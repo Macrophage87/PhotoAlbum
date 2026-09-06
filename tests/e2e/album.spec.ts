@@ -2,7 +2,8 @@ import { expect, test } from "@playwright/test";
 import path from "node:path";
 import { createTrip, resetDb, setVisibility, signIn, withDb } from "./helpers";
 
-const ADMIN = "e2e-admin@example.com";
+// Must match ADMIN_EMAIL as set by scripts/e2e-server.mjs: only that address may bootstrap the admin account.
+const ADMIN = process.env.E2E_ADMIN_EMAIL ?? "e2e-admin@example.com";
 const fixture = (n: string) => path.join(__dirname, "../fixtures", n);
 
 test.describe.configure({ mode: "serial" });

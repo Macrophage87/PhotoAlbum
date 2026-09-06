@@ -11,7 +11,7 @@ if (!existsSync(".next/standalone/server.js")) throw new Error("Run `pnpm build`
 cpSync(".next/static", ".next/standalone/.next/static", { recursive: true });
 cpSync("public", ".next/standalone/public", { recursive: true });
 
-const env = { ...process.env, DATABASE_URL: dbUrl, PHOTO_STORAGE_ROOT: photoRoot, PORT: "3200", HOSTNAME: "127.0.0.1", APP_URL: "http://localhost:3200", SMTP_HOST: "", RUN_WORKER: "true", NODE_ENV: "production" };
+const env = { ...process.env, DATABASE_URL: dbUrl, PHOTO_STORAGE_ROOT: photoRoot, PORT: "3200", HOSTNAME: "127.0.0.1", APP_URL: "http://localhost:3200", SMTP_HOST: "", RUN_WORKER: "true", NODE_ENV: "production", ADMIN_EMAIL: process.env.E2E_ADMIN_EMAIL ?? "e2e-admin@example.com" };
 const migrate = spawn("./node_modules/.bin/prisma", ["migrate", "deploy"], { env, stdio: "inherit" });
 migrate.on("exit", (code) => {
   if (code !== 0) process.exit(code ?? 1);
