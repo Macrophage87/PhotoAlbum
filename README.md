@@ -40,6 +40,8 @@ Photos live in the `photos` volume, the database in `pgdata`. Back those two up.
 
 ### Behind a reverse proxy
 
+For a full walkthrough of a fresh server (Docker, deploy key, HTTPS with Caddy, backups, updates) see [docs/DEPLOY.md](docs/DEPLOY.md).
+
 Set `APP_URL` to the public URL (used in emails and redirects) and raise the proxy's body size limit (e.g. `client_max_body_size 200m;` in nginx) so large photos and Google exports get through. `MAX_UPLOAD_BYTES` and `MAX_IMPORT_BYTES` cap sizes on the app side.
 
 ### Maps
