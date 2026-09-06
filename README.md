@@ -1,36 +1,113 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Family Album
 
-## Getting Started
+A self-hosted photo album for family trips. Photos are grouped into **trips** and **activities**, browsed on a **timeline** and a **map**, and each trip gets its own visual **theme** (lighthouse coast, Scottish highlands, Everglades swamp, desert canyon, alpine, or classic). GPS tracks from a watch, bike computer, or Google location history give hikes and rides a route and fitness stats, and can even place photos that have no GPS of their own.
 
-First, run the development server:
+## Features
+
+- **Trips → activities → photos.** Photos land on the right trip by the date they were taken and on the right activity by time.
+- **Upload from any device.** Drag-and-drop or pick files; JPEG, PNG, WebP, HEIC. Originals are kept, web-sized WebP renditions are generated.
+- **Correct times, everywhere.** Camera times are resolved with the EXIF offset, the GPS position, or the trip's time zone. A one-click fix handles cameras left in the wrong zone.
+- **Timeline** grouped by local day, with activities holding their photos, plus a global timeline across trips.
+- **Map** with clustered photo markers and colour-coded tracks, per trip and across all trips.
+- **Tracks and stats.** Import GPX, Garmin FIT, or Google Timeline exports. Activities get distance, moving time, elevation, pace/speed, heart rate, cadence, power and calories, with elevation/pace/HR/power charts linked to the map.
+- **Photos placed from tracks.** A photo taken during a hike without GPS is positioned by interpolating along the track.
+- **Themes** per trip: palette, fonts, illustrated header art, map marker and motif.
+- **Sharing.** Each trip is private, shared by secret link, or public. Public trips appear on the front page for anyone.
+- **Photo links.** Mark photos as the same scene, before/after, parts of a panorama, or related.
+- **Family sign-in** by emailed magic link; an admin invites members. No passwords.
+
+## Quick start (Docker)
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+cp .env.example .env
+# edit .env: set ADMIN_EMAIL, and SMTP_* if you want real emails
+docker compose up --build
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open <http://localhost:3000>, enter the admin email, and follow the sign-in link. If SMTP is not configured, the link is printed in the container log:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+docker compose logs -f app | grep "auth/verify"
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+To load a demo trip with a hike and sample photos:
 
-## Learn More
+```bash
+docker compose exec app node_modules/.bin/tsx prisma/seed.ts
+```
 
-To learn more about Next.js, take a look at the following resources:
+Photos live in the `photos` volume, the database in `pgdata`. Back those two up.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+### Behind a reverse proxy
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Set `APP_URL` to the public URL (used in emails and redirects) and raise the proxy's body size limit (e.g. `client_max_body_size 200m;` in nginx) so large photos and Google exports get through. `MAX_UPLOAD_BYTES` and `MAX_IMPORT_BYTES` cap sizes on the app side.
 
-## Deploy on Vercel
+### Maps
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+The map uses OpenStreetMap raster tiles by default, which is fine for family use. For heavier use set `NEXT_PUBLIC_TILE_URL` to a tile provider template, or `NEXT_PUBLIC_MAP_STYLE_URL` to a full MapLibre style.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Importing tracks
+
+| Source | What to upload | Result |
+|---|---|---|
+| Garmin, Wahoo, Strava, Komoot, AllTrails… | `.gpx` or `.fit` file | An activity with route, stats and charts. Photos in its time window are attached. |
+| Google Maps Timeline (on device) | Google Maps → profile → Your Timeline → ⋯ → Location and privacy settings → **Export Timeline data** → `Timeline.json` | One location trace per day of the trip. |
+| Google Takeout (older) | `Records.json` or the monthly `Semantic Location History` files | Same as above. |
+
+Only points inside the trip's dates are imported, so uploading a whole export is safe. Google traces show dashed on the map and do not create activities.
+
+## Development
+
+Requirements: Node 22, pnpm, PostgreSQL 16.
+
+```bash
+pnpm install
+cp .env.example .env            # point DATABASE_URL at your Postgres
+pnpm prisma migrate dev         # creates the schema
+pnpm db:seed                    # optional demo data
+pnpm dev                        # http://localhost:3000
+```
+
+`docker compose -f docker-compose.yml -f docker-compose.dev.yml up db mailpit` gives you a Postgres on `localhost:5432` and a Mailpit inbox on <http://localhost:8025> for sign-in emails.
+
+### Tests
+
+```bash
+pnpm test        # unit tests (needs a <db>_test database: createdb photoalbum_test)
+pnpm build && pnpm test:e2e   # Playwright smoke tests against a <db>_e2e database
+```
+
+Fixtures under `tests/fixtures` are generated by `node scripts/make-fixtures.mjs`.
+
+### Layout
+
+```
+src/app            routes (App Router)
+src/components     UI
+src/lib/auth       magic links, sessions, trip access rules
+src/lib/images     EXIF, renditions, HEIC
+src/lib/tracks     GPX / FIT / Google parsers, stats, simplification, storage encoding
+src/lib/jobs       pg-boss queue and the process-photo / import-track / geotag jobs
+src/themes         theme registry and per-theme art
+prisma             schema and migrations
+```
+
+Background work (photo processing, imports, geotagging) runs inside the web process by default. Set `RUN_WORKER=false` on the web container and run `pnpm worker` in a second container to split it out.
+
+## Configuration
+
+See `.env.example` for every variable. The important ones:
+
+| Variable | Purpose |
+|---|---|
+| `DATABASE_URL` | Postgres connection string |
+| `APP_URL` | Public URL of the site |
+| `ADMIN_EMAIL` | This address becomes an admin when it first signs in |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM` | Outgoing email; leave `SMTP_HOST` empty to log links instead |
+| `PHOTO_STORAGE_ROOT` | Where originals and renditions are stored |
+| `MAX_UPLOAD_BYTES`, `MAX_IMPORT_BYTES` | Upload limits |
+| `NEXT_PUBLIC_TILE_URL`, `NEXT_PUBLIC_MAP_STYLE_URL` | Map basemap |
+
+## Privacy notes
+
+A shared link or a public trip exposes every photo, activity and location trace on that trip, which reveals where people were and when. Trips are private by default, the settings page spells out what each level shows, and a shared link can be rotated at any time. Keep photos you would not share on a private trip.

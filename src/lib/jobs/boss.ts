@@ -31,3 +31,11 @@ export async function getJobState(queue: QueueName, id: string) {
   if (!job) return null;
   return { state: job.state, output: job.output as unknown };
 }
+
+/** Stop the queue if it was started (lets one-off scripts like the seed exit cleanly). */
+export async function stopBoss(): Promise<void> {
+  if (!globalForBoss.boss) return;
+  const boss = await globalForBoss.boss;
+  await boss.stop({ graceful: true, timeout: 5000 });
+  globalForBoss.boss = undefined;
+}

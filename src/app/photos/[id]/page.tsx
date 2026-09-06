@@ -7,7 +7,12 @@ import { AppShell, Container } from "@/components/layout/AppShell";
 import { ExifPanel } from "@/components/photos/ExifPanel";
 import { Button, Card, Label, Select, Textarea } from "@/components/ui";
 import { formatDateTime } from "@/lib/time/format";
-import { deletePhoto, reprocessPhoto, setAsCover, updatePhoto } from "./actions";
+import { deletePhoto, reprocessPhoto, setAsCover, shiftPhotoTimezone, updatePhoto } from "./actions";
+import { TimezoneShift } from "@/components/photos/TimezoneShift";
+import { PhotoLinkEditor } from "@/components/photos/PhotoLinkEditor";
+import { LinkedPhotos } from "@/components/photos/LinkedPhotos";
+import { linkedPhotos } from "@/lib/photos/links";
+import { linkPhotos, unlinkPhotos } from "@/app/photos/link-actions";
 
 export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
   const { id } = await params;
@@ -19,14 +24,20 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
   });
   if (!photo) notFound();
 
-  const [trips, activities] = await Promise.all([
+  const [trips, activities, links, candidates] = await Promise.all([
     db.trip.findMany({ orderBy: { startDate: "desc" }, select: { id: true, title: true } }),
     photo.tripId ? db.activity.findMany({ where: { tripId: photo.tripId }, orderBy: { startTime: "asc" }, select: { id: true, title: true, startTime: true } }) : Promise.resolve([]),
+    linkedPhotos(photo.id),
+    photo.tripId
+      ? db.photo.findMany({ where: { tripId: photo.tripId, status: "READY", id: { not: photo.id } }, orderBy: [{ takenAt: "asc" }], select: { id: true, caption: true, originalName: true, takenAt: true, updatedAt: true } })
+      : Promise.resolve([]),
   ]);
+  const link = linkPhotos.bind(null, id);
   const update = updatePhoto.bind(null, id);
   const remove = deletePhoto.bind(null, id);
   const reprocess = reprocessPhoto.bind(null, id);
   const cover = setAsCover.bind(null, id);
+  const shift = shiftPhotoTimezone.bind(null, id);
   const isCover = photo.trip?.coverPhotoId === photo.id;
 
   return (
@@ -94,6 +105,13 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
               <h2 className="font-medium mb-2">Details</h2>
               <ExifPanel photo={photo} tripTimezone={photo.trip?.timezone} />
               <p className="text-xs text-muted mt-2">Uploaded by {photo.uploader.name ?? photo.uploader.email}</p>
+              {photo.takenAt && <TimezoneShift action={shift} currentOffsetMin={photo.tzOffsetMin} hasTrip={Boolean(photo.trip)} tripTimezone={photo.trip?.timezone} />}
+            </Card>
+
+            <Card className="p-4 space-y-3">
+              <h2 className="font-medium">Linked photos</h2>
+              <LinkedPhotos links={links} unlink={unlinkPhotos} />
+              <PhotoLinkEditor action={link} candidates={candidates.map((c) => ({ id: c.id, thumbUrl: photoUrl(c, "thumb"), caption: c.caption, originalName: c.originalName, takenAt: c.takenAt?.toISOString() ?? null }))} />
             </Card>
 
             <div className="flex flex-wrap gap-2">

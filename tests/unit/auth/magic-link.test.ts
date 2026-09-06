@@ -1,16 +1,14 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
 import { createInvite, requestMagicLink, verifyMagicLink } from "@/lib/auth/magic-link";
+import { resetTestDb } from "../helpers/reset";
 
 const T0 = new Date("2026-01-01T12:00:00Z");
 const deps = (now = T0, adminEmail?: string) => ({ db, adminEmail, now: () => now });
 
 describe("magic link", () => {
   beforeEach(async () => {
-    await db.magicLinkToken.deleteMany();
-    await db.invite.deleteMany();
-    await db.session.deleteMany();
-    await db.user.deleteMany();
+    await resetTestDb();
   });
 
   it("bootstraps the first user as admin", async () => {

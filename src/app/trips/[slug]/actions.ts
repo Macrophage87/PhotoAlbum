@@ -75,3 +75,12 @@ export async function deleteTrip(slug: string, fd: FormData): Promise<void> {
   revalidatePath("/");
   redirect("/");
 }
+
+/** Clear track-derived positions and recompute them from the trip's current tracks. */
+export async function regeotagPhotos(slug: string): Promise<void> {
+  const trip = await loadEditableTrip(slug);
+  await db.photo.updateMany({ where: { tripId: trip.id, gpsSource: "TRACK" }, data: { lat: null, lng: null, altitude: null, gpsSource: null } });
+  await enqueue(QUEUES.geotagPhotos, { tripId: trip.id });
+  revalidatePath(`/trips/${slug}`, "layout");
+  redirect(`/trips/${slug}/settings?regeotag=1`);
+}

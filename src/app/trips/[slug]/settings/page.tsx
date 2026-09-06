@@ -5,7 +5,7 @@ import { getTripBySlug } from "@/lib/trips/queries";
 import { dateColumnToDay } from "@/lib/time/local-day";
 import { TripForm } from "@/components/trips/TripForm";
 import { Button, Card } from "@/components/ui";
-import { deleteTrip, rotateShareToken, setVisibility, updateTrip } from "../actions";
+import { deleteTrip, regeotagPhotos, rotateShareToken, setVisibility, updateTrip } from "../actions";
 
 const VISIBILITY = [
   { value: "PRIVATE", label: "Private", help: "Only signed-in family members can see this trip." },
@@ -23,11 +23,13 @@ export default async function TripSettingsPage({ params, searchParams }: PagePro
   const visibility = setVisibility.bind(null, slug);
   const rotate = rotateShareToken.bind(null, slug);
   const remove = deleteTrip.bind(null, slug);
+  const regeotag = regeotagPhotos.bind(null, slug);
   const shareUrl = trip.shareToken ? new URL(`/share/${trip.shareToken}`, env().APP_URL).toString() : null;
 
   return (
     <div className="max-w-2xl space-y-10">
       {sp.saved && <p className="rounded-theme bg-emerald-50 border border-emerald-200 text-emerald-900 text-sm p-3">Saved.</p>}
+      {sp.regeotag && <p className="rounded-theme bg-emerald-50 border border-emerald-200 text-emerald-900 text-sm p-3">Re-positioning photos from tracks in the background.</p>}
 
       <section>
         <h2 className="font-display text-xl font-semibold mb-4">Trip details</h2>
@@ -65,6 +67,16 @@ export default async function TripSettingsPage({ params, searchParams }: PagePro
             </form>
           </Card>
         )}
+      </section>
+
+      <section>
+        <h2 className="font-display text-xl font-semibold mb-2">Photo locations</h2>
+        <p className="text-sm text-muted mb-3">
+          Photos without GPS are placed on the map using any track that covers the moment they were taken. Run this again after importing tracks or fixing photo times.
+        </p>
+        <form action={regeotag}>
+          <Button type="submit" variant="secondary">Re-position photos from tracks</Button>
+        </form>
       </section>
 
       <section>

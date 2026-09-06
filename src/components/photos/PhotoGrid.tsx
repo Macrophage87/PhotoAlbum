@@ -4,7 +4,7 @@ import { Lightbox, useLightbox, type LightboxPhoto } from "./Lightbox";
 
 export type GridPhoto = LightboxPhoto & { thumbUrl: string; status: "PENDING" | "PROCESSING" | "READY" | "FAILED"; badge?: string | null };
 
-export function PhotoGrid({ photos, showDetailLink = true, emptyMessage = "No photos yet." }: { photos: GridPhoto[]; showDetailLink?: boolean; emptyMessage?: string }) {
+export function PhotoGrid({ photos, showDetailLink = true, emptyMessage = "No photos yet.", selectable = false, selected, onToggle }: { photos: GridPhoto[]; showDetailLink?: boolean; emptyMessage?: string; selectable?: boolean; selected?: Set<string>; onToggle?: (id: string) => void }) {
   const lb = useLightbox();
   const ready = photos.filter((p) => p.status === "READY");
   if (photos.length === 0) return <p className="text-muted text-sm">{emptyMessage}</p>;
@@ -17,7 +17,7 @@ export function PhotoGrid({ photos, showDetailLink = true, emptyMessage = "No ph
           return (
             <li key={p.id} className="relative aspect-square rounded-theme overflow-hidden bg-surface-alt border border-border group">
               {p.status === "READY" ? (
-                <button onClick={() => lb.open(readyIndex)} className="block w-full h-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                <button onClick={() => (selectable ? onToggle?.(p.id) : lb.open(readyIndex))} className={`block w-full h-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring ${selectable && selected?.has(p.id) ? "ring-4 ring-primary ring-inset" : ""}`} aria-pressed={selectable ? selected?.has(p.id) : undefined}>
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img src={p.thumbUrl} alt={p.alt} loading="lazy" className="w-full h-full object-cover transition-transform group-hover:scale-[1.03]" />
                 </button>
@@ -27,6 +27,11 @@ export function PhotoGrid({ photos, showDetailLink = true, emptyMessage = "No ph
                 </div>
               )}
               {p.badge && <span className="absolute top-1 left-1 text-[10px] bg-black/60 text-white rounded px-1.5 py-0.5">{p.badge}</span>}
+              {selectable && (
+                <span className={`absolute top-1 right-1 w-5 h-5 rounded-full border-2 border-white flex items-center justify-center text-[10px] ${selected?.has(p.id) ? "bg-primary text-primary-fg" : "bg-black/40"}`} aria-hidden="true">
+                  {selected?.has(p.id) ? "✓" : ""}
+                </span>
+              )}
             </li>
           );
         })}

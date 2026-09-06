@@ -12,7 +12,7 @@ await base.clone().withExif({
   IFD2: { DateTimeOriginal: "2025:08:12 15:04:05", OffsetTimeOriginal: "-04:00", ExposureTime: "1/250", FNumber: "1.8", ISOSpeedRatings: "100", FocalLength: "6.9", LensModel: "iPhone 15 Pro back camera" },
   IFD3: { GPSLatitudeRef: "N", GPSLatitude: "44/1 21/1 0/1", GPSLongitudeRef: "W", GPSLongitude: "68/1 12/1 0/1", GPSAltitudeRef: "0", GPSAltitude: "120/1" },
 }).toFile(new URL("../tests/fixtures/photo-with-gps.jpg", import.meta.url).pathname);
-await base.clone().withExif({ IFD0: { Make: "Canon", Model: "EOS R6" }, IFD2: { DateTimeOriginal: "2025:08:13 09:30:00" } }).toFile(new URL("../tests/fixtures/photo-no-gps.jpg", import.meta.url).pathname);
+await base.clone().withExif({ IFD0: { Make: "Canon", Model: "EOS R6" }, IFD2: { DateTimeOriginal: "2025:08:12 09:20:00" } }).toFile(new URL("../tests/fixtures/photo-no-gps.jpg", import.meta.url).pathname);
 await sharp({ create: { width: 640, height: 480, channels: 3, background: { r: 200, g: 120, b: 60 } } }).jpeg().toFile(new URL("../tests/fixtures/photo-no-exif.jpg", import.meta.url).pathname);
 
 // ---------- a synthetic hike: 1 point / 5 s, ~3 km loop near Acadia with a climb ----------
