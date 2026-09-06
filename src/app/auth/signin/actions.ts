@@ -20,8 +20,10 @@ export async function requestSignIn(_prev: SignInState, formData: FormData): Pro
   // Throttle link requests so the form cannot be used to flood a member's inbox. The response stays
   // identical to the normal path so nothing about membership is revealed.
   const email = parsed.data.email.trim().toLowerCase();
-  const client = (await headers()).get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
-  if (!signInPerEmail.allow(email) || !signInPerClient.allow(client)) return { status: "sent", email };
+  // The per-client cap is best-effort: it only applies when a proxy supplies a client address, so that
+  // an install without a proxy does not put every visitor in one shared bucket.
+  const client = (await headers()).get("x-forwarded-for")?.split(",")[0]?.trim() || null;
+  if (!signInPerEmail.allow(email) || (client && !signInPerClient.allow(client))) return { status: "sent", email };
 
   const result = await requestMagicLink(parsed.data.email, { db, adminEmail: env().ADMIN_EMAIL });
   // Always report success to avoid leaking which addresses are members.
