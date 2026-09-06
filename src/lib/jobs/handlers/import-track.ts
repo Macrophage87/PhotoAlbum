@@ -1,7 +1,11 @@
-import type { ImportTrackJob } from "../queues";
+import { importTrackFile } from "@/lib/tracks/import";
+import { enqueue } from "../boss";
+import { QUEUES, type ImportTrackJob } from "../queues";
 
-/** Phase 3 fills this in: GPX/FIT/Google parsing, stats, activities. */
 export async function importTrack(job: ImportTrackJob): Promise<unknown> {
-  console.log("[import-track] not implemented yet", job.importKey);
-  return { tracks: [], activities: [] };
+  const summary = await importTrackFile(job);
+  if (summary.tracks.length) {
+    await enqueue(QUEUES.geotagPhotos, { tripId: job.tripId, trackIds: summary.tracks.map((t) => t.trackId) });
+  }
+  return summary;
 }

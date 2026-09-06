@@ -14,7 +14,7 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
 # DATABASE_URL is not needed at build time; prisma generate only reads the schema.
-RUN pnpm prisma generate && pnpm next build
+RUN pnpm build
 
 FROM base AS runner
 WORKDIR /app

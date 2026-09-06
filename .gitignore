@@ -50,3 +50,6 @@ next-env.d.ts
 /test-results
 /playwright-report
 /.scratch
+
+# copied from node_modules by scripts/copy-map-worker.mjs
+/public/maplibre

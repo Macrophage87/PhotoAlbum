@@ -1,0 +1,78 @@
+{
+ "timelineObjects": [
+  {
+   "activitySegment": {
+    "startLocation": {
+     "latitudeE7": 443500000,
+     "longitudeE7": -682000000
+    },
+    "endLocation": {
+     "latitudeE7": 443520000,
+     "longitudeE7": -682020000
+    },
+    "duration": {
+     "startTimestamp": "2025-08-12T14:00:00.000Z",
+     "endTimestamp": "2025-08-12T14:10:00.000Z"
+    },
+    "waypointPath": {
+     "waypoints": [
+      {
+       "latE7": 443510000,
+       "lngE7": -682010000
+      }
+     ]
+    }
+   }
+  },
+  {
+   "placeVisit": {
+    "location": {
+     "latitudeE7": 443530000,
+     "longitudeE7": -682030000
+    },
+    "duration": {
+     "startTimestamp": "2025-08-12T14:11:40.000Z",
+     "endTimestamp": "2025-08-12T15:06:40.000Z"
+    }
+   }
+  },
+  {
+   "activitySegment": {
+    "duration": {
+     "startTimestamp": "2025-08-12T15:23:20.000Z",
+     "endTimestamp": "2025-08-12T15:40:00.000Z"
+    },
+    "simplifiedRawPath": {
+     "points": [
+      {
+       "latE7": 443530000,
+       "lngE7": -682030000,
+       "timestampMs": "1755012200000"
+      },
+      {
+       "latE7": 443600000,
+       "lngE7": -682100000,
+       "timestamp": "2025-08-12T15:40:00.000Z"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "activitySegment": {
+    "startLocation": {
+     "latitudeE7": 407000000,
+     "longitudeE7": -740000000
+    },
+    "endLocation": {
+     "latitudeE7": 407100000,
+     "longitudeE7": -740100000
+    },
+    "duration": {
+     "startTimestamp": "2025-06-01T12:00:00.000Z",
+     "endTimestamp": "2025-06-01T12:01:00.000Z"
+    }
+   }
+  }
+ ]
+}

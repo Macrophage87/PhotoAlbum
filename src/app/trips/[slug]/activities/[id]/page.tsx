@@ -15,6 +15,8 @@ import { PhotoGrid } from "@/components/photos/PhotoGrid";
 import { toGridPhoto } from "@/components/photos/toGrid";
 import { Button, Card } from "@/components/ui";
 import { ActivityMapSection } from "@/components/activities/ActivityMapSection";
+import { getTheme } from "@/themes";
+import { mapThemeOf } from "@/lib/map/theme";
 import { deleteActivity, updateActivity } from "../actions";
 
 export default async function ActivityPage({ params, searchParams }: PageProps<"/trips/[slug]/activities/[id]">) {
@@ -81,7 +83,7 @@ export default async function ActivityPage({ params, searchParams }: PageProps<"
         </Card>
       )}
 
-      {activity.track && <ActivityMapSection track={activity.track} activity={{ id: activity.id, type: activity.type, title: activity.title }} photos={photos} tripSlug={slug} />}
+      {activity.track && <ActivityMapSection tripSlug={slug} trackId={activity.track.id} activityId={activity.id} type={activity.type} theme={mapThemeOf(getTheme(trip.themeKey))} showDetailLink={editable} />}
 
       <section>
         <h3 className="font-display text-lg font-semibold mb-3">
