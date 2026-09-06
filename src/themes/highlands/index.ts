@@ -1,4 +1,4 @@
-import { PlaceholderArt } from "../PlaceholderArt";
+import { HighlandsArt, highlandsMarker, highlandsMotif } from "../art/HighlandsArt";
 import type { Theme } from "../types";
 
 export const highlandsTheme: Theme = {
@@ -20,9 +20,9 @@ export const highlandsTheme: Theme = {
   },
   fonts: { display: "var(--font-cormorant), Georgia, serif", body: "var(--font-lato), system-ui, sans-serif" },
   radius: "0.5rem",
-  headerArt: PlaceholderArt,
+  headerArt: HighlandsArt,
   map: { trackColor: "#5e3a7a", photoMarkerColor: "#5e3a7a", clusterColor: "#3f2657", canvasFilter: "sepia(0.15) saturate(0.85)" },
-  markerIcon:
-    '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32"><circle cx="16" cy="16" r="10" fill="#5e3a7a" stroke="#fff" stroke-width="3"/></svg>',
+  markerIcon: highlandsMarker,
+  motif: { pattern: highlandsMotif, opacity: 0.35 },
   swatch: ["#5e3a7a", "#4f7a3a", "#f5f3f7"],
 };

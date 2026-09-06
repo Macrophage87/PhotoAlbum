@@ -1,4 +1,4 @@
-import { PlaceholderArt } from "../PlaceholderArt";
+import { DesertArt, desertMarker, desertMotif } from "../art/DesertArt";
 import type { Theme } from "../types";
 
 export const desertTheme: Theme = {
@@ -20,9 +20,9 @@ export const desertTheme: Theme = {
   },
   fonts: { display: "var(--font-bitter), Georgia, serif", body: "var(--font-work-sans), system-ui, sans-serif" },
   radius: "0.5rem",
-  headerArt: PlaceholderArt,
+  headerArt: DesertArt,
   map: { trackColor: "#b5542a", photoMarkerColor: "#b5542a", clusterColor: "#8a3d1c", canvasFilter: "sepia(0.25) saturate(0.9)" },
-  markerIcon:
-    '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32"><circle cx="16" cy="16" r="10" fill="#b5542a" stroke="#fff" stroke-width="3"/></svg>',
+  markerIcon: desertMarker,
+  motif: { pattern: desertMotif, opacity: 0.35 },
   swatch: ["#b5542a", "#2aa1a8", "#faf5ef"],
 };

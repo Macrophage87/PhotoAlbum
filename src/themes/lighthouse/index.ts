@@ -1,4 +1,4 @@
-import { PlaceholderArt } from "../PlaceholderArt";
+import { LighthouseArt, lighthouseMarker, lighthouseMotif } from "../art/LighthouseArt";
 import type { Theme } from "../types";
 
 export const lighthouseTheme: Theme = {
@@ -20,9 +20,9 @@ export const lighthouseTheme: Theme = {
   },
   fonts: { display: "var(--font-playfair), Georgia, serif", body: "var(--font-source-sans), system-ui, sans-serif" },
   radius: "0.375rem",
-  headerArt: PlaceholderArt,
+  headerArt: LighthouseArt,
   map: { trackColor: "#c1272d", photoMarkerColor: "#14213d", clusterColor: "#0b3d91", canvasFilter: "saturate(0.85) contrast(1.02)" },
-  markerIcon:
-    '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32"><circle cx="16" cy="16" r="10" fill="#14213d" stroke="#fff" stroke-width="3"/></svg>',
+  markerIcon: lighthouseMarker,
+  motif: { pattern: lighthouseMotif, opacity: 0.35 },
   swatch: ["#14213d", "#c1272d", "#f4f6f8"],
 };

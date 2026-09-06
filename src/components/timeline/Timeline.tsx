@@ -8,7 +8,7 @@ import { DayJumpNav } from "./DayJumpNav";
 
 export type TimelineGroups = DayGroup<PhotoCard, ActivityCardData>[];
 
-export function Timeline({ groups, tripSlug, timezone, showDetailLink, idPrefix = "day" }: { groups: TimelineGroups; tripSlug: string; timezone: string; showDetailLink: boolean; idPrefix?: string }) {
+export function Timeline({ groups, tripSlug, timezone, showDetailLink, idPrefix = "day", activityHrefBase }: { groups: TimelineGroups; tripSlug: string; timezone: string; showDetailLink: boolean; idPrefix?: string; activityHrefBase?: string }) {
   if (groups.length === 0) return <p className="text-muted text-sm">Nothing on the timeline yet. Upload photos or add an activity.</p>;
   const days = groups.map((g) => ({ key: g.dayKey ?? "undated", id: `${idPrefix}-${g.dayKey ?? "undated"}`, count: g.items.reduce((n, i) => n + (i.kind === "activity" ? 1 : i.photos.length), 0) }));
   return (
@@ -23,7 +23,7 @@ export function Timeline({ groups, tripSlug, timezone, showDetailLink, idPrefix 
                 <li key={ii} className="relative">
                   <span className="absolute -left-[1.85rem] top-2 w-3 h-3 rounded-full bg-primary ring-4 ring-bg" />
                   {item.kind === "activity" ? (
-                    <ActivityCard activity={item.activity} tripSlug={tripSlug} timezone={timezone}>
+                    <ActivityCard activity={item.activity} tripSlug={tripSlug} timezone={timezone} hrefBase={activityHrefBase}>
                       {item.photos.length > 0 && (
                         <div className="px-4 pb-4">
                           <PhotoGrid photos={item.photos.map((p) => toGridPhoto(p))} showDetailLink={showDetailLink} />

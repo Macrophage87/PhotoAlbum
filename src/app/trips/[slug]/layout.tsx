@@ -10,7 +10,7 @@ import { TripTabs } from "@/components/trips/TripTabs";
 export async function generateMetadata({ params }: LayoutProps<"/trips/[slug]">) {
   const { slug } = await params;
   const trip = await getTripBySlug(slug);
-  return { title: trip?.title ?? "Trip" };
+  return { title: trip?.title ?? "Trip", robots: trip?.visibility === "PUBLIC" ? undefined : { index: false, follow: false } };
 }
 
 export default async function TripLayout({ params, children }: LayoutProps<"/trips/[slug]">) {

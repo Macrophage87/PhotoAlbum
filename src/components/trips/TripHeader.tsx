@@ -22,6 +22,7 @@ export function TripHeader({ trip }: { trip: { title: string; description: strin
           </div>
           {trip.description && <p className="mt-3 max-w-3xl text-text/90">{trip.description}</p>}
         </div>
+        {theme.motif && <div className="h-3 mt-3 rounded" style={{ backgroundImage: `url("${theme.motif.pattern}")`, backgroundRepeat: "repeat-x", backgroundPosition: "center", opacity: theme.motif.opacity }} />}
       </div>
     </div>
   );

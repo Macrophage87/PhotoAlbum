@@ -1,4 +1,4 @@
-import { PlaceholderArt } from "../PlaceholderArt";
+import { DefaultArt } from "../art/DefaultArt";
 import type { Theme } from "../types";
 
 export const defaultTheme: Theme = {
@@ -20,7 +20,7 @@ export const defaultTheme: Theme = {
   },
   fonts: { display: "var(--font-inter), system-ui, sans-serif", body: "var(--font-inter), system-ui, sans-serif" },
   radius: "0.75rem",
-  headerArt: PlaceholderArt,
+  headerArt: DefaultArt,
   map: { trackColor: "#2563eb", photoMarkerColor: "#2563eb", clusterColor: "#1d4ed8" },
   markerIcon:
     '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32"><circle cx="16" cy="16" r="10" fill="#2563eb" stroke="#fff" stroke-width="3"/></svg>',

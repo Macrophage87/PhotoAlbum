@@ -1,4 +1,4 @@
-import { PlaceholderArt } from "../PlaceholderArt";
+import { AlpineArt, alpineMarker, alpineMotif } from "../art/AlpineArt";
 import type { Theme } from "../types";
 
 export const alpineTheme: Theme = {
@@ -20,9 +20,9 @@ export const alpineTheme: Theme = {
   },
   fonts: { display: "var(--font-montserrat), system-ui, sans-serif", body: "var(--font-open-sans), system-ui, sans-serif" },
   radius: "0.5rem",
-  headerArt: PlaceholderArt,
+  headerArt: AlpineArt,
   map: { trackColor: "#1f5f8b", photoMarkerColor: "#1f5f8b", clusterColor: "#154466", canvasFilter: "saturate(0.9) brightness(1.02)" },
-  markerIcon:
-    '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32"><circle cx="16" cy="16" r="10" fill="#1f5f8b" stroke="#fff" stroke-width="3"/></svg>',
+  markerIcon: alpineMarker,
+  motif: { pattern: alpineMotif, opacity: 0.35 },
   swatch: ["#1f5f8b", "#2f6b3a", "#f3f7fa"],
 };

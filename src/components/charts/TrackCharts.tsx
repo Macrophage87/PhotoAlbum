@@ -107,13 +107,13 @@ export function TrackCharts({ trackId, type, onHover }: { trackId: string; type:
           </div>
           <UPlotChart
             data={ch.data}
-            height={ch.key === "ele" ? 170 : 120}
+            height={ch.key === "ele" ? 170 : 140}
             onCursor={hover}
             options={{
               ...common,
               axes: [
                 { ...xAxis, stroke: "#94a3b8", grid: { stroke: "#e2e8f0" } },
-                { stroke: "#94a3b8", grid: { stroke: "#e2e8f0" }, size: 48, values: ch.paceFmt ? (_u: unknown, vals: number[]) => vals.map((v) => `${Math.floor(v)}:${String(Math.round((v % 1) * 60)).padStart(2, "0")}`) : undefined },
+                { stroke: "#94a3b8", grid: { stroke: "#e2e8f0" }, size: 48, space: 22, values: ch.paceFmt ? (_u: unknown, vals: number[]) => vals.map((v) => `${Math.floor(v)}:${String(Math.round((v % 1) * 60)).padStart(2, "0")}`) : undefined },
               ],
               scales: { x: { time: false }, y: ch.paceFmt ? { dir: -1, range: ch.range } : {} },
               series: [{}, { stroke: ch.stroke, width: 1.5, fill: ch.fill, spanGaps: true, points: { show: false } }],

@@ -12,7 +12,8 @@ import type { ActivityType } from "@/generated/prisma/enums";
 import { ActivityTypeIcon } from "@/components/activities/ActivityTypeIcon";
 import { formatDistance } from "@/lib/time/format";
 
-export function TripMap({ src, theme, showDetailLink, showTripList = false }: { src: string; theme: MapTheme; showDetailLink: boolean; showTripList?: boolean }) {
+export function TripMap({ src, theme, showDetailLink, showTripList = false, activityHrefBase }: { src: string; theme: MapTheme; showDetailLink: boolean; showTripList?: boolean; /** Override the activity link root, e.g. for share pages. */ activityHrefBase?: string }) {
+  const activityHref = (tripSlug: string, activityId: string) => `${activityHrefBase ?? `/trips/${tripSlug}/activities`}/${activityId}`;
   const [data, setData] = useState<MapPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [lightbox, setLightbox] = useState<number | null>(null);
@@ -57,7 +58,7 @@ export function TripMap({ src, theme, showDetailLink, showTripList = false }: { 
           }}
           onTrackHover={setHover}
           onTrackClick={(p: TrackFeatureProps) => {
-            if (p.activityId) router.push(`/trips/${p.tripSlug}/activities/${p.activityId}`);
+            if (p.activityId) router.push(activityHref(p.tripSlug, p.activityId));
           }}
         />
         {empty && <div className="absolute inset-x-0 top-3 text-center pointer-events-none"><span className="bg-surface/90 text-muted text-sm px-3 py-1.5 rounded-theme border border-border">No geotagged photos or tracks yet.</span></div>}
@@ -93,7 +94,7 @@ export function TripMap({ src, theme, showDetailLink, showTripList = false }: { 
               const cls = `flex items-center gap-2 text-sm rounded px-2 py-1 ${hover === p.trackId ? "bg-surface-alt" : ""}`;
               return (
                 <li key={p.trackId} onMouseEnter={() => setHover(p.trackId)} onMouseLeave={() => setHover(null)} title={p.activityType ? ACTIVITY_LABEL[p.activityType as ActivityType] : "Location trace"}>
-                  {p.activityId ? <Link href={`/trips/${p.tripSlug}/activities/${p.activityId}`} className={cls}>{inner}</Link> : <div className={cls}>{inner}</div>}
+                  {p.activityId ? <Link href={activityHref(p.tripSlug, p.activityId)} className={cls}>{inner}</Link> : <div className={cls}>{inner}</div>}
                 </li>
               );
             })}

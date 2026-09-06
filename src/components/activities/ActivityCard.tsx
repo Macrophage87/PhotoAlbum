@@ -16,8 +16,8 @@ export type ActivityCardData = {
   track: { simplified: unknown; stats: StatsLike | null } | null;
 };
 
-export function ActivityCard({ activity, tripSlug, timezone, children }: { activity: ActivityCardData; tripSlug: string; timezone: string; children?: React.ReactNode }) {
-  const href = `/trips/${tripSlug}/activities/${activity.id}`;
+export function ActivityCard({ activity, tripSlug, timezone, children, hrefBase }: { activity: ActivityCardData; tripSlug: string; timezone: string; children?: React.ReactNode; /** Override the link root, e.g. for share pages. */ hrefBase?: string }) {
+  const href = `${hrefBase ?? `/trips/${tripSlug}/activities`}/${activity.id}`;
   const line = activity.track?.simplified as [number, number][] | undefined;
   return (
     <article className="rounded-theme border border-border bg-surface shadow-sm overflow-hidden">
