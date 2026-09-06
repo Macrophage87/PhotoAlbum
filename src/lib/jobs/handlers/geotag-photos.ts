@@ -35,7 +35,7 @@ export async function geotagPhotos(job: GeotagPhotosJob): Promise<{ updated: num
         ...(precise.length ? [{ gpsSource: "TRACK" as const, ...trusted, OR: precise.map((t) => ({ takenAt: { gte: t.startTime, lte: t.endTime } })) }] : []),
       ],
     },
-    select: { id: true, takenAt: true, gpsSource: true },
+    select: { id: true, takenAt: true, gpsSource: true, lat: true, lng: true, altitude: true },
   });
   if (!photos.length) return { updated: 0 };
 
@@ -58,6 +58,8 @@ export async function geotagPhotos(job: GeotagPhotosJob): Promise<{ updated: num
       if (t < track.startTime.getTime() || t > track.endTime.getTime()) continue;
       const pos = positionAt(pointsOf(track), t);
       if (!pos) continue;
+      const same = photo.gpsSource === "TRACK" && photo.lat === pos.lat && photo.lng === pos.lng && (photo.altitude ?? null) === (pos.ele ?? null);
+      if (same) break;
       await db.photo.update({ where: { id: photo.id }, data: { lat: pos.lat, lng: pos.lng, altitude: pos.ele ?? null, gpsSource: "TRACK" } });
       updated++;
       break;

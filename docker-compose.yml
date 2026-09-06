@@ -15,6 +15,7 @@ services:
       retries: 20
 
   app:
+    image: photoalbum:local
     build:
       context: .
       args:
@@ -23,6 +24,8 @@ services:
         NEXT_PUBLIC_MAP_STYLE_URL: ${NEXT_PUBLIC_MAP_STYLE_URL:-}
         NEXT_PUBLIC_MAP_GLYPHS_URL: ${NEXT_PUBLIC_MAP_GLYPHS_URL:-}
     restart: unless-stopped
+    # Give in-flight photo processing time to finish before Docker kills the container.
+    stop_grace_period: 45s
     depends_on:
       db:
         condition: service_healthy
@@ -38,13 +41,15 @@ services:
   # Optional: run background jobs in their own container.
   # Set RUN_WORKER=false in .env and start with `docker compose --profile worker up -d`.
   worker:
-    build:
-      context: .
+    image: photoalbum:local
     profiles: ["worker"]
     restart: unless-stopped
+    stop_grace_period: 45s
     depends_on:
       db:
         condition: service_healthy
+      app:
+        condition: service_started
     env_file: .env
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-photoalbum}:${POSTGRES_PASSWORD:-photoalbum}@db:5432/${POSTGRES_DB:-photoalbum}

@@ -5,7 +5,9 @@ export async function register() {
   if (!env().RUN_WORKER) return;
   const { startWorker } = await import("@/lib/jobs/worker");
   const { installShutdownHandlers } = await import("@/lib/jobs/boss");
-  // The Next server exits on SIGTERM; stop the queue first so in-flight jobs finish or are released.
-  installShutdownHandlers();
+  // Next's built-in SIGTERM handler exits as soon as the HTTP server closes, which would cut the queue
+  // shutdown short. With NEXT_MANUAL_SIG_HANDLE=1 (set in the Docker image) it stands down and our
+  // handler stops pg-boss gracefully, then exits. Without that variable this is best-effort only.
+  installShutdownHandlers({ exit: process.env.NEXT_MANUAL_SIG_HANDLE === "1" });
   startWorker().catch((err) => console.error("[worker] failed to start", err));
 }

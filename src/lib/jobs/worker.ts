@@ -5,11 +5,12 @@ import { QUEUES } from "./queues";
 /**
  * A photo left in PROCESSING longer than the job expiry plus all retries can no longer have a live job
  * (the process that owned it died). Mark it FAILED so the uploader stops spinning and "Re-process" is offered.
+ * PENDING rows are left alone: they may simply be queued behind a long backlog.
  */
 export async function reconcileStalePhotos(now = new Date()): Promise<number> {
   const cutoff = new Date(now.getTime() - JOB_EXPIRE_SECONDS * 4 * 1000);
   const res = await db.photo.updateMany({
-    where: { status: { in: ["PROCESSING", "PENDING"] }, updatedAt: { lt: cutoff } },
+    where: { status: "PROCESSING", updatedAt: { lt: cutoff } },
     data: { status: "FAILED", error: "Processing was interrupted by a restart. Use Re-process to try again." },
   });
   if (res.count) console.warn(`[worker] marked ${res.count} stale photo(s) as FAILED`);

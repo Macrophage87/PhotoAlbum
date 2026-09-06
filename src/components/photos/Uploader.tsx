@@ -135,7 +135,7 @@ export function Uploader({ tripId, onDone }: { tripId?: string; onDone?: (photoI
         }}
         className={`rounded-theme border-2 border-dashed p-10 text-center transition-colors ${dragging ? "border-primary bg-primary/5" : "border-border hover:bg-surface-alt"}`}
       >
-        <input ref={inputRef} id="photo-file-input" type="file" multiple accept="image/*,.heic,.heif" className="sr-only" onChange={(e) => e.target.files && addFiles(e.target.files)} />
+        <input ref={inputRef} id="photo-file-input" type="file" multiple accept="image/*,.heic,.heif" className="sr-only" tabIndex={-1} aria-label="Choose photos" onChange={(e) => e.target.files && addFiles(e.target.files)} />
         <p className="font-medium">Drop photos here</p>
         <p className="text-sm text-muted mt-1">JPEG, PNG, HEIC and more. Several at a time is fine.</p>
         <Button type="button" variant="secondary" className="mt-4" onClick={() => inputRef.current?.click()}>
