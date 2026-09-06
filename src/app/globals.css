@@ -1,26 +1,46 @@
 @import "tailwindcss";
 
+/* Default theme values so pages outside a trip still render. Trip pages override via TripTheme. */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --th-bg: #f8fafc;
+  --th-surface: #ffffff;
+  --th-surface-alt: #f1f5f9;
+  --th-text: #0f172a;
+  --th-text-muted: #64748b;
+  --th-primary: #2563eb;
+  --th-primary-fg: #ffffff;
+  --th-accent: #0ea5e9;
+  --th-accent-fg: #ffffff;
+  --th-border: #e2e8f0;
+  --th-ring: #93c5fd;
+  --th-font-display: var(--font-inter), system-ui, sans-serif;
+  --th-font-body: var(--font-inter), system-ui, sans-serif;
+  --th-radius: 0.75rem;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --color-bg: var(--th-bg);
+  --color-surface: var(--th-surface);
+  --color-surface-alt: var(--th-surface-alt);
+  --color-text: var(--th-text);
+  --color-muted: var(--th-text-muted);
+  --color-primary: var(--th-primary);
+  --color-primary-fg: var(--th-primary-fg);
+  --color-accent: var(--th-accent);
+  --color-accent-fg: var(--th-accent-fg);
+  --color-border: var(--th-border);
+  --color-ring: var(--th-ring);
+  --font-display: var(--th-font-display);
+  --font-body: var(--th-font-body);
+  --radius-theme: var(--th-radius);
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--th-bg);
+  color: var(--th-text);
+  font-family: var(--th-font-body);
+}
+
+h1, h2, h3, .font-display {
+  font-family: var(--th-font-display);
 }

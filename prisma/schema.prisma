@@ -1,0 +1,269 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  ADMIN
+  MEMBER
+}
+
+enum TripVisibility {
+  PRIVATE
+  LINK
+  PUBLIC
+}
+
+enum ActivityType {
+  HIKE
+  BIKE
+  RUN
+  KAYAK
+  DRIVE
+  BOAT
+  SIGHTSEEING
+  FOOD
+  OTHER
+}
+
+enum TrackSource {
+  GPX
+  FIT
+  GOOGLE
+}
+
+enum PhotoStatus {
+  PENDING
+  PROCESSING
+  READY
+  FAILED
+}
+
+enum GpsSource {
+  EXIF
+  TRACK
+  MANUAL
+}
+
+enum TakenAtSource {
+  EXIF_OFFSET
+  EXIF_TZLOOKUP
+  TRIP_TZ
+  FILE_MTIME
+  UPLOAD_TIME
+  MANUAL
+}
+
+enum PhotoRelation {
+  SAME_SCENE
+  BEFORE_AFTER
+  PANORAMA_PART
+  DETAIL_OF
+  RELATED
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  role      Role     @default(MEMBER)
+  createdAt DateTime @default(now())
+
+  sessions Session[]
+  invites  Invite[]  @relation("InvitedBy")
+  trips    Trip[]
+  photos   Photo[]
+  tracks   Track[]
+}
+
+model Invite {
+  id          String    @id @default(cuid())
+  email       String
+  tokenHash   String    @unique
+  role        Role      @default(MEMBER)
+  invitedById String
+  invitedBy   User      @relation("InvitedBy", fields: [invitedById], references: [id], onDelete: Cascade)
+  expiresAt   DateTime
+  acceptedAt  DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([email])
+}
+
+model MagicLinkToken {
+  id        String    @id @default(cuid())
+  email     String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([email])
+}
+
+model Session {
+  id        String   @id
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+model Trip {
+  id           String         @id @default(cuid())
+  slug         String         @unique
+  title        String
+  description  String?
+  startDate    DateTime       @db.Date
+  endDate      DateTime       @db.Date
+  timezone     String         @default("UTC")
+  themeKey     String         @default("default")
+  coverPhotoId String?        @unique
+  coverPhoto   Photo?         @relation("TripCover", fields: [coverPhotoId], references: [id], onDelete: SetNull)
+  visibility   TripVisibility @default(PRIVATE)
+  shareToken   String?        @unique
+  createdById  String
+  createdBy    User           @relation(fields: [createdById], references: [id])
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  activities Activity[]
+  photos     Photo[]
+  tracks     Track[]
+
+  @@index([startDate])
+  @@index([visibility])
+}
+
+model Activity {
+  id          String       @id @default(cuid())
+  tripId      String
+  trip        Trip         @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  title       String
+  type        ActivityType @default(OTHER)
+  startTime   DateTime
+  endTime     DateTime
+  description String?
+  trackId     String?      @unique
+  track       Track?       @relation("ActivityTrack", fields: [trackId], references: [id], onDelete: SetNull)
+  photos      Photo[]
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  @@index([tripId, startTime])
+}
+
+model Photo {
+  id            String         @id @default(cuid())
+  tripId        String?
+  trip          Trip?          @relation(fields: [tripId], references: [id], onDelete: SetNull)
+  activityId    String?
+  activity      Activity?      @relation(fields: [activityId], references: [id], onDelete: SetNull)
+  uploaderId    String
+  uploader      User           @relation(fields: [uploaderId], references: [id])
+  status        PhotoStatus    @default(PENDING)
+  error         String?
+  originalName  String
+  mimeType      String
+  storageKey    String
+  originalPath  String
+  sizeBytes     Int
+  width         Int?
+  height        Int?
+  takenAt       DateTime?
+  takenAtSource TakenAtSource?
+  tzOffsetMin   Int?
+  lat           Float?
+  lng           Float?
+  altitude      Float?
+  gpsSource     GpsSource?
+  camera        String?
+  lens          String?
+  exif          Json?
+  caption       String?
+  renditions    Json?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  coverOf Trip?       @relation("TripCover")
+  linksA  PhotoLink[] @relation("LinkA")
+  linksB  PhotoLink[] @relation("LinkB")
+
+  @@index([takenAt])
+  @@index([tripId, takenAt])
+  @@index([activityId])
+  @@index([lat, lng])
+  @@index([status])
+}
+
+model PhotoLink {
+  id        String        @id @default(cuid())
+  photoAId  String
+  photoBId  String
+  photoA    Photo         @relation("LinkA", fields: [photoAId], references: [id], onDelete: Cascade)
+  photoB    Photo         @relation("LinkB", fields: [photoBId], references: [id], onDelete: Cascade)
+  relation  PhotoRelation
+  note      String?
+  createdAt DateTime      @default(now())
+
+  @@unique([photoAId, photoBId, relation])
+  @@index([photoBId])
+}
+
+model Track {
+  id           String      @id @default(cuid())
+  tripId       String
+  trip         Trip        @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  activity     Activity?   @relation("ActivityTrack")
+  uploaderId   String
+  uploader     User        @relation(fields: [uploaderId], references: [id])
+  source       TrackSource
+  name         String
+  originalFile String?
+  startTime    DateTime
+  endTime      DateTime
+  pointCount   Int
+  minLat       Float
+  maxLat       Float
+  minLng       Float
+  maxLng       Float
+  simplified   Json
+  pointsBlob   Bytes
+  hasElevation Boolean     @default(false)
+  hasHeartRate Boolean     @default(false)
+  hasCadence   Boolean     @default(false)
+  hasPower     Boolean     @default(false)
+  stats        TrackStats?
+  createdAt    DateTime    @default(now())
+
+  @@index([tripId, startTime])
+  @@index([startTime, endTime])
+}
+
+model TrackStats {
+  trackId         String @id
+  track           Track  @relation(fields: [trackId], references: [id], onDelete: Cascade)
+  distanceM       Float
+  movingTimeS     Int
+  elapsedTimeS    Int
+  elevGainM       Float?
+  elevLossM       Float?
+  minEleM         Float?
+  maxEleM         Float?
+  avgSpeedMs      Float?
+  maxSpeedMs      Float?
+  avgHr           Int?
+  maxHr           Int?
+  avgCadence      Int?
+  maxCadence      Int?
+  avgPower        Int?
+  maxPower        Int?
+  normalizedPower Int?
+  calories        Int?
+}

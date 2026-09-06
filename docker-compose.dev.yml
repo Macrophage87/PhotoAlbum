@@ -1,0 +1,13 @@
+# Development overrides: `docker compose -f docker-compose.yml -f docker-compose.dev.yml up db mailpit`
+# then run `pnpm dev` on the host with DATABASE_URL pointing at localhost:5432.
+services:
+  db:
+    ports:
+      - "5432:5432"
+
+  mailpit:
+    image: axllent/mailpit:latest
+    restart: unless-stopped
+    ports:
+      - "8025:8025"   # web UI
+      - "1025:1025"   # SMTP
