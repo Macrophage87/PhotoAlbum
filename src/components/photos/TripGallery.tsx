@@ -41,27 +41,31 @@ export function TripGallery({ photos, activities, trips, editable, emptyMessage 
                 None
               </Button>
               <span className="mx-1 text-border">|</span>
-              <Select value={activityId} onChange={(e) => setActivityId(e.target.value)} className="h-8 w-48 text-sm">
-                <option value="">Activity…</option>
-                <option value="__none">No activity</option>
-                {activities.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.title}
-                  </option>
-                ))}
-              </Select>
+              <div className="w-48">
+                <Select value={activityId} onChange={(e) => setActivityId(e.target.value)} className="h-8 text-sm">
+                  <option value="">Activity…</option>
+                  <option value="__none">No activity</option>
+                  {activities.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.title}
+                    </option>
+                  ))}
+                </Select>
+              </div>
               <Button size="sm" variant="secondary" disabled={!ids.length || !activityId || pending} onClick={() => run(() => bulkAssignActivity(ids, activityId === "__none" ? null : activityId))}>
                 Assign
               </Button>
-              <Select value={tripId} onChange={(e) => setTripId(e.target.value)} className="h-8 w-48 text-sm">
-                <option value="">Move to trip…</option>
-                <option value="__none">No trip</option>
-                {trips.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.title}
-                  </option>
-                ))}
-              </Select>
+              <div className="w-48">
+                <Select value={tripId} onChange={(e) => setTripId(e.target.value)} className="h-8 text-sm">
+                  <option value="">Move to trip…</option>
+                  <option value="__none">No trip</option>
+                  {trips.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.title}
+                    </option>
+                  ))}
+                </Select>
+              </div>
               <Button size="sm" variant="secondary" disabled={!ids.length || !tripId || pending} onClick={() => run(() => bulkMoveToTrip(ids, tripId === "__none" ? null : tripId))}>
                 Move
               </Button>
