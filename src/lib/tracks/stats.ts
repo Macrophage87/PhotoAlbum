@@ -112,8 +112,14 @@ export function computeStats(points: TrackPoint[], opts: StatsOptions = {}): Tra
     const { gain, loss } = elevationGainLoss(eles, opts.elevationWindow ?? 5);
     elevGain = Math.round(gain);
     elevLoss = Math.round(loss);
-    minEle = Math.min(...eles);
-    maxEle = Math.max(...eles);
+    // Loop rather than spread: Math.min(...arr) overflows the call stack past ~100k points.
+    let lo = Infinity, hi = -Infinity;
+    for (const e of eles) {
+      if (e < lo) lo = e;
+      if (e > hi) hi = e;
+    }
+    minEle = lo;
+    maxEle = hi;
   }
 
   return {

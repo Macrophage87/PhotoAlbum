@@ -1,16 +1,11 @@
-import { notFound } from "next/navigation";
 import { db } from "@/lib/db";
-import { getViewer } from "@/lib/auth/viewer";
-import { canEditTrip } from "@/lib/auth/access";
-import { getTripBySlug } from "@/lib/trips/queries";
+import { loadViewableTrip } from "@/lib/trips/access";
 import { ActivityCard } from "@/components/activities/ActivityCard";
 import { ButtonLink } from "@/components/ui";
 
 export default async function ActivitiesPage({ params }: PageProps<"/trips/[slug]/activities">) {
   const { slug } = await params;
-  const [viewer, trip] = await Promise.all([getViewer(), getTripBySlug(slug)]);
-  if (!trip) notFound();
-  const editable = canEditTrip(viewer);
+  const { trip, editable } = await loadViewableTrip(slug, `/trips/${slug}/activities`);
   const activities = await db.activity.findMany({
     where: { tripId: trip.id },
     orderBy: { startTime: "asc" },

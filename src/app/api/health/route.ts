@@ -5,6 +5,7 @@ export async function GET() {
     await db.$queryRaw`SELECT 1`;
     return Response.json({ ok: true });
   } catch (err) {
-    return Response.json({ ok: false, error: (err as Error).message }, { status: 503 });
+    console.error("[health] database check failed:", err instanceof Error ? err.message : err);
+    return Response.json({ ok: false }, { status: 503 });
   }
 }

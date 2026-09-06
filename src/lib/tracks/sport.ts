@@ -6,7 +6,7 @@ const MAP: [RegExp, ActivityType][] = [
   [/^(hiking|hike|walking|walk|trekking|backpack|snowshoe)/i, "HIKE"],
   [/^(paddling|kayak|canoe|rowing|row|sup|stand_?up|paddle)/i, "KAYAK"],
   [/^(boating|sail|boat|motorboat|fishing)/i, "BOAT"],
-  [/^(driving|drive|motorcycl|car|flying|train|transit)/i, "DRIVE"],
+  [/^(driving|drive|motorcycl|car$|car_|flying|flight|train$|train_|transit$|transport|bus$)/i, "DRIVE"],
 ];
 
 /** FIT sport / GPX <type> string -> our activity type; null when unknown. */

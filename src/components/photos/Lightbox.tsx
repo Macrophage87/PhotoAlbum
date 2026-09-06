@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 
 export type LightboxPhoto = { id: string; mediumUrl: string; width: number | null; height: number | null; caption: string | null; alt: string };
@@ -10,6 +10,32 @@ export function Lightbox({ photos, index, onClose, onNavigate, showDetailLink = 
   const prev = useCallback(() => onNavigate((index - 1 + photos.length) % photos.length), [index, photos.length, onNavigate]);
   const next = useCallback(() => onNavigate((index + 1) % photos.length), [index, photos.length, onNavigate]);
 
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    const opener = document.activeElement as HTMLElement | null;
+    closeRef.current?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Tab" && dialogRef.current) {
+        // Keep keyboard focus inside the dialog.
+        const focusable = Array.from(dialogRef.current.querySelectorAll<HTMLElement>("a[href], button:not([disabled])"));
+        if (!focusable.length) return;
+        const first = focusable[0], last = focusable[focusable.length - 1];
+        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = "";
+      opener?.focus?.();
+    };
+    // Focus management runs once per open; navigation between photos keeps focus where it is.
+  }, []);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
@@ -17,16 +43,12 @@ export function Lightbox({ photos, index, onClose, onNavigate, showDetailLink = 
       if (e.key === "ArrowRight") next();
     };
     window.addEventListener("keydown", onKey);
-    document.body.style.overflow = "hidden";
-    return () => {
-      window.removeEventListener("keydown", onKey);
-      document.body.style.overflow = "";
-    };
+    return () => window.removeEventListener("keydown", onKey);
   }, [onClose, prev, next]);
 
   if (!photo) return null;
   return (
-    <div className="fixed inset-0 z-50 bg-black/90 flex flex-col" onClick={onClose} role="dialog" aria-modal="true">
+    <div ref={dialogRef} className="fixed inset-0 z-50 bg-black/90 flex flex-col" onClick={onClose} role="dialog" aria-modal="true" aria-label="Photo viewer">
       <div className="flex items-center justify-between p-3 text-white/80 text-sm" onClick={(e) => e.stopPropagation()}>
         <span>
           {index + 1} / {photos.length}
@@ -37,7 +59,7 @@ export function Lightbox({ photos, index, onClose, onNavigate, showDetailLink = 
               Details
             </Link>
           )}
-          <button onClick={onClose} className="px-2 py-1 rounded hover:bg-white/10" aria-label="Close">
+          <button ref={closeRef} onClick={onClose} className="px-2 py-1 rounded hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white" aria-label="Close">
             ✕
           </button>
         </div>

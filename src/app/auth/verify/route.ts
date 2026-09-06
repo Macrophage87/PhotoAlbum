@@ -3,11 +3,11 @@ import { db } from "@/lib/db";
 import { env } from "@/lib/env";
 import { verifyMagicLink } from "@/lib/auth/magic-link";
 import { createSession } from "@/lib/auth/session";
+import { safeNextPath } from "@/lib/auth/tokens";
 
 export async function GET(request: NextRequest) {
   const token = request.nextUrl.searchParams.get("token") ?? "";
-  const nextParam = request.nextUrl.searchParams.get("next");
-  const next = nextParam && nextParam.startsWith("/") ? nextParam : "/";
+  const next = safeNextPath(request.nextUrl.searchParams.get("next"));
 
   const result = await verifyMagicLink(token, { db, adminEmail: env().ADMIN_EMAIL });
   if (!result.ok) {

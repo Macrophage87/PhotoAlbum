@@ -27,7 +27,7 @@ export async function bulkMoveToTrip(photoIds: string[], tripId: string | null):
   const list = ids.parse(photoIds);
   if (tripId && !(await db.trip.findUnique({ where: { id: tripId }, select: { id: true } }))) return;
   await db.photo.updateMany({ where: { id: { in: list } }, data: { tripId, activityId: null } });
-  if (tripId) await enqueue(QUEUES.geotagPhotos, { tripId }, { singletonKey: `geotag:${tripId}`, singletonSeconds: 10 });
+  if (tripId) await enqueue(QUEUES.geotagPhotos, { tripId }, { singletonKey: `geotag:${tripId}`, singletonSeconds: 10, singletonNextSlot: true });
   revalidatePath("/", "layout");
 }
 

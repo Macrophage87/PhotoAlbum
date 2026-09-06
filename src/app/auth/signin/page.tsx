@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { getViewer } from "@/lib/auth/viewer";
+import { safeNextPath } from "@/lib/auth/tokens";
 import { Card } from "@/components/ui";
 import { SignInForm } from "./SignInForm";
 
@@ -8,7 +9,7 @@ export const metadata = { title: "Sign in" };
 export default async function SignInPage({ searchParams }: PageProps<"/auth/signin">) {
   const viewer = await getViewer();
   const sp = await searchParams;
-  const next = typeof sp.next === "string" && sp.next.startsWith("/") ? sp.next : undefined;
+  const next = safeNextPath(sp.next, "") || undefined;
   const error = typeof sp.error === "string" ? sp.error : undefined;
   if (viewer.kind === "user") redirect(next ?? "/");
 

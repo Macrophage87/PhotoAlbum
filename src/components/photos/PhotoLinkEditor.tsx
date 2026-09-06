@@ -25,7 +25,7 @@ export function PhotoLinkEditor({ candidates, action }: { candidates: LinkCandid
 
   return (
     <form action={action} className="space-y-3 rounded-theme border border-border p-3">
-      <Input placeholder="Filter by caption or file name" value={query} onChange={(e) => setQuery(e.target.value)} className="h-8 text-sm" />
+      <Input aria-label="Filter photos by caption or file name" placeholder="Filter by caption or file name" value={query} onChange={(e) => setQuery(e.target.value)} className="h-8 text-sm" />
       <div className="grid grid-cols-4 gap-1.5 max-h-56 overflow-y-auto">
         {filtered.slice(0, 200).map((c) => (
           <button
@@ -43,14 +43,14 @@ export function PhotoLinkEditor({ candidates, action }: { candidates: LinkCandid
       </div>
       <input type="hidden" name="otherId" value={picked ?? ""} />
       <div className="flex gap-2">
-        <Select name="relation" defaultValue="RELATED" className="h-8 text-sm">
+        <Select name="relation" aria-label="Relationship" defaultValue="RELATED" className="h-8 text-sm">
           {Object.entries(RELATION_LABEL).map(([k, v]) => (
             <option key={k} value={k}>
               {v}
             </option>
           ))}
         </Select>
-        <Input name="note" placeholder="Note (optional)" className="h-8 text-sm" />
+        <Input name="note" aria-label="Note" placeholder="Note (optional)" className="h-8 text-sm" />
       </div>
       <div className="flex gap-2">
         <Button type="submit" size="sm" disabled={!picked}>

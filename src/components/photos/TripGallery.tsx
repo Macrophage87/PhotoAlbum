@@ -42,7 +42,7 @@ export function TripGallery({ photos, activities, trips, editable, emptyMessage 
               </Button>
               <span className="mx-1 text-border">|</span>
               <div className="w-48">
-                <Select value={activityId} onChange={(e) => setActivityId(e.target.value)} className="h-8 text-sm">
+                <Select aria-label="Activity to assign" value={activityId} onChange={(e) => setActivityId(e.target.value)} className="h-8 text-sm">
                   <option value="">Activity…</option>
                   <option value="__none">No activity</option>
                   {activities.map((a) => (
@@ -56,7 +56,7 @@ export function TripGallery({ photos, activities, trips, editable, emptyMessage 
                 Assign
               </Button>
               <div className="w-48">
-                <Select value={tripId} onChange={(e) => setTripId(e.target.value)} className="h-8 text-sm">
+                <Select aria-label="Trip to move to" value={tripId} onChange={(e) => setTripId(e.target.value)} className="h-8 text-sm">
                   <option value="">Move to trip…</option>
                   <option value="__none">No trip</option>
                   {trips.map((t) => (

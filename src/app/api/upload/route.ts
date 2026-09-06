@@ -80,6 +80,12 @@ export async function POST(request: Request) {
     return Response.json({ error: "Upload failed" }, { status: 500 });
   }
 
-  await enqueue(QUEUES.processPhoto, { photoId: photo.id, tripId: tripId ?? null });
+  try {
+    await enqueue(QUEUES.processPhoto, { photoId: photo.id, tripId: tripId ?? null });
+  } catch (err) {
+    console.error("[upload] could not queue processing", err);
+    await db.photo.update({ where: { id: photo.id }, data: { status: "FAILED", error: "Could not queue processing; use Re-process on the photo page." } }).catch(() => {});
+    return Response.json({ error: "Upload stored but processing could not be queued" }, { status: 500 });
+  }
   return Response.json({ photoId: photo.id });
 }

@@ -1,8 +1,6 @@
 import { notFound } from "next/navigation";
 import { db } from "@/lib/db";
-import { getViewer } from "@/lib/auth/viewer";
-import { canEditTrip } from "@/lib/auth/access";
-import { getTripBySlug } from "@/lib/trips/queries";
+import { loadViewableTrip } from "@/lib/trips/access";
 import { photoCardSelect } from "@/lib/photos/queries";
 import { ActivityDetail } from "@/components/activities/ActivityDetail";
 import { deleteActivity, updateActivity } from "../actions";
@@ -10,9 +8,7 @@ import { deleteActivity, updateActivity } from "../actions";
 export default async function ActivityPage({ params, searchParams }: PageProps<"/trips/[slug]/activities/[id]">) {
   const { slug, id } = await params;
   const sp = await searchParams;
-  const [viewer, trip] = await Promise.all([getViewer(), getTripBySlug(slug)]);
-  if (!trip) notFound();
-  const editable = canEditTrip(viewer);
+  const { trip, editable } = await loadViewableTrip(slug, `/trips/${slug}/activities/${id}`);
   const activity = await db.activity.findFirst({ where: { id, tripId: trip.id }, include: { track: { select: { id: true, simplified: true, stats: true } } } });
   if (!activity) notFound();
   const photos = await db.photo.findMany({ where: { activityId: activity.id }, orderBy: [{ takenAt: "asc" }], select: photoCardSelect });

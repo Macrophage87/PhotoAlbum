@@ -22,6 +22,8 @@ export async function updatePhoto(id: string, fd: FormData): Promise<void> {
   if (!photo) throw new Error("Photo not found");
   const v = updateSchema.parse({ caption: fd.get("caption") ?? "", tripId: fd.get("tripId") ?? "", activityId: fd.get("activityId") ?? undefined });
 
+  if (v.tripId && !(await db.trip.findUnique({ where: { id: v.tripId }, select: { id: true } }))) throw new Error("That trip no longer exists");
+
   let activityId = v.activityId;
   if (v.tripId !== photo.tripId) {
     // Trip changed: re-derive the activity from the new trip's windows.
@@ -109,7 +111,7 @@ export async function shiftPhotoTimezone(id: string, fd: FormData): Promise<void
       ...(photo.gpsSource === "TRACK" ? { lat: null, lng: null, altitude: null, gpsSource: null } : {}),
     },
   });
-  if (tripId) await enqueue(QUEUES.geotagPhotos, { tripId }, { singletonKey: `geotag:${tripId}`, singletonSeconds: 10 });
+  if (tripId) await enqueue(QUEUES.geotagPhotos, { tripId }, { singletonKey: `geotag:${tripId}`, singletonSeconds: 10, singletonNextSlot: true });
   revalidatePath(`/photos/${id}`);
   revalidatePath("/trips", "layout");
 }

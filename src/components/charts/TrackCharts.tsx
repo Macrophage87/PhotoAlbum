@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AlignedData } from "uplot";
 import type { ActivityType } from "@/generated/prisma/enums";
 import type { ColumnarPoints } from "@/lib/tracks/types";
@@ -77,26 +77,38 @@ export function TrackCharts({ trackId, type, onHover }: { trackId: string; type:
     return { xs, ele, speedSeries, paceBased, hr, pwr, lat: c.lat, lng: c.lng };
   }, [payload, type]);
 
-  if (error) return <p className="text-sm text-red-600">{error}</p>;
-  if (!series) return <div className="h-40 bg-surface-alt animate-pulse rounded-theme" />;
-
   const color = ACTIVITY_COLOR[type];
-  const hover = (idx: number | null) => onHover?.(idx === null ? null : { lat: series.lat[idx], lng: series.lng[idx] });
+  const onHoverRef = useRef(onHover);
+  useEffect(() => {
+    onHoverRef.current = onHover;
+  }, [onHover]);
+  // Stable callback: keeps the props handed to UPlotChart inert across hover-driven re-renders.
+  const hover = useCallback((idx: number | null) => onHoverRef.current?.(idx === null ? null : series ? { lat: series.lat[idx], lng: series.lng[idx] } : null), [series]);
+
+  // Memoised: UPlotChart recreates the plot when `data` changes identity, and this component re-renders on every
+  // hover (the parent stores the marker position in state), so the AlignedData tuples must be stable.
+  const charts = useMemo(() => {
+    if (!series) return [];
+    const rangeOf = (vals: (number | null)[], pad = 0.1): [number, number] => {
+      let lo = Infinity, hi = -Infinity;
+      for (const v of vals) if (v !== null && Number.isFinite(v)) { if (v < lo) lo = v; if (v > hi) hi = v; }
+      if (!Number.isFinite(lo)) return [0, 1];
+      const span = Math.max(hi - lo, 1);
+      return [lo - span * pad, hi + span * pad];
+    };
+    const list: { key: string; title: string; data: AlignedData; stroke: string; fill?: string; unit: string; paceFmt?: boolean; range?: [number, number] }[] = [];
+    if (series.ele) list.push({ key: "ele", title: "Elevation", data: [series.xs, series.ele] as AlignedData, stroke: color, fill: color + "33", unit: "ft" });
+    list.push({ key: "spd", title: series.paceBased ? "Pace" : "Speed", data: [series.xs, series.speedSeries] as AlignedData, stroke: "#1565c0", unit: series.paceBased ? "/mi" : "mph", paceFmt: series.paceBased, range: rangeOf(series.speedSeries, 0.25) });
+    if (series.hr) list.push({ key: "hr", title: "Heart rate", data: [series.xs, series.hr] as AlignedData, stroke: "#c62828", fill: "#c6282822", unit: "bpm" });
+    if (series.pwr) list.push({ key: "pwr", title: "Power", data: [series.xs, series.pwr] as AlignedData, stroke: "#6a1b9a", unit: "W" });
+    return list;
+  }, [series, color]);
+
   const xAxis = { label: "Distance (mi)", values: (_u: unknown, vals: number[]) => vals.map((v) => v.toFixed(v < 10 ? 1 : 0)) };
   const common = { scales: { x: { time: false } }, cursor: { sync: { key: `track-${trackId}` }, y: false }, legend: { show: false } } as const;
 
-  const rangeOf = (vals: (number | null)[], pad = 0.1): [number, number] => {
-    let lo = Infinity, hi = -Infinity;
-    for (const v of vals) if (v !== null && Number.isFinite(v)) { if (v < lo) lo = v; if (v > hi) hi = v; }
-    if (!Number.isFinite(lo)) return [0, 1];
-    const span = Math.max(hi - lo, 1);
-    return [lo - span * pad, hi + span * pad];
-  };
-  const charts: { key: string; title: string; data: AlignedData; stroke: string; fill?: string; unit: string; paceFmt?: boolean; range?: [number, number] }[] = [];
-  if (series.ele) charts.push({ key: "ele", title: "Elevation", data: [series.xs, series.ele] as AlignedData, stroke: color, fill: color + "33", unit: "ft" });
-  charts.push({ key: "spd", title: series.paceBased ? "Pace" : "Speed", data: [series.xs, series.speedSeries] as AlignedData, stroke: "#1565c0", unit: series.paceBased ? "/mi" : "mph", paceFmt: series.paceBased, range: rangeOf(series.speedSeries, 0.25) });
-  if (series.hr) charts.push({ key: "hr", title: "Heart rate", data: [series.xs, series.hr] as AlignedData, stroke: "#c62828", fill: "#c6282822", unit: "bpm" });
-  if (series.pwr) charts.push({ key: "pwr", title: "Power", data: [series.xs, series.pwr] as AlignedData, stroke: "#6a1b9a", unit: "W" });
+  if (error) return <p className="text-sm text-red-600">{error}</p>;
+  if (!series) return <div className="h-40 bg-surface-alt animate-pulse rounded-theme" />;
 
   return (
     <div className="space-y-3">

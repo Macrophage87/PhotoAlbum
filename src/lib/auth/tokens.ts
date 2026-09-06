@@ -12,3 +12,14 @@ export function hashToken(token: string): string {
 export function normalizeEmail(email: string): string {
   return email.trim().toLowerCase();
 }
+
+/**
+ * Accept a post-sign-in redirect target only when it is a same-site relative path:
+ * starts with a single "/" and is not protocol-relative ("//host") or backslash-tricked.
+ */
+export function safeNextPath(value: unknown, fallback = "/"): string {
+  if (typeof value !== "string") return fallback;
+  if (!/^\/(?![\/\\])/.test(value)) return fallback;
+  if (/[\r\n]/.test(value)) return fallback;
+  return value;
+}

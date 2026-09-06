@@ -66,3 +66,40 @@ describe("geotagPhotos", () => {
     expect(await geotagPhotos({ tripId })).toEqual({ updated: 0 });
   });
 });
+
+describe("geotagPhotos upgrades coarse positions", () => {
+  let tripId: string, userId: string;
+  beforeEach(async () => {
+    await resetTestDb();
+    const user = await db.user.create({ data: { email: "g2@example.com", role: "ADMIN" } });
+    userId = user.id;
+    const trip = await db.trip.create({ data: { slug: "g2", title: "G2", startDate: new Date("2025-08-10"), endDate: new Date("2025-08-16"), createdById: user.id } });
+    tripId = trip.id;
+  });
+
+  it("re-positions a photo placed from a Google trace once a GPX track covering it is imported", async () => {
+    const google = await makeTrack(tripId, userId, line(10).map((p) => ({ ...p, lng: -70 })), "GOOGLE");
+    const photo = await makePhoto(tripId, userId, new Date(T0 + 4.5 * 60_000));
+    await geotagPhotos({ tripId, trackIds: [google.id] });
+    const coarse = await db.photo.findUniqueOrThrow({ where: { id: photo.id } });
+    expect(coarse.gpsSource).toBe("TRACK");
+    expect(coarse.lng).toBeCloseTo(-70, 5);
+
+    const gpx = await makeTrack(tripId, userId, line(10), "GPX");
+    await geotagPhotos({ tripId, trackIds: [gpx.id] });
+    const precise = await db.photo.findUniqueOrThrow({ where: { id: photo.id } });
+    expect(precise.gpsSource).toBe("TRACK");
+    expect(precise.lng).toBeCloseTo(-68, 5);
+  });
+
+  it("does not move a track-placed photo for a later Google trace, nor EXIF/manual photos ever", async () => {
+    const gpx = await makeTrack(tripId, userId, line(10), "GPX");
+    const photo = await makePhoto(tripId, userId, new Date(T0 + 4.5 * 60_000));
+    const manual = await makePhoto(tripId, userId, new Date(T0 + 4.5 * 60_000), { lat: 1, lng: 2, gpsSource: "MANUAL" });
+    await geotagPhotos({ tripId, trackIds: [gpx.id] });
+    const google = await makeTrack(tripId, userId, line(10).map((p) => ({ ...p, lng: -70 })), "GOOGLE");
+    await geotagPhotos({ tripId, trackIds: [google.id] });
+    expect((await db.photo.findUniqueOrThrow({ where: { id: photo.id } })).lng).toBeCloseTo(-68, 5);
+    expect((await db.photo.findUniqueOrThrow({ where: { id: manual.id } })).lng).toBe(2);
+  });
+});

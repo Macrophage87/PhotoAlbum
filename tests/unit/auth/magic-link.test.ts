@@ -21,6 +21,13 @@ describe("magic link", () => {
     expect(user.role).toBe("ADMIN");
   });
 
+  it("only ADMIN_EMAIL may bootstrap on an empty database when it is configured", async () => {
+    const req = await requestMagicLink("stranger@example.com", deps(T0, "owner@example.com"));
+    expect(req).toEqual({ ok: false, reason: "not_invited" });
+    const owner = await requestMagicLink("Owner@Example.com", deps(T0, "owner@example.com"));
+    expect(owner.ok).toBe(true);
+  });
+
   it("rejects uninvited addresses once a user exists", async () => {
     await db.user.create({ data: { email: "owner@example.com", role: "ADMIN" } });
     const req = await requestMagicLink("stranger@example.com", deps());

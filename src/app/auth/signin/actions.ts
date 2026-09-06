@@ -5,6 +5,7 @@ import { db } from "@/lib/db";
 import { env } from "@/lib/env";
 import { requestMagicLink } from "@/lib/auth/magic-link";
 import { magicLinkEmail, sendMail } from "@/lib/auth/email";
+import { safeNextPath } from "@/lib/auth/tokens";
 
 export type SignInState = { status: "idle" } | { status: "sent"; email: string } | { status: "error"; message: string };
 
@@ -20,7 +21,8 @@ export async function requestSignIn(_prev: SignInState, formData: FormData): Pro
 
   const url = new URL("/auth/verify", env().APP_URL);
   url.searchParams.set("token", result.token);
-  if (parsed.data.next && parsed.data.next.startsWith("/")) url.searchParams.set("next", parsed.data.next);
+  const next = safeNextPath(parsed.data.next);
+  if (next !== "/") url.searchParams.set("next", next);
   await sendMail(magicLinkEmail(result.email, url.toString()));
   return { status: "sent", email: result.email };
 }

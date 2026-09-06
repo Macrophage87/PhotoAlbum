@@ -70,3 +70,14 @@ describe("computeStats", () => {
     expect(merged.movingTimeS).toBe(computed.movingTimeS);
   });
 });
+
+describe("computeStats on very large tracks", () => {
+  it("handles 300k points with elevation without overflowing the stack", () => {
+    const t0 = Date.parse("2025-08-12T13:00:00Z");
+    const pts: TrackPoint[] = Array.from({ length: 300_000 }, (_, i) => ({ t: t0 + i * 1000, lat: 44 + i * 1e-5, lng: -68, ele: 100 + Math.sin(i / 500) * 50 }));
+    const s = computeStats(pts);
+    expect(s.minEleM).toBeCloseTo(50, 0);
+    expect(s.maxEleM).toBeCloseTo(150, 0);
+    expect(s.distanceM).toBeGreaterThan(300_000);
+  });
+});

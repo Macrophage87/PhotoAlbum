@@ -92,8 +92,13 @@ export function Uploader({ tripId, onDone }: { tripId?: string; onDone?: (photoI
     if (!pending.length) return;
     const t = setTimeout(async () => {
       const ids = pending.map((i) => i.photoId).join(",");
-      const res = await fetch(`/api/photos/status?ids=${ids}`);
-      if (!res.ok) return;
+      const res = await fetch(`/api/photos/status?ids=${ids}`).catch(() => null);
+      if (!res || !res.ok) {
+        const message = res?.status === 401 ? "Signed out. Sign in again to see the result." : "Lost contact with the server. Reload the page to check.";
+        // Give up on status polling rather than spinning forever; the photos themselves are already safe.
+        setItems((prev) => prev.map((it) => (it.status === "processing" ? { ...it, status: "failed", error: message } : it)));
+        return;
+      }
       const { photos } = (await res.json()) as { photos: { id: string; status: string; error: string | null; thumbUrl: string | null; trip: Item["trip"] }[] };
       setItems((prev) =>
         prev.map((it) => {
@@ -128,12 +133,14 @@ export function Uploader({ tripId, onDone }: { tripId?: string; onDone?: (photoI
           setDragging(false);
           addFiles(e.dataTransfer.files);
         }}
-        onClick={() => inputRef.current?.click()}
-        className={`cursor-pointer rounded-theme border-2 border-dashed p-10 text-center transition-colors ${dragging ? "border-primary bg-primary/5" : "border-border hover:bg-surface-alt"}`}
+        className={`rounded-theme border-2 border-dashed p-10 text-center transition-colors ${dragging ? "border-primary bg-primary/5" : "border-border hover:bg-surface-alt"}`}
       >
-        <input ref={inputRef} type="file" multiple accept="image/*,.heic,.heif" className="hidden" onChange={(e) => e.target.files && addFiles(e.target.files)} />
-        <p className="font-medium">Drop photos here or click to choose</p>
+        <input ref={inputRef} id="photo-file-input" type="file" multiple accept="image/*,.heic,.heif" className="sr-only" onChange={(e) => e.target.files && addFiles(e.target.files)} />
+        <p className="font-medium">Drop photos here</p>
         <p className="text-sm text-muted mt-1">JPEG, PNG, HEIC and more. Several at a time is fine.</p>
+        <Button type="button" variant="secondary" className="mt-4" onClick={() => inputRef.current?.click()}>
+          Choose photos
+        </Button>
       </div>
 
       {items.length > 0 && (

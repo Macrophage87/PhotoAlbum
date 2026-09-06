@@ -64,6 +64,9 @@ export class LocalStorage implements StorageProvider {
   }
 
   async deletePrefix(prefix: string): Promise<void> {
+    // Never allow the storage root itself (or a bare top-level folder) to be removed.
+    const parts = prefix.split("/").filter(Boolean);
+    if (parts.length < 2) throw new Error(`Refusing to delete prefix "${prefix}": expected at least "<folder>/<id>"`);
     await rm(this.localPath(prefix), { recursive: true, force: true });
   }
 }

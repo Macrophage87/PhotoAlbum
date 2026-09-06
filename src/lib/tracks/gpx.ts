@@ -15,7 +15,7 @@ const parser = new XMLParser({
 
 const asArray = <T>(v: T | T[] | undefined): T[] => (v === undefined ? [] : Array.isArray(v) ? v : [v]);
 const num = (v: unknown): number | undefined => {
-  const n = typeof v === "number" ? v : typeof v === "string" ? Number(v) : NaN;
+  const n = typeof v === "number" ? v : typeof v === "string" && v.trim() !== "" ? Number(v) : NaN;
   return Number.isFinite(n) ? n : undefined;
 };
 
@@ -38,6 +38,12 @@ function text(v: unknown): string | undefined {
   return String(v);
 }
 
+/** GPX times are UTC by spec; add a "Z" when a writer omitted the zone so Date.parse does not use the host zone. */
+export function gpxTimeToIso(time: string): string {
+  const s = time.trim();
+  return /(Z|[+-]\d{2}:?\d{2})$/i.test(s) ? s : `${s}Z`;
+}
+
 /** Parse a GPX document into one ParsedTrack per <trk>. Routes/waypoints are ignored. */
 export function parseGpx(xml: string): ParsedTrack[] {
   const doc = parser.parse(xml) as Node;
@@ -51,7 +57,7 @@ export function parseGpx(xml: string): ParsedTrack[] {
         const lng = num(pt["@_lon"]);
         const time = text(pt.time);
         if (lat === undefined || lng === undefined || !time) continue;
-        const t = Date.parse(time);
+        const t = Date.parse(gpxTimeToIso(time));
         if (!Number.isFinite(t)) continue;
         const p: TrackPoint = { t, lat, lng };
         const ele = num(text(pt.ele));

@@ -36,3 +36,25 @@ describe("parseGpx", () => {
     expect(tracks[0].points).toHaveLength(1);
   });
 });
+
+describe("parseGpx edge cases", () => {
+  const wrap = (pts: string) => `<?xml version="1.0"?><gpx version="1.1"><trk><name>t</name><trkseg>${pts}</trkseg></trk></gpx>`;
+
+  it("treats empty <ele> and empty attributes as missing, not zero", () => {
+    const xml = wrap(
+      `<trkpt lat="44.0" lon="-68.0"><ele></ele><time>2025-01-01T10:00:00Z</time></trkpt>` +
+        `<trkpt lat="44.001" lon="-68.0"><ele>1500</ele><time>2025-01-01T10:00:10Z</time></trkpt>` +
+        `<trkpt lat="" lon="-68.1"><time>2025-01-01T10:00:20Z</time></trkpt>`,
+    );
+    const [track] = parseGpx(xml);
+    expect(track.points).toHaveLength(2);
+    expect(track.points[0].ele).toBeUndefined();
+    expect(track.points[1].ele).toBe(1500);
+  });
+
+  it("reads times without a zone designator as UTC", () => {
+    const [track] = parseGpx(wrap(`<trkpt lat="44" lon="-68"><time>2025-01-01T10:00:00</time></trkpt><trkpt lat="44.001" lon="-68"><time>2025-01-01T10:00:05.5Z</time></trkpt>`));
+    expect(track.points[0].t).toBe(Date.parse("2025-01-01T10:00:00Z"));
+    expect(track.points[1].t).toBe(Date.parse("2025-01-01T10:00:05.5Z"));
+  });
+});

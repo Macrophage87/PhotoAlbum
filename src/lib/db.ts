@@ -10,10 +10,25 @@ function createClient() {
   });
 }
 
-const globalForPrisma = globalThis as unknown as { prisma?: ReturnType<typeof createClient> };
+type Client = ReturnType<typeof createClient>;
+const globalForPrisma = globalThis as unknown as { prisma?: Client };
 
-export const db = globalForPrisma.prisma ?? createClient();
+function getClient(): Client {
+  if (!globalForPrisma.prisma) globalForPrisma.prisma = createClient();
+  return globalForPrisma.prisma;
+}
 
-if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = db;
+/**
+ * Shared Prisma client. Created on first use rather than at import time so that
+ * `next build` (which imports route modules to collect page data) does not need DATABASE_URL.
+ * The instance is cached on globalThis in every environment, so hot reload reuses one connection pool.
+ */
+export const db: Client = new Proxy({} as Client, {
+  get(_target, prop, receiver) {
+    const client = getClient();
+    const value = Reflect.get(client, prop, receiver);
+    return typeof value === "function" ? value.bind(client) : value;
+  },
+});
 
-export type Db = typeof db;
+export type Db = Client;

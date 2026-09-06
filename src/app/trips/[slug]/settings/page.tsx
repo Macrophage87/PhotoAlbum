@@ -4,7 +4,7 @@ import { env } from "@/lib/env";
 import { getTripBySlug } from "@/lib/trips/queries";
 import { dateColumnToDay } from "@/lib/time/local-day";
 import { TripForm } from "@/components/trips/TripForm";
-import { Button, Card } from "@/components/ui";
+import { Button, Card, ConfirmSubmitButton } from "@/components/ui";
 import { deleteTrip, regeotagPhotos, rotateShareToken, setVisibility, updateTrip } from "../actions";
 
 const VISIBILITY = [
@@ -86,9 +86,9 @@ export default async function TripSettingsPage({ params, searchParams }: PagePro
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" name="deletePhotos" /> Also delete the {trip._count.photos} photo{trip._count.photos === 1 ? "" : "s"} on this trip
           </label>
-          <Button type="submit" variant="danger">
+          <ConfirmSubmitButton variant="danger" confirmMessage={`Delete "${trip.title}"? Its activities and tracks are removed permanently. This cannot be undone.`}>
             Delete this trip
-          </Button>
+          </ConfirmSubmitButton>
         </form>
       </section>
     </div>

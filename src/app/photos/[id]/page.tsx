@@ -5,7 +5,7 @@ import { getViewer, requireUser } from "@/lib/auth/viewer";
 import { photoUrl } from "@/lib/photos/urls";
 import { AppShell, Container } from "@/components/layout/AppShell";
 import { ExifPanel } from "@/components/photos/ExifPanel";
-import { Button, Card, Label, Select, Textarea } from "@/components/ui";
+import { Button, Card, Label, Select, Textarea, ConfirmSubmitButton } from "@/components/ui";
 import { formatDateTime } from "@/lib/time/format";
 import { deletePhoto, reprocessPhoto, setAsCover, shiftPhotoTimezone, updatePhoto } from "./actions";
 import { TimezoneShift } from "@/components/photos/TimezoneShift";
@@ -124,7 +124,7 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
                 <Button type="submit" variant="secondary" size="sm">Re-process</Button>
               </form>
               <form action={remove}>
-                <Button type="submit" variant="danger" size="sm">Delete photo</Button>
+                <ConfirmSubmitButton variant="danger" size="sm" confirmMessage="Delete this photo and its original file? This cannot be undone.">Delete photo</ConfirmSubmitButton>
               </form>
             </div>
           </div>

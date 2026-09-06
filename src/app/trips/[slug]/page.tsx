@@ -1,9 +1,6 @@
 import Link from "next/link";
-import { notFound } from "next/navigation";
 import { db } from "@/lib/db";
-import { getViewer } from "@/lib/auth/viewer";
-import { canEditTrip } from "@/lib/auth/access";
-import { getTripBySlug } from "@/lib/trips/queries";
+import { loadViewableTrip } from "@/lib/trips/access";
 import { photoCardSelect } from "@/lib/photos/queries";
 import { PhotoGrid } from "@/components/photos/PhotoGrid";
 import { toGridPhoto } from "@/components/photos/toGrid";
@@ -12,9 +9,7 @@ import { dateColumnToDay } from "@/lib/time/local-day";
 
 export default async function TripOverviewPage({ params }: PageProps<"/trips/[slug]">) {
   const { slug } = await params;
-  const [viewer, trip] = await Promise.all([getViewer(), getTripBySlug(slug)]);
-  if (!trip) notFound();
-  const editable = canEditTrip(viewer);
+  const { trip, editable } = await loadViewableTrip(slug);
 
   const [latest, trackAgg] = await Promise.all([
     db.photo.findMany({ where: { tripId: trip.id, status: "READY" }, orderBy: [{ takenAt: "desc" }], take: 10, select: photoCardSelect }),

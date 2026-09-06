@@ -15,7 +15,13 @@ services:
       retries: 20
 
   app:
-    build: .
+    build:
+      context: .
+      args:
+        # Baked into the client bundle at build time; rebuild after changing them in .env.
+        NEXT_PUBLIC_TILE_URL: ${NEXT_PUBLIC_TILE_URL:-}
+        NEXT_PUBLIC_MAP_STYLE_URL: ${NEXT_PUBLIC_MAP_STYLE_URL:-}
+        NEXT_PUBLIC_MAP_GLYPHS_URL: ${NEXT_PUBLIC_MAP_GLYPHS_URL:-}
     restart: unless-stopped
     depends_on:
       db:
@@ -28,6 +34,25 @@ services:
       - photos:/data/photos
     ports:
       - "${APP_PORT:-3000}:3000"
+
+  # Optional: run background jobs in their own container.
+  # Set RUN_WORKER=false in .env and start with `docker compose --profile worker up -d`.
+  worker:
+    build:
+      context: .
+    profiles: ["worker"]
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-photoalbum}:${POSTGRES_PASSWORD:-photoalbum}@db:5432/${POSTGRES_DB:-photoalbum}
+      PHOTO_STORAGE_ROOT: /data/photos
+      RUN_WORKER: "true"
+    volumes:
+      - photos:/data/photos
+    command: ["./node_modules/.bin/tsx", "scripts/worker.ts"]
 
 volumes:
   pgdata:

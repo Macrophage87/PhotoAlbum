@@ -1,14 +1,15 @@
 import { defineConfig } from "vitest/config";
-import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 export default defineConfig({
   test: {
     include: ["tests/unit/**/*.test.ts"],
     environment: "node",
     setupFiles: ["tests/setup.ts"],
+    globalSetup: ["tests/global-setup.ts"],
     fileParallelism: false,
   },
   resolve: {
-    alias: { "@": path.resolve(__dirname, "src") },
+    alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) },
   },
 });

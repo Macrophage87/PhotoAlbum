@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { db } from "@/lib/db";
 import { storage } from "@/lib/storage";
 import { dateColumnToDay, wallTimeToInstant } from "@/lib/time/local-day";
@@ -17,6 +17,9 @@ export type ImportSummary = {
   skipped: string[];
   pointsRead: number;
 };
+
+/** GPX and FIT files are parsed from memory; anything bigger than this is not a real activity file. */
+export const MAX_PARSED_TRACK_BYTES = 256 * 1024 * 1024;
 
 export type ImportArgs = { importKey: string; tripId: string; userId: string; sourceHint: "auto" | TrackFileKind; originalName: string };
 
@@ -58,6 +61,10 @@ export async function importTrackFile(args: ImportArgs): Promise<ImportSummary> 
     return summary;
   }
 
+  const { size } = await stat(filePath);
+  if (size > MAX_PARSED_TRACK_BYTES) {
+    throw new Error(`${kind.toUpperCase()} file is ${Math.round(size / 1048576)} MB; files over ${MAX_PARSED_TRACK_BYTES / 1048576} MB are not supported.`);
+  }
   let parsedTracks: ParsedTrack[];
   if (kind === "gpx") {
     parsedTracks = parseGpx(await readFile(filePath, "utf8"));

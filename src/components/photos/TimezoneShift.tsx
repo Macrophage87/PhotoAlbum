@@ -10,7 +10,7 @@ export function TimezoneShift({ action, currentOffsetMin, hasTrip, tripTimezone 
       <div className="text-xs font-medium">Wrong time zone?</div>
       <p className="text-xs text-muted">Keeps the time the camera shows, but reinterprets it in another zone. Currently {currentOffsetMin !== null ? label(currentOffsetMin) : "unknown"}.</p>
       <div className="flex gap-2">
-        <Select name="offset" defaultValue={hasTrip ? "trip" : String(currentOffsetMin ?? 0)} className="h-8 text-sm">
+        <Select name="offset" aria-label="Time zone offset" defaultValue={hasTrip ? "trip" : String(currentOffsetMin ?? 0)} className="h-8 text-sm">
           {hasTrip && <option value="trip">Trip zone ({tripTimezone})</option>}
           {OFFSETS.map((m) => (
             <option key={m} value={m}>

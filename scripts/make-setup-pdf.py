@@ -134,7 +134,7 @@ S += [P("3. Quick start with Docker", H1),
 git clone https://github.com/Macrophage87/PhotoAlbum.git
 cd PhotoAlbum
 cp .env.example .env
-nano .env                 # set ADMIN_EMAIL, and SMTP_* for real email
+nano .env                 # set ADMIN_EMAIL, SMTP_* for real email, a new POSTGRES_PASSWORD
 docker compose up --build -d
 """),
       P("The stack has two services. <b>db</b> is PostgreSQL 16 with its data in the <b>pgdata</b> volume. <b>app</b> is the web server, "
@@ -146,7 +146,7 @@ docker compose up --build -d
         "This is fine for first setup and for a purely local install."),
       code("""docker compose logs -f app | grep "auth/verify" """),
       P("Loading demo data", H2),
-      P("A seed script creates a sample lighthouse-themed trip in Acadia, Maine with a hike, its track and stats, and two sample photos, "
+      P("A seed script creates a sample lighthouse-themed trip in Acadia, Maine with a hike, its track and stats, and three sample photos, "
         "one of which is positioned from the track. It is a quick way to see every feature working."),
       code("""docker compose exec app node_modules/.bin/tsx prisma/seed.ts"""),
       P("Useful commands", H2),
@@ -178,9 +178,10 @@ S += [P("4. Configuration reference (.env)", H1),
         ["PHOTO_STORAGE_ROOT", "/data/photos", "Where originals and renditions are written (inside the container)."],
         ["MAX_UPLOAD_BYTES", "104857600 (100 MB)", "Largest single photo accepted."],
         ["MAX_IMPORT_BYTES", "2147483648 (2 GB)", "Largest track or Google export file accepted."],
-        ["RUN_WORKER", "true", "Run background jobs inside the web process. Set false only if you run a separate worker container."],
+        ["RUN_WORKER", "true", "Run background jobs inside the web process. Set false and start the worker container (docker compose --profile worker up -d) to split them out."],
         ["NEXT_PUBLIC_TILE_URL", "(empty, uses OpenStreetMap)", "Raster tile template for the map, e.g. from MapTiler or Stadia."],
         ["NEXT_PUBLIC_MAP_STYLE_URL", "(empty)", "Full MapLibre style JSON URL. Overrides the tile URL."],
+        ["NEXT_PUBLIC_MAP_GLYPHS_URL", "(empty)", "Font glyph URL template for map labels. All NEXT_PUBLIC values are compiled into the browser bundle: rebuild with docker compose up --build after changing them."],
       ], [1.85*inch, 1.25*inch, W-3.1*inch], first=CELLV),
       note("<b>Gmail example.</b> SMTP_HOST=smtp.gmail.com, SMTP_PORT=587, SMTP_SECURE=false, SMTP_USER=your address, "
            "SMTP_PASS=an App Password generated in your Google account security settings (normal passwords are rejected), "
@@ -195,7 +196,7 @@ S += [P("5. Signing in and inviting family", H1),
         "The address in ADMIN_EMAIL, always. The first sign-in with it creates the admin account.",
         "Anyone who already has an account.",
         "Anyone with a pending invite for their address.",
-        "Everyone else is told the address is not recognised; no account is created.",
+        "Everyone else sees the same 'check your email' message but no email is sent and no account is created, so the site never reveals who is a member.",
       ]),
       P("Inviting members", H2),
       steps([
@@ -220,7 +221,7 @@ S += [P("6. Using the album", H1),
         "A photo uploaded from a trip page is attached to that trip. Uploaded from the global page, it is matched to whichever trip's dates contain the day it was taken. If several trips overlap, it stays unassigned and shows a 'needs trip' badge until you assign it.",
         "If the photo's time falls inside an activity's window on that trip, it is attached to the activity too.",
         "The photo detail page shows EXIF data, lets you edit the caption, move the photo to a trip or activity, shift the time zone if the camera was set wrong, set it as the trip cover, and link it to other photos.",
-        "In the gallery, select several photos for bulk actions: assign to an activity, set cover, or delete.",
+        "In the gallery, select several photos for bulk actions: assign to an activity, move to another trip, or delete.",
       ]),
       note("<b>iPhone HEIC photos</b> work, but conversion is slow (a few seconds each). If you prefer, set the iPhone camera to "
            "'Most Compatible' so it saves JPEG. Renditions are always WebP, so browsers never need HEIC support."),
@@ -346,10 +347,10 @@ pnpm dev                        # http://localhost:3000
         ["Command", "What it does"],
         ["pnpm dev / pnpm build / pnpm start", "Development server / production build / run the build"],
         ["pnpm lint / pnpm typecheck", "ESLint and TypeScript checks"],
-        ["pnpm test", "Vitest unit tests (parsers, stats, timeline, auth). Needs a photoalbum_test database: createdb photoalbum_test"],
+        ["pnpm test", "Vitest unit tests (parsers, stats, timeline, auth). Migrates, and creates if needed, a photoalbum_test database before running."],
         ["pnpm build &amp;&amp; pnpm test:e2e", "Playwright smoke tests (sign-in, upload, sharing) against a photoalbum_e2e database"],
         ["pnpm db:migrate / pnpm db:deploy / pnpm db:seed", "Create a migration / apply migrations / load demo data"],
-        ["pnpm worker", "Run the background job worker separately (with RUN_WORKER=false on the web process)"],
+        ["pnpm worker", "Run the background job worker as its own process (with RUN_WORKER=false on the web process). In Docker use the worker compose profile instead."],
         ["node scripts/make-fixtures.mjs", "Regenerate test fixture files (GPX, FIT, Google JSON, photos)"],
       ], [2.6*inch, W-2.6*inch]),
       P("Code layout", H2),
@@ -370,7 +371,7 @@ tests              unit tests, fixtures, Playwright specs
 S += [P("10. Troubleshooting", H1),
       table([
         ["Symptom", "Likely cause and fix"],
-        ["Sign-in says the address is not recognised", "Only ADMIN_EMAIL, existing members and invited addresses may sign in. Check .env spelling; the app must be restarted after edits."],
+        ["Sign-in says 'check your email' but nothing arrives for a new person", "Only ADMIN_EMAIL, existing members and invited addresses receive a link; everyone else gets the same message and no email. Invite them from the Admin page, and check .env spelling (restart the app after edits)."],
         ["No sign-in email arrives", "SMTP_HOST empty (links are in the log: docker compose logs app | grep auth/verify), wrong port/SECURE combination, or the provider rejects SMTP_FROM. Test with Mailpit first."],
         ["Links in emails point to localhost", "APP_URL is still the default. Set it to the public URL and restart."],
         ["Uploads fail around 1 MB or 100 MB", "Reverse proxy body limit (raise client_max_body_size / max_size) or MAX_UPLOAD_BYTES."],

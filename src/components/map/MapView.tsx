@@ -158,7 +158,17 @@ export function MapView({ photos, tracks, bounds, theme, className = "", onPhoto
           popupRef.current?.remove();
           const el = document.createElement("div");
           el.className = "cursor-pointer";
-          el.innerHTML = `<img src="${p.thumbUrl}" alt="" style="width:160px;height:120px;object-fit:cover;border-radius:6px;display:block" />${p.caption ? `<div style="max-width:160px;font-size:12px;margin-top:4px">${p.caption.replace(/</g, "&lt;")}</div>` : ""}`;
+          const img = document.createElement("img");
+          img.src = p.thumbUrl;
+          img.alt = "";
+          img.style.cssText = "width:160px;height:120px;object-fit:cover;border-radius:6px;display:block";
+          el.appendChild(img);
+          if (p.caption) {
+            const cap = document.createElement("div");
+            cap.style.cssText = "max-width:160px;font-size:12px;margin-top:4px";
+            cap.textContent = p.caption;
+            el.appendChild(cap);
+          }
           el.onclick = () => callbacks.current.onPhotoClick?.(p.id);
           popupRef.current = new Popup({ offset: 14, closeButton: false, maxWidth: "200px" }).setLngLat((f.geometry as GeoJSON.Point).coordinates as [number, number]).setDOMContent(el).addTo(map);
         });

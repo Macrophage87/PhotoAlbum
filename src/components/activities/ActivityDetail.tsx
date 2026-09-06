@@ -12,7 +12,7 @@ import { StatsGrid, type StatsLike } from "./StatsGrid";
 import { ActivityMapSection } from "./ActivityMapSection";
 import { PhotoGrid } from "@/components/photos/PhotoGrid";
 import { toGridPhoto } from "@/components/photos/toGrid";
-import { Button, Card } from "@/components/ui";
+import { Card, ConfirmSubmitButton } from "@/components/ui";
 
 export type ActivityDetailData = {
   id: string;
@@ -70,9 +70,9 @@ export function ActivityDetail({ trip, activity, photos, ...mode }: { trip: { sl
                 <input type="checkbox" name="deleteTrack" /> Also delete its track
               </label>
             )}
-            <Button type="submit" variant="danger" size="sm">
+            <ConfirmSubmitButton variant="danger" size="sm" confirmMessage={`Delete "${activity.title}"? Photos stay on the trip. This cannot be undone.`}>
               Delete activity
-            </Button>
+            </ConfirmSubmitButton>
           </form>
         </Card>
       ) : (

@@ -5,7 +5,7 @@ import { cameraLabel, readExif, resolveTakenAt } from "@/lib/images/exif";
 import { heicToJpegBuffer, isHeic } from "@/lib/images/heic";
 import { makeRenditions } from "@/lib/images/renditions";
 import { pickActivityByTime, pickTripByDay } from "@/lib/photos/assign";
-import { localDayFromOffset } from "@/lib/time/local-day";
+import { localDayFromOffset, offsetMinutesInZone } from "@/lib/time/local-day";
 import { enqueue } from "../boss";
 import { QUEUES, type ProcessPhotoJob } from "../queues";
 
@@ -51,8 +51,8 @@ export async function processPhoto(job: ProcessPhotoJob): Promise<void> {
     let takenAt = resolved?.takenAt ?? null;
     let tzOffsetMin = resolved?.tzOffsetMin ?? null;
     let takenAtSource = resolved?.source ?? null;
+    const mtimeHeader = (photo.exif as { fileLastModified?: number } | null)?.fileLastModified;
     if (!takenAt) {
-      const mtimeHeader = (photo.exif as { fileLastModified?: number } | null)?.fileLastModified;
       if (mtimeHeader && Number.isFinite(mtimeHeader)) {
         takenAt = new Date(mtimeHeader);
         takenAtSource = "FILE_MTIME";
@@ -61,12 +61,14 @@ export async function processPhoto(job: ProcessPhotoJob): Promise<void> {
         takenAt = s ? s.mtime : photo.createdAt;
         takenAtSource = s ? "FILE_MTIME" : "UPLOAD_TIME";
       }
-      tzOffsetMin = 0;
+      // No camera zone to go on: interpret the instant in the trip zone when we know it, else in UTC.
       if (!trip) {
-        const candidates = await db.trip.findMany({ select: { id: true, startDate: true, endDate: true } });
-        const match = pickTripByDay(candidates, localDayFromOffset(takenAt, 0));
-        if (match) trip = await db.trip.findUnique({ where: { id: match.id } });
+        const candidates = await db.trip.findMany({ select: { id: true, startDate: true, endDate: true, timezone: true } });
+        // Each trip judges the instant in its own zone; still require exactly one match.
+        const matches = candidates.filter((c) => pickTripByDay([c], localDayFromOffset(takenAt!, offsetMinutesInZone(takenAt!, c.timezone))));
+        if (matches.length === 1) trip = await db.trip.findUnique({ where: { id: matches[0].id } });
       }
+      tzOffsetMin = trip ? offsetMinutesInZone(takenAt, trip.timezone) : 0;
     }
 
     // 5. Renditions
@@ -103,6 +105,7 @@ export async function processPhoto(job: ProcessPhotoJob): Promise<void> {
           orientation: exif.orientation,
           offsetTimeOriginal: exif.offsetTimeOriginal,
           dateTimeOriginal: exif.dateTimeOriginal,
+          ...(mtimeHeader && Number.isFinite(mtimeHeader) ? { fileLastModified: mtimeHeader } : {}),
         },
         renditions,
         tripId: trip?.id ?? null,
@@ -112,7 +115,7 @@ export async function processPhoto(job: ProcessPhotoJob): Promise<void> {
 
     // 7. Position GPS-less photos from any track covering that moment (handler lands in Phase 5)
     if (trip && !hasGps && takenAt) {
-      await enqueue(QUEUES.geotagPhotos, { tripId: trip.id }, { singletonKey: `geotag:${trip.id}`, singletonSeconds: 10 });
+      await enqueue(QUEUES.geotagPhotos, { tripId: trip.id }, { singletonKey: `geotag:${trip.id}`, singletonSeconds: 10, singletonNextSlot: true });
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
