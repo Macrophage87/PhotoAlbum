@@ -1,0 +1,49 @@
+# Push to `main` → GitHub logs into the server and updates the live
+# instance. Same shape as deploy-staging.yml; only the three env vars
+# differ. Details in docs/DEPLOY.md → "Continuous deployment".
+#
+# Needs the same three repository secrets: DEPLOY_HOST, DEPLOY_USER,
+# DEPLOY_SSH_KEY. Until they exist — or until the live instance has been
+# set up on the server (a second checkout with its own .env, port and data
+# directory) — the job prints a note and exits green, so `main` never shows
+# a red ✗ for a server that isn't there yet.
+name: Deploy production
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false # rapid pushes queue, never overlap
+
+jobs:
+  deploy:
+    name: Update the live instance
+    runs-on: ubuntu-latest
+    env:
+      ARMED: ${{ secrets.DEPLOY_SSH_KEY != '' && secrets.DEPLOY_HOST != '' && secrets.DEPLOY_USER != '' }}
+    steps:
+      - name: Not armed yet
+        if: env.ARMED != 'true'
+        run: echo "DEPLOY_HOST / DEPLOY_USER / DEPLOY_SSH_KEY secrets are not set — skipping the deploy (see docs/DEPLOY.md)."
+      - name: SSH in and run deploy/update.sh
+        if: env.ARMED == 'true'
+        uses: appleboy/ssh-action@v1
+        env:
+          APP_DIR: /cieply/sites/cieply.com/PhotoAlbum-live
+          BRANCH: main
+          APP_PORT: "3004"
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          command_timeout: 30m # the image rebuild takes a few minutes
+          envs: APP_DIR,BRANCH,APP_PORT
+          script: |
+            set -e
+            if [ ! -d "$APP_DIR/.git" ]; then
+              echo "Live instance is not set up yet ($APP_DIR) — skipping. See docs/DEPLOY.md."
+              exit 0
+            fi
+            bash "$APP_DIR/deploy/update.sh"

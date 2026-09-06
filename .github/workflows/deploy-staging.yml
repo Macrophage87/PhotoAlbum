@@ -1,0 +1,52 @@
+# Push to `staging` → GitHub logs into the server and updates the staging
+# instance: one job, one SSH step, one shared script (deploy/update.sh),
+# which dumps the database, resets the checkout to the branch, rebuilds the
+# image with `docker compose up --build -d` and waits for /api/health.
+# Details in docs/DEPLOY.md → "Continuous deployment".
+#
+# Needs three repository secrets (Settings → Secrets and variables → Actions):
+#   DEPLOY_HOST     the server's hostname (a name, not an IP, so the pipeline
+#                   follows DNS if the server ever moves)
+#   DEPLOY_USER     the deploy login on the server (a user with sudo)
+#   DEPLOY_SSH_KEY  the private half of a keypair made just for deploys
+# Until they exist the job prints a note and exits green.
+name: Deploy staging
+on:
+  push:
+    branches: [staging]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false # rapid pushes queue, never overlap
+
+jobs:
+  deploy:
+    name: Update the staging instance
+    runs-on: ubuntu-latest
+    env:
+      ARMED: ${{ secrets.DEPLOY_SSH_KEY != '' && secrets.DEPLOY_HOST != '' && secrets.DEPLOY_USER != '' }}
+    steps:
+      - name: Not armed yet
+        if: env.ARMED != 'true'
+        run: echo "DEPLOY_HOST / DEPLOY_USER / DEPLOY_SSH_KEY secrets are not set — skipping the deploy (see docs/DEPLOY.md)."
+      - name: SSH in and run deploy/update.sh
+        if: env.ARMED == 'true'
+        uses: appleboy/ssh-action@v1
+        env:
+          APP_DIR: /cieply/sites/cieply.com/PhotoAlbum
+          BRANCH: staging
+          APP_PORT: "3005"
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          command_timeout: 30m # the image rebuild takes a few minutes
+          envs: APP_DIR,BRANCH,APP_PORT
+          script: |
+            set -e
+            if [ ! -d "$APP_DIR/.git" ]; then
+              echo "Staging instance is not set up yet ($APP_DIR) — skipping. See docs/DEPLOY.md."
+              exit 0
+            fi
+            bash "$APP_DIR/deploy/update.sh"
