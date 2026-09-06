@@ -198,6 +198,11 @@ S += [P("5. Signing in and inviting family", H1),
         "Anyone with a pending invite for their address.",
         "Everyone else sees the same 'check your email' message but no email is sent and no account is created, so the site never reveals who is a member.",
       ]),
+      P("Installing on a phone", H2),
+      P("The album is a progressive web app. Once it is reachable over HTTPS, family members can install it without an app store: "
+        "on iPhone open the site in Safari, tap Share, then Add to Home Screen; on Android open it in Chrome, tap the menu, then Install app; "
+        "on a desktop browser click the install icon in the address bar. It then opens full-screen with its own icon, and shows an offline "
+        "notice rather than a browser error when there is no connection."),
       P("Inviting members", H2),
       steps([
         "Sign in as the admin and open <b>Admin</b> from the top navigation (the /admin page).",

@@ -15,6 +15,7 @@ A self-hosted photo album for family trips. Photos are grouped into **trips** an
 - **Sharing.** Each trip is private, shared by secret link, or public. Public trips appear on the front page for anyone.
 - **Photo links.** Mark photos as the same scene, before/after, parts of a panorama, or related.
 - **Family sign-in** by emailed magic link; an admin invites members. No passwords.
+- **Installable.** Add it to a phone's home screen and it opens full-screen like an app, with its own icon.
 
 ## Quick start (Docker)
 
@@ -37,6 +38,16 @@ docker compose exec app node_modules/.bin/tsx prisma/seed.ts
 ```
 
 Photos live in the `photos` volume, the database in `pgdata`. Back those two up.
+
+### Installing on a phone
+
+The album is a progressive web app, so once it is reachable over HTTPS it can be installed without an app store:
+
+- **iPhone / iPad (Safari):** open the site, tap the Share button, then **Add to Home Screen**.
+- **Android (Chrome):** open the site, tap the menu (three dots), then **Install app** or **Add to Home screen**.
+- **Desktop (Chrome / Edge):** click the install icon at the right end of the address bar.
+
+It launches full-screen with the Family Album icon. Uploads and sign-in work exactly as in the browser; when the network is unavailable an offline notice is shown instead of a browser error.
 
 ### Behind a reverse proxy
 
