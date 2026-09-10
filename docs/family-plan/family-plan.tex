@@ -275,7 +275,45 @@ After the files arrive, you land on a short \textbf{review} screen. This is the 
 
 \subsection{Videos too}
 
-Videos from phones will be accepted alongside photos and play inside the album. Short clips, up to about a minute, play silently in the photo grid when you tap or hover, the way stories do on social apps. Longer videos open in the viewer with normal controls. Everything is converted so that it plays on any phone or computer, and the original file is kept untouched.
+Videos come in two kinds, and they take two different routes.
+
+\textbf{Short clips} (up to about a minute) are uploaded straight into the album like photos. They play silently in the photo grid when you tap or hover, the way stories do on social apps, and with sound and controls when opened. They are converted so they play on any phone or computer, and the original file is kept.
+
+\textbf{Longer videos} (the school play, the whole wedding speech) are not uploaded to the album. Instead, whoever has the video puts it on YouTube as an \emph{unlisted} video, then pastes the YouTube link into the album. The album fetches the title and a still frame, and the video appears in the trip or collection like any other item: it shows up on the timeline, can be given a note, can be searched, and can be added to collections. Pressing play on it plays the video right there on the page. Unlisted means the video does not appear in YouTube searches or on anyone's channel; only people with the link can watch it. YouTube does the heavy lifting of storing and streaming, which keeps our own computer small.
+
+\begin{figure}[H]
+  \centering
+  \begin{tikzpicture}[x=1cm,y=1cm]
+    \phoneframe{6.2}{7.2}
+    \begin{scope}[shift={(0.35,0)}]
+      \node[lbl,font=\small\bfseries] at (0,6.55) {Add a YouTube video};
+      \node[mlbl,text width=5.2cm] at (0,6.05) {Upload it to YouTube as \emph{Unlisted}, then paste the link here.};
+      \node[ui,minimum width=5.4cm,anchor=north west,text width=5.1cm] at (0,5.45) {\textcolor{muted}{https://youtu.be/}dQw4w9WgXcQ};
+      \node[thumb=ph4!60,minimum width=5.4cm,minimum height=2.2cm,anchor=north west] at (0,4.6) {};
+      \fill[white,opacity=0.9] (2.35,3.5) circle (0.38);
+      \fill[navy] (2.2,3.28) -- (2.2,3.72) -- (2.6,3.5) -- cycle;
+      \node[lbl,anchor=north west] at (0,2.25) {\textbf{Nana's 80th: the speeches}};
+      \node[mlbl,anchor=north west] at (0,1.9) {14 min \textbullet\ from YouTube \textbullet\ Date: 14 Aug 2026};
+      \node[btn2,anchor=south west] at (0,0.6) {Cancel};
+      \node[btn,anchor=south west] at (3.6,0.6) {Add to trip};
+    \end{scope}
+  \end{tikzpicture}
+  \hspace{0.8cm}
+  \begin{tikzpicture}[node distance=5mm]
+    \node[stepbox,text width=2.6cm] (a) {\textbf{Short clip}\\under about a minute};
+    \node[stepbox,text width=2.6cm,below=8mm of a] (b) {\textbf{Long video}\\a talent show, a speech};
+    \node[stepbox,text width=2.6cm,right=of a,fill=sea!8] (a2) {\textbf{Upload to the album}\\plays in the grid};
+    \node[stepbox,text width=2.6cm,right=of b,fill=sand!50] (b2) {\textbf{Upload to YouTube}\\unlisted, then paste the link};
+    \node[stepbox,text width=2.6cm,right=of b2,yshift=8.5mm] (c) {\textbf{Appears in the album}\\timeline, search, collections, sharing};
+    \draw[arrow] (a) -- (a2); \draw[arrow] (b) -- (b2);
+    \draw[arrow] (a2.east) -- (c.west); \draw[arrow] (b2.east) -- (c.west);
+  \end{tikzpicture}
+  \caption{Left: a sketch of adding a YouTube video by pasting its link. Right: short clips are uploaded; long videos go through YouTube; both end up in the album the same way.}
+\end{figure}
+
+\begin{note}[About unlisted YouTube videos]
+An unlisted video is hidden from searches and from your channel, but anyone who has its link can watch it, and YouTube keeps a copy on its servers. If a video should stay strictly within the family, keep it as a short clip in the album, or split it into a few clips. The album shows a small reminder about this whenever a YouTube video is added.
+\end{note}
 
 \subsection{Finding anything again}
 
@@ -422,7 +460,7 @@ Two parts of the plan use software that looks at the pictures. Here is where the
   \centering
   \begin{tikzpicture}
     \node[box,text width=5.6cm,fill=mist,minimum height=2.3cm,align=left] (home) at (0,0) {\textbf{Stays on our own computer}\\[3pt]\scriptsize
-      \textbullet\ The photos and videos themselves\\
+      \textbullet\ The photos and short clips themselves\\
       \textbullet\ Who is who: all the face matching\\
       \textbullet\ The ``looks alike'' web\\
       \textbullet\ Your notes, names, dates, places\\
@@ -451,7 +489,7 @@ Two parts of the plan use software that looks at the pictures. Here is where the
 \section{Things for us to decide together}
 
 \begin{enumerate}[leftmargin=2em,itemsep=4pt]
-  \item \textbf{Short videos.} The plan treats clips under about a minute as ``quick'' videos that play silently in the grid. Is that what we want, or should all videos behave the same?
+  \item \textbf{Videos.} Clips under about a minute go into the album; anything longer goes on YouTube as unlisted and is linked in. Is a minute the right cut-off, and is everyone comfortable with long videos living on YouTube?
   \item \textbf{The AI helper.} Are we comfortable sending reduced copies of new photos to Anthropic so they can be described and searched? It costs roughly a few cents per photo, and a few hundred dollars once to describe a library of ten thousand old pictures. A cheaper helper writes shorter descriptions for about a fifth of that.
   \item \textbf{Faces.} Is everyone happy with face matching on our own computer, with the opt-out described above, and with children left out until they are adults?
   \item \textbf{How much we have.} A few thousand photos work on the small computer we have. If the shoeboxes add up to a hundred thousand, we need a bigger one.
@@ -469,7 +507,7 @@ The work is planned in five steps. Each one is useful on its own, so the album k
     \draw[line width=2pt,color=line] (0,0) -- (14.5,0);
     \foreach \x/\c/\t/\d in {
       0.6/ph1/Collections/{and ``uploaded by''},
-      3.5/ph2/Videos/{and uploads that resume},
+      3.5/ph2/Videos/{short clips and YouTube links},
       6.4/ph3/Review \& search/{notes, descriptions, search box},
       9.3/ph4/People \& suggestions/{naming faces, ``belongs to''},
       12.2/ph5/The photo web/{and polish}} {
