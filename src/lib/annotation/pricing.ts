@@ -31,23 +31,26 @@ export function estimateCost(model: string, counts: { photos: number; videos: nu
   return { items, inputTokens: Math.round(imageTokens + instructionTokens), outputTokens, usd: Math.round(usd * 100) / 100, approximate: true, pricesAsOf, model };
 }
 
-export type Spend = { items: number; inputTokens: number; cacheReadTokens: number; outputTokens: number; usd: number; model: string; pricesAsOf: string };
+export type Spend = { items: number; inputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; outputTokens: number; usd: number; model: string; pricesAsOf: string };
+
+/** Writing the instruction block into the five-minute cache costs this much more than a plain input token. */
+export const CACHE_WRITE_FACTOR = 1.25;
 
 /**
  * Real spend from recorded usage, each row at the price of the model that answered it: single requests at list
- * price, batch results at the batch discount. `input` is the API's input_tokens, which already excludes cache reads.
+ * price, batch results at the batch discount. `input` is the API's input_tokens, which already excludes cache reads
+ * and cache writes; those are billed at their own factors.
  */
-export const CACHE_WRITE_FACTOR = 1.25;
-
 export function actualSpend(fallbackModel: string, rows: { model?: string | null; input: number; cacheRead: number; cacheWrite?: number; output: number; batched: boolean }[]): Spend {
-  let usd = 0, inputTokens = 0, cacheReadTokens = 0, outputTokens = 0;
+  let usd = 0, inputTokens = 0, cacheReadTokens = 0, cacheWriteTokens = 0, outputTokens = 0;
   for (const r of rows) {
     const price = PRICES[r.model ?? ""] ?? PRICES[fallbackModel] ?? PRICES["claude-opus-5"];
     const factor = r.batched ? BATCH_DISCOUNT : 1;
     usd += factor * ((r.input * price.inputPerMTok + r.cacheRead * price.inputPerMTok * price.cacheReadFactor + (r.cacheWrite ?? 0) * price.inputPerMTok * CACHE_WRITE_FACTOR + r.output * price.outputPerMTok) / 1_000_000);
     inputTokens += r.input;
     cacheReadTokens += r.cacheRead;
+    cacheWriteTokens += r.cacheWrite ?? 0;
     outputTokens += r.output;
   }
-  return { items: rows.length, inputTokens, cacheReadTokens, outputTokens, usd: Math.round(usd * 100) / 100, model: fallbackModel, pricesAsOf };
+  return { items: rows.length, inputTokens, cacheReadTokens, cacheWriteTokens, outputTokens, usd: Math.round(usd * 100) / 100, model: fallbackModel, pricesAsOf };
 }

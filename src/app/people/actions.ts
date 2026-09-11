@@ -67,6 +67,7 @@ export async function nameCluster(clusterId: string, fd: FormData): Promise<void
           createdById: user.id,
         },
       });
+  if (v.personId && person.optedOutAt) throw new Error("This person asked to be forgotten");
   // Merging a cluster into an existing person (a childhood cluster named after a known adult) follows that person's setting.
   const effective = v.personId ? { faceIndexing: person.faceIndexing, nullTemplates: !person.faceIndexing, pendingDecision: person.pendingDecision } : outcome;
   await db.faceCluster.update({ where: { id: clusterId }, data: { personId: person.id, label: v.name } });
@@ -220,6 +221,8 @@ export async function nameFace(faceId: string, personId: string): Promise<void> 
   await requireUserOrThrow();
   const face = await db.face.findUniqueOrThrow({ where: { id: faceId }, select: { photoId: true, personId: true } });
   if (face.personId) throw new Error("Already named");
+  const target = await db.person.findUniqueOrThrow({ where: { id: personId }, select: { optedOutAt: true } });
+  if (target.optedOutAt) throw new Error("This person asked to be forgotten");
   await confirmFaceAs(faceId, personId);
   revalidatePath(`/photos/${face.photoId}`);
   revalidatePath("/people", "layout");

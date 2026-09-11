@@ -10,10 +10,10 @@ function describeSkips(reasons: Record<string, number>): string {
   return Object.entries(reasons).map(([k, n]) => `${n} ${SKIP_LABELS[k] ?? k}`).join(", ");
 }
 
-type Batch = { id: string; parentId: string | null; skippedReasons: Record<string, number> | null; running: boolean; status: string; requested: number; succeeded: number; errored: number; skipped: number; createdAt: string; endedAt: string | null; scope: string };
+type Batch = { id: string; parentId: string | null; skippedReasons: Record<string, number> | null; running: boolean; /** A marker row: the rest of the run was not sent, because of an error or a worker restart. */ marker: "error" | "restart" | null; canceled: number; status: string; requested: number; succeeded: number; errored: number; skipped: number; createdAt: string; endedAt: string | null; scope: string };
 type Option = { id: string; title: string };
 
-export function AnnotationAdmin({ gates, model, trips, collections, batches, spend, rawRetentionDays }: { gates: { envEnabled: boolean; hasKey: boolean; optedInAt: string | null; active: boolean }; model: string; trips: Option[]; collections: Option[]; batches: Batch[]; /** Real spend from recorded token usage, each item at the price of the model that answered it. */ spend: { items: number; inputTokens: number; cacheReadTokens: number; outputTokens: number; usd: number; pricesAsOf: string }; rawRetentionDays: number }) {
+export function AnnotationAdmin({ gates, model, trips, collections, batches, spend, rawRetentionDays }: { gates: { envEnabled: boolean; hasKey: boolean; optedInAt: string | null; active: boolean }; model: string; trips: Option[]; collections: Option[]; batches: Batch[]; /** Real spend from recorded token usage, each item at the price of the model that answered it. */ spend: { items: number; inputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; outputTokens: number; usd: number; pricesAsOf: string }; rawRetentionDays: number }) {
   const [pending, start] = useTransition();
   const [scopeKind, setScopeKind] = useState<BackfillScope["kind"]>("all");
   const [tripId, setTripId] = useState(trips[0]?.id ?? "");
@@ -42,7 +42,7 @@ export function AnnotationAdmin({ gates, model, trips, collections, batches, spe
           <dt className="text-muted">API key</dt><dd>{gates.hasKey ? "ANTHROPIC_API_KEY is set" : "ANTHROPIC_API_KEY is missing"}</dd>
           <dt className="text-muted">Admin opt-in</dt><dd>{gates.optedInAt ? `on since ${new Date(gates.optedInAt).toLocaleDateString("en-US")}` : "off"}</dd>
           <dt className="text-muted">Model</dt><dd>{model}</dd>
-          <dt className="text-muted">Spent so far</dt><dd>{spend.items === 0 ? "nothing yet" : `about $${spend.usd.toFixed(2)} for ${spend.items} item${spend.items === 1 ? "" : "s"} (${(spend.inputTokens + spend.cacheReadTokens).toLocaleString()} input tokens, ${spend.cacheReadTokens.toLocaleString()} of them read from cache, ${spend.outputTokens.toLocaleString()} output; each item at the price of the model that answered it, as of ${spend.pricesAsOf}; re-described items count their latest answer only)`}</dd>
+          <dt className="text-muted">Spent so far</dt><dd>{spend.items === 0 ? "nothing yet" : `about $${spend.usd.toFixed(2)} for ${spend.items} item${spend.items === 1 ? "" : "s"} (${(spend.inputTokens + spend.cacheReadTokens + spend.cacheWriteTokens).toLocaleString()} input tokens, ${spend.cacheReadTokens.toLocaleString()} of them read from cache and ${spend.cacheWriteTokens.toLocaleString()} written to it, ${spend.outputTokens.toLocaleString()} output; each item at the price of the model that answered it, as of ${spend.pricesAsOf}; re-described items count their latest answer only)`}</dd>
         </dl>
         <div className="flex items-center gap-3">
           {gates.optedInAt ? (
@@ -103,11 +103,20 @@ export function AnnotationAdmin({ gates, model, trips, collections, batches, spe
         {batches.length > 0 && (
           <ul className="divide-y divide-border">
             {batches.map((b) => (
-              <li key={b.id} className="py-2 flex flex-wrap items-center justify-between gap-2">
-                <span>
-                  {new Date(b.createdAt).toLocaleString("en-US")} · {b.scope}{b.parentId ? " (continued)" : ""} · {b.requested} requested{b.status !== "SUBMITTED" && <> · {b.succeeded} described, {b.errored} failed, {b.skipped} skipped{b.skippedReasons ? ` (${describeSkips(b.skippedReasons)})` : ""}</>} · <span className="text-muted">{b.status.toLowerCase()}</span>
-                </span>
-                {(b.status === "SUBMITTED" || b.running) && <Button size="sm" variant="secondary" disabled={pending} onClick={() => start(() => cancelBackfill(b.id))}>Cancel</Button>}
+              <li key={b.id} className={`py-2 flex flex-wrap items-center justify-between gap-2 ${b.parentId ? "pl-4 text-muted" : ""}`}>
+                {b.marker ? (
+                  <span>
+                    {new Date(b.createdAt).toLocaleString("en-US")} · {b.marker === "restart" ? "the server restarted during this run" : "the rest of this run could not be submitted"}; run the backfill again for the remaining items{b.marker === "error" ? " (details in the worker log)" : ""}.
+                  </span>
+                ) : (
+                  <span>
+                    {new Date(b.createdAt).toLocaleString("en-US")} · {b.scope}{b.parentId ? " (continued)" : ""} · {b.requested} requested
+                    {b.status !== "SUBMITTED" && <> · {b.succeeded} described, {b.errored} failed{b.canceled > 0 ? `, ${b.canceled} not sent (stopped)` : ""}, {b.skipped} skipped{b.skippedReasons ? ` (${describeSkips(b.skippedReasons)})` : ""}</>}
+                    {" · "}
+                    <span className="text-muted">{b.status === "SUBMITTED" ? "in progress" : b.running ? `${b.status.toLowerCase()}, still submitting the rest of the run` : b.status.toLowerCase()}</span>
+                  </span>
+                )}
+                {(b.status === "SUBMITTED" || b.running) && <Button size="sm" variant="secondary" disabled={pending} onClick={() => start(() => cancelBackfill(b.id))}>{b.running && b.status !== "SUBMITTED" ? "Stop the rest of this run" : "Cancel"}</Button>}
               </li>
             ))}
           </ul>

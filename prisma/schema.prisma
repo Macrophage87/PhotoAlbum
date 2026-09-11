@@ -387,6 +387,8 @@ model AnnotationBatch {
   requested        Int
   succeeded        Int                   @default(0)
   errored          Int                   @default(0)
+  /// Requests the run was stopped before the helper processed them: not failures, and still eligible for a later run.
+  canceled         Int                   @default(0)
   skipped          Int                   @default(0)
   /// The row the admin started; chunk rows point at it so one cancel stops the whole run.
   parentId         String?

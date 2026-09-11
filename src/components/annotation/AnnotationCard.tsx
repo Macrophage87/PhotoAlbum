@@ -15,7 +15,7 @@ export function AnnotationCard({ photoId, annotation, source, model, error, optO
       </div>
       {!annotation && (
         <p className="text-sm text-muted">
-          {error ? `The helper could not describe this item (${error.replace(":", ": ")}).` : optOutReason ? `Not sent to the AI helper. ${optOutReason === "this item is opted out" ? "" : `(${optOutReason[0].toUpperCase()}${optOutReason.slice(1)}.)`}` : active ? "No description yet; it is written a little while after the upload is reviewed." : "No description. The AI helper is off; an admin can turn it on."}
+          {error?.startsWith("batch:") ? (error === "batch:canceled" ? "Not described yet: an admin stopped the run before this item was processed. It will be included in the next backfill." : "Not described yet: the batch it was in did not complete. It will be included in the next backfill.") : error ? `The helper could not describe this item (${error.replace(":", ": ")}).` : optOutReason ? `Not sent to the AI helper. ${optOutReason === "this item is opted out" ? "" : `(${optOutReason[0].toUpperCase()}${optOutReason.slice(1)}.)`}` : active ? "No description yet; it is written a little while after the upload is reviewed." : "No description. The AI helper is off; an admin can turn it on."}
         </p>
       )}
       {annotation && editable ? (

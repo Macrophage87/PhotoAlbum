@@ -23,7 +23,7 @@ async function clickUntil(page: Page, button: () => Locator, done: () => Promise
       await page.reload();
       await page.waitForLoadState("networkidle");
       const b = button();
-      if (await b.count()) await b.first().click();
+      if (await b.count()) await b.first().click({ timeout: 5_000 }).catch(() => {});
       await page.waitForTimeout(800);
       return done();
     }, { timeout: 40_000, intervals: [1500] })

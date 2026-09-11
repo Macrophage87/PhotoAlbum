@@ -128,7 +128,7 @@ export async function previewBackfill(scope: BackfillScope): Promise<BackfillPre
     photos,
     videos,
     excluded,
-    cap: items.length >= BACKFILL_CAP ? BACKFILL_CAP : null,
+    cap: excluded.inScope - excluded.described - excluded.optedOutSelf - excluded.optedOutInherited > BACKFILL_CAP ? BACKFILL_CAP : null,
     sends: ["the 1600-pixel rendition of each photo (three or four frames for a clip)", "the uploader's notes, caption and title", "the date and camera when known", "the trip and collection titles", "the names of confirmed people whose recognition is on and who are adults, and confirmed pet names; never face data"],
   };
 }
@@ -150,7 +150,6 @@ export async function startBackfill(scope: BackfillScope, typedConfirmation: str
   return batch.id;
 }
 
-/** Stop a running backfill: cancel at Anthropic and mark it; results already applied stay. */
 /**
  * Cancel a backfill run: the request is recorded on the row the admin started (so the worker stops between chunks
  * whatever the rows' states), every open row of the family is flipped first and only then, from the fresh row,

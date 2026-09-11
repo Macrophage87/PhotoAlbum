@@ -97,7 +97,16 @@ export async function annotationBackfill(job: AnnotationBackfillJob): Promise<vo
   const gates = await annotationGates();
   if (!gates.active) return;
   const batch = await db.annotationBatch.findUnique({ where: { id: job.batchId } });
-  if (!batch || batch.status !== "SUBMITTED" || !batch.anthropicBatchId.startsWith("pending-")) return;
+  if (!batch) return;
+  if (batch.status !== "SUBMITTED" || !batch.anthropicBatchId.startsWith("pending-")) {
+    // pg-boss re-delivering a run whose worker died after the first chunk was claimed: the rest was never sent.
+    if (!batch.parentId && !batch.runEndedAt) {
+      await db.annotationBatch.update({ where: { id: batch.id }, data: { runEndedAt: new Date() } });
+      await db.annotationBatch.create({ data: { anthropicBatchId: `failed-${batch.id}-retry`, parentId: batch.id, scope: batch.scope as object, requested: 0, status: "FAILED", endedAt: new Date(), createdById: batch.createdById } }).catch(() => undefined);
+      console.error(`[annotation-backfill] ${batch.id} was cut short (worker restarted); run it again for the remaining items`);
+    }
+    return;
+  }
   await db.annotationBatch.update({ where: { id: batch.id }, data: { startedAt: new Date() } });
   const candidates = await backfillCandidates(batch.scope as BackfillScope);
   let rowId = batch.id;
@@ -163,8 +172,9 @@ export async function annotationBackfill(job: AnnotationBackfillJob): Promise<vo
   } catch (err) {
     // Fail only a placeholder row; a live row keeps polling so its billed results are still applied.
     const message = err instanceof Error ? err.message.slice(0, 200) : String(err);
-    if (rowLive) await db.annotationBatch.create({ data: { anthropicBatchId: `failed-${batch.id}-${chunkNo}`, parentId: batch.id, scope: batch.scope as object, requested: 0, status: "FAILED", endedAt: new Date(), createdById: batch.createdById } }).catch(() => undefined);
-    else await db.annotationBatch.updateMany({ where: { id: rowId, anthropicBatchId: { startsWith: "pending-" } }, data: { status: "FAILED", endedAt: new Date() } }).catch(() => undefined);
+    const failedInPlace = rowLive ? 0 : (await db.annotationBatch.updateMany({ where: { id: rowId, anthropicBatchId: { startsWith: "pending-" } }, data: { status: "FAILED", endedAt: new Date() } }).catch(() => ({ count: 0 }))).count;
+    // A live row, or one already closed as empty, keeps its state; a marker row records that the rest was not sent.
+    if (failedInPlace === 0) await db.annotationBatch.create({ data: { anthropicBatchId: `failed-${batch.id}-${chunkNo}`, parentId: batch.id, scope: batch.scope as object, requested: 0, status: "FAILED", endedAt: new Date(), createdById: batch.createdById } }).catch(() => undefined);
     console.error(`[annotation-backfill] ${rowId} failed: ${message}`);
     return;
   } finally {
@@ -180,19 +190,26 @@ export async function annotationBatchPoll(): Promise<void> {
   // (A run that merely waited in the queue has no startedAt and is left alone for a day.)
   const hourAgo = new Date(Date.now() - 3_600_000);
   const dayAgo = new Date(Date.now() - 86_400_000);
-  await db.annotationBatch.updateMany({ where: { status: "SUBMITTED", anthropicBatchId: { startsWith: "pending-" }, OR: [{ startedAt: { lt: hourAgo } }, { parentId: { not: null }, createdAt: { lt: hourAgo } }, { startedAt: null, createdAt: { lt: dayAgo } }] }, data: { status: "FAILED", endedAt: new Date(), runEndedAt: new Date() } });
+  const stale = await db.annotationBatch.findMany({ where: { status: "SUBMITTED", anthropicBatchId: { startsWith: "pending-" }, OR: [{ startedAt: { lt: hourAgo } }, { parentId: { not: null }, createdAt: { lt: hourAgo } }, { startedAt: null, createdAt: { lt: dayAgo } }] }, select: { id: true, parentId: true } });
+  if (stale.length) {
+    await db.annotationBatch.updateMany({ where: { id: { in: stale.map((r) => r.id) } }, data: { status: "FAILED", endedAt: new Date(), runEndedAt: new Date() } });
+    // The run those placeholders belonged to is over as well.
+    const origins = [...new Set(stale.map((r) => r.parentId).filter(Boolean) as string[])];
+    if (origins.length) await db.annotationBatch.updateMany({ where: { id: { in: origins }, runEndedAt: null }, data: { runEndedAt: new Date() } });
+  }
   // Cancelled rows with a live batch id still get their (already billed) results applied once the batch ends.
   const open = (await db.annotationBatch.findMany({ where: { OR: [{ status: "SUBMITTED" }, { status: "CANCELLED", endedAt: null }] } })).filter((b) => !b.anthropicBatchId.startsWith("pending-") && !b.anthropicBatchId.startsWith("empty-"));
   for (const b of open) {
     const remote = await anthropic().messages.batches.retrieve(b.anthropicBatchId).catch(() => null);
     if (!remote) continue;
     if (remote.processing_status !== "ended") continue;
-    let succeeded = 0, errored = 0;
+    let succeeded = 0, errored = 0, canceled = 0;
     for await (const result of await anthropic().messages.batches.results(b.anthropicBatchId)) {
       const photoId = result.custom_id;
       if (result.result.type !== "succeeded") {
-        // Errored or expired: the helper never saw the item, so leave it eligible for a later backfill.
-        errored++;
+        // Errored, expired or cancelled: the helper never saw the item, so leave it eligible for a later backfill.
+        if (result.result.type === "canceled") canceled++;
+        else errored++;
         await recordFailure(photoId, `batch:${result.result.type}`, { terminal: false });
         continue;
       }
@@ -217,6 +234,6 @@ export async function annotationBatchPoll(): Promise<void> {
       succeeded++;
     }
     console.log(`[annotation-backfill] batch ${b.anthropicBatchId} ended: ${succeeded} ok, ${errored} failed`);
-    await db.annotationBatch.update({ where: { id: b.id }, data: { status: b.status === "CANCELLED" || remote.request_counts.canceled ? "CANCELLED" : "ENDED", succeeded, errored, endedAt: new Date() } });
+    await db.annotationBatch.update({ where: { id: b.id }, data: { status: b.status === "CANCELLED" || remote.request_counts.canceled ? "CANCELLED" : "ENDED", succeeded, errored, canceled, endedAt: new Date() } });
   }
 }
