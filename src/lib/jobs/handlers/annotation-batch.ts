@@ -82,9 +82,12 @@ function imageBytes(params: Awaited<ReturnType<typeof buildRequest>>): number {
   return n;
 }
 
-/** A run is cancelled when the admin asked on the row they started, or when any row of the family was cancelled. */
+/**
+ * A run must stop when the admin asked on the row they started, when any row of the family was cancelled, or when
+ * the poll declared the run over (a loop that was only stalled would otherwise carry on after the "run it again" advice).
+ */
 export async function familyCancelled(originId: string): Promise<boolean> {
-  const row = await db.annotationBatch.findFirst({ where: { OR: [{ id: originId, cancelRequestedAt: { not: null } }, { id: originId, status: "CANCELLED" }, { parentId: originId, status: "CANCELLED" }] }, select: { id: true } });
+  const row = await db.annotationBatch.findFirst({ where: { OR: [{ id: originId, cancelRequestedAt: { not: null } }, { id: originId, runEndedAt: { not: null } }, { id: originId, status: "CANCELLED" }, { parentId: originId, status: "CANCELLED" }] }, select: { id: true } });
   return Boolean(row);
 }
 
@@ -112,22 +115,25 @@ export async function annotationBackfill(job: AnnotationBackfillJob): Promise<vo
     const newest = await db.annotationBatch.findFirst({ where: { OR: [{ id: batch.id }, { parentId: batch.id }] }, orderBy: { createdAt: "desc" }, select: { createdAt: true } });
     const lastSign = Math.max(newest?.createdAt.getTime() ?? 0, batch.startedAt?.getTime() ?? 0);
     if (Date.now() - lastSign < RUN_IDLE_MS) return;
-    await db.annotationBatch.update({ where: { id: batch.id }, data: { runEndedAt: new Date() } });
+    await db.annotationBatch.update({ where: { id: batch.id }, data: { runEndedAt: new Date(), cancelRequestedAt: new Date() } });
     await db.annotationBatch.create({ data: { anthropicBatchId: `failed-${batch.id}-retry`, parentId: batch.id, scope: batch.scope as object, requested: 0, status: "FAILED", endedAt: new Date(), createdById: batch.createdById } }).catch(() => undefined);
     console.error(`[annotation-backfill] ${batch.id} was cut short (worker restarted); run it again for the remaining items`);
     return;
   }
-  await db.annotationBatch.update({ where: { id: batch.id }, data: { startedAt: new Date() } });
+  // startedAt doubles as the run's last sign of life: it is refreshed before every part and every upload.
+  const heartbeat = () => db.annotationBatch.updateMany({ where: { id: batch.id, runEndedAt: null }, data: { startedAt: new Date() } }).catch(() => undefined);
+  await heartbeat();
   const candidates = await backfillCandidates(batch.scope as BackfillScope);
   let rowId = batch.id;
   let rowLive = false; // whether rowId already carries a real batch id (its results must never be lost)
   let unclaimed: string | null = null; // a batch created at Anthropic whose row claim has not landed yet
   let submittedAny = false;
   let chunkNo = 0;
-  const finish = async () => db.annotationBatch.update({ where: { id: batch.id }, data: { runEndedAt: new Date() } }).catch(() => undefined);
+  const finish = async () => db.annotationBatch.updateMany({ where: { id: batch.id, runEndedAt: null }, data: { runEndedAt: new Date() } }).catch(() => undefined);
   try {
     for (const part of chunk(candidates, BATCH_CHUNK)) {
       if (await familyCancelled(batch.id)) return;
+      await heartbeat();
       // Re-check now: an item opted out or described since the run started must not be sent.
       const still = new Set((await db.photo.findMany({ where: { id: { in: part.map((c) => c.id) }, status: "READY", annotatedAt: null, annotationOptOut: false, OR: [...notOptedOutWhere.OR], collections: notOptedOutWhere.collections }, select: { id: true } })).map((p) => p.id));
       const built: { custom_id: string; params: Awaited<ReturnType<typeof buildRequest>>; bytes: number }[] = [];
@@ -159,6 +165,7 @@ export async function annotationBackfill(job: AnnotationBackfillJob): Promise<vo
           await db.annotationBatch.update({ where: { id: rowId }, data: { status: "ENDED", ...skipData, endedAt: new Date(), anthropicBatchId: `empty-${rowId}` } });
           continue;
         }
+        await heartbeat();
         // A batch upload is large and slow; give it its own timeout and never let the SDK re-upload it on a timeout.
         const created = await anthropic().messages.batches.create({ requests: group.map((g) => ({ custom_id: g.custom_id, params: g.params })) }, { timeout: 10 * 60_000, maxRetries: 0 });
         unclaimed = created.id;
@@ -205,13 +212,15 @@ export async function annotationBackfill(job: AnnotationBackfillJob): Promise<vo
  */
 export async function closeDeadRuns(cutoff: Date): Promise<number> {
   const candidates = await db.annotationBatch.findMany({ where: { parentId: null, runEndedAt: null, cancelRequestedAt: null, startedAt: { lt: cutoff } }, select: { id: true, scope: true, createdById: true } });
+  // startedAt is refreshed as a heartbeat while the loop runs, so an old value means no sign of life since.
   let closed = 0;
   for (const origin of candidates) {
     const recent = await db.annotationBatch.findFirst({ where: { OR: [{ id: origin.id }, { parentId: origin.id }], createdAt: { gte: cutoff } }, select: { id: true } });
     if (recent) continue;
     const pendingChild = await db.annotationBatch.findFirst({ where: { parentId: origin.id, status: "SUBMITTED", anthropicBatchId: { startsWith: "pending-" } }, select: { id: true } });
     if (pendingChild) continue; // the stale sweep closes that one
-    await db.annotationBatch.update({ where: { id: origin.id }, data: { runEndedAt: new Date() } });
+    // Both marks: runEndedAt closes the run for the admin page, cancelRequestedAt stops a loop that was merely stalled.
+    await db.annotationBatch.update({ where: { id: origin.id }, data: { runEndedAt: new Date(), cancelRequestedAt: new Date() } });
     await db.annotationBatch.create({ data: { anthropicBatchId: `failed-${origin.id}-retry`, parentId: origin.id, scope: origin.scope as object, requested: 0, status: "FAILED", endedAt: new Date(), createdById: origin.createdById } }).catch(() => undefined);
     console.error(`[annotation-backfill] ${origin.id} was cut short (worker restarted); run it again for the remaining items`);
     closed += 1;

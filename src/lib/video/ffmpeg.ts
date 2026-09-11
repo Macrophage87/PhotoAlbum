@@ -74,6 +74,9 @@ export function posterArgs(input: string, output: string, durationS: number | nu
   return ["-y", "-hide_banner", "-loglevel", "error", "-ss", t.toFixed(2), "-i", input, "-frames:v", "1", "-vf", videoFilter({ hdr: false }), "-q:v", "2", output];
 }
 
+/** No single ffmpeg call may hang a worker: a poster or frame takes seconds, a 90-second transcode a few minutes. */
+export const FFMPEG_TIMEOUT_MS = 10 * 60_000;
+
 export async function ffmpeg(args: string[]): Promise<void> {
-  await run("ffmpeg", args, { maxBuffer: 4 * 1024 * 1024 });
+  await run("ffmpeg", args, { maxBuffer: 4 * 1024 * 1024, timeout: FFMPEG_TIMEOUT_MS, killSignal: "SIGKILL" });
 }

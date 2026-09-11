@@ -136,6 +136,9 @@ export async function previewBackfill(scope: BackfillScope): Promise<BackfillPre
 /** Submit a backfill through the Message Batches API. Requires the admin to type the item count as confirmation. */
 export async function startBackfill(scope: BackfillScope, typedConfirmation: string): Promise<string> {
   const admin = await requireAdminOrThrow();
+  // One run at a time: items in a batch still processing have no annotatedAt yet and would be sent twice.
+  const open = await db.annotationBatch.count({ where: { OR: [{ status: "SUBMITTED" }, { parentId: null, runEndedAt: null, startedAt: { not: null } }] } });
+  if (open > 0) throw new Error("A backfill is still in progress; wait until every row of it has ended before starting another.");
   const gates = await annotationGates();
   if (!gates.active) throw new Error("Annotation is off");
   const s = scopeSchema.parse(scope);
@@ -147,7 +150,7 @@ export async function startBackfill(scope: BackfillScope, typedConfirmation: str
   const batch = await db.annotationBatch.create({ data: { id, anthropicBatchId: `pending-${id}`, scope: s, requested: items.length, createdById: admin.id } });
   // A full run can take hours of building and uploading; the job must not expire meanwhile. One late retry lets a
   // run cut short by a crash be closed by the handler as well as by the poll.
-  await enqueue(QUEUES.annotationBackfill, { batchId: batch.id }, { expireInSeconds: 12 * 3600, retryLimit: 1, retryDelay: 3600 });
+  await enqueue(QUEUES.annotationBackfill, { batchId: batch.id }, { expireInSeconds: 12 * 3600, retryLimit: 1, retryDelay: 3600, retryBackoff: false });
   revalidatePath("/admin");
   return batch.id;
 }

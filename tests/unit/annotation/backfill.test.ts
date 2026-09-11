@@ -147,6 +147,12 @@ describe("the backfill run", () => {
     expect((await db.annotationBatch.findFirst({ where: { anthropicBatchId: `failed-${originId}-retry` } }))?.status).toBe("FAILED");
     expect((await db.annotationBatch.findUniqueOrThrow({ where: { id: alive.id } })).runEndedAt).toBeNull();
     expect(await db.annotationBatch.findFirst({ where: { anthropicBatchId: `failed-${alive.id}-retry` } })).toBeNull();
+    // A heartbeat alone (a long part with no new row) keeps a run alive too.
+    const beating = await db.annotationBatch.create({ data: { anthropicBatchId: "msgbatch_beating", scope: { kind: "all" }, requested: 5, createdById: userId, startedAt: new Date(Date.now() - 30 * 60_000), createdAt: twoHoursAgo } });
+    expect(await closeDeadRuns(hourAgo)).toBe(0);
+    expect((await db.annotationBatch.findUniqueOrThrow({ where: { id: beating.id } })).runEndedAt).toBeNull();
+    // A run the poll closed reads as stopped to its own loop.
+    expect(await familyCancelled(originId)).toBe(true);
   });
 
   it("applies results, counting cancelled requests apart from failures, and ends the family's run for stale placeholders", async () => {
