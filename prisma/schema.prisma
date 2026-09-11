@@ -78,6 +78,8 @@ model User {
   trips    Trip[]
   photos   Photo[]
   tracks   Track[]
+  collections     Collection[]
+  collectionItems CollectionItem[]
 }
 
 model Invite {
@@ -191,15 +193,54 @@ model Photo {
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
 
-  coverOf Trip?       @relation("TripCover")
-  linksA  PhotoLink[] @relation("LinkA")
-  linksB  PhotoLink[] @relation("LinkB")
+  coverOf     Trip?            @relation("TripCover")
+  linksA      PhotoLink[]      @relation("LinkA")
+  linksB      PhotoLink[]      @relation("LinkB")
+  collections CollectionItem[]
+  coverOfCollection Collection? @relation("CollectionCover")
 
   @@index([takenAt])
   @@index([tripId, takenAt])
   @@index([activityId])
   @@index([lat, lng])
   @@index([status])
+}
+
+/// A named, themed, shareable set of media that is independent of trips. A photo may sit in any number of collections.
+model Collection {
+  id           String         @id @default(cuid())
+  slug         String         @unique
+  title        String
+  description  String?
+  themeKey     String         @default("default")
+  visibility   TripVisibility @default(PRIVATE)
+  shareToken   String?        @unique
+  coverPhotoId String?        @unique
+  coverPhoto   Photo?         @relation("CollectionCover", fields: [coverPhotoId], references: [id], onDelete: SetNull)
+  createdById  String
+  createdBy    User           @relation(fields: [createdById], references: [id])
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  items CollectionItem[]
+
+  @@index([visibility])
+}
+
+model CollectionItem {
+  id           String     @id @default(cuid())
+  collectionId String
+  collection   Collection @relation(fields: [collectionId], references: [id], onDelete: Cascade)
+  photoId      String
+  photo        Photo      @relation(fields: [photoId], references: [id], onDelete: Cascade)
+  position     Int        @default(0)
+  addedById    String
+  addedBy      User       @relation(fields: [addedById], references: [id])
+  createdAt    DateTime   @default(now())
+
+  @@unique([collectionId, photoId])
+  @@index([photoId])
+  @@index([collectionId, position])
 }
 
 model PhotoLink {

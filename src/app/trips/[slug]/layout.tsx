@@ -32,7 +32,7 @@ async function openGraphFor(trip: TripWithCounts, pageUrl: string, imageToken?: 
   const cover = await coverFor(trip);
   const description = trip.description?.trim() || formatDayRange(dateColumnToDay(trip.startDate), dateColumnToDay(trip.endDate));
   const images = cover
-    ? [{ url: new URL(`${photoUrl(cover, "medium")}${imageToken ? `&share=${encodeURIComponent(imageToken)}` : ""}`, env().APP_URL).toString() }]
+    ? [{ url: new URL(`${photoUrl(cover, "medium")}${imageToken ? `&share=${encodeURIComponent(imageToken)}&kind=trip` : ""}`, env().APP_URL).toString() }]
     : [];
   return { type: "website", siteName: "Family Album", title: trip.title, description, url: pageUrl, images };
 }

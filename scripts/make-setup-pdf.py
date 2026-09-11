@@ -6,7 +6,8 @@ from reportlab.lib.enums import TA_LEFT
 from reportlab.platypus import (SimpleDocTemplate, Paragraph, Spacer, PageBreak,
                                 Table, TableStyle, Preformatted, KeepTogether, ListFlowable, ListItem)
 
-OUT = "/home/user/PhotoAlbum/docs/SETUP.pdf"
+import os
+OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "docs", "SETUP.pdf")
 
 NAVY = colors.HexColor("#1f3a5f")
 ACCENT = colors.HexColor("#b3392b")
@@ -230,6 +231,12 @@ S += [P("6. Using the album", H1),
       ]),
       note("<b>iPhone HEIC photos</b> work, but conversion is slow (a few seconds each). If you prefer, set the iPhone camera to "
            "'Most Compatible' so it saves JPEG. Renditions are always WebP, so browsers never need HEIC support."),
+      P("Collections", H2),
+      P("A collection gathers photos from any trip, or from none, around a theme: a person, a place, a year, the dog. Create one from the front page, "
+        "then add photos by ticking the collection on a photo's page or by selecting photos in a gallery. A photo can sit in any number of collections. "
+        "Each collection has its own cover, theme, order (drag to arrange, or sort by date), timeline and map, and is private, shared by secret link, or public, "
+        "exactly like a trip. Because a photo is visible to anyone who may open its trip or any collection holding it, putting a private trip's photo into a "
+        "public collection publishes that photo; the album warns before it happens."),
       P("Activities", H2),
       P("An activity is anything you did within a trip: hike, bike, run, kayak, drive, boat, sightseeing, food, or other. Create one by hand "
         "from the trip's Activities tab with a title, type and time window, or let a FIT or GPX import create it. Photos whose time falls inside "

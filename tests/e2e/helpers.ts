@@ -17,7 +17,7 @@ export async function withDb<T>(fn: (c: Client) => Promise<T>): Promise<T> {
 
 export async function resetDb() {
   await withDb(async (c) => {
-    await c.query('TRUNCATE "PhotoLink", "TrackStats", "Track", "Photo", "Activity", "Trip", "Session", "MagicLinkToken", "Invite", "User" CASCADE');
+    await c.query('TRUNCATE "CollectionItem", "Collection", "PhotoLink", "TrackStats", "Track", "Photo", "Activity", "Trip", "Session", "MagicLinkToken", "Invite", "User" CASCADE');
   });
 }
 

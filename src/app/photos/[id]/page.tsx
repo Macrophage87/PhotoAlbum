@@ -13,6 +13,8 @@ import { PhotoLinkEditor } from "@/components/photos/PhotoLinkEditor";
 import { LinkedPhotos } from "@/components/photos/LinkedPhotos";
 import { linkedPhotos } from "@/lib/photos/links";
 import { linkPhotos, unlinkPhotos } from "@/app/photos/link-actions";
+import { collectionsForPhoto } from "@/lib/collections/queries";
+import { CollectionPicker } from "@/components/collections/CollectionPicker";
 
 export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
   const { id } = await params;
@@ -24,13 +26,14 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
   });
   if (!photo) notFound();
 
-  const [trips, activities, links, candidates] = await Promise.all([
+  const [trips, activities, links, candidates, collections] = await Promise.all([
     db.trip.findMany({ orderBy: { startDate: "desc" }, select: { id: true, title: true } }),
     photo.tripId ? db.activity.findMany({ where: { tripId: photo.tripId }, orderBy: { startTime: "asc" }, select: { id: true, title: true, startTime: true } }) : Promise.resolve([]),
     linkedPhotos(photo.id),
     photo.tripId
       ? db.photo.findMany({ where: { tripId: photo.tripId, status: "READY", id: { not: photo.id } }, orderBy: [{ takenAt: "asc" }], select: { id: true, caption: true, originalName: true, takenAt: true, updatedAt: true } })
       : Promise.resolve([]),
+    collectionsForPhoto(photo.id),
   ]);
   const link = linkPhotos.bind(null, id);
   const update = updatePhoto.bind(null, id);
@@ -106,6 +109,11 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
               <ExifPanel photo={photo} tripTimezone={photo.trip?.timezone} />
               <p className="text-xs text-muted mt-2">Uploaded by {photo.uploader.name ?? photo.uploader.email}</p>
               {photo.takenAt && <TimezoneShift action={shift} currentOffsetMin={photo.tzOffsetMin} hasTrip={Boolean(photo.trip)} tripTimezone={photo.trip?.timezone} />}
+            </Card>
+
+            <Card className="p-4 space-y-3">
+              <h2 className="font-medium">Collections</h2>
+              <CollectionPicker photoId={photo.id} collections={collections} />
             </Card>
 
             <Card className="p-4 space-y-3">

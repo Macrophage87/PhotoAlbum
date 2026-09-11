@@ -1,13 +1,20 @@
 /**
- * Helpers for sharing a trip on the open web. Only trips that anonymous visitors
- * can open are shareable: PUBLIC trips at their normal URL, LINK trips via the secret link.
+ * Helpers for sharing a trip or collection on the open web. Only containers that anonymous visitors
+ * can open are shareable: PUBLIC ones at their normal URL, LINK ones via the secret link.
  */
-export type ShareableTrip = { slug: string; visibility: "PRIVATE" | "LINK" | "PUBLIC"; shareToken: string | null };
+export type ShareableContainer = { slug: string; visibility: "PRIVATE" | "LINK" | "PUBLIC"; shareToken: string | null };
 
 /** Absolute URL an outsider can open for this trip, or null for private trips. */
-export function shareableTripUrl(trip: ShareableTrip, appUrl: string): string | null {
+export function shareableTripUrl(trip: ShareableContainer, appUrl: string): string | null {
   if (trip.visibility === "PUBLIC") return new URL(`/trips/${trip.slug}`, appUrl).toString();
   if (trip.visibility === "LINK" && trip.shareToken) return new URL(`/share/${trip.shareToken}`, appUrl).toString();
+  return null;
+}
+
+/** Absolute URL an outsider can open for this collection, or null for private ones. */
+export function shareableCollectionUrl(collection: ShareableContainer, appUrl: string): string | null {
+  if (collection.visibility === "PUBLIC") return new URL(`/collections/${collection.slug}`, appUrl).toString();
+  if (collection.visibility === "LINK" && collection.shareToken) return new URL(`/share/c/${collection.shareToken}`, appUrl).toString();
   return null;
 }
 

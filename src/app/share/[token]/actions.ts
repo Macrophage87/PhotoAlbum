@@ -1,13 +1,15 @@
 "use server";
 
 import { cookies } from "next/headers";
-import { getSharedTrip } from "@/lib/share/queries";
+import { getSharedCollection, getSharedTrip } from "@/lib/share/queries";
 import { SHARE_COOKIE_PREFIX } from "@/lib/auth/viewer";
+import { shareKey, type ContainerKind } from "@/lib/auth/access";
 
-export async function setShareCookie(tripId: string, token: string): Promise<void> {
-  const trip = await getSharedTrip(token);
-  if (!trip || trip.id !== tripId) return;
-  (await cookies()).set(`${SHARE_COOKIE_PREFIX}${trip.id}`, token, {
+/** Remember a share token for one container so its media requests are authorised. The token is verified first. */
+export async function setShareCookie(kind: ContainerKind, id: string, token: string): Promise<void> {
+  const container = kind === "trip" ? await getSharedTrip(token) : await getSharedCollection(token);
+  if (!container || container.id !== id) return;
+  (await cookies()).set(`${SHARE_COOKIE_PREFIX}${shareKey(kind, id)}`, token, {
     httpOnly: true,
     sameSite: "lax",
     secure: process.env.NODE_ENV === "production",

@@ -107,3 +107,54 @@ test("public trips are browsable anonymously without edit controls", async ({ br
   await expect(page).toHaveURL(/\/auth\/signin/);
   await anon.close();
 });
+
+test("a collection gathers photos from two trips and can be shared by link", async ({ browser, context, page }) => {
+  await signIn(context, ADMIN);
+  await createTrip({ slug: "yosemite", title: "Yosemite", start: "2025-09-01", end: "2025-09-05", ownerEmail: ADMIN });
+  await page.goto("/upload?trip=yosemite");
+  await page.setInputFiles('input[type="file"]', fixture("photo-no-gps.jpg"));
+  await expect(page.locator("img[src*='/api/photos/']")).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText("1 of 1 uploaded.")).toBeVisible();
+
+  await page.goto("/collections/new");
+  await page.getByLabel("Title").fill("Best of 2025");
+  await page.getByRole("button", { name: "Create collection" }).click();
+  await expect(page).toHaveURL(/\/collections\/best-of-2025$/);
+  await expect(page.getByRole("heading", { name: "Best of 2025" })).toBeVisible();
+
+  const photos = await withDb((c) => c.query('SELECT p.id FROM "Photo" p JOIN "Trip" t ON t.id = p."tripId" WHERE t.slug IN (\'acadia\', \'yosemite\') ORDER BY t.slug'));
+  expect(photos.rows).toHaveLength(2);
+  for (const row of photos.rows) {
+    await page.goto(`/photos/${row.id}`);
+    const box = page.getByLabel("Best of 2025");
+    await box.check();
+    await expect(page.getByRole("link", { name: "Open" })).toBeVisible();
+    await page.reload();
+    await expect(page.getByLabel("Best of 2025")).toBeChecked();
+  }
+  await page.goto("/collections/best-of-2025/photos");
+  await expect(page.getByRole("heading", { name: /2 photos/ })).toBeVisible();
+
+  await page.goto("/collections/best-of-2025/settings");
+  await page.getByLabel("Anyone with the link").check();
+  await page.getByRole("button", { name: "Update visibility" }).click();
+  const shareUrl = (await page.locator("code").first().textContent())!.trim();
+  expect(shareUrl).toMatch(/\/share\/c\//);
+
+  const anon = await browser.newContext();
+  const anonPage = await anon.newPage();
+  await anonPage.goto("/collections/best-of-2025");
+  await expect(anonPage).toHaveURL(/\/auth\/signin/);
+  await anonPage.goto(shareUrl);
+  await expect(anonPage.getByText("Shared with you")).toBeVisible();
+  const imgs = anonPage.locator("img[src*='/api/photos/']");
+  await expect(imgs).toHaveCount(2);
+  for (const img of await imgs.all()) await expect.poll(async () => img.evaluate((el: HTMLImageElement) => el.naturalWidth)).toBeGreaterThan(0);
+  await expect(anonPage.getByRole("link", { name: "Settings" })).toHaveCount(0);
+  const ogImage = await anonPage.locator('meta[property="og:image"]').getAttribute("content");
+  expect(ogImage).toContain("kind=collection");
+  const crawler = await browser.newContext();
+  expect((await crawler.request.get(ogImage!)).ok()).toBe(true);
+  await crawler.close();
+  await anon.close();
+});

@@ -81,3 +81,28 @@ export async function buildMapPayload(viewer: Viewer, tripId?: string): Promise<
     trips: trips.map((t) => ({ slug: t.slug, title: t.title, themeKey: t.themeKey, bounds: toPair(tripBounds.get(t.id)) })),
   };
 }
+
+/** Photos in a collection (no tracks). The caller has already checked the viewer may open the collection. */
+export async function buildCollectionMapPayload(collectionId: string): Promise<MapPayload> {
+  const photos = await db.photo.findMany({
+    where: { status: "READY", lat: { not: null }, lng: { not: null }, collections: { some: { collectionId } } },
+    select: { id: true, lat: true, lng: true, caption: true, takenAt: true, updatedAt: true, activityId: true, gpsSource: true, trip: { select: { slug: true, title: true } } },
+    orderBy: { takenAt: "asc" },
+  });
+  let all: Bounds | null = null;
+  const features = photos.map((p) => {
+    all = mergeBounds(all, { minLat: p.lat!, maxLat: p.lat!, minLng: p.lng!, maxLng: p.lng! });
+    return {
+      type: "Feature" as const,
+      geometry: { type: "Point" as const, coordinates: [p.lng!, p.lat!] },
+      properties: { id: p.id, thumbUrl: photoUrl(p, "thumb"), mediumUrl: photoUrl(p, "medium"), caption: p.caption, takenAt: p.takenAt?.toISOString() ?? null, tripSlug: p.trip?.slug ?? "", tripTitle: p.trip?.title ?? "", activityId: p.activityId, gpsSource: p.gpsSource },
+    };
+  });
+  const b = all as Bounds | null;
+  return {
+    photos: { type: "FeatureCollection", features },
+    tracks: { type: "FeatureCollection", features: [] },
+    bounds: b ? [[b.minLng, b.minLat], [b.maxLng, b.maxLat]] : null,
+    trips: [],
+  };
+}

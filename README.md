@@ -12,7 +12,8 @@ A self-hosted photo album for family trips. Photos are grouped into **trips** an
 - **Tracks and stats.** Import GPX, Garmin FIT, or Google Timeline exports. Activities get distance, moving time, elevation, pace/speed, heart rate, cadence, power and calories, with elevation/pace/HR/power charts linked to the map.
 - **Photos placed from tracks.** A photo taken during a hike without GPS is positioned by interpolating along the track.
 - **Themes** per trip: palette, fonts, illustrated header art, map marker and motif.
-- **Sharing.** Each trip is private, shared by secret link, or public. Public trips appear on the front page for anyone.
+- **Collections.** Gather photos from any trip, or none, around a theme: a person, a place, a year, the dog. A photo can sit in any number of collections, with its own order, cover and theme.
+- **Sharing.** Each trip and each collection is private, shared by secret link, or public. Public ones appear on the front page for anyone.
 - **Photo links.** Mark photos as the same scene, before/after, parts of a panorama, or related.
 - **Family sign-in** by emailed magic link; an admin invites members. No passwords.
 - **Installable.** Add it to a phone's home screen and it opens full-screen like an app, with its own icon.
@@ -132,4 +133,8 @@ See `.env.example` for every variable. The important ones:
 
 ## Privacy notes
 
-A shared link or a public trip exposes every photo, activity and location trace on that trip, which reveals where people were and when. Trips are private by default, the settings page spells out what each level shows, and a shared link can be rotated at any time. Keep photos you would not share on a private trip.
+A shared link or a public trip exposes every photo, activity and location trace on that trip, which reveals where people were and when. Trips and collections are private by default, the settings page spells out what each level shows, and a shared link can be rotated at any time.
+
+A photo's visibility is the union of its containers: it can be seen by anyone who may open its trip or any collection holding it. Putting a photo from a private trip into a public collection therefore publishes that photo, and making a trip private does not hide a photo that also sits in a public collection. The interface warns before either happens.
+
+Link previews (Facebook, chat apps) fetch a shared page's cover image without cookies, so the cover image address on a secret-link page carries the share token; whichever service renders the preview receives that secret link. That is inherent to previewing secret URLs.
