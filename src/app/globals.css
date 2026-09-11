@@ -44,3 +44,9 @@ body {
 h1, h2, h3, .font-display {
   font-family: var(--th-font-display);
 }
+
+/* Off-screen gallery tiles skip layout and paint until scrolled near (cheap virtualisation for long grids). */
+.tile-lazy {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 240px;
+}

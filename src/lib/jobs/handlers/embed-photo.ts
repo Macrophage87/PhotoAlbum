@@ -5,6 +5,7 @@ import { storage } from "@/lib/storage";
 import type { Renditions } from "@/lib/images/renditions";
 import { embedImage, embedText, mlConfigured, vectorLiteral } from "@/lib/ml/client";
 import type { StoredAnnotation } from "@/lib/annotation/schema";
+import { upsertNeighbours } from "@/lib/graph/neighbours";
 import { withHeavyLock } from "../heavy-lock";
 import { enqueue } from "../boss";
 import { QUEUES, type EmbedPhotoJob } from "../queues";
@@ -30,6 +31,7 @@ export async function embedPhoto(job: EmbedPhotoJob): Promise<void> {
     if (image) sets.push(Prisma.sql`"embedding" = ${vectorLiteral(image)}::vector`);
     if (textVec) sets.push(Prisma.sql`"textEmbedding" = ${vectorLiteral(textVec)}::vector`);
     await db.$executeRaw`UPDATE "Photo" SET ${Prisma.join(sets, ", ")} WHERE id = ${photo.id}`;
+    if (image) await upsertNeighbours(photo.id);
   });
 }
 

@@ -134,7 +134,7 @@ test("a collection gathers photos from two trips and can be shared by link", asy
     await page.goto(`/photos/${row.id}`);
     const box = page.getByLabel("Best of 2025");
     await box.check();
-    await expect(page.getByRole("link", { name: "Open" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Open", exact: true })).toBeVisible();
     await page.reload();
     await expect(page.getByLabel("Best of 2025")).toBeChecked();
   }
@@ -378,7 +378,9 @@ test("uploads get embeddings from the sidecar and the review screen suggests whe
   await withDb((c) => c.query('UPDATE "Photo" SET "tripId" = NULL WHERE id = $1', [id]));
   await page.goto(`/review?ids=${id}`);
   const suggestion = page.getByRole("button", { name: /Add to trip Acadia/ }).first();
-  await expect(suggestion).toBeVisible();
+  // Background jobs on a fresh upload can still be writing; the suggestion appears once the row settles.
+  await expect.poll(async () => { await page.reload(); return suggestion.count(); }, { timeout: 20_000, intervals: [1000] }).toBe(1);
+  await page.waitForLoadState("networkidle");
   await expect(suggestion).toContainText("taken during the trip");
   await suggestion.click();
   await expect(page.getByRole("button", { name: /Added to Acadia/ })).toBeVisible();
@@ -517,4 +519,21 @@ test("a consented person is proposed on the next upload, names in the notes prop
   expect(tags.rows[0].n).toBe(2);
   await page.goto("/search?q=Biscuit");
   await expect(page.getByRole("status")).toContainText(/2 results/);
+});
+
+test("the similarity graph and the similar-photos strip are members-only and show look-alike items", async ({ page, context, request }) => {
+  // Two uploads of the same image (from the people test) share an embedding, so they are neighbours at score 1.
+  const anon = await request.get("/api/graph");
+  expect(anon.status()).toBe(401);
+  await signIn(context, ADMIN);
+  await expect.poll(async () => (await withDb((c) => c.query('SELECT count(*)::int AS n FROM "MediaSimilarity"'))).rows[0].n, { timeout: 30_000 }).toBeGreaterThan(0);
+  const pair = await withDb((c) => c.query('SELECT "photoAId" FROM "MediaSimilarity" ORDER BY score DESC LIMIT 1'));
+  await page.goto(`/photos/${pair.rows[0].photoAId}`);
+  await expect(page.getByTestId("similar-strip").locator("img").first()).toBeVisible();
+  await page.goto("/graph");
+  await expect(page.getByRole("status")).toContainText(/\d+ items · [1-9]\d* links/);
+  await expect(page.getByTestId("graph-canvas").locator("canvas").first()).toBeVisible();
+  // Pages carry a per-request nonce policy; the API keeps the frame-only one.
+  const res = await request.get("/graph");
+  expect(res.headers()["content-security-policy"]).toMatch(/script-src 'self' 'nonce-[A-Za-z0-9+/=]+' 'strict-dynamic'/);
 });

@@ -20,6 +20,7 @@ A self-hosted photo album for family trips. Photos are grouped into **trips** an
 - **AI descriptions (opt-in).** With `ANTHROPIC_API_KEY`, `ANNOTATION_ENABLED=true` and an admin's opt-in on the Admin page, each reviewed item is described by Claude (`ANNOTATION_MODEL`, default `claude-opus-5`): caption, description, tags, place, a search summary, and for undated scans an estimated year to confirm. Items, trips and collections can be opted out; a scoped backfill with a cost estimate and typed confirmation describes the existing library at half price through the Batches API.
 - **Local ML sidecar (optional).** A small Python service on an internal Docker network computes image embeddings (OpenCLIP), text embeddings (MiniLM) and face templates (InsightFace) on the CPU; nothing about a photo leaves the server. With it on, search blends meaning with keywords, the review screen suggests trips and collections by date, place and similarity, and (later phases) people are recognised locally.
 - **People (local, consent-first).** With the sidecar on and an admin's opt-in, faces are found and grouped on the server; a member names a group once and it becomes a person with a page of their photos over time. Recognising someone in new photos is a separate per-person decision only an admin can make, off by default, never for a minor without a parent's instruction; unnamed faces are purged after `FACE_UNNAMED_RETENTION_DAYS`; a person can be forgotten at any time. Once a person is recognised, new faces that look like them are shown as "Probably …?" proposals for a member to confirm or reject (a rejection counts against that person from then on); a person owns one face group per era, matched by age at capture from their birthday and the photo's real or estimated date, and childhood matches use a stricter threshold. Names in your upload notes ("Sam at age 4") propose people too. Names and face chips are members-only, and a name reaches the AI helper only when that person's recognition is on and they are an adult.
+- **Similarity graph.** With the sidecar on, each item's eight nearest look-alikes are stored, and a members-only graph page draws items as thumbnails with links by similarity, for the whole library (admins, capped at 3,000) or one trip, collection or person; colour by trip, collection, person or uploader, slide the threshold, click to open. Only links between items you may see are ever returned. The photo page shows a small "similar photos" strip under the same rule.
 - **Pets.** Records with species and lifespan (or a flock record like "the chickens"), tagged by hand from the lightbox or proposed from your notes, with pages and search like people. No animal recognition runs.
 - **Search.** Captions, notes, AI descriptions and tags, confirmed people's names (members only), titles, trip and collection names, and for members uploader names, through Postgres full-text search with filters by trip, collection, uploader, year and type. Anonymous visitors search only public content and only the column that carries no names.
 - **Photo links.** Mark photos as the same scene, before/after, parts of a panorama, or related.
@@ -40,11 +41,13 @@ Open <http://localhost:3000>, enter the admin email, and follow the sign-in link
 docker compose logs -f app | grep "auth/verify"
 ```
 
-To load a demo trip with a hike and sample photos:
+To load demo content (two trips, a hike with stats, sample photos, a collection, a short clip, a YouTube embed, two named people, a pet and AI-style descriptions):
 
 ```bash
 docker compose exec app node_modules/.bin/tsx prisma/seed.ts
 ```
+
+The seed needs no network access and no API key: the descriptions are copied from a recorded fixture and the face templates are fixture vectors, so they show what the features look like without any live service. Each live feature has two switches, an environment flag and an admin's opt-in on the Admin page: descriptions need `ANNOTATION_ENABLED=true` plus `ANTHROPIC_API_KEY` and the opt-in; faces need the ML sidecar (`ML_URL`, `ML_TOKEN`), `FACE_INDEXING_ENABLED=true` and the opt-in. Until both switches are on, nothing is sent anywhere and no face is scanned.
 
 Photos live in the `photos` volume, the database in `pgdata`. Back those two up.
 
@@ -57,6 +60,10 @@ The album is a progressive web app, so once it is reachable over HTTPS it can be
 - **Desktop (Chrome / Edge):** click the install icon at the right end of the address bar.
 
 It launches full-screen with the Family Album icon. Uploads and sign-in work exactly as in the browser; when the network is unavailable an offline notice is shown instead of a browser error.
+
+### Security headers
+
+Every page is served with a nonce-based Content-Security-Policy: scripts only from this site with a per-request nonce, inline styles allowed (themes set style attributes), images and data only from this site and the configured map hosts (`NEXT_PUBLIC_TILE_URL`, `NEXT_PUBLIC_MAP_STYLE_URL`, `NEXT_PUBLIC_MAP_GLYPHS_URL`), frames only for the privacy-enhanced YouTube host, and no framing of this site by anyone. If a new map provider's assets are blocked, set `CSP_REPORT_ONLY=true` to see the violations in the browser console without blocking, then fix the host variables and turn enforcement back on.
 
 ### Behind a reverse proxy
 
@@ -145,7 +152,7 @@ With annotation on (two gates: `ANNOTATION_ENABLED` plus an admin's opt-in on th
 
 ## Server size
 
-Without the ML sidecar the stack runs comfortably in 2 GB of RAM. The sidecar needs about 2 GB to itself with all models loaded, so the full stack wants 4 GB with a swap file, or 8 GB without; `docs/DEPLOY.md` has the steps. On a smaller server leave `ML_URL` unset: collections, video, descriptions and keyword search all still work, and only faces, semantic search, similarity suggestions and the graph are hidden.
+Without the ML sidecar the stack runs comfortably in 2 GB of RAM. The sidecar needs about 2 GB to itself with all models loaded, so the full stack wants 4 GB with a swap file, or 8 GB without; `docs/DEPLOY.md` has the steps. On a smaller server leave `ML_URL` unset: collections, video, descriptions and keyword search all still work, and only faces, semantic search, similarity suggestions and the graph are hidden. Long galleries load 240 items at a time and the timeline pages by day, so a 3,000-photo trip paints its first screen in well under two seconds (see `scripts/seed-perf.ts` and `scripts/measure-perf.mjs`).
 
 ## Privacy notes
 

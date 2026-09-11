@@ -11,6 +11,7 @@ const memberLinks = [
   { href: "/upload", label: "Upload" },
   { href: "/review", label: "Review" },
   { href: "/people", label: "People" },
+  { href: "/graph", label: "Graph" },
 ];
 
 export function Nav({ viewer }: { viewer: Viewer }) {

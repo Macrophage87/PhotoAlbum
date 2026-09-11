@@ -24,7 +24,8 @@ export default async function GlobalTimelinePage({ searchParams }: PageProps<"/t
   const filter = typeof sp.collection === "string" ? collections.find((c) => c.slug === sp.collection) : undefined;
   const trips = filter ? [] : await listVisibleTrips(viewer);
   const [groups, collectionGroups, tripOptions, collectionOptions] = await Promise.all([
-    Promise.all(trips.map((t) => tripTimeline(t.id, t.timezone))),
+    // The global view shows the first page of each trip; the trip timeline pages through the rest.
+    Promise.all(trips.map((t) => tripTimeline(t.id, t.timezone).then((p) => p.groups))),
     filter ? collectionTimeline(filter.id) : Promise.resolve(null),
     editable ? db.trip.findMany({ orderBy: { startDate: "desc" }, select: { id: true, title: true } }) : Promise.resolve([]),
     editable ? db.collection.findMany({ orderBy: { title: "asc" }, select: { id: true, title: true } }) : Promise.resolve([]),

@@ -22,7 +22,7 @@ export function PhotoGrid({ photos, showDetailLink = true, emptyMessage = "No ph
         {photos.map((p) => {
           const readyIndex = ready.findIndex((r) => r.id === p.id);
           return (
-            <li key={p.id} className="relative aspect-square rounded-theme overflow-hidden bg-surface-alt border border-border group">
+            <li key={p.id} className="tile-lazy relative aspect-square rounded-theme overflow-hidden bg-surface-alt border border-border group">
               {p.status === "READY" ? (
                 <button onClick={() => (selectable ? onToggle?.(p.id) : lb.open(readyIndex))} className={`block w-full h-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring ${selectable && selected?.has(p.id) ? "ring-4 ring-primary ring-inset" : ""}`} aria-pressed={selectable ? selected?.has(p.id) : undefined}>
                   {p.videoUrl ? (

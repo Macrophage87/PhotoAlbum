@@ -26,6 +26,8 @@ import { annotationGates, optOutReason } from "@/lib/annotation/eligibility";
 import type { StoredAnnotation } from "@/lib/annotation/schema";
 import { peopleOnPhoto, proposalsFor } from "@/lib/people/queries";
 import { ProposalList } from "@/components/people/ProposalList";
+import { similarTo } from "@/lib/graph/query";
+import { SimilarStrip } from "@/components/graph/SimilarStrip";
 import { PersonChips } from "@/components/people/PersonChips";
 
 export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
@@ -38,7 +40,7 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
   });
   if (!photo) notFound();
 
-  const [gates, optOutWhy, faces, proposals, people] = await Promise.all([annotationGates(), optOutReason(photo.id), peopleOnPhoto(photo.id), proposalsFor([photo.id]), db.person.findMany({ where: { kind: "HUMAN" }, orderBy: { name: "asc" }, select: { id: true, name: true } })]);
+  const [gates, optOutWhy, faces, proposals, similar, people] = await Promise.all([annotationGates(), optOutReason(photo.id), peopleOnPhoto(photo.id), proposalsFor([photo.id]), similarTo(viewer, photo.id), db.person.findMany({ where: { kind: "HUMAN" }, orderBy: { name: "asc" }, select: { id: true, name: true } })]);
   const [trips, activities, links, candidates, collections] = await Promise.all([
     db.trip.findMany({ orderBy: { startDate: "desc" }, select: { id: true, title: true } }),
     photo.tripId ? db.activity.findMany({ where: { tripId: photo.tripId }, orderBy: { startTime: "asc" }, select: { id: true, title: true, startTime: true } }) : Promise.resolve([]),
@@ -182,6 +184,12 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
               <h2 className="font-medium">Collections</h2>
               <CollectionPicker photoId={photo.id} collections={collections} />
             </Card>
+
+            {similar.length > 0 && (
+              <Card className="p-4">
+                <SimilarStrip items={similar} graphHref={photo.trip ? `/graph?trip=${photo.trip.slug}` : undefined} />
+              </Card>
+            )}
 
             <Card className="p-4 space-y-3">
               <h2 className="font-medium">Linked photos</h2>

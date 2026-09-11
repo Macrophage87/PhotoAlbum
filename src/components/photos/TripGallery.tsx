@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { PhotoGrid, type GridPhoto } from "./PhotoGrid";
+import { LoadMoreSentinel, useLoadMore } from "./LoadMore";
 import { Button, Select } from "@/components/ui";
 import { bulkAssignActivity, bulkDelete, bulkMoveToTrip } from "@/app/photos/bulk-actions";
 import { addToCollection } from "@/app/collections/actions";
@@ -10,7 +11,9 @@ import { previewAddToCollection, previewMoveToTrip } from "@/app/photos/exposure
 type Option = { id: string; title: string };
 
 /** Gallery with an optional selection mode for members: assign to an activity, move trips, or delete. */
-export function TripGallery({ photos, activities, trips, collections = [], editable, emptyMessage }: { photos: GridPhoto[]; activities: Option[]; trips: Option[]; collections?: Option[]; editable: boolean; emptyMessage: string }) {
+export function TripGallery({ photos: initialPhotos, activities, trips, collections = [], editable, emptyMessage, more }: { photos: GridPhoto[]; activities: Option[]; trips: Option[]; collections?: Option[]; editable: boolean; emptyMessage: string; /** Cursor pagination: where to fetch the next page and how many items there are in all. */ more?: { url: string; nextCursor: string | null; total: number } }) {
+  const paged = useLoadMore(more?.url ?? "", more?.nextCursor ?? null, initialPhotos);
+  const photos = paged.photos;
   const [selecting, setSelecting] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [activityId, setActivityId] = useState("");
@@ -142,6 +145,7 @@ export function TripGallery({ photos, activities, trips, collections = [], edita
           })
         }
       />
+      {more && <LoadMoreSentinel hasMore={paged.hasMore} loading={paged.loading} error={paged.error} onLoad={paged.loadMore} shown={photos.length} total={more.total} />}
     </div>
   );
 }

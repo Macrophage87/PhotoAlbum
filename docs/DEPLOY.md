@@ -342,3 +342,7 @@ The production workflow points at a second checkout,
 `PhotoAlbum-live`, with its own `.env` (`APP_PORT=3004`, `APP_URL`
 `https://cieply.com`) and its own data directory — see step 13. It skips
 until that folder exists.
+
+## Security headers
+
+Pages are served with a nonce-based Content-Security-Policy generated per request (see `src/proxy.ts`), so a reverse proxy must pass the `Content-Security-Policy` response header through unchanged and must not add its own. If you use a map tile or style provider, set `NEXT_PUBLIC_TILE_URL`, `NEXT_PUBLIC_MAP_STYLE_URL` and `NEXT_PUBLIC_MAP_GLYPHS_URL` before building the image: the policy allows exactly those hosts. `CSP_REPORT_ONLY=true` switches to reporting while you check a new provider.

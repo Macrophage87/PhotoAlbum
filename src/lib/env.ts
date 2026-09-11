@@ -42,6 +42,8 @@ const schema = z.object({
   // Face detection stays off until this flag and an admin's opt-in on the disclosure screen are both set.
   FACE_INDEXING_ENABLED: boolish.transform((v) => v ?? false),
   FACE_UNNAMED_RETENTION_DAYS: z.coerce.number().int().positive().default(180),
+  // Send the page Content-Security-Policy as report-only (browser console warnings instead of blocking) while trying a new tile or style host.
+  CSP_REPORT_ONLY: boolish.transform((v) => v ?? false),
 }).refine((e) => !e.ML_URL || Boolean(e.ML_TOKEN), { message: "ML_TOKEN is required when ML_URL is set", path: ["ML_TOKEN"] });
 
 export type Env = z.infer<typeof schema>;

@@ -1,5 +1,5 @@
 import { loadViewableTrip } from "@/lib/trips/access";
-import { listTripPhotos } from "@/lib/photos/queries";
+import { tripPhotoPage } from "@/lib/photos/page";
 import { TripGallery } from "@/components/photos/TripGallery";
 import { db } from "@/lib/db";
 import { toGridPhoto, uploaderLabel } from "@/components/photos/toGrid";
@@ -13,18 +13,20 @@ export default async function TripPhotosPage({ params, searchParams }: PageProps
   const { trip, editable } = await loadViewableTrip(slug, `/trips/${slug}/photos`);
   // The uploader filter is a members-only control; anonymous requests never see the member list.
   const uploaderId = editable && typeof sp.uploader === "string" && sp.uploader ? sp.uploader : undefined;
-  const [photos, activities, trips, collections, members] = await Promise.all([
-    listTripPhotos(trip.id, uploaderId),
+  const [page, activities, trips, collections, members] = await Promise.all([
+    tripPhotoPage(trip.id, { uploaderId }),
     editable ? db.activity.findMany({ where: { tripId: trip.id }, orderBy: { startTime: "asc" }, select: { id: true, title: true } }) : Promise.resolve([]),
     editable ? db.trip.findMany({ where: { id: { not: trip.id } }, orderBy: { startDate: "desc" }, select: { id: true, title: true } }) : Promise.resolve([]),
     editable ? db.collection.findMany({ orderBy: { title: "asc" }, select: { id: true, title: true } }) : Promise.resolve([]),
     editable ? db.user.findMany({ where: { photos: { some: { tripId: trip.id } } }, orderBy: { name: "asc" }, select: { id: true, name: true } }) : Promise.resolve([]),
   ]);
+  const photos = page.photos;
+  const moreUrl = `/api/trips/${trip.slug}/photos${uploaderId ? `?uploader=${encodeURIComponent(uploaderId)}` : ""}`;
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="font-display text-xl font-semibold">
-          {photos.length} photo{photos.length === 1 ? "" : "s"}
+          {page.total} photo{page.total === 1 ? "" : "s"}
         </h2>
         <div className="flex items-center gap-2">
           {editable && members.length > 1 && (
@@ -43,7 +45,7 @@ export default async function TripPhotosPage({ params, searchParams }: PageProps
         </div>
       </div>
       {editable && <YouTubeAddForm tripId={trip.id} defaultDate={dateColumnToDay(trip.startDate)} />}
-      <TripGallery photos={photos.map((p) => toGridPhoto(p, null, editable))} activities={activities} trips={trips} collections={collections} editable={editable} emptyMessage={editable ? "No photos yet. Upload some to get started." : "No photos yet."} />
+      <TripGallery key={moreUrl} photos={photos.map((p) => toGridPhoto(p, null, editable))} more={{ url: moreUrl, nextCursor: page.nextCursor, total: page.total }} activities={activities} trips={trips} collections={collections} editable={editable} emptyMessage={editable ? "No photos yet. Upload some to get started." : "No photos yet."} />
     </div>
   );
 }

@@ -297,6 +297,8 @@ model Photo {
   coverOfCollection Collection? @relation("CollectionCover")
   annotationRaw     MediaAnnotationRaw[]
   faces             Face[]
+  similarA          MediaSimilarity[] @relation("SimA")
+  similarB          MediaSimilarity[] @relation("SimB")
 
   @@index([takenAt])
   @@index([tripId, takenAt])
@@ -459,6 +461,19 @@ model Face {
   @@index([clusterId])
   @@index([personId])
   @@index([status])
+}
+
+/// Precomputed nearest neighbours by image embedding (cosine), stored once per unordered pair with photoAId < photoBId.
+model MediaSimilarity {
+  photoAId String
+  photoA   Photo  @relation("SimA", fields: [photoAId], references: [id], onDelete: Cascade)
+  photoBId String
+  photoB   Photo  @relation("SimB", fields: [photoBId], references: [id], onDelete: Cascade)
+  score    Float
+
+  @@id([photoAId, photoBId])
+  @@index([photoBId])
+  @@index([score])
 }
 
 model PhotoLink {

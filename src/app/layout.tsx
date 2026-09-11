@@ -12,6 +12,7 @@ import {
   Montserrat,
   Open_Sans,
 } from "next/font/google";
+import { headers } from "next/headers";
 import "./globals.css";
 import { RegisterServiceWorker } from "@/components/pwa/RegisterServiceWorker";
 
@@ -52,7 +53,9 @@ export const viewport: Viewport = {
   themeColor: "#1f3a5f",
 };
 
-export default function RootLayout({ children }: LayoutProps<"/">) {
+export default async function RootLayout({ children }: LayoutProps<"/">) {
+  // Every page carries a per-request CSP nonce (set in src/proxy.ts), so nothing is prerendered at build time.
+  await headers();
   return (
     <html lang="en" className={`${fontVars} h-full antialiased`}>
       <body className="min-h-full flex flex-col">
