@@ -3,6 +3,9 @@
 import { useEffect, useState, useTransition } from "react";
 import Link from "next/link";
 import { StaticMapTile } from "@/components/map/StaticMapTile";
+import { PlaceEditor } from "./PlaceEditor";
+import { mapThemeOf } from "@/lib/map/theme";
+import { getTheme } from "@/themes";
 import { resetPhotoDateToCamera, setPhotoDate } from "@/app/photos/[id]/actions";
 import type { PhotoInfo } from "@/app/api/photos/[id]/info/route";
 
@@ -84,13 +87,18 @@ export function LightboxInfo({ photoId, share }: { photoId: string; share?: { to
         )}
         {message && <p role="alert" className="text-xs text-amber-300 mt-1">{message}</p>}
       </div>
-      {info.lat !== null && info.lng !== null && (
+      {(info.lat !== null && info.lng !== null) || info.editable ? (
         <div>
           <div className="text-white/60 text-xs uppercase tracking-wide mb-1">Place</div>
-          <StaticMapTile lat={info.lat} lng={info.lng} height={150} />
-          {info.trip && <p className="text-white/60 text-xs mt-1">On <Link href={`/trips/${info.trip.slug}/map`} className="underline underline-offset-2 hover:text-white" onClick={(e) => e.stopPropagation()}>{info.trip.title}</Link></p>}
+          {info.lat !== null && info.lng !== null && <StaticMapTile lat={info.lat} lng={info.lng} height={150} />}
+          {info.trip && info.lat !== null && <p className="text-white/60 text-xs mt-1">On <Link href={`/trips/${info.trip.slug}/map`} className="underline underline-offset-2 hover:text-white" onClick={(e) => e.stopPropagation()}>{info.trip.title}</Link></p>}
+          {info.editable && (
+            <div className="mt-2">
+              <PlaceEditor photoId={info.id} initial={info.lat !== null && info.lng !== null ? { lat: info.lat, lng: info.lng } : null} gpsSource={info.gpsSource} theme={mapThemeOf(getTheme(info.themeKey))} dark onSaved={(v) => setInfo((prev) => (prev ? { ...prev, lat: v.lat, lng: v.lng, gpsSource: v.gpsSource } : prev))} />
+            </div>
+          )}
         </div>
-      )}
+      ) : null}
       {info.description && (
         <div>
           <div className="text-white/60 text-xs uppercase tracking-wide">Description</div>

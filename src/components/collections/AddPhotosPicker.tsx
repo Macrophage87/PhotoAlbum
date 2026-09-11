@@ -7,7 +7,7 @@ import { PhotoGrid, type GridPhoto } from "@/components/photos/PhotoGrid";
 import { addToCollection, moreCandidates } from "@/app/collections/actions";
 import { previewAddToCollection } from "@/app/photos/exposure-actions";
 
-type Filter = { trip: string | null; q: string | null };
+type Filter = { trip: string | null; q: string | null; from: string | null; to: string | null };
 
 /** Tick photos from anywhere in the album and add them to one collection; warns first when that would expose them. */
 export function AddPhotosPicker({ collection, trips, filter, initial }: { collection: { id: string; slug: string; title: string }; trips: { id: string; title: string }[]; filter: Filter; initial: { photos: GridPhoto[]; nextCursor: string | null; total: number } }) {
@@ -45,7 +45,7 @@ export function AddPhotosPicker({ collection, trips, filter, initial }: { collec
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h2 className="font-display text-xl font-semibold">Add existing photos to {collection.title}</h2>
-          <p className="text-sm text-muted mt-1">Tick the photos that belong here. {initial.total} item{initial.total === 1 ? "" : "s"} to choose from{filter.trip || filter.q ? " with this filter" : ""}; photos already in the collection are not shown.</p>
+          <p className="text-sm text-muted mt-1">Tick the photos that belong here. {initial.total} item{initial.total === 1 ? "" : "s"} to choose from{filter.trip || filter.q || filter.from || filter.to ? " with this filter" : ""}; photos already in the collection are not shown.</p>
         </div>
         <form method="get" className="flex flex-wrap items-end gap-2">
           <div>
@@ -57,14 +57,22 @@ export function AddPhotosPicker({ collection, trips, filter, initial }: { collec
             </Select>
           </div>
           <div>
-            <Label htmlFor="q">Word in caption or notes</Label>
+            <Label htmlFor="from">From</Label>
+            <Input id="from" name="from" type="date" defaultValue={filter.from ?? ""} className="h-9" />
+          </div>
+          <div>
+            <Label htmlFor="to">To</Label>
+            <Input id="to" name="to" type="date" defaultValue={filter.to ?? ""} className="h-9" />
+          </div>
+          <div>
+            <Label htmlFor="q">Words in caption, notes or description</Label>
             <Input id="q" name="q" defaultValue={filter.q ?? ""} placeholder="lake, birthday, Biscuit…" className="h-9" />
           </div>
           <Button type="submit" variant="secondary" size="sm">Filter</Button>
         </form>
       </div>
       {message && <p role="alert" className="text-sm rounded-theme bg-red-50 border border-red-200 text-red-900 p-3">{message}</p>}
-      <PhotoGrid photos={photos} selectable selected={selected} onToggle={toggle} showDetailLink={false} emptyMessage={filter.trip || filter.q ? "Nothing matches this filter." : "Every ready photo is already in this collection."} />
+      <PhotoGrid photos={photos} selectable selected={selected} onToggle={toggle} showDetailLink={false} emptyMessage={filter.trip || filter.q || filter.from || filter.to ? "Nothing matches this filter." : "Every ready photo is already in this collection."} />
       {nextCursor && (
         <div className="text-center">
           <Button variant="secondary" size="sm" onClick={loadMore} disabled={pending}>Load more</Button>

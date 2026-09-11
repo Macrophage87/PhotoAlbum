@@ -14,6 +14,9 @@ const SOURCE_LABEL: Record<string, string> = { EXIF_OFFSET: "from the camera", E
 import { TimezoneShift } from "@/components/photos/TimezoneShift";
 import { PhotoLinkEditor } from "@/components/photos/PhotoLinkEditor";
 import { LinkedPhotos } from "@/components/photos/LinkedPhotos";
+import { PlaceEditor } from "@/components/photos/PlaceEditor";
+import { mapThemeOf } from "@/lib/map/theme";
+import { getTheme } from "@/themes";
 import { linkedPhotos } from "@/lib/photos/links";
 import { linkPhotos, unlinkPhotos } from "@/app/photos/link-actions";
 import { collectionsForPhoto } from "@/lib/collections/queries";
@@ -53,6 +56,7 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
   });
   if (!photo) notFound();
 
+  const tripTheme = photo.trip ? (await db.trip.findUnique({ where: { id: photo.trip.id }, select: { themeKey: true } }))?.themeKey ?? null : null;
   const [gates, optOutWhy, faces, proposals, similar, people] = await Promise.all([annotationGates(), optOutReason(photo.id), peopleOnPhoto(photo.id), proposalsFor([photo.id]), similarTo(viewer, photo.id), db.person.findMany({ where: { kind: "HUMAN", optedOutAt: null }, orderBy: { name: "asc" }, select: { id: true, name: true } })]);
   const [trips, activities, links, candidates, collections] = await Promise.all([
     db.trip.findMany({ orderBy: { startDate: "desc" }, select: { id: true, title: true } }),
@@ -193,6 +197,10 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
               <EstimatedDate photoId={photo.id} estimatedDate={photo.estimatedDate} confidence={photo.estimatedDateConfidence} note={photo.estimatedDateNote} />
             )}
 
+            <Card className="p-4">
+              <h2 className="font-medium mb-2">Place</h2>
+              <PlaceEditor photoId={photo.id} initial={photo.lat !== null && photo.lng !== null ? { lat: photo.lat, lng: photo.lng } : null} gpsSource={photo.gpsSource} theme={mapThemeOf(getTheme(tripTheme))} />
+            </Card>
             <Card className="p-4">
               <h2 className="font-medium mb-2">Details</h2>
               <ExifPanel photo={photo} tripTimezone={photo.trip?.timezone} />

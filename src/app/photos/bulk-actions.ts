@@ -39,3 +39,13 @@ export async function bulkDelete(photoIds: string[]): Promise<void> {
   for (const p of photos) await enqueue(QUEUES.deletePhoto, { storageKey: p.storageKey });
   revalidatePath("/", "layout");
 }
+
+/** Pin every selected item to one spot (a group of prints from the same place). */
+export async function bulkSetPlace(photoIds: string[], lat: number, lng: number): Promise<number> {
+  await requireUserOrThrow();
+  const list = ids.parse(photoIds);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) throw new Error("That is not a place on the map");
+  const r = await db.photo.updateMany({ where: { id: { in: list } }, data: { lat, lng, altitude: null, gpsSource: "MANUAL" } });
+  revalidatePath("/", "layout");
+  return r.count;
+}

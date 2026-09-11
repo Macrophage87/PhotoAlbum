@@ -22,7 +22,7 @@ const VISIBILITY = [
 export default async function TripSettingsPage({ params, searchParams }: PageProps<"/trips/[slug]/settings">) {
   const { slug } = await params;
   const sp = await searchParams;
-  await requireUser(`/trips/${slug}/settings`);
+  const me = await requireUser(`/trips/${slug}/settings`);
   const trip = await getTripBySlug(slug);
   if (!trip) notFound();
   const update = updateTrip.bind(null, slug);
@@ -112,15 +112,18 @@ export default async function TripSettingsPage({ params, searchParams }: PagePro
 
       <section>
         <h2 className="font-display text-xl font-semibold mb-2 text-red-700">Delete trip</h2>
-        <p className="text-sm text-muted mb-3">Activities and tracks on this trip are deleted. Photos are kept and become unassigned unless you tick the box.</p>
-        <form action={remove} className="space-y-3">
-          <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" name="deletePhotos" /> Also delete the {trip._count.photos} photo{trip._count.photos === 1 ? "" : "s"} on this trip
-          </label>
-          <ConfirmSubmitButton variant="danger" confirmMessage={`Delete "${trip.title}"? Its activities and tracks are removed permanently. This cannot be undone.`}>
-            Delete this trip
-          </ConfirmSubmitButton>
-        </form>
+        {me.role === "ADMIN" ? (
+          <>
+            <p className="text-sm text-muted mb-3">Activities and tracks on this trip are deleted. The {trip._count.photos} photo{trip._count.photos === 1 ? "" : "s"} stay in the album and move to <em>photos without a trip</em>, where they can be filed again.</p>
+            <form action={remove}>
+              <ConfirmSubmitButton variant="danger" confirmMessage={`Delete "${trip.title}"? Its activities and tracks are removed permanently; the photos are kept and become unassigned. This cannot be undone.`}>
+                Delete this trip
+              </ConfirmSubmitButton>
+            </form>
+          </>
+        ) : (
+          <p className="text-sm text-muted">Only an admin can delete a trip. Photos are never deleted with it.</p>
+        )}
       </section>
     </div>
   );

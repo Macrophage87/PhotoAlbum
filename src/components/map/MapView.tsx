@@ -23,6 +23,8 @@ export type MapViewProps = {
   /** Bounds to fly to when they change (e.g. a trip picked from a list). */
   focusBounds?: [[number, number], [number, number]] | null;
   interactive?: boolean;
+  /** A click on the map itself (not on a photo or track), for placing things. */
+  onMapClick?: (pos: { lat: number; lng: number }) => void;
 };
 
 const EMPTY: GeoJSON.FeatureCollection = { type: "FeatureCollection", features: [] };
@@ -39,16 +41,16 @@ function svgToImage(svg: string): Promise<HTMLImageElement> {
   });
 }
 
-export function MapView({ photos, tracks, bounds, theme, className = "", onPhotoClick, onTrackClick, onTrackHover, highlightTrackId, marker, focusBounds, interactive = true }: MapViewProps) {
+export function MapView({ photos, tracks, bounds, theme, className = "", onPhotoClick, onTrackClick, onTrackHover, highlightTrackId, marker, focusBounds, interactive = true, onMapClick }: MapViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MLMap | null>(null);
   const markerRef = useRef<Marker | null>(null);
   const popupRef = useRef<Popup | null>(null);
   const hoveredRef = useRef<string | null>(null);
   const [loaded, setLoaded] = useState(false);
-  const callbacks = useRef({ onPhotoClick, onTrackClick, onTrackHover });
+  const callbacks = useRef({ onPhotoClick, onTrackClick, onTrackHover, onMapClick });
   useEffect(() => {
-    callbacks.current = { onPhotoClick, onTrackClick, onTrackHover };
+    callbacks.current = { onPhotoClick, onTrackClick, onTrackHover, onMapClick };
   });
 
   // Create the map once
@@ -67,6 +69,12 @@ export function MapView({ photos, tracks, bounds, theme, className = "", onPhoto
     mapRef.current = map;
     (containerRef.current as HTMLDivElement & { __map?: MLMap }).__map = map; // handy for debugging in devtools
     if (interactive) map.addControl(new NavigationControl({ showCompass: false }), "top-right");
+    map.on("click", (e: MapMouseEvent) => {
+      if (!callbacks.current.onMapClick) return;
+      const busy = ["clusters", "photo-points", "tracks-line", "tracks-google"].filter((l) => map.getLayer(l));
+      if (busy.length && map.queryRenderedFeatures(e.point, { layers: busy }).length) return;
+      callbacks.current.onMapClick({ lat: e.lngLat.lat, lng: e.lngLat.lng });
+    });
     if (theme.canvasFilter) map.getCanvas().style.filter = theme.canvasFilter;
 
     map.on("load", async () => {

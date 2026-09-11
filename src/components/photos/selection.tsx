@@ -5,6 +5,10 @@ import { useRouter } from "next/navigation";
 import { Button, Select } from "@/components/ui";
 import { bulkMoveToTrip } from "@/app/photos/bulk-actions";
 import { addToCollection } from "@/app/collections/actions";
+import { bulkSetPlace } from "@/app/photos/bulk-actions";
+import { PlacePicker, type PlaceValue } from "./PlacePicker";
+import { mapThemeOf } from "@/lib/map/theme";
+import { getTheme } from "@/themes";
 import { previewAddToCollection, previewMoveToTrip } from "@/app/photos/exposure-actions";
 
 type Option = { id: string; title: string };
@@ -27,6 +31,8 @@ export function SelectionProvider({ trips, collections, children }: { trips: Opt
   const [collectionId, setCollectionId] = useState("");
   const [pending, start] = useTransition();
   const [notice, setNotice] = useState<string | null>(null);
+  const [placing, setPlacing] = useState(false);
+  const [place, setPlace] = useState<PlaceValue | null>(null);
   const router = useRouter();
   const ids = [...selected];
   const toggle = (id: string) =>
@@ -49,6 +55,13 @@ export function SelectionProvider({ trips, collections, children }: { trips: Opt
       if (warnings.length && !window.confirm(`${warnings.join("\n")}\n\nContinue?`)) return;
       await bulkMoveToTrip(ids, target);
       finish(`${ids.length} photo${ids.length === 1 ? "" : "s"} moved.`);
+    });
+  const applyPlace = () =>
+    start(async () => {
+      if (!place) return;
+      const n = await bulkSetPlace(ids, place.lat, place.lng);
+      setPlacing(false);
+      finish(`${n} photo${n === 1 ? "" : "s"} placed.`);
     });
   const addToCol = () =>
     start(async () => {
@@ -90,10 +103,21 @@ export function SelectionProvider({ trips, collections, children }: { trips: Opt
               </Select>
             </div>
             <Button size="sm" variant="secondary" disabled={!ids.length || !collectionId || pending} onClick={addToCol}>Add</Button>
-            <Button variant="ghost" size="sm" onClick={() => { setActive(false); setSelected(new Set()); }}>Done</Button>
+            <Button size="sm" variant="secondary" disabled={!ids.length || pending} onClick={() => setPlacing((v) => !v)}>Set a place…</Button>
+            <Button variant="ghost" size="sm" onClick={() => { setActive(false); setSelected(new Set()); setPlacing(false); }}>Done</Button>
           </>
         )}
       </div>
+      {active && placing && (
+        <div className="mb-4 rounded-theme border border-border bg-surface p-3 space-y-2 max-w-xl" data-testid="bulk-place">
+          <p className="text-sm">Pin the {ids.length} selected photo{ids.length === 1 ? "" : "s"} to one spot.</p>
+          <PlacePicker initial={null} theme={mapThemeOf(getTheme(null))} onChange={setPlace} />
+          <div className="flex gap-2">
+            <Button size="sm" disabled={!place || pending} onClick={applyPlace}>Place them</Button>
+            <Button size="sm" variant="ghost" onClick={() => setPlacing(false)}>Cancel</Button>
+          </div>
+        </div>
+      )}
       {children}
     </SelectionContext.Provider>
   );

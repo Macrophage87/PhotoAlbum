@@ -74,6 +74,13 @@ export default async function PrivacyPage() {
       enabled: false,
     },
     {
+      name: "Address lookup (OpenStreetMap Nominatim)",
+      what: "Only the words a member types into the Look up box when setting a photo's place, sent from the server with this site's host name as the identification that service asks for. Never a photo, its date, or anything else about it.",
+      when: "Only when a member presses Look up. Clicking the map or typing coordinates contacts nothing.",
+      off: `Set GEOCODER_ENABLED=false (the button then explains that lookup is off), or point GEOCODER_URL at your own server.`,
+      enabled: e.GEOCODER_ENABLED,
+    },
+    {
       name: "Facebook share button",
       what: "Nothing until pressed. Pressing it opens Facebook in a new tab with the trip or collection address; Facebook then fetches that public page or secret link to build a preview.",
       when: "Only when a member or visitor presses the button on a public or link-shared trip or collection.",

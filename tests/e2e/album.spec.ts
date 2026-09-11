@@ -58,8 +58,20 @@ test("uploading a photo processes it and assigns it to the trip by date", async 
   await expect(page.getByText("1 of 1 uploaded.")).toBeVisible();
   await page.goto("/trips/acadia/photos");
   await expect(page.getByRole("heading", { name: /1 photo/ })).toBeVisible();
-  const row = await withDb((c) => c.query('SELECT status, "takenAtSource", lat FROM "Photo" LIMIT 1'));
+  const row = await withDb((c) => c.query('SELECT id, status, "takenAtSource", lat FROM "Photo" LIMIT 1'));
   expect(row.rows[0]).toMatchObject({ status: "READY", takenAtSource: "EXIF_OFFSET" });
+  // A place can be set by hand: look a spot up, take the hit, save; the position is marked as set by a member.
+  await page.goto(`/photos/${row.rows[0].id}`);
+  await page.waitForLoadState("networkidle");
+  const place = page.getByTestId("place-editor");
+  await place.getByRole("button", { name: /Change place|Set a place/ }).click();
+  await place.getByLabel("Look up a place").fill("Jordan Pond");
+  await place.getByRole("button", { name: "Look up" }).click();
+  await place.getByRole("button", { name: /Jordan Pond, Mount Desert Island/ }).click();
+  await place.getByRole("button", { name: "Save place" }).click();
+  await expect(place.getByText("set by a family member")).toBeVisible();
+  const placed = await withDb((c) => c.query('SELECT lat, lng, "gpsSource" FROM "Photo" WHERE id = $1', [row.rows[0].id]));
+  expect(placed.rows[0]).toEqual({ lat: 44.326, lng: -68.253, gpsSource: "MANUAL" });
   expect(Number(row.rows[0].lat)).toBeCloseTo(44.35, 3);
 });
 
@@ -164,6 +176,9 @@ test("a collection gathers photos from two trips and can be shared by link", asy
   await expect(page).toHaveURL(/\/collections\/best-of-2025\/photos\?added=1$/);
   await expect(page.getByRole("status")).toContainText("Added 1 photo");
   await expect(page.getByRole("heading", { name: /2 items/ })).toBeVisible();
+  // The picker filters by date and searches descriptions as well as captions.
+  await page.goto("/collections/best-of-2025/add?from=2001-01-01&to=2001-01-02");
+  await expect(page.getByTestId("add-photos").getByText("0 items to choose from with this filter")).toBeVisible();
 
   await page.goto("/collections/best-of-2025/settings");
   await page.getByLabel("Anyone with the link").check();

@@ -19,6 +19,8 @@ export type PhotoInfo = {
   timezone: string | null;
   lat: number | null;
   lng: number | null;
+  gpsSource: string | null;
+  themeKey: string | null;
   originalUrl: string | null;
   editable: boolean;
   uploadedBy: string | null;
@@ -33,7 +35,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   const { id } = await params;
   const photo = await db.photo.findUnique({
     where: { id },
-    select: { id: true, status: true, kind: true, title: true, caption: true, context: true, annotation: true, takenAt: true, tzOffsetMin: true, takenAtSource: true, lat: true, lng: true, updatedAt: true, renditions: true, originalPath: true, uploader: { select: { name: true, email: true } }, ...mediaAccessInclude, trip: { select: { id: true, slug: true, title: true, timezone: true, visibility: true, shareToken: true } } },
+    select: { id: true, status: true, kind: true, title: true, caption: true, context: true, annotation: true, takenAt: true, tzOffsetMin: true, takenAtSource: true, lat: true, lng: true, gpsSource: true, updatedAt: true, renditions: true, originalPath: true, uploader: { select: { name: true, email: true } }, ...mediaAccessInclude, trip: { select: { id: true, slug: true, title: true, timezone: true, themeKey: true, visibility: true, shareToken: true } } },
   });
   if (!photo || photo.status !== "READY") return Response.json({ error: "Not found" }, { status: 404 });
   const url = new URL(request.url);
@@ -55,6 +57,8 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     timezone: photo.trip?.timezone ?? null,
     lat: photo.lat,
     lng: photo.lng,
+    gpsSource: photo.gpsSource,
+    themeKey: photo.trip?.themeKey ?? null,
     originalUrl: photo.kind === "PHOTO" ? photoUrl(photo, "original") : null,
     editable: canEdit(viewer),
     uploadedBy: member ? uploaderLabel(photo.uploader?.name, photo.uploader?.email) : null,

@@ -18,15 +18,17 @@ export default async function AddPhotosPage({ params, searchParams }: PageProps<
   const sp = await searchParams;
   const trip = typeof sp.trip === "string" && sp.trip ? sp.trip : null;
   const q = typeof sp.q === "string" && sp.q.trim() ? sp.q.trim().slice(0, 100) : null;
+  const day = (v: unknown) => (typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null);
+  const from = day(sp.from), to = day(sp.to);
   const [page, trips] = await Promise.all([
-    candidatePhotoPage({ excludeCollectionId: collection.id, trip, q }),
+    candidatePhotoPage({ excludeCollectionId: collection.id, trip, q, from, to }),
     db.trip.findMany({ orderBy: { startDate: "desc" }, select: { id: true, title: true } }),
   ]);
   return (
     <AddPhotosPicker
       collection={{ id: collection.id, slug, title: collection.title }}
       trips={trips}
-      filter={{ trip, q }}
+      filter={{ trip, q, from, to }}
       initial={{ photos: page.photos.map((p) => toGridPhoto(p, null, true)), nextCursor: page.nextCursor, total: page.total }}
     />
   );

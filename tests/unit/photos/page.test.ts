@@ -75,6 +75,11 @@ describe("candidate photos for a collection", () => {
     expect((await candidatePhotoPage({ excludeCollectionId: collection.id, trip: trip.id })).photos.map((p) => p.id)).toEqual([inTrip.id]);
     expect((await candidatePhotoPage({ excludeCollectionId: collection.id, trip: "none" })).photos.map((p) => p.id)).toEqual([loose.id]);
     expect((await candidatePhotoPage({ excludeCollectionId: collection.id, q: "LAKE" })).photos.map((p) => p.id)).toEqual([inTrip.id]);
+    // The AI description is searched too, through the members' index.
+    await db.photo.update({ where: { id: loose.id }, data: { annotation: { caption: "x", description: "Two kayaks pulled up on the shingle", tags: ["kayak"], searchSummary: "kayaks on the beach" } } });
+    expect((await candidatePhotoPage({ excludeCollectionId: collection.id, q: "kayaks" })).photos.map((p) => p.id)).toEqual([loose.id]);
+    expect((await candidatePhotoPage({ excludeCollectionId: collection.id, from: "2025-08-13", to: "2025-08-13" })).photos.map((p) => p.id)).toEqual([loose.id]);
+    expect((await candidatePhotoPage({ excludeCollectionId: collection.id, to: "2025-08-12" })).photos.map((p) => p.id)).toEqual([inTrip.id]);
     const first = await candidatePhotoPage({ excludeCollectionId: collection.id }, { take: 1 });
     expect(first.nextCursor).toBe(loose.id);
     expect((await candidatePhotoPage({ excludeCollectionId: collection.id }, { take: 1, cursor: first.nextCursor })).photos.map((p) => p.id)).toEqual([inTrip.id]);

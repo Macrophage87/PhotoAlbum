@@ -155,6 +155,12 @@ export function startMocks(port = 3201) {
       }
       return json(404, { error: { code: 404 } });
     }
+    // --- Nominatim stand-in for address lookup ---
+    if (url.pathname === "/geocode") {
+      const q = (url.searchParams.get("q") ?? "").toLowerCase();
+      if (!q.includes("jordan pond")) return json(200, []);
+      return json(200, [{ display_name: "Jordan Pond, Mount Desert Island, Hancock County, Maine, United States", lat: "44.3260", lon: "-68.2530" }]);
+    }
     if (url.pathname === "/oembed") {
       const target = url.searchParams.get("url") ?? "";
       const id = /v=([A-Za-z0-9_-]{11})/.exec(target)?.[1];

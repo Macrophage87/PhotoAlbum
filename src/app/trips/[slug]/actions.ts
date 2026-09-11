@@ -66,17 +66,17 @@ export async function setCoverPhoto(slug: string, photoId: string | null): Promi
   revalidatePath("/");
 }
 
-export async function deleteTrip(slug: string, fd: FormData): Promise<void> {
+/**
+ * Admins only. The trip, its activities and tracks go; every photo stays in the album and becomes a photo without a
+ * trip (the schema sets tripId to null), so nothing anyone uploaded is ever lost by deleting a container.
+ */
+export async function deleteTrip(slug: string): Promise<void> {
   const trip = await loadEditableTrip(slug);
-  const deletePhotos = fd.get("deletePhotos") === "on";
-  if (deletePhotos) {
-    const photos = await db.photo.findMany({ where: { tripId: trip.id }, select: { id: true, storageKey: true } });
-    for (const p of photos) await enqueue(QUEUES.deletePhoto, { storageKey: p.storageKey });
-    await db.photo.deleteMany({ where: { tripId: trip.id } });
-  }
+  const me = await requireUserOrThrow();
+  if (me.role !== "ADMIN") throw new Error("Only an admin can delete a trip");
   await db.trip.delete({ where: { id: trip.id } });
-  revalidatePath("/");
-  redirect("/");
+  revalidatePath("/", "layout");
+  redirect("/photos");
 }
 
 /** Clear track-derived positions and recompute them from the trip's current tracks. */

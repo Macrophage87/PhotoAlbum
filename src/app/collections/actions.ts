@@ -82,10 +82,13 @@ export async function setCollectionCover(slug: string, photoId: string | null): 
   revalidatePath("/");
 }
 
+/** Admins only. The collection and its membership rows go; the photos stay in the album and on their trips. */
 export async function deleteCollection(slug: string): Promise<void> {
   const collection = await loadEditableCollection(slug);
+  const me = await requireUserOrThrow();
+  if (me.role !== "ADMIN") throw new Error("Only an admin can delete a collection");
   await db.collection.delete({ where: { id: collection.id } });
-  revalidatePath("/");
+  revalidatePath("/", "layout");
   redirect("/");
 }
 
@@ -174,10 +177,10 @@ export async function detachExposedFromOtherCollections(slug: string): Promise<v
 }
 
 /** The next page of the "add existing photos" picker, as grid items. */
-export async function moreCandidates(slug: string, filter: { trip?: string | null; q?: string | null }, cursor: string): Promise<{ photos: GridPhoto[]; nextCursor: string | null }> {
+export async function moreCandidates(slug: string, filter: { trip?: string | null; q?: string | null; from?: string | null; to?: string | null }, cursor: string): Promise<{ photos: GridPhoto[]; nextCursor: string | null }> {
   await requireUserOrThrow();
   const collection = await db.collection.findUnique({ where: { slug }, select: { id: true } });
   if (!collection) throw new Error("Collection not found");
-  const page = await candidatePhotoPage({ excludeCollectionId: collection.id, trip: filter.trip, q: filter.q }, { cursor });
+  const page = await candidatePhotoPage({ excludeCollectionId: collection.id, trip: filter.trip, q: filter.q, from: filter.from, to: filter.to }, { cursor });
   return { photos: page.photos.map((p) => toGridPhoto(p, null, true)), nextCursor: page.nextCursor };
 }

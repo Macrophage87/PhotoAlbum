@@ -21,7 +21,7 @@ const VISIBILITY = [
 export default async function CollectionSettingsPage({ params, searchParams }: PageProps<"/collections/[slug]/settings">) {
   const { slug } = await params;
   const sp = await searchParams;
-  await requireUser(`/collections/${slug}/settings`);
+  const me = await requireUser(`/collections/${slug}/settings`);
   const collection = await getCollectionBySlug(slug);
   if (!collection) notFound();
   const update = updateCollection.bind(null, slug);
@@ -101,10 +101,16 @@ export default async function CollectionSettingsPage({ params, searchParams }: P
 
       <section>
         <h2 className="font-display text-xl font-semibold mb-2 text-red-700">Delete collection</h2>
-        <p className="text-sm text-muted mb-3">The photos stay in the album and on their trips; only the collection goes.</p>
-        <form action={remove}>
-          <ConfirmSubmitButton variant="danger" confirmMessage={`Delete "${collection.title}"? Photos are kept. This cannot be undone.`}>Delete this collection</ConfirmSubmitButton>
-        </form>
+        {me.role === "ADMIN" ? (
+          <>
+            <p className="text-sm text-muted mb-3">The photos stay in the album and on their trips; only the collection goes.</p>
+            <form action={remove}>
+              <ConfirmSubmitButton variant="danger" confirmMessage={`Delete "${collection.title}"? Photos are kept. This cannot be undone.`}>Delete this collection</ConfirmSubmitButton>
+            </form>
+          </>
+        ) : (
+          <p className="text-sm text-muted">Only an admin can delete a collection. Photos are never deleted with it.</p>
+        )}
       </section>
     </div>
   );

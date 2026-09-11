@@ -12,6 +12,7 @@ import { localDayFromOffset, offsetMinutesInZone, wallTimeWithOffsetToInstant } 
 import { storage } from "@/lib/storage";
 import { readExif, resolveTakenAt } from "@/lib/images/exif";
 import type { TakenAtSource } from "@/generated/prisma/enums";
+import { parseLatLng } from "@/lib/geo/parse";
 
 const updateSchema = z.object({
   title: z.string().trim().max(120).optional().transform((v) => v || null),
@@ -164,4 +165,30 @@ async function applyInstant(photo: { id: string; tripId: string | null; gpsSourc
     },
   });
   if (tripId) await enqueue(QUEUES.geotagPhotos, { tripId }, { singletonKey: `geotag:${tripId}`, singletonSeconds: 10, singletonNextSlot: true });
+}
+
+export type PlaceResult = { ok: true; lat: number | null; lng: number | null; gpsSource: string | null } | { ok: false; message: string };
+
+/** Pin an item to a spot a member chose (a click on the map or a looked-up address). Never touched by later geotagging. */
+export async function setPhotoPlace(id: string, fd: FormData): Promise<PlaceResult> {
+  await requireUserOrThrow();
+  const pos = parseLatLng(fd.get("lat"), fd.get("lng"));
+  if (!pos) return { ok: false, message: "Enter a latitude between -90 and 90 and a longitude between -180 and 180" };
+  const r = await db.photo.updateMany({ where: { id }, data: { lat: pos.lat, lng: pos.lng, altitude: null, gpsSource: "MANUAL" } });
+  if (!r.count) return { ok: false, message: "Photo not found" };
+  revalidatePath(`/photos/${id}`);
+  revalidatePath("/trips", "layout");
+  return { ok: true, lat: pos.lat, lng: pos.lng, gpsSource: "MANUAL" };
+}
+
+/** Forget a hand-set (or any) position; a track covering the moment may place it again. */
+export async function clearPhotoPlace(id: string): Promise<PlaceResult> {
+  await requireUserOrThrow();
+  const photo = await db.photo.findUnique({ where: { id }, select: { tripId: true } });
+  if (!photo) return { ok: false, message: "Photo not found" };
+  await db.photo.update({ where: { id }, data: { lat: null, lng: null, altitude: null, gpsSource: null } });
+  if (photo.tripId) await enqueue(QUEUES.geotagPhotos, { tripId: photo.tripId }, { singletonKey: `geotag:${photo.tripId}`, singletonSeconds: 10, singletonNextSlot: true });
+  revalidatePath(`/photos/${id}`);
+  revalidatePath("/trips", "layout");
+  return { ok: true, lat: null, lng: null, gpsSource: null };
 }

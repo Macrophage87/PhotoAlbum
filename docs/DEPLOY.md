@@ -219,6 +219,8 @@ The basics (`APP_URL`, `ADMIN_EMAIL`, `SMTP_*`, `POSTGRES_*`, `APP_PORT`, `MAX_U
 | `IMPORT_INBOX_DIR` | `/data/imports` | Folder the Takeout importer reads; the compose file mounts the `imports` volume there. Empty hides the section. |
 | `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET` | empty | OAuth client for the Google Photos picker (see below). |
 | `TOKEN_ENCRYPTION_KEY` | empty | 32 random bytes, base64; encrypts members' Google refresh tokens at rest. Required with the client id. |
+| `GEOCODER_ENABLED` | `true` | Address lookup in "Set a place"; the typed words go to `GEOCODER_URL` from the server. |
+| `GEOCODER_URL` | Nominatim's public search | A Nominatim-compatible endpoint; point it at your own for heavy use. |
 | `CSP_REPORT_ONLY` | `false` | Report Content-Security-Policy violations instead of blocking. |
 
 ### Optional: Google Photos
