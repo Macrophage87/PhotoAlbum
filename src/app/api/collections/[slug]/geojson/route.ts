@@ -8,5 +8,5 @@ export async function GET(_req: Request, { params }: { params: Promise<{ slug: s
   const viewer = await getViewer();
   const collection = await db.collection.findUnique({ where: { slug }, select: { id: true, visibility: true, shareToken: true } });
   if (!collection || !canViewCollection(viewer, collection)) return Response.json({ error: "Not found" }, { status: 404 });
-  return Response.json(await buildCollectionMapPayload(collection.id), { headers: { "Cache-Control": "private, no-store" } });
+  return Response.json(await buildCollectionMapPayload(viewer, collection.id), { headers: { "Cache-Control": "private, no-store" } });
 }

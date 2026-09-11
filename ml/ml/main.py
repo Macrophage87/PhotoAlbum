@@ -5,6 +5,7 @@ import os
 import threading
 
 from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
 from .models import FACE_DIM, IMAGE_DIM, TEXT_DIM, Models
@@ -41,6 +42,12 @@ class Health(BaseModel):
     dims: dict[str, int]
 
 
+def _locked(fn, *args):
+    """Run one inference call under the model lock (one request at a time keeps memory flat)."""
+    with models.lock:
+        return fn(*args)
+
+
 @app.get("/health", response_model=Health)
 def health() -> Health:
     models.maybe_unload()
@@ -50,8 +57,8 @@ def health() -> Health:
 @app.post("/embed/image", dependencies=[Depends(require_token)])
 async def embed_image(file: UploadFile = File(...)) -> dict:
     data = await read_image(file)
-    with models.lock:
-        vec = models.embed_image(data)
+    # Inference (and the first lazy model load) runs off the event loop so /health keeps answering meanwhile.
+    vec = await run_in_threadpool(_locked, models.embed_image, data)
     return {"embedding": vec, "dim": IMAGE_DIM}
 
 
@@ -65,8 +72,7 @@ def embed_text(body: TextRequest) -> dict:
 @app.post("/faces", dependencies=[Depends(require_token)])
 async def faces(file: UploadFile = File(...)) -> dict:
     data = await read_image(file)
-    with models.lock:
-        found = models.faces(data)
+    found = await run_in_threadpool(_locked, models.faces, data)
     return {"faces": [{"box": list(f.box), "confidence": f.confidence, "embedding": f.embedding, "age": f.age} for f in found], "dim": FACE_DIM}
 
 

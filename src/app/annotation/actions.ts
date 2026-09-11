@@ -126,7 +126,7 @@ export async function previewBackfill(scope: BackfillScope): Promise<BackfillPre
     estimate: estimateCost(env().ANNOTATION_MODEL, { photos, videos }, { batch: true }),
     photos,
     videos,
-    sends: ["the 1600-pixel rendition of each photo (three or four frames for a clip)", "the uploader's notes, caption and title", "the date and camera when known", "the trip and collection titles", "no people's names until the people feature exists"],
+    sends: ["the 1600-pixel rendition of each photo (three or four frames for a clip)", "the uploader's notes, caption and title", "the date and camera when known", "the trip and collection titles", "the names of confirmed people whose recognition is on and who are adults, and confirmed pet names; never face data"],
   };
 }
 

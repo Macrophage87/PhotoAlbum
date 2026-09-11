@@ -139,7 +139,7 @@ test("a collection gathers photos from two trips and can be shared by link", asy
     await expect(page.getByLabel("Best of 2025")).toBeChecked();
   }
   await page.goto("/collections/best-of-2025/photos");
-  await expect(page.getByRole("heading", { name: /2 photos/ })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /2 items/ })).toBeVisible();
 
   await page.goto("/collections/best-of-2025/settings");
   await page.getByLabel("Anyone with the link").check();
@@ -259,7 +259,7 @@ test("a short clip is transcoded with a poster and streams with range requests; 
   await signIn(context, ADMIN);
   await page.goto("/upload?trip=yosemite");
   await chooseFile(page, "long-clip.mp4");
-  await expect(page.getByText(/limited to 90 seconds/)).toBeVisible();
+  await expect(page.getByRole("alert").getByText(/limited to 90 seconds/)).toBeVisible();
   await chooseFile(page, "clip.mp4");
   await expect(page.locator("img[src*='/api/photos/']")).toBeVisible({ timeout: 90_000 });
   // Headless Chromium cannot decode H.264, so the browser reports an unknown duration and the server is the authority:

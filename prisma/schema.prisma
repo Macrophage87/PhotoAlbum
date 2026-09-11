@@ -272,6 +272,11 @@ model Photo {
   annotationError   String?
   /// Never send this item to the AI helper (also inherited from its trip and collections).
   annotationOptOut  Boolean  @default(false)
+  /// Token counts from the helper's last response, for the admin page's real-spend figure.
+  annotationInputTokens     Int?
+  annotationCacheReadTokens Int?
+  annotationOutputTokens    Int?
+  annotationBatched         Boolean?
   /// For undated items: the helper's estimated year range, kept until a member sets a real date.
   estimatedDate           DateTime?
   estimatedDateConfidence Float?
@@ -409,6 +414,8 @@ model Person {
   pendingDecision     Boolean    @default(false)
   /// The person asked to be forgotten by the recogniser but kept their name on confirmed photos.
   keepNameOnPhotos    Boolean    @default(false)
+  /// Asked to be forgotten by the recogniser: excluded from the members' name index and from every proposal.
+  optedOutAt          DateTime?
   createdById         String
   createdAt           DateTime   @default(now())
   updatedAt           DateTime   @updatedAt

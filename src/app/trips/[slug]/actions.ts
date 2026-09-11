@@ -50,6 +50,8 @@ export async function rotateShareToken(slug: string): Promise<void> {
   const trip = await loadEditableTrip(slug);
   if (trip.visibility !== "LINK") return;
   await db.trip.update({ where: { id: trip.id }, data: { shareToken: generateToken() } });
+  // New token, new rendition URLs: private caches keyed on the old ?v= stop matching.
+  await db.photo.updateMany({ where: { tripId: trip.id }, data: { updatedAt: new Date() } });
   revalidatePath(`/trips/${slug}/settings`);
 }
 

@@ -52,6 +52,13 @@ export default async function PrivacyPage() {
       enabled: true,
     },
     {
+      name: "YouTube Data API (video length)",
+      what: "The video id only, to read its duration for the card. No key, no call: the length is then simply not shown.",
+      when: "Once, when a member adds a video, and only when YOUTUBE_API_KEY is set.",
+      off: "Leave YOUTUBE_API_KEY empty.",
+      enabled: Boolean(e.YOUTUBE_API_KEY),
+    },
+    {
       name: "Facebook share button",
       what: "Nothing until pressed. Pressing it opens Facebook in a new tab with the trip or collection address; Facebook then fetches that public page or secret link to build a preview.",
       when: "Only when a member or visitor presses the button on a public or link-shared trip or collection.",
@@ -80,7 +87,7 @@ export default async function PrivacyPage() {
               <p><span className="text-muted">To turn off:</span> {f.off}</p>
             </Card>
           ))}
-          <p className="text-sm text-muted">Photos, short clips (transcoded here with ffmpeg, originals kept) and location traces are stored on this server only; longer videos live on YouTube as unlisted videos, which means anyone with the YouTube link can watch them regardless of this album&apos;s settings. The optional ML sidecar (image and text embeddings for similarity, suggestions and semantic search; face templates in a later phase) runs on this server only, on an internal network with no outbound access, and writes nothing to disk or logs{mlConfigured() ? " (configured)" : " (not configured)"}. </p>
+          <p className="text-sm text-muted">Photos, short clips (transcoded here with ffmpeg, originals kept) and location traces are stored on this server only; longer videos live on YouTube as unlisted videos, which means anyone with the YouTube link can watch them regardless of this album&apos;s settings. The optional ML sidecar (image and text embeddings for similarity, suggestions and semantic search; and face templates when detection is on) runs on this server only, on an internal network with no outbound access, and writes nothing to disk or logs{mlConfigured() ? " (configured)" : " (not configured)"}. </p>
         </section>
 
         <section className="space-y-2 text-sm">

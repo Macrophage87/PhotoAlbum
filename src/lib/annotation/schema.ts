@@ -37,3 +37,18 @@ export function toStored(a: Annotation): StoredAnnotation {
 function uniqueLower(list: string[]): string[] {
   return [...new Set(list.map((t) => t.trim().toLowerCase()).filter(Boolean))];
 }
+
+/**
+ * Clamp a raw response to the schema's size limits before validating. The API receives the limits only as
+ * descriptions, so a slightly long caption or one tag too many is a good answer to keep, not a failure.
+ */
+export function clampAnnotation(raw: unknown): unknown {
+  if (!raw || typeof raw !== "object") return raw;
+  const r = { ...(raw as Record<string, unknown>) };
+  const str = (k: string, max: number) => { if (typeof r[k] === "string") r[k] = (r[k] as string).slice(0, max); };
+  const list = (k: string, max: number, each: number) => { if (Array.isArray(r[k])) r[k] = (r[k] as unknown[]).filter((x) => typeof x === "string").slice(0, max).map((x) => (x as string).slice(0, each)); };
+  str("caption", 200); str("description", 2000); str("place", 120); str("activity", 80); str("visibleText", 500); str("mood", 60); str("searchSummary", 600);
+  list("tags", 25, 40); list("objects", 20, 40);
+  if (r.estimatedYear && typeof r.estimatedYear === "object") { const e = { ...(r.estimatedYear as Record<string, unknown>) }; if (typeof e.evidence === "string") e.evidence = e.evidence.slice(0, 300); r.estimatedYear = e; }
+  return r;
+}

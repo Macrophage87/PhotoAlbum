@@ -32,7 +32,7 @@ async function proposeNow(photoId: string): Promise<number> {
   const realDate = photo.takenAt && photo.takenAtSource !== "FILE_MTIME" && photo.takenAtSource !== "UPLOAD_TIME" ? photo.takenAt : null;
   const faces = await facesOf(photoId);
   const open = faces.filter((f) => f.status === "DETECTED");
-  const people = await db.person.findMany({ where: { kind: "HUMAN" }, select: { id: true, name: true, birthday: true, faceIndexing: true } });
+  const people = await db.person.findMany({ where: { kind: "HUMAN", optedOutAt: null }, select: { id: true, name: true, birthday: true, faceIndexing: true } });
   const onPhoto = new Set((await db.face.findMany({ where: { photoId, status: { in: ["CONFIRMED", "PROPOSED"] } }, select: { personId: true, proposedPersonId: true } })).flatMap((f) => [f.personId, f.proposedPersonId]).filter(Boolean) as string[]);
   let proposed = 0;
 
@@ -43,7 +43,7 @@ async function proposeNow(photoId: string): Promise<number> {
     const near = await db.$queryRaw<{ id: string; personId: string; ageBandMin: number | null; ageBandMax: number | null; similarity: number; birthday: Date | null }[]>`
       SELECT fc.id, fc."personId", fc."ageBandMin", fc."ageBandMax", 1 - (fc.centroid <=> ${vec}::vector) AS similarity, p.birthday
       FROM "FaceCluster" fc JOIN "Person" p ON p.id = fc."personId"
-      WHERE p."faceIndexing" AND p.kind = 'HUMAN' AND fc.centroid IS NOT NULL
+      WHERE p."faceIndexing" AND p.kind = 'HUMAN' AND p."optedOutAt" IS NULL AND fc.centroid IS NOT NULL
       ORDER BY fc.centroid <=> ${vec}::vector LIMIT 12`;
     const rejected = await db.$queryRaw<{ proposedPersonId: string; embedding: string }[]>`SELECT "proposedPersonId", embedding::text AS embedding FROM "Face" WHERE status = 'REJECTED' AND "proposedPersonId" IS NOT NULL AND embedding IS NOT NULL AND 1 - (embedding <=> ${vec}::vector) >= 0.5`;
     const veto = vetoes(embedding, rejected.map((r) => ({ proposedPersonId: r.proposedPersonId, embedding: JSON.parse(r.embedding) as number[] })));
@@ -56,20 +56,21 @@ async function proposeNow(photoId: string): Promise<number> {
       if (m && (!best || m.similarity > best.similarity)) best = m;
     }
     if (best) {
-      await db.face.update({ where: { id: face.id }, data: { status: "PROPOSED", proposedPersonId: best.personId } });
-      onPhoto.add(best.personId);
-      proposed += 1;
+      // Only a face still open: a member may have named it meanwhile from the photo page.
+      const n = await db.face.updateMany({ where: { id: face.id, status: "DETECTED" }, data: { status: "PROPOSED", proposedPersonId: best.personId } });
+      if (n.count) {
+        onPhoto.add(best.personId);
+        proposed += 1;
+      }
     }
   }
 
-  // Text-to-name: one person named in the notes and not yet on the photo goes to the largest still-open face.
+  // Text-to-name: exactly one known person named in the notes and exactly one face still open is a pairing worth proposing.
   const mentioned = namesMentioned(photo.context, people).filter((p) => !onPhoto.has(p.id));
-  const stillOpen = (await facesOf(photoId)).filter((f) => f.status === "DETECTED").sort((a, b) => b.box[2] * b.box[3] - a.box[2] * a.box[3]);
-  for (const [i, p] of mentioned.entries()) {
-    const face = stillOpen[i];
-    if (!face) break;
-    await db.face.update({ where: { id: face.id }, data: { status: "PROPOSED", proposedPersonId: p.id } });
-    proposed += 1;
+  const stillOpen = (await facesOf(photoId)).filter((f) => f.status === "DETECTED");
+  if (mentioned.length === 1 && stillOpen.length === 1) {
+    const n = await db.face.updateMany({ where: { id: stillOpen[0].id, status: "DETECTED" }, data: { status: "PROPOSED", proposedPersonId: mentioned[0].id } });
+    proposed += n.count;
   }
   // Pets named in the notes are proposed as whole-image appearances (there is no pet detector).
   const pets = await db.person.findMany({ where: { kind: "PET" }, select: { id: true, name: true } });

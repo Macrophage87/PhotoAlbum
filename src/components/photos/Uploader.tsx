@@ -179,11 +179,11 @@ export function Uploader({ tripId, onDone, maxClipSeconds = 90, annotationActive
         }}
         className={`rounded-theme border-2 border-dashed p-10 text-center transition-colors ${dragging ? "border-primary bg-primary/5" : "border-border hover:bg-surface-alt"}`}
       >
-        <input ref={inputRef} id="photo-file-input" type="file" multiple accept="image/*,.heic,.heif,video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm" className="sr-only" tabIndex={-1} aria-label="Choose photos" onChange={(e) => e.target.files && addFiles(e.target.files)} />
+        <input ref={inputRef} id="photo-file-input" type="file" multiple accept="image/*,.heic,.heif,video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm" className="sr-only" tabIndex={-1} aria-label="Choose files" onChange={(e) => e.target.files && addFiles(e.target.files)} />
         <p className="font-medium">Drop photos or short clips here</p>
         <p className="text-sm text-muted mt-1">JPEG, PNG, HEIC and more; MP4, MOV or WebM clips up to {maxClipSeconds} seconds (longer videos go on YouTube). Several at a time is fine.</p>
         <Button type="button" variant="secondary" className="mt-4" onClick={() => inputRef.current?.click()}>
-          Choose photos
+          Choose files
         </Button>
       </div>
 
@@ -192,6 +192,13 @@ export function Uploader({ tripId, onDone, maxClipSeconds = 90, annotationActive
           <input type="checkbox" checked={optOut} onChange={(e) => setOptOut(e.target.checked)} />
           Don&apos;t send these to the AI helper (no description will be generated; they stay on the server)
         </label>
+      )}
+      {items.some((i) => i.status === "failed" && i.error?.startsWith("This video is")) && (
+        <ul className="text-sm text-red-700 space-y-1" role="alert">
+          {items.filter((i) => i.status === "failed" && i.error?.startsWith("This video is")).map((i) => (
+            <li key={i.localId}><b>{i.file.name}</b>: {i.error}</li>
+          ))}
+        </ul>
       )}
       {items.length > 0 && (
         <ul className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-3">

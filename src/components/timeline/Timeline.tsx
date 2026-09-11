@@ -9,10 +9,10 @@ import { DayJumpNav } from "./DayJumpNav";
 
 export type TimelineGroups = DayGroup<PhotoCard, ActivityCardData>[];
 
-export type TimelinePaging = { base: string; after: Date | null; nextAfter: Date | null };
+export type TimelinePaging = { base: string; /** True on any page after the first. */ paged: boolean; /** Encoded cursor for the next page, or null on the last. */ next: string | null };
 
 export function Timeline({ groups, tripSlug, timezone, showDetailLink, idPrefix = "day", activityHrefBase, paging }: { groups: TimelineGroups; tripSlug: string; timezone: string; showDetailLink: boolean; idPrefix?: string; activityHrefBase?: string; /** Day-boundary paging for long trips. */ paging?: TimelinePaging }) {
-  if (groups.length === 0 && !paging?.after) return <p className="text-muted text-sm">Nothing on the timeline yet. Upload photos or add an activity.</p>;
+  if (groups.length === 0 && !paging?.paged) return <p className="text-muted text-sm">Nothing on the timeline yet. Upload photos or add an activity.</p>;
   const days = groups.map((g) => ({ key: g.dayKey ?? "undated", id: `${idPrefix}-${g.dayKey ?? "undated"}`, count: g.items.reduce((n, i) => n + (i.kind === "activity" ? 1 : i.photos.length), 0) }));
   return (
     <div className="flex gap-8">
@@ -50,10 +50,10 @@ export function Timeline({ groups, tripSlug, timezone, showDetailLink, idPrefix 
             </ol>
           </section>
         ))}
-        {paging && (paging.after || paging.nextAfter) && (
+        {paging && (paging.paged || paging.next) && (
           <nav className="flex items-center justify-between text-sm pt-2" aria-label="Timeline pages">
-            {paging.after ? <Link href={paging.base} className="text-primary hover:underline">← Back to the first days</Link> : <span />}
-            {paging.nextAfter && <Link href={`${paging.base}?after=${encodeURIComponent(paging.nextAfter.toISOString())}`} className="text-primary hover:underline">Later days →</Link>}
+            {paging.paged ? <Link href={paging.base} className="text-primary hover:underline">← Back to the first days</Link> : <span />}
+            {paging.next && <Link href={`${paging.base}?after=${encodeURIComponent(paging.next)}`} className="text-primary hover:underline">Later days →</Link>}
           </nav>
         )}
       </div>

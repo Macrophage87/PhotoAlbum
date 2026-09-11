@@ -30,13 +30,21 @@ export async function detectFacesJob(job: DetectFacesJob): Promise<void> {
     await db.face.deleteMany({ where: { photoId: photo.id, status: { in: ["DETECTED", "PROPOSED"] } } });
     const kept = await db.face.findMany({ where: { photoId: photo.id }, select: { id: true, box: true, personId: true, confidence: true } });
     const found = detected.filter((f) => !kept.some((k) => k.confidence > 0 && boxIou(k.box as [number, number, number, number], f.box) > 0.5));
-    // Kept faces of consented people get their template back (it was nulled while recognition was off).
+    // Kept faces of consented people get their template back (it was nulled while recognition was off), and their
+    // person's era centroids are rebuilt from the faces that now carry templates.
+    const restoredFor = new Set<string>();
     for (const k of kept) {
       const again = detected.find((f) => k.confidence > 0 && boxIou(k.box as [number, number, number, number], f.box) > 0.5);
       if (!again || !k.personId) continue;
       const person = await db.person.findUnique({ where: { id: k.personId }, select: { faceIndexing: true } });
-      if (person?.faceIndexing) await db.$executeRaw`UPDATE "Face" SET embedding = ${vectorLiteral(again.embedding)}::vector WHERE id = ${k.id} AND embedding IS NULL`;
+      if (!person?.faceIndexing) continue;
+      const n = await db.$executeRaw`UPDATE "Face" SET embedding = ${vectorLiteral(again.embedding)}::vector WHERE id = ${k.id} AND embedding IS NULL`;
+      if (n > 0) restoredFor.add(k.personId);
     }
+    for (const personId of restoredFor) await rebuildCentroids(personId);
+    // Deleted faces leave their unnamed clusters lighter; keep the counts the running mean relies on honest.
+    await db.$executeRaw`UPDATE "FaceCluster" fc SET "faceCount" = (SELECT count(*) FROM "Face" f WHERE f."clusterId" = fc.id) WHERE fc."personId" IS NULL`;
+    await db.faceCluster.deleteMany({ where: { personId: null, faces: { none: {} } } });
     // Unnamed clusters only: named ones are the matcher's business.
     const clusters = (await db.$queryRaw<{ id: string; centroid: string; faceCount: number }[]>`SELECT id, centroid::text AS centroid, "faceCount" FROM "FaceCluster" WHERE "personId" IS NULL AND centroid IS NOT NULL`).map((c) => ({ id: c.id, centroid: JSON.parse(c.centroid) as number[], faceCount: c.faceCount }));
     for (const f of found) {
@@ -62,10 +70,24 @@ export async function detectFacesJob(job: DetectFacesJob): Promise<void> {
   await proposeForPhoto(photo.id);
 }
 
-export async function enqueueFaceDetection(photoId: string): Promise<void> {
+/**
+ * Recompute a person's era centroids from the faces in each cluster (mean of unit vectors, renormalised), after
+ * templates were nulled and restored. Clusters that still have no templates keep a NULL centroid.
+ */
+export async function rebuildCentroids(personId: string): Promise<void> {
+  await db.$executeRaw`
+    UPDATE "FaceCluster" fc SET centroid = sub.c, "faceCount" = sub.n, "updatedAt" = now()
+    FROM (SELECT f."clusterId", avg(f.embedding) AS c, count(*)::int AS n FROM "Face" f WHERE f.embedding IS NOT NULL GROUP BY f."clusterId") sub
+    WHERE sub."clusterId" = fc.id AND fc."personId" = ${personId}`;
+  // Every open face may now match this person.
+  const { enqueueMatchAllOpen } = await import("./match-photo");
+  await enqueueMatchAllOpen();
+}
+
+export async function enqueueFaceDetection(...photoIds: string[]): Promise<void> {
   const gates = await faceGates();
   if (!gates.active) return;
-  await enqueue(QUEUES.detectFaces, { photoId }, { singletonKey: `faces:${photoId}`, singletonSeconds: 60 });
+  for (const photoId of photoIds) await enqueue(QUEUES.detectFaces, { photoId }, { singletonKey: `faces:${photoId}`, singletonSeconds: 60 });
 }
 
 /** Catch-up: ready photos not yet scanned (photos and posters; clips use their poster). */
@@ -77,11 +99,29 @@ export async function faceSweep(): Promise<number> {
   return rows.length;
 }
 
-/** Faces nobody named (guests, bystanders) are not kept forever: purge them, and empty clusters, after the retention window. */
+/**
+ * Faces nobody named (guests, bystanders) are not kept forever: purge them, and empty clusters, after the retention
+ * window. Templates kept for a member-named person who is still waiting for an admin's decision are nulled after the
+ * same window (the name and the boxes stay; a later "yes" re-scans the photos).
+ */
 export async function purgeUnnamedFaces(): Promise<number> {
   const gates = await faceGates();
   const cutoff = new Date(Date.now() - gates.retentionDays * 86_400_000);
   const res = await db.face.deleteMany({ where: { personId: null, createdAt: { lt: cutoff }, OR: [{ clusterId: null }, { cluster: { personId: null } }] } });
   await db.faceCluster.deleteMany({ where: { personId: null, faces: { none: {} } } });
+  await db.$executeRaw`UPDATE "Face" f SET embedding = NULL FROM "Person" p WHERE p.id = f."personId" AND p."pendingDecision" AND NOT p."faceIndexing" AND f."createdAt" < ${cutoff} AND f.embedding IS NOT NULL`;
+  await db.$executeRaw`UPDATE "FaceCluster" fc SET centroid = NULL FROM "Person" p WHERE p.id = fc."personId" AND p."pendingDecision" AND NOT p."faceIndexing" AND fc.centroid IS NOT NULL AND NOT EXISTS (SELECT 1 FROM "Face" f WHERE f."clusterId" = fc.id AND f.embedding IS NOT NULL)`;
   return res.count;
+}
+
+/**
+ * Nightly: people whose birthday now makes them adults, with recognition off and no admin decision on record, join
+ * the "Needs a decision" list. Nothing is ever enabled here.
+ */
+export async function flagNewAdults(): Promise<number> {
+  const { isMinor } = await import("@/lib/people/consent");
+  const people = await db.person.findMany({ where: { kind: "HUMAN", faceIndexing: false, pendingDecision: false, faceIndexingSetAt: null, adultAttestedAt: null, birthday: { not: null }, optedOutAt: null }, select: { id: true, birthday: true } });
+  const adults = people.filter((p) => !isMinor(p));
+  if (adults.length) await db.person.updateMany({ where: { id: { in: adults.map((p) => p.id) } }, data: { pendingDecision: true } });
+  return adults.length;
 }

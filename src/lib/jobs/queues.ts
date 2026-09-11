@@ -17,6 +17,7 @@ export const QUEUES = {
   faceSweep: "face-sweep",
   purgeUnnamedFaces: "purge-unnamed-faces",
   matchPhoto: "match-photo",
+  flagNewAdults: "flag-new-adults",
 } as const;
 
 export type QueueName = (typeof QUEUES)[keyof typeof QUEUES];

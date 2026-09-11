@@ -8,6 +8,8 @@ import { AppShell, Container } from "@/components/layout/AppShell";
 import { SearchBox } from "@/components/search/SearchBox";
 import { SearchResults, type SearchResult } from "@/components/search/SearchResults";
 import { Button } from "@/components/ui";
+import { db } from "@/lib/db";
+import { SelectionProvider } from "@/components/photos/selection";
 
 export const metadata = { title: "Search" };
 
@@ -28,8 +30,13 @@ export default async function SearchPage({ searchParams }: PageProps<"/search">)
   const kindRaw = str(sp.kind);
   const kind: MediaKind | undefined = kindRaw === "PHOTO" || kindRaw === "VIDEO" || kindRaw === "EXTERNAL_VIDEO" ? (kindRaw as MediaKind) : undefined;
   const year = Number(str(sp.year));
-  const params = { q, tripId: str(sp.trip), collectionId: str(sp.collection), uploaderId: member ? str(sp.uploader) : undefined, year: Number.isInteger(year) && year > 0 ? year : undefined, kind };
-  const [facets, hits] = await Promise.all([searchFacets(viewer), q ? searchMedia(viewer, params) : Promise.resolve([])]);
+  const params = { q, tripId: str(sp.trip), collectionId: str(sp.collection), uploaderId: member ? str(sp.uploader) : undefined, personId: member ? str(sp.person) : undefined, year: Number.isInteger(year) && year > 0 ? year : undefined, kind };
+  const [facets, hits, tripOptions, collectionOptions] = await Promise.all([
+    searchFacets(viewer),
+    q ? searchMedia(viewer, params) : Promise.resolve([]),
+    member ? db.trip.findMany({ orderBy: { startDate: "desc" }, select: { id: true, title: true } }) : Promise.resolve([]),
+    member ? db.collection.findMany({ orderBy: { title: "asc" }, select: { id: true, title: true } }) : Promise.resolve([]),
+  ]);
   const results: SearchResult[] = hits.map((h) => ({
     id: h.id,
     thumbUrl: photoUrl(h, "thumb"),
@@ -79,6 +86,14 @@ export default async function SearchPage({ searchParams }: PageProps<"/search">)
                 ))}
               </select>
             )}
+            {member && facets.people.length > 0 && (
+              <select name="person" defaultValue={params.personId ?? ""} className={select} aria-label="Person">
+                <option value="">Anyone in the picture</option>
+                {facets.people.map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+            )}
             <select name="year" defaultValue={params.year ?? ""} className={select} aria-label="Year">
               <option value="">Any year</option>
               {facets.years.map((y) => (
@@ -98,7 +113,13 @@ export default async function SearchPage({ searchParams }: PageProps<"/search">)
             {results.length === 0 ? `Nothing matches “${q}”.` : `${results.length} result${results.length === 1 ? "" : "s"} for “${q}”.`}
           </p>
         )}
-        {results.length > 0 && <SearchResults results={results} member={member} />}
+        {results.length > 0 && (member ? (
+          <SelectionProvider trips={tripOptions} collections={collectionOptions}>
+            <SearchResults results={results} member={member} />
+          </SelectionProvider>
+        ) : (
+          <SearchResults results={results} member={member} />
+        ))}
         {!q && <p className="text-sm text-muted">Search captions, notes, titles, trips and collections. Try a place, a food, a year, or a family member&apos;s name.</p>}
       </Container>
     </AppShell>

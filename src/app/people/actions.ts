@@ -7,7 +7,7 @@ import { db } from "@/lib/db";
 import { requireUserOrThrow } from "@/lib/auth/viewer";
 import { namingOutcome } from "@/lib/people/consent";
 import { enqueueEmbedding } from "@/lib/jobs/handlers/embed-photo";
-import { enqueueMatchAllOpen } from "@/lib/jobs/handlers/match-photo";
+import { enqueueFaceDetection } from "@/lib/jobs/handlers/detect-faces";
 import { confirmFaceAs, rejectProposal } from "@/lib/people/matching";
 import type { StoredAnnotation } from "@/lib/annotation/schema";
 
@@ -101,7 +101,9 @@ export async function decideIndexing(personId: string, fd: FormData): Promise<vo
     // Enabling later: templates of confirmed faces are recomputed by re-scanning their photos, then open faces are re-matched.
     const photos = await db.face.findMany({ where: { personId, status: "CONFIRMED" }, select: { photoId: true }, distinct: ["photoId"] });
     await db.photo.updateMany({ where: { id: { in: photos.map((p) => p.photoId) } }, data: { facesDetectedAt: null } });
-    await enqueueMatchAllOpen();
+    await db.person.update({ where: { id: personId }, data: { optedOutAt: null } });
+    // The re-scan restores the templates and rebuilds this person's centroids, then proposes for open faces (detect-faces.ts).
+    await enqueueFaceDetection(...photos.map((p) => p.photoId));
   }
   revalidatePath("/people", "layout");
   revalidatePath("/admin");
@@ -119,25 +121,45 @@ export async function optOutPerson(personId: string, fd: FormData): Promise<void
   const photos = await db.face.findMany({ where: { OR: [{ personId }, { proposedPersonId: personId }] }, select: { photoId: true }, distinct: ["photoId"] });
   await db.faceCluster.deleteMany({ where: { personId } });
   await db.face.deleteMany({ where: { proposedPersonId: personId } });
-  if (keepName) await db.$executeRaw`UPDATE "Face" SET embedding = NULL, "clusterId" = NULL WHERE "personId" = ${personId}`;
-  else await db.face.deleteMany({ where: { personId } });
-  await db.person.update({ where: { id: personId }, data: { faceIndexing: false, pendingDecision: false, keepNameOnPhotos: keepName, faceIndexingSetAt: new Date() } });
+  if (keepName) {
+    await db.$executeRaw`UPDATE "Face" SET embedding = NULL, "clusterId" = NULL WHERE "personId" = ${personId}`;
+    await db.person.update({ where: { id: personId }, data: { faceIndexing: false, pendingDecision: false, keepNameOnPhotos: true, optedOutAt: new Date(), faceIndexingSetAt: new Date() } });
+  } else {
+    await db.face.deleteMany({ where: { personId } });
+  }
   // Scrub the name from the helper's text on affected items so neither the keyword nor the semantic index carries it.
-  const pattern = new RegExp(person.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
-  const scrub = (v: string | null | undefined) => (v ? v.replace(pattern, "a family member") : v ?? null);
+  // Two regexes: a global one for replacing, and a non-global one for testing (a global regex's lastIndex would skip tags).
+  const escaped = person.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const replaceAll = new RegExp(escaped, "gi");
+  const mentions = new RegExp(escaped, "i");
+  const scrub = (v: string | null | undefined) => (v ? v.replace(replaceAll, "a family member") : v ?? null);
   for (const { photoId } of photos) {
     const p = await db.photo.findUnique({ where: { id: photoId }, select: { annotation: true } });
     const a = p?.annotation as StoredAnnotation | null;
     if (a) {
-      const next: StoredAnnotation = { ...a, caption: scrub(a.caption) ?? "", description: scrub(a.description) ?? "", searchSummary: scrub(a.searchSummary) ?? "", tags: a.tags.filter((t) => !pattern.test(t)) };
+      const next: StoredAnnotation = {
+        ...a,
+        caption: scrub(a.caption) ?? "",
+        description: scrub(a.description) ?? "",
+        searchSummary: scrub(a.searchSummary) ?? "",
+        place: scrub(a.place),
+        activity: scrub(a.activity),
+        visibleText: scrub(a.visibleText),
+        mood: scrub(a.mood),
+        tags: a.tags.filter((t) => !mentions.test(t)),
+        objects: a.objects.filter((t) => !mentions.test(t)),
+      };
       await db.photo.update({ where: { id: photoId }, data: { annotation: next } });
     } else {
       await db.photo.update({ where: { id: photoId }, data: { updatedAt: new Date() } });
     }
     await enqueueEmbedding(photoId, true);
   }
+  // Forgetting entirely also removes the person page; the record of who is in which photo went with the faces.
+  if (!keepName) await db.person.delete({ where: { id: personId } });
   revalidatePath("/people", "layout");
   revalidatePath("/admin");
+  if (!keepName) redirect("/people");
 }
 
 export async function updatePerson(personId: string, fd: FormData): Promise<void> {
@@ -245,9 +267,10 @@ export async function untagPerson(photoId: string, personId: string): Promise<vo
   revalidatePath("/people", "layout");
 }
 
+/** Remove a pet record and its tags. People go through optOutPerson, which handles their templates. */
 export async function deletePerson(personId: string): Promise<void> {
   await requireAdmin();
-  await db.person.delete({ where: { id: personId } });
+  await db.person.delete({ where: { id: personId, kind: "PET" } });
   revalidatePath("/people", "layout");
   redirect("/people");
 }

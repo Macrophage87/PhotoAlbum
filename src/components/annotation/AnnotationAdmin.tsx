@@ -8,7 +8,7 @@ import type { BackfillScope } from "@/lib/jobs/handlers/annotation-batch";
 type Batch = { id: string; status: string; requested: number; succeeded: number; errored: number; skipped: number; createdAt: string; endedAt: string | null; scope: string };
 type Option = { id: string; title: string };
 
-export function AnnotationAdmin({ gates, model, trips, collections, batches }: { gates: { envEnabled: boolean; hasKey: boolean; optedInAt: string | null; active: boolean }; model: string; trips: Option[]; collections: Option[]; batches: Batch[] }) {
+export function AnnotationAdmin({ gates, model, trips, collections, batches, spend, rawRetentionDays }: { gates: { envEnabled: boolean; hasKey: boolean; optedInAt: string | null; active: boolean }; model: string; trips: Option[]; collections: Option[]; batches: Batch[]; /** Real spend from recorded token usage, at today's prices. */ spend: { items: number; inputTokens: number; cacheReadTokens: number; outputTokens: number; usd: number; pricesAsOf: string }; rawRetentionDays: number }) {
   const [pending, start] = useTransition();
   const [scopeKind, setScopeKind] = useState<BackfillScope["kind"]>("all");
   const [tripId, setTripId] = useState(trips[0]?.id ?? "");
@@ -29,14 +29,15 @@ export function AnnotationAdmin({ gates, model, trips, collections, batches }: {
         <ul className="list-disc pl-5 space-y-1 text-muted">
           <li>The 1600-pixel rendition of the photo, or three or four frames of a clip; never the original file.</li>
           <li>The uploader&apos;s notes, the caption and title, the date and camera when known, and the trip and collection titles.</li>
-          <li>People&apos;s names only for people the family has confirmed and allowed (a later feature); never face data.</li>
+          <li>The names of confirmed people whose recognition an admin has turned on and who are adults, plus confirmed pet names; never face data or templates.</li>
         </ul>
-        <p className="text-muted">The helper returns a caption, description, tags, place and a search summary. Raw responses are kept for a few weeks for debugging, then purged. Items, trips and collections can be opted out; opted-out items are never sent, including by a backfill.</p>
+        <p className="text-muted">The helper returns a caption, description, tags, place and a search summary. Raw responses are kept for {rawRetentionDays} days for debugging, then purged. Items, trips and collections can be opted out; opted-out items are never sent, including by a backfill.</p>
         <dl className="grid grid-cols-[10rem_1fr] gap-y-1">
           <dt className="text-muted">Operator flag</dt><dd>{gates.envEnabled ? "ANNOTATION_ENABLED is on" : "ANNOTATION_ENABLED is off (set it in .env and restart)"}</dd>
           <dt className="text-muted">API key</dt><dd>{gates.hasKey ? "ANTHROPIC_API_KEY is set" : "ANTHROPIC_API_KEY is missing"}</dd>
           <dt className="text-muted">Admin opt-in</dt><dd>{gates.optedInAt ? `on since ${new Date(gates.optedInAt).toLocaleDateString("en-US")}` : "off"}</dd>
           <dt className="text-muted">Model</dt><dd>{model}</dd>
+          <dt className="text-muted">Spent so far</dt><dd>{spend.items === 0 ? "nothing yet" : `about $${spend.usd.toFixed(2)} for ${spend.items} item${spend.items === 1 ? "" : "s"} (${spend.inputTokens.toLocaleString()} input tokens, ${spend.cacheReadTokens.toLocaleString()} of them cached, ${spend.outputTokens.toLocaleString()} output; prices as of ${spend.pricesAsOf})`}</dd>
         </dl>
         <div className="flex items-center gap-3">
           {gates.optedInAt ? (

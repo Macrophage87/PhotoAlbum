@@ -17,7 +17,7 @@ export default async function CollectionPhotosPage({ params }: PageProps<"/colle
   return (
     <div className="space-y-4">
       <h2 className="font-display text-xl font-semibold">
-        {shown.length} photo{shown.length === 1 ? "" : "s"}
+        {shown.length} item{shown.length === 1 ? "" : "s"}
       </h2>
       {editable && <YouTubeAddForm collectionId={collection.id} defaultDate={new Date().toISOString().slice(0, 10)} />}
       <CollectionGallery collectionId={collection.id} slug={slug} photos={shown.map((p) => ({ ...toGridPhoto(p, null, editable), itemId: p.itemId }))} trips={trips} collections={collections} editable={editable} emptyMessage={editable ? "Nothing here yet. Open a photo and tick this collection, or select photos in any gallery." : "Nothing here yet."} />

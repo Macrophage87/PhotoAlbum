@@ -4,8 +4,9 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
 import { annotationSchema, toStored } from "@/lib/annotation/schema";
 import { estimateCost } from "@/lib/annotation/pricing";
-import { describeItem, needsDateEstimate } from "@/lib/annotation/request";
+import { describeItem, needsDateEstimate, requestParams } from "@/lib/annotation/request";
 import { applyAnnotation, parseMessageContent } from "@/lib/annotation/apply";
+import { BATCH_CHUNK, chunk } from "@/lib/jobs/handlers/annotation-batch";
 import { thinkingParams } from "@/lib/annotation/client";
 import { SYSTEM_INSTRUCTIONS } from "@/lib/annotation/prompt";
 import { resetTestDb } from "../helpers/reset";
@@ -34,6 +35,28 @@ describe("annotation schema and pricing", () => {
   it("uses adaptive thinking at low effort except on Haiku", () => {
     expect(thinkingParams("claude-opus-5")).toEqual({ thinking: { type: "adaptive" }, output_config: { effort: "low" } });
     expect(thinkingParams("claude-haiku-4-5")).toEqual({});
+  });
+  it("keeps the effort level next to the output format in a built request", () => {
+    const image = { type: "image" as const, source: { type: "base64" as const, media_type: "image/webp" as const, data: "AAAA" } };
+    const req = requestParams("claude-opus-5", [image], "notes");
+    expect((req.output_config as { effort?: string }).effort).toBe("low");
+    expect((req.output_config as { format?: unknown }).format).toBeTruthy();
+    expect(req.thinking).toEqual({ type: "adaptive" });
+    const haiku = requestParams("claude-haiku-4-5", [image], "notes");
+    expect((haiku.output_config as { effort?: string }).effort).toBeUndefined();
+    expect(haiku.thinking).toBeUndefined();
+  });
+  it("clamps over-long fields instead of rejecting a good answer", () => {
+    const raw = { caption: "x".repeat(250), description: "d", tags: Array.from({ length: 30 }, (_, i) => `t${i}`), place: null, activity: null, objects: [], visibleText: null, season: "summer", mood: null, searchSummary: "s", estimatedYear: null };
+    const parsed = parseMessageContent([{ type: "text", text: JSON.stringify(raw) }]);
+    expect(parsed?.caption).toHaveLength(200);
+    expect(parsed?.tags).toHaveLength(25);
+    expect(parseMessageContent([{ type: "text", text: "not json" }])).toBeNull();
+  });
+  it("splits a backfill into batches of at most BATCH_CHUNK items", () => {
+    expect(chunk([1, 2, 3, 4, 5], 2)).toEqual([[1, 2], [3, 4], [5]]);
+    expect(chunk([], 2)).toEqual([]);
+    expect(BATCH_CHUNK).toBeLessThanOrEqual(500);
   });
   it("keeps the instruction block above the Opus 5 and Sonnet 5 cache minimums", () => {
     // Roughly four characters per token: comfortably over 1,024 tokens.

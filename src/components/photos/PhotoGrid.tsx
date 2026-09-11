@@ -4,7 +4,7 @@ import { Lightbox, useLightbox, type LightboxPhoto } from "./Lightbox";
 import { useSelectionContext } from "./selection";
 import { ClipTile } from "./ClipTile";
 
-export type GridPhoto = LightboxPhoto & { thumbUrl: string; status: "PENDING" | "PROCESSING" | "READY" | "FAILED"; badge?: string | null; unavailable?: boolean };
+export type GridPhoto = LightboxPhoto & { thumbUrl: string; status: "PENDING" | "PROCESSING" | "READY" | "FAILED"; badge?: string | null; unavailable?: boolean; /** Members only: the collections holding this item, shown as chips. */ collections?: { slug: string; title: string }[] };
 
 export function PhotoGrid({ photos, showDetailLink = true, emptyMessage = "No photos yet.", selectable: selectableProp, selected: selectedProp, onToggle: onToggleProp }: { photos: GridPhoto[]; showDetailLink?: boolean; emptyMessage?: string; selectable?: boolean; selected?: Set<string>; onToggle?: (id: string) => void }) {
   const lb = useLightbox();
@@ -38,6 +38,14 @@ export function PhotoGrid({ photos, showDetailLink = true, emptyMessage = "No ph
                 </div>
               )}
               {p.badge && <span className="absolute top-1 left-1 text-[10px] bg-black/60 text-white rounded px-1.5 py-0.5">{p.badge}</span>}
+              {p.collections && p.collections.length > 0 && (
+                <span className="absolute bottom-1 left-1 right-1 flex flex-wrap gap-1 pointer-events-none" aria-label={`In ${p.collections.map((c) => c.title).join(", ")}`}>
+                  {p.collections.slice(0, 2).map((c) => (
+                    <span key={c.slug} className="text-[10px] bg-white/85 text-text rounded px-1.5 py-0.5 truncate max-w-[70%]">{c.title}</span>
+                  ))}
+                  {p.collections.length > 2 && <span className="text-[10px] bg-white/85 text-text rounded px-1.5 py-0.5">+{p.collections.length - 2}</span>}
+                </span>
+              )}
               {p.youtubeId && (
                 <span className="absolute bottom-1 left-1 text-[10px] bg-black/60 text-white rounded px-1.5 py-0.5 pointer-events-none" aria-hidden="true">
                   ▶ {p.unavailable ? "no longer available" : "video"}

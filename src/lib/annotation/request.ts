@@ -83,12 +83,18 @@ export async function buildRequest(item: ItemForAnnotation, model: string, permi
   const video = item.videoRenditions as VideoRenditions | null;
   if (item.kind === "VIDEO" && video?.mp4) for (const f of await clipFrames(video.mp4.key, item.durationS)) images.push(imageBlock(f, "image/jpeg"));
   if (!images.length) throw new Error("no rendition to send");
+  return requestParams(model, images, describeItem(item, permittedNames, needsDateEstimate(item)));
+}
+
+/** The request shape, separate from file reading so the parameters are unit-tested. */
+export function requestParams(model: string, images: ImageBlock[], text: string): Anthropic.MessageCreateParamsNonStreaming {
   return {
     model,
     max_tokens: 4000,
     ...thinkingParams(model),
     system: [{ type: "text", text: SYSTEM_INSTRUCTIONS, cache_control: { type: "ephemeral" } }],
-    messages: [{ role: "user", content: [...images, { type: "text", text: describeItem(item, permittedNames, needsDateEstimate(item)) }] }],
-    output_config: { format: zodOutputFormat(annotationSchema) },
+    messages: [{ role: "user", content: [...images, { type: "text", text }] }],
+    // Keep the effort level from thinkingParams: a later key would otherwise replace the whole output_config object.
+    output_config: { ...thinkingParams(model).output_config, format: zodOutputFormat(annotationSchema) },
   };
 }

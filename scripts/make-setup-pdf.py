@@ -101,15 +101,19 @@ S += [P("1. What the application does", H1),
       ])]
 
 S += [P("How it is built", H2),
-      P("The app is a single Next.js server with a PostgreSQL database and a folder for photos. Background work "
-        "(processing uploads, parsing track files, geotagging) runs in a job queue stored in Postgres, so there is nothing else to run."),
+      P("The app is a Next.js server with a PostgreSQL database (with the pgvector extension) and a folder for photos. Background work "
+        "(processing uploads, transcoding clips, parsing track files, geotagging, descriptions, embeddings, faces) runs in a job queue stored in Postgres. "
+        "The optional ML sidecar is a small Python service on an internal Docker network that never talks to the internet."),
       table([
         ["Component", "Technology", "Role"],
         ["Web app", "Next.js 16, React 19, TypeScript", "Pages, uploads, API routes"],
         ["Database", "PostgreSQL 16 with Prisma 7", "Trips, activities, photos, tracks, users"],
         ["Photo storage", "Local folder (Docker volume)", "Originals plus generated thumbnails"],
-        ["Jobs", "pg-boss (in the Postgres database)", "Photo processing, track imports, geotagging"],
+        ["Jobs", "pg-boss (in the Postgres database)", "Photo processing, track imports, geotagging, transcoding, descriptions, embeddings, faces, nightly purges"],
         ["Images", "sharp, exifr, heic-convert", "EXIF reading, resizing, HEIC conversion"],
+        ["Video", "ffmpeg (in the app image)", "Short clips transcoded to MP4 with a poster; longer videos embedded from YouTube"],
+        ["AI descriptions", "Anthropic API (optional, two switches)", "Captions, tags and a search summary per item"],
+        ["ML sidecar", "FastAPI, OpenCLIP, MiniLM, InsightFace (optional)", "Image and text embeddings, face templates, all on your own server"],
         ["Maps", "MapLibre GL with OpenStreetMap tiles", "Clustered photo markers and track lines"],
         ["Email", "Nodemailer over SMTP", "Sign-in and invite links"],
       ], [1.2*inch, 2.4*inch, W-3.6*inch])]
@@ -117,7 +121,7 @@ S += [P("How it is built", H2),
 # ---------- 2 ----------
 S += [P("2. Requirements", H1),
       bullets([
-        "A machine that runs <b>Docker</b> and <b>Docker Compose v2</b>: a home server, NAS, Raspberry Pi 4 or better, or a small VPS. 2 GB of RAM is comfortable; HEIC conversion is the heaviest task.",
+        "A machine that runs <b>Docker</b> and <b>Docker Compose v2</b>: a home server, NAS, Raspberry Pi 4 or better, or a small VPS. Without the ML sidecar 2 GB of RAM is comfortable; with it (faces, similar photos, semantic search) plan on 4 GB with a swap file, or 8 GB without.",
         "Disk space for photos. Originals are kept, so budget for the size of your library plus roughly 15% for renditions.",
         "An <b>SMTP account</b> for sending sign-in emails (any provider: Gmail app password, Fastmail, Mailgun, Postmark, your ISP). Optional for testing; links can be read from the log instead.",
         "Optional: a domain name and a reverse proxy with HTTPS if you want to reach the album from outside your home network.",
@@ -138,17 +142,19 @@ cp .env.example .env
 nano .env                 # set ADMIN_EMAIL, SMTP_* for real email, a new POSTGRES_PASSWORD
 docker compose up --build -d
 """),
-      P("The stack has two services. <b>db</b> is PostgreSQL 16 with its data in the <b>pgdata</b> volume. <b>app</b> is the web server, "
+      P("The stack has two services by default. <b>db</b> is PostgreSQL 16 with pgvector, its data in the <b>pgdata</b> volume. <b>app</b> is the web server, "
         "with photos in the <b>photos</b> volume mounted at /data/photos. On every start the app applies pending database migrations "
-        "before serving, so upgrades need no manual database step."),
+        "before serving, so upgrades need no manual database step. Three optional services live behind compose profiles: <b>worker</b> (background jobs "
+        "in their own container), <b>ml</b> (the local ML sidecar) and <b>ml-init</b> (a one-off download of the model weights into the <b>ml-models</b> volume)."),
       P("Browse to <b>http://&lt;server&gt;:3000</b>. Change the host port with APP_PORT in .env if 3000 is taken."),
       P("Reading the sign-in link without email", H2),
       P("If SMTP_HOST is left empty, sign-in and invite links are printed to the container log instead of being sent. "
         "This is fine for first setup and for a purely local install."),
       code("""docker compose logs -f app | grep "auth/verify" """),
       P("Loading demo data", H2),
-      P("A seed script creates a sample lighthouse-themed trip in Acadia, Maine with a hike, its track and stats, and three sample photos, "
-        "one of which is positioned from the track. It is a quick way to see every feature working."),
+      P("A seed script creates two sample trips (a lighthouse-themed week in Acadia, Maine with a hike, its track and stats, and a Scottish Highlands trip), "
+        "a collection spanning both, a short clip, a YouTube embed, two named people, a pet and AI-style descriptions. It needs no internet access and no API key: "
+        "the descriptions are copied from a recorded example and the face templates are made-up vectors, so you can see what the features look like before turning anything on."),
       code("""docker compose exec app node_modules/.bin/tsx prisma/seed.ts"""),
       P("Useful commands", H2),
       code("""
@@ -183,6 +189,20 @@ S += [P("4. Configuration reference (.env)", H1),
         ["NEXT_PUBLIC_TILE_URL", "(empty, uses OpenStreetMap)", "Raster tile template for the map, e.g. from MapTiler or Stadia."],
         ["NEXT_PUBLIC_MAP_STYLE_URL", "(empty)", "Full MapLibre style JSON URL. Overrides the tile URL."],
         ["NEXT_PUBLIC_MAP_GLYPHS_URL", "(empty)", "Font glyph URL template for map labels. All NEXT_PUBLIC values are compiled into the browser bundle: rebuild with docker compose up --build after changing them."],
+        ["MAX_CLIP_SECONDS", "90", "Longest clip accepted for upload. Longer videos go on YouTube as unlisted and are linked in."],
+        ["MAX_VIDEO_UPLOAD_BYTES", "1073741824 (1 GB)", "Largest clip file accepted."],
+        ["YOUTUBE_API_KEY", "(empty)", "Optional. With a Google Data API key, embedded videos also show their length."],
+        ["ANNOTATION_ENABLED", "false", "Operator half of the AI-description switch. The other half is an admin's opt-in on the Admin page."],
+        ["ANTHROPIC_API_KEY", "(empty)", "Key for the AI helper. Nothing is sent without it and both switches."],
+        ["ANNOTATION_MODEL", "claude-opus-5", "Model used for descriptions; claude-sonnet-5 and claude-haiku-4-5 cost less."],
+        ["ANNOTATION_QUIET_MINUTES", "30", "Minutes without edits before an unreviewed item is sent."],
+        ["ANNOTATION_RAW_RETENTION_DAYS", "30", "Days the raw AI responses are kept for debugging."],
+        ["ML_URL / ML_TOKEN", "(empty)", "Address and shared secret of the local ML sidecar (http://ml:8000 in Docker). Set both or neither."],
+        ["ML_IDLE_UNLOAD_SECONDS", "300", "The sidecar frees its models after this much idle time."],
+        ["FACE_INDEXING_ENABLED", "false", "Operator half of the face-detection switch; the admin's opt-in is the other half."],
+        ["FACE_UNNAMED_RETENTION_DAYS", "180", "Faces nobody names are deleted after this many days."],
+        ["CSP_REPORT_ONLY", "false", "Report Content-Security-Policy violations instead of blocking them, while trying a new map provider."],
+        ["COMPOSE_PROFILES", "(empty)", "Read by Docker Compose: set to ml (and/or worker) so every 'up' includes those optional services."],
       ], [1.85*inch, 1.25*inch, W-3.1*inch], first=CELLV),
       note("<b>Gmail example.</b> SMTP_HOST=smtp.gmail.com, SMTP_PORT=587, SMTP_SECURE=false, SMTP_USER=your address, "
            "SMTP_PASS=an App Password generated in your Google account security settings (normal passwords are rejected), "
@@ -360,9 +380,11 @@ docker run --rm -v photoalbum_photos:/data -v $(pwd):/backup alpine \\
       P("Upgrading", H2),
       code("""
 git pull
-docker compose up --build -d
+docker compose up --build -d          # add --profile ml if you run the sidecar and COMPOSE_PROFILES is not set
+docker compose run --rm ml-init       # only after an upgrade that changes the sidecar's models
 """),
-      P("Database migrations run automatically at container start. Take a database dump before upgrading, as a precaution.")]
+      P("Database migrations run automatically at container start. Take a database dump before upgrading, as a precaution. "
+        "The first upgrade to the media-hub release replaces the database container with the pgvector image; the data in the pgdata volume is kept as it is.")]
 
 # ---------- 9 ----------
 S += [P("9. Development setup and tests", H1),
@@ -395,9 +417,15 @@ src/components     UI components (photos, timeline, map, charts, admin)
 src/lib/auth       magic links, sessions, trip access rules
 src/lib/images     EXIF, renditions, HEIC conversion
 src/lib/tracks     GPX / FIT / Google parsers, stats, simplification, storage encoding
-src/lib/jobs       pg-boss queue and the process-photo / import-track / geotag jobs
+src/lib/jobs       pg-boss queue and every background job
+src/lib/annotation AI descriptions (request building, pricing, apply)
+src/lib/people     consent rules, face clustering and matching
+src/lib/search     keyword plus semantic search
+src/lib/graph      similar-photo edges and the graph page data
+src/lib/ml         client for the sidecar
 src/themes         theme registry and per-theme art
-prisma             schema, migrations and seed
+ml                 the Python ML sidecar
+prisma             schema, migrations and the offline seed
 tests              unit tests, fixtures, Playwright specs
 """),
       P("A GitHub Actions workflow runs lint, typecheck, unit tests and a Docker build on every push.")]

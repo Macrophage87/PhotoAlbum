@@ -17,7 +17,7 @@ export function CollectionHeader({ collection, shareUrl }: { collection: { title
               <p className="text-xs uppercase tracking-wide text-muted">Collection</p>
               <h1 className="font-display text-3xl sm:text-4xl font-semibold leading-tight">{collection.title}</h1>
               <p className="text-muted mt-1">
-                {collection._count.items} photo{collection._count.items === 1 ? "" : "s"}
+                {collection._count.items} item{collection._count.items === 1 ? "" : "s"}
               </p>
             </div>
             {collection.visibility !== "PRIVATE" && (

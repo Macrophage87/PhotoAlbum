@@ -5,7 +5,7 @@ import type { Viewer } from "@/lib/auth/viewer";
 import { visibleContainersWhere } from "@/lib/auth/access";
 import { embedText, mlConfigured, vectorLiteral } from "@/lib/ml/client";
 
-export type SearchParams = { q: string; tripId?: string; collectionId?: string; uploaderId?: string; year?: number; kind?: MediaKind };
+export type SearchParams = { q: string; tripId?: string; collectionId?: string; uploaderId?: string; personId?: string; year?: number; kind?: MediaKind };
 
 export type SearchHit = {
   id: string;
@@ -71,24 +71,28 @@ export async function searchMedia(viewer: Viewer, params: SearchParams, limit = 
   if (params.tripId) filters.push(Prisma.sql`p."tripId" = ${params.tripId}`);
   if (params.collectionId) filters.push(Prisma.sql`EXISTS (SELECT 1 FROM "CollectionItem" ci2 WHERE ci2."photoId" = p.id AND ci2."collectionId" = ${params.collectionId})`);
   if (member && params.uploaderId) filters.push(Prisma.sql`p."uploaderId" = ${params.uploaderId}`);
+  if (member && params.personId) filters.push(Prisma.sql`EXISTS (SELECT 1 FROM "Face" f2 WHERE f2."photoId" = p.id AND f2."personId" = ${params.personId} AND f2.status = 'CONFIRMED')`);
   if (params.year) filters.push(Prisma.sql`EXTRACT(YEAR FROM (p."takenAt" + make_interval(mins => COALESCE(p."tzOffsetMin", 0)))) = ${params.year}`);
   if (params.kind) filters.push(Prisma.sql`p.kind = ${params.kind}::"MediaKind"`);
   const where = filters.length ? Prisma.join(filters, " AND ") : Prisma.sql`TRUE`;
   const uploader = member ? Prisma.sql`u.name` : Prisma.sql`NULL`;
+  // A private trip's title is members-only metadata: anonymous visitors see the trip of a hit only when they may open that trip.
+  const shareTripIds = [...viewer.shareTokens.keys()].filter((k) => k.startsWith("trip_")).map((k) => k.slice(5));
+  const tripVisible = member ? Prisma.sql`TRUE` : shareTripIds.length ? Prisma.sql`(t.visibility = 'PUBLIC' OR t.id IN (${Prisma.join(shareTripIds)}))` : Prisma.sql`t.visibility = 'PUBLIC'`;
   // Semantic half: cosine similarity of the query embedding to the item's description embedding, when both exist.
   const similarity = queryVec ? Prisma.sql`CASE WHEN p."textEmbedding" IS NULL THEN NULL ELSE 1 - (p."textEmbedding" <=> ${vectorLiteral(queryVec)}::vector) END` : Prisma.sql`NULL::float`;
   const match = queryVec ? Prisma.sql`(${column} @@ query OR (p."textEmbedding" IS NOT NULL AND 1 - (p."textEmbedding" <=> ${vectorLiteral(queryVec)}::vector) >= ${SEMANTIC_FLOOR}))` : Prisma.sql`${column} @@ query`;
   const rows = await db.$queryRaw<(SearchHit & { similarity: number | null })[]>`
     SELECT p.id, p.kind, p.status, p.caption, p.title, p."originalName", p."externalId", p."externalStatus", p."durationS", p.width, p.height,
            p."takenAt", p."tzOffsetMin", p."updatedAt", p."gpsSource",
-           t.slug AS "tripSlug", t.title AS "tripTitle", ${uploader} AS "uploaderName",
+           CASE WHEN ${tripVisible} THEN t.slug END AS "tripSlug", CASE WHEN ${tripVisible} THEN t.title END AS "tripTitle", ${uploader} AS "uploaderName",
            ts_rank_cd(${column}, query) AS rank,
            ${similarity} AS similarity,
            ts_headline('english', concat_ws(' · ', p.caption, p.title, p.context, p.annotation->>'caption'), query, 'MaxWords=18, MinWords=6, StartSel=[[, StopSel=]], MaxFragments=1') AS snippet
     FROM "Photo" p
     LEFT JOIN "Trip" t ON t.id = p."tripId"
     LEFT JOIN "User" u ON u.id = p."uploaderId",
-    websearch_to_tsquery('english', ${q}) query
+    LATERAL (SELECT websearch_to_tsquery('english', ${q}) || websearch_to_tsquery('simple', ${q}) AS query) qq
     WHERE p.status = 'READY' AND ${match} AND ${visibilitySql(viewer)} AND ${where}
     ORDER BY rank DESC, p."takenAt" DESC NULLS LAST
     LIMIT ${limit * 2}
@@ -115,21 +119,24 @@ export type SearchFacets = {
   collections: { id: string; title: string }[];
   /** Empty for anonymous viewers: the member list is never served to them. */
   uploaders: { id: string; name: string | null }[];
+  /** Members only: every confirmed person and pet who has not opted out. */
+  people: { id: string; name: string }[];
   years: number[];
 };
 
 /** Filter options built from the viewer's visible set only. */
 export async function searchFacets(viewer: Viewer): Promise<SearchFacets> {
   const member = viewer.kind === "user";
-  const [trips, collections, uploaders, years] = await Promise.all([
+  const [trips, collections, uploaders, people, years] = await Promise.all([
     db.trip.findMany({ where: visibleContainersWhere(viewer), orderBy: { startDate: "desc" }, select: { id: true, title: true } }),
     db.collection.findMany({ where: visibleContainersWhere(viewer), orderBy: { title: "asc" }, select: { id: true, title: true } }),
     member ? db.user.findMany({ where: { photos: { some: {} } }, orderBy: { name: "asc" }, select: { id: true, name: true } }) : Promise.resolve([]),
+    member ? db.person.findMany({ where: { optedOutAt: null, faces: { some: { status: "CONFIRMED" } } }, orderBy: { name: "asc" }, select: { id: true, name: true } }) : Promise.resolve([]),
     db.$queryRaw<{ year: number }[]>`
       SELECT DISTINCT EXTRACT(YEAR FROM (p."takenAt" + make_interval(mins => COALESCE(p."tzOffsetMin", 0))))::int AS year
       FROM "Photo" p LEFT JOIN "Trip" t ON t.id = p."tripId"
       WHERE p."takenAt" IS NOT NULL AND p.status = 'READY' AND ${visibilitySql(viewer)}
       ORDER BY year DESC`,
   ]);
-  return { trips, collections, uploaders, years: years.map((y) => y.year) };
+  return { trips, collections, uploaders, people, years: years.map((y) => y.year) };
 }

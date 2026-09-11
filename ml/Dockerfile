@@ -1,11 +1,20 @@
 # syntax=docker/dockerfile:1
 # Family Album ML sidecar: CPU-only inference, no host ports, internal network only. Weights live in the ml-models volume.
+# insightface ships as a source distribution with a Cython extension, so the wheels are built in a stage that has a compiler
+# and only the finished virtualenv is copied into the slim runtime image.
+FROM python:3.12-slim AS build
+ENV PIP_NO_CACHE_DIR=1
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential && rm -rf /var/lib/apt/lists/*
+RUN python -m venv /opt/venv
+ENV PATH=/opt/venv/bin:$PATH
+COPY requirements.txt requirements-models.txt ./
+RUN pip install -r requirements.txt && pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirements-models.txt
+
 FROM python:3.12-slim
-ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 ML_MODEL_DIR=/models HF_HOME=/models/hf
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 ML_MODEL_DIR=/models HF_HOME=/models/hf PATH=/opt/venv/bin:$PATH
 WORKDIR /srv
 RUN apt-get update && apt-get install -y --no-install-recommends libgl1 libglib2.0-0 && rm -rf /var/lib/apt/lists/*
-COPY requirements.txt requirements-models.txt ./
-RUN pip install --no-cache-dir -r requirements.txt && pip install --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cpu -r requirements-models.txt
+COPY --from=build /opt/venv /opt/venv
 COPY ml ./ml
 RUN useradd -r -u 10001 mluser && mkdir -p /models && chown -R mluser /models
 USER mluser

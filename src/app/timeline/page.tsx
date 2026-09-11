@@ -2,7 +2,7 @@ import Link from "next/link";
 import { getViewer } from "@/lib/auth/viewer";
 import { canEditTrip } from "@/lib/auth/access";
 import { listVisibleTrips } from "@/lib/trips/queries";
-import { tripTimeline } from "@/lib/timeline/queries";
+import { encodeCursor, tripTimeline } from "@/lib/timeline/queries";
 import { formatDayRange } from "@/lib/time/format";
 import { dateColumnToDay } from "@/lib/time/local-day";
 import { AppShell, Container } from "@/components/layout/AppShell";
@@ -25,7 +25,7 @@ export default async function GlobalTimelinePage({ searchParams }: PageProps<"/t
   const trips = filter ? [] : await listVisibleTrips(viewer);
   const [groups, collectionGroups, tripOptions, collectionOptions] = await Promise.all([
     // The global view shows the first page of each trip; the trip timeline pages through the rest.
-    Promise.all(trips.map((t) => tripTimeline(t.id, t.timezone).then((p) => p.groups))),
+    Promise.all(trips.map((t) => tripTimeline(t.id, t.timezone))),
     filter ? collectionTimeline(filter.id) : Promise.resolve(null),
     editable ? db.trip.findMany({ orderBy: { startDate: "desc" }, select: { id: true, title: true } }) : Promise.resolve([]),
     editable ? db.collection.findMany({ orderBy: { title: "asc" }, select: { id: true, title: true } }) : Promise.resolve([]),
@@ -52,7 +52,12 @@ export default async function GlobalTimelinePage({ searchParams }: PageProps<"/t
               </h2>
               <p className="text-muted text-sm">{formatDayRange(dateColumnToDay(trip.startDate), dateColumnToDay(trip.endDate))}</p>
             </div>
-            <Timeline groups={groups[i]} tripSlug={trip.slug} timezone={trip.timezone} showDetailLink={editable} idPrefix={`t-${trip.slug}`} />
+            <Timeline groups={groups[i].groups} tripSlug={trip.slug} timezone={trip.timezone} showDetailLink={editable} idPrefix={`t-${trip.slug}`} />
+            {groups[i].next && (
+              <p className="text-sm mt-4">
+                <Link href={`/trips/${trip.slug}/timeline?after=${encodeURIComponent(encodeCursor(groups[i].next!))}`} className="text-primary hover:underline">Later days of {trip.title} on its own timeline →</Link>
+              </p>
+            )}
           </TripTheme>
         ))}
       </div>

@@ -17,6 +17,7 @@ export const photoCardSelect = {
   originalName: true,
   updatedAt: true,
   uploader: { select: { name: true } },
+  collections: { select: { collection: { select: { slug: true, title: true } } } },
   kind: true,
   externalId: true,
   title: true,

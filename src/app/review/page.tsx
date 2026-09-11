@@ -15,6 +15,7 @@ import { suggestionsFor } from "@/lib/suggest";
 import { SuggestionList } from "@/components/suggest/SuggestionList";
 import { proposalsFor } from "@/lib/people/queries";
 import { ProposalList } from "@/components/people/ProposalList";
+import { YouTubeAddForm } from "@/components/videos/YouTubeAddForm";
 
 export const metadata = { title: "Review uploads" };
 
@@ -25,18 +26,20 @@ export const metadata = { title: "Review uploads" };
 export default async function ReviewPage({ searchParams }: PageProps<"/review">) {
   await requireUser("/review");
   const viewer = await getViewer();
+  const editable = true;
   const sp = await searchParams;
   const ids = typeof sp.ids === "string" ? sp.ids.split(",").filter(Boolean).slice(0, 500) : [];
   const batch = ids.length > 0;
   const gates = await annotationGates();
   const [photos, trips, collections, unreviewedCount] = await Promise.all([
-    db.photo.findMany({ where: batch ? { id: { in: ids } } : { reviewedAt: null }, orderBy: { createdAt: "desc" }, select: { ...photoCardSelect, context: true, reviewedAt: true, annotation: true, annotationOptOut: true, annotatedAt: true, estimatedDate: true, estimatedDateConfidence: true, estimatedDateNote: true, takenAtSource: true, trip: { select: { annotationOptOut: true } } } }),
+    db.photo.findMany({ where: batch ? { id: { in: ids } } : { reviewedAt: null }, orderBy: { createdAt: "desc" }, select: { ...photoCardSelect, context: true, reviewedAt: true, annotation: true, annotationOptOut: true, annotatedAt: true, estimatedDate: true, estimatedDateConfidence: true, estimatedDateNote: true, takenAtSource: true, trip: { select: { annotationOptOut: true } }, collections: { select: { collection: { select: { annotationOptOut: true } } } } } }),
     db.trip.findMany({ orderBy: { startDate: "desc" }, select: { id: true, title: true } }),
     db.collection.findMany({ orderBy: { title: "asc" }, select: { id: true, title: true } }),
     db.photo.count({ where: { reviewedAt: null } }),
   ]);
   const allIds = photos.map((p) => p.id);
-  const [suggestions, proposals] = await Promise.all([suggestionsFor(allIds), proposalsFor(allIds)]);
+  const [suggestions, proposals, unnamedFaces] = await Promise.all([suggestionsFor(allIds), proposalsFor(allIds), db.face.count({ where: { photoId: { in: allIds }, personId: null, status: { in: ["DETECTED", "REJECTED"] } } })]);
+  const optedOut = (p: (typeof photos)[number]) => p.annotationOptOut || Boolean(p.trip?.annotationOptOut) || p.collections.some((c) => c.collection.annotationOptOut);
   return (
     <AppShell viewer={viewer}>
       <Container className="py-10 space-y-5">
@@ -58,12 +61,18 @@ export default async function ReviewPage({ searchParams }: PageProps<"/review">)
           <p className="text-muted">Nothing to review.</p>
         ) : (
           <SelectionProvider trips={trips} collections={collections}>
-            <ReviewPanel allIds={allIds} annotation={gates.active ? { quietMinutes: env().ANNOTATION_QUIET_MINUTES, pending: photos.filter((p) => !p.annotatedAt && !p.annotationOptOut && !p.trip?.annotationOptOut).length } : null} />
+            <ReviewPanel allIds={allIds} annotation={gates.active ? { quietMinutes: env().ANNOTATION_QUIET_MINUTES, pending: photos.filter((p) => !p.annotatedAt && !optedOut(p)).length } : null} />
+            {editable && <YouTubeAddForm defaultDate={new Date().toISOString().slice(0, 10)} />}
             <PhotoGrid photos={photos.map((p) => toGridPhoto(p, p.reviewedAt ? null : "unreviewed", true))} />
-            {proposals.length > 0 && (
+            {(proposals.length > 0 || unnamedFaces > 0) && (
               <section className="space-y-2">
                 <h2 className="font-display text-lg font-semibold">Who might be in these</h2>
                 <ProposalList proposals={proposals} />
+                {unnamedFaces > 0 && (
+                  <p className="text-sm text-muted">
+                    {unnamedFaces} face{unnamedFaces === 1 ? " in this batch is" : "s in this batch are"} not named yet. <Link href="/people" className="text-primary hover:underline">Name them on the People page</Link>, or open an item&apos;s details.
+                  </p>
+                )}
               </section>
             )}
             {photos.some((p) => suggestions[p.id]?.length) && (
@@ -75,14 +84,14 @@ export default async function ReviewPage({ searchParams }: PageProps<"/review">)
               </section>
             )}
             <ul className="text-sm space-y-2">
-              {photos.filter((p) => p.context || p.annotation || p.annotationOptOut).map((p) => {
+              {photos.filter((p) => p.context || p.annotation || optedOut(p)).map((p) => {
                 const a = p.annotation as StoredAnnotation | null;
                 return (
                   <li key={p.id} className="rounded-theme border border-border p-3 space-y-1">
                     <Link href={`/photos/${p.id}`} className="text-primary hover:underline font-medium">{a?.caption ?? p.caption ?? p.title ?? p.originalName}</Link>
                     {p.context && <p className="text-muted">Note: {p.context}</p>}
                     {a && <p>{a.description}{a.tags.length > 0 && <span className="text-muted"> · {a.tags.slice(0, 8).join(", ")}</span>}</p>}
-                    {(p.annotationOptOut || p.trip?.annotationOptOut) && <p className="text-xs text-muted">Not sent to the AI helper.</p>}
+                    {optedOut(p) && <p className="text-xs text-muted">Not sent to the AI helper.</p>}
                   </li>
                 );
               })}

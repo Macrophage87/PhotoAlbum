@@ -45,10 +45,9 @@ export async function graphPayload(viewer: Viewer, scope: GraphScope, minScore: 
     if (!p) return null;
     scopeWhere = { faces: { some: { personId: p.id, status: "CONFIRMED" } } };
   }
-  const rows = await db.$queryRaw<{ id: string }[]>`SELECT id FROM "Photo" WHERE embedding IS NOT NULL`;
-  const embedded = rows.map((r) => r.id);
+  // embeddedAt is written together with the image embedding, so it stands in for the vector column Prisma cannot filter on.
   const photos = await db.photo.findMany({
-    where: { ...visibleMediaWhere(viewer), ...scopeWhere, id: { in: embedded }, status: "READY" },
+    where: { ...visibleMediaWhere(viewer), ...scopeWhere, embeddedAt: { not: null }, status: "READY" },
     orderBy: { createdAt: "desc" },
     take: MAX_NODES + 1,
     select: { id: true, updatedAt: true, caption: true, title: true, originalName: true, kind: true, takenAt: true, tripId: true, trip: { select: { title: true } }, uploader: { select: { name: true } }, collections: { select: { collectionId: true } }, faces: { where: { status: "CONFIRMED", personId: { not: null } }, select: { personId: true } } },

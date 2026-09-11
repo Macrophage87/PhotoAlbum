@@ -1,7 +1,7 @@
 import { anthropic } from "@/lib/annotation/client";
 import { annotationGates, optOutReason } from "@/lib/annotation/eligibility";
 import { buildRequest, loadItem } from "@/lib/annotation/request";
-import { applyAnnotation, recordFailure } from "@/lib/annotation/apply";
+import { applyAnnotation, parseMessageContent, recordFailure } from "@/lib/annotation/apply";
 import { permittedNames } from "@/lib/people/gates";
 import type { AnnotatePhotoJob } from "../queues";
 
@@ -19,18 +19,24 @@ export async function annotatePhoto(job: AnnotatePhotoJob): Promise<void> {
   // Names go to the helper only for confirmed people whose indexing is on and who are not minors; pets always.
   const request = await buildRequest(item, gates.model, await permittedNames(item.id));
   try {
-    const response = await anthropic().messages.parse(request);
+    // `messages.create` rather than `parse`: a truncated or off-schema answer must be recorded, not thrown and retried at full price.
+    const response = await anthropic().messages.create(request);
     const usage = response.usage;
     console.log(`[annotate] ${item.id} model=${response.model} stop=${response.stop_reason} in=${usage.input_tokens} cached=${usage.cache_read_input_tokens ?? 0} out=${usage.output_tokens}`);
     if (response.stop_reason === "refusal") {
       await recordFailure(item.id, `refusal:${response.stop_details?.category ?? "unspecified"}`);
       return;
     }
-    if (response.stop_reason === "max_tokens" || !response.parsed_output) {
-      await recordFailure(item.id, response.stop_reason === "max_tokens" ? "max_tokens" : "invalid_output");
+    if (response.stop_reason === "max_tokens") {
+      await recordFailure(item.id, "max_tokens");
       return;
     }
-    await applyAnnotation(item.id, response.model, response.parsed_output, { content: response.content, usage: response.usage, stop_reason: response.stop_reason });
+    const parsed = parseMessageContent(response.content as { type: string; text?: string }[]);
+    if (!parsed) {
+      await recordFailure(item.id, "invalid_output");
+      return;
+    }
+    await applyAnnotation(item.id, response.model, parsed, { content: response.content, usage: response.usage, stop_reason: response.stop_reason });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[annotate] ${item.id} failed: ${message.slice(0, 200)}`);

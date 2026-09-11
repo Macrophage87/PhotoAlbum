@@ -193,6 +193,29 @@ docker compose --profile ml up -d --build
 
 `docker compose exec app node -e "fetch('http://ml:8000/health').then(r=>r.json()).then(j=>console.log(j))"` should print `models: idle` or `loaded`. The app refuses to start if `ML_URL` is set without `ML_TOKEN`.
 
+For faces, also set `FACE_INDEXING_ENABLED=true` in `.env` and press **Turn on face detection** on the Admin page; faces nobody names are deleted after `FACE_UNNAMED_RETENTION_DAYS` (default 180). Put `COMPOSE_PROFILES=ml` in `.env` (add `,worker` if you use the separate worker) so every later `docker compose up`, including `deploy/update.sh`, starts the sidecar too; otherwise pass `--profile ml` each time.
+
+### Every variable
+
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `MAX_CLIP_SECONDS` | `90` | Longest clip accepted for upload; longer videos go on YouTube. |
+| `MAX_VIDEO_UPLOAD_BYTES` | `1073741824` (1 GB) | Largest clip file accepted. |
+| `YOUTUBE_API_KEY` | empty | Optional Data API key so embedded videos show their length. |
+| `ANNOTATION_ENABLED` | `false` | Operator half of the AI-description switch; the admin opt-in is the other half. |
+| `ANTHROPIC_API_KEY` | empty | Required for descriptions. |
+| `ANTHROPIC_BASE_URL` | empty | Proxy or mock endpoint for the helper; leave empty. |
+| `ANNOTATION_MODEL` | `claude-opus-5` | Model for descriptions (`claude-sonnet-5` and `claude-haiku-4-5` cost less). |
+| `ANNOTATION_QUIET_MINUTES` | `30` | Minutes without edits before an unreviewed item is sent. |
+| `ANNOTATION_RAW_RETENTION_DAYS` | `30` | How long raw responses are kept. |
+| `ML_URL`, `ML_TOKEN` | empty | Sidecar address and shared secret; both or neither. |
+| `ML_IDLE_UNLOAD_SECONDS` | `300` | Sidecar unloads its models after this idle time. |
+| `FACE_INDEXING_ENABLED` | `false` | Operator half of the face-detection switch. |
+| `FACE_UNNAMED_RETENTION_DAYS` | `180` | Unnamed faces are deleted after this. |
+| `CSP_REPORT_ONLY` | `false` | Report Content-Security-Policy violations instead of blocking. |
+
+The heavy-work lock (transcoding, embeddings, faces one at a time) is held inside the worker process, so run exactly one worker: the web container (default) or the `worker` profile, not both.
+
 ## 8. First sign-in
 
 1. Open `https://album.example.com` in a browser.
@@ -208,7 +231,7 @@ docker compose --profile ml up -d --build
 Optionally load the demo trip (a Maine lighthouse trip with a hike, track, stats and three sample photos):
 
 ```bash
-docker compose exec app node_modules/.bin/tsx prisma/seed.ts
+docker compose exec app node_modules/.bin/tsx prisma/seed.ts   # two trips, a hike, sample photos, a collection, a clip, a YouTube embed, two named people, a pet; descriptions and face templates are offline fixtures
 ```
 
 ## 9. Backups
@@ -252,6 +275,8 @@ docker image prune -f
 ```
 
 Migrations run automatically at start. Take a database dump first (step 9) before any upgrade. In-flight photo processing is given 45 seconds to finish before the old container stops.
+
+Two things to know when upgrading an install from before the media-hub release: the database image changed from `postgres:16` to `pgvector/pgvector:pg16` (same data format; compose replaces the container and keeps the `pgdata` volume, and the first start creates the `vector` extension), and if you run the ML sidecar its profile must be part of every `up`. Put `COMPOSE_PROFILES=ml` (plus `worker` if used) in `.env` so `docker compose up --build -d` and `deploy/update.sh` include it, then run `docker compose run --rm ml-init` once to fetch the weights.
 
 ## 11. Optional: separate worker container
 

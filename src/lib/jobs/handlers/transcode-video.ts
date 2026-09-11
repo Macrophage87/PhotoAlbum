@@ -89,8 +89,9 @@ export async function transcodeVideo(job: TranscodeVideoJob): Promise<void> {
         },
       });
     });
-    await enqueueEmbedding(photo.id);
-    await enqueueFaceDetection(photo.id);
+    // Follow-up jobs are best-effort here; the sweeps pick up anything the queue refused.
+    await enqueueEmbedding(photo.id).catch(() => undefined);
+    await enqueueFaceDetection(photo.id).catch(() => undefined);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[transcode-video] ${photo.id} failed:`, message);

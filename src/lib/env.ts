@@ -39,6 +39,8 @@ const schema = z.object({
   // Local ML sidecar (faces, image and text embeddings). Optional; when set, ML_TOKEN is required so the app fails closed.
   ML_URL: z.string().url().optional().transform((v) => (v ? v : undefined)),
   ML_TOKEN: z.string().optional().transform((v) => (v ? v : undefined)),
+  // Documented pass-through for the sidecar (compose hands it to the ml service); the app itself does not read it.
+  ML_IDLE_UNLOAD_SECONDS: z.coerce.number().int().positive().default(300),
   // Face detection stays off until this flag and an admin's opt-in on the disclosure screen are both set.
   FACE_INDEXING_ENABLED: boolish.transform((v) => v ?? false),
   FACE_UNNAMED_RETENTION_DAYS: z.coerce.number().int().positive().default(180),

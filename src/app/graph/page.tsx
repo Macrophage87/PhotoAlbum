@@ -29,7 +29,7 @@ export default async function GraphPage({ searchParams }: PageProps<"/graph">) {
       <Container className="py-8 space-y-4">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
-            <h1 className="font-display text-3xl font-semibold">Similar photos</h1>
+            <h1 className="font-display text-3xl font-semibold">Similarity graph</h1>
             <p className="text-muted mt-1">Items that look alike sit close together. Drag to pan, scroll to zoom, click a photo to open it.</p>
           </div>
           <form method="get" className="flex flex-wrap items-center gap-2 text-sm">
@@ -49,7 +49,7 @@ export default async function GraphPage({ searchParams }: PageProps<"/graph">) {
           </form>
         </div>
         {!mlConfigured() ? (
-          <p className="text-muted">The similarity graph needs the ML sidecar (set <code>ML_URL</code> and <code>ML_TOKEN</code>).</p>
+          <p className="text-muted">Similar photos need the optional local ML service, which the person who runs this album has not set up (see the README&apos;s server size section).</p>
         ) : !data ? (
           <p className="text-muted">Nothing to show for this scope.</p>
         ) : data.nodes.length === 0 ? (

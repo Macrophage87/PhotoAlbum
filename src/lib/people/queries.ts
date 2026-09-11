@@ -42,11 +42,9 @@ export async function faceCounts(retentionDays: number): Promise<FaceCounts> {
   return { templates, unnamed, people, nextPurge: oldest ? new Date(oldest.createdAt.getTime() + retentionDays * 86_400_000) : null };
 }
 
-/** Who needs an admin's decision: member-named clusters, and people who turned 18 without a decision since. */
+/** Who needs an admin's decision: member-named clusters, and people the nightly job found have turned 18. */
 export async function needsDecision() {
-  const people = await db.person.findMany({ where: { kind: "HUMAN", OR: [{ pendingDecision: true }, { faceIndexing: false, birthday: { not: null }, adultAttestedAt: null }] }, orderBy: { name: "asc" } });
-  const now = new Date();
-  return people.filter((p) => p.pendingDecision || (p.birthday && !isMinor(p, now) && (now.getTime() - new Date(Date.UTC(p.birthday.getUTCFullYear() + 18, p.birthday.getUTCMonth(), p.birthday.getUTCDate())).getTime()) < 400 * 86_400_000));
+  return db.person.findMany({ where: { kind: "HUMAN", pendingDecision: true }, orderBy: { name: "asc" } });
 }
 
 /** Confirmed people on one photo, for members-only chips. */

@@ -1,6 +1,6 @@
 import { db } from "@/lib/db";
+import { canViewTrip, visibleTripsWhere } from "@/lib/auth/access";
 import type { Viewer } from "@/lib/auth/viewer";
-import { visibleTripsWhere } from "@/lib/auth/access";
 import { photoUrl } from "@/lib/photos/urls";
 import { mergeBounds, type Bounds } from "@/lib/geo/bounds";
 import { getTheme } from "@/themes";
@@ -82,11 +82,11 @@ export async function buildMapPayload(viewer: Viewer, tripId?: string): Promise<
   };
 }
 
-/** Photos in a collection (no tracks). The caller has already checked the viewer may open the collection. */
-export async function buildCollectionMapPayload(collectionId: string): Promise<MapPayload> {
+/** Photos in a collection (no tracks). The caller has already checked the viewer may open the collection; a photo's trip is named only when the viewer may open that trip too. */
+export async function buildCollectionMapPayload(viewer: Viewer, collectionId: string): Promise<MapPayload> {
   const photos = await db.photo.findMany({
     where: { status: "READY", lat: { not: null }, lng: { not: null }, collections: { some: { collectionId } } },
-    select: { id: true, lat: true, lng: true, caption: true, takenAt: true, updatedAt: true, activityId: true, gpsSource: true, trip: { select: { slug: true, title: true } } },
+    select: { id: true, lat: true, lng: true, caption: true, takenAt: true, updatedAt: true, activityId: true, gpsSource: true, trip: { select: { id: true, slug: true, title: true, visibility: true, shareToken: true } } },
     orderBy: { takenAt: "asc" },
   });
   let all: Bounds | null = null;
@@ -95,7 +95,7 @@ export async function buildCollectionMapPayload(collectionId: string): Promise<M
     return {
       type: "Feature" as const,
       geometry: { type: "Point" as const, coordinates: [p.lng!, p.lat!] },
-      properties: { id: p.id, thumbUrl: photoUrl(p, "thumb"), mediumUrl: photoUrl(p, "medium"), caption: p.caption, takenAt: p.takenAt?.toISOString() ?? null, tripSlug: p.trip?.slug ?? "", tripTitle: p.trip?.title ?? "", activityId: p.activityId, gpsSource: p.gpsSource },
+      properties: { id: p.id, thumbUrl: photoUrl(p, "thumb"), mediumUrl: photoUrl(p, "medium"), caption: p.caption, takenAt: p.takenAt?.toISOString() ?? null, tripSlug: p.trip && canViewTrip(viewer, p.trip) ? p.trip.slug : "", tripTitle: p.trip && canViewTrip(viewer, p.trip) ? p.trip.title : "", activityId: p.activityId, gpsSource: p.gpsSource },
     };
   });
   const b = all as Bounds | null;

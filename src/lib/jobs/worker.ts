@@ -31,7 +31,7 @@ export async function startWorker(): Promise<void> {
   const { annotationSweep, purgeAnnotationRaw } = await import("./handlers/annotation-sweep");
   const { annotationBackfill, annotationBatchPoll } = await import("./handlers/annotation-batch");
   const { embedPhoto, embedSweep } = await import("./handlers/embed-photo");
-  const { detectFacesJob, faceSweep, purgeUnnamedFaces } = await import("./handlers/detect-faces");
+  const { detectFacesJob, faceSweep, purgeUnnamedFaces, flagNewAdults } = await import("./handlers/detect-faces");
   const { matchPhoto } = await import("./handlers/match-photo");
 
   await boss.work(QUEUES.processPhoto, { batchSize: 1, localConcurrency: 2, pollingIntervalSeconds: 2 }, async ([job]) =>
@@ -59,6 +59,7 @@ export async function startWorker(): Promise<void> {
   await boss.work(QUEUES.detectFaces, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 3 }, async ([job]) => detectFacesJob(job.data as never));
   await boss.work(QUEUES.matchPhoto, { batchSize: 1, localConcurrency: 2, pollingIntervalSeconds: 2 }, async ([job]) => matchPhoto(job.data as never));
   await boss.work(QUEUES.faceSweep, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 30 }, async () => void (await faceSweep()));
+  await boss.work(QUEUES.flagNewAdults, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60 }, async () => void (await flagNewAdults()));
   await boss.work(QUEUES.purgeUnnamedFaces, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60 }, async () => void (await purgeUnnamedFaces()));
   await boss.work(QUEUES.purgeAnnotationRaw, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60 }, async () => void (await purgeAnnotationRaw()));
   // Schedules (idempotent): weekly video re-check, the annotation quiet-period sweep, batch polling, raw-response purge.
@@ -69,6 +70,7 @@ export async function startWorker(): Promise<void> {
   await boss.schedule(QUEUES.embedSweep, "*/5 * * * *", {}, { retryLimit: 0 });
   await boss.schedule(QUEUES.faceSweep, "*/5 * * * *", {}, { retryLimit: 0 });
   await boss.schedule(QUEUES.purgeUnnamedFaces, "45 3 * * *", {}, { retryLimit: 0 });
+  await boss.schedule(QUEUES.flagNewAdults, "50 3 * * *", {}, { retryLimit: 0 });
   console.log("[worker] pg-boss handlers registered");
   await reconcileStalePhotos().catch((err) => console.error("[worker] stale-photo reconciliation failed", err));
 }

@@ -6,7 +6,7 @@ import { shareableCollectionUrl } from "@/lib/share/social";
 import { CollectionForm } from "@/components/collections/CollectionForm";
 import { ShareButtons } from "@/components/trips/ShareButtons";
 import { Button, Card, ConfirmSubmitButton } from "@/components/ui";
-import { deleteCollection, rotateCollectionShareToken, setCollectionVisibility, updateCollection } from "../../actions";
+import { deleteCollection, detachExposedFromOtherCollections, rotateCollectionShareToken, setCollectionVisibility, updateCollection } from "../../actions";
 import { VisibilityForm } from "@/components/trips/VisibilityForm";
 import { OptOutToggle } from "@/components/annotation/OptOutToggle";
 import { visibilityWarnings } from "@/lib/visibility/settings";
@@ -48,8 +48,14 @@ export default async function CollectionSettingsPage({ params, searchParams }: P
             {warnings.stillExposed.map((line) => (
               <p key={line} className="text-sm">{line}</p>
             ))}
-            <p className="text-sm">Visibility is a union: a photo can be seen by anyone who may open its trip or any collection holding it. Change those containers to hide the photos everywhere.</p>
-            <div className="flex flex-wrap gap-3">
+            <p className="text-sm">Visibility is a union: an item can be seen by anyone who may open its trip or any collection holding it.</p>
+            <div className="flex flex-wrap gap-3 items-center">
+              {warnings.exposingContainers.some((c) => c.kind === "collection") && (
+                <form action={detachExposedFromOtherCollections.bind(null, slug)}>
+                  <Button type="submit" variant="secondary" size="sm">Make these items private everywhere (remove them from those collections)</Button>
+                </form>
+              )}
+              {warnings.exposingContainers.some((c) => c.kind === "trip") && <span className="text-sm">Items on a more visible trip stay visible through that trip; change it from its settings:</span>}
               {warnings.exposingContainers.map((c) => (
                 <Link key={`${c.kind}_${c.id}`} href={c.kind === "trip" ? `/trips/${c.slug}/settings` : `/collections/${c.slug}/settings`} className="text-sm underline underline-offset-2">Open {c.title}</Link>
               ))}

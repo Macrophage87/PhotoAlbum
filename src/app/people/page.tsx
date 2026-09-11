@@ -25,7 +25,7 @@ export default async function PeoplePage() {
         <div>
           <h1 className="font-display text-3xl font-semibold">People</h1>
           <p className="text-muted mt-1">
-            {gates.active ? "Faces are found on this server and grouped; name a group once and it becomes a person." : gates.sidecar ? "Face detection is off. An admin can turn it on from the Admin page." : "Face detection needs the ML sidecar, which is not configured."}
+            {gates.active ? "Faces are found on this server and grouped; name a group once and it becomes a person." : gates.sidecar ? "Face detection is off. An admin can turn it on from the Admin page." : "Face detection needs the optional local ML service, which the person who runs this album has not set up."}
           </p>
         </div>
 

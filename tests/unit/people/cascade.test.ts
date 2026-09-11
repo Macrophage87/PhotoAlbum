@@ -36,3 +36,21 @@ describe("names that may reach the helper", () => {
     expect(anon).toEqual([]);
   });
 });
+
+describe("the forget-me scrub", () => {
+  it("removes every tag and object that mentions the name, not just the first", () => {
+    // Mirrors optOutPerson: a non-global regex for testing, so lastIndex never skips an entry.
+    const name = "Jo";
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const mentions = new RegExp(escaped, "i");
+    const tags = ["jo", "jo's party", "lake", "grandma jo", "JO"];
+    expect(tags.filter((t) => !mentions.test(t))).toEqual(["lake"]);
+  });
+});
+
+describe("the indexes on unsupported columns", () => {
+  it("exist after migrate deploy (a later migrate dev must not drop them again)", async () => {
+    const rows = await db.$queryRaw<{ indexname: string }[]>`SELECT indexname FROM pg_indexes WHERE indexname IN ('Photo_searchVector_idx', 'Photo_searchVectorMembers_idx', 'Photo_embedding_idx', 'Photo_textEmbedding_idx', 'Face_embedding_idx')`;
+    expect(rows.map((r) => r.indexname).sort()).toEqual(["Face_embedding_idx", "Photo_embedding_idx", "Photo_searchVectorMembers_idx", "Photo_searchVector_idx", "Photo_textEmbedding_idx"]);
+  });
+});

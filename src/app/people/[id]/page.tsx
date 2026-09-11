@@ -90,7 +90,7 @@ export default async function PersonPage({ params }: PageProps<"/people/[id]">) 
                     <input type="checkbox" name="faceIndexing" defaultChecked={person.faceIndexing} className="mt-1" />
                     <span>
                       <span className="font-medium">Recognise this person in new photos</span>
-                      <span className="block text-muted">Turning it off drops the face templates now. Only admins change this; the decision is recorded{person.faceIndexingSetAt ? ` (last set ${person.faceIndexingSetAt.toLocaleDateString("en-US")})` : ""}.</span>
+                      <span className="block text-muted">Turning it off drops the face templates now. Without a birthday showing an adult or the attestation the templates are dropped as well{minor ? ", and a minor is never recognised unless a parent has asked" : ""}. Only admins change this; the decision is recorded{person.faceIndexingSetAt ? ` (last set ${person.faceIndexingSetAt.toLocaleDateString("en-US")})` : ""}.</span>
                     </span>
                   </label>
                   <Button type="submit" size="sm" variant="secondary">Save recognition setting</Button>

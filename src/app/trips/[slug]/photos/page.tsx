@@ -45,7 +45,7 @@ export default async function TripPhotosPage({ params, searchParams }: PageProps
         </div>
       </div>
       {editable && <YouTubeAddForm tripId={trip.id} defaultDate={dateColumnToDay(trip.startDate)} />}
-      <TripGallery key={moreUrl} photos={photos.map((p) => toGridPhoto(p, null, editable))} more={{ url: moreUrl, nextCursor: page.nextCursor, total: page.total }} activities={activities} trips={trips} collections={collections} editable={editable} emptyMessage={editable ? "No photos yet. Upload some to get started." : "No photos yet."} />
+      <TripGallery key={`${moreUrl}:${page.total}:${photos[0]?.id ?? ""}:${photos[photos.length - 1]?.id ?? ""}`} photos={photos.map((p) => toGridPhoto(p, null, editable))} more={{ url: moreUrl, nextCursor: page.nextCursor, total: page.total }} activities={activities} trips={trips} collections={collections} editable={editable} emptyMessage={editable ? "No photos yet. Upload some to get started." : "No photos yet."} />
     </div>
   );
 }

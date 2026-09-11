@@ -30,7 +30,7 @@ export function CollectionCard({ collection, cover, showVisibility }: { collecti
         </h3>
         {collection.description && <p className="text-sm text-muted mt-1 line-clamp-2">{collection.description}</p>}
         <p className="text-xs text-muted mt-2">
-          {collection._count.items} photo{collection._count.items === 1 ? "" : "s"}
+          {collection._count.items} item{collection._count.items === 1 ? "" : "s"}
         </p>
       </div>
     </Link>

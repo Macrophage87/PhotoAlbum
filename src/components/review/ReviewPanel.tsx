@@ -59,7 +59,7 @@ export function ReviewPanel({ allIds, annotation }: { allIds: string[]; /** Pres
           <span>
             {annotation.pending} item{annotation.pending === 1 ? "" : "s"} will be sent to the AI helper when you mark them reviewed, or after {annotation.quietMinutes} minutes without changes.
           </span>
-          <Button size="sm" variant="secondary" disabled={pending} onClick={optOut}>Don&apos;t send {label} to the model</Button>
+          <Button size="sm" variant="secondary" disabled={pending} onClick={optOut}>Don&apos;t send {label} to the AI helper</Button>
         </div>
       )}
     </div>

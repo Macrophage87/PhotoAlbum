@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { z } from "zod";
 import { db } from "@/lib/db";
+import { levelOf } from "@/lib/visibility/exposure";
 import { requireUserOrThrow } from "@/lib/auth/viewer";
 import { generateToken } from "@/lib/auth/tokens";
 import { uniqueSlug } from "@/lib/trips/slug";
@@ -147,4 +148,24 @@ export async function sortCollectionByDate(slug: string): Promise<void> {
   items.sort((a, b) => (a.photo.takenAt?.getTime() ?? Infinity) - (b.photo.takenAt?.getTime() ?? Infinity) || a.photo.createdAt.getTime() - b.photo.createdAt.getTime());
   await db.$transaction(items.map((it, position) => db.collectionItem.update({ where: { id: it.id }, data: { position } })));
   revalidatePath(`/collections/${slug}`, "layout");
+}
+
+/**
+ * After lowering a collection's visibility: remove its items from every other collection that is more visible than
+ * this one now is. Trips cannot be changed from here; the settings page links to them.
+ */
+export async function detachExposedFromOtherCollections(slug: string): Promise<void> {
+  const collection = await loadEditableCollection(slug);
+  const level = levelOf(collection.visibility);
+  const items = await db.collectionItem.findMany({ where: { collectionId: collection.id }, select: { photoId: true } });
+  const others = await db.collectionItem.findMany({ where: { photoId: { in: items.map((i) => i.photoId) }, collectionId: { not: collection.id } }, select: { id: true, photoId: true, collection: { select: { id: true, visibility: true, coverPhotoId: true } } } });
+  const doomed = others.filter((i) => levelOf(i.collection.visibility) > level);
+  if (doomed.length) {
+    await db.collectionItem.deleteMany({ where: { id: { in: doomed.map((d) => d.id) } } });
+    for (const c of doomed.filter((d) => d.collection.coverPhotoId === d.photoId)) await db.collection.update({ where: { id: c.collection.id }, data: { coverPhotoId: null } });
+    await db.photo.updateMany({ where: { id: { in: doomed.map((d) => d.photoId) } }, data: { updatedAt: new Date() } });
+  }
+  revalidatePath(`/collections/${slug}`, "layout");
+  revalidatePath("/", "layout");
+  redirect(`/collections/${slug}/settings?saved=1`);
 }

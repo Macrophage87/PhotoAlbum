@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { Lightbox, useLightbox, type LightboxPhoto } from "@/components/photos/Lightbox";
+import { useSelectionContext } from "@/components/photos/selection";
 
 export type SearchResult = LightboxPhoto & { thumbUrl: string; snippet: string; tripSlug: string | null; tripTitle: string | null; when: string | null };
 
@@ -17,12 +18,16 @@ function Snippet({ text }: { text: string }) {
 
 export function SearchResults({ results, member }: { results: SearchResult[]; member: boolean }) {
   const lb = useLightbox();
+  // Inside a SelectionProvider (members), the "Select photos" bar turns each result into a checkbox for add-to-trip and add-to-collection.
+  const ctx = useSelectionContext();
+  const selecting = ctx?.active ?? false;
   return (
     <>
       <ul className="divide-y divide-border">
         {results.map((r, i) => (
           <li key={r.id} className="flex gap-4 py-3">
-            <button onClick={() => lb.open(i)} className="shrink-0 w-24 h-24 rounded-theme overflow-hidden bg-surface-alt border border-border focus:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label={`Open ${r.alt}`}>
+            <button onClick={() => (selecting ? ctx?.toggle(r.id) : lb.open(i))} className={`relative shrink-0 w-24 h-24 rounded-theme overflow-hidden bg-surface-alt border border-border focus:outline-none focus-visible:ring-2 focus-visible:ring-ring ${selecting && ctx?.selected.has(r.id) ? "ring-4 ring-primary ring-inset" : ""}`} aria-label={selecting ? `Select ${r.alt}` : `Open ${r.alt}`} aria-pressed={selecting ? ctx?.selected.has(r.id) : undefined}>
+              {selecting && <span className={`absolute top-1 right-1 w-5 h-5 rounded-full border-2 border-white flex items-center justify-center text-[10px] ${ctx?.selected.has(r.id) ? "bg-primary text-primary-fg" : "bg-black/40"}`} aria-hidden="true">{ctx?.selected.has(r.id) ? "✓" : ""}</span>}
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src={r.thumbUrl} alt="" className="w-full h-full object-cover" loading="lazy" />
             </button>
