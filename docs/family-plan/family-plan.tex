@@ -315,6 +315,29 @@ Videos come in two kinds, and they take two different routes.
 An unlisted video is hidden from searches and from your channel, but anyone who has its link can watch it, and YouTube keeps a copy on its servers. If a video should stay strictly within the family, keep it as a short clip in the album, or split it into a few clips. The album shows a small reminder about this whenever a YouTube video is added.
 \end{note}
 
+\subsection{Bringing photos over from Google Photos}
+
+Many of us already keep photos in Google Photos, and there are two ways to get them into the album. Google no longer lets outside apps read a whole library or copy new photos automatically in the background, so neither route is a permanent link; both are things you do when you want to.
+
+\begin{itemize}
+  \item \textbf{A handful at a time.} An \emph{Import from Google Photos} button opens Google's own picking screen. You tick the photos you want, and they arrive in the album as if you had uploaded them, complete with the review screen, notes and suggestions. Each person connects their own Google account once. One catch: Google removes the location from photos it hands over this way, so those photos only land on the map if a recorded hike or drive covers them, or if someone sets the place by hand.
+  \item \textbf{Everything at once.} For the big transfer, Google's \emph{Takeout} service packages up an entire library. Those files keep everything, including locations, the captions you typed in Google Photos, and which Google album each photo was in. The album reads them, skips photos we already have, and turns each Google album into a collection. The files are large, so they go straight onto the family computer rather than through a phone.
+\end{itemize}
+
+\begin{figure}[H]
+  \centering
+  \begin{tikzpicture}[node distance=6mm]
+    \node[stepbox,text width=3cm,fill=sea!8] (g) {\textbf{Google Photos}\\your existing library};
+    \node[stepbox,text width=3cm,right=1.4cm of g,yshift=1.1cm] (pick) {\textbf{Pick a few}\\Google's picking screen, then the review screen};
+    \node[stepbox,text width=3cm,right=1.4cm of g,yshift=-1.1cm,fill=sand!50] (take) {\textbf{Takeout, once}\\the whole library, locations and captions kept};
+    \node[stepbox,text width=3cm,right=1.4cm of pick,yshift=-1.1cm] (album) {\textbf{The album}\\filed, searchable, on the map};
+    \draw[arrow] (g) -- (pick); \draw[arrow] (g) -- (take);
+    \draw[arrow] (pick.east) -- (album.west); \draw[arrow] (take.east) -- (album.west);
+    \node[mlbl,anchor=north,text width=8cm,align=center] at ($(take.south)+(0,-2mm)$) {no automatic copying in the background: Google does not allow it any more};
+  \end{tikzpicture}
+  \caption{Two ways in from Google Photos: pick a few when you need them, or bring the whole library over once with Takeout.}
+\end{figure}
+
 \subsection{Finding anything again}
 
 Today you find a photo by remembering which trip it was on. The plan adds a proper search box. You will be able to type things like \emph{``lobster rolls on the boat''}, \emph{``Sam and Kate at Christmas''} or \emph{``the red barn''} and get the right photos, even ones nobody captioned by hand.
@@ -496,10 +519,11 @@ Two parts of the plan use software that looks at the pictures. Here is where the
   \item \textbf{Faces.} Is everyone happy with face matching on our own computer, with the opt-out described above, and with children left out until they are adults?
   \item \textbf{How much we have.} A few thousand photos work on the small computer we have. If the shoeboxes add up to a hundred thousand, we need a bigger one.
   \item \textbf{Who does the scanning.} The review screen is designed so one note can cover a whole envelope of prints. Volunteers welcome.
+  \item \textbf{Google Photos.} Should we bring our Google Photos libraries over with Takeout, and would each of you connect your Google account for the pick-a-few button?
 \end{enumerate}
 
 % ================= Timeline =================
-\clearpage
+
 \section{When}
 
 The work is planned in five steps. Each one is useful on its own, so the album keeps working throughout, and we can stop or reorder after any step.
