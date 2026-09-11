@@ -20,6 +20,9 @@ const schema = z.object({
   PHOTO_STORAGE_ROOT: z.string().default("/data/photos"),
   MAX_UPLOAD_BYTES: z.coerce.number().int().positive().default(100 * 1024 * 1024),
   MAX_IMPORT_BYTES: z.coerce.number().int().positive().default(2 * 1024 * 1024 * 1024),
+  // Short clips only: longer videos go to YouTube. Phone video runs 65 to 400 MB per minute, hence the separate byte cap.
+  MAX_CLIP_SECONDS: z.coerce.number().int().positive().default(90),
+  MAX_VIDEO_UPLOAD_BYTES: z.coerce.number().int().positive().default(1024 * 1024 * 1024),
   RUN_WORKER: boolish.transform((v) => v ?? true),
   // External services are reached only through these base URLs so tests can point them at a mock server.
   YOUTUBE_OEMBED_URL: z.string().url().default("https://www.youtube.com/oembed"),

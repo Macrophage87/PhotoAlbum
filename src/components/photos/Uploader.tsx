@@ -39,7 +39,33 @@ function uploadOne(file: File, tripId: string | undefined, onProgress: (p: numbe
   });
 }
 
-export function Uploader({ tripId, onDone }: { tripId?: string; onDone?: (photoIds: string[]) => void }) {
+const VIDEO_EXT = /\.(mp4|m4v|mov|webm)$/i;
+const isVideoFile = (f: File) => f.type.startsWith("video/") || VIDEO_EXT.test(f.name);
+
+/**
+ * Read a clip's duration in the browser so an over-long file is refused before any bytes are sent.
+ * Browsers that cannot decode the file (HEVC on many desktops) report NaN: treat as unknown and let the server decide.
+ */
+function readDuration(file: File): Promise<number | null> {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(file);
+    const v = document.createElement("video");
+    v.preload = "metadata";
+    const done = (d: number | null) => {
+      URL.revokeObjectURL(url);
+      resolve(d);
+    };
+    v.onloadedmetadata = () => done(Number.isFinite(v.duration) ? v.duration : null);
+    v.onerror = () => done(null);
+    v.src = url;
+  });
+}
+
+export function tooLongMessage(durationS: number, limit: number): string {
+  return `This video is ${Math.round(durationS)} seconds long; clips uploaded here are limited to ${limit} seconds. Upload longer videos to YouTube as Unlisted and add the link instead.`;
+}
+
+export function Uploader({ tripId, onDone, maxClipSeconds = 90 }: { tripId?: string; onDone?: (photoIds: string[]) => void; maxClipSeconds?: number }) {
   const [items, setItems] = useState<Item[]>([]);
   const [dragging, setDragging] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -74,16 +100,27 @@ export function Uploader({ tripId, onDone }: { tripId?: string; onDone?: (photoI
   }, [update]);
 
   const addFiles = useCallback(
-    (files: FileList | File[]) => {
-      const fresh: Item[] = Array.from(files)
-        .filter((f) => f.type.startsWith("image/") || /\.(heic|heif)$/i.test(f.name))
-        .map((file) => ({ localId: `${file.name}-${file.size}-${file.lastModified}-${Math.random().toString(36).slice(2)}`, file, progress: 0, status: "queued" }));
-      if (!fresh.length) return;
-      setItems((prev) => [...prev, ...fresh]);
+    async (files: FileList | File[]) => {
+      const accepted = Array.from(files).filter((f) => f.type.startsWith("image/") || /\.(heic|heif)$/i.test(f.name) || isVideoFile(f));
+      const fresh: Item[] = [];
+      const refused: Item[] = [];
+      for (const file of accepted) {
+        const item: Item = { localId: `${file.name}-${file.size}-${file.lastModified}-${Math.random().toString(36).slice(2)}`, file, progress: 0, status: "queued" };
+        if (isVideoFile(file)) {
+          const d = await readDuration(file);
+          if (d !== null && d > maxClipSeconds) {
+            refused.push({ ...item, status: "failed", error: tooLongMessage(d, maxClipSeconds) });
+            continue;
+          }
+        }
+        fresh.push(item);
+      }
+      if (!fresh.length && !refused.length) return;
+      setItems((prev) => [...prev, ...refused, ...fresh]);
       queue.current.push(...fresh);
       pumpRef.current();
     },
-    [],
+    [maxClipSeconds],
   );
 
   // Poll processing status
@@ -135,9 +172,9 @@ export function Uploader({ tripId, onDone }: { tripId?: string; onDone?: (photoI
         }}
         className={`rounded-theme border-2 border-dashed p-10 text-center transition-colors ${dragging ? "border-primary bg-primary/5" : "border-border hover:bg-surface-alt"}`}
       >
-        <input ref={inputRef} id="photo-file-input" type="file" multiple accept="image/*,.heic,.heif" className="sr-only" tabIndex={-1} aria-label="Choose photos" onChange={(e) => e.target.files && addFiles(e.target.files)} />
-        <p className="font-medium">Drop photos here</p>
-        <p className="text-sm text-muted mt-1">JPEG, PNG, HEIC and more. Several at a time is fine.</p>
+        <input ref={inputRef} id="photo-file-input" type="file" multiple accept="image/*,.heic,.heif,video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm" className="sr-only" tabIndex={-1} aria-label="Choose photos" onChange={(e) => e.target.files && addFiles(e.target.files)} />
+        <p className="font-medium">Drop photos or short clips here</p>
+        <p className="text-sm text-muted mt-1">JPEG, PNG, HEIC and more; MP4, MOV or WebM clips up to {maxClipSeconds} seconds (longer videos go on YouTube). Several at a time is fine.</p>
         <Button type="button" variant="secondary" className="mt-4" onClick={() => inputRef.current?.click()}>
           Choose photos
         </Button>

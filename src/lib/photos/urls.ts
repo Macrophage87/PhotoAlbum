@@ -1,4 +1,4 @@
-export type PhotoSize = "thumb" | "medium" | "original";
+export type PhotoSize = "thumb" | "medium" | "original" | "video" | "poster";
 
 /** Versioned URL so caches drop stale copies after edits or visibility changes. */
 export function photoUrl(photo: { id: string; updatedAt: Date | string }, size: PhotoSize): string {

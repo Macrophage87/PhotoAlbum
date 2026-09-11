@@ -44,10 +44,10 @@ export class LocalStorage implements StorageProvider {
     await writeFile(file, buf);
   }
 
-  async getStream(key: string) {
+  async getStream(key: string, range?: { start: number; end: number }) {
     const file = this.localPath(key);
     const s = await stat(file);
-    return { stream: createReadStream(file), size: s.size };
+    return { stream: createReadStream(file, range), size: s.size };
   }
 
   async exists(key: string): Promise<boolean> {

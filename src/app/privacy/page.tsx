@@ -66,7 +66,7 @@ export default async function PrivacyPage() {
               <p><span className="text-muted">To turn off:</span> {f.off}</p>
             </Card>
           ))}
-          <p className="text-sm text-muted">Photos, short clips and location traces are stored on this server only; longer videos live on YouTube as unlisted videos, which means anyone with the YouTube link can watch them regardless of this album&apos;s settings. No AI service or face recognition is connected yet; when one is, it appears here with its own switch.</p>
+          <p className="text-sm text-muted">Photos, short clips (transcoded here with ffmpeg, originals kept) and location traces are stored on this server only; longer videos live on YouTube as unlisted videos, which means anyone with the YouTube link can watch them regardless of this album&apos;s settings. No AI service or face recognition is connected yet; when one is, it appears here with its own switch.</p>
         </section>
 
         <section className="space-y-2 text-sm">

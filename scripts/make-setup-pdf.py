@@ -238,6 +238,7 @@ S += [P("6. Using the album", H1),
         "exactly like a trip. Because a photo is visible to anyone who may open its trip or any collection holding it, putting a private trip's photo into a "
         "public collection publishes that photo; the album warns before it happens."),
       P("Videos", H2),
+      P("Short clips (MP4, MOV or WebM, up to 90 seconds) upload like photos and are converted in the background to a web-playable file with a poster; they play muted when you hover over them in a gallery and with controls in the viewer. A longer file is refused before it uploads."),
       P("Longer videos live on YouTube. Upload the video there as <b>Unlisted</b>, then choose <b>Add a YouTube video</b> on a trip's or collection's Photos tab (or the Upload page) and paste the link. "
         "The album fetches the title and poster once and shows the poster in the gallery; the video plays in place only when someone presses play, through YouTube's privacy-enhanced player. "
         "Unlisted means anyone with the YouTube link can watch, whatever the album's visibility. A weekly check flags videos that were deleted or made private on the Admin page."),

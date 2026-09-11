@@ -254,3 +254,27 @@ test("a YouTube link becomes an embedded video with a stored poster and a click-
   await page.getByRole("button", { name: "Add video" }).click();
   await expect(page.getByText("private, deleted, or cannot be embedded")).toBeVisible();
 });
+
+test("a short clip is transcoded with a poster and streams with range requests; a long one is refused before upload", async ({ context, page }) => {
+  await signIn(context, ADMIN);
+  await page.goto("/upload?trip=yosemite");
+  await chooseFile(page, "long-clip.mp4");
+  await expect(page.getByText(/limited to 90 seconds/)).toBeVisible();
+  await chooseFile(page, "clip.mp4");
+  await expect(page.locator("img[src*='/api/photos/']")).toBeVisible({ timeout: 90_000 });
+  // Headless Chromium cannot decode H.264, so the browser reports an unknown duration and the server is the authority:
+  // the long clip must end FAILED with the message naming the YouTube route, the short one READY.
+  const rows = await withDb((c) => c.query('SELECT id, status, error, "durationS" FROM "Photo" WHERE kind = $1 ORDER BY "createdAt"', ["VIDEO"]));
+  expect(rows.rows.map((r) => r.status).sort()).toEqual(["FAILED", "READY"]);
+  expect(rows.rows.find((r) => r.status === "FAILED")?.error).toContain("limited to 90 seconds");
+  const row = { rows: rows.rows.filter((r) => r.status === "READY") };
+  expect(Number(row.rows[0].durationS)).toBeGreaterThan(1.5);
+  const videoUrl = `/api/photos/${row.rows[0].id}/video`;
+  const partial = await context.request.get(videoUrl, { headers: { range: "bytes=0-99" } });
+  expect(partial.status()).toBe(206);
+  expect(partial.headers()["content-range"]).toMatch(/^bytes 0-99\//);
+  expect((await partial.body()).length).toBe(100);
+  await page.goto("/trips/yosemite/photos");
+  await page.locator("li", { hasText: "0:02" }).first().locator("button").click();
+  await expect(page.getByRole("dialog").locator("video")).toHaveAttribute("src", /\/video\?v=/);
+});

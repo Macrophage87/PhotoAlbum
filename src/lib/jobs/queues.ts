@@ -5,12 +5,14 @@ export const QUEUES = {
   geotagPhotos: "geotag-photos",
   deletePhoto: "delete-photo",
   checkExternalVideos: "check-external-videos",
+  transcodeVideo: "transcode-video",
 } as const;
 
 export type QueueName = (typeof QUEUES)[keyof typeof QUEUES];
 
 /** `renditions` only makes thumbnails (posters of external videos); `full` also reads EXIF, resolves dates and assigns a trip. */
 export type ProcessPhotoJob = { photoId: string; tripId?: string | null; mode?: "full" | "renditions" };
+export type TranscodeVideoJob = { photoId: string; tripId?: string | null };
 export type CheckExternalVideosJob = Record<string, never>;
 export type ImportTrackJob = {
   importKey: string;

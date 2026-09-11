@@ -11,6 +11,8 @@ export function toGridPhoto(p: PhotoCard, badge?: string | null, member = false)
   return {
     uploadedBy: member ? uploaderLabel(p.uploader?.name) : null,
     youtubeId: p.kind === "EXTERNAL_VIDEO" ? p.externalId : null,
+    videoUrl: p.kind === "VIDEO" && p.status === "READY" ? photoUrl(p, "video") : null,
+    durationS: p.durationS,
     title: p.title,
     unavailable: p.externalStatus === "UNAVAILABLE",
     id: p.id,

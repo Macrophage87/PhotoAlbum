@@ -4,7 +4,7 @@ This guide takes a fresh Linux server to a running, HTTPS-secured Family Album t
 
 Rough time: 30 minutes. You will need:
 
-- A server with at least 2 GB RAM and enough disk for your photos (originals are kept, so budget your library size plus about 15 percent).
+- A server with at least 2 GB RAM and enough disk for your photos (originals are kept, so budget your library size plus about 15 percent). Clip transcoding runs one at a time in the background; a 90-second 1080p clip takes 2 to 5 minutes on a 2-vCPU server, 4K HDR footage 5 to 15 minutes.
 - SSH access as root or a sudo user.
 - A domain name you control, for example `album.example.com`.
 - An SMTP account for sign-in emails (Gmail with an app password, Fastmail, Postmark, Mailgun, your ISP). Optional at first; links can be read from the log.
@@ -134,7 +134,7 @@ album.example.com {
 }
 ```
 
-The body limit matters: photos are accepted up to 100 MB and Google Timeline exports can be much larger. Reload Caddy:
+The body limit matters: photos are accepted up to 100 MB, short video clips up to 1 GB (`MAX_VIDEO_UPLOAD_BYTES`), and Google Timeline exports can be much larger. Reload Caddy:
 
 ```bash
 sudo systemctl reload caddy

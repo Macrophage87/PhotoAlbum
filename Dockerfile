@@ -30,7 +30,8 @@ FROM base AS runner
 WORKDIR /app
 # NEXT_MANUAL_SIG_HANDLE lets the app finish in-flight background jobs on SIGTERM before exiting.
 ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 PORT=3000 HOSTNAME=0.0.0.0 NEXT_MANUAL_SIG_HANDLE=1
-RUN apt-get update && apt-get install -y --no-install-recommends tini && rm -rf /var/lib/apt/lists/*
+# ffmpeg (Debian build, with libzimg for HDR tone mapping) transcodes uploaded clips.
+RUN apt-get update && apt-get install -y --no-install-recommends tini ffmpeg && rm -rf /var/lib/apt/lists/*
 COPY --from=build /app/.next/standalone ./
 COPY --from=build /app/.next/static ./.next/static
 COPY --from=build /app/public ./public

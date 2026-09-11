@@ -48,6 +48,7 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
   const shift = shiftPhotoTimezone.bind(null, id);
   const isCover = photo.trip?.coverPhotoId === photo.id;
   const isVideo = photo.kind === "EXTERNAL_VIDEO";
+  const isClip = photo.kind === "VIDEO";
   const updateVideo = updateExternalVideo.bind(null, id);
   const filmedDay = photo.takenAt ? localDayFromOffset(photo.takenAt, photo.tzOffsetMin ?? 0) : "";
 
@@ -67,7 +68,15 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
         </div>
         <div className="grid lg:grid-cols-[1fr_22rem] gap-8">
           <div>
-            {isVideo && photo.externalId ? (
+            {isClip ? (
+              photo.status === "READY" ? (
+                <video src={photoUrl(photo, "video")} poster={photoUrl(photo, "medium")} controls playsInline className="w-full rounded-theme bg-black" />
+              ) : (
+                <div className="aspect-video rounded-theme bg-surface-alt flex items-center justify-center text-muted p-4 text-center">
+                  {photo.status === "FAILED" ? `Processing failed: ${photo.error}` : "Transcoding… a 90-second clip takes a few minutes on a small server."}
+                </div>
+              )
+            ) : isVideo && photo.externalId ? (
               <div className="rounded-theme overflow-hidden bg-black">
                 {photo.status === "READY" ? (
                   <YouTubeEmbed videoId={photo.externalId} posterUrl={photoUrl(photo, "medium")} title={photo.title ?? "Video"} />
@@ -86,6 +95,7 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
               </div>
             )}
             {isVideo && photo.title && <p className="mt-3 text-lg font-medium">{photo.title}</p>}
+            {isClip && photo.durationS && <p className="mt-2 text-sm text-muted">{Math.round(photo.durationS)} second clip{photo.status === "READY" ? " · original kept" : ""}</p>}
             {isVideo && photo.externalStatus === "UNAVAILABLE" && <p className="mt-1 text-sm text-amber-800">This video is no longer available on YouTube (deleted or made private). Replace the link below or delete the item.</p>}
             {photo.caption && <p className="mt-3 text-lg">{photo.caption}</p>}
             {photo.takenAt && <p className="text-sm text-muted mt-1">{formatDateTime(photo.takenAt, photo.trip?.timezone ?? "UTC")}</p>}

@@ -26,6 +26,7 @@ export async function startWorker(): Promise<void> {
   const { geotagPhotos } = await import("./handlers/geotag-photos");
   const { deletePhoto } = await import("./handlers/delete-photo");
   const { checkExternalVideos } = await import("./handlers/check-external-videos");
+  const { transcodeVideo } = await import("./handlers/transcode-video");
 
   await boss.work(QUEUES.processPhoto, { batchSize: 1, localConcurrency: 2, pollingIntervalSeconds: 2 }, async ([job]) =>
     processPhoto(job.data as never),
@@ -39,6 +40,8 @@ export async function startWorker(): Promise<void> {
   await boss.work(QUEUES.deletePhoto, { batchSize: 1, localConcurrency: 2, pollingIntervalSeconds: 5 }, async ([job]) =>
     deletePhoto(job.data as never),
   );
+  // One clip at a time; the handler also takes the heavy-work lock so it never overlaps other heavy jobs.
+  await boss.work(QUEUES.transcodeVideo, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 2 }, async ([job]) => transcodeVideo(job.data as never));
   await boss.work(QUEUES.checkExternalVideos, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 30 }, async () => checkExternalVideos());
   // Weekly re-check of embedded videos (Monday 04:00 UTC); schedule() is idempotent.
   await boss.schedule(QUEUES.checkExternalVideos, "0 4 * * 1", {}, { retryLimit: 1 });

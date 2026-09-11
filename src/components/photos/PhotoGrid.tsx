@@ -2,6 +2,7 @@
 
 import { Lightbox, useLightbox, type LightboxPhoto } from "./Lightbox";
 import { useSelectionContext } from "./selection";
+import { ClipTile } from "./ClipTile";
 
 export type GridPhoto = LightboxPhoto & { thumbUrl: string; status: "PENDING" | "PROCESSING" | "READY" | "FAILED"; badge?: string | null; unavailable?: boolean };
 
@@ -24,8 +25,12 @@ export function PhotoGrid({ photos, showDetailLink = true, emptyMessage = "No ph
             <li key={p.id} className="relative aspect-square rounded-theme overflow-hidden bg-surface-alt border border-border group">
               {p.status === "READY" ? (
                 <button onClick={() => (selectable ? onToggle?.(p.id) : lb.open(readyIndex))} className={`block w-full h-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring ${selectable && selected?.has(p.id) ? "ring-4 ring-primary ring-inset" : ""}`} aria-pressed={selectable ? selected?.has(p.id) : undefined}>
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={p.thumbUrl} alt={p.alt} title={p.uploadedBy ? `Uploaded by ${p.uploadedBy}` : undefined} loading="lazy" className="w-full h-full object-cover transition-transform group-hover:scale-[1.03]" />
+                  {p.videoUrl ? (
+                    <ClipTile src={p.videoUrl} poster={p.thumbUrl} alt={p.alt} durationS={p.durationS ?? null} />
+                  ) : (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={p.thumbUrl} alt={p.alt} title={p.uploadedBy ? `Uploaded by ${p.uploadedBy}` : undefined} loading="lazy" className="w-full h-full object-cover transition-transform group-hover:scale-[1.03]" />
+                  )}
                 </button>
               ) : (
                 <div className="w-full h-full flex items-center justify-center text-xs text-muted p-2 text-center">

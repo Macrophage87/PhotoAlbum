@@ -34,6 +34,8 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Install ffmpeg (clip transcoding in unit and e2e tests)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       - name: Create test databases
         run: |
           psql "$DATABASE_URL" -c 'CREATE DATABASE photoalbum_test' -c 'CREATE DATABASE photoalbum_e2e'

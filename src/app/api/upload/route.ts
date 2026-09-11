@@ -9,7 +9,10 @@ import { QUEUES } from "@/lib/jobs/queues";
 
 export const dynamic = "force-dynamic";
 
-const ALLOWED = new Set(["image/jpeg", "image/png", "image/webp", "image/heic", "image/heif", "image/tiff", "image/avif", "image/gif"]);
+const IMAGE = new Set(["image/jpeg", "image/png", "image/webp", "image/heic", "image/heif", "image/tiff", "image/avif", "image/gif"]);
+// Short clips only; HEVC inside MOV or MP4 from phones is covered by the first two.
+const VIDEO = new Set(["video/mp4", "video/quicktime", "video/webm"]);
+const ALLOWED = new Set([...IMAGE, ...VIDEO]);
 const EXT_BY_MIME: Record<string, string> = {
   "image/jpeg": "jpg",
   "image/png": "png",
@@ -19,8 +22,12 @@ const EXT_BY_MIME: Record<string, string> = {
   "image/tiff": "tif",
   "image/avif": "avif",
   "image/gif": "gif",
+  "video/mp4": "mp4",
+  "video/quicktime": "mov",
+  "video/webm": "webm",
 };
-const EXT_MIME: Record<string, string> = { jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", webp: "image/webp", heic: "image/heic", heif: "image/heif", tif: "image/tiff", tiff: "image/tiff", avif: "image/avif", gif: "image/gif" };
+// Browsers often send an empty or generic type for .mov, so the extension decides then.
+const EXT_MIME: Record<string, string> = { jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", webp: "image/webp", heic: "image/heic", heif: "image/heif", tif: "image/tiff", tiff: "image/tiff", avif: "image/avif", gif: "image/gif", mp4: "video/mp4", m4v: "video/mp4", mov: "video/quicktime", webm: "video/webm" };
 
 const headerSchema = z.object({
   fileName: z.string().min(1).max(255),
@@ -54,10 +61,12 @@ export async function POST(request: Request) {
     if (!trip) return Response.json({ error: "Trip not found" }, { status: 404 });
   }
 
+  const isVideo = VIDEO.has(mime);
   const photo = await db.photo.create({
     data: {
       uploaderId: viewer.user.id,
       tripId: tripId ?? null,
+      kind: isVideo ? "VIDEO" : "PHOTO",
       status: "PENDING",
       originalName: fileName,
       mimeType: mime,
@@ -71,7 +80,7 @@ export async function POST(request: Request) {
   const originalPath = `${storageKey}/original.${EXT_BY_MIME[mime]}`;
 
   try {
-    const { bytes } = await storage().putStream(originalPath, Readable.fromWeb(request.body as never), { maxBytes: env().MAX_UPLOAD_BYTES });
+    const { bytes } = await storage().putStream(originalPath, Readable.fromWeb(request.body as never), { maxBytes: isVideo ? env().MAX_VIDEO_UPLOAD_BYTES : env().MAX_UPLOAD_BYTES });
     await db.photo.update({ where: { id: photo.id }, data: { storageKey, originalPath, sizeBytes: bytes } });
   } catch (err) {
     await db.photo.delete({ where: { id: photo.id } }).catch(() => {});
@@ -81,7 +90,8 @@ export async function POST(request: Request) {
   }
 
   try {
-    await enqueue(QUEUES.processPhoto, { photoId: photo.id, tripId: tripId ?? null });
+    if (isVideo) await enqueue(QUEUES.transcodeVideo, { photoId: photo.id, tripId: tripId ?? null });
+    else await enqueue(QUEUES.processPhoto, { photoId: photo.id, tripId: tripId ?? null });
   } catch (err) {
     console.error("[upload] could not queue processing", err);
     await db.photo.update({ where: { id: photo.id }, data: { status: "FAILED", error: "Could not queue processing; use Re-process on the photo page." } }).catch(() => {});
