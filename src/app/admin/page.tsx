@@ -17,6 +17,7 @@ import { decideIndexing } from "@/app/people/actions";
 import { isMinor } from "@/lib/people/consent";
 import { TakeoutAdmin } from "@/components/admin/TakeoutAdmin";
 import { inboxDir, listArchives } from "@/lib/takeout/inbox";
+import { closeDeadImports } from "@/lib/takeout/import";
 
 export const metadata = { title: "Admin" };
 
@@ -50,6 +51,7 @@ export default async function AdminPage() {
     if (s.kind === "range") return `${s.from} to ${s.to}`;
     return "everything not yet described";
   };
+  await closeDeadImports();
   const [archives, takeoutImports] = await Promise.all([listArchives(), db.takeoutImport.findMany({ orderBy: { startedAt: "desc" }, take: 10 })]);
   const unavailable = await db.photo.findMany({ where: { kind: "EXTERNAL_VIDEO", externalStatus: "UNAVAILABLE" }, orderBy: { externalCheckedAt: "desc" }, select: { id: true, title: true, externalUrl: true, externalCheckedAt: true } });
 

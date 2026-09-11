@@ -2,7 +2,7 @@ import { Readable } from "node:stream";
 import { db } from "@/lib/db";
 import { env } from "@/lib/env";
 import { storage, StorageLimitError } from "@/lib/storage";
-import { accessTokenFor } from "@/lib/google/account";
+import { accessTokenFor, noteAuthFailure } from "@/lib/google/account";
 import { GoogleAuthError } from "@/lib/google/oauth";
 import { deletePickerSession, openDownload, type PickedItem } from "@/lib/google/picker";
 import { EXT_BY_MIME } from "@/lib/media/mime";
@@ -43,7 +43,7 @@ export async function googlePickerImport(job: GooglePickerImportJob): Promise<vo
       const reason = err instanceof StorageLimitError ? `Larger than ${Math.round(err.maxBytes / 1048576)} MB` : err instanceof GoogleAuthError ? (err.needsReconnect ? "Google Photos needs to be connected again." : err.message) : "Download from Google Photos failed.";
       await db.photo.update({ where: { id: row.id }, data: { status: "FAILED", error: reason } }).catch(() => undefined);
       console.error(`[google] download of ${row.originalName} failed: ${err instanceof Error ? err.message : String(err)}`);
-      if (err instanceof GoogleAuthError && err.needsReconnect) {
+      if (await noteAuthFailure(job.userId, err)) {
         await db.photo.updateMany({ where: { id: { in: rows.map((r) => r.id) }, originalPath: "pending", status: "PENDING" }, data: { status: "FAILED", error: "Google Photos needs to be connected again." } });
         break;
       }

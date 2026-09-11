@@ -3,19 +3,20 @@
 import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
 import { requireUserOrThrow } from "@/lib/auth/viewer";
-import { accessTokenFor, disconnectGoogleAccount } from "@/lib/google/account";
-import { GoogleAuthError, googleConfigured } from "@/lib/google/oauth";
-import { createPickerSession, getPickerSession, listPickedItems } from "@/lib/google/picker";
+import { accessTokenFor, disconnectGoogleAccount, noteAuthFailure } from "@/lib/google/account";
+import { googleConfigured } from "@/lib/google/oauth";
+import { createPickerSession, getPickerSession, listPickedItems, PickerSessionGone } from "@/lib/google/picker";
 import { ALLOWED_MIMES, EXT_MIME, VIDEO_MIMES } from "@/lib/media/mime";
 import { enqueue } from "@/lib/jobs/boss";
 import { QUEUES } from "@/lib/jobs/queues";
 
-export type PickerStart = { ok: true; sessionId: string; pickerUri: string; pollIntervalMs: number } | { ok: false; reconnect: boolean; message: string };
+export type PickerStart = { ok: true; sessionId: string; pickerUri: string; pollIntervalMs: number; deadline: number } | { ok: false; reconnect: boolean; message: string };
 export type PickerPoll = { state: "picking" } | { state: "queued"; photoIds: string[]; skipped: number; unsupported: number } | { state: "error"; reconnect: boolean; message: string };
 
-function fail(err: unknown): { ok: false; reconnect: boolean; message: string } {
-  const reconnect = err instanceof GoogleAuthError && err.needsReconnect;
-  return { ok: false, reconnect, message: reconnect ? "Google Photos needs to be connected again." : err instanceof Error ? err.message : "Google Photos is not responding." };
+async function fail(userId: string, err: unknown): Promise<{ ok: false; reconnect: boolean; message: string }> {
+  const reconnect = await noteAuthFailure(userId, err);
+  const message = reconnect ? "Google Photos needs to be connected again." : err instanceof PickerSessionGone ? "That picking session has ended; start again." : err instanceof Error ? err.message : "Google Photos is not responding.";
+  return { ok: false, reconnect, message };
 }
 
 /** Open a Picker session for the member; the returned URL is where they choose photos on Google's own page. */
@@ -25,9 +26,9 @@ export async function startPickerSession(): Promise<PickerStart> {
   try {
     const token = await accessTokenFor(user.id);
     const s = await createPickerSession(token);
-    return { ok: true, sessionId: s.id, pickerUri: s.pickerUri, pollIntervalMs: s.pollIntervalMs };
+    return { ok: true, sessionId: s.id, pickerUri: s.pickerUri, pollIntervalMs: s.pollIntervalMs, deadline: s.deadline };
   } catch (err) {
-    return fail(err);
+    return fail(user.id, err);
   }
 }
 
@@ -40,7 +41,7 @@ export async function pollPickerSession(sessionId: string, tripId: string | null
   try {
     const token = await accessTokenFor(user.id);
     const s = await getPickerSession(token, sessionId);
-    if (!s.mediaItemsSet) return { state: "picking" };
+    if (!s.mediaItemsSet) return s.deadline <= Date.now() ? { state: "error", reconnect: false, message: "That picking session has ended; start again." } : { state: "picking" };
     const items = await listPickedItems(token, sessionId);
     if (tripId && !(await db.trip.findUnique({ where: { id: tripId }, select: { id: true } }))) tripId = null;
     const existing = new Set((await db.photo.findMany({ where: { sourceKind: "GOOGLE_PICKER", sourceId: { in: items.map((i) => i.id) } }, select: { sourceId: true } })).map((r) => r.sourceId));
@@ -65,7 +66,7 @@ export async function pollPickerSession(sessionId: string, tripId: string | null
     if (photoIds.length > 0) await enqueue(QUEUES.googlePickerImport, { userId: user.id, sessionId, photoIds, items: jobItems }, { expireInSeconds: 2 * 3600, retryLimit: 1, retryDelay: 60, singletonKey: `picker:${sessionId}` });
     return { state: "queued", photoIds, skipped, unsupported };
   } catch (err) {
-    const f = fail(err);
+    const f = await fail(user.id, err);
     return { state: "error", reconnect: f.reconnect, message: f.message };
   }
 }

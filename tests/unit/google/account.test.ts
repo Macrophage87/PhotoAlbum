@@ -13,7 +13,7 @@ vi.mock("@/lib/google/oauth", async (orig) => {
   return { ...real, refreshAccessToken: oauth.refresh, revokeToken: async (t: string) => { oauth.revoked.push(t); } };
 });
 
-import { _cacheForTests, accessTokenFor, disconnectGoogleAccount, googleStatus, storeRefreshToken } from "@/lib/google/account";
+import { _cacheForTests, accessTokenFor, disconnectGoogleAccount, googleStatus, noteAuthFailure, storeRefreshToken } from "@/lib/google/account";
 import { GoogleAuthError } from "@/lib/google/oauth";
 
 describe("a member's Google connection", () => {
@@ -48,6 +48,17 @@ describe("a member's Google connection", () => {
     expect((await googleStatus(userId)).needsReconnect).toBe(true);
     await storeRefreshToken(userId, "1//new");
     expect((await googleStatus(userId)).needsReconnect).toBe(false);
+  });
+  it("a 401 anywhere marks the account and drops the cached token; other errors change nothing", async () => {
+    await storeRefreshToken(userId, "1//rt");
+    oauth.refresh.mockResolvedValue({ accessToken: "at", expiresIn: 3600 });
+    expect(await accessTokenFor(userId)).toBe("at");
+    expect(await noteAuthFailure(userId, new Error("timeout"))).toBe(false);
+    expect((await googleStatus(userId)).needsReconnect).toBe(false);
+    expect(await noteAuthFailure(userId, new GoogleAuthError("refused (401)", true))).toBe(true);
+    expect((await googleStatus(userId)).needsReconnect).toBe(true);
+    expect(_cacheForTests.has(userId)).toBe(false);
+    await expect(accessTokenFor(userId)).rejects.toMatchObject({ needsReconnect: true });
   });
   it("goes with the member when their account is deleted", async () => {
     await storeRefreshToken(userId, "1//rt");

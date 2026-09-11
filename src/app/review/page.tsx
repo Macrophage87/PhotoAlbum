@@ -16,6 +16,9 @@ import { SuggestionList } from "@/components/suggest/SuggestionList";
 import { proposalsFor } from "@/lib/people/queries";
 import { ProposalList } from "@/components/people/ProposalList";
 import { YouTubeAddForm } from "@/components/videos/YouTubeAddForm";
+import { GooglePickerButton } from "@/components/google/GooglePickerButton";
+import { googleStatus } from "@/lib/google/account";
+import { googleConfigured } from "@/lib/google/oauth";
 
 export const metadata = { title: "Review uploads" };
 
@@ -24,8 +27,9 @@ export const metadata = { title: "Review uploads" };
  * items to trips and collections, and mark the batch reviewed; the AI draft, suggestions, proposals and dates sit below.
  */
 export default async function ReviewPage({ searchParams }: PageProps<"/review">) {
-  await requireUser("/review");
+  const me = await requireUser("/review");
   const viewer = await getViewer();
+  const google = googleConfigured() ? await googleStatus(me.id) : null;
   const editable = true;
   const sp = await searchParams;
   const ids = typeof sp.ids === "string" ? sp.ids.split(",").filter(Boolean).slice(0, 500) : [];
@@ -59,11 +63,15 @@ export default async function ReviewPage({ searchParams }: PageProps<"/review">)
           </div>
         </div>
         {photos.length === 0 ? (
-          <p className="text-muted">Nothing to review.</p>
+          <div className="space-y-4">
+            <p className="text-muted">Nothing to review.</p>
+            {google && <GooglePickerButton status={google} configured next="/review" />}
+          </div>
         ) : (
           <SelectionProvider trips={trips} collections={collections}>
             <ReviewPanel allIds={allIds} annotation={gates.active ? { quietMinutes: env().ANNOTATION_QUIET_MINUTES, pending: photos.filter((p) => !p.annotatedAt && !optedOut(p)).length } : null} />
             {editable && <YouTubeAddForm defaultDate={new Date().toISOString().slice(0, 10)} />}
+            {google && <GooglePickerButton status={google} configured next="/review" />}
             <PhotoGrid photos={photos.map((p) => toGridPhoto(p, p.reviewedAt ? null : "unreviewed", true))} />
             {(proposals.length > 0 || unnamedFaces > 0) && (
               <section className="space-y-2">

@@ -39,7 +39,7 @@ export async function detectAnimalsJob(job: DetectAnimalsJob): Promise<void> {
     await db.animalDetection.deleteMany({ where: { photoId: photo.id, status: { in: ["DETECTED", "PROPOSED"] } } });
     const kept = await db.$queryRaw<{ id: string; box: number[]; hasEmbedding: boolean }[]>`SELECT id, box, embedding IS NOT NULL AS "hasEmbedding" FROM "AnimalDetection" WHERE "photoId" = ${photo.id}`;
     for (const a of detected) {
-      const same = kept.find((k) => boxIou(k.box as [number, number, number, number], a.box) > 0.5 || (k.box as number[])[2] === 1);
+      const same = kept.find((k) => boxIou(k.box as [number, number, number, number], a.box) > 0.5);
       if (same) {
         if (!same.hasEmbedding) await setAnimalEmbedding(same.id, a.embedding);
         continue;

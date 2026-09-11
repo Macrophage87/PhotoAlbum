@@ -30,9 +30,21 @@ export async function accessTokenFor(userId: string): Promise<string> {
     await db.googleAccount.update({ where: { userId }, data: { lastUsedAt: new Date() } }).catch(() => undefined);
     return t.accessToken;
   } catch (err) {
-    if (err instanceof GoogleAuthError && err.needsReconnect) await db.googleAccount.update({ where: { userId }, data: { needsReconnect: true } }).catch(() => undefined);
+    await noteAuthFailure(userId, err);
     throw err;
   }
+}
+
+/**
+ * Google said the grant is gone (invalid_grant on refresh, or a 401 on a Picker call or download): remember it on
+ * the account so the Upload page offers "Connect again", and drop the cached access token so nothing reuses it.
+ * Any other error is left alone. Returns true when the error was a reconnect case.
+ */
+export async function noteAuthFailure(userId: string, err: unknown): Promise<boolean> {
+  if (!(err instanceof GoogleAuthError) || !err.needsReconnect) return false;
+  cache.delete(userId);
+  await db.googleAccount.updateMany({ where: { userId }, data: { needsReconnect: true } }).catch(() => undefined);
+  return true;
 }
 
 /** Forget the grant here and, best effort, at Google. */

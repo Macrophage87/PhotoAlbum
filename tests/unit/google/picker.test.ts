@@ -11,7 +11,7 @@ vi.hoisted(() => {
 });
 
 import { authorizationUrl, exchangeCode, GoogleAuthError, refreshAccessToken } from "@/lib/google/oauth";
-import { createPickerSession, downloadUrl, listPickedItems, parseDuration } from "@/lib/google/picker";
+import { createPickerSession, downloadUrl, getPickerSession, listPickedItems, parseDuration, PickerSessionGone, sessionDeadline } from "@/lib/google/picker";
 
 const calls: { url: string; init?: RequestInit }[] = [];
 let responses: (() => Response)[] = [];
@@ -72,6 +72,16 @@ describe("picker sessions", () => {
     expect(calls[2].url).toContain("pageToken=p2");
     expect(downloadUrl(items[0])).toBe("https://lh3/a=d");
     expect(downloadUrl(items[1])).toBe("https://lh3/b=dv");
+  });
+  it("bounds polling by timeoutIn or expireTime, whichever comes first", () => {
+    const now = Date.parse("2026-09-11T10:00:00Z");
+    expect(sessionDeadline({ pollingConfig: { timeoutIn: "600s" } }, now)).toBe(now + 600_000);
+    expect(sessionDeadline({ pollingConfig: { timeoutIn: "600s" }, expireTime: "2026-09-11T10:05:00Z" }, now)).toBe(now + 300_000);
+    expect(sessionDeadline({}, now)).toBe(now + 30 * 60_000);
+  });
+  it("reports a vanished session distinctly from other failures", async () => {
+    responses = [json(404, {})];
+    await expect(getPickerSession("tok", "old")).rejects.toBeInstanceOf(PickerSessionGone);
   });
   it("turns a 401 into a reconnect error", async () => {
     responses = [json(401, {})];

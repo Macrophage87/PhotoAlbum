@@ -13,7 +13,7 @@ process.env.PHOTO_STORAGE_ROOT = photoRoot;
 const enqueued = vi.hoisted(() => [] as { queue: string; data: unknown }[]);
 vi.mock("@/lib/jobs/boss", () => ({ enqueue: async (queue: string, data: unknown) => { enqueued.push({ queue, data }); } }));
 
-import { importTakeoutArchive } from "@/lib/takeout/import";
+import { closeDeadImports, importTakeoutArchive } from "@/lib/takeout/import";
 import { copyFileSync } from "node:fs";
 
 describe("importing a Takeout archive", () => {
@@ -57,6 +57,29 @@ describe("importing a Takeout archive", () => {
     expect({ imported: again.imported, skipped: again.skipped }).toEqual({ imported: 0, skipped: 5 });
     expect(await db.photo.count()).toBe(4);
     expect(await db.collection.count()).toBe(1);
+  });
+  it("never files an album into a public or link-shared collection of the same name", async () => {
+    await db.collection.create({ data: { slug: "lake-house", title: "Lake House", themeKey: "default", visibility: "PUBLIC", createdById: userId } });
+    const r = await run();
+    expect(r.collectionsCreated).toBe(1);
+    const all = await db.collection.findMany({ where: { title: "Lake House" }, orderBy: { slug: "asc" }, include: { items: true } });
+    expect(all.map((c) => [c.slug, c.visibility, c.items.length])).toEqual([["lake-house", "PUBLIC", 0], ["lake-house-2", "PRIVATE", 2]]);
+  });
+  it("reuses a private, unshared collection of the same name", async () => {
+    const mine = await db.collection.create({ data: { slug: "lake-house", title: "Lake House", themeKey: "default", visibility: "PRIVATE", createdById: userId } });
+    const r = await run();
+    expect(r.collectionsCreated).toBe(0);
+    expect(await db.collectionItem.count({ where: { collectionId: mine.id } })).toBe(2);
+  });
+  it("closes a run whose worker stopped sending heartbeats", async () => {
+    const old = new Date(Date.now() - 20 * 60_000);
+    const dead = await db.takeoutImport.create({ data: { archiveName: "old.zip", startedById: userId, startedAt: old, heartbeatAt: old } });
+    const live = await db.takeoutImport.create({ data: { archiveName: "live.zip", startedById: userId, heartbeatAt: new Date() } });
+    const fresh = await db.takeoutImport.create({ data: { archiveName: "fresh.zip", startedById: userId } });
+    expect(await closeDeadImports()).toBe(1);
+    expect((await db.takeoutImport.findUniqueOrThrow({ where: { id: dead.id } })).status).toBe("FAILED");
+    expect((await db.takeoutImport.findUniqueOrThrow({ where: { id: live.id } })).status).toBe("RUNNING");
+    expect((await db.takeoutImport.findUniqueOrThrow({ where: { id: fresh.id } })).status).toBe("RUNNING");
   });
   it("refuses names outside the inbox", async () => {
     const row = await db.takeoutImport.create({ data: { archiveName: "../etc/passwd.zip", startedById: userId } });

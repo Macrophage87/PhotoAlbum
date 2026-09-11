@@ -2,6 +2,7 @@ import { cookies } from "next/headers";
 import { getViewer } from "@/lib/auth/viewer";
 import { exchangeCode, googleConfigured, PICKER_SCOPE } from "@/lib/google/oauth";
 import { storeRefreshToken } from "@/lib/google/account";
+import { safeNextPath } from "@/lib/auth/tokens";
 
 export const dynamic = "force-dynamic";
 
@@ -15,7 +16,8 @@ export async function GET(request: Request) {
   const saved = store.get("google_oauth_state")?.value ?? "";
   store.delete({ name: "google_oauth_state", path: "/api/google" });
   const sep = saved.indexOf(":");
-  const [state, next] = sep > 0 ? [saved.slice(0, sep), saved.slice(sep + 1)] : ["", "/upload"];
+  // The cookie value is ours, but it is re-checked anyway so a tampered cookie cannot turn the callback into a redirector.
+  const [state, next] = sep > 0 ? [saved.slice(0, sep), safeNextPath(saved.slice(sep + 1), "/upload")] : ["", "/upload"];
   const back = (q: string) => Response.redirect(new URL(`${next}${next.includes("?") ? "&" : "?"}google=${q}`, request.url), 303);
   if (!state || url.searchParams.get("state") !== state) return back("state");
   if (url.searchParams.get("error")) return back("denied");

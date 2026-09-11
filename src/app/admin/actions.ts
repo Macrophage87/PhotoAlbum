@@ -11,6 +11,7 @@ import { normalizeEmail } from "@/lib/auth/tokens";
 import { enqueue } from "@/lib/jobs/boss";
 import { QUEUES } from "@/lib/jobs/queues";
 import { deleteArchive, safeArchivePath } from "@/lib/takeout/inbox";
+import { closeDeadImports } from "@/lib/takeout/import";
 import { stat } from "node:fs/promises";
 import { disconnectGoogleAccount } from "@/lib/google/account";
 
@@ -70,7 +71,8 @@ export async function startTakeoutImport(archiveName: string): Promise<void> {
   const file = safeArchivePath(archiveName);
   const s = await stat(file).catch(() => null);
   if (!s?.isFile()) throw new Error("That archive is no longer in the inbox.");
-  const running = await db.takeoutImport.count({ where: { status: "RUNNING", startedAt: { gt: new Date(Date.now() - 24 * 3600_000) } } });
+  await closeDeadImports();
+  const running = await db.takeoutImport.count({ where: { status: "RUNNING" } });
   if (running > 0) throw new Error("An import is still running; wait for it to finish.");
   const run = await db.takeoutImport.create({ data: { archiveName, startedById: admin.id } });
   await enqueue(QUEUES.takeoutImport, { importId: run.id }, { expireInSeconds: 12 * 3600, retryLimit: 0 });

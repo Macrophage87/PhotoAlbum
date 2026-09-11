@@ -598,7 +598,7 @@ test("a member connects Google Photos, picks items on Google's page, gets them o
   await expect(picker.getByRole("status")).toContainText("Copying 3 items", { timeout: 30_000 });
   await page.waitForURL(/\/review\?ids=.*google=1/, { timeout: 120_000 });
   await expect(page.getByRole("heading", { name: "Review what you picked" })).toBeVisible();
-  await expect(page.getByText("Google leaves the location out")).toBeVisible();
+  await expect(page.getByText("Add places here, or file these to a trip")).toBeVisible();
   const rows = await withDb((c) => c.query(`SELECT "sourceId", status, kind, "originalName" FROM "Photo" WHERE "sourceKind" = 'GOOGLE_PICKER' ORDER BY "sourceId"`));
   expect(rows.rows).toEqual([
     { sourceId: "gp-item-1", status: "READY", kind: "PHOTO", originalName: "photo-with-gps.jpg" },

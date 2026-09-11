@@ -10,7 +10,7 @@ type Status = { connected: boolean; needsReconnect: boolean };
 type Phase =
   | { kind: "idle" }
   | { kind: "starting" }
-  | { kind: "picking"; sessionId: string; pickerUri: string; pollIntervalMs: number }
+  | { kind: "picking"; sessionId: string; pickerUri: string; pollIntervalMs: number; deadline: number }
   | { kind: "downloading"; photoIds: string[]; done: number; failed: number; skipped: number; unsupported: number }
   | { kind: "error"; message: string; reconnect: boolean };
 
@@ -41,9 +41,15 @@ export function GooglePickerButton({ status, configured, tripId, next }: { statu
     void tick();
   }, [router]);
 
-  const watchSession = useCallback((sessionId: string, pickerUri: string, pollIntervalMs: number) => {
-    setPhase({ kind: "picking", sessionId, pickerUri, pollIntervalMs });
+  const watchSession = useCallback((sessionId: string, pickerUri: string, pollIntervalMs: number, deadline: number) => {
+    setPhase({ kind: "picking", sessionId, pickerUri, pollIntervalMs, deadline });
     const tick = async () => {
+      // Google's session has a lifetime; past it the poll would only ever see "gone", so stop and say so.
+      if (Date.now() > deadline) {
+        try { sessionStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
+        setPhase({ kind: "error", message: "That picking session has ended; start again.", reconnect: false });
+        return;
+      }
       const r = await pollPickerSession(sessionId, tripId ?? null);
       if (r.state === "picking") { timer.current = setTimeout(tick, pollIntervalMs); return; }
       try { sessionStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
@@ -56,10 +62,10 @@ export function GooglePickerButton({ status, configured, tripId, next }: { statu
 
   // Resume a session this tab started before it was discarded.
   useEffect(() => {
-    let saved: { sessionId: string; pickerUri: string; pollIntervalMs: number } | null = null;
+    let saved: { sessionId: string; pickerUri: string; pollIntervalMs: number; deadline?: number } | null = null;
     try { saved = JSON.parse(sessionStorage.getItem(STORAGE_KEY) ?? "null"); } catch { saved = null; }
     // Resuming is scheduled rather than done inline so the first render stays a plain render.
-    const resume = saved?.sessionId && status.connected ? setTimeout(() => watchSession(saved.sessionId, saved.pickerUri, saved.pollIntervalMs || 5000), 0) : null;
+    const resume = saved?.sessionId && status.connected ? setTimeout(() => watchSession(saved.sessionId, saved.pickerUri, saved.pollIntervalMs || 5000, saved.deadline ?? Date.now() + 30 * 60_000), 0) : null;
     return () => { if (resume) clearTimeout(resume); stop(); };
   }, [status.connected, watchSession]);
 
@@ -67,8 +73,8 @@ export function GooglePickerButton({ status, configured, tripId, next }: { statu
     setPhase({ kind: "starting" });
     const r = await startPickerSession();
     if (!r.ok) { setPhase({ kind: "error", message: r.message, reconnect: r.reconnect }); return; }
-    try { sessionStorage.setItem(STORAGE_KEY, JSON.stringify({ sessionId: r.sessionId, pickerUri: r.pickerUri, pollIntervalMs: r.pollIntervalMs })); } catch { /* ignore */ }
-    watchSession(r.sessionId, r.pickerUri, r.pollIntervalMs);
+    try { sessionStorage.setItem(STORAGE_KEY, JSON.stringify({ sessionId: r.sessionId, pickerUri: r.pickerUri, pollIntervalMs: r.pollIntervalMs, deadline: r.deadline })); } catch { /* ignore */ }
+    watchSession(r.sessionId, r.pickerUri, r.pollIntervalMs, r.deadline);
   };
 
   if (!configured) return null;

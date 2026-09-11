@@ -2,7 +2,11 @@ import { env } from "@/lib/env";
 import { GoogleAuthError } from "./oauth";
 
 /** The parts of a Picker session the app uses. */
-export type PickerSession = { id: string; pickerUri: string; mediaItemsSet: boolean; pollIntervalMs: number; expireTime: string | null };
+/** `deadline` is when polling must stop (epoch ms): Google's `expireTime`, or now plus `timeoutIn`, whichever is earlier. */
+export type PickerSession = { id: string; pickerUri: string; mediaItemsSet: boolean; pollIntervalMs: number; expireTime: string | null; deadline: number };
+
+/** Google answers 404 for a session that expired or was deleted. */
+export class PickerSessionGone extends Error {}
 export type PickedItem = { id: string; type: "PHOTO" | "VIDEO" | "TYPE_UNSPECIFIED"; createTime: string | null; baseUrl: string; mimeType: string; filename: string; width: number | null; height: number | null };
 
 /** "5s" or "5.5s" → ms; the API returns protobuf durations. */
@@ -14,12 +18,19 @@ export function parseDuration(s: string | undefined, fallbackMs: number): number
 async function call<T>(accessToken: string, path: string, init: RequestInit = {}): Promise<T> {
   const res = await fetch(new URL(path, `${env().GOOGLE_PHOTOS_API_URL}/`), { ...init, headers: { authorization: `Bearer ${accessToken}`, "content-type": "application/json", ...(init.headers ?? {}) }, signal: AbortSignal.timeout(30_000) });
   if (res.status === 401 || res.status === 403) throw new GoogleAuthError(`Google Photos refused the request (${res.status})`, res.status === 401);
+  if (res.status === 404 && path.startsWith("sessions/")) throw new PickerSessionGone("picking session gone");
   if (!res.ok) throw new Error(`Google Photos request failed (${res.status})`);
   return (await res.json().catch(() => ({}))) as T;
 }
 
 type RawSession = { id: string; pickerUri: string; mediaItemsSet?: boolean; pollingConfig?: { pollInterval?: string; timeoutIn?: string }; expireTime?: string };
-const toSession = (s: RawSession): PickerSession => ({ id: s.id, pickerUri: s.pickerUri, mediaItemsSet: Boolean(s.mediaItemsSet), pollIntervalMs: Math.max(2000, parseDuration(s.pollingConfig?.pollInterval, 5000)), expireTime: s.expireTime ?? null });
+const DEFAULT_TIMEOUT_MS = 30 * 60_000;
+export function sessionDeadline(s: { expireTime?: string; pollingConfig?: { timeoutIn?: string } }, now = Date.now()): number {
+  const byTimeout = now + parseDuration(s.pollingConfig?.timeoutIn, DEFAULT_TIMEOUT_MS);
+  const expires = s.expireTime ? Date.parse(s.expireTime) : NaN;
+  return Number.isFinite(expires) ? Math.min(expires, byTimeout) : byTimeout;
+}
+const toSession = (s: RawSession): PickerSession => ({ id: s.id, pickerUri: s.pickerUri, mediaItemsSet: Boolean(s.mediaItemsSet), pollIntervalMs: Math.max(2000, parseDuration(s.pollingConfig?.pollInterval, 5000)), expireTime: s.expireTime ?? null, deadline: sessionDeadline(s) });
 
 export async function createPickerSession(accessToken: string): Promise<PickerSession> {
   return toSession(await call<RawSession>(accessToken, "sessions", { method: "POST", body: "{}" }));

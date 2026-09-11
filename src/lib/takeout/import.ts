@@ -30,7 +30,11 @@ export async function importTakeoutArchive(importId: string): Promise<void> {
   const report: ImportReport = { albums: [], duplicates: 0, unsupported: 0, failures: [], noSidecar: 0 };
   let imported = 0, skipped = 0, failed = 0, collectionsCreated = 0;
   const work = await mkdtemp(path.join(tmpdir(), "takeout-"));
+  // A live run refreshes heartbeatAt every half minute; closeDeadImports() fails runs whose worker stopped doing so.
+  const heartbeat = () => db.takeoutImport.updateMany({ where: { id: importId, status: "RUNNING" }, data: { heartbeatAt: new Date() } }).catch(() => undefined);
+  const pulse = setInterval(() => void heartbeat(), HEARTBEAT_MS);
   try {
+    await heartbeat();
     const archive = safeArchivePath(run.archiveName);
     // Pass one: names and sidecars.
     const names: string[] = [];
@@ -104,7 +108,9 @@ export async function importTakeoutArchive(importId: string): Promise<void> {
         if (albumTitle) {
           let album = albums.get(albumTitle);
           if (!album) {
-            const existing = await db.collection.findFirst({ where: { title: albumTitle }, select: { id: true } });
+            // Only a private, unshared collection may be reused; a public or link-shared one of the same name would
+            // publish the whole album silently, so the import makes its own private collection instead.
+            const existing = await db.collection.findFirst({ where: { title: albumTitle, visibility: "PRIVATE", shareToken: null }, select: { id: true } });
             if (existing) album = { id: existing.id, created: false, items: 0, title: albumTitle };
             else {
               const slug = await uniqueSlug(albumTitle, async (s) => Boolean(await db.collection.findUnique({ where: { slug: s }, select: { id: true } })));
@@ -135,6 +141,21 @@ export async function importTakeoutArchive(importId: string): Promise<void> {
     await db.takeoutImport.update({ where: { id: importId }, data: { status: "FAILED", imported, skipped, failed, collectionsCreated, report, endedAt: new Date() } }).catch(() => undefined);
     console.error(`[takeout] ${run.archiveName} failed: ${err instanceof Error ? err.message.slice(0, 200) : String(err)}`);
   } finally {
+    clearInterval(pulse);
     await rm(work, { recursive: true, force: true }).catch(() => undefined);
   }
+}
+
+const HEARTBEAT_MS = 30_000;
+/** A run whose heartbeat is this old has lost its worker (a restart mid-import) and is closed as failed. */
+export const DEAD_IMPORT_MS = 10 * 60_000;
+
+/** Close runs left RUNNING by a worker that died; called from the admin page and before a new import starts. */
+export async function closeDeadImports(now = new Date()): Promise<number> {
+  const cutoff = new Date(now.getTime() - DEAD_IMPORT_MS);
+  const r = await db.takeoutImport.updateMany({
+    where: { status: "RUNNING", OR: [{ heartbeatAt: { lt: cutoff } }, { heartbeatAt: null, startedAt: { lt: cutoff } }] },
+    data: { status: "FAILED", endedAt: now, report: { albums: [], duplicates: 0, unsupported: 0, noSidecar: 0, failures: [{ file: "(import)", reason: "The import was interrupted by a restart. Import the archive again; items already in the album are skipped." }] } },
+  });
+  return r.count;
 }
