@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { db } from "@/lib/db";
 import { env } from "@/lib/env";
 import { getViewer, requireAdmin } from "@/lib/auth/viewer";
@@ -16,6 +17,7 @@ export default async function AdminPage() {
     db.invite.findMany({ where: { acceptedAt: null, expiresAt: { gt: new Date() } }, orderBy: { createdAt: "desc" }, include: { invitedBy: { select: { email: true, name: true } } } }),
   ]);
   const smtp = Boolean(env().SMTP_HOST);
+  const unavailable = await db.photo.findMany({ where: { kind: "EXTERNAL_VIDEO", externalStatus: "UNAVAILABLE" }, orderBy: { externalCheckedAt: "desc" }, select: { id: true, title: true, externalUrl: true, externalCheckedAt: true } });
 
   return (
     <AppShell viewer={viewer}>
@@ -51,6 +53,25 @@ export default async function AdminPage() {
             </Card>
           </section>
         )}
+
+        <section>
+          <h2 className="font-display text-xl font-semibold mb-3">Embedded videos no longer available</h2>
+          <p className="text-sm text-muted mb-3">Checked weekly against YouTube. A video that was deleted or made private shows here; open it to replace the link or delete the item.</p>
+          {unavailable.length === 0 ? (
+            <p className="text-sm text-muted">None.</p>
+          ) : (
+            <Card className="divide-y divide-border">
+              {unavailable.map((v) => (
+                <div key={v.id} className="flex items-center justify-between gap-3 p-3 text-sm">
+                  <div className="min-w-0">
+                    <Link href={`/photos/${v.id}`} className="font-medium text-primary hover:underline">{v.title ?? "Untitled video"}</Link>
+                    <div className="text-muted truncate">{v.externalUrl} · checked {v.externalCheckedAt?.toLocaleDateString("en-US")}</div>
+                  </div>
+                </div>
+              ))}
+            </Card>
+          )}
+        </section>
 
         <section>
           <h2 className="font-display text-xl font-semibold mb-3">Members</h2>

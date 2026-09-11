@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Label, Select } from "@/components/ui";
 import { Uploader } from "@/components/photos/Uploader";
+import { YouTubeAddForm } from "@/components/videos/YouTubeAddForm";
 
 export function UploadPanel({ trips, initialTripId }: { trips: { id: string; slug: string; title: string }[]; initialTripId?: string }) {
   const [tripId, setTripId] = useState(initialTripId ?? "");
@@ -20,6 +21,7 @@ export function UploadPanel({ trips, initialTripId }: { trips: { id: string; slu
         </Select>
       </div>
       <Uploader key={tripId} tripId={tripId || undefined} />
+      <YouTubeAddForm tripId={tripId || undefined} defaultDate={new Date().toISOString().slice(0, 10)} />
     </div>
   );
 }

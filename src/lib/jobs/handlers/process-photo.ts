@@ -23,6 +23,14 @@ export async function processPhoto(job: ProcessPhotoJob): Promise<void> {
     const localPath = store.localPath?.(photo.originalPath);
     if (!localPath) throw new Error("process-photo requires a storage driver with local paths");
 
+    // Posters of external videos carry no EXIF worth trusting and their date and trip were set by the member:
+    // make renditions and stop, never touching dates, GPS or trip assignment.
+    if (job.mode === "renditions" || photo.kind === "EXTERNAL_VIDEO") {
+      const { width, height, renditions } = await makeRenditions(localPath, photo.storageKey, (key, buf) => store.putBuffer(key, buf));
+      await db.photo.update({ where: { id: photo.id }, data: { status: "READY", width, height, renditions } });
+      return;
+    }
+
     // 1. Source pixels (HEIC may need conversion)
     let source: string | Buffer = localPath;
     if (isHeic(photo.mimeType, photo.originalName)) {

@@ -14,6 +14,7 @@ A self-hosted photo album for family trips. Photos are grouped into **trips** an
 - **Themes** per trip: palette, fonts, illustrated header art, map marker and motif.
 - **Collections.** Gather photos from any trip, or none, around a theme: a person, a place, a year, the dog. A photo can sit in any number of collections, with its own order, cover and theme.
 - **Sharing.** Each trip and each collection is private, shared by secret link, or public. Public ones appear on the front page for anyone.
+- **Videos on YouTube.** Longer videos are uploaded to YouTube as unlisted and embedded: paste the link, the album keeps the title and poster and plays the video in place through the privacy-enhanced player only when someone presses play. A weekly check flags videos that were deleted or made private.
 - **Photo links.** Mark photos as the same scene, before/after, parts of a panorama, or related.
 - **Family sign-in** by emailed magic link; an admin invites members. No passwords.
 - **Installable.** Add it to a phone's home screen and it opens full-screen like an app, with its own icon.
@@ -133,7 +134,7 @@ See `.env.example` for every variable. The important ones:
 
 ## How the AI features work and what leaves the server
 
-Nothing leaves the server today except sign-in email (through your SMTP provider, or the log when `SMTP_HOST` is empty), map tile requests made by the browser to the configured tile host (which sees only this site's origin), and the Facebook share button, which does nothing until pressed. There is no AI service, face recognition or video host connected. The members-only **Privacy** page in the app lists the same flows with each switch's current state, and every feature that adds an outbound flow will extend both this section and that page, naming what is sent, which variable switches it off, and what is retained for how long.
+When a member embeds a YouTube video the server fetches its title and poster once (oEmbed, no API key) and re-checks weekly that it still exists; a viewer's browser contacts YouTube only when they press play. Set `YOUTUBE_API_KEY` to also record durations. Otherwise nothing leaves the server except sign-in email (through your SMTP provider, or the log when `SMTP_HOST` is empty), map tile requests made by the browser to the configured tile host (which sees only this site's origin), and the Facebook share button, which does nothing until pressed. There is no AI service, face recognition or video host connected. The members-only **Privacy** page in the app lists the same flows with each switch's current state, and every feature that adds an outbound flow will extend both this section and that page, naming what is sent, which variable switches it off, and what is retained for how long.
 
 ## Privacy notes
 

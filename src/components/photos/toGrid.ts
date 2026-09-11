@@ -10,6 +10,9 @@ export function uploaderLabel(name: string | null | undefined): string {
 export function toGridPhoto(p: PhotoCard, badge?: string | null, member = false): GridPhoto {
   return {
     uploadedBy: member ? uploaderLabel(p.uploader?.name) : null,
+    youtubeId: p.kind === "EXTERNAL_VIDEO" ? p.externalId : null,
+    title: p.title,
+    unavailable: p.externalStatus === "UNAVAILABLE",
     id: p.id,
     status: p.status,
     thumbUrl: photoUrl(p, "thumb"),
@@ -17,7 +20,7 @@ export function toGridPhoto(p: PhotoCard, badge?: string | null, member = false)
     width: p.width,
     height: p.height,
     caption: p.caption,
-    alt: p.caption ?? p.originalName,
+    alt: p.caption ?? p.title ?? p.originalName,
     badge: badge ?? (p.gpsSource === "TRACK" ? "from track" : null),
   };
 }

@@ -2,8 +2,9 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { YouTubeEmbed } from "@/components/videos/YouTubeEmbed";
 
-export type LightboxPhoto = { id: string; mediumUrl: string; width: number | null; height: number | null; caption: string | null; alt: string; /** Shown to members only; never set for anonymous viewers. */ uploadedBy?: string | null };
+export type LightboxPhoto = { id: string; mediumUrl: string; width: number | null; height: number | null; caption: string | null; alt: string; /** Shown to members only; never set for anonymous viewers. */ uploadedBy?: string | null; /** Set for embedded videos: the lightbox shows the click-to-play facade instead of the image. */ youtubeId?: string | null; title?: string | null };
 
 export function Lightbox({ photos, index, onClose, onNavigate, showDetailLink = true }: { photos: LightboxPhoto[]; index: number; onClose: () => void; onNavigate: (i: number) => void; showDetailLink?: boolean }) {
   const photo = photos[index];
@@ -70,8 +71,14 @@ export function Lightbox({ photos, index, onClose, onNavigate, showDetailLink = 
             ‹
           </button>
         )}
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={photo.mediumUrl} alt={photo.alt} className="max-h-full max-w-full object-contain select-none" onClick={(e) => e.stopPropagation()} />
+        {photo.youtubeId ? (
+          <div className="w-full max-w-5xl" onClick={(e) => e.stopPropagation()}>
+            <YouTubeEmbed videoId={photo.youtubeId} posterUrl={photo.mediumUrl} title={photo.title ?? photo.alt} />
+          </div>
+        ) : (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={photo.mediumUrl} alt={photo.alt} className="max-h-full max-w-full object-contain select-none" onClick={(e) => e.stopPropagation()} />
+        )}
         {photos.length > 1 && (
           <button onClick={(e) => { e.stopPropagation(); next(); }} className="absolute right-2 top-1/2 -translate-y-1/2 text-white/80 hover:text-white text-3xl p-3" aria-label="Next">
             ›

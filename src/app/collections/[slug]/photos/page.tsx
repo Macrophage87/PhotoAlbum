@@ -3,6 +3,7 @@ import { listCollectionItems } from "@/lib/collections/queries";
 import { CollectionGallery } from "@/components/collections/CollectionGallery";
 import { toGridPhoto } from "@/components/photos/toGrid";
 import { db } from "@/lib/db";
+import { YouTubeAddForm } from "@/components/videos/YouTubeAddForm";
 
 export default async function CollectionPhotosPage({ params }: PageProps<"/collections/[slug]/photos">) {
   const { slug } = await params;
@@ -18,6 +19,7 @@ export default async function CollectionPhotosPage({ params }: PageProps<"/colle
       <h2 className="font-display text-xl font-semibold">
         {shown.length} photo{shown.length === 1 ? "" : "s"}
       </h2>
+      {editable && <YouTubeAddForm collectionId={collection.id} defaultDate={new Date().toISOString().slice(0, 10)} />}
       <CollectionGallery collectionId={collection.id} slug={slug} photos={shown.map((p) => ({ ...toGridPhoto(p, null, editable), itemId: p.itemId }))} trips={trips} collections={collections} editable={editable} emptyMessage={editable ? "Nothing here yet. Open a photo and tick this collection, or select photos in any gallery." : "Nothing here yet."} />
     </div>
   );

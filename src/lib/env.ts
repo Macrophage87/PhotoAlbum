@@ -21,6 +21,11 @@ const schema = z.object({
   MAX_UPLOAD_BYTES: z.coerce.number().int().positive().default(100 * 1024 * 1024),
   MAX_IMPORT_BYTES: z.coerce.number().int().positive().default(2 * 1024 * 1024 * 1024),
   RUN_WORKER: boolish.transform((v) => v ?? true),
+  // External services are reached only through these base URLs so tests can point them at a mock server.
+  YOUTUBE_OEMBED_URL: z.string().url().default("https://www.youtube.com/oembed"),
+  YOUTUBE_THUMBNAIL_URL: z.string().url().default("https://i.ytimg.com/vi"),
+  YOUTUBE_DATA_API_URL: z.string().url().default("https://www.googleapis.com/youtube/v3"),
+  YOUTUBE_API_KEY: z.string().optional().transform((v) => (v ? v : undefined)),
 });
 
 export type Env = z.infer<typeof schema>;

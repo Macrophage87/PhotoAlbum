@@ -4,6 +4,8 @@ import { TripGallery } from "@/components/photos/TripGallery";
 import { db } from "@/lib/db";
 import { toGridPhoto, uploaderLabel } from "@/components/photos/toGrid";
 import { Button, ButtonLink } from "@/components/ui";
+import { YouTubeAddForm } from "@/components/videos/YouTubeAddForm";
+import { dateColumnToDay } from "@/lib/time/local-day";
 
 export default async function TripPhotosPage({ params, searchParams }: PageProps<"/trips/[slug]/photos">) {
   const { slug } = await params;
@@ -40,6 +42,7 @@ export default async function TripPhotosPage({ params, searchParams }: PageProps
           {editable && <ButtonLink href={`/upload?trip=${trip.slug}`} size="sm">Upload photos</ButtonLink>}
         </div>
       </div>
+      {editable && <YouTubeAddForm tripId={trip.id} defaultDate={dateColumnToDay(trip.startDate)} />}
       <TripGallery photos={photos.map((p) => toGridPhoto(p, null, editable))} activities={activities} trips={trips} collections={collections} editable={editable} emptyMessage={editable ? "No photos yet. Upload some to get started." : "No photos yet."} />
     </div>
   );

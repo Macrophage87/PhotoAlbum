@@ -16,6 +16,10 @@ import { linkPhotos, unlinkPhotos } from "@/app/photos/link-actions";
 import { collectionsForPhoto } from "@/lib/collections/queries";
 import { CollectionPicker } from "@/components/collections/CollectionPicker";
 import { uploaderLabel } from "@/components/photos/toGrid";
+import { YouTubeEmbed } from "@/components/videos/YouTubeEmbed";
+import { updateExternalVideo } from "@/app/videos/actions";
+import { Input } from "@/components/ui";
+import { localDayFromOffset } from "@/lib/time/local-day";
 
 export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
   const { id } = await params;
@@ -43,6 +47,9 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
   const cover = setAsCover.bind(null, id);
   const shift = shiftPhotoTimezone.bind(null, id);
   const isCover = photo.trip?.coverPhotoId === photo.id;
+  const isVideo = photo.kind === "EXTERNAL_VIDEO";
+  const updateVideo = updateExternalVideo.bind(null, id);
+  const filmedDay = photo.takenAt ? localDayFromOffset(photo.takenAt, photo.tzOffsetMin ?? 0) : "";
 
   return (
     <AppShell viewer={viewer}>
@@ -60,7 +67,15 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
         </div>
         <div className="grid lg:grid-cols-[1fr_22rem] gap-8">
           <div>
-            {photo.status === "READY" ? (
+            {isVideo && photo.externalId ? (
+              <div className="rounded-theme overflow-hidden bg-black">
+                {photo.status === "READY" ? (
+                  <YouTubeEmbed videoId={photo.externalId} posterUrl={photoUrl(photo, "medium")} title={photo.title ?? "Video"} />
+                ) : (
+                  <div className="aspect-video flex items-center justify-center text-white/70">Fetching poster…</div>
+                )}
+              </div>
+            ) : photo.status === "READY" ? (
               <a href={photoUrl(photo, "original")} target="_blank" rel="noreferrer" title="Open original">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img src={photoUrl(photo, "medium")} alt={photo.caption ?? photo.originalName} className="w-full rounded-theme bg-surface-alt" />
@@ -70,11 +85,33 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
                 {photo.status === "FAILED" ? `Processing failed: ${photo.error}` : "Processing…"}
               </div>
             )}
+            {isVideo && photo.title && <p className="mt-3 text-lg font-medium">{photo.title}</p>}
+            {isVideo && photo.externalStatus === "UNAVAILABLE" && <p className="mt-1 text-sm text-amber-800">This video is no longer available on YouTube (deleted or made private). Replace the link below or delete the item.</p>}
             {photo.caption && <p className="mt-3 text-lg">{photo.caption}</p>}
             {photo.takenAt && <p className="text-sm text-muted mt-1">{formatDateTime(photo.takenAt, photo.trip?.timezone ?? "UTC")}</p>}
           </div>
 
           <div className="space-y-6">
+            {isVideo && (
+              <Card className="p-4">
+                <form action={updateVideo} className="space-y-4">
+                  <div>
+                    <Label htmlFor="title">Title</Label>
+                    <Input id="title" name="title" required defaultValue={photo.title ?? ""} />
+                  </div>
+                  <div>
+                    <Label htmlFor="url">YouTube link</Label>
+                    <Input id="url" name="url" required defaultValue={photo.externalUrl ?? ""} />
+                    <p className="text-xs text-muted mt-1">Pasting a different video replaces the poster. Deleting this item never touches YouTube.</p>
+                  </div>
+                  <div>
+                    <Label htmlFor="date">Date filmed</Label>
+                    <Input id="date" name="date" type="date" required defaultValue={filmedDay} />
+                  </div>
+                  <Button type="submit">Save video</Button>
+                </form>
+              </Card>
+            )}
             <Card className="p-4">
               <form action={update} className="space-y-4">
                 <div>

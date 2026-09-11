@@ -17,6 +17,11 @@ export const photoCardSelect = {
   originalName: true,
   updatedAt: true,
   uploader: { select: { name: true } },
+  kind: true,
+  externalId: true,
+  title: true,
+  durationS: true,
+  externalStatus: true,
 } satisfies Prisma.PhotoSelect;
 
 export type PhotoCard = Prisma.PhotoGetPayload<{ select: typeof photoCardSelect }>;

@@ -3,7 +3,7 @@
 import { Lightbox, useLightbox, type LightboxPhoto } from "./Lightbox";
 import { useSelectionContext } from "./selection";
 
-export type GridPhoto = LightboxPhoto & { thumbUrl: string; status: "PENDING" | "PROCESSING" | "READY" | "FAILED"; badge?: string | null };
+export type GridPhoto = LightboxPhoto & { thumbUrl: string; status: "PENDING" | "PROCESSING" | "READY" | "FAILED"; badge?: string | null; unavailable?: boolean };
 
 export function PhotoGrid({ photos, showDetailLink = true, emptyMessage = "No photos yet.", selectable: selectableProp, selected: selectedProp, onToggle: onToggleProp }: { photos: GridPhoto[]; showDetailLink?: boolean; emptyMessage?: string; selectable?: boolean; selected?: Set<string>; onToggle?: (id: string) => void }) {
   const lb = useLightbox();
@@ -33,6 +33,11 @@ export function PhotoGrid({ photos, showDetailLink = true, emptyMessage = "No ph
                 </div>
               )}
               {p.badge && <span className="absolute top-1 left-1 text-[10px] bg-black/60 text-white rounded px-1.5 py-0.5">{p.badge}</span>}
+              {p.youtubeId && (
+                <span className="absolute bottom-1 left-1 text-[10px] bg-black/60 text-white rounded px-1.5 py-0.5 pointer-events-none" aria-hidden="true">
+                  ▶ {p.unavailable ? "no longer available" : "video"}
+                </span>
+              )}
               {selectable && (
                 <span className={`absolute top-1 right-1 w-5 h-5 rounded-full border-2 border-white flex items-center justify-center text-[10px] ${selected?.has(p.id) ? "bg-primary text-primary-fg" : "bg-black/40"}`} aria-hidden="true">
                   {selected?.has(p.id) ? "✓" : ""}

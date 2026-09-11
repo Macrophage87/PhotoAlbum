@@ -1,10 +1,16 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import path from "node:path";
 import { createTrip, resetDb, setVisibility, signIn, withDb } from "./helpers";
 
 // Must match ADMIN_EMAIL as set by scripts/e2e-server.mjs: only that address may bootstrap the admin account.
 const ADMIN = process.env.E2E_ADMIN_EMAIL ?? "e2e-admin@example.com";
 const fixture = (n: string) => path.join(__dirname, "../fixtures", n);
+
+/** Pick a file only once the page has hydrated, otherwise React's change handler is not attached yet and nothing uploads. */
+async function chooseFile(page: Page, name: string) {
+  await page.waitForLoadState("networkidle");
+  await page.setInputFiles('input[type="file"]', fixture(name));
+}
 
 test.describe.configure({ mode: "serial" });
 
@@ -31,7 +37,7 @@ test("uploading a photo processes it and assigns it to the trip by date", async 
   await signIn(context, ADMIN);
   await createTrip({ slug: "acadia", title: "Acadia", start: "2025-08-10", end: "2025-08-16", ownerEmail: ADMIN });
   await page.goto("/upload");
-  await page.setInputFiles('input[type="file"]', fixture("photo-with-gps.jpg"));
+  await chooseFile(page, "photo-with-gps.jpg");
   await expect(page.locator("img[src*='/api/photos/']")).toBeVisible({ timeout: 30_000 });
   await expect(page.getByText("1 of 1 uploaded.")).toBeVisible();
   await page.goto("/trips/acadia/photos");
@@ -44,7 +50,7 @@ test("uploading a photo processes it and assigns it to the trip by date", async 
 test("importing a GPX file creates an activity with stats and a track on the map", async ({ context, page }) => {
   await signIn(context, ADMIN);
   await page.goto("/trips/acadia/import");
-  await page.setInputFiles('input[type="file"]', fixture("sample-hr.gpx"));
+  await chooseFile(page, "sample-hr.gpx");
   await expect(page.getByRole("link", { name: "Ocean Path loop" })).toBeVisible({ timeout: 60_000 });
   await page.getByRole("link", { name: "Ocean Path loop" }).click();
   await expect(page.getByText("Distance")).toBeVisible();
@@ -112,7 +118,7 @@ test("a collection gathers photos from two trips and can be shared by link", asy
   await signIn(context, ADMIN);
   await createTrip({ slug: "yosemite", title: "Yosemite", start: "2025-09-01", end: "2025-09-05", ownerEmail: ADMIN });
   await page.goto("/upload?trip=yosemite");
-  await page.setInputFiles('input[type="file"]', fixture("photo-no-gps.jpg"));
+  await chooseFile(page, "photo-no-gps.jpg");
   await expect(page.locator("img[src*='/api/photos/']")).toBeVisible({ timeout: 30_000 });
   await expect(page.getByText("1 of 1 uploaded.")).toBeVisible();
 
@@ -181,7 +187,7 @@ test("exposure warnings fire when widening and when lowering, and bulk actions a
 
   // A photo with no date lands nowhere; attach it from the unassigned gallery, with a warning when the target is public.
   await page.goto("/upload");
-  await page.setInputFiles('input[type="file"]', fixture("photo-no-exif.jpg"));
+  await chooseFile(page, "photo-no-exif.jpg");
   await expect(page.locator("img[src*='/api/photos/']")).toBeVisible({ timeout: 30_000 });
   await page.goto("/photos");
   await expect(page.getByRole("heading", { name: "Photos without a trip" })).toBeVisible();
@@ -213,4 +219,38 @@ test("exposure warnings fire when widening and when lowering, and bulk actions a
   await expect(anonPage.getByRole("dialog")).toBeVisible();
   await expect(anonPage.getByText(/Uploaded by/)).toHaveCount(0);
   await anon.close();
+});
+
+test("a YouTube link becomes an embedded video with a stored poster and a click-to-play facade", async ({ context, page }) => {
+  await signIn(context, ADMIN);
+  await page.goto("/trips/yosemite/photos");
+  await page.getByRole("button", { name: "Add a YouTube video" }).click();
+  await page.getByLabel("YouTube link").fill("https://youtu.be/dQw4w9WgXcQ?si=abc");
+  await page.getByLabel("Date it was filmed").fill("2025-09-03");
+  await page.getByRole("button", { name: "Add video" }).click();
+  await expect(page.getByRole("status")).toContainText("Added Mock video dQw4w9WgXcQ");
+  // The poster is made in the background and the gallery is server-rendered, so reload until it is there.
+  const tile = page.locator("li", { hasText: "video" }).first();
+  await expect
+    .poll(async () => {
+      await page.reload();
+      return tile.locator("img[src*='/api/photos/']").count();
+    }, { timeout: 30_000, intervals: [1000] })
+    .toBe(1);
+  await expect(page.getByRole("heading", { name: /3 photos/ })).toBeVisible();
+  await tile.locator("button").click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByText("Playing sends your request to YouTube")).toBeVisible();
+  await expect(dialog.locator("iframe")).toHaveCount(0);
+  await dialog.getByRole("button", { name: /^Play / }).click();
+  await expect(dialog.locator("iframe")).toHaveAttribute("src", /youtube-nocookie\.com\/embed\/dQw4w9WgXcQ/);
+  const csp = (await context.request.get("/trips/yosemite/photos")).headers()["content-security-policy"];
+  expect(csp).toContain("frame-src https://www.youtube-nocookie.com");
+
+  // A link to a video that is gone is refused before anything is stored.
+  await page.goto("/upload");
+  await page.getByRole("button", { name: "Add a YouTube video" }).click();
+  await page.getByLabel("YouTube link").fill("https://www.youtube.com/watch?v=gonegonegon");
+  await page.getByRole("button", { name: "Add video" }).click();
+  await expect(page.getByText("private, deleted, or cannot be embedded")).toBeVisible();
 });

@@ -58,6 +58,27 @@ enum TakenAtSource {
   MANUAL
 }
 
+/// What a media row is: an uploaded photo, an uploaded short clip, or a video hosted elsewhere (YouTube) and embedded.
+enum MediaKind {
+  PHOTO
+  VIDEO
+  EXTERNAL_VIDEO
+}
+
+enum MediaSourceKind {
+  UPLOAD
+  YOUTUBE
+}
+
+enum ExternalProvider {
+  YOUTUBE
+}
+
+enum ExternalStatus {
+  AVAILABLE
+  UNAVAILABLE
+}
+
 enum PhotoRelation {
   SAME_SCENE
   BEFORE_AFTER
@@ -190,6 +211,15 @@ model Photo {
   exif          Json?
   caption       String?
   renditions    Json?
+  kind          MediaKind         @default(PHOTO)
+  sourceKind    MediaSourceKind   @default(UPLOAD)
+  provider      ExternalProvider?
+  externalId    String?
+  externalUrl   String?
+  title         String?
+  externalStatus    ExternalStatus?
+  externalCheckedAt DateTime?
+  durationS     Float?
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
 
@@ -204,6 +234,8 @@ model Photo {
   @@index([activityId])
   @@index([lat, lng])
   @@index([status])
+  @@index([kind])
+  @@index([provider, externalId])
 }
 
 /// A named, themed, shareable set of media that is independent of trips. A photo may sit in any number of collections.

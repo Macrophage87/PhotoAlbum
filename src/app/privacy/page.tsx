@@ -31,6 +31,13 @@ export default async function PrivacyPage() {
       enabled: true,
     },
     {
+      name: "YouTube (embedded videos)",
+      what: "When a member adds a video, the server asks YouTube for its title and poster and stores the poster here, so galleries never call YouTube. When a viewer presses play, their browser loads the player from youtube-nocookie.com and YouTube sees that request (this site's origin, not the page or any share link). A weekly server-side check asks YouTube whether each video still exists.",
+      when: "Adding a video, pressing play, and the weekly check.",
+      off: "Do not add YouTube videos; nothing is contacted for photos.",
+      enabled: true,
+    },
+    {
       name: "Facebook share button",
       what: "Nothing until pressed. Pressing it opens Facebook in a new tab with the trip or collection address; Facebook then fetches that public page or secret link to build a preview.",
       when: "Only when a member or visitor presses the button on a public or link-shared trip or collection.",
@@ -59,7 +66,7 @@ export default async function PrivacyPage() {
               <p><span className="text-muted">To turn off:</span> {f.off}</p>
             </Card>
           ))}
-          <p className="text-sm text-muted">Photos, videos and location traces are stored on this server only. No AI service, face recognition or video host is connected yet; when one is, it appears here with its own switch.</p>
+          <p className="text-sm text-muted">Photos, short clips and location traces are stored on this server only; longer videos live on YouTube as unlisted videos, which means anyone with the YouTube link can watch them regardless of this album&apos;s settings. No AI service or face recognition is connected yet; when one is, it appears here with its own switch.</p>
         </section>
 
         <section className="space-y-2 text-sm">

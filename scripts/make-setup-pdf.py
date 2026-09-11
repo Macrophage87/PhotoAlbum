@@ -237,6 +237,10 @@ S += [P("6. Using the album", H1),
         "Each collection has its own cover, theme, order (drag to arrange, or sort by date), timeline and map, and is private, shared by secret link, or public, "
         "exactly like a trip. Because a photo is visible to anyone who may open its trip or any collection holding it, putting a private trip's photo into a "
         "public collection publishes that photo; the album warns before it happens."),
+      P("Videos", H2),
+      P("Longer videos live on YouTube. Upload the video there as <b>Unlisted</b>, then choose <b>Add a YouTube video</b> on a trip's or collection's Photos tab (or the Upload page) and paste the link. "
+        "The album fetches the title and poster once and shows the poster in the gallery; the video plays in place only when someone presses play, through YouTube's privacy-enhanced player. "
+        "Unlisted means anyone with the YouTube link can watch, whatever the album's visibility. A weekly check flags videos that were deleted or made private on the Admin page."),
       P("Activities", H2),
       P("An activity is anything you did within a trip: hike, bike, run, kayak, drive, boat, sightseeing, food, or other. Create one by hand "
         "from the trip's Activities tab with a title, type and time window, or let a FIT or GPX import create it. Photos whose time falls inside "
