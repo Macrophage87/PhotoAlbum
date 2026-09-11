@@ -45,7 +45,8 @@ export default async function ReviewPage({ searchParams }: PageProps<"/review">)
       <Container className="py-10 space-y-5">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
-            <h1 className="font-display text-3xl font-semibold">{batch ? "Review this upload" : "Unreviewed"}</h1>
+            <h1 className="font-display text-3xl font-semibold">{batch ? (sp.google === "1" ? "Review what you picked" : "Review this upload") : "Unreviewed"}</h1>
+            {sp.google === "1" && <p className="text-sm rounded-theme bg-amber-50 border border-amber-200 text-amber-900 p-3 mt-2">Google leaves the location out of what it hands over. Add places here, or file these to a trip so they can be placed from its tracks.</p>}
             <p className="text-muted mt-1">
               {batch ? `${photos.length} item${photos.length === 1 ? "" : "s"} just uploaded. Add a note, file them, then mark them reviewed.` : `${unreviewedCount} item${unreviewedCount === 1 ? "" : "s"} nobody has reviewed yet.`}
               {batch && unreviewedCount > photos.length && (

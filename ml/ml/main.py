@@ -76,6 +76,16 @@ async def faces(file: UploadFile = File(...)) -> dict:
     return {"faces": [{"box": list(f.box), "confidence": f.confidence, "embedding": f.embedding, "age": f.age} for f in found], "dim": FACE_DIM}
 
 
+@app.post("/animals", dependencies=[Depends(require_token)])
+async def animals(file: UploadFile = File(...)) -> dict:
+    """Animals with species and a crop embedding. Needs the detector weights from ml-init (503 until then)."""
+    data = await read_image(file)
+    if not models.detector_present():
+        raise HTTPException(status_code=503, detail="animal detector weights missing; run ml-init again")
+    found = await run_in_threadpool(_locked, models.animals, data)
+    return {"animals": [{"box": list(a.box), "species": a.species, "confidence": a.confidence, "embedding": a.embedding} for a in found], "dim": IMAGE_DIM}
+
+
 def _unloader() -> None:
     import time
 

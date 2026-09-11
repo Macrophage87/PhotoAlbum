@@ -3,7 +3,7 @@ import { createPet, updatePet } from "@/app/people/actions";
 
 const SPECIES = [["DOG", "Dog"], ["CAT", "Cat"], ["CHICKEN", "Chicken"], ["HORSE", "Horse"], ["OTHER", "Other"]] as const;
 
-type Pet = { id: string; name: string; species: string | null; livedFrom: Date | null; livedTo: Date | null; isFlock: boolean };
+type Pet = { id: string; name: string; species: string | null; livedFrom: Date | null; livedTo: Date | null; isFlock: boolean; descriptors?: string | null };
 const day = (d: Date | null) => (d ? d.toISOString().slice(0, 10) : "");
 
 /** Create or edit a pet: name, species, lifespan, or a flock record for a species nobody tells apart. */
@@ -30,6 +30,10 @@ export function PetForm({ pet }: { pet?: Pet }) {
       <div>
         <Label htmlFor="pet-to">Until</Label>
         <Input id="pet-to" name="livedTo" type="date" defaultValue={day(pet?.livedTo ?? null)} className="h-9" />
+      </div>
+      <div className="sm:col-span-2">
+        <Label htmlFor="pet-descriptors">Looks like (optional)</Label>
+        <Input id="pet-descriptors" name="descriptors" defaultValue={pet?.descriptors ?? ""} placeholder="golden retriever, floppy ears" className="h-9" />
       </div>
       <label className="flex items-center gap-2 sm:col-span-2">
         <input type="checkbox" name="isFlock" defaultChecked={pet?.isFlock ?? false} />

@@ -3,6 +3,9 @@ import { db } from "@/lib/db";
 /** Empty every table in dependency order so tests can start from nothing. */
 export async function resetTestDb(): Promise<void> {
   await db.mediaSimilarity.deleteMany();
+  await db.animalDetection.deleteMany();
+  await db.takeoutImport.deleteMany();
+  await db.googleAccount.deleteMany();
   await db.face.deleteMany();
   await db.faceCluster.deleteMany();
   await db.person.deleteMany();

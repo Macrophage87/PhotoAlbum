@@ -53,6 +53,15 @@ export async function detectFaces(bytes: Buffer, mediaType = "image/webp"): Prom
   return r.faces;
 }
 
+export type AnimalSpecies = "DOG" | "CAT" | "CHICKEN" | "HORSE" | "OTHER";
+export type AnimalResult = { box: [number, number, number, number]; species: AnimalSpecies; confidence: number; embedding: number[] };
+
+/** Animals with a species and a 512-d crop embedding. A 503 means the detector weights are missing on the sidecar. */
+export async function detectAnimals(bytes: Buffer, mediaType = "image/webp"): Promise<AnimalResult[]> {
+  const r = await call<{ animals: AnimalResult[] }>("/animals", { method: "POST", body: imageForm(bytes, mediaType) }, 90_000);
+  return r.animals;
+}
+
 export async function mlHealth(): Promise<{ ok: boolean; models: string } | null> {
   if (!mlConfigured()) return null;
   try {

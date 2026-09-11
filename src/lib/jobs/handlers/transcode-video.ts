@@ -1,4 +1,5 @@
 import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { sha256File } from "@/lib/media/hash";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { db } from "@/lib/db";
@@ -12,6 +13,7 @@ import { withHeavyLock } from "../heavy-lock";
 import type { TranscodeVideoJob } from "../queues";
 import { enqueueEmbedding } from "./embed-photo";
 import { enqueueFaceDetection } from "./detect-faces";
+import { enqueueAnimalDetection } from "./detect-animals";
 
 export type VideoRenditions = { mp4: { key: string; w: number; h: number; bytes: number }; poster: { key: string } };
 
@@ -70,10 +72,12 @@ export async function transcodeVideo(job: TranscodeVideoJob): Promise<void> {
         activityId = pickActivityByTime(activities, instant)?.id ?? null;
       }
       const videoRenditions: VideoRenditions = { mp4: { key: mp4Key, w: out.width ?? 0, h: out.height ?? 0, bytes }, poster: { key: posterKey } };
+      const contentHash = photo.contentHash ?? (await sha256File(input));
       await db.photo.update({
         where: { id: photo.id },
         data: {
           status: "READY",
+          contentHash,
           kind: "VIDEO",
           width: out.width,
           height: out.height,
@@ -92,6 +96,7 @@ export async function transcodeVideo(job: TranscodeVideoJob): Promise<void> {
     // Follow-up jobs are best-effort here; the sweeps pick up anything the queue refused.
     await enqueueEmbedding(photo.id).catch(() => undefined);
     await enqueueFaceDetection(photo.id).catch(() => undefined);
+    await enqueueAnimalDetection(photo.id).catch(() => undefined);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[transcode-video] ${photo.id} failed:`, message);

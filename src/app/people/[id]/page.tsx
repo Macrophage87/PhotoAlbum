@@ -32,7 +32,7 @@ export default async function PersonPage({ params }: PageProps<"/people/[id]">) 
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
             <h1 className="font-display text-3xl font-semibold">{person.name}</h1>
-            <p className="text-muted mt-1">{[person.relationship, person.kind === "PET" ? `${person.isFlock ? "flock of " : ""}${person.species?.toLowerCase() ?? "pet"}` : null, person.kind === "PET" && person.livedFrom ? `${person.livedFrom.getUTCFullYear()}–${person.livedTo ? person.livedTo.getUTCFullYear() : ""}` : null, `${photos.length} photo${photos.length === 1 ? "" : "s"}`].filter(Boolean).join(" · ")}</p>
+            <p className="text-muted mt-1">{[person.relationship, person.kind === "PET" ? `${person.isFlock ? "flock of " : ""}${person.species?.toLowerCase() ?? "pet"}` : null, person.kind === "PET" && person.livedFrom ? `${person.livedFrom.getUTCFullYear()}–${person.livedTo ? person.livedTo.getUTCFullYear() : ""}` : null, person.kind === "PET" ? person.descriptors : null, `${photos.length} photo${photos.length === 1 ? "" : "s"}`].filter(Boolean).join(" · ")}</p>
           </div>
           {person.kind === "HUMAN" && (person.faceIndexing ? <Badge tone="success">recognised in new photos · {person.adultAttestedAt ? "attested adult" : "by birthday"}</Badge> : person.optedOutAt ? <Badge tone="warning">asked to be forgotten on {person.optedOutAt.toLocaleDateString("en-US")}</Badge> : <Badge tone="neutral">{person.pendingDecision ? "awaiting an admin's decision" : "not recognised"}</Badge>)}
         </div>

@@ -172,7 +172,10 @@ async function main() {
       await db.$executeRaw`UPDATE "Face" SET embedding = ${vectorLiteral(vec)}::vector WHERE id = ${face.id}`;
     }
     const biscuit = await db.person.create({ data: { kind: "PET", name: "Biscuit", species: "DOG", livedFrom: new Date("2016-05-01"), createdById: admin.id } });
-    await db.face.create({ data: { photoId: maine[2]?.id ?? maine[0].id, personId: biscuit.id, box: [0, 0, 1, 1], confidence: 0, status: "CONFIRMED" } });
+    const biscuitPhoto = maine[2]?.id ?? maine[0].id;
+    await db.face.create({ data: { photoId: biscuitPhoto, personId: biscuit.id, box: [0.1, 0.5, 0.4, 0.4], confidence: 0, status: "CONFIRMED" } });
+    // A confirmed sighting seeds automatic matching once the sidecar scans the photo (it fills in the crop embedding).
+    await db.animalDetection.create({ data: { photoId: biscuitPhoto, personId: biscuit.id, species: "DOG", box: [0.1, 0.5, 0.4, 0.4], confidence: 0.9, status: "CONFIRMED" } });
     console.log("people: Grandma Jo (birthday), Uncle Dan (attested), Biscuit the dog; face detection opt-in recorded");
   }
 }

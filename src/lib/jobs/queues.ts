@@ -18,6 +18,11 @@ export const QUEUES = {
   purgeUnnamedFaces: "purge-unnamed-faces",
   matchPhoto: "match-photo",
   flagNewAdults: "flag-new-adults",
+  takeoutImport: "takeout-import",
+  detectAnimals: "detect-animals",
+  animalSweep: "animal-sweep",
+  matchAnimals: "match-animals",
+  googlePickerImport: "google-picker-import",
 } as const;
 
 export type QueueName = (typeof QUEUES)[keyof typeof QUEUES];
@@ -40,3 +45,8 @@ export type AnnotationBackfillJob = { batchId: string };
 export type EmbedPhotoJob = { photoId: string; textOnly?: boolean };
 export type DetectFacesJob = { photoId: string };
 export type MatchPhotoJob = { photoId: string };
+export type TakeoutImportJob = { importId: string };
+export type DetectAnimalsJob = { photoId: string };
+export type MatchAnimalsJob = { photoId: string };
+/** Rows were created by the action; the job downloads each `items[photoId]` (a Picker media item) into its row. */
+export type GooglePickerImportJob = { userId: string; sessionId: string; photoIds: string[]; items: Record<string, unknown> };

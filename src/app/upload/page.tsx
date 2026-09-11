@@ -5,17 +5,22 @@ import { AppShell, Container } from "@/components/layout/AppShell";
 import { UploadPanel } from "./UploadPanel";
 import { env } from "@/lib/env";
 import { annotationGates } from "@/lib/annotation/eligibility";
+import { GooglePickerButton } from "@/components/google/GooglePickerButton";
+import { googleStatus } from "@/lib/google/account";
+import { googleConfigured } from "@/lib/google/oauth";
 
 export const metadata = { title: "Upload" };
 
 export default async function UploadPage({ searchParams }: PageProps<"/upload">) {
-  await requireUser("/upload");
+  const me = await requireUser("/upload");
   const viewer = await getViewer();
   const sp = await searchParams;
   const tripSlug = typeof sp.trip === "string" ? sp.trip : undefined;
   const trips = await db.trip.findMany({ orderBy: { startDate: "desc" }, select: { id: true, slug: true, title: true } });
   const selected = trips.find((t) => t.slug === tripSlug);
   const gates = await annotationGates();
+  const google = googleConfigured() ? await googleStatus(me.id) : null;
+  const googleNotice = typeof sp.google === "string" ? sp.google : null;
 
   return (
     <AppShell viewer={viewer}>
@@ -27,6 +32,12 @@ export default async function UploadPage({ searchParams }: PageProps<"/upload">)
           </p>
         </div>
         <UploadPanel trips={trips} initialTripId={selected?.id} maxClipSeconds={env().MAX_CLIP_SECONDS} annotationActive={gates.active} />
+        {google && (
+          <>
+            {googleNotice && googleNotice !== "connected" && <p role="alert" className="text-sm rounded-theme bg-amber-50 border border-amber-200 text-amber-900 p-3">{googleNotice === "denied" ? "Google Photos was not connected: permission was declined." : googleNotice === "scope" ? "Google Photos was not connected: the photo-picking permission was not granted." : googleNotice === "state" ? "That sign-in link had expired; try connecting again." : "Google Photos could not be connected; try again in a moment."}</p>}
+            <GooglePickerButton status={google} configured tripId={selected?.id ?? null} next={selected ? `/upload?trip=${selected.slug}` : "/upload"} />
+          </>
+        )}
       </Container>
     </AppShell>
   );

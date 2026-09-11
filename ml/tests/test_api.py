@@ -57,6 +57,18 @@ def test_faces_shape():
     assert len(face["embedding"]) == 512 and 0 < face["confidence"] <= 1
 
 
+def test_animals_shape_and_determinism():
+    assert client.post("/animals", files={"file": ("a.png", png(), "image/png")}).status_code == 401
+    a = client.post("/animals", files={"file": ("a.png", png(), "image/png")}, headers=HEADERS).json()
+    b = client.post("/animals", files={"file": ("a.png", png(), "image/png")}, headers=HEADERS).json()
+    assert a["dim"] == 512 and 1 <= len(a["animals"]) <= 2
+    animal = a["animals"][0]
+    assert animal["species"] in {"DOG", "CAT", "CHICKEN", "HORSE", "OTHER"}
+    assert len(animal["box"]) == 4 and all(0 <= v <= 1 for v in animal["box"])
+    assert len(animal["embedding"]) == 512 and 0 < animal["confidence"] <= 1
+    assert a == b
+
+
 def test_empty_and_oversized_images_are_refused():
     assert client.post("/embed/image", files={"file": ("a.png", b"", "image/png")}, headers=HEADERS).status_code == 400
 

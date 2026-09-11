@@ -5,6 +5,7 @@ import { Card } from "@/components/ui";
 import { annotationGates } from "@/lib/annotation/eligibility";
 import { mlConfigured } from "@/lib/ml/client";
 import { faceGates } from "@/lib/people/gates";
+import { petGates } from "@/lib/pets/gates";
 import { faceCounts } from "@/lib/people/queries";
 
 export const metadata = { title: "Privacy", robots: { index: false, follow: false } };
@@ -59,6 +60,20 @@ export default async function PrivacyPage() {
       enabled: Boolean(e.YOUTUBE_API_KEY),
     },
     {
+      name: "Google Photos (pick-a-few import)",
+      what: "When a member connects Google, the server keeps only an encrypted token that lets it fetch what that member picks; Google sees this site's address and the member's Google sign-in. Each import asks Google for the picked items only (never the library), and Google leaves the location out of the copies it hands over. Google learns which member imported and when; it never sees anything in this album.",
+      when: "Only when a member presses Pick from Google Photos, and only for their own account. Disconnect removes the token here and asks Google to forget the grant.",
+      off: "Press Disconnect Google on the upload page, or leave GOOGLE_OAUTH_CLIENT_ID empty and the button never appears.",
+      enabled: Boolean(e.GOOGLE_OAUTH_CLIENT_ID),
+    },
+    {
+      name: "Google Takeout (whole-library import)",
+      what: "Nothing. An admin copies the Takeout zip files onto this server and the import reads them here; dates, places, captions and Google album names come across, nothing goes back.",
+      when: "Never leaves the server. The archive is an unencrypted copy of the export; delete it from the inbox once its photos are in.",
+      off: "Leave IMPORT_INBOX_DIR empty.",
+      enabled: false,
+    },
+    {
       name: "Facebook share button",
       what: "Nothing until pressed. Pressing it opens Facebook in a new tab with the trip or collection address; Facebook then fetches that public page or secret link to build a preview.",
       when: "Only when a member or visitor presses the button on a public or link-shared trip or collection.",
@@ -93,6 +108,7 @@ export default async function PrivacyPage() {
         <section className="space-y-2 text-sm">
           <h2 className="font-display text-xl font-semibold">Faces (stays on this server)</h2>
           <p>Face detection is {fg.active ? "on" : "off"}: operator flag {fg.envEnabled ? "on" : "off"}, admin opt-in {fg.optedInAt ? "on" : "off"}, sidecar {fg.sidecar ? "configured" : "not configured"}. When on, a face template is computed for every face in every new photo and kept in this server&apos;s database only; nothing is sent anywhere. Templates: {fc.templates} stored, {fc.unnamed} unnamed{fc.nextPurge ? `, the oldest purged by ${fc.nextPurge.toLocaleDateString("en-US")}` : ""}; unnamed faces are deleted after {fg.retentionDays} days. Recognising a named person is a separate per-person decision by an admin, off by default, never for a minor without a parent&apos;s instruction; even then every match is only a proposal until a member confirms it; a person can be forgotten at any time, which deletes their templates and removes their name from descriptions and search. A person&apos;s name reaches the AI helper only when their recognition is on and they are not a minor.</p>
+          <p>Animals are spotted the same way, on this server only, and the pet-spotting flag is {petGates().active ? "on" : "off"}. A crop of each animal is kept as a number vector so the same pet can be recognised again; nothing about it leaves the server, and a pet is only ever proposed, never tagged, until a member confirms.</p>
         </section>
 
         <section className="space-y-2 text-sm">
@@ -104,7 +120,7 @@ export default async function PrivacyPage() {
 
         <section className="space-y-2 text-sm">
           <h2 className="font-display text-xl font-semibold">What is kept</h2>
-          <p>Originals are kept as uploaded, plus web-sized renditions. Deleting a photo removes its files. Sign-in sessions last about three months; magic links expire after fifteen minutes and work once.</p>
+          <p>Originals are kept as uploaded, plus web-sized renditions. Deleting a photo removes its files. Sign-in sessions last about three months; magic links expire after fifteen minutes and work once. A member&apos;s Google connection is one encrypted refresh token, deleted when they disconnect or are removed. Photos brought over from Google keep the Google item id so a second import skips them.</p>
         </section>
       </Container>
     </AppShell>

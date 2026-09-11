@@ -44,9 +44,23 @@ const schema = z.object({
   // Face detection stays off until this flag and an admin's opt-in on the disclosure screen are both set.
   FACE_INDEXING_ENABLED: boolish.transform((v) => v ?? false),
   FACE_UNNAMED_RETENTION_DAYS: z.coerce.number().int().positive().default(180),
+  // Google Takeout import: archives are read from this server-side folder (a compose volume); hidden when unset.
+  IMPORT_INBOX_DIR: z.string().optional().transform((v) => (v ? v : undefined)),
+  // Google Photos Picker: hidden until both OAuth values are set; refresh tokens are encrypted under TOKEN_ENCRYPTION_KEY.
+  GOOGLE_OAUTH_CLIENT_ID: z.string().optional().transform((v) => (v ? v : undefined)),
+  GOOGLE_OAUTH_CLIENT_SECRET: z.string().optional().transform((v) => (v ? v : undefined)),
+  TOKEN_ENCRYPTION_KEY: z.string().optional().transform((v) => (v ? v : undefined)),
+  GOOGLE_ACCOUNTS_URL: z.string().url().default("https://accounts.google.com"),
+  GOOGLE_OAUTH_BASE_URL: z.string().url().default("https://oauth2.googleapis.com"),
+  GOOGLE_PHOTOS_API_URL: z.string().url().default("https://photospicker.googleapis.com/v1"),
+  // Automatic pet matching through the sidecar's animal detector (needs ML_URL); on by default when the sidecar is set.
+  PET_MATCHING_ENABLED: boolish.transform((v) => v ?? true),
   // Send the page Content-Security-Policy as report-only (browser console warnings instead of blocking) while trying a new tile or style host.
   CSP_REPORT_ONLY: boolish.transform((v) => v ?? false),
-}).refine((e) => !e.ML_URL || Boolean(e.ML_TOKEN), { message: "ML_TOKEN is required when ML_URL is set", path: ["ML_TOKEN"] });
+})
+  .refine((e) => !e.ML_URL || Boolean(e.ML_TOKEN), { message: "ML_TOKEN is required when ML_URL is set", path: ["ML_TOKEN"] })
+  .refine((e) => !e.GOOGLE_OAUTH_CLIENT_ID || Boolean(e.GOOGLE_OAUTH_CLIENT_SECRET), { message: "GOOGLE_OAUTH_CLIENT_SECRET is required with GOOGLE_OAUTH_CLIENT_ID", path: ["GOOGLE_OAUTH_CLIENT_SECRET"] })
+  .refine((e) => !e.GOOGLE_OAUTH_CLIENT_ID || (Boolean(e.TOKEN_ENCRYPTION_KEY) && Buffer.from(e.TOKEN_ENCRYPTION_KEY ?? "", "base64").length === 32), { message: "TOKEN_ENCRYPTION_KEY (32 bytes, base64) is required when Google OAuth is configured", path: ["TOKEN_ENCRYPTION_KEY"] });
 
 export type Env = z.infer<typeof schema>;
 

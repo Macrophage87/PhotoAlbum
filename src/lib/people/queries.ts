@@ -63,11 +63,23 @@ export async function proposalsFor(photoIds?: string[]): Promise<ProposalRow[]> 
     take: 200,
     select: { id: true, box: true, confidence: true, ageAtCaptureYears: true, photo: { select: { id: true, updatedAt: true, caption: true, title: true, originalName: true, takenAt: true, estimatedDate: true } }, proposedPerson: { select: { id: true, name: true, kind: true, birthday: true } } },
   });
-  return faces.map((f) => {
+  const rows: ProposalRow[] = faces.map((f) => {
     const p = f.proposedPerson!;
     const date = f.photo.takenAt ?? f.photo.estimatedDate;
     const age = p.birthday && date ? Math.floor((date.getTime() - p.birthday.getTime()) / (365.25 * 86_400_000)) : null;
     const label = f.confidence === 0 ? `named in the notes on ${f.photo.caption ?? f.photo.title ?? f.photo.originalName}` : age !== null ? `about ${age} years old in ${f.photo.caption ?? f.photo.title ?? f.photo.originalName}` : (f.photo.caption ?? f.photo.title ?? f.photo.originalName);
     return { faceId: f.id, photo: { id: f.photo.id, updatedAt: f.photo.updatedAt }, box: f.box as [number, number, number, number], person: { id: p.id, name: p.name, kind: p.kind }, label, childhood: age !== null && age < 13 };
   });
+  // Animal proposals ride in the same list under an `animal:` id; the actions tell the two apart by the prefix.
+  const animals = await db.animalDetection.findMany({
+    where: { status: "PROPOSED", proposedPersonId: { not: null }, ...(photoIds ? { photoId: { in: photoIds } } : {}) },
+    orderBy: { createdAt: "asc" },
+    take: 200,
+    select: { id: true, box: true, species: true, createdAt: true, photo: { select: { id: true, updatedAt: true, caption: true, title: true, originalName: true } }, proposedPerson: { select: { id: true, name: true, kind: true } } },
+  });
+  for (const a of animals) {
+    const p = a.proposedPerson!;
+    rows.push({ faceId: `animal:${a.id}`, photo: { id: a.photo.id, updatedAt: a.photo.updatedAt }, box: a.box as [number, number, number, number], person: { id: p.id, name: p.name, kind: p.kind }, label: `a ${a.species.toLowerCase()} spotted in ${a.photo.caption ?? a.photo.title ?? a.photo.originalName}`, childhood: false });
+  }
+  return rows;
 }

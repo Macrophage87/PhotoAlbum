@@ -36,6 +36,7 @@ services:
       PHOTO_STORAGE_ROOT: /data/photos
     volumes:
       - photos:/data/photos
+      - imports:/data/imports
     ports:
       - "${APP_PORT:-3000}:3000"
     networks:
@@ -61,6 +62,7 @@ services:
       RUN_WORKER: "true"
     volumes:
       - photos:/data/photos
+      - imports:/data/imports
     networks:
       - default
       - internal
@@ -103,4 +105,6 @@ networks:
 volumes:
   pgdata:
   photos:
+  # Google Takeout archives are copied here (docker compose cp takeout-001.zip app:/data/imports/) and imported from the Admin page.
+  imports:
   ml-models:

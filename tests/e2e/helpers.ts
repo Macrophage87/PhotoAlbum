@@ -17,7 +17,7 @@ export async function withDb<T>(fn: (c: Client) => Promise<T>): Promise<T> {
 
 export async function resetDb() {
   await withDb(async (c) => {
-    await c.query('TRUNCATE "MediaSimilarity", "Face", "FaceCluster", "Person", "MediaAnnotationRaw", "AnnotationBatch", "AppSetting", "CollectionItem", "Collection", "PhotoLink", "TrackStats", "Track", "Photo", "Activity", "Trip", "Session", "MagicLinkToken", "Invite", "User" CASCADE');
+    await c.query('TRUNCATE "AnimalDetection", "TakeoutImport", "GoogleAccount", "MediaSimilarity", "Face", "FaceCluster", "Person", "MediaAnnotationRaw", "AnnotationBatch", "AppSetting", "CollectionItem", "Collection", "PhotoLink", "TrackStats", "Track", "Photo", "Activity", "Trip", "Session", "MagicLinkToken", "Invite", "User" CASCADE');
     // Jobs left by a previous run (a server killed mid-job) would otherwise sit until they expire.
     await c.query("DELETE FROM pgboss.job").catch(() => {});
   });

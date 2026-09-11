@@ -8,6 +8,11 @@ import { requireUserOrThrow } from "@/lib/auth/viewer";
 import { createInvite } from "@/lib/auth/magic-link";
 import { inviteEmail, sendMail } from "@/lib/auth/email";
 import { normalizeEmail } from "@/lib/auth/tokens";
+import { enqueue } from "@/lib/jobs/boss";
+import { QUEUES } from "@/lib/jobs/queues";
+import { deleteArchive, safeArchivePath } from "@/lib/takeout/inbox";
+import { stat } from "node:fs/promises";
+import { disconnectGoogleAccount } from "@/lib/google/account";
 
 async function requireAdminOrThrow() {
   const user = await requireUserOrThrow();
@@ -47,6 +52,8 @@ export async function setRole(userId: string, role: "ADMIN" | "MEMBER"): Promise
 export async function removeMember(userId: string): Promise<void> {
   const admin = await requireAdminOrThrow();
   if (userId === admin.id) throw new Error("You can't remove yourself.");
+  // Their Google connection goes with them (revoked at Google when possible, deleted here regardless).
+  await disconnectGoogleAccount(userId);
   // Keep their uploads: reassign ownership to the acting admin, then delete the account and its sessions.
   await db.$transaction([
     db.photo.updateMany({ where: { uploaderId: userId }, data: { uploaderId: admin.id } }),
@@ -54,5 +61,25 @@ export async function removeMember(userId: string): Promise<void> {
     db.trip.updateMany({ where: { createdById: userId }, data: { createdById: admin.id } }),
     db.user.delete({ where: { id: userId } }),
   ]);
+  revalidatePath("/admin");
+}
+
+/** Queue one Takeout archive from the inbox. One import runs at a time so the worker's memory stays bounded. */
+export async function startTakeoutImport(archiveName: string): Promise<void> {
+  const admin = await requireAdminOrThrow();
+  const file = safeArchivePath(archiveName);
+  const s = await stat(file).catch(() => null);
+  if (!s?.isFile()) throw new Error("That archive is no longer in the inbox.");
+  const running = await db.takeoutImport.count({ where: { status: "RUNNING", startedAt: { gt: new Date(Date.now() - 24 * 3600_000) } } });
+  if (running > 0) throw new Error("An import is still running; wait for it to finish.");
+  const run = await db.takeoutImport.create({ data: { archiveName, startedById: admin.id } });
+  await enqueue(QUEUES.takeoutImport, { importId: run.id }, { expireInSeconds: 12 * 3600, retryLimit: 0 });
+  revalidatePath("/admin");
+}
+
+/** Remove an archive from the inbox once its photos are in the album (it is an unencrypted copy of the export). */
+export async function deleteTakeoutArchive(archiveName: string): Promise<void> {
+  await requireAdminOrThrow();
+  await deleteArchive(archiveName);
   revalidatePath("/admin");
 }

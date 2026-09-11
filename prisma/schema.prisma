@@ -47,6 +47,7 @@ enum GpsSource {
   EXIF
   TRACK
   MANUAL
+  SIDECAR
 }
 
 enum TakenAtSource {
@@ -56,6 +57,7 @@ enum TakenAtSource {
   FILE_MTIME
   UPLOAD_TIME
   MANUAL
+  SIDECAR
 }
 
 /// What a media row is: an uploaded photo, an uploaded short clip, or a video hosted elsewhere (YouTube) and embedded.
@@ -68,6 +70,21 @@ enum MediaKind {
 enum MediaSourceKind {
   UPLOAD
   YOUTUBE
+  TAKEOUT
+  GOOGLE_PICKER
+}
+
+enum TakeoutImportStatus {
+  RUNNING
+  ENDED
+  FAILED
+}
+
+enum AnimalStatus {
+  DETECTED
+  PROPOSED
+  CONFIRMED
+  REJECTED
 }
 
 enum ExternalProvider {
@@ -132,6 +149,7 @@ model User {
   createdAt DateTime @default(now())
 
   sessions Session[]
+  googleAccount GoogleAccount?
   invites  Invite[]  @relation("InvitedBy")
   trips    Trip[]
   photos   Photo[]
@@ -293,6 +311,11 @@ model Photo {
   textEmbedding Unsupported("vector(384)")?
   embeddedAt    DateTime?
   facesDetectedAt DateTime?
+  animalsDetectedAt DateTime?
+  /// sha256 of the original file, for duplicate detection on imports.
+  contentHash   String?
+  /// The source system's own id (a Google media item id), so re-importing the same item is detected.
+  sourceId      String?
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
 
@@ -303,6 +326,7 @@ model Photo {
   coverOfCollection Collection? @relation("CollectionCover")
   annotationRaw     MediaAnnotationRaw[]
   faces             Face[]
+  animals           AnimalDetection[]
   similarA          MediaSimilarity[] @relation("SimA")
   similarB          MediaSimilarity[] @relation("SimB")
 
@@ -312,6 +336,8 @@ model Photo {
   @@index([lat, lng])
   @@index([status])
   @@index([kind])
+  @@index([contentHash])
+  @@index([sourceKind, sourceId])
   @@index([provider, externalId])
   @@index([reviewedAt])
 }
@@ -427,6 +453,8 @@ model Person {
   pendingDecision     Boolean    @default(false)
   /// The person asked to be forgotten by the recogniser but kept their name on confirmed photos.
   keepNameOnPhotos    Boolean    @default(false)
+  /// For pets: colour and breed words ("black lab", "ginger tabby") that narrow automatic matching.
+  descriptors         String?
   /// Asked to be forgotten by the recogniser: excluded from the members' name index and from every proposal.
   optedOutAt          DateTime?
   createdById         String
@@ -436,6 +464,8 @@ model Person {
   clusters FaceCluster[]
   faces    Face[]        @relation("FacePerson")
   proposed Face[]        @relation("FaceProposed")
+  animals  AnimalDetection[] @relation("AnimalPerson")
+  animalsProposed AnimalDetection[] @relation("AnimalProposed")
 
   @@index([name])
 }
@@ -494,6 +524,53 @@ model MediaSimilarity {
   @@id([photoAId, photoBId])
   @@index([photoBId])
   @@index([score])
+}
+
+/// One animal found by the sidecar's detector: species, box and a whole-animal image embedding for matching pets.
+model AnimalDetection {
+  id               String       @id @default(cuid())
+  photoId          String
+  photo            Photo        @relation(fields: [photoId], references: [id], onDelete: Cascade)
+  species          Species
+  box              Json
+  embedding        Unsupported("vector(512)")?
+  confidence       Float
+  personId         String?
+  person           Person?      @relation("AnimalPerson", fields: [personId], references: [id], onDelete: SetNull)
+  proposedPersonId String?
+  proposedPerson   Person?      @relation("AnimalProposed", fields: [proposedPersonId], references: [id], onDelete: SetNull)
+  status           AnimalStatus @default(DETECTED)
+  createdAt        DateTime     @default(now())
+
+  @@index([photoId])
+  @@index([personId])
+  @@index([status])
+}
+
+/// A Google Takeout archive import run, started by an admin from the server inbox.
+model TakeoutImport {
+  id                 String              @id @default(cuid())
+  archiveName        String
+  status             TakeoutImportStatus @default(RUNNING)
+  imported           Int                 @default(0)
+  skipped            Int                 @default(0)
+  failed             Int                 @default(0)
+  collectionsCreated Int                 @default(0)
+  report             Json?
+  startedById        String
+  startedAt          DateTime            @default(now())
+  endedAt            DateTime?
+}
+
+/// A member's Google connection for the Photos Picker: only the encrypted refresh token, usable by that member alone.
+model GoogleAccount {
+  userId                String   @id
+  user                  User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  encryptedRefreshToken String
+  connectedAt           DateTime @default(now())
+  lastUsedAt            DateTime?
+  /// Set when Google refused the refresh token (testing-mode expiry, revocation): the member must reconnect.
+  needsReconnect        Boolean  @default(false)
 }
 
 model PhotoLink {

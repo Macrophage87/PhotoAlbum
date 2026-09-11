@@ -4,6 +4,7 @@ import { faceGates } from "@/lib/people/gates";
 import { listPeople, listUnnamedClusters, proposalsFor } from "@/lib/people/queries";
 import { ProposalList } from "@/components/people/ProposalList";
 import { PetForm } from "@/components/people/PetForm";
+import { petGates } from "@/lib/pets/gates";
 import { AppShell, Container } from "@/components/layout/AppShell";
 import { FaceThumb } from "@/components/people/FaceThumb";
 import { NameClusterForm } from "@/components/people/NameClusterForm";
@@ -16,6 +17,7 @@ export default async function PeoplePage() {
   const user = await requireUser("/people");
   const viewer = await getViewer();
   const [everyone, clusters, gates, proposals] = await Promise.all([listPeople(), listUnnamedClusters(), faceGates(), proposalsFor()]);
+  const petsActive = petGates().active;
   const people = everyone.filter((p) => p.kind === "HUMAN");
   const pets = everyone.filter((p) => p.kind === "PET");
   const isAdmin = user.role === "ADMIN";
@@ -73,7 +75,7 @@ export default async function PeoplePage() {
           )}
           <Card className="p-4">
             <p className="text-sm font-medium mb-2">Add a pet</p>
-            <p className="text-xs text-muted mb-3">Pets are tagged by hand from a photo, or proposed when your notes mention their name. No recognition runs for animals.</p>
+            <p className="text-xs text-muted mb-3">Pets are tagged by hand from a photo or proposed when your notes mention their name. {petsActive ? "Once a pet has been tagged on a photo where the album spotted an animal, look-alikes of the same kind are proposed as “Probably …?” for you to confirm; a flock record is proposed whenever its kind is seen." : "Automatic spotting is off (it needs the ML sidecar and PET_MATCHING_ENABLED)."}</p>
             <PetForm />
           </Card>
         </section>

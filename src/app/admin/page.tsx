@@ -10,10 +10,13 @@ import { AnnotationAdmin } from "@/components/annotation/AnnotationAdmin";
 import { annotationGates } from "@/lib/annotation/eligibility";
 import { actualSpend } from "@/lib/annotation/pricing";
 import { faceGates } from "@/lib/people/gates";
+import { petGates } from "@/lib/pets/gates";
 import { faceCounts, needsDecision } from "@/lib/people/queries";
 import { FacesAdmin } from "@/components/people/FacesAdmin";
 import { decideIndexing } from "@/app/people/actions";
 import { isMinor } from "@/lib/people/consent";
+import { TakeoutAdmin } from "@/components/admin/TakeoutAdmin";
+import { inboxDir, listArchives } from "@/lib/takeout/inbox";
 
 export const metadata = { title: "Admin" };
 
@@ -26,6 +29,8 @@ export default async function AdminPage() {
   ]);
   const smtp = Boolean(env().SMTP_HOST);
   const fg = await faceGates();
+  const pg = petGates();
+  const animalCounts = { sightings: await db.animalDetection.count(), confirmed: await db.animalDetection.count({ where: { status: "CONFIRMED" } }) };
   const [counts, decisions] = await Promise.all([faceCounts(fg.retentionDays), needsDecision()]);
   const [gates, batches, tripOptions, collectionOptions] = await Promise.all([
     annotationGates(),
@@ -45,6 +50,7 @@ export default async function AdminPage() {
     if (s.kind === "range") return `${s.from} to ${s.to}`;
     return "everything not yet described";
   };
+  const [archives, takeoutImports] = await Promise.all([listArchives(), db.takeoutImport.findMany({ orderBy: { startedAt: "desc" }, take: 10 })]);
   const unavailable = await db.photo.findMany({ where: { kind: "EXTERNAL_VIDEO", externalStatus: "UNAVAILABLE" }, orderBy: { externalCheckedAt: "desc" }, select: { id: true, title: true, externalUrl: true, externalCheckedAt: true } });
 
   return (
@@ -98,6 +104,7 @@ export default async function AdminPage() {
           <h2 className="font-display text-xl font-semibold mb-1">Faces</h2>
           <p className="text-sm text-muted mb-3">Face detection runs on this server through the ML sidecar. It is off until both the operator flag and your opt-in here are set.</p>
           <FacesAdmin gates={{ sidecar: fg.sidecar, envEnabled: fg.envEnabled, optedInAt: fg.optedInAt?.toISOString() ?? null, active: fg.active, retentionDays: fg.retentionDays }} counts={{ ...counts, nextPurge: counts.nextPurge?.toISOString() ?? null }} />
+          <p className="text-sm text-muted mt-3" data-testid="pet-gates">Pet spotting (animals, not faces; no opt-in needed): {pg.active ? `on, ${animalCounts.sightings} sighting${animalCounts.sightings === 1 ? "" : "s"} kept, ${animalCounts.confirmed} confirmed` : pg.sidecar ? "off (PET_MATCHING_ENABLED is false)" : "off (needs the ML sidecar)"}.</p>
           {decisions.length > 0 && (
             <div className="mt-4 space-y-3">
               <h3 className="font-medium">Needs a decision</h3>
@@ -116,6 +123,11 @@ export default async function AdminPage() {
               ))}
             </div>
           )}
+        </section>
+
+        <section>
+          <h2 className="font-display text-xl font-semibold mb-1">Import from Google Photos (Takeout)</h2>
+          <TakeoutAdmin configured={Boolean(inboxDir())} dir={inboxDir()} archives={archives.map((a) => ({ ...a, modifiedAt: a.modifiedAt.toISOString() }))} imports={takeoutImports.map((i) => ({ id: i.id, archiveName: i.archiveName, status: i.status, imported: i.imported, skipped: i.skipped, failed: i.failed, collectionsCreated: i.collectionsCreated, startedAt: i.startedAt.toISOString(), endedAt: i.endedAt?.toISOString() ?? null, report: (i.report as never) ?? null }))} />
         </section>
 
         <section>

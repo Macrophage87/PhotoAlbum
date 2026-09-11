@@ -554,3 +554,114 @@ test("the similarity graph and the similar-photos strip are members-only and sho
   const res = await request.get("/graph");
   expect(res.headers()["content-security-policy"]).toMatch(/script-src 'self' 'nonce-[A-Za-z0-9+/=]+' 'strict-dynamic'/);
 });
+
+test("a Google Takeout archive in the inbox imports with dates, places, notes and a private album, then can be deleted", async ({ context, page }) => {
+  const inbox = process.env.E2E_INBOX_DIR ?? "/tmp/photoalbum-e2e-inbox";
+  const { copyFileSync, existsSync } = await import("node:fs");
+  copyFileSync(fixture("takeout.zip"), path.join(inbox, "takeout-e2e.zip"));
+  await signIn(context, ADMIN);
+  await page.goto("/admin");
+  const row = page.getByTestId("takeout-admin").getByText("takeout-e2e.zip").locator("..").locator("..");
+  await page.waitForLoadState("networkidle");
+  await row.getByRole("button", { name: "Import" }).click();
+  await expect.poll(async () => (await withDb((c) => c.query('SELECT status FROM "TakeoutImport" WHERE "archiveName" = $1', ["takeout-e2e.zip"]))).rows[0]?.status, { timeout: 60_000 }).toBe("ENDED");
+  const run = await withDb((c) => c.query('SELECT imported, skipped, "collectionsCreated" FROM "TakeoutImport" WHERE "archiveName" = $1', ["takeout-e2e.zip"]));
+  expect(run.rows[0]).toMatchObject({ imported: 4, skipped: 1, collectionsCreated: 1 });
+  // Every imported item goes through the normal pipeline and keeps its sidecar date and place.
+  await expect.poll(async () => (await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "Photo" WHERE "sourceKind" = 'TAKEOUT' AND status = 'READY'`))).rows[0].n, { timeout: 90_000 }).toBe(4);
+  const gps = await withDb((c) => c.query(`SELECT "takenAtSource", "gpsSource", lat, context, "contentHash" FROM "Photo" WHERE "originalName" = 'photo-with-gps.jpg' AND "sourceKind" = 'TAKEOUT'`));
+  expect(gps.rows[0]).toMatchObject({ takenAtSource: "SIDECAR", gpsSource: "EXIF", context: "Otter Cliff from the Ocean Path" });
+  expect(gps.rows[0].contentHash).toHaveLength(64);
+  const album = await withDb((c) => c.query(`SELECT visibility, "shareToken" FROM "Collection" WHERE title = 'Lake House'`));
+  expect(album.rows[0]).toEqual({ visibility: "PRIVATE", shareToken: null });
+  await page.reload();
+  await expect(page.getByTestId("takeout-import").first()).toHaveAttribute("data-status", "ENDED");
+  await expect(page.getByTestId("takeout-import").first()).toContainText("4 imported");
+  page.once("dialog", (d) => d.accept());
+  await page.waitForLoadState("networkidle");
+  await page.getByTestId("takeout-admin").getByText("takeout-e2e.zip").locator("..").locator("..").getByRole("button", { name: "Delete" }).click();
+  await expect.poll(() => existsSync(path.join(inbox, "takeout-e2e.zip")), { timeout: 15_000 }).toBe(false);
+});
+
+test("a member connects Google Photos, picks items on Google's page, gets them on the review screen, and can disconnect", async ({ context, page }) => {
+  await signIn(context, ADMIN);
+  await page.goto("/upload");
+  await page.getByRole("link", { name: "Connect Google Photos" }).click();
+  await page.waitForURL("**/upload?google=connected");
+  const picker = page.getByTestId("google-picker");
+  await expect(picker.getByRole("button", { name: "Pick from Google Photos" })).toBeVisible();
+  await page.waitForLoadState("networkidle");
+  await picker.getByRole("button", { name: "Pick from Google Photos" }).click();
+  const [popup] = await Promise.all([context.waitForEvent("page"), picker.getByRole("link", { name: "Open Google Photos" }).click()]);
+  await expect(popup.getByText("Mock Google Photos picker")).toBeVisible();
+  await popup.close();
+  await expect(picker.getByRole("status")).toContainText("Copying 3 items", { timeout: 30_000 });
+  await page.waitForURL(/\/review\?ids=.*google=1/, { timeout: 120_000 });
+  await expect(page.getByRole("heading", { name: "Review what you picked" })).toBeVisible();
+  await expect(page.getByText("Google leaves the location out")).toBeVisible();
+  const rows = await withDb((c) => c.query(`SELECT "sourceId", status, kind, "originalName" FROM "Photo" WHERE "sourceKind" = 'GOOGLE_PICKER' ORDER BY "sourceId"`));
+  expect(rows.rows).toEqual([
+    { sourceId: "gp-item-1", status: "READY", kind: "PHOTO", originalName: "photo-with-gps.jpg" },
+    { sourceId: "gp-item-2", status: "READY", kind: "PHOTO", originalName: "IMG_2001.jpg" },
+    { sourceId: "gp-item-3", status: "READY", kind: "VIDEO", originalName: "clip.mp4" },
+  ]);
+  // Picking the same items again imports nothing.
+  await page.goto("/upload");
+  await page.waitForLoadState("networkidle");
+  await picker.getByRole("button", { name: "Pick from Google Photos" }).click();
+  const [popup2] = await Promise.all([context.waitForEvent("page"), picker.getByRole("link", { name: "Open Google Photos" }).click()]);
+  await popup2.close();
+  await expect(picker.getByRole("alert")).toContainText("already in the album", { timeout: 30_000 });
+  expect((await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "Photo" WHERE "sourceKind" = 'GOOGLE_PICKER'`))).rows[0].n).toBe(3);
+  // The connection is one encrypted token, gone on disconnect.
+  const stored = await withDb((c) => c.query('SELECT "encryptedRefreshToken" FROM "GoogleAccount"'));
+  expect(stored.rows[0].encryptedRefreshToken).toMatch(/^v1\./);
+  expect(stored.rows[0].encryptedRefreshToken).not.toContain("mock-refresh");
+  await page.reload();
+  await page.waitForLoadState("networkidle");
+  await picker.getByRole("button", { name: "Disconnect Google" }).click();
+  await expect(picker.getByRole("link", { name: "Connect Google Photos" })).toBeVisible();
+  expect((await withDb((c) => c.query('SELECT count(*)::int AS n FROM "GoogleAccount"'))).rows[0].n).toBe(0);
+});
+
+test("a pet tagged on a spotted animal is proposed on the next look-alike and confirmed from the review screen", async ({ context, page }) => {
+  await signIn(context, ADMIN);
+  await page.goto("/admin");
+  await expect(page.getByTestId("pet-gates")).toContainText("on,");
+  await page.goto("/people");
+  const petForm = page.locator("form").filter({ has: page.getByRole("button", { name: "Add pet" }) });
+  await petForm.locator("#pet-name").fill("Rex");
+  await petForm.locator("#pet-species").selectOption("DOG");
+  await petForm.locator("#pet-descriptors").fill("black lab");
+  await petForm.getByRole("button", { name: "Add pet" }).click();
+  await expect(page.getByRole("link", { name: /Rex/ })).toBeVisible();
+  // First sighting: upload, wait for the sidecar to spot the animal, tag Rex by hand from the lightbox.
+  await page.goto("/upload");
+  await chooseFile(page, "clip-poster.jpg");
+  await expect(page.locator("img[src*='/api/photos/']")).toBeVisible({ timeout: 30_000 });
+  const first = await withDb((c) => c.query(`SELECT p.id, t.slug FROM "Photo" p LEFT JOIN "Trip" t ON t.id = p."tripId" WHERE p."originalName" = 'clip-poster.jpg' ORDER BY p."createdAt" DESC LIMIT 1`));
+  await expect.poll(async () => (await withDb((c) => c.query('SELECT count(*)::int AS n FROM "AnimalDetection" WHERE "photoId" = $1', [first.rows[0].id]))).rows[0].n, { timeout: 30_000 }).toBe(1);
+  await page.goto(first.rows[0].slug ? `/trips/${first.rows[0].slug}/photos` : "/photos");
+  await page.locator(`button:has(img[src*='/api/photos/${first.rows[0].id}/'])`).first().click();
+  const dialog = page.getByRole("dialog", { name: "Photo viewer" });
+  await dialog.getByRole("button", { name: "Tag a pet" }).click();
+  await dialog.getByLabel("Pet").selectOption({ label: "Rex" });
+  await dialog.getByRole("button", { name: "Tag", exact: true }).click();
+  await expect(dialog.getByRole("button", { name: "Tag a pet" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect.poll(async () => (await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "AnimalDetection" a JOIN "Person" p ON p.id = a."personId" WHERE p.name = 'Rex' AND a.status = 'CONFIRMED'`))).rows[0].n).toBe(1);
+  // Same bytes again: the mock sidecar returns the same crop embedding, so Rex is proposed.
+  await page.goto("/upload");
+  await chooseFile(page, "clip-poster.jpg");
+  await expect(page.locator("img[src*='/api/photos/']")).toBeVisible({ timeout: 30_000 });
+  const ids = await page.getByRole("link", { name: /Add notes and file/ }).getAttribute("href");
+  await page.goto(ids!);
+  const rexRow = page.getByTestId("proposal").filter({ hasText: "Rex" });
+  await expect.poll(async () => { await page.reload(); return rexRow.count(); }, { timeout: 30_000, intervals: [1500] }).toBe(1);
+  await expect(rexRow).toContainText("a dog spotted in");
+  const rexConfirmed = async () => (await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "Face" f JOIN "Person" p ON p.id = f."personId" WHERE p.name = 'Rex' AND f.status = 'CONFIRMED'`))).rows[0].n === 2;
+  await clickUntil(page, () => rexRow.getByRole("button", { name: /Yes, that's Rex/ }), rexConfirmed);
+  const rex = await withDb((c) => c.query(`SELECT id FROM "Person" WHERE name = 'Rex'`));
+  await page.goto(`/people/${rex.rows[0].id}`);
+  await expect(page.getByText(/black lab · 2 photos/)).toBeVisible();
+});

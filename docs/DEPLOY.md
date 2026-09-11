@@ -215,9 +215,34 @@ The basics (`APP_URL`, `ADMIN_EMAIL`, `SMTP_*`, `POSTGRES_*`, `APP_PORT`, `MAX_U
 | `ML_IDLE_UNLOAD_SECONDS` | `300` | Sidecar unloads its models after this idle time. |
 | `FACE_INDEXING_ENABLED` | `false` | Operator half of the face-detection switch. |
 | `FACE_UNNAMED_RETENTION_DAYS` | `180` | Unnamed faces are deleted after this. |
+| `PET_MATCHING_ENABLED` | `true` | Animal spotting through the sidecar; a tagged pet is proposed on later look-alikes. |
+| `IMPORT_INBOX_DIR` | `/data/imports` | Folder the Takeout importer reads; the compose file mounts the `imports` volume there. Empty hides the section. |
+| `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET` | empty | OAuth client for the Google Photos picker (see below). |
+| `TOKEN_ENCRYPTION_KEY` | empty | 32 random bytes, base64; encrypts members' Google refresh tokens at rest. Required with the client id. |
 | `CSP_REPORT_ONLY` | `false` | Report Content-Security-Policy violations instead of blocking. |
 
-The heavy-work lock (transcoding, embeddings, faces one at a time) is held inside the worker process, so run exactly one worker: the web container (default) or the `worker` profile, not both.
+### Optional: Google Photos
+
+**Pick a few (the picker button).** In Google Cloud create a project, enable the *Google Photos Picker API*, configure the OAuth consent screen (External, add the family's addresses as test users unless you publish it) and create an OAuth client of type *Web application* with `https://album.example.com/api/google/callback` as the authorised redirect URI. Put the client id and secret in `.env` together with a fresh key:
+
+```bash
+openssl rand -base64 32   # → TOKEN_ENCRYPTION_KEY
+docker compose up -d
+```
+
+Each member then presses **Connect Google Photos** on the Upload page once. The server keeps one refresh token per member, encrypted with `TOKEN_ENCRYPTION_KEY`; nothing else from Google is stored, and Google never sees the album. If Google revokes the grant (a password change, six months of disuse on a test-mode consent screen), the button says so and the member connects again. To rotate the key, generate a new one, restart, and tell members to reconnect: old tokens fail to decrypt and are treated as disconnected, and *Disconnect* still removes them. Removing a member deletes their token and asks Google to forget the grant.
+
+**Everything at once (Takeout).** Export from Google Takeout with only *Google Photos* selected, in zip parts of 2 GB or 4 GB. Copy each part into the inbox and import it from the Admin page, one at a time:
+
+```bash
+docker compose cp ~/Downloads/takeout-20260901T120000Z-001.zip app:/data/imports/
+```
+
+The import streams the archive (memory stays flat whatever its size), reads the `.supplemental-metadata.json` sidecars for the capture date, position and description, skips anything already in the album (same bytes, or the same Google item), turns each Google album folder into a private collection, and queues every item through the normal processing pipeline. Each import's counts and any failures show on the Admin page. The zip is an unencrypted copy of your whole export: delete it from the inbox from the Admin page once its photos are in. Nothing contacts Google during a Takeout import.
+
+`ml-init` also fetches the animal detector used for pet spotting (about 80 MB); after upgrading from a version without it, run `docker compose run --rm ml-init` again or the sidecar answers 503 for animals and the app skips spotting.
+
+The heavy-work lock (transcoding, embeddings, faces, animals one at a time) is held inside the worker process, so run exactly one worker: the web container (default) or the `worker` profile, not both.
 
 ## 8. First sign-in
 
@@ -277,7 +302,7 @@ docker compose up --build -d
 docker image prune -f
 ```
 
-Migrations run automatically at start. Take a database dump first (step 9) before any upgrade. In-flight photo processing is given 45 seconds to finish before the old container stops. A description backfill that is still submitting is cut short by an upgrade: the Admin page says so under that run within the hour, and running the backfill again picks up the remaining items (nothing already sent is sent twice).
+Migrations run automatically at start. Take a database dump first (step 9) before any upgrade. In-flight photo processing is given 45 seconds to finish before the old container stops. A description backfill that is still submitting is cut short by an upgrade: the Admin page says so under that run within about an hour. Wait until no row of that run still reads "in progress" (batches already sent keep processing at Anthropic for up to a day), then run the backfill again for the remaining items; the app refuses to start a new run while one is open, so nothing is sent twice.
 
 Two things to know when upgrading an install from before the media-hub release: the database image changed from `postgres:16` to `pgvector/pgvector:pg16` (same data format; compose replaces the container and keeps the `pgdata` volume, and the first start creates the `vector` extension), and if you run the ML sidecar its profile must be part of every `up`. Put `COMPOSE_PROFILES=ml` (plus `worker` if used) in `.env` so `docker compose up --build -d` and `deploy/update.sh` include it, then run `docker compose run --rm ml-init` once to fetch the weights.
 

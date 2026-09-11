@@ -45,6 +45,7 @@
     "stream-json": "^3.6.0",
     "tz-lookup": "^6.1.25",
     "uplot": "^1.6.32",
+    "yauzl": "^3.4.0",
     "zod": "^4.5.4"
   },
   "devDependencies": {
@@ -58,6 +59,8 @@
     "@types/react-dom": "^19",
     "@types/stream-json": "^1.7.8",
     "@types/tz-lookup": "^6.1.2",
+    "@types/yauzl": "^3.4.0",
+    "@types/yazl": "^3.3.1",
     "dotenv": "^17.4.2",
     "eslint": "^9",
     "eslint-config-next": "16.3.4",
@@ -65,7 +68,8 @@
     "tailwindcss": "^4",
     "tsx": "^4.23.13",
     "typescript": "^5",
-    "vitest": "^5.0.0"
+    "vitest": "^5.0.0",
+    "yazl": "^3.3.1"
   },
   "packageManager": "pnpm@10.33.0",
   "pnpm": {

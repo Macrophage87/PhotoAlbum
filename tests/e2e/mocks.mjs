@@ -8,6 +8,8 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const poster = readFileSync(path.join(here, "../fixtures/photo-no-gps.jpg"));
 const annotation = readFileSync(path.join(here, "../fixtures/annotation-response.json"), "utf8");
 const batches = new Map();
+const pickerSessions = new Map();
+const fixtureBytes = (name) => readFileSync(path.join(here, "../fixtures", name));
 
 /** A Messages API reply shaped like the real one, with the recorded structured record as its text block. */
 function message(model, text = annotation) {
@@ -50,7 +52,7 @@ export function startMocks(port = 3201) {
     const json = (status, body) => { res.writeHead(status, { "content-type": "application/json" }); res.end(JSON.stringify(body)); };
     // --- ML sidecar stand-in: deterministic unit vectors derived from the input, like the Python stub ---
     if (url.pathname === "/health") return json(200, { ok: true, models: "stub", dims: { image: 512, text: 384, face: 512 } });
-    if (url.pathname.startsWith("/embed/") || url.pathname === "/faces") {
+    if (url.pathname.startsWith("/embed/") || url.pathname === "/faces" || url.pathname === "/animals") {
       if (req.headers["x-ml-token"] !== "e2e-ml-token") return json(401, { detail: "missing or wrong token" });
       const body = await readBody(req);
       if (url.pathname === "/embed/text") {
@@ -58,6 +60,7 @@ export function startMocks(port = 3201) {
         return json(200, { embeddings: texts.map((t) => seeded(`text:${String(t).trim().toLowerCase()}`, 384)), dim: 384 });
       }
       if (url.pathname === "/embed/image") return json(200, { embedding: seeded(`image:${hash(filePart(body))}`, 512), dim: 512 });
+      if (url.pathname === "/animals") return json(200, { animals: [{ box: [0.1, 0.5, 0.4, 0.4], species: "DOG", confidence: 0.9, embedding: seeded(`animal:${hash(filePart(body))}`, 512) }], dim: 512 });
       return json(200, { faces: [{ box: [0.3, 0.2, 0.25, 0.35], confidence: 0.98, embedding: seeded(`face:${hash(filePart(body))}`, 512), age: 34 }], dim: 512 });
     }
     // --- Anthropic Messages API stand-in ---
@@ -87,6 +90,70 @@ export function startMocks(port = 3201) {
         return;
       }
       return json(200, { id, type: "message_batch", processing_status: "ended", request_counts: { processing: 0, succeeded: requests.length, errored: 0, canceled: 0, expired: 0 }, created_at: new Date().toISOString(), expires_at: new Date(Date.now() + 86400000).toISOString(), ended_at: new Date().toISOString(), cancel_initiated_at: null, results_url: `http://127.0.0.1:${port}/v1/messages/batches/${id}/results`, archived_at: null });
+    }
+    // --- Google OAuth and the Photos Picker API stand-ins ---
+    if (url.pathname === "/google-accounts/o/oauth2/v2/auth") {
+      // The consent screen: send the browser straight back with a code, keeping the state.
+      const back = new URL(url.searchParams.get("redirect_uri"));
+      back.searchParams.set("code", url.searchParams.get("prompt") === "consent" && url.searchParams.get("access_type") === "offline" ? "mock-code" : "no-offline");
+      back.searchParams.set("state", url.searchParams.get("state") ?? "");
+      back.searchParams.set("scope", url.searchParams.get("scope") ?? "");
+      res.writeHead(302, { location: back.toString() });
+      res.end();
+      return;
+    }
+    if (url.pathname === "/google-oauth/token" && req.method === "POST") {
+      const form = new URLSearchParams(await readBody(req));
+      if (form.get("client_id") !== "e2e-client" || form.get("client_secret") !== "e2e-secret") return json(401, { error: "invalid_client" });
+      if (form.get("grant_type") === "authorization_code") {
+        if (form.get("code") !== "mock-code") return json(400, { error: "invalid_grant", error_description: "bad code" });
+        return json(200, { access_token: "mock-access", refresh_token: "mock-refresh", expires_in: 3600, scope: "https://www.googleapis.com/auth/photospicker.mediaitems.readonly", token_type: "Bearer" });
+      }
+      if (form.get("refresh_token") === "mock-refresh") return json(200, { access_token: "mock-access", expires_in: 3600, token_type: "Bearer" });
+      return json(400, { error: "invalid_grant", error_description: "Token has been expired or revoked." });
+    }
+    if (url.pathname === "/google-oauth/revoke") return json(200, {});
+    if (url.pathname.startsWith("/google-picker/")) {
+      const rest = url.pathname.slice("/google-picker/".length);
+      // The picking page a person would see: visiting it counts as picking two fixture photos and one clip and pressing Done.
+      if (rest.startsWith("pick/")) {
+        const s = pickerSessions.get(rest.slice(5));
+        if (s) s.mediaItemsSet = true;
+        res.writeHead(200, { "content-type": "text/html" });
+        res.end("<html><body><h1>Mock Google Photos picker</h1><p>Done. You can close this tab.</p></body></html>");
+        return;
+      }
+      if (rest.startsWith("download/")) {
+        const [name, mode] = rest.slice(9).split("=");
+        if (req.headers.authorization !== "Bearer mock-access") return json(401, { error: "unauthenticated" });
+        res.writeHead(200, { "content-type": mode === "dv" ? "video/mp4" : "image/jpeg" });
+        res.end(fixtureBytes(name));
+        return;
+      }
+      if (req.headers.authorization !== "Bearer mock-access") return json(401, { error: { code: 401, status: "UNAUTHENTICATED" } });
+      if (rest === "sessions" && req.method === "POST") {
+        const id = `sess-${pickerSessions.size + 1}-${Date.now()}`;
+        const s = { id, pickerUri: `http://127.0.0.1:${port}/google-picker/pick/${id}`, mediaItemsSet: false, pollingConfig: { pollInterval: "1s", timeoutIn: "1800s" }, expireTime: new Date(Date.now() + 1800_000).toISOString() };
+        pickerSessions.set(id, s);
+        return json(200, s);
+      }
+      if (rest.startsWith("sessions/")) {
+        const s = pickerSessions.get(rest.slice(9));
+        if (!s) return json(404, { error: { code: 404 } });
+        if (req.method === "DELETE") { pickerSessions.delete(s.id); return json(200, {}); }
+        return json(200, s);
+      }
+      if (rest.startsWith("mediaItems")) {
+        const s = pickerSessions.get(url.searchParams.get("sessionId") ?? "");
+        if (!s?.mediaItemsSet) return json(400, { error: { code: 400, message: "not set" } });
+        const base = `http://127.0.0.1:${port}/google-picker/download/`;
+        return json(200, { mediaItems: [
+          { id: "gp-item-1", createTime: "2025-08-12T13:30:00Z", type: "PHOTO", mediaFile: { baseUrl: `${base}photo-with-gps.jpg`, mimeType: "image/jpeg", filename: "photo-with-gps.jpg", mediaFileMetadata: { width: 1200, height: 800 } } },
+          { id: "gp-item-2", createTime: "2019-07-03T12:00:00Z", type: "PHOTO", mediaFile: { baseUrl: `${base}photo-no-exif.jpg`, mimeType: "image/jpeg", filename: "IMG_2001.jpg", mediaFileMetadata: { width: 800, height: 600 } } },
+          { id: "gp-item-3", createTime: "2019-07-04T12:00:00Z", type: "VIDEO", mediaFile: { baseUrl: `${base}clip.mp4`, mimeType: "video/mp4", filename: "clip.mp4", mediaFileMetadata: { width: 320, height: 240 } } },
+        ] });
+      }
+      return json(404, { error: { code: 404 } });
     }
     if (url.pathname === "/oembed") {
       const target = url.searchParams.get("url") ?? "";

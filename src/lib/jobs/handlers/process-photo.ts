@@ -1,7 +1,9 @@
 import { stat } from "node:fs/promises";
 import { db } from "@/lib/db";
 import { storage } from "@/lib/storage";
-import { cameraLabel, readExif, resolveTakenAt } from "@/lib/images/exif";
+import { cameraLabel, readExif, resolveTakenAt, type TakenAtResolution } from "@/lib/images/exif";
+import { timezoneForCoords } from "@/lib/geo/tz";
+import { sha256File } from "@/lib/media/hash";
 import { heicToJpegBuffer, isHeic } from "@/lib/images/heic";
 import { makeRenditions } from "@/lib/images/renditions";
 import { pickActivityByTime, pickTripByDay } from "@/lib/photos/assign";
@@ -10,6 +12,7 @@ import { enqueue } from "../boss";
 import { QUEUES, type ProcessPhotoJob } from "../queues";
 import { enqueueEmbedding } from "./embed-photo";
 import { enqueueFaceDetection } from "./detect-faces";
+import { enqueueAnimalDetection } from "./detect-animals";
 
 /**
  * Turn an uploaded original into a usable photo: EXIF, timezone-correct takenAt, GPS,
@@ -31,7 +34,8 @@ export async function processPhoto(job: ProcessPhotoJob): Promise<void> {
       const { width, height, renditions } = await makeRenditions(localPath, photo.storageKey, (key, buf) => store.putBuffer(key, buf));
       await db.photo.update({ where: { id: photo.id }, data: { status: "READY", width, height, renditions } });
       await enqueueEmbedding(photo.id);
-    await enqueueFaceDetection(photo.id);
+      await enqueueFaceDetection(photo.id);
+      await enqueueAnimalDetection(photo.id);
       return;
     }
 
@@ -49,6 +53,8 @@ export async function processPhoto(job: ProcessPhotoJob): Promise<void> {
     const explicitTrip = job.tripId ? await db.trip.findUnique({ where: { id: job.tripId } }) : photo.tripId ? await db.trip.findUnique({ where: { id: photo.tripId } }) : null;
     let trip = explicitTrip;
     let resolved = resolveTakenAt(exif, trip?.timezone ?? null);
+    // A Takeout sidecar's date is authoritative (Google's own record of the capture time); EXIF supplies the zone.
+    if (photo.takenAtSource === "SIDECAR" && photo.takenAt) resolved = sidecarResolution(photo.takenAt, resolved, exif, trip?.timezone ?? null, photo.gpsSource === "SIDECAR" ? { lat: photo.lat, lng: photo.lng } : null);
     if (!trip && resolved) {
       const candidates = await db.trip.findMany({ select: { id: true, startDate: true, endDate: true, timezone: true } });
       const match = pickTripByDay(candidates, resolved.wallDay);
@@ -56,6 +62,7 @@ export async function processPhoto(job: ProcessPhotoJob): Promise<void> {
         trip = await db.trip.findUnique({ where: { id: match.id } });
         // Re-resolve now that we know the trip's zone (matters when EXIF has no offset and no GPS).
         if (resolved.source === "TRIP_TZ") resolved = resolveTakenAt(exif, trip?.timezone ?? null);
+        else if (resolved.source === "SIDECAR" && photo.takenAt) resolved = sidecarResolution(photo.takenAt, resolveTakenAt(exif, trip?.timezone ?? null), exif, trip?.timezone ?? null, photo.gpsSource === "SIDECAR" ? { lat: photo.lat, lng: photo.lng } : null);
       }
     }
 
@@ -94,6 +101,8 @@ export async function processPhoto(job: ProcessPhotoJob): Promise<void> {
     }
 
     const hasGps = exif.lat !== null && exif.lng !== null;
+    const sidecarGps = photo.gpsSource === "SIDECAR" && photo.lat !== null && photo.lng !== null;
+    const contentHash = photo.contentHash ?? (await sha256File(localPath));
     await db.photo.update({
       where: { id: photo.id },
       data: {
@@ -103,10 +112,11 @@ export async function processPhoto(job: ProcessPhotoJob): Promise<void> {
         takenAt,
         takenAtSource,
         tzOffsetMin,
-        lat: hasGps ? exif.lat : photo.gpsSource === "MANUAL" ? photo.lat : null,
-        lng: hasGps ? exif.lng : photo.gpsSource === "MANUAL" ? photo.lng : null,
+        lat: hasGps ? exif.lat : photo.gpsSource === "MANUAL" || sidecarGps ? photo.lat : null,
+        lng: hasGps ? exif.lng : photo.gpsSource === "MANUAL" || sidecarGps ? photo.lng : null,
         altitude: hasGps ? exif.altitude : null,
-        gpsSource: hasGps ? "EXIF" : photo.gpsSource === "MANUAL" ? "MANUAL" : null,
+        gpsSource: hasGps ? "EXIF" : photo.gpsSource === "MANUAL" ? "MANUAL" : sidecarGps ? "SIDECAR" : null,
+        contentHash,
         camera: cameraLabel(exif),
         lens: exif.lens,
         exif: {
@@ -127,9 +137,10 @@ export async function processPhoto(job: ProcessPhotoJob): Promise<void> {
 
     await enqueueEmbedding(photo.id);
     await enqueueFaceDetection(photo.id);
+    await enqueueAnimalDetection(photo.id);
 
     // 7. Position GPS-less photos from any track covering that moment (handler lands in Phase 5)
-    if (trip && !hasGps && takenAt) {
+    if (trip && !hasGps && !sidecarGps && takenAt) {
       await enqueue(QUEUES.geotagPhotos, { tripId: trip.id }, { singletonKey: `geotag:${trip.id}`, singletonSeconds: 10, singletonNextSlot: true });
     }
   } catch (err) {
@@ -138,4 +149,20 @@ export async function processPhoto(job: ProcessPhotoJob): Promise<void> {
     await db.photo.update({ where: { id: photo.id }, data: { status: "FAILED", error: message.slice(0, 500) } });
     throw err;
   }
+}
+
+/**
+ * Keep a sidecar's instant and work out its zone: the EXIF offset when present, else the zone at the sidecar's or
+ * EXIF's position, else the trip's zone, else UTC.
+ */
+function sidecarResolution(takenAt: Date, fromExif: TakenAtResolution | null, exif: { lat: number | null; lng: number | null }, tripTimezone: string | null, sidecarGps: { lat: number | null; lng: number | null } | null): TakenAtResolution {
+  let tzOffsetMin: number;
+  if (fromExif?.source === "EXIF_OFFSET") tzOffsetMin = fromExif.tzOffsetMin;
+  else {
+    const lat = sidecarGps?.lat ?? exif.lat;
+    const lng = sidecarGps?.lng ?? exif.lng;
+    const zone = (lat !== null && lng !== null ? timezoneForCoords(lat, lng) : null) ?? tripTimezone ?? "UTC";
+    tzOffsetMin = offsetMinutesInZone(takenAt, zone);
+  }
+  return { takenAt, tzOffsetMin, source: "SIDECAR", wallDay: localDayFromOffset(takenAt, tzOffsetMin) };
 }

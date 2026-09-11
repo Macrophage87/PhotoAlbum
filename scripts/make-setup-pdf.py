@@ -201,6 +201,10 @@ S += [P("4. Configuration reference (.env)", H1),
         ["ML_IDLE_UNLOAD_SECONDS", "300", "The sidecar frees its models after this much idle time."],
         ["FACE_INDEXING_ENABLED", "false", "Operator half of the face-detection switch; the admin's opt-in is the other half."],
         ["FACE_UNNAMED_RETENTION_DAYS", "180", "Faces nobody names are deleted after this many days."],
+        ["PET_MATCHING_ENABLED", "true", "Animal spotting through the ML sidecar. A pet you have tagged once is proposed on later look-alikes."],
+        ["IMPORT_INBOX_DIR", "/data/imports", "Folder the Google Takeout importer reads zip files from (the imports volume). Empty hides the section on the Admin page."],
+        ["GOOGLE_OAUTH_CLIENT_ID / _SECRET", "(empty)", "OAuth client for the Google Photos picker button. See the deployment guide for the Google Cloud steps."],
+        ["TOKEN_ENCRYPTION_KEY", "(empty)", "32 random bytes in base64 (openssl rand -base64 32). Encrypts members' Google tokens; required with the client id."],
         ["ANTHROPIC_BASE_URL, YOUTUBE_*_URL", "(empty)", "Endpoints for test doubles; leave empty."],
         ["CSP_REPORT_ONLY", "false", "Report Content-Security-Policy violations instead of blocking them, while trying a new map provider."],
         ["COMPOSE_PROFILES", "(empty)", "Read by Docker Compose: set to ml (and/or worker) so every 'up' includes those optional services."],
@@ -272,7 +276,10 @@ S += [P("6. Using the album", H1),
       P("With the ML sidecar running, an admin can turn on face detection from the Admin page after reading what it does. Faces are then found and grouped on your own server. "
         "On the People page, name a group once and it becomes a person with a page of their photos. Whether that person is recognised in new photos is a separate decision only an admin can make, "
         "off by default and never for a child without a parent's instruction; faces nobody names are deleted after six months, and anyone can be forgotten at any time. Names are only ever shown to family members. "
-        "Once someone is recognised, the album asks \"Probably Grandma Jo?\" on later photos and waits for you to say yes or no. Pets get a record with their species and years, and are tagged by hand from the photo viewer."),
+        "Once someone is recognised, the album asks \"Probably Grandma Jo?\" on later photos and waits for you to say yes or no. Pets get a record with their species and years; tag one by hand from the photo viewer, and with the sidecar running the album spots animals too and asks \"Probably Biscuit?\" on later look-alikes of the same kind (a flock record like \"the chickens\" is proposed whenever chickens are seen)."),
+      P("Bringing photos over from Google Photos", H2),
+      P("Two routes, neither a background sync (Google no longer allows one). <b>Pick a few:</b> once the operator has set up a Google OAuth client (deployment guide), each member presses <b>Connect Google Photos</b> on the Upload page once; after that, <b>Pick from Google Photos</b> opens Google's own picking page, and what they pick is copied into the album and shown on the review screen. Google leaves the location out of those copies, so add places on the review screen or file them to a trip with a track. "
+        "<b>Everything at once:</b> export your library with Google Takeout (Google Photos only), copy the zip files to the server's import inbox, and import each from the Admin page. Dates, places, descriptions and album membership come across from Google's sidecar files, duplicates are skipped, and each Google album becomes a private collection. Delete the zip from the inbox once its photos are in: it is an unencrypted copy of your export."),
       P("Similar photos", H2),
       P("With the ML sidecar running, the album keeps track of which photos look alike. The Graph page (members only) draws them as a web of thumbnails you can pan and zoom; "
         "colour it by trip, collection, person or who uploaded, and drag the slider to show only the closest matches. Each photo page also shows a small strip of look-alikes. Only photos you can see are ever linked."),
@@ -385,7 +392,7 @@ docker compose up --build -d          # add --profile ml if you run the sidecar 
 docker compose run --rm ml-init       # only after an upgrade that changes the sidecar's models
 """),
       P("Database migrations run automatically at container start. Take a database dump before upgrading, as a precaution. "
-        "An AI-description backfill still in progress is cut short by an upgrade; the Admin page says so under that run, and starting the backfill again sends only what is left. "
+        "An AI-description backfill still in progress is cut short by an upgrade; the Admin page says so under that run within about an hour. Wait until none of its rows reads in progress, then start the backfill again for what is left (the app refuses a new run while one is open). "
         "The first upgrade to the media-hub release replaces the database container with the pgvector image; the data in the pgdata volume is kept as it is.")]
 
 # ---------- 9 ----------
@@ -444,6 +451,9 @@ S += [P("10. Troubleshooting", H1),
         ["Photo landed on the wrong day or trip", "Camera clock or time zone. Open the photo and use the time-zone shift control, or set the trip's time zone correctly before uploading."],
         ["Photo has no location on the map", "No GPS in the file and no track covering that time. Import a GPX/FIT/Google trace for that day; photos are then geotagged from it automatically."],
         ["Google import created nothing", "No points inside the trip's dates. Check the trip dates and that the file is a Timeline export (Timeline.json, Records.json or Semantic Location History)."],
+        ["Takeout import skipped everything", "The photos are already in the album (same bytes or the same Google item). The import report on the Admin page shows the count."],
+        ["\"Google Photos needs to be connected again\"", "Google revoked the member's grant (a password change, or six months unused on a test-mode consent screen). Press Connect again on the Upload page."],
+        ["No \"Probably Biscuit?\" for a pet", "Spotting needs the sidecar, PET_MATCHING_ENABLED, and one hand tag of that pet on a photo where an animal was found; the Admin page shows the sighting counts."],
         ["Map is blank", "Tile server unreachable or NEXT_PUBLIC_TILE_URL / NEXT_PUBLIC_MAP_STYLE_URL wrong. Clear them to fall back to OpenStreetMap. NEXT_PUBLIC values are baked in at build time, so rebuild after changing them."],
         ["Container restarts on start", "Migration failure or database not ready; run docker compose logs app. The db service has a health check so app waits for it."],
         ["Disk full", "Photos volume. Move Docker's data root or mount a larger disk at the volume; originals are never deleted automatically."],

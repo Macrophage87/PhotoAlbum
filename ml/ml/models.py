@@ -1,7 +1,8 @@
 """Model loading with a deterministic stub mode.
 
-Real mode loads InsightFace buffalo_l (faces, 512-d), OpenCLIP ViT-B/32 (image embeddings, 512-d) and
-all-MiniLM-L6-v2 (text embeddings, 384-d) lazily on first use and unloads them after ML_IDLE_UNLOAD_SECONDS.
+Real mode loads InsightFace buffalo_l (faces, 512-d), OpenCLIP ViT-B/32 (image embeddings, 512-d),
+all-MiniLM-L6-v2 (text embeddings, 384-d) and a torchvision Faster R-CNN (animals, COCO classes) lazily on first use
+and unloads them after ML_IDLE_UNLOAD_SECONDS.
 Stub mode (ML_STUB_MODELS=1) returns embeddings derived from a hash of the input, so the same bytes always
 produce the same vector and tests never need weights.
 """
@@ -24,6 +25,20 @@ TEXT_DIM = 384
 STUB = os.environ.get("ML_STUB_MODELS", "0") in {"1", "true", "yes"}
 MODEL_DIR = os.environ.get("ML_MODEL_DIR", "/models")
 IDLE_UNLOAD_SECONDS = int(os.environ.get("ML_IDLE_UNLOAD_SECONDS", "300"))
+
+
+# COCO category ids from the torchvision detection models, mapped onto the album's species list.
+COCO_SPECIES = {16: "CHICKEN", 17: "CAT", 18: "DOG", 19: "HORSE", 20: "OTHER", 21: "OTHER", 22: "OTHER", 23: "OTHER", 24: "OTHER", 25: "OTHER"}
+ANIMAL_MIN_SCORE = float(os.environ.get("ML_ANIMAL_MIN_SCORE", "0.6"))
+DETECTOR_FILE = "fasterrcnn_mobilenet_v3_large_320_fpn.pth"
+
+
+@dataclass
+class Animal:
+    box: tuple[float, float, float, float]  # x, y, w, h as fractions of the image
+    species: str
+    confidence: float
+    embedding: list[float]  # CLIP embedding of the crop, 512-d
 
 
 @dataclass
@@ -58,12 +73,13 @@ class Models:
         self._clip = None
         self._text = None
         self._faces = None
+        self._detector = None
 
     # ---- lifecycle ----
     def status(self) -> str:
         if STUB:
             return "stub"
-        return "loaded" if (self._clip or self._text or self._faces) else ("missing" if not self.weights_present() else "idle")
+        return "loaded" if (self._clip or self._text or self._faces or self._detector) else ("missing" if not self.weights_present() else "idle")
 
     @staticmethod
     def weights_present() -> bool:
@@ -76,7 +92,7 @@ class Models:
         if not self.lock.acquire(blocking=False):
             return
         try:
-            self._clip = self._text = self._faces = None
+            self._clip = self._text = self._faces = self._detector = None
         finally:
             self.lock.release()
 
@@ -84,11 +100,7 @@ class Models:
         self.last_used = time.monotonic()
 
     # ---- image embeddings ----
-    def embed_image(self, image_bytes: bytes) -> list[float]:
-        self._touch()
-        if STUB:
-            # Stable per input, but stable across renditions of the same picture is not required in stub mode.
-            return _seeded(image_bytes, IMAGE_DIM, "image")
+    def _clip_embed(self, image: Image.Image) -> list[float]:
         import torch  # noqa: WPS433 (heavy import kept local)
 
         if self._clip is None:
@@ -99,9 +111,59 @@ class Models:
             self._clip = (model, preprocess)
         model, preprocess = self._clip
         with torch.no_grad():
-            tensor = preprocess(_open(image_bytes)).unsqueeze(0)
+            tensor = preprocess(image).unsqueeze(0)
             vec = model.encode_image(tensor)[0].cpu().numpy()
         return _unit(vec)
+
+    def embed_image(self, image_bytes: bytes) -> list[float]:
+        self._touch()
+        if STUB:
+            # Stable per input, but stable across renditions of the same picture is not required in stub mode.
+            return _seeded(image_bytes, IMAGE_DIM, "image")
+        return self._clip_embed(_open(image_bytes))
+
+    # ---- animals ----
+    @staticmethod
+    def detector_present() -> bool:
+        return STUB or os.path.isfile(os.path.join(MODEL_DIR, "detector", DETECTOR_FILE))
+
+    def animals(self, image_bytes: bytes) -> list[Animal]:
+        """Animals in the picture with a CLIP embedding of each crop, so the same pet looks alike across photos."""
+        self._touch()
+        if STUB:
+            # One dog per image, derived from the bytes; pictures whose second digest byte is divisible by three also get a cat.
+            digest = hashlib.sha256(image_bytes).digest()
+            out = [Animal(box=(0.1, 0.5, 0.4, 0.4), species="DOG", confidence=0.9, embedding=_seeded(image_bytes, IMAGE_DIM, "animal"))]
+            if digest[1] % 3 == 0:
+                out.append(Animal(box=(0.6, 0.6, 0.25, 0.3), species="CAT", confidence=0.8, embedding=_seeded(image_bytes, IMAGE_DIM, "animal2")))
+            return out
+        import torch
+
+        if self._detector is None:
+            from torchvision.models.detection import fasterrcnn_mobilenet_v3_large_320_fpn
+
+            model = fasterrcnn_mobilenet_v3_large_320_fpn(weights=None, weights_backbone=None)
+            model.load_state_dict(torch.load(os.path.join(MODEL_DIR, "detector", DETECTOR_FILE), map_location="cpu"))
+            model.eval()
+            self._detector = model
+        image = _open(image_bytes)
+        w, h = image.size
+        tensor = torch.from_numpy(np.asarray(image)).permute(2, 0, 1).float() / 255.0
+        with torch.no_grad():
+            pred = self._detector([tensor])[0]
+        out: list[Animal] = []
+        for box, label, score in zip(pred["boxes"].tolist(), pred["labels"].tolist(), pred["scores"].tolist()):
+            species = COCO_SPECIES.get(int(label))
+            if species is None or score < ANIMAL_MIN_SCORE:
+                continue
+            x1, y1, x2, y2 = box
+            # A little context around the animal helps the embedding; clamp to the frame.
+            pad = 0.1 * max(x2 - x1, y2 - y1)
+            crop = image.crop((max(0, x1 - pad), max(0, y1 - pad), min(w, x2 + pad), min(h, y2 + pad)))
+            out.append(Animal(box=(x1 / w, y1 / h, (x2 - x1) / w, (y2 - y1) / h), species=species, confidence=float(score), embedding=self._clip_embed(crop)))
+            if len(out) >= 8:
+                break
+        return out
 
     # ---- text embeddings ----
     def embed_text(self, texts: list[str]) -> list[list[float]]:

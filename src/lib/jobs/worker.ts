@@ -33,6 +33,10 @@ export async function startWorker(): Promise<void> {
   const { embedPhoto, embedSweep } = await import("./handlers/embed-photo");
   const { detectFacesJob, faceSweep, purgeUnnamedFaces, flagNewAdults } = await import("./handlers/detect-faces");
   const { matchPhoto } = await import("./handlers/match-photo");
+  const { importTakeoutArchive } = await import("@/lib/takeout/import");
+  const { googlePickerImport } = await import("./handlers/google-picker-import");
+  const { detectAnimalsJob, animalSweep } = await import("./handlers/detect-animals");
+  const { proposeAnimalsForPhoto } = await import("@/lib/pets/proposals");
 
   await boss.work(QUEUES.processPhoto, { batchSize: 1, localConcurrency: 2, pollingIntervalSeconds: 2 }, async ([job]) =>
     processPhoto(job.data as never),
@@ -57,6 +61,11 @@ export async function startWorker(): Promise<void> {
   await boss.work(QUEUES.embedPhoto, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 3 }, async ([job]) => embedPhoto(job.data as never));
   await boss.work(QUEUES.embedSweep, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 30 }, async () => void (await embedSweep()));
   await boss.work(QUEUES.detectFaces, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 3 }, async ([job]) => detectFacesJob(job.data as never));
+  await boss.work(QUEUES.takeoutImport, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 5 }, async ([job]) => importTakeoutArchive((job.data as { importId: string }).importId));
+  await boss.work(QUEUES.detectAnimals, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 3 }, async ([job]) => detectAnimalsJob(job.data as never));
+  await boss.work(QUEUES.animalSweep, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 30 }, async () => void (await animalSweep()));
+  await boss.work(QUEUES.matchAnimals, { batchSize: 1, localConcurrency: 2, pollingIntervalSeconds: 2 }, async ([job]) => void (await proposeAnimalsForPhoto((job.data as { photoId: string }).photoId)));
+  await boss.work(QUEUES.googlePickerImport, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 2 }, async ([job]) => googlePickerImport(job.data as never));
   await boss.work(QUEUES.matchPhoto, { batchSize: 1, localConcurrency: 2, pollingIntervalSeconds: 2 }, async ([job]) => matchPhoto(job.data as never));
   await boss.work(QUEUES.faceSweep, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 30 }, async () => void (await faceSweep()));
   await boss.work(QUEUES.flagNewAdults, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60 }, async () => void (await flagNewAdults()));
@@ -69,6 +78,7 @@ export async function startWorker(): Promise<void> {
   await boss.schedule(QUEUES.purgeAnnotationRaw, "30 3 * * *", {}, { retryLimit: 0 });
   await boss.schedule(QUEUES.embedSweep, "*/5 * * * *", {}, { retryLimit: 0 });
   await boss.schedule(QUEUES.faceSweep, "*/5 * * * *", {}, { retryLimit: 0 });
+  await boss.schedule(QUEUES.animalSweep, "*/5 * * * *", {}, { retryLimit: 0 });
   await boss.schedule(QUEUES.purgeUnnamedFaces, "45 3 * * *", {}, { retryLimit: 0 });
   await boss.schedule(QUEUES.flagNewAdults, "50 3 * * *", {}, { retryLimit: 0 });
   console.log("[worker] pg-boss handlers registered");

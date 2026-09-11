@@ -4,6 +4,8 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { z } from "zod";
 import { db } from "@/lib/db";
+import { claimAnimalsForPet, confirmAnimalAs, rejectAnimal, releaseAnimalsForPet } from "@/lib/pets/proposals";
+import { enqueueAnimalMatchAllOpen } from "@/lib/jobs/handlers/detect-animals";
 import { requireUserOrThrow } from "@/lib/auth/viewer";
 import { namingOutcome } from "@/lib/people/consent";
 import { enqueueEmbedding } from "@/lib/jobs/handlers/embed-photo";
@@ -199,9 +201,23 @@ export async function deleteAllFaceData(): Promise<void> {
 /** A member confirms a proposal ("Probably Grandma Jo?"). */
 export async function confirmProposal(faceId: string): Promise<void> {
   await requireUserOrThrow();
+  // Animal proposals share the list with face proposals under an `animal:` id.
+  if (faceId.startsWith("animal:")) {
+    const a = await db.animalDetection.findUniqueOrThrow({ where: { id: faceId.slice(7) }, select: { proposedPersonId: true, photoId: true } });
+    if (!a.proposedPersonId) throw new Error("Nothing proposed for this animal");
+    await confirmAnimalAs(faceId.slice(7), a.proposedPersonId);
+    await enqueueAnimalMatchAllOpen();
+    revalidatePath(`/photos/${a.photoId}`);
+    revalidatePath("/review");
+    revalidatePath("/people", "layout");
+    return;
+  }
   const face = await db.face.findUniqueOrThrow({ where: { id: faceId }, select: { proposedPersonId: true, photoId: true } });
   if (!face.proposedPersonId) throw new Error("Nothing proposed for this face");
   await confirmFaceAs(faceId, face.proposedPersonId);
+  // Saying yes to a pet named in the notes also claims that photo's detected animals of its kind.
+  const who = await db.person.findUnique({ where: { id: face.proposedPersonId }, select: { kind: true } });
+  if (who?.kind === "PET" && (await claimAnimalsForPet(face.photoId, face.proposedPersonId)) > 0) await enqueueAnimalMatchAllOpen();
   revalidatePath(`/photos/${face.photoId}`);
   revalidatePath("/review");
   revalidatePath("/people", "layout");
@@ -210,6 +226,13 @@ export async function confirmProposal(faceId: string): Promise<void> {
 /** A member rejects a proposal; the face stays unnamed and counts against that person from now on. */
 export async function rejectProposalAction(faceId: string): Promise<void> {
   await requireUserOrThrow();
+  if (faceId.startsWith("animal:")) {
+    const a = await db.animalDetection.findUniqueOrThrow({ where: { id: faceId.slice(7) }, select: { photoId: true } });
+    await rejectAnimal(faceId.slice(7));
+    revalidatePath(`/photos/${a.photoId}`);
+    revalidatePath("/review");
+    return;
+  }
   const face = await db.face.findUniqueOrThrow({ where: { id: faceId }, select: { photoId: true } });
   await rejectProposal(faceId);
   revalidatePath(`/photos/${face.photoId}`);
@@ -234,20 +257,21 @@ const petSchema = z.object({
   livedFrom: day,
   livedTo: day,
   isFlock: z.boolean(),
+  descriptors: z.string().trim().max(200).optional().transform((v) => v || null),
 });
 
 /** Pets have no consent settings: a record with species and lifespan, or a flock record for a species nobody tells apart. */
 export async function createPet(fd: FormData): Promise<void> {
   const user = await requireUserOrThrow();
-  const v = petSchema.parse({ name: fd.get("name"), species: fd.get("species"), livedFrom: fd.get("livedFrom") || undefined, livedTo: fd.get("livedTo") || undefined, isFlock: fd.get("isFlock") === "on" });
-  await db.person.create({ data: { kind: "PET", name: v.name, species: v.species, livedFrom: v.livedFrom, livedTo: v.livedTo, isFlock: v.isFlock, createdById: user.id } });
+  const v = petSchema.parse({ name: fd.get("name"), species: fd.get("species"), livedFrom: fd.get("livedFrom") || undefined, livedTo: fd.get("livedTo") || undefined, isFlock: fd.get("isFlock") === "on", descriptors: fd.get("descriptors") ?? undefined });
+  await db.person.create({ data: { kind: "PET", name: v.name, species: v.species, livedFrom: v.livedFrom, livedTo: v.livedTo, isFlock: v.isFlock, descriptors: v.descriptors, createdById: user.id } });
   revalidatePath("/people", "layout");
 }
 
 export async function updatePet(personId: string, fd: FormData): Promise<void> {
   await requireUserOrThrow();
-  const v = petSchema.parse({ name: fd.get("name"), species: fd.get("species"), livedFrom: fd.get("livedFrom") || undefined, livedTo: fd.get("livedTo") || undefined, isFlock: fd.get("isFlock") === "on" });
-  await db.person.update({ where: { id: personId, kind: "PET" }, data: { name: v.name, species: v.species, livedFrom: v.livedFrom, livedTo: v.livedTo, isFlock: v.isFlock } });
+  const v = petSchema.parse({ name: fd.get("name"), species: fd.get("species"), livedFrom: fd.get("livedFrom") || undefined, livedTo: fd.get("livedTo") || undefined, isFlock: fd.get("isFlock") === "on", descriptors: fd.get("descriptors") ?? undefined });
+  await db.person.update({ where: { id: personId, kind: "PET" }, data: { name: v.name, species: v.species, livedFrom: v.livedFrom, livedTo: v.livedTo, isFlock: v.isFlock, descriptors: v.descriptors } });
   revalidatePath("/people", "layout");
 }
 
@@ -261,6 +285,8 @@ export async function tagPet(photoId: string, personId: string): Promise<void> {
   if (pet.kind !== "PET") throw new Error("Not a pet");
   const existing = await db.face.findFirst({ where: { photoId, personId, status: "CONFIRMED" }, select: { id: true } });
   if (!existing) await db.face.create({ data: { photoId, personId, status: "CONFIRMED", box: [0, 0, 1, 1], confidence: 0 } });
+  // The tag also claims this photo's detected animals of the pet's kind, which is what teaches the matcher its look.
+  if ((await claimAnimalsForPet(photoId, personId)) > 0) await enqueueAnimalMatchAllOpen();
   revalidatePath(`/photos/${photoId}`);
   revalidatePath("/people", "layout");
 }
@@ -269,6 +295,7 @@ export async function untagPerson(photoId: string, personId: string): Promise<vo
   await requireUserOrThrow();
   await db.face.deleteMany({ where: { photoId, personId, confidence: 0 } });
   await db.face.updateMany({ where: { photoId, personId, confidence: { gt: 0 } }, data: { personId: null, status: "REJECTED", proposedPersonId: personId, clusterId: null } });
+  await releaseAnimalsForPet(photoId, personId);
   revalidatePath(`/photos/${photoId}`);
   revalidatePath("/people", "layout");
 }
@@ -276,6 +303,8 @@ export async function untagPerson(photoId: string, personId: string): Promise<vo
 /** Remove a pet record and its tags. People go through optOutPerson, which handles their templates. */
 export async function deletePerson(personId: string): Promise<void> {
   await requireAdmin();
+  // Its detections go back to being unclaimed animals rather than confirmed rows pointing at nobody.
+  await db.animalDetection.updateMany({ where: { OR: [{ personId }, { proposedPersonId: personId }] }, data: { personId: null, proposedPersonId: null, status: "DETECTED" } });
   await db.person.delete({ where: { id: personId, kind: "PET" } });
   revalidatePath("/people", "layout");
   redirect("/people");
