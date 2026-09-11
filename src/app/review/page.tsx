@@ -21,7 +21,7 @@ export const metadata = { title: "Review uploads" };
 
 /**
  * The review screen: a batch just uploaded (`?ids=`), or everything not yet reviewed. Members add notes, attach
- * items to trips and collections, and mark the batch reviewed. Later phases add annotation, suggestions and naming here.
+ * items to trips and collections, and mark the batch reviewed; the AI draft, suggestions, proposals and dates sit below.
  */
 export default async function ReviewPage({ searchParams }: PageProps<"/review">) {
   await requireUser("/review");
@@ -32,13 +32,13 @@ export default async function ReviewPage({ searchParams }: PageProps<"/review">)
   const batch = ids.length > 0;
   const gates = await annotationGates();
   const [photos, trips, collections, unreviewedCount] = await Promise.all([
-    db.photo.findMany({ where: batch ? { id: { in: ids } } : { reviewedAt: null }, orderBy: { createdAt: "desc" }, select: { ...photoCardSelect, context: true, reviewedAt: true, annotation: true, annotationOptOut: true, annotatedAt: true, estimatedDate: true, estimatedDateConfidence: true, estimatedDateNote: true, takenAtSource: true, trip: { select: { annotationOptOut: true } }, collections: { select: { collection: { select: { annotationOptOut: true } } } } } }),
+    db.photo.findMany({ where: batch ? { id: { in: ids } } : { reviewedAt: null }, orderBy: { createdAt: "desc" }, select: { ...photoCardSelect, context: true, reviewedAt: true, annotation: true, annotationOptOut: true, annotatedAt: true, estimatedDate: true, estimatedDateConfidence: true, estimatedDateNote: true, takenAtSource: true, trip: { select: { annotationOptOut: true } }, collections: { select: { collection: { select: { slug: true, title: true, annotationOptOut: true } } } } } }),
     db.trip.findMany({ orderBy: { startDate: "desc" }, select: { id: true, title: true } }),
     db.collection.findMany({ orderBy: { title: "asc" }, select: { id: true, title: true } }),
     db.photo.count({ where: { reviewedAt: null } }),
   ]);
   const allIds = photos.map((p) => p.id);
-  const [suggestions, proposals, unnamedFaces] = await Promise.all([suggestionsFor(allIds), proposalsFor(allIds), db.face.count({ where: { photoId: { in: allIds }, personId: null, status: { in: ["DETECTED", "REJECTED"] } } })]);
+  const [suggestions, proposals, unnamedFaces] = await Promise.all([suggestionsFor(allIds), proposalsFor(allIds), db.face.count({ where: { photoId: { in: allIds }, personId: null, clusterId: { not: null }, status: { in: ["DETECTED", "REJECTED"] } } })]);
   const optedOut = (p: (typeof photos)[number]) => p.annotationOptOut || Boolean(p.trip?.annotationOptOut) || p.collections.some((c) => c.collection.annotationOptOut);
   return (
     <AppShell viewer={viewer}>

@@ -20,6 +20,8 @@ export async function annotationSweep(): Promise<number> {
       AND COALESCE(t."annotationOptOut", false) = false
       AND NOT EXISTS (SELECT 1 FROM "CollectionItem" ci JOIN "Collection" c ON c.id = ci."collectionId" WHERE ci."photoId" = p.id AND c."annotationOptOut")
       AND (p."annotatedAt" IS NULL OR (p."contextUpdatedAt" IS NOT NULL AND p."contextUpdatedAt" > p."annotatedAt"))
+      -- An item whose batch errored or expired waits for the next backfill (at the batch price) rather than a single call.
+      AND (p."annotationError" IS NULL OR p."annotationError" NOT LIKE 'batch:%')
       AND p."updatedAt" < ${cutoff}
     LIMIT 200`;
   for (const r of rows) await enqueue(QUEUES.annotatePhoto, { photoId: r.id }, { singletonKey: `annotate:${r.id}`, singletonSeconds: 600 });

@@ -7,7 +7,9 @@ import { detectFaces, vectorLiteral } from "@/lib/ml/client";
 import { faceGates } from "@/lib/people/gates";
 import { nearestCluster, updatedCentroid } from "@/lib/people/cluster";
 import { boxIou } from "@/lib/people/match";
-import { proposeForPhoto } from "@/lib/people/matching";
+import { joinEraCluster, proposeForPhoto } from "@/lib/people/matching";
+import { ageAtCapture } from "@/lib/people/match";
+import { normalise } from "@/lib/people/cluster";
 import { withHeavyLock } from "../heavy-lock";
 import { enqueue } from "../boss";
 import { QUEUES, type DetectFacesJob } from "../queues";
@@ -19,7 +21,7 @@ import { QUEUES, type DetectFacesJob } from "../queues";
 export async function detectFacesJob(job: DetectFacesJob): Promise<void> {
   const gates = await faceGates();
   if (!gates.active) return;
-  const photo = await db.photo.findUnique({ where: { id: job.photoId }, select: { id: true, status: true, renditions: true, facesDetectedAt: true } });
+  const photo = await db.photo.findUnique({ where: { id: job.photoId }, select: { id: true, status: true, renditions: true, facesDetectedAt: true, takenAt: true, takenAtSource: true, estimatedDate: true } });
   if (!photo || photo.status !== "READY") return;
   const medium = (photo.renditions as Renditions | null)?.medium;
   const local = medium ? storage().localPath?.(medium.key) : undefined;
@@ -28,7 +30,7 @@ export async function detectFacesJob(job: DetectFacesJob): Promise<void> {
     const detected = await detectFaces(await readFile(local));
     // A re-scan keeps what people decided (confirmed and rejected faces) and only re-finds the rest.
     await db.face.deleteMany({ where: { photoId: photo.id, status: { in: ["DETECTED", "PROPOSED"] } } });
-    const kept = await db.face.findMany({ where: { photoId: photo.id }, select: { id: true, box: true, personId: true, confidence: true } });
+    const kept = await db.face.findMany({ where: { photoId: photo.id }, select: { id: true, box: true, personId: true, confidence: true, clusterId: true, ageAtCaptureYears: true } });
     const found = detected.filter((f) => !kept.some((k) => k.confidence > 0 && boxIou(k.box as [number, number, number, number], f.box) > 0.5));
     // Kept faces of consented people get their template back (it was nulled while recognition was off), and their
     // person's era centroids are rebuilt from the faces that now carry templates.
@@ -36,10 +38,16 @@ export async function detectFacesJob(job: DetectFacesJob): Promise<void> {
     for (const k of kept) {
       const again = detected.find((f) => k.confidence > 0 && boxIou(k.box as [number, number, number, number], f.box) > 0.5);
       if (!again || !k.personId) continue;
-      const person = await db.person.findUnique({ where: { id: k.personId }, select: { faceIndexing: true } });
+      const person = await db.person.findUnique({ where: { id: k.personId }, select: { faceIndexing: true, birthday: true } });
       if (!person?.faceIndexing) continue;
       const n = await db.$executeRaw`UPDATE "Face" SET embedding = ${vectorLiteral(again.embedding)}::vector WHERE id = ${k.id} AND embedding IS NULL`;
-      if (n > 0) restoredFor.add(k.personId);
+      if (n === 0) continue;
+      restoredFor.add(k.personId);
+      // A face named while recognition was off has no era cluster yet; give it one now so the matcher can find this person.
+      if (!k.clusterId) {
+        const realDate = photo.takenAt && photo.takenAtSource !== "FILE_MTIME" && photo.takenAtSource !== "UPLOAD_TIME" ? photo.takenAt : null;
+        await joinEraCluster(k.id, k.personId, again.embedding, ageAtCapture(person.birthday, realDate, photo.estimatedDate, k.ageAtCaptureYears));
+      }
     }
     for (const personId of restoredFor) await rebuildCentroids(personId);
     // Deleted faces leave their unnamed clusters lighter; keep the counts the running mean relies on honest.
@@ -71,14 +79,18 @@ export async function detectFacesJob(job: DetectFacesJob): Promise<void> {
 }
 
 /**
- * Recompute a person's era centroids from the faces in each cluster (mean of unit vectors, renormalised), after
- * templates were nulled and restored. Clusters that still have no templates keep a NULL centroid.
+ * Recompute a person's era centroids from the faces in each cluster (mean of unit vectors, renormalised in JS since
+ * the running mean elsewhere assumes unit centroids), after templates were nulled and restored. Clusters that still
+ * have no templates keep a NULL centroid.
  */
 export async function rebuildCentroids(personId: string): Promise<void> {
-  await db.$executeRaw`
-    UPDATE "FaceCluster" fc SET centroid = sub.c, "faceCount" = sub.n, "updatedAt" = now()
-    FROM (SELECT f."clusterId", avg(f.embedding) AS c, count(*)::int AS n FROM "Face" f WHERE f.embedding IS NOT NULL GROUP BY f."clusterId") sub
-    WHERE sub."clusterId" = fc.id AND fc."personId" = ${personId}`;
+  const rows = await db.$queryRaw<{ clusterId: string; c: string; n: number }[]>`
+    SELECT f."clusterId", avg(f.embedding)::text AS c, count(*)::int AS n FROM "Face" f JOIN "FaceCluster" fc ON fc.id = f."clusterId"
+    WHERE f.embedding IS NOT NULL AND fc."personId" = ${personId} GROUP BY f."clusterId"`;
+  for (const r of rows) {
+    const centroid = normalise(JSON.parse(r.c) as number[]);
+    await db.$executeRaw`UPDATE "FaceCluster" SET centroid = ${vectorLiteral(centroid)}::vector, "faceCount" = ${r.n}, "updatedAt" = now() WHERE id = ${r.clusterId}`;
+  }
   // Every open face may now match this person.
   const { enqueueMatchAllOpen } = await import("./match-photo");
   await enqueueMatchAllOpen();
@@ -120,8 +132,9 @@ export async function purgeUnnamedFaces(): Promise<number> {
  */
 export async function flagNewAdults(): Promise<number> {
   const { isMinor } = await import("@/lib/people/consent");
-  const people = await db.person.findMany({ where: { kind: "HUMAN", faceIndexing: false, pendingDecision: false, faceIndexingSetAt: null, adultAttestedAt: null, birthday: { not: null }, optedOutAt: null }, select: { id: true, birthday: true } });
-  const adults = people.filter((p) => !isMinor(p));
+  const people = await db.person.findMany({ where: { kind: "HUMAN", faceIndexing: false, pendingDecision: false, adultAttestedAt: null, birthday: { not: null }, optedOutAt: null }, select: { id: true, birthday: true, faceIndexingSetAt: true } });
+  // Adults now whose last recorded decision (if any) was taken while they were still minors.
+  const adults = people.filter((p) => !isMinor(p) && (!p.faceIndexingSetAt || isMinor(p, p.faceIndexingSetAt)));
   if (adults.length) await db.person.updateMany({ where: { id: { in: adults.map((p) => p.id) } }, data: { pendingDecision: true } });
   return adults.length;
 }

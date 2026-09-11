@@ -41,8 +41,9 @@ async function clipFrames(mp4Key: string, durationS: number | null): Promise<Buf
   const work = await mkdtemp(path.join(tmpdir(), "frames-"));
   try {
     const frames: Buffer[] = [];
+    // Without a known duration every fraction would be the same first frame: send one.
     const d = durationS ?? 0;
-    for (const fraction of [0.25, 0.5, 0.75]) {
+    for (const fraction of d > 0 ? [0.25, 0.5, 0.75] : [0]) {
       const out = path.join(work, `f${fraction}.jpg`);
       await ffmpeg(["-y", "-hide_banner", "-loglevel", "error", "-ss", (d * fraction).toFixed(2), "-i", input, "-frames:v", "1", "-vf", "scale='min(1280,iw)':-2", "-q:v", "4", out]);
       frames.push(await readFile(out));

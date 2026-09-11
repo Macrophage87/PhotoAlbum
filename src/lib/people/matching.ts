@@ -109,6 +109,11 @@ export async function confirmFaceAs(faceId: string, personId: string): Promise<v
   const row = await db.$queryRaw<{ embedding: string | null }[]>`SELECT embedding::text AS embedding FROM "Face" WHERE id = ${faceId}`;
   const embedding = row[0]?.embedding ? (JSON.parse(row[0].embedding) as number[]) : null;
   if (!embedding) return;
+  await joinEraCluster(faceId, personId, embedding, age);
+}
+
+/** Put a confirmed face with a template into the person's era cluster for its age, or start a new era. */
+export async function joinEraCluster(faceId: string, personId: string, embedding: number[], age: AgeAtCapture): Promise<void> {
   const eras = await db.$queryRaw<{ id: string; ageBandMin: number | null; ageBandMax: number | null; centroid: string | null; faceCount: number }[]>`SELECT id, "ageBandMin", "ageBandMax", centroid::text AS centroid, "faceCount" FROM "FaceCluster" WHERE "personId" = ${personId}`;
   const era = chooseEraCluster(eras, age);
   const band = widenedBand(era ?? { ageBandMin: null, ageBandMax: null }, age);

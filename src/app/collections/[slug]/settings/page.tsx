@@ -52,7 +52,7 @@ export default async function CollectionSettingsPage({ params, searchParams }: P
             <div className="flex flex-wrap gap-3 items-center">
               {warnings.exposingContainers.some((c) => c.kind === "collection") && (
                 <form action={detachExposedFromOtherCollections.bind(null, slug)}>
-                  <Button type="submit" variant="secondary" size="sm">Make these items private everywhere (remove them from those collections)</Button>
+                  <Button type="submit" variant="secondary" size="sm">{collection.visibility === "PRIVATE" && !warnings.exposingContainers.some((c) => c.kind === "trip") ? "Make these items private everywhere (remove them from those collections)" : "Remove these items from the more visible collections"}</Button>
                 </form>
               )}
               {warnings.exposingContainers.some((c) => c.kind === "trip") && <span className="text-sm">Items on a more visible trip stay visible through that trip; change it from its settings:</span>}

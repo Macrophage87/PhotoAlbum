@@ -33,17 +33,19 @@ export function estimateCost(model: string, counts: { photos: number; videos: nu
 
 export type Spend = { items: number; inputTokens: number; cacheReadTokens: number; outputTokens: number; usd: number; model: string; pricesAsOf: string };
 
-/** Real spend from recorded usage: single requests at list price, batch results at the batch discount. */
-export function actualSpend(model: string, rows: { input: number; cacheRead: number; output: number; batched: boolean }[]): Spend {
-  const price = PRICES[model] ?? PRICES["claude-opus-5"];
+/**
+ * Real spend from recorded usage, each row at the price of the model that answered it: single requests at list
+ * price, batch results at the batch discount. `input` is the API's input_tokens, which already excludes cache reads.
+ */
+export function actualSpend(fallbackModel: string, rows: { model?: string | null; input: number; cacheRead: number; output: number; batched: boolean }[]): Spend {
   let usd = 0, inputTokens = 0, cacheReadTokens = 0, outputTokens = 0;
   for (const r of rows) {
+    const price = PRICES[r.model ?? ""] ?? PRICES[fallbackModel] ?? PRICES["claude-opus-5"];
     const factor = r.batched ? BATCH_DISCOUNT : 1;
-    const fresh = Math.max(0, r.input - r.cacheRead);
-    usd += factor * ((fresh * price.inputPerMTok + r.cacheRead * price.inputPerMTok * price.cacheReadFactor + r.output * price.outputPerMTok) / 1_000_000);
+    usd += factor * ((r.input * price.inputPerMTok + r.cacheRead * price.inputPerMTok * price.cacheReadFactor + r.output * price.outputPerMTok) / 1_000_000);
     inputTokens += r.input;
     cacheReadTokens += r.cacheRead;
     outputTokens += r.output;
   }
-  return { items: rows.length, inputTokens, cacheReadTokens, outputTokens, usd: Math.round(usd * 100) / 100, model, pricesAsOf };
+  return { items: rows.length, inputTokens, cacheReadTokens, outputTokens, usd: Math.round(usd * 100) / 100, model: fallbackModel, pricesAsOf };
 }

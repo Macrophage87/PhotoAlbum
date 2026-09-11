@@ -201,6 +201,7 @@ S += [P("4. Configuration reference (.env)", H1),
         ["ML_IDLE_UNLOAD_SECONDS", "300", "The sidecar frees its models after this much idle time."],
         ["FACE_INDEXING_ENABLED", "false", "Operator half of the face-detection switch; the admin's opt-in is the other half."],
         ["FACE_UNNAMED_RETENTION_DAYS", "180", "Faces nobody names are deleted after this many days."],
+        ["ANTHROPIC_BASE_URL, YOUTUBE_*_URL", "(empty)", "Endpoints for test doubles; leave empty."],
         ["CSP_REPORT_ONLY", "false", "Report Content-Security-Policy violations instead of blocking them, while trying a new map provider."],
         ["COMPOSE_PROFILES", "(empty)", "Read by Docker Compose: set to ml (and/or worker) so every 'up' includes those optional services."],
       ], [1.85*inch, 1.25*inch, W-3.1*inch], first=CELLV),
@@ -262,7 +263,7 @@ S += [P("6. Using the album", H1),
         "The <b>Review</b> page lists everything nobody has reviewed yet. The search box finds photos by caption, note, title, trip or collection name; visitors without an account search only public content."),
       P("AI descriptions (optional)", H2),
       P("An AI helper (Anthropic's Claude) can write a caption, a description and search tags for each photo, using the notes you typed. It is off until two switches are on: "
-        "ANNOTATION_ENABLED with an API key in the configuration, and an admin's opt-in on the Admin page, which lists exactly what is sent (a reduced copy of the image, your notes, the date and camera, the trip and collection names; never the original file or any face data). "
+        "ANNOTATION_ENABLED with an API key in the configuration, and an admin's opt-in on the Admin page, which lists exactly what is sent (a reduced copy of the image, your notes, the date and camera, the trip and collection names, and the names of confirmed people whose recognition an admin turned on and who are adults, plus pet names; never the original file or any face data). "
         "Each item is sent once after it is reviewed. Any photo, trip or collection can be marked as never to be sent. The Admin page can also describe the existing library in one go, showing the count and an approximate cost first and asking you to type the number to confirm."),
       P("Suggestions and the ML helper (optional)", H2),
       P("With the local ML sidecar running (see the deployment guide), the review screen suggests which trip or collection each new photo belongs to, with the reason (\"taken during the trip, 2 km from the Ocean Path hike\"), and search understands meaning as well as words. "

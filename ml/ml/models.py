@@ -72,8 +72,13 @@ class Models:
     def maybe_unload(self) -> None:
         if STUB or time.monotonic() - self.last_used < IDLE_UNLOAD_SECONDS:
             return
-        with self.lock:
+        # Never wait on a running inference: /health must answer within its timeout.
+        if not self.lock.acquire(blocking=False):
+            return
+        try:
             self._clip = self._text = self._faces = None
+        finally:
+            self.lock.release()
 
     def _touch(self) -> None:
         self.last_used = time.monotonic()

@@ -77,8 +77,9 @@ export async function searchMedia(viewer: Viewer, params: SearchParams, limit = 
   const where = filters.length ? Prisma.join(filters, " AND ") : Prisma.sql`TRUE`;
   const uploader = member ? Prisma.sql`u.name` : Prisma.sql`NULL`;
   // A private trip's title is members-only metadata: anonymous visitors see the trip of a hit only when they may open that trip.
-  const shareTripIds = [...viewer.shareTokens.keys()].filter((k) => k.startsWith("trip_")).map((k) => k.slice(5));
-  const tripVisible = member ? Prisma.sql`TRUE` : shareTripIds.length ? Prisma.sql`(t.visibility = 'PUBLIC' OR t.id IN (${Prisma.join(shareTripIds)}))` : Prisma.sql`t.visibility = 'PUBLIC'`;
+  // Same rule as canViewTrip: a held share cookie counts only while the trip is LINK and the token still matches.
+  const shareTokens = [...viewer.shareTokens.entries()].filter(([k]) => k.startsWith("trip_")).map(([, v]) => v);
+  const tripVisible = member ? Prisma.sql`TRUE` : shareTokens.length ? Prisma.sql`(t.visibility = 'PUBLIC' OR (t.visibility = 'LINK' AND t."shareToken" IN (${Prisma.join(shareTokens)})))` : Prisma.sql`t.visibility = 'PUBLIC'`;
   // Semantic half: cosine similarity of the query embedding to the item's description embedding, when both exist.
   const similarity = queryVec ? Prisma.sql`CASE WHEN p."textEmbedding" IS NULL THEN NULL ELSE 1 - (p."textEmbedding" <=> ${vectorLiteral(queryVec)}::vector) END` : Prisma.sql`NULL::float`;
   const match = queryVec ? Prisma.sql`(${column} @@ query OR (p."textEmbedding" IS NOT NULL AND 1 - (p."textEmbedding" <=> ${vectorLiteral(queryVec)}::vector) >= ${SEMANTIC_FLOOR}))` : Prisma.sql`${column} @@ query`;

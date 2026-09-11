@@ -4,14 +4,14 @@ import { visibleMediaWhere } from "@/lib/auth/access";
 import { photoCardSelect } from "@/lib/photos/queries";
 import { isMinor, minorsCheckPasses } from "./consent";
 
-export type PersonCard = { id: string; name: string; kind: "HUMAN" | "PET"; species: string | null; isFlock: boolean; relationship: string | null; faceIndexing: boolean; pendingDecision: boolean; basis: "birthday" | "attestation" | "none"; minor: boolean; photoCount: number; sample: { id: string; updatedAt: Date } | null };
+export type PersonCard = { id: string; name: string; kind: "HUMAN" | "PET"; species: string | null; isFlock: boolean; relationship: string | null; faceIndexing: boolean; pendingDecision: boolean; optedOut: boolean; basis: "birthday" | "attestation" | "none"; minor: boolean; photoCount: number; sample: { id: string; updatedAt: Date } | null };
 
 export async function listPeople(): Promise<PersonCard[]> {
   const people = await db.person.findMany({ orderBy: { name: "asc" }, include: { faces: { where: { status: "CONFIRMED" }, select: { photoId: true, photo: { select: { id: true, updatedAt: true, status: true } } } } } });
   return people.map((p) => {
     const photoIds = new Set(p.faces.map((f) => f.photoId));
     const sample = p.faces.find((f) => f.photo.status === "READY")?.photo ?? null;
-    return { id: p.id, name: p.name, kind: p.kind, species: p.species, isFlock: p.isFlock, relationship: p.relationship, faceIndexing: p.faceIndexing, pendingDecision: p.pendingDecision, basis: p.adultAttestedAt ? "attestation" : p.birthday && minorsCheckPasses(p) ? "birthday" : "none", minor: isMinor(p), photoCount: photoIds.size, sample: sample ? { id: sample.id, updatedAt: sample.updatedAt } : null };
+    return { id: p.id, name: p.name, kind: p.kind, species: p.species, isFlock: p.isFlock, relationship: p.relationship, faceIndexing: p.faceIndexing, pendingDecision: p.pendingDecision, optedOut: Boolean(p.optedOutAt), basis: p.adultAttestedAt ? "attestation" : p.birthday && minorsCheckPasses(p) ? "birthday" : "none", minor: isMinor(p), photoCount: photoIds.size, sample: sample ? { id: sample.id, updatedAt: sample.updatedAt } : null };
   });
 }
 

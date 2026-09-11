@@ -39,7 +39,7 @@ export function PhotoGrid({ photos, showDetailLink = true, emptyMessage = "No ph
               )}
               {p.badge && <span className="absolute top-1 left-1 text-[10px] bg-black/60 text-white rounded px-1.5 py-0.5">{p.badge}</span>}
               {p.collections && p.collections.length > 0 && (
-                <span className="absolute bottom-1 left-1 right-1 flex flex-wrap gap-1 pointer-events-none" aria-label={`In ${p.collections.map((c) => c.title).join(", ")}`}>
+                <span className={`absolute bottom-1 left-1 flex flex-wrap gap-1 pointer-events-none ${p.youtubeId ? "right-14" : "right-1"}`} aria-label={`In ${p.collections.map((c) => c.title).join(", ")}`}>
                   {p.collections.slice(0, 2).map((c) => (
                     <span key={c.slug} className="text-[10px] bg-white/85 text-text rounded px-1.5 py-0.5 truncate max-w-[70%]">{c.title}</span>
                   ))}
@@ -47,7 +47,7 @@ export function PhotoGrid({ photos, showDetailLink = true, emptyMessage = "No ph
                 </span>
               )}
               {p.youtubeId && (
-                <span className="absolute bottom-1 left-1 text-[10px] bg-black/60 text-white rounded px-1.5 py-0.5 pointer-events-none" aria-hidden="true">
+                <span className="absolute bottom-1 right-1 text-[10px] bg-black/60 text-white rounded px-1.5 py-0.5 pointer-events-none" aria-hidden="true">
                   ▶ {p.unavailable ? "no longer available" : "video"}
                 </span>
               )}

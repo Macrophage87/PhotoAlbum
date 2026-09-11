@@ -205,6 +205,7 @@ For faces, also set `FACE_INDEXING_ENABLED=true` in `.env` and press **Turn on f
 | `ANNOTATION_ENABLED` | `false` | Operator half of the AI-description switch; the admin opt-in is the other half. |
 | `ANTHROPIC_API_KEY` | empty | Required for descriptions. |
 | `ANTHROPIC_BASE_URL` | empty | Proxy or mock endpoint for the helper; leave empty. |
+| `YOUTUBE_OEMBED_URL`, `YOUTUBE_THUMBNAIL_URL`, `YOUTUBE_DATA_API_URL` | empty | Test doubles for the YouTube endpoints; leave empty. |
 | `ANNOTATION_MODEL` | `claude-opus-5` | Model for descriptions (`claude-sonnet-5` and `claude-haiku-4-5` cost less). |
 | `ANNOTATION_QUIET_MINUTES` | `30` | Minutes without edits before an unreviewed item is sent. |
 | `ANNOTATION_RAW_RETENTION_DAYS` | `30` | How long raw responses are kept. |
@@ -228,7 +229,7 @@ The heavy-work lock (transcoding, embeddings, faces one at a time) is held insid
 
 4. You are now the admin. Go to **Admin** in the navigation to invite family members by email.
 
-Optionally load the demo trip (a Maine lighthouse trip with a hike, track, stats and three sample photos):
+Optionally load the demo content (two trips, a hike with track and stats, sample photos, a collection, a short clip, a YouTube embed, two named people and a pet, with descriptions and face templates from offline fixtures):
 
 ```bash
 docker compose exec app node_modules/.bin/tsx prisma/seed.ts   # two trips, a hike, sample photos, a collection, a clip, a YouTube embed, two named people, a pet; descriptions and face templates are offline fixtures

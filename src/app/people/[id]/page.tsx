@@ -34,7 +34,7 @@ export default async function PersonPage({ params }: PageProps<"/people/[id]">) 
             <h1 className="font-display text-3xl font-semibold">{person.name}</h1>
             <p className="text-muted mt-1">{person.relationship}{person.kind === "PET" ? `${person.isFlock ? "flock of " : ""}${person.species?.toLowerCase() ?? "pet"}${person.livedFrom ? ` · ${person.livedFrom.getUTCFullYear()}–${person.livedTo ? person.livedTo.getUTCFullYear() : ""}` : ""}` : ""} · {photos.length} photo{photos.length === 1 ? "" : "s"}</p>
           </div>
-          {person.kind === "HUMAN" && (person.faceIndexing ? <Badge tone="success">recognised in new photos · {person.adultAttestedAt ? "attested adult" : "by birthday"}</Badge> : <Badge tone="neutral">{person.pendingDecision ? "awaiting an admin's decision" : "not recognised"}</Badge>)}
+          {person.kind === "HUMAN" && (person.faceIndexing ? <Badge tone="success">recognised in new photos · {person.adultAttestedAt ? "attested adult" : "by birthday"}</Badge> : person.optedOutAt ? <Badge tone="warning">asked to be forgotten on {person.optedOutAt.toLocaleDateString("en-US")}</Badge> : <Badge tone="neutral">{person.pendingDecision ? "awaiting an admin's decision" : "not recognised"}</Badge>)}
         </div>
 
         <PhotoGrid photos={photos.map((p) => toGridPhoto(p, null, true))} emptyMessage="No photos you can see." />
@@ -84,6 +84,12 @@ export default async function PersonPage({ params }: PageProps<"/people/[id]">) 
                     <label className="flex items-start gap-2">
                       <input type="checkbox" name="parentInstruction" className="mt-1" />
                       <span>A parent has asked for this child to be recognised</span>
+                    </label>
+                  )}
+                  {person.optedOutAt && (
+                    <label className="flex items-start gap-2 rounded-theme border border-amber-300 bg-amber-50 p-2 text-amber-900">
+                      <input type="checkbox" name="agreedAgain" className="mt-1" />
+                      <span>{person.name} asked to be forgotten on {person.optedOutAt.toLocaleDateString("en-US")}. Tick only if they have told you they agree to recognition again; otherwise the switch below is ignored.</span>
                     </label>
                   )}
                   <label className="flex items-start gap-2">

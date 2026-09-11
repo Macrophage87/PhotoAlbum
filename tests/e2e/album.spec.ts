@@ -383,7 +383,10 @@ test("uploads get embeddings from the sidecar and the review screen suggests whe
   await page.waitForLoadState("networkidle");
   await expect(suggestion).toContainText("taken during the trip");
   await suggestion.click();
-  await expect(page.getByRole("button", { name: /Added to Acadia/ })).toBeVisible();
+  // The server re-renders without the suggestion once the item is filed, so check the outcome itself.
+  await expect
+    .poll(async () => (await withDb((c) => c.query('SELECT t.slug FROM "Photo" p JOIN "Trip" t ON t.id = p."tripId" WHERE p.id = $1', [id]))).rows[0]?.slug, { timeout: 15_000, intervals: [500] })
+    .toBe("acadia");
   await expect
     .poll(async () => (await withDb((c) => c.query('SELECT ("embedding" IS NOT NULL) AS e FROM "Photo" WHERE id = $1', [id]))).rows[0].e, { timeout: 30_000, intervals: [1000] })
     .toBe(true);
@@ -495,15 +498,20 @@ test("a consented person is proposed on the next upload, names in the notes prop
   await expect.poll(async () => { await page.reload(); return page.getByText(/Probably Biscuit/).count(); }, { timeout: 30_000, intervals: [1500] }).toBe(1);
   await page.waitForLoadState("networkidle");
   await page.getByRole("button", { name: /Yes, that's Biscuit/ }).click();
-  await expect(page.getByTestId("proposal").filter({ hasText: "Biscuit" })).toHaveCount(0);
+  // Wait for the action to land before anything reloads the page, or the in-flight request is dropped.
+  await expect
+    .poll(async () => (await withDb((c) => c.query('SELECT count(*)::int AS n FROM "Face" f JOIN "Person" p ON p.id = f."personId" WHERE p.name = $1 AND f.status = $2', ["Biscuit", "CONFIRMED"]))).rows[0].n, { timeout: 15_000, intervals: [500] })
+    .toBe(1);
   // The two fixture images have the same pixels, so Dan is proposed here too; saying no records a negative example.
   const danRow = page.getByTestId("proposal").filter({ hasText: "Uncle Dan" });
   await expect.poll(async () => { await page.reload(); return danRow.count(); }, { timeout: 30_000, intervals: [1500] }).toBe(1);
   await page.waitForLoadState("networkidle");
   await danRow.getByRole("button", { name: "No" }).click();
+  await expect
+    .poll(async () => (await withDb((c) => c.query('SELECT count(*)::int AS n FROM "Face" f JOIN "Person" p ON p.id = f."proposedPersonId" WHERE p.name = $1 AND f.status = $2', ["Uncle Dan", "REJECTED"]))).rows[0].n, { timeout: 15_000, intervals: [500] })
+    .toBe(1);
+  await page.reload();
   await expect(page.getByTestId("proposal")).toHaveCount(0);
-  const negatives = await withDb((c) => c.query('SELECT count(*)::int AS n FROM "Face" f JOIN "Person" p ON p.id = f."proposedPersonId" WHERE p.name = $1 AND f.status = $2', ["Uncle Dan", "REJECTED"]));
-  expect(negatives.rows[0].n).toBe(1);
 
   // Open a photo with no pet tag yet in the lightbox, wherever it was filed (a trip by date, or the unassigned page).
   const target = await withDb((c) => c.query(`SELECT p.id, t.slug FROM "Photo" p LEFT JOIN "Trip" t ON t.id = p."tripId" WHERE p.status = 'READY' AND p.kind = 'PHOTO' AND NOT EXISTS (SELECT 1 FROM "Face" f WHERE f."photoId" = p.id AND f.confidence = 0) ORDER BY p."createdAt" DESC LIMIT 1`));

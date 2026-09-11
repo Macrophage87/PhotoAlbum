@@ -82,7 +82,10 @@ export async function decideIndexing(personId: string, fd: FormData): Promise<vo
   const person = await db.person.findUniqueOrThrow({ where: { id: personId } });
   const birthday = day.parse(fd.get("birthday") || undefined) ?? person.birthday;
   const attest = fd.get("attest") === "on";
-  const outcome = namingOutcome({ byAdmin: true, wantIndexing: fd.get("faceIndexing") === "on", parentInstruction: fd.get("parentInstruction") === "on", birthday, attest, isChildFlag: false });
+  // Someone who asked to be forgotten stays off unless the admin records that they have agreed again.
+  const agreedAgain = fd.get("agreedAgain") === "on";
+  const wantIndexing = fd.get("faceIndexing") === "on" && (!person.optedOutAt || agreedAgain);
+  const outcome = namingOutcome({ byAdmin: true, wantIndexing, parentInstruction: fd.get("parentInstruction") === "on", birthday, attest, isChildFlag: false });
   const now = new Date();
   await db.person.update({
     where: { id: personId },
@@ -101,7 +104,7 @@ export async function decideIndexing(personId: string, fd: FormData): Promise<vo
     // Enabling later: templates of confirmed faces are recomputed by re-scanning their photos, then open faces are re-matched.
     const photos = await db.face.findMany({ where: { personId, status: "CONFIRMED" }, select: { photoId: true }, distinct: ["photoId"] });
     await db.photo.updateMany({ where: { id: { in: photos.map((p) => p.photoId) } }, data: { facesDetectedAt: null } });
-    await db.person.update({ where: { id: personId }, data: { optedOutAt: null } });
+    if (agreedAgain) await db.person.update({ where: { id: personId }, data: { optedOutAt: null } });
     // The re-scan restores the templates and rebuilds this person's centroids, then proposes for open faces (detect-faces.ts).
     await enqueueFaceDetection(...photos.map((p) => p.photoId));
   }

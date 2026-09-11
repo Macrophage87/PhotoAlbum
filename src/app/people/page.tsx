@@ -41,7 +41,7 @@ export default async function PeoplePage() {
                   <div className="text-xs text-muted">{p.relationship ?? (p.kind === "PET" ? "pet" : "")}</div>
                   <div className="text-xs text-muted mt-1">{p.photoCount} photo{p.photoCount === 1 ? "" : "s"}</div>
                   <div className="mt-2 flex flex-wrap gap-1">
-                    {p.kind === "HUMAN" && (p.faceIndexing ? <Badge tone="success">recognised · {p.basis === "attestation" ? "attested adult" : "by birthday"}</Badge> : p.pendingDecision ? <Badge tone="warning">awaiting admin decision</Badge> : <Badge tone="neutral">not recognised</Badge>)}
+                    {p.kind === "HUMAN" && (p.faceIndexing ? <Badge tone="success">recognised · {p.basis === "attestation" ? "attested adult" : "by birthday"}</Badge> : p.optedOut ? <Badge tone="warning">asked to be forgotten</Badge> : p.pendingDecision ? <Badge tone="warning">awaiting admin decision</Badge> : <Badge tone="neutral">not recognised</Badge>)}
                     {p.minor && <Badge tone="neutral">minor</Badge>}
                   </div>
                 </Link>

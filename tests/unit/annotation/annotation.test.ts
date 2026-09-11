@@ -3,10 +3,10 @@ import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
 import { annotationSchema, toStored } from "@/lib/annotation/schema";
-import { estimateCost } from "@/lib/annotation/pricing";
+import { actualSpend, estimateCost } from "@/lib/annotation/pricing";
 import { describeItem, needsDateEstimate, requestParams } from "@/lib/annotation/request";
 import { applyAnnotation, parseMessageContent } from "@/lib/annotation/apply";
-import { BATCH_CHUNK, chunk } from "@/lib/jobs/handlers/annotation-batch";
+import { BATCH_CHUNK, chunk, splitByBytes } from "@/lib/jobs/handlers/annotation-batch";
 import { thinkingParams } from "@/lib/annotation/client";
 import { SYSTEM_INSTRUCTIONS } from "@/lib/annotation/prompt";
 import { resetTestDb } from "../helpers/reset";
@@ -108,5 +108,25 @@ describe("applying a record", () => {
     const p = await db.photo.findUniqueOrThrow({ where: { id: photoId } });
     expect(p.annotationSource).toBe("EDITED");
     expect(p.estimatedDate?.getUTCFullYear()).toBe(1980);
+  });
+});
+
+describe("real spend and byte budgets", () => {
+  it("prices each row by its own model and never subtracts cache reads from input tokens", () => {
+    const rows = [
+      { model: "claude-haiku-4-5", input: 1000, cacheRead: 1000, output: 100, batched: false },
+      { model: "claude-opus-5", input: 1000, cacheRead: 0, output: 100, batched: true },
+    ];
+    const spend = actualSpend("claude-opus-5", rows);
+    const haiku = (1000 * 1 + 1000 * 1 * 0.1 + 100 * 5) / 1e6;
+    const opus = 0.5 * ((1000 * 5 + 100 * 25) / 1e6);
+    expect(spend.usd).toBeCloseTo(Math.round((haiku + opus) * 100) / 100, 2);
+    expect(spend.inputTokens).toBe(2000);
+    expect(spend.cacheReadTokens).toBe(1000);
+  });
+  it("splits requests so no batch exceeds the byte budget", () => {
+    const items = [{ bytes: 60 }, { bytes: 60 }, { bytes: 60 }, { bytes: 10 }];
+    expect(splitByBytes(items, 100).map((g) => g.length)).toEqual([1, 1, 2]);
+    expect(splitByBytes([{ bytes: 500 }], 100)).toHaveLength(1);
   });
 });

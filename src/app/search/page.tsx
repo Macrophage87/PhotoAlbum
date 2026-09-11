@@ -120,7 +120,7 @@ export default async function SearchPage({ searchParams }: PageProps<"/search">)
         ) : (
           <SearchResults results={results} member={member} />
         ))}
-        {!q && <p className="text-sm text-muted">Search captions, notes, titles, trips and collections. Try a place, a food, a year, or a family member&apos;s name.</p>}
+        {!q && <p className="text-sm text-muted">Search captions, notes, titles, trips and collections. Try a place, a food or a year{member ? ", or a family member\u2019s name" : ""}.</p>}
       </Container>
     </AppShell>
   );

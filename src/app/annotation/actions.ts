@@ -10,7 +10,7 @@ import { enqueue } from "@/lib/jobs/boss";
 import { QUEUES } from "@/lib/jobs/queues";
 import { annotationGates } from "@/lib/annotation/eligibility";
 import { estimateCost, type Estimate } from "@/lib/annotation/pricing";
-import { backfillCandidates, type BackfillScope } from "@/lib/jobs/handlers/annotation-batch";
+import { backfillCandidates, backfillExclusions, type BackfillScope } from "@/lib/jobs/handlers/annotation-batch";
 import { annotationSchema, toStored, type StoredAnnotation } from "@/lib/annotation/schema";
 import { anthropic } from "@/lib/annotation/client";
 
@@ -113,7 +113,7 @@ const scopeSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("range"), from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }),
 ]);
 
-export type BackfillPreview = { estimate: Estimate; photos: number; videos: number; sends: string[] };
+export type BackfillPreview = { estimate: Estimate; photos: number; videos: number; sends: string[]; /** What in scope is left out, and why. */ excluded: { inScope: number; described: number; optedOutSelf: number; optedOutInherited: number } };
 
 /** What a backfill would send and roughly what it would cost, before anything is submitted. */
 export async function previewBackfill(scope: BackfillScope): Promise<BackfillPreview> {
@@ -122,10 +122,12 @@ export async function previewBackfill(scope: BackfillScope): Promise<BackfillPre
   const items = await backfillCandidates(s);
   const videos = items.filter((i) => i.kind === "VIDEO").length;
   const photos = items.length - videos;
+  const excluded = await backfillExclusions(s);
   return {
     estimate: estimateCost(env().ANNOTATION_MODEL, { photos, videos }, { batch: true }),
     photos,
     videos,
+    excluded,
     sends: ["the 1600-pixel rendition of each photo (three or four frames for a clip)", "the uploader's notes, caption and title", "the date and camera when known", "the trip and collection titles", "the names of confirmed people whose recognition is on and who are adults, and confirmed pet names; never face data"],
   };
 }
@@ -148,11 +150,21 @@ export async function startBackfill(scope: BackfillScope, typedConfirmation: str
 }
 
 /** Stop a running backfill: cancel at Anthropic and mark it; results already applied stay. */
+/**
+ * Cancel a backfill: every open row of the run (the one started and its chunks) is cancelled here and, where a batch
+ * is already in flight, at Anthropic too. Results of requests that had completed are still applied by the poll job
+ * (they were billed), which is when the row's end time is set.
+ */
 export async function cancelBackfill(batchId: string): Promise<void> {
   await requireAdminOrThrow();
-  const batch = await db.annotationBatch.findUnique({ where: { id: batchId } });
-  if (!batch || batch.status !== "SUBMITTED") return;
-  if (!batch.anthropicBatchId.startsWith("pending")) await anthropic().messages.batches.cancel(batch.anthropicBatchId).catch(() => {});
-  await db.annotationBatch.update({ where: { id: batchId }, data: { status: "CANCELLED", endedAt: new Date() } });
+  const batch = await db.annotationBatch.findUnique({ where: { id: batchId }, select: { id: true, parentId: true } });
+  if (!batch) return;
+  const originId = batch.parentId ?? batch.id;
+  const family = await db.annotationBatch.findMany({ where: { OR: [{ id: originId }, { parentId: originId }], status: "SUBMITTED" } });
+  for (const row of family) {
+    const live = !row.anthropicBatchId.startsWith("pending") && !row.anthropicBatchId.startsWith("empty");
+    if (live) await anthropic().messages.batches.cancel(row.anthropicBatchId).catch(() => {});
+    await db.annotationBatch.update({ where: { id: row.id }, data: { status: "CANCELLED", endedAt: live ? null : new Date() } });
+  }
   revalidatePath("/admin");
 }

@@ -387,9 +387,15 @@ model AnnotationBatch {
   succeeded        Int                   @default(0)
   errored          Int                   @default(0)
   skipped          Int                   @default(0)
+  /// The row the admin started; chunk rows point at it so one cancel stops the whole run.
+  parentId         String?
+  /// Why items in scope were not sent, e.g. {"noRendition": 2}.
+  skippedReasons   Json?
   createdById      String
   createdAt        DateTime              @default(now())
   endedAt          DateTime?
+
+  @@index([parentId])
 }
 
 /// A family member or a pet. Recognition data lives in Face and FaceCluster and follows the consent fields here.
