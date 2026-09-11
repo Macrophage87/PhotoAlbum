@@ -18,8 +18,11 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   });
   if (!photo) return new Response("Not found", { status: 404 });
 
+  const url = new URL(request.url);
   const viewer = await getViewer();
-  const allowed = photo.trip ? canViewTrip(viewer, photo.trip) : viewer.kind === "user";
+  const shareParam = url.searchParams.get("share");
+  const tokenMatches = Boolean(shareParam) && photo.trip?.visibility === "LINK" && photo.trip.shareToken === shareParam;
+  const allowed = photo.trip ? canViewTrip(viewer, photo.trip) || tokenMatches : viewer.kind === "user";
   if (!allowed) return new Response("Forbidden", { status: viewer.kind === "user" ? 403 : 401 });
 
   let key: string;
@@ -44,7 +47,6 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     "Cache-Control": `${isPublic ? "public" : "private"}, max-age=31536000, immutable`,
   };
   if (size === "original") headers["Content-Disposition"] = `inline; filename="${encodeURIComponent(photo.originalName)}"`;
-  const url = new URL(request.url);
   if (!url.searchParams.has("v")) headers["Cache-Control"] = "private, max-age=0, must-revalidate";
   return new Response(Readable.toWeb(stream) as ReadableStream, { headers });
 }

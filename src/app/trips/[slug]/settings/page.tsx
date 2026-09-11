@@ -4,6 +4,8 @@ import { env } from "@/lib/env";
 import { getTripBySlug } from "@/lib/trips/queries";
 import { dateColumnToDay } from "@/lib/time/local-day";
 import { TripForm } from "@/components/trips/TripForm";
+import { ShareButtons } from "@/components/trips/ShareButtons";
+import { shareableTripUrl } from "@/lib/share/social";
 import { Button, Card, ConfirmSubmitButton } from "@/components/ui";
 import { deleteTrip, regeotagPhotos, rotateShareToken, setVisibility, updateTrip } from "../actions";
 
@@ -24,7 +26,7 @@ export default async function TripSettingsPage({ params, searchParams }: PagePro
   const rotate = rotateShareToken.bind(null, slug);
   const remove = deleteTrip.bind(null, slug);
   const regeotag = regeotagPhotos.bind(null, slug);
-  const shareUrl = trip.shareToken ? new URL(`/share/${trip.shareToken}`, env().APP_URL).toString() : null;
+  const shareUrl = shareableTripUrl(trip, env().APP_URL);
 
   return (
     <div className="max-w-2xl space-y-10">
@@ -60,11 +62,22 @@ export default async function TripSettingsPage({ params, searchParams }: PagePro
           <Card className="mt-4 p-4 space-y-2">
             <div className="text-sm font-medium">Share link</div>
             <code className="block text-xs break-all bg-surface-alt rounded p-2">{shareUrl}</code>
-            <form action={rotate}>
-              <Button type="submit" variant="secondary" size="sm">
-                Generate a new link (old link stops working)
-              </Button>
-            </form>
+            <div className="flex flex-wrap gap-2">
+              <form action={rotate}>
+                <Button type="submit" variant="secondary" size="sm">
+                  Generate a new link (old link stops working)
+                </Button>
+              </form>
+              <ShareButtons url={shareUrl} />
+            </div>
+            <p className="text-xs text-muted">Posting the link on Facebook shows the trip title and cover photo. Anyone who sees the post can open the trip, so prefer a private group or message.</p>
+          </Card>
+        )}
+        {trip.visibility === "PUBLIC" && shareUrl && (
+          <Card className="mt-4 p-4 space-y-2">
+            <div className="text-sm font-medium">Share</div>
+            <code className="block text-xs break-all bg-surface-alt rounded p-2">{shareUrl}</code>
+            <ShareButtons url={shareUrl} />
           </Card>
         )}
       </section>

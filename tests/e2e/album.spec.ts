@@ -72,6 +72,14 @@ test("a share link opens the trip read-only, and stops working when rotated", as
   await expect(img).toBeVisible();
   await expect.poll(async () => img.evaluate((el: HTMLImageElement) => el.naturalWidth)).toBeGreaterThan(0);
   await expect(page.getByRole("link", { name: "Settings" })).toHaveCount(0);
+  await expect(page.getByTestId("share-facebook")).toHaveAttribute("href", /%2Fshare%2Fe2e-share-token/);
+  // Link previews fetch the cover without a cookie, so the og:image URL must work on its own.
+  const ogImage = await page.locator('meta[property="og:image"]').getAttribute("content");
+  expect(ogImage).toContain("share=e2e-share-token");
+  const crawler = await browser.newContext();
+  const bare = await crawler.request.get(ogImage!);
+  expect(bare.ok()).toBe(true);
+  await crawler.close();
   await setVisibility("acadia", "LINK", "rotated-token");
   await page.goto("/share/e2e-share-token");
   await expect(page.getByRole("heading", { name: "Not found" })).toBeVisible();
@@ -87,6 +95,10 @@ test("public trips are browsable anonymously without edit controls", async ({ br
   await page.goto("/trips/acadia");
   await expect(page.getByRole("heading", { name: "Acadia" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Family sign in" })).toBeVisible();
+  const fb = page.getByTestId("share-facebook");
+  await expect(fb).toHaveAttribute("href", /facebook\.com\/sharer\/sharer\.php\?u=.*%2Ftrips%2Facadia/);
+  await expect(page.locator('meta[property="og:title"]')).toHaveAttribute("content", "Acadia");
+  await expect(page.locator('meta[property="og:image"]')).toHaveAttribute("content", /\/api\/photos\//);
   await expect(page.getByRole("link", { name: "Settings" })).toHaveCount(0);
   await page.goto("/trips/acadia/settings");
   await expect(page).toHaveURL(/\/auth\/signin/);

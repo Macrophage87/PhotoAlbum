@@ -1,4 +1,11 @@
+import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
+import { env } from "@/lib/env";
+import { coverFor, type TripWithCounts } from "@/lib/trips/queries";
+import { photoUrl } from "@/lib/photos/urls";
+import { shareableTripUrl } from "@/lib/share/social";
+import { formatDayRange } from "@/lib/time/format";
+import { dateColumnToDay } from "@/lib/time/local-day";
 import { getViewer } from "@/lib/auth/viewer";
 import { canViewTrip, canEditTrip } from "@/lib/auth/access";
 import { getTripBySlug } from "@/lib/trips/queries";
@@ -7,11 +14,29 @@ import { Nav } from "@/components/layout/Nav";
 import { TripHeader } from "@/components/trips/TripHeader";
 import { TripTabs } from "@/components/trips/TripTabs";
 
-export async function generateMetadata({ params }: LayoutProps<"/trips/[slug]">) {
+export async function generateMetadata({ params }: LayoutProps<"/trips/[slug]">): Promise<Metadata> {
   const { slug } = await params;
   const trip = await getTripBySlug(slug);
-  return { title: trip?.title ?? "Trip", robots: trip?.visibility === "PUBLIC" ? undefined : { index: false, follow: false } };
+  if (!trip) return { title: "Trip" };
+  const isPublic = trip.visibility === "PUBLIC";
+  return {
+    title: trip.title,
+    robots: isPublic ? undefined : { index: false, follow: false },
+    // Only public trips get a preview card: a private URL would leak the cover photo to link scrapers.
+    openGraph: isPublic ? await openGraphFor(trip, new URL(`/trips/${slug}`, env().APP_URL).toString()) : undefined,
+  };
 }
+
+/** Open Graph tags so Facebook and chat apps show the title, dates and cover photo. */
+async function openGraphFor(trip: TripWithCounts, pageUrl: string, imageToken?: string): Promise<Metadata["openGraph"]> {
+  const cover = await coverFor(trip);
+  const description = trip.description?.trim() || formatDayRange(dateColumnToDay(trip.startDate), dateColumnToDay(trip.endDate));
+  const images = cover
+    ? [{ url: new URL(`${photoUrl(cover, "medium")}${imageToken ? `&share=${encodeURIComponent(imageToken)}` : ""}`, env().APP_URL).toString() }]
+    : [];
+  return { type: "website", siteName: "Family Album", title: trip.title, description, url: pageUrl, images };
+}
+
 
 export default async function TripLayout({ params, children }: LayoutProps<"/trips/[slug]">) {
   const { slug } = await params;
@@ -32,7 +57,7 @@ export default async function TripLayout({ params, children }: LayoutProps<"/tri
   return (
     <TripTheme themeKey={trip.themeKey}>
       <Nav viewer={viewer} />
-      <TripHeader trip={trip} />
+      <TripHeader trip={trip} shareUrl={shareableTripUrl(trip, env().APP_URL)} />
       <TripTabs tabs={tabs} />
       <main className="mx-auto max-w-6xl px-4 sm:px-6 py-8">{children}</main>
     </TripTheme>

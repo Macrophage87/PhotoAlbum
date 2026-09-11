@@ -2,8 +2,9 @@ import { getTheme } from "@/themes";
 import { formatDayRange } from "@/lib/time/format";
 import { dateColumnToDay } from "@/lib/time/local-day";
 import { Badge } from "@/components/ui";
+import { ShareButtons } from "./ShareButtons";
 
-export function TripHeader({ trip }: { trip: { title: string; description: string | null; startDate: Date; endDate: Date; themeKey: string; visibility: "PRIVATE" | "LINK" | "PUBLIC" } }) {
+export function TripHeader({ trip, shareUrl }: { trip: { title: string; description: string | null; startDate: Date; endDate: Date; themeKey: string; visibility: "PRIVATE" | "LINK" | "PUBLIC" }; shareUrl?: string | null }) {
   const theme = getTheme(trip.themeKey);
   const Art = theme.headerArt;
   return (
@@ -18,7 +19,12 @@ export function TripHeader({ trip }: { trip: { title: string; description: strin
               <h1 className="font-display text-3xl sm:text-4xl font-semibold leading-tight">{trip.title}</h1>
               <p className="text-muted mt-1">{formatDayRange(dateColumnToDay(trip.startDate), dateColumnToDay(trip.endDate))}</p>
             </div>
-            {trip.visibility !== "PRIVATE" && <Badge tone={trip.visibility === "PUBLIC" ? "success" : "warning"}>{trip.visibility === "PUBLIC" ? "Public" : "Shared by link"}</Badge>}
+            {trip.visibility !== "PRIVATE" && (
+              <div className="flex items-center gap-3">
+                <Badge tone={trip.visibility === "PUBLIC" ? "success" : "warning"}>{trip.visibility === "PUBLIC" ? "Public" : "Shared by link"}</Badge>
+                {shareUrl && <ShareButtons url={shareUrl} />}
+              </div>
+            )}
           </div>
           {trip.description && <p className="mt-3 max-w-3xl text-text/90">{trip.description}</p>}
         </div>
