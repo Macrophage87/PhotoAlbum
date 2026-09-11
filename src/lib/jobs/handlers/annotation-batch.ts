@@ -49,8 +49,8 @@ export async function backfillExclusions(scope: BackfillScope): Promise<{ inScop
 /** Items per Message Batch, and the byte budget of image data per batch: well under the API's 256 MB cap, and small enough to upload from a home connection within the request timeout. */
 export const BATCH_CHUNK = 200;
 export const BATCH_BYTE_BUDGET = 32 * 1024 * 1024;
-/** A run with no new row for this long, whose job comes back, is taken to be dead. */
-export const RUN_IDLE_MS = 20 * 60_000;
+/** A run with no new row and no start for this long is taken to be dead (a clip-heavy part can spend many minutes between rows). */
+export const RUN_IDLE_MS = 60 * 60_000;
 
 export function chunk<T>(items: T[], size: number): T[][] {
   const out: T[][] = [];
@@ -121,6 +121,7 @@ export async function annotationBackfill(job: AnnotationBackfillJob): Promise<vo
   const candidates = await backfillCandidates(batch.scope as BackfillScope);
   let rowId = batch.id;
   let rowLive = false; // whether rowId already carries a real batch id (its results must never be lost)
+  let unclaimed: string | null = null; // a batch created at Anthropic whose row claim has not landed yet
   let submittedAny = false;
   let chunkNo = 0;
   const finish = async () => db.annotationBatch.update({ where: { id: batch.id }, data: { runEndedAt: new Date() } }).catch(() => undefined);
@@ -160,8 +161,10 @@ export async function annotationBackfill(job: AnnotationBackfillJob): Promise<vo
         }
         // A batch upload is large and slow; give it its own timeout and never let the SDK re-upload it on a timeout.
         const created = await anthropic().messages.batches.create({ requests: group.map((g) => ({ custom_id: g.custom_id, params: g.params })) }, { timeout: 10 * 60_000, maxRetries: 0 });
+        unclaimed = created.id;
         // The row may have been cancelled while the batch was in flight: then the batch must not run.
         const claimed = await db.annotationBatch.updateMany({ where: { id: rowId, status: "SUBMITTED" }, data: { anthropicBatchId: created.id, requested: group.length, ...skipData } });
+        unclaimed = null;
         if (claimed.count === 0) {
           await anthropic().messages.batches.cancel(created.id).catch(() => {});
           console.log(`[annotation-backfill] batch ${created.id} cancelled: its row was cancelled during submission`);
@@ -180,6 +183,8 @@ export async function annotationBackfill(job: AnnotationBackfillJob): Promise<vo
       }
     }
   } catch (err) {
+    // A batch whose row claim never landed would run untracked: stop it rather than pay for results nobody applies.
+    if (unclaimed) await anthropic().messages.batches.cancel(unclaimed).catch(() => {});
     // Fail only a placeholder row; a live row keeps polling so its billed results are still applied.
     const message = err instanceof Error ? err.message.slice(0, 200) : String(err);
     const failedInPlace = rowLive ? 0 : (await db.annotationBatch.updateMany({ where: { id: rowId, anthropicBatchId: { startsWith: "pending-" } }, data: { status: "FAILED", endedAt: new Date(), anthropicBatchId: `failed-${batch.id}-${chunkNo}` } }).catch(() => ({ count: 0 }))).count;
@@ -194,6 +199,26 @@ export async function annotationBackfill(job: AnnotationBackfillJob): Promise<vo
   if (submittedAny) await enqueue(QUEUES.annotationBatchPoll, {}, { startAfter: 5, singletonKey: "annotation-batch-poll", singletonSeconds: 5 });
 }
 
+/**
+ * A run whose worker died between chunks leaves no placeholder to sweep: its origin was started long ago, nothing
+ * in its family has been created since, and no cancel was asked. Close it and leave the "run it again" marker.
+ */
+export async function closeDeadRuns(cutoff: Date): Promise<number> {
+  const candidates = await db.annotationBatch.findMany({ where: { parentId: null, runEndedAt: null, cancelRequestedAt: null, startedAt: { lt: cutoff } }, select: { id: true, scope: true, createdById: true } });
+  let closed = 0;
+  for (const origin of candidates) {
+    const recent = await db.annotationBatch.findFirst({ where: { OR: [{ id: origin.id }, { parentId: origin.id }], createdAt: { gte: cutoff } }, select: { id: true } });
+    if (recent) continue;
+    const pendingChild = await db.annotationBatch.findFirst({ where: { parentId: origin.id, status: "SUBMITTED", anthropicBatchId: { startsWith: "pending-" } }, select: { id: true } });
+    if (pendingChild) continue; // the stale sweep closes that one
+    await db.annotationBatch.update({ where: { id: origin.id }, data: { runEndedAt: new Date() } });
+    await db.annotationBatch.create({ data: { anthropicBatchId: `failed-${origin.id}-retry`, parentId: origin.id, scope: origin.scope as object, requested: 0, status: "FAILED", endedAt: new Date(), createdById: origin.createdById } }).catch(() => undefined);
+    console.error(`[annotation-backfill] ${origin.id} was cut short (worker restarted); run it again for the remaining items`);
+    closed += 1;
+  }
+  return closed;
+}
+
 /** Poll open batches; apply each result, validating by hand since `parse` does not apply to batch results. */
 export async function annotationBatchPoll(): Promise<void> {
   // A placeholder whose run started over an hour ago belongs to a worker that died mid-loop; nothing will submit it now.
@@ -206,7 +231,9 @@ export async function annotationBatchPoll(): Promise<void> {
     // The run those placeholders belonged to is over as well.
     const origins = [...new Set(stale.map((r) => r.parentId).filter(Boolean) as string[])];
     if (origins.length) await db.annotationBatch.updateMany({ where: { id: { in: origins }, runEndedAt: null }, data: { runEndedAt: new Date() } });
+    console.error(`[annotation-backfill] placeholders never submitted (worker died mid-run): ${stale.map((r) => r.id).join(", ")}; run the backfill again for the remaining items`);
   }
+  await closeDeadRuns(hourAgo);
   // Cancelled rows with a live batch id still get their (already billed) results applied once the batch ends.
   const open = (await db.annotationBatch.findMany({ where: { OR: [{ status: "SUBMITTED" }, { status: "CANCELLED", endedAt: null }] } })).filter((b) => !b.anthropicBatchId.startsWith("pending-") && !b.anthropicBatchId.startsWith("empty-"));
   for (const b of open) {

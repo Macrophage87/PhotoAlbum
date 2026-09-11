@@ -42,7 +42,7 @@ vi.mock("@/lib/annotation/request", () => ({
 }));
 
 import { db } from "@/lib/db";
-import { annotationBackfill, annotationBatchPoll, BATCH_CHUNK, familyCancelled, RUN_IDLE_MS } from "@/lib/jobs/handlers/annotation-batch";
+import { annotationBackfill, annotationBatchPoll, BATCH_CHUNK, closeDeadRuns, familyCancelled, RUN_IDLE_MS } from "@/lib/jobs/handlers/annotation-batch";
 import { resetTestDb } from "../helpers/reset";
 
 async function seed(count: number) {
@@ -130,6 +130,23 @@ describe("the backfill run", () => {
     const only = await family(queued);
     expect(only).toHaveLength(1);
     expect(only[0].runEndedAt).not.toBeNull();
+  });
+
+  it("closes a run that died between chunks from the poll, and leaves a live one alone", async () => {
+    const originId = await seed(3);
+    const userId = (await db.user.findFirstOrThrow()).id;
+    const twoHoursAgo = new Date(Date.now() - 2 * 3_600_000);
+    const hourAgo = new Date(Date.now() - 3_600_000);
+    // Dead: claimed long ago, nothing since.
+    await db.annotationBatch.update({ where: { id: originId }, data: { anthropicBatchId: "msgbatch_dead", startedAt: twoHoursAgo, createdAt: twoHoursAgo } });
+    // Alive: started long ago but a chunk row was created a minute ago.
+    const alive = await db.annotationBatch.create({ data: { anthropicBatchId: "msgbatch_alive", scope: { kind: "all" }, requested: 5, createdById: userId, startedAt: twoHoursAgo, createdAt: twoHoursAgo } });
+    await db.annotationBatch.create({ data: { anthropicBatchId: "msgbatch_alive_2", parentId: alive.id, scope: { kind: "all" }, requested: 5, createdById: userId } });
+    expect(await closeDeadRuns(hourAgo)).toBe(1);
+    expect((await db.annotationBatch.findUniqueOrThrow({ where: { id: originId } })).runEndedAt).not.toBeNull();
+    expect((await db.annotationBatch.findFirst({ where: { anthropicBatchId: `failed-${originId}-retry` } }))?.status).toBe("FAILED");
+    expect((await db.annotationBatch.findUniqueOrThrow({ where: { id: alive.id } })).runEndedAt).toBeNull();
+    expect(await db.annotationBatch.findFirst({ where: { anthropicBatchId: `failed-${alive.id}-retry` } })).toBeNull();
   });
 
   it("applies results, counting cancelled requests apart from failures, and ends the family's run for stale placeholders", async () => {

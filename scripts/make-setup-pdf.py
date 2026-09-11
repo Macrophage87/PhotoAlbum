@@ -385,6 +385,7 @@ docker compose up --build -d          # add --profile ml if you run the sidecar 
 docker compose run --rm ml-init       # only after an upgrade that changes the sidecar's models
 """),
       P("Database migrations run automatically at container start. Take a database dump before upgrading, as a precaution. "
+        "An AI-description backfill still in progress is cut short by an upgrade; the Admin page says so under that run, and starting the backfill again sends only what is left. "
         "The first upgrade to the media-hub release replaces the database container with the pgvector image; the data in the pgdata volume is kept as it is.")]
 
 # ---------- 9 ----------

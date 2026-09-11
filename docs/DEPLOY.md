@@ -277,7 +277,7 @@ docker compose up --build -d
 docker image prune -f
 ```
 
-Migrations run automatically at start. Take a database dump first (step 9) before any upgrade. In-flight photo processing is given 45 seconds to finish before the old container stops.
+Migrations run automatically at start. Take a database dump first (step 9) before any upgrade. In-flight photo processing is given 45 seconds to finish before the old container stops. A description backfill that is still submitting is cut short by an upgrade: the Admin page says so under that run within the hour, and running the backfill again picks up the remaining items (nothing already sent is sent twice).
 
 Two things to know when upgrading an install from before the media-hub release: the database image changed from `postgres:16` to `pgvector/pgvector:pg16` (same data format; compose replaces the container and keeps the `pgdata` volume, and the first start creates the `vector` extension), and if you run the ML sidecar its profile must be part of every `up`. Put `COMPOSE_PROFILES=ml` (plus `worker` if used) in `.env` so `docker compose up --build -d` and `deploy/update.sh` include it, then run `docker compose run --rm ml-init` once to fetch the weights.
 

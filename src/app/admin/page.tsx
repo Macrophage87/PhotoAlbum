@@ -90,7 +90,7 @@ export default async function AdminPage() {
             model={gates.model}
             trips={tripOptions}
             collections={collectionOptions}
-            spend={spend} rawRetentionDays={env().ANNOTATION_RAW_RETENTION_DAYS} batches={orderedBatches.map((b) => ({ id: b.id, parentId: b.parentId, running: !b.parentId && !b.runEndedAt && !b.cancelRequestedAt && b.status !== "FAILED", marker: b.anthropicBatchId.startsWith("failed-") ? (b.anthropicBatchId.endsWith("-retry") ? "restart" : "error") : b.parentId && b.status === "FAILED" && b.requested === 0 ? "error" : null, canceled: b.canceled, skippedReasons: (b.skippedReasons as Record<string, number> | null) ?? null, status: b.status, requested: b.requested, succeeded: b.succeeded, errored: b.errored, skipped: b.skipped, createdAt: b.createdAt.toISOString(), endedAt: b.endedAt?.toISOString() ?? null, scope: describeScope(b.scope) }))}
+            spend={spend} rawRetentionDays={env().ANNOTATION_RAW_RETENTION_DAYS} batches={orderedBatches.map((b) => ({ id: b.id, parentId: b.parentId, running: !b.parentId && !b.runEndedAt && !b.cancelRequestedAt && b.status !== "FAILED", marker: b.parentId && (b.anthropicBatchId.startsWith("failed-") || (b.status === "FAILED" && b.requested === 0)) ? (b.anthropicBatchId.endsWith("-retry") ? "restart" : "error") : null, canceled: b.canceled, skippedReasons: (b.skippedReasons as Record<string, number> | null) ?? null, status: b.status, requested: b.requested, succeeded: b.succeeded, errored: b.errored, skipped: b.skipped, createdAt: b.createdAt.toISOString(), endedAt: b.endedAt?.toISOString() ?? null, scope: describeScope(b.scope) }))}
           />
         </section>
 

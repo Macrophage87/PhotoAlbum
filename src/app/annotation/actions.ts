@@ -145,8 +145,9 @@ export async function startBackfill(scope: BackfillScope, typedConfirmation: str
   const id = `b${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
   // The placeholder is unique per batch so two submissions never collide on the unique column.
   const batch = await db.annotationBatch.create({ data: { id, anthropicBatchId: `pending-${id}`, scope: s, requested: items.length, createdById: admin.id } });
-  // A full run can take hours of building and uploading; the job must not expire and be re-delivered meanwhile.
-  await enqueue(QUEUES.annotationBackfill, { batchId: batch.id }, { expireInSeconds: 12 * 3600, retryLimit: 0 });
+  // A full run can take hours of building and uploading; the job must not expire meanwhile. One late retry lets a
+  // run cut short by a crash be closed by the handler as well as by the poll.
+  await enqueue(QUEUES.annotationBackfill, { batchId: batch.id }, { expireInSeconds: 12 * 3600, retryLimit: 1, retryDelay: 3600 });
   revalidatePath("/admin");
   return batch.id;
 }

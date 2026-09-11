@@ -6,13 +6,13 @@ import { cancelBackfill, previewBackfill, setAnnotationOptIn, startBackfill, typ
 import type { BackfillScope } from "@/lib/jobs/handlers/annotation-batch";
 
 const SKIP_LABELS: Record<string, string> = { noRendition: "file could not be read", missing: "deleted meanwhile", optedOutOrDescribedMeanwhile: "opted out or described meanwhile" };
-type Collapsed = (Batch & { kind: "row" }) | { kind: "more"; id: string; count: number; described: number; errored: number; skipped: number };
+type Collapsed = (Batch & { kind: "row" }) | { kind: "more"; id: string; count: number; described: number; errored: number; canceled: number; skipped: number };
 
 /** Long runs make many continuation rows: keep the first three, anything still open, and every marker; fold the rest into one line. */
 function collapseFamilies(rows: Batch[]): Collapsed[] {
   const out: Collapsed[] = [];
   let shownInFamily = 0;
-  let folded: { count: number; described: number; errored: number; skipped: number } | null = null;
+  let folded: { count: number; described: number; errored: number; canceled: number; skipped: number } | null = null;
   const flush = (familyId: string) => {
     if (folded) out.push({ kind: "more", id: `more-${familyId}`, ...folded });
     folded = null;
@@ -29,10 +29,11 @@ function collapseFamilies(rows: Batch[]): Collapsed[] {
       out.push({ ...r, kind: "row" });
       shownInFamily += 1;
     } else {
-      folded = folded ?? { count: 0, described: 0, errored: 0, skipped: 0 };
+      folded = folded ?? { count: 0, described: 0, errored: 0, canceled: 0, skipped: 0 };
       folded.count += 1;
       folded.described += r.succeeded;
       folded.errored += r.errored;
+      folded.canceled += r.canceled;
       folded.skipped += r.skipped;
     }
   }
@@ -137,7 +138,7 @@ export function AnnotationAdmin({ gates, model, trips, collections, batches, spe
         {batches.length > 0 && (
           <ul className="divide-y divide-border">
             {collapseFamilies(batches).map((b) => b.kind === "more" ? (
-              <li key={b.id} className="py-1 pl-4 text-xs text-muted">{b.count} more continuation row{b.count === 1 ? "" : "s"} of this run: {b.described} described, {b.errored} failed, {b.skipped} skipped.</li>
+              <li key={b.id} className="py-1 pl-4 text-xs text-muted">{b.count} more continuation row{b.count === 1 ? "" : "s"} of this run: {b.described} described, {b.errored} failed{b.canceled > 0 ? `, ${b.canceled} not processed (stopped)` : ""}, {b.skipped} skipped.</li>
             ) : (
               <li key={b.id} className={`py-2 flex flex-wrap items-center justify-between gap-2 ${b.parentId ? "pl-4 text-muted" : ""}`}>
                 {b.marker ? (
@@ -149,7 +150,7 @@ export function AnnotationAdmin({ gates, model, trips, collections, batches, spe
                     {new Date(b.createdAt).toLocaleString("en-US")} · {b.scope}{b.parentId ? " (continued)" : ""} · {b.requested} requested
                     {b.status !== "SUBMITTED" && <> · {b.succeeded} described, {b.errored} failed{b.canceled > 0 ? `, ${b.canceled} not processed (stopped)` : ""}, {b.skipped} skipped{b.skippedReasons ? ` (${describeSkips(b.skippedReasons)})` : ""}</>}
                     {" · "}
-                    <span className="text-muted">{b.status === "SUBMITTED" ? "in progress" : b.running ? `${b.status.toLowerCase()}, still submitting the rest of the run` : b.status.toLowerCase()}</span>
+                    <span className="text-muted">{b.status === "SUBMITTED" ? "in progress" : b.running ? `${b.status.toLowerCase()}, still submitting the rest of the run` : b.status === "FAILED" && !b.parentId ? "failed before anything was sent; run it again (details in the worker log)" : b.status.toLowerCase()}</span>
                   </span>
                 )}
                 {(b.status === "SUBMITTED" || b.running) && <Button size="sm" variant="secondary" disabled={pending} onClick={() => start(() => cancelBackfill(b.id))}>{b.running && b.status !== "SUBMITTED" ? "Stop the rest of this run" : "Cancel"}</Button>}
