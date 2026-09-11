@@ -30,11 +30,20 @@ export default async function CollectionOverviewPage({ params }: PageProps<"/col
         <div className="flex items-center justify-between mb-3">
           <h2 className="font-display text-xl font-semibold">Photos</h2>
           <div className="flex gap-2">
-            {editable && <ButtonLink href="/upload" size="sm">Upload</ButtonLink>}
+            {editable && <ButtonLink href={`/collections/${slug}/add`} size="sm">Add existing photos</ButtonLink>}
+            {editable && <ButtonLink href="/upload" size="sm" variant="secondary">Upload</ButtonLink>}
             <Link href={`/collections/${slug}/photos`} className="text-sm text-primary underline-offset-2 hover:underline self-center">All photos →</Link>
           </div>
         </div>
-        <PhotoGrid photos={ready.slice(0, 12).map((p) => toGridPhoto(p, null, editable))} showDetailLink={editable} emptyMessage={editable ? "Nothing here yet. Open a photo and tick this collection, or select photos in any gallery." : "Nothing here yet."} />
+        {editable && ready.length === 0 ? (
+          <Card className="p-5 space-y-2">
+            <p className="font-medium">Nothing here yet.</p>
+            <p className="text-sm text-muted">Pick photos that are already in the album, upload new ones, or open any photo and tick this collection.</p>
+            <div className="flex gap-2 pt-1"><ButtonLink href={`/collections/${slug}/add`} size="sm">Add existing photos</ButtonLink><ButtonLink href="/upload" size="sm" variant="secondary">Upload</ButtonLink></div>
+          </Card>
+        ) : (
+          <PhotoGrid photos={ready.slice(0, 12).map((p) => toGridPhoto(p, null, editable))} showDetailLink={editable} emptyMessage="Nothing here yet." />
+        )}
       </section>
     </div>
   );

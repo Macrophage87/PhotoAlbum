@@ -4,10 +4,10 @@ import { getTheme, isThemeKey, listThemes, themeToCssVars } from "@/themes";
 const HEX = /^#[0-9a-f]{6}$/i;
 
 describe("theme registry", () => {
-  it("ships the six built-in themes with unique keys", () => {
+  it("ships the seven built-in themes with unique keys", () => {
     const keys = listThemes().map((t) => t.key);
     expect(new Set(keys).size).toBe(keys.length);
-    expect(keys).toEqual(expect.arrayContaining(["default", "lighthouse", "highlands", "swamp", "desert", "alpine"]));
+    expect(keys).toEqual(expect.arrayContaining(["default", "lighthouse", "highlands", "swamp", "desert", "alpine", "kennel"]));
   });
   it("every theme is complete", () => {
     for (const t of listThemes()) {

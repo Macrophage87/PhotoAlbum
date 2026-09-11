@@ -144,17 +144,25 @@ test("a collection gathers photos from two trips and can be shared by link", asy
   await expect(page).toHaveURL(/\/collections\/best-of-2025$/);
   await expect(page.getByRole("heading", { name: "Best of 2025" })).toBeVisible();
 
-  const photos = await withDb((c) => c.query('SELECT p.id FROM "Photo" p JOIN "Trip" t ON t.id = p."tripId" WHERE t.slug IN (\'acadia\', \'yosemite\') ORDER BY t.slug'));
+  const photos = await withDb((c) => c.query('SELECT p.id, t.slug FROM "Photo" p JOIN "Trip" t ON t.id = p."tripId" WHERE t.slug IN (\'acadia\', \'yosemite\') ORDER BY t.slug'));
   expect(photos.rows).toHaveLength(2);
-  for (const row of photos.rows) {
-    await page.goto(`/photos/${row.id}`);
-    const box = page.getByLabel("Best of 2025");
-    await box.check();
-    await expect(page.getByRole("link", { name: "Open", exact: true })).toBeVisible();
-    await page.reload();
-    await expect(page.getByLabel("Best of 2025")).toBeChecked();
-  }
-  await page.goto("/collections/best-of-2025/photos");
+  // One photo through the per-photo checkbox, the other through the collection's own "Add existing photos" picker.
+  await page.goto(`/photos/${photos.rows[0].id}`);
+  await page.getByLabel("Best of 2025").check();
+  await expect(page.getByRole("link", { name: "Open", exact: true })).toBeVisible();
+  await page.reload();
+  await expect(page.getByLabel("Best of 2025")).toBeChecked();
+  await page.goto("/collections/best-of-2025");
+  await page.getByRole("link", { name: "Add existing photos" }).first().click();
+  await expect(page).toHaveURL(/\/collections\/best-of-2025\/add$/);
+  const picker = page.getByTestId("add-photos");
+  await expect(picker.getByText("1 item to choose from")).toBeVisible();
+  await page.waitForLoadState("networkidle");
+  await picker.locator(`button:has(img[src*='/api/photos/${photos.rows[1].id}/'])`).click();
+  await expect(picker.getByText("1 selected")).toBeVisible();
+  await picker.getByRole("button", { name: /Add 1 to collection/ }).click();
+  await expect(page).toHaveURL(/\/collections\/best-of-2025\/photos\?added=1$/);
+  await expect(page.getByRole("status")).toContainText("Added 1 photo");
   await expect(page.getByRole("heading", { name: /2 items/ })).toBeVisible();
 
   await page.goto("/collections/best-of-2025/settings");

@@ -1,6 +1,9 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { candidatePhotoPage } from "@/lib/photos/page";
+import { toGridPhoto } from "@/components/photos/toGrid";
+import type { GridPhoto } from "@/components/photos/PhotoGrid";
 import { redirect } from "next/navigation";
 import { z } from "zod";
 import { db } from "@/lib/db";
@@ -168,4 +171,13 @@ export async function detachExposedFromOtherCollections(slug: string): Promise<v
   revalidatePath(`/collections/${slug}`, "layout");
   revalidatePath("/", "layout");
   redirect(`/collections/${slug}/settings?saved=1`);
+}
+
+/** The next page of the "add existing photos" picker, as grid items. */
+export async function moreCandidates(slug: string, filter: { trip?: string | null; q?: string | null }, cursor: string): Promise<{ photos: GridPhoto[]; nextCursor: string | null }> {
+  await requireUserOrThrow();
+  const collection = await db.collection.findUnique({ where: { slug }, select: { id: true } });
+  if (!collection) throw new Error("Collection not found");
+  const page = await candidatePhotoPage({ excludeCollectionId: collection.id, trip: filter.trip, q: filter.q }, { cursor });
+  return { photos: page.photos.map((p) => toGridPhoto(p, null, true)), nextCursor: page.nextCursor };
 }

@@ -4,12 +4,13 @@ import { highlandsTheme } from "./highlands";
 import { swampTheme } from "./swamp";
 import { desertTheme } from "./desert";
 import { alpineTheme } from "./alpine";
+import { kennelTheme } from "./kennel";
 import type { Theme } from "./types";
 
 export const DEFAULT_THEME_KEY = "default";
 
 const registry: Record<string, Theme> = Object.fromEntries(
-  [defaultTheme, lighthouseTheme, highlandsTheme, swampTheme, desertTheme, alpineTheme].map((t) => [t.key, t]),
+  [defaultTheme, lighthouseTheme, highlandsTheme, swampTheme, desertTheme, alpineTheme, kennelTheme].map((t) => [t.key, t]),
 );
 
 export function getTheme(key: string | null | undefined): Theme {

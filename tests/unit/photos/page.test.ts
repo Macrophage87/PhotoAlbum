@@ -55,3 +55,28 @@ describe("cursor pagination", () => {
     expect(new Set(seen).size).toBe(seen.length);
   });
 });
+
+describe("candidate photos for a collection", () => {
+  it("offers ready items not yet in the collection, newest first, filtered by trip or a word", async () => {
+    const { candidatePhotoPage } = await import("@/lib/photos/page");
+    await resetTestDb();
+    const user = await db.user.create({ data: { email: "cand@example.com", role: "ADMIN" } });
+    const trip = await db.trip.create({ data: { slug: "c", title: "C", startDate: new Date("2025-08-10"), endDate: new Date("2025-08-16"), createdById: user.id } });
+    const collection = await db.collection.create({ data: { slug: "best", title: "Best", themeKey: "default", createdById: user.id } });
+    const mk = (name: string, extra: Record<string, unknown> = {}) => db.photo.create({ data: { uploaderId: user.id, originalName: name, mimeType: "image/jpeg", storageKey: name, originalPath: `${name}/o.jpg`, sizeBytes: 1, status: "READY", ...extra } });
+    const inTrip = await mk("trip.jpg", { tripId: trip.id, takenAt: new Date("2025-08-12T10:00:00Z"), caption: "Lake at dawn" });
+    const loose = await mk("loose.jpg", { takenAt: new Date("2025-08-13T10:00:00Z") });
+    const held = await mk("held.jpg", { takenAt: new Date("2025-08-14T10:00:00Z") });
+    await mk("pending.jpg", { status: "PENDING" });
+    await db.collectionItem.create({ data: { collectionId: collection.id, photoId: held.id, position: 0, addedById: user.id } });
+    const all = await candidatePhotoPage({ excludeCollectionId: collection.id });
+    expect(all.photos.map((p) => p.id)).toEqual([loose.id, inTrip.id]);
+    expect(all.total).toBe(2);
+    expect((await candidatePhotoPage({ excludeCollectionId: collection.id, trip: trip.id })).photos.map((p) => p.id)).toEqual([inTrip.id]);
+    expect((await candidatePhotoPage({ excludeCollectionId: collection.id, trip: "none" })).photos.map((p) => p.id)).toEqual([loose.id]);
+    expect((await candidatePhotoPage({ excludeCollectionId: collection.id, q: "LAKE" })).photos.map((p) => p.id)).toEqual([inTrip.id]);
+    const first = await candidatePhotoPage({ excludeCollectionId: collection.id }, { take: 1 });
+    expect(first.nextCursor).toBe(loose.id);
+    expect((await candidatePhotoPage({ excludeCollectionId: collection.id }, { take: 1, cursor: first.nextCursor })).photos.map((p) => p.id)).toEqual([inTrip.id]);
+  });
+});
