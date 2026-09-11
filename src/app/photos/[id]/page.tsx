@@ -40,7 +40,7 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
   });
   if (!photo) notFound();
 
-  const [gates, optOutWhy, faces, proposals, similar, people] = await Promise.all([annotationGates(), optOutReason(photo.id), peopleOnPhoto(photo.id), proposalsFor([photo.id]), similarTo(viewer, photo.id), db.person.findMany({ where: { kind: "HUMAN" }, orderBy: { name: "asc" }, select: { id: true, name: true } })]);
+  const [gates, optOutWhy, faces, proposals, similar, people] = await Promise.all([annotationGates(), optOutReason(photo.id), peopleOnPhoto(photo.id), proposalsFor([photo.id]), similarTo(viewer, photo.id), db.person.findMany({ where: { kind: "HUMAN", optedOutAt: null }, orderBy: { name: "asc" }, select: { id: true, name: true } })]);
   const [trips, activities, links, candidates, collections] = await Promise.all([
     db.trip.findMany({ orderBy: { startDate: "desc" }, select: { id: true, title: true } }),
     photo.tripId ? db.activity.findMany({ where: { tripId: photo.tripId }, orderBy: { startTime: "asc" }, select: { id: true, title: true, startTime: true } }) : Promise.resolve([]),

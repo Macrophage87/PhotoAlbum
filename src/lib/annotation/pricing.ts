@@ -37,12 +37,14 @@ export type Spend = { items: number; inputTokens: number; cacheReadTokens: numbe
  * Real spend from recorded usage, each row at the price of the model that answered it: single requests at list
  * price, batch results at the batch discount. `input` is the API's input_tokens, which already excludes cache reads.
  */
-export function actualSpend(fallbackModel: string, rows: { model?: string | null; input: number; cacheRead: number; output: number; batched: boolean }[]): Spend {
+export const CACHE_WRITE_FACTOR = 1.25;
+
+export function actualSpend(fallbackModel: string, rows: { model?: string | null; input: number; cacheRead: number; cacheWrite?: number; output: number; batched: boolean }[]): Spend {
   let usd = 0, inputTokens = 0, cacheReadTokens = 0, outputTokens = 0;
   for (const r of rows) {
     const price = PRICES[r.model ?? ""] ?? PRICES[fallbackModel] ?? PRICES["claude-opus-5"];
     const factor = r.batched ? BATCH_DISCOUNT : 1;
-    usd += factor * ((r.input * price.inputPerMTok + r.cacheRead * price.inputPerMTok * price.cacheReadFactor + r.output * price.outputPerMTok) / 1_000_000);
+    usd += factor * ((r.input * price.inputPerMTok + r.cacheRead * price.inputPerMTok * price.cacheReadFactor + (r.cacheWrite ?? 0) * price.inputPerMTok * CACHE_WRITE_FACTOR + r.output * price.outputPerMTok) / 1_000_000);
     inputTokens += r.input;
     cacheReadTokens += r.cacheRead;
     outputTokens += r.output;

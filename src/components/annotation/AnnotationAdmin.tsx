@@ -10,10 +10,10 @@ function describeSkips(reasons: Record<string, number>): string {
   return Object.entries(reasons).map(([k, n]) => `${n} ${SKIP_LABELS[k] ?? k}`).join(", ");
 }
 
-type Batch = { id: string; parentId: string | null; skippedReasons: Record<string, number> | null; status: string; requested: number; succeeded: number; errored: number; skipped: number; createdAt: string; endedAt: string | null; scope: string };
+type Batch = { id: string; parentId: string | null; skippedReasons: Record<string, number> | null; running: boolean; status: string; requested: number; succeeded: number; errored: number; skipped: number; createdAt: string; endedAt: string | null; scope: string };
 type Option = { id: string; title: string };
 
-export function AnnotationAdmin({ gates, model, trips, collections, batches, spend, rawRetentionDays }: { gates: { envEnabled: boolean; hasKey: boolean; optedInAt: string | null; active: boolean }; model: string; trips: Option[]; collections: Option[]; batches: Batch[]; /** Real spend from recorded token usage, at today's prices. */ spend: { items: number; inputTokens: number; cacheReadTokens: number; outputTokens: number; usd: number; pricesAsOf: string }; rawRetentionDays: number }) {
+export function AnnotationAdmin({ gates, model, trips, collections, batches, spend, rawRetentionDays }: { gates: { envEnabled: boolean; hasKey: boolean; optedInAt: string | null; active: boolean }; model: string; trips: Option[]; collections: Option[]; batches: Batch[]; /** Real spend from recorded token usage, each item at the price of the model that answered it. */ spend: { items: number; inputTokens: number; cacheReadTokens: number; outputTokens: number; usd: number; pricesAsOf: string }; rawRetentionDays: number }) {
   const [pending, start] = useTransition();
   const [scopeKind, setScopeKind] = useState<BackfillScope["kind"]>("all");
   const [tripId, setTripId] = useState(trips[0]?.id ?? "");
@@ -88,7 +88,7 @@ export function AnnotationAdmin({ gates, model, trips, collections, batches, spe
             </p>
             <p className="text-muted">Sent per item: {preview.sends.join("; ")}. Opted-out and already described items are skipped.</p>
             <p className="text-muted">
-              {preview.excluded.inScope} item{preview.excluded.inScope === 1 ? "" : "s"} in scope: {preview.excluded.described} already described, {preview.excluded.optedOutSelf} opted out, {preview.excluded.optedOutInherited} opted out through a trip or collection, {preview.estimate.items} would be sent. Items whose files cannot be read are skipped at submission and counted below.
+              {preview.excluded.inScope} item{preview.excluded.inScope === 1 ? "" : "s"} in scope: {preview.excluded.described} already described, {preview.excluded.optedOutSelf} opted out, {preview.excluded.optedOutInherited} opted out through a trip or collection, {preview.estimate.items} would be sent{preview.cap ? ` (one run sends at most ${preview.cap.toLocaleString()}; run it again for the rest)` : ""}. Items whose files cannot be read are skipped at submission and counted below.
             </p>
             {preview.estimate.items > 0 && (
               <div className="flex flex-wrap items-center gap-2">
@@ -107,7 +107,7 @@ export function AnnotationAdmin({ gates, model, trips, collections, batches, spe
                 <span>
                   {new Date(b.createdAt).toLocaleString("en-US")} · {b.scope}{b.parentId ? " (continued)" : ""} · {b.requested} requested{b.status !== "SUBMITTED" && <> · {b.succeeded} described, {b.errored} failed, {b.skipped} skipped{b.skippedReasons ? ` (${describeSkips(b.skippedReasons)})` : ""}</>} · <span className="text-muted">{b.status.toLowerCase()}</span>
                 </span>
-                {b.status === "SUBMITTED" && <Button size="sm" variant="secondary" disabled={pending} onClick={() => start(() => cancelBackfill(b.id))}>Cancel</Button>}
+                {(b.status === "SUBMITTED" || b.running) && <Button size="sm" variant="secondary" disabled={pending} onClick={() => start(() => cancelBackfill(b.id))}>Cancel</Button>}
               </li>
             ))}
           </ul>

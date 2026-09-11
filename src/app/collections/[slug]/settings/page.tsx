@@ -55,11 +55,18 @@ export default async function CollectionSettingsPage({ params, searchParams }: P
                   <Button type="submit" variant="secondary" size="sm">{collection.visibility === "PRIVATE" && !warnings.exposingContainers.some((c) => c.kind === "trip") ? "Make these items private everywhere (remove them from those collections)" : "Remove these items from the more visible collections"}</Button>
                 </form>
               )}
-              {warnings.exposingContainers.some((c) => c.kind === "trip") && <span className="text-sm">Items on a more visible trip stay visible through that trip; change it from its settings:</span>}
-              {warnings.exposingContainers.map((c) => (
-                <Link key={`${c.kind}_${c.id}`} href={c.kind === "trip" ? `/trips/${c.slug}/settings` : `/collections/${c.slug}/settings`} className="text-sm underline underline-offset-2">Open {c.title}</Link>
+              {warnings.exposingContainers.filter((c) => c.kind === "collection").map((c) => (
+                <Link key={`${c.kind}_${c.id}`} href={`/collections/${c.slug}/settings`} className="text-sm underline underline-offset-2">Open {c.title}</Link>
               ))}
             </div>
+            {warnings.exposingContainers.some((c) => c.kind === "trip") && (
+              <div className="flex flex-wrap gap-3 items-center">
+                <span className="text-sm">Items on a more visible trip stay visible through that trip; change it from its settings:</span>
+                {warnings.exposingContainers.filter((c) => c.kind === "trip").map((c) => (
+                  <Link key={`${c.kind}_${c.id}`} href={`/trips/${c.slug}/settings`} className="text-sm underline underline-offset-2">Open {c.title}</Link>
+                ))}
+              </div>
+            )}
           </Card>
         )}
         {warnings.alsoElsewhere > 0 && warnings.stillExposed.length === 0 && (

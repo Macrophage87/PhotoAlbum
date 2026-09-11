@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import path from "node:path";
 import { createTrip, resetDb, setVisibility, signIn, withDb } from "./helpers";
 
@@ -13,6 +13,22 @@ async function chooseFile(page: Page, name: string) {
 }
 
 test.describe.configure({ mode: "serial" });
+
+
+/** Server-action buttons on a freshly reloaded page can lose a click before hydration; click until the database agrees. */
+async function clickUntil(page: Page, button: () => Locator, done: () => Promise<boolean>) {
+  await expect
+    .poll(async () => {
+      if (await done()) return true;
+      await page.reload();
+      await page.waitForLoadState("networkidle");
+      const b = button();
+      if (await b.count()) await b.first().click();
+      await page.waitForTimeout(800);
+      return done();
+    }, { timeout: 40_000, intervals: [1500] })
+    .toBe(true);
+}
 
 test.beforeAll(async () => {
   await resetDb();
@@ -474,19 +490,19 @@ test("a consented person is proposed on the next upload, names in the notes prop
   await page.goto(ids!);
   await expect.poll(async () => { await page.reload(); return page.getByText(/Probably/).count(); }, { timeout: 30_000, intervals: [1500] }).toBeGreaterThan(0);
   await expect(page.getByTestId("proposal").first()).toContainText("Uncle Dan");
-  await page.waitForLoadState("networkidle"); // a click before hydration is lost
-  await page.getByRole("button", { name: /Yes, that's Uncle/ }).click();
+  const danConfirmed = async () => (await withDb((c) => c.query('SELECT count(*)::int AS n FROM "Face" f JOIN "Person" p ON p.id = f."personId" WHERE p.name = $1 AND f.status = $2', ["Uncle Dan", "CONFIRMED"]))).rows[0].n === 2;
+  await clickUntil(page, () => page.getByRole("button", { name: /Yes, that's Uncle/ }), danConfirmed);
+  await page.reload();
   await expect(page.getByTestId("proposal")).toHaveCount(0);
-  const confirmed = await withDb((c) => c.query('SELECT count(*)::int AS n FROM "Face" f JOIN "Person" p ON p.id = f."personId" WHERE p.name = $1 AND f.status = $2', ["Uncle Dan", "CONFIRMED"]));
-  expect(confirmed.rows[0].n).toBe(2);
   const eras = await withDb((c) => c.query('SELECT "ageBandMin", "ageBandMax" FROM "FaceCluster" fc JOIN "Person" p ON p.id = fc."personId" WHERE p.name = $1', ["Uncle Dan"]));
   expect(eras.rows.length).toBe(1);
 
   // Pets: add one, then a note naming it proposes it; tag another from the lightbox; search finds both.
   await page.goto("/people");
-  await page.getByLabel("Name", { exact: true }).last().fill("Biscuit");
-  await page.getByLabel("Species").selectOption("DOG");
-  await page.getByRole("button", { name: "Add pet" }).click();
+  const petForm = page.locator("form").filter({ has: page.getByRole("button", { name: "Add pet" }) });
+  await petForm.locator("#pet-name").fill("Biscuit");
+  await petForm.locator("#pet-species").selectOption("DOG");
+  await petForm.getByRole("button", { name: "Add pet" }).click();
   await expect(page.getByRole("link", { name: /Biscuit/ })).toBeVisible();
   await page.goto("/upload");
   await chooseFile(page, "photo-no-gps.jpg");
@@ -496,20 +512,13 @@ test("a consented person is proposed on the next upload, names in the notes prop
   await page.getByLabel(/Notes for/).fill("Biscuit asleep on the porch");
   await page.getByRole("button", { name: "Set note" }).click();
   await expect.poll(async () => { await page.reload(); return page.getByText(/Probably Biscuit/).count(); }, { timeout: 30_000, intervals: [1500] }).toBe(1);
-  await page.waitForLoadState("networkidle");
-  await page.getByRole("button", { name: /Yes, that's Biscuit/ }).click();
-  // Wait for the action to land before anything reloads the page, or the in-flight request is dropped.
-  await expect
-    .poll(async () => (await withDb((c) => c.query('SELECT count(*)::int AS n FROM "Face" f JOIN "Person" p ON p.id = f."personId" WHERE p.name = $1 AND f.status = $2', ["Biscuit", "CONFIRMED"]))).rows[0].n, { timeout: 15_000, intervals: [500] })
-    .toBe(1);
+  const biscuitConfirmed = async () => (await withDb((c) => c.query('SELECT count(*)::int AS n FROM "Face" f JOIN "Person" p ON p.id = f."personId" WHERE p.name = $1 AND f.status = $2', ["Biscuit", "CONFIRMED"]))).rows[0].n === 1;
+  await clickUntil(page, () => page.getByRole("button", { name: /Yes, that's Biscuit/ }), biscuitConfirmed);
   // The two fixture images have the same pixels, so Dan is proposed here too; saying no records a negative example.
   const danRow = page.getByTestId("proposal").filter({ hasText: "Uncle Dan" });
   await expect.poll(async () => { await page.reload(); return danRow.count(); }, { timeout: 30_000, intervals: [1500] }).toBe(1);
-  await page.waitForLoadState("networkidle");
-  await danRow.getByRole("button", { name: "No" }).click();
-  await expect
-    .poll(async () => (await withDb((c) => c.query('SELECT count(*)::int AS n FROM "Face" f JOIN "Person" p ON p.id = f."proposedPersonId" WHERE p.name = $1 AND f.status = $2', ["Uncle Dan", "REJECTED"]))).rows[0].n, { timeout: 15_000, intervals: [500] })
-    .toBe(1);
+  const danRejected = async () => (await withDb((c) => c.query('SELECT count(*)::int AS n FROM "Face" f JOIN "Person" p ON p.id = f."proposedPersonId" WHERE p.name = $1 AND f.status = $2', ["Uncle Dan", "REJECTED"]))).rows[0].n === 1;
+  await clickUntil(page, () => danRow.getByRole("button", { name: "No" }), danRejected);
   await page.reload();
   await expect(page.getByTestId("proposal")).toHaveCount(0);
 

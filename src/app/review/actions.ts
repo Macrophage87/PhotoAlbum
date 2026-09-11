@@ -17,13 +17,13 @@ export async function setContext(photoIds: string[], value: string, mode: "repla
   const note = text.parse(value).trim();
   const now = new Date();
   if (mode === "replace") {
-    const res = await db.photo.updateMany({ where: { id: { in: list } }, data: { context: note || null, contextUpdatedAt: now } });
+    const res = await db.photo.updateMany({ where: { id: { in: list } }, data: { context: note || null, contextUpdatedAt: now, annotationError: null } });
     await enqueueMatch(list);
     revalidatePath("/", "layout");
     return res.count;
   }
   const rows = await db.photo.findMany({ where: { id: { in: list } }, select: { id: true, context: true } });
-  await db.$transaction(rows.map((r) => db.photo.update({ where: { id: r.id }, data: { context: [r.context?.trim(), note].filter(Boolean).join("\n") || null, contextUpdatedAt: now } })));
+  await db.$transaction(rows.map((r) => db.photo.update({ where: { id: r.id }, data: { context: [r.context?.trim(), note].filter(Boolean).join("\n") || null, contextUpdatedAt: now, annotationError: null } })));
   await enqueueMatch(list);
   revalidatePath("/", "layout");
   return rows.length;

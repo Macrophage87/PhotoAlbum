@@ -60,7 +60,7 @@ export default async function TripSettingsPage({ params, searchParams }: PagePro
             <p className="text-sm">Visibility is a union: a photo can be seen by anyone who may open its trip or any collection holding it.</p>
             <div className="flex flex-wrap gap-2 items-center">
               <form action={detach}>
-                <Button type="submit" variant="secondary" size="sm">Make these photos private everywhere (remove them from those collections)</Button>
+                <Button type="submit" variant="secondary" size="sm">{trip.visibility === "PRIVATE" ? "Make these photos private everywhere (remove them from those collections)" : "Remove these photos from the more visible collections"}</Button>
               </form>
               {warnings.exposingContainers.filter((c) => c.kind === "collection").map((c) => (
                 <Link key={c.id} href={`/collections/${c.slug}/settings`} className="text-sm underline underline-offset-2">Open {c.title}</Link>

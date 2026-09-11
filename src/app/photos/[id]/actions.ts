@@ -37,7 +37,7 @@ export async function updatePhoto(id: string, fd: FormData): Promise<void> {
     const act = await db.activity.findFirst({ where: { id: activityId, tripId: v.tripId ?? "" }, select: { id: true } });
     if (!act) activityId = null;
   }
-  await db.photo.update({ where: { id }, data: { caption: v.caption, context: v.context, ...(v.context !== photo.context ? { contextUpdatedAt: new Date() } : {}), tripId: v.tripId, activityId } });
+  await db.photo.update({ where: { id }, data: { caption: v.caption, context: v.context, ...(v.context !== photo.context ? { contextUpdatedAt: new Date(), annotationError: null } : {}), tripId: v.tripId, activityId } });
   revalidatePath(`/photos/${id}`);
   if (photo.tripId) revalidatePath(`/trips`, "layout");
 }

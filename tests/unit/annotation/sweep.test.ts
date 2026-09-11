@@ -34,4 +34,19 @@ describe("the annotation sweep", () => {
     expect(enqueued).toEqual([sent.id]);
     expect(enqueued).not.toContain(skipped.id);
   });
+
+  it("leaves a batch-failed item for the next backfill unless its notes were edited since", async () => {
+    const admin = await db.user.findFirstOrThrow();
+    const old = new Date(Date.now() - 2 * 60 * 60_000);
+    const base = { uploaderId: admin.id, originalName: "x.jpg", mimeType: "image/jpeg", storageKey: "k", originalPath: "k/o.jpg", sizeBytes: 1, status: "READY" as const };
+    const waiting = await db.photo.create({ data: { ...base, annotationError: "batch:expired" } });
+    const edited = await db.photo.create({ data: { ...base, annotationError: "batch:expired" } });
+    await db.$executeRaw`UPDATE "Photo" SET "updatedAt" = ${old}`;
+    // Editing notes (setContext / updatePhoto) clears the flag; the sweep then treats the item like any other.
+    await db.photo.update({ where: { id: edited.id }, data: { context: "Sam at the lake", contextUpdatedAt: new Date(), annotationError: null } });
+    await db.$executeRaw`UPDATE "Photo" SET "updatedAt" = ${old}`;
+    await annotationSweep();
+    expect(enqueued).toContain(edited.id);
+    expect(enqueued).not.toContain(waiting.id);
+  });
 });

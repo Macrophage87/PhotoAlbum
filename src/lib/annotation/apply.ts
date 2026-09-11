@@ -5,7 +5,7 @@ import { enqueueEmbedding } from "@/lib/jobs/handlers/embed-photo";
 export type ApplyResult = { ok: true } | { ok: false; reason: "refusal" | "invalid" | "max_tokens" };
 
 /** Persist a parsed record on the item and keep the raw response briefly for debugging. Never logs content. */
-export type Usage = { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number | null };
+export type Usage = { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null };
 
 export async function applyAnnotation(photoId: string, model: string, parsed: Annotation, raw: { usage?: Usage; batched?: boolean } & Record<string, unknown>): Promise<void> {
   const current = await db.photo.findUnique({ where: { id: photoId }, select: { takenAt: true, takenAtSource: true, estimatedDateSource: true, annotationSource: true } });
@@ -26,6 +26,7 @@ export async function applyAnnotation(photoId: string, model: string, parsed: An
         annotationError: null,
         annotationInputTokens: raw.usage?.input_tokens ?? null,
         annotationCacheReadTokens: raw.usage?.cache_read_input_tokens ?? null,
+        annotationCacheWriteTokens: raw.usage?.cache_creation_input_tokens ?? null,
         annotationOutputTokens: raw.usage?.output_tokens ?? null,
         annotationBatched: raw.batched ?? false,
         ...(est && noReliableDate && !keepMemberEstimate

@@ -195,7 +195,9 @@ docker compose --profile ml up -d --build
 
 For faces, also set `FACE_INDEXING_ENABLED=true` in `.env` and press **Turn on face detection** on the Admin page; faces nobody names are deleted after `FACE_UNNAMED_RETENTION_DAYS` (default 180). Put `COMPOSE_PROFILES=ml` in `.env` (add `,worker` if you use the separate worker) so every later `docker compose up`, including `deploy/update.sh`, starts the sidecar too; otherwise pass `--profile ml` each time.
 
-### Every variable
+### Media, AI and ML variables
+
+The basics (`APP_URL`, `ADMIN_EMAIL`, `SMTP_*`, `POSTGRES_*`, `APP_PORT`, `MAX_UPLOAD_BYTES`, `MAX_IMPORT_BYTES`, `RUN_WORKER`, `NEXT_PUBLIC_*`, `COMPOSE_PROFILES`) are described in `.env.example` and the setup PDF's configuration table; these are the ones added with the media features.
 
 | Variable | Default | What it does |
 | --- | --- | --- |
@@ -232,7 +234,7 @@ The heavy-work lock (transcoding, embeddings, faces one at a time) is held insid
 Optionally load the demo content (two trips, a hike with track and stats, sample photos, a collection, a short clip, a YouTube embed, two named people and a pet, with descriptions and face templates from offline fixtures):
 
 ```bash
-docker compose exec app node_modules/.bin/tsx prisma/seed.ts   # two trips, a hike, sample photos, a collection, a clip, a YouTube embed, two named people, a pet; descriptions and face templates are offline fixtures
+docker compose exec app node_modules/.bin/tsx prisma/seed.ts
 ```
 
 ## 9. Backups

@@ -33,8 +33,8 @@ export default async function AdminPage() {
     db.trip.findMany({ orderBy: { startDate: "desc" }, select: { id: true, title: true } }),
     db.collection.findMany({ orderBy: { title: "asc" }, select: { id: true, title: true } }),
   ]);
-  const usageRows = await db.photo.findMany({ where: { annotationInputTokens: { not: null } }, select: { annotationModel: true, annotationInputTokens: true, annotationCacheReadTokens: true, annotationOutputTokens: true, annotationBatched: true } });
-  const spend = actualSpend(env().ANNOTATION_MODEL, usageRows.map((r) => ({ model: r.annotationModel, input: r.annotationInputTokens ?? 0, cacheRead: r.annotationCacheReadTokens ?? 0, output: r.annotationOutputTokens ?? 0, batched: r.annotationBatched ?? false })));
+  const usageRows = await db.photo.findMany({ where: { annotationInputTokens: { not: null } }, select: { annotationModel: true, annotationInputTokens: true, annotationCacheReadTokens: true, annotationCacheWriteTokens: true, annotationOutputTokens: true, annotationBatched: true } });
+  const spend = actualSpend(env().ANNOTATION_MODEL, usageRows.map((r) => ({ model: r.annotationModel, input: r.annotationInputTokens ?? 0, cacheRead: r.annotationCacheReadTokens ?? 0, cacheWrite: r.annotationCacheWriteTokens ?? 0, output: r.annotationOutputTokens ?? 0, batched: r.annotationBatched ?? false })));
   const describeScope = (scope: unknown) => {
     const s = scope as { kind: string; tripId?: string; collectionId?: string; from?: string; to?: string };
     if (s.kind === "trip") return `trip ${tripOptions.find((t) => t.id === s.tripId)?.title ?? s.tripId}`;
@@ -87,7 +87,7 @@ export default async function AdminPage() {
             model={gates.model}
             trips={tripOptions}
             collections={collectionOptions}
-            spend={spend} rawRetentionDays={env().ANNOTATION_RAW_RETENTION_DAYS} batches={batches.map((b) => ({ id: b.id, parentId: b.parentId, skippedReasons: (b.skippedReasons as Record<string, number> | null) ?? null, status: b.status, requested: b.requested, succeeded: b.succeeded, errored: b.errored, skipped: b.skipped, createdAt: b.createdAt.toISOString(), endedAt: b.endedAt?.toISOString() ?? null, scope: describeScope(b.scope) }))}
+            spend={spend} rawRetentionDays={env().ANNOTATION_RAW_RETENTION_DAYS} batches={batches.map((b) => ({ id: b.id, parentId: b.parentId, running: !b.parentId && !b.runEndedAt && !b.cancelRequestedAt && b.status !== "FAILED", skippedReasons: (b.skippedReasons as Record<string, number> | null) ?? null, status: b.status, requested: b.requested, succeeded: b.succeeded, errored: b.errored, skipped: b.skipped, createdAt: b.createdAt.toISOString(), endedAt: b.endedAt?.toISOString() ?? null, scope: describeScope(b.scope) }))}
           />
         </section>
 

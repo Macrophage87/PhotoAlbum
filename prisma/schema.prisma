@@ -275,6 +275,7 @@ model Photo {
   /// Token counts from the helper's last response, for the admin page's real-spend figure.
   annotationInputTokens     Int?
   annotationCacheReadTokens Int?
+  annotationCacheWriteTokens Int?
   annotationOutputTokens    Int?
   annotationBatched         Boolean?
   /// For undated items: the helper's estimated year range, kept until a member sets a real date.
@@ -391,6 +392,10 @@ model AnnotationBatch {
   parentId         String?
   /// Why items in scope were not sent, e.g. {"noRendition": 2}.
   skippedReasons   Json?
+  /// On the row the admin started: when the worker picked the run up, when the admin asked to stop, and when the loop finished.
+  startedAt        DateTime?
+  cancelRequestedAt DateTime?
+  runEndedAt       DateTime?
   createdById      String
   createdAt        DateTime              @default(now())
   endedAt          DateTime?

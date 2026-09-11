@@ -23,8 +23,11 @@ export async function backfillCandidates(scope: BackfillScope) {
     : scope.kind === "collection" ? { ...base, collections: { ...base.collections, some: { collectionId: scope.collectionId } } }
     : scope.kind === "range" ? { ...base, takenAt: { gte: new Date(`${scope.from}T00:00:00Z`), lte: new Date(`${scope.to}T23:59:59Z`) } }
     : base;
-  return db.photo.findMany({ where, select: { id: true, kind: true }, orderBy: { createdAt: "asc" }, take: 10_000 });
+  return db.photo.findMany({ where, select: { id: true, kind: true }, orderBy: { createdAt: "asc" }, take: BACKFILL_CAP });
 }
+
+/** One run sends at most this many items; the preview says so when a scope is larger. */
+export const BACKFILL_CAP = 10_000;
 
 /** How many items in scope a backfill leaves out, and why: already described, opted out directly, or by a trip or collection. */
 export async function backfillExclusions(scope: BackfillScope): Promise<{ inScope: number; described: number; optedOutSelf: number; optedOutInherited: number }> {
@@ -43,9 +46,9 @@ export async function backfillExclusions(scope: BackfillScope): Promise<{ inScop
   return { inScope, described, optedOutSelf, optedOutInherited };
 }
 
-/** Items per Message Batch, and the byte budget of image data per batch (the API caps a batch request at 256 MB). */
+/** Items per Message Batch, and the byte budget of image data per batch: well under the API's 256 MB cap, and small enough to upload from a home connection within the request timeout. */
 export const BATCH_CHUNK = 200;
-export const BATCH_BYTE_BUDGET = 150 * 1024 * 1024;
+export const BATCH_BYTE_BUDGET = 32 * 1024 * 1024;
 
 export function chunk<T>(items: T[], size: number): T[][] {
   const out: T[][] = [];
@@ -77,8 +80,9 @@ function imageBytes(params: Awaited<ReturnType<typeof buildRequest>>): number {
   return n;
 }
 
-async function familyCancelled(originId: string): Promise<boolean> {
-  const row = await db.annotationBatch.findFirst({ where: { OR: [{ id: originId }, { parentId: originId }], status: "CANCELLED" }, select: { id: true } });
+/** A run is cancelled when the admin asked on the row they started, or when any row of the family was cancelled. */
+export async function familyCancelled(originId: string): Promise<boolean> {
+  const row = await db.annotationBatch.findFirst({ where: { OR: [{ id: originId, cancelRequestedAt: { not: null } }, { id: originId, status: "CANCELLED" }, { parentId: originId, status: "CANCELLED" }] }, select: { id: true } });
   return Boolean(row);
 }
 
@@ -94,10 +98,13 @@ export async function annotationBackfill(job: AnnotationBackfillJob): Promise<vo
   if (!gates.active) return;
   const batch = await db.annotationBatch.findUnique({ where: { id: job.batchId } });
   if (!batch || batch.status !== "SUBMITTED" || !batch.anthropicBatchId.startsWith("pending-")) return;
+  await db.annotationBatch.update({ where: { id: batch.id }, data: { startedAt: new Date() } });
   const candidates = await backfillCandidates(batch.scope as BackfillScope);
   let rowId = batch.id;
+  let rowLive = false; // whether rowId already carries a real batch id (its results must never be lost)
   let submittedAny = false;
   let chunkNo = 0;
+  const finish = async () => db.annotationBatch.update({ where: { id: batch.id }, data: { runEndedAt: new Date() } }).catch(() => undefined);
   try {
     for (const part of chunk(candidates, BATCH_CHUNK)) {
       if (await familyCancelled(batch.id)) return;
@@ -119,31 +126,49 @@ export async function annotationBackfill(job: AnnotationBackfillJob): Promise<vo
       }
       const skipped = Object.values(reasons).reduce((a, b) => a + b, 0);
       const groups = built.length ? splitByBytes(built, BATCH_BYTE_BUDGET) : [[]];
-      for (const group of groups) {
+      for (const [gi, group] of groups.entries()) {
         if (await familyCancelled(batch.id)) return;
-        if (chunkNo > 0) rowId = (await db.annotationBatch.create({ data: { anthropicBatchId: `pending-${batch.id}-${chunkNo}`, parentId: batch.id, scope: batch.scope as object, requested: 0, createdById: batch.createdById }, select: { id: true } })).id;
+        // Skips belong to the part, so only its first row carries them.
+        const skipData = gi === 0 ? { skipped, skippedReasons: reasons } : {};
+        if (chunkNo > 0) {
+          rowId = (await db.annotationBatch.create({ data: { anthropicBatchId: `pending-${batch.id}-${chunkNo}`, parentId: batch.id, scope: batch.scope as object, requested: 0, createdById: batch.createdById }, select: { id: true } })).id;
+          rowLive = false;
+        }
         chunkNo += 1;
         if (!group.length) {
-          await db.annotationBatch.update({ where: { id: rowId }, data: { status: "ENDED", skipped, skippedReasons: reasons, endedAt: new Date(), anthropicBatchId: `empty-${rowId}` } });
+          await db.annotationBatch.update({ where: { id: rowId }, data: { status: "ENDED", ...skipData, endedAt: new Date(), anthropicBatchId: `empty-${rowId}` } });
           continue;
         }
-        const created = await anthropic().messages.batches.create({ requests: group.map((g) => ({ custom_id: g.custom_id, params: g.params })) });
+        // A batch upload is large and slow; give it its own timeout and never let the SDK re-upload it on a timeout.
+        const created = await anthropic().messages.batches.create({ requests: group.map((g) => ({ custom_id: g.custom_id, params: g.params })) }, { timeout: 10 * 60_000, maxRetries: 0 });
         // The row may have been cancelled while the batch was in flight: then the batch must not run.
-        const claimed = await db.annotationBatch.updateMany({ where: { id: rowId, status: "SUBMITTED" }, data: { anthropicBatchId: created.id, requested: group.length, skipped, skippedReasons: reasons } });
+        const claimed = await db.annotationBatch.updateMany({ where: { id: rowId, status: "SUBMITTED" }, data: { anthropicBatchId: created.id, requested: group.length, ...skipData } });
         if (claimed.count === 0) {
           await anthropic().messages.batches.cancel(created.id).catch(() => {});
           console.log(`[annotation-backfill] batch ${created.id} cancelled: its row was cancelled during submission`);
           return;
         }
+        rowLive = true;
         submittedAny = true;
+        // A cancel that landed between the last check and the claim: stop the batch, keep the row for its results.
+        if (await familyCancelled(batch.id)) {
+          await anthropic().messages.batches.cancel(created.id).catch(() => {});
+          await db.annotationBatch.updateMany({ where: { id: rowId, status: "SUBMITTED" }, data: { status: "CANCELLED", endedAt: null } });
+          console.log(`[annotation-backfill] batch ${created.id} cancelled right after submission`);
+          return;
+        }
         console.log(`[annotation-backfill] batch ${created.id} submitted with ${group.length} requests (${skipped} skipped), chunk ${chunkNo}`);
       }
     }
   } catch (err) {
-    // A chunk that cannot be submitted marks its row failed rather than leaving a placeholder that polls forever.
-    await db.annotationBatch.update({ where: { id: rowId }, data: { status: "FAILED", endedAt: new Date() } }).catch(() => {});
-    console.error(`[annotation-backfill] ${rowId} failed: ${err instanceof Error ? err.message.slice(0, 200) : String(err)}`);
+    // Fail only a placeholder row; a live row keeps polling so its billed results are still applied.
+    const message = err instanceof Error ? err.message.slice(0, 200) : String(err);
+    if (rowLive) await db.annotationBatch.create({ data: { anthropicBatchId: `failed-${batch.id}-${chunkNo}`, parentId: batch.id, scope: batch.scope as object, requested: 0, status: "FAILED", endedAt: new Date(), createdById: batch.createdById } }).catch(() => undefined);
+    else await db.annotationBatch.updateMany({ where: { id: rowId, anthropicBatchId: { startsWith: "pending-" } }, data: { status: "FAILED", endedAt: new Date() } }).catch(() => undefined);
+    console.error(`[annotation-backfill] ${rowId} failed: ${message}`);
     return;
+  } finally {
+    await finish();
   }
   // First poll soon after submission; the five-minute schedule takes over from there.
   if (submittedAny) await enqueue(QUEUES.annotationBatchPoll, {}, { startAfter: 5, singletonKey: "annotation-batch-poll", singletonSeconds: 5 });
@@ -151,8 +176,11 @@ export async function annotationBackfill(job: AnnotationBackfillJob): Promise<vo
 
 /** Poll open batches; apply each result, validating by hand since `parse` does not apply to batch results. */
 export async function annotationBatchPoll(): Promise<void> {
-  // A placeholder older than an hour belongs to a run whose worker died mid-loop; nothing will submit it now.
-  await db.annotationBatch.updateMany({ where: { status: "SUBMITTED", anthropicBatchId: { startsWith: "pending-" }, createdAt: { lt: new Date(Date.now() - 3_600_000) } }, data: { status: "FAILED", endedAt: new Date() } });
+  // A placeholder whose run started over an hour ago belongs to a worker that died mid-loop; nothing will submit it now.
+  // (A run that merely waited in the queue has no startedAt and is left alone for a day.)
+  const hourAgo = new Date(Date.now() - 3_600_000);
+  const dayAgo = new Date(Date.now() - 86_400_000);
+  await db.annotationBatch.updateMany({ where: { status: "SUBMITTED", anthropicBatchId: { startsWith: "pending-" }, OR: [{ startedAt: { lt: hourAgo } }, { parentId: { not: null }, createdAt: { lt: hourAgo } }, { startedAt: null, createdAt: { lt: dayAgo } }] }, data: { status: "FAILED", endedAt: new Date(), runEndedAt: new Date() } });
   // Cancelled rows with a live batch id still get their (already billed) results applied once the batch ends.
   const open = (await db.annotationBatch.findMany({ where: { OR: [{ status: "SUBMITTED" }, { status: "CANCELLED", endedAt: null }] } })).filter((b) => !b.anthropicBatchId.startsWith("pending-") && !b.anthropicBatchId.startsWith("empty-"));
   for (const b of open) {

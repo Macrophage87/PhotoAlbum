@@ -41,10 +41,10 @@ export async function detectFacesJob(job: DetectFacesJob): Promise<void> {
       const person = await db.person.findUnique({ where: { id: k.personId }, select: { faceIndexing: true, birthday: true } });
       if (!person?.faceIndexing) continue;
       const n = await db.$executeRaw`UPDATE "Face" SET embedding = ${vectorLiteral(again.embedding)}::vector WHERE id = ${k.id} AND embedding IS NULL`;
-      if (n === 0) continue;
-      restoredFor.add(k.personId);
+      if (n > 0) restoredFor.add(k.personId);
       // A face named while recognition was off has no era cluster yet; give it one now so the matcher can find this person.
       if (!k.clusterId) {
+        restoredFor.add(k.personId);
         const realDate = photo.takenAt && photo.takenAtSource !== "FILE_MTIME" && photo.takenAtSource !== "UPLOAD_TIME" ? photo.takenAt : null;
         await joinEraCluster(k.id, k.personId, again.embedding, ageAtCapture(person.birthday, realDate, photo.estimatedDate, k.ageAtCaptureYears));
       }
