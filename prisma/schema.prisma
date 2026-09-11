@@ -221,6 +221,14 @@ model Photo {
   externalCheckedAt DateTime?
   durationS     Float?
   videoRenditions Json?
+  /// Free text the uploader added at review time ("Grandma Jo's 80th at the lake house"); feeds search and annotation.
+  context          String?
+  contextUpdatedAt DateTime?
+  reviewedAt       DateTime?
+  /// Full-text index over caption, context, title, place and container titles: the only column anonymous search queries.
+  searchVector        Unsupported("tsvector")?
+  /// Adds people's, pets' and the uploader's names; queried for members only.
+  searchVectorMembers Unsupported("tsvector")?
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
 
@@ -237,6 +245,7 @@ model Photo {
   @@index([status])
   @@index([kind])
   @@index([provider, externalId])
+  @@index([reviewedAt])
 }
 
 /// A named, themed, shareable set of media that is independent of trips. A photo may sit in any number of collections.

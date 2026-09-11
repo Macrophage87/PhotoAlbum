@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Button } from "@/components/ui";
+import Link from "next/link";
+import { Button, buttonClasses } from "@/components/ui";
 
 type Item = {
   localId: string;
@@ -213,6 +214,11 @@ export function Uploader({ tripId, onDone, maxClipSeconds = 90 }: { tripId?: str
           <span className="text-muted">
             {doneIds.length} of {items.length} uploaded.
           </span>
+          {doneIds.length > 0 && (
+            <Link href={`/review?ids=${doneIds.join(",")}`} className={buttonClasses("primary", "sm")}>
+              Add notes and file {doneIds.length === 1 ? "it" : "them"}
+            </Link>
+          )}
           <Button variant="secondary" size="sm" onClick={() => setItems([])}>
             Clear
           </Button>

@@ -12,6 +12,7 @@ import { localDayFromOffset, offsetMinutesInZone } from "@/lib/time/local-day";
 
 const updateSchema = z.object({
   caption: z.string().trim().max(1000).transform((v) => v || null),
+  context: z.string().trim().max(4000).transform((v) => v || null),
   tripId: z.string().transform((v) => v || null),
   activityId: z.string().optional().transform((v) => v || null),
 });
@@ -20,7 +21,7 @@ export async function updatePhoto(id: string, fd: FormData): Promise<void> {
   await requireUserOrThrow();
   const photo = await db.photo.findUnique({ where: { id } });
   if (!photo) throw new Error("Photo not found");
-  const v = updateSchema.parse({ caption: fd.get("caption") ?? "", tripId: fd.get("tripId") ?? "", activityId: fd.get("activityId") ?? undefined });
+  const v = updateSchema.parse({ caption: fd.get("caption") ?? "", context: fd.get("context") ?? "", tripId: fd.get("tripId") ?? "", activityId: fd.get("activityId") ?? undefined });
 
   if (v.tripId && !(await db.trip.findUnique({ where: { id: v.tripId }, select: { id: true } }))) throw new Error("That trip no longer exists");
 
@@ -36,7 +37,7 @@ export async function updatePhoto(id: string, fd: FormData): Promise<void> {
     const act = await db.activity.findFirst({ where: { id: activityId, tripId: v.tripId ?? "" }, select: { id: true } });
     if (!act) activityId = null;
   }
-  await db.photo.update({ where: { id }, data: { caption: v.caption, tripId: v.tripId, activityId } });
+  await db.photo.update({ where: { id }, data: { caption: v.caption, context: v.context, ...(v.context !== photo.context ? { contextUpdatedAt: new Date() } : {}), tripId: v.tripId, activityId } });
   revalidatePath(`/photos/${id}`);
   if (photo.tripId) revalidatePath(`/trips`, "layout");
 }

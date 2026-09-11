@@ -278,3 +278,32 @@ test("a short clip is transcoded with a poster and streams with range requests; 
   await page.locator("li", { hasText: "0:02" }).first().locator("button").click();
   await expect(page.getByRole("dialog").locator("video")).toHaveAttribute("src", /\/video\?v=/);
 });
+
+test("notes from the review screen and the item page are searchable, within what each viewer may see", async ({ browser, context, page }) => {
+  await signIn(context, ADMIN);
+  const acadia = await withDb((c) => c.query('SELECT p.id FROM "Photo" p JOIN "Trip" t ON t.id = p."tripId" WHERE t.slug = $1', ["acadia"]));
+  await page.goto(`/review?ids=${acadia.rows[0].id}`);
+  await expect(page.getByRole("heading", { name: "Review this upload" })).toBeVisible();
+  await page.getByLabel(/^Notes for/).fill("lobster rolls on the mail boat");
+  await page.getByRole("button", { name: "Set note" }).click();
+  await expect(page.getByRole("status")).toContainText("Set the note on 1 item");
+  await page.getByRole("button", { name: /Mark all 1 reviewed/ }).click();
+  await expect(page.getByRole("status")).toContainText("marked reviewed");
+
+  await page.goto("/search?q=lobster");
+  await expect(page.getByRole("status")).toContainText("1 result");
+  await expect(page.getByText("Uploaded by a family member")).toBeVisible();
+  await page.goto("/search?q=Mock+video");
+  await expect(page.getByRole("status")).toContainText("1 result");
+
+  // Anonymous: the Acadia photo is public through the collection; the YouTube video sits on a private trip.
+  const anon = await browser.newContext();
+  const anonPage = await anon.newPage();
+  await anonPage.goto("/search?q=lobster");
+  await expect(anonPage.getByRole("status")).toContainText("1 result");
+  await expect(anonPage.getByText(/Uploaded by/)).toHaveCount(0);
+  await expect(anonPage.getByLabel("Uploaded by")).toHaveCount(0);
+  await anonPage.goto("/search?q=Mock+video");
+  await expect(anonPage.getByRole("status")).toContainText("Nothing matches");
+  await anon.close();
+});

@@ -126,7 +126,12 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
               <form action={update} className="space-y-4">
                 <div>
                   <Label htmlFor="caption">Caption</Label>
-                  <Textarea id="caption" name="caption" rows={3} defaultValue={photo.caption ?? ""} />
+                  <Textarea id="caption" name="caption" rows={2} defaultValue={photo.caption ?? ""} />
+                </div>
+                <div>
+                  <Label htmlFor="context">Notes (who, where, what was happening)</Label>
+                  <Textarea id="context" name="context" rows={3} defaultValue={photo.context ?? ""} placeholder="Grandma Jo's 80th at the lake house" />
+                  <p className="text-xs text-muted mt-1">Notes feed search and the AI description; they are shown wherever the photo is.</p>
                 </div>
                 <div>
                   <Label htmlFor="tripId">Trip</Label>

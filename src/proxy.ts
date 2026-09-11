@@ -14,5 +14,5 @@ export function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/upload", "/admin/:path*", "/trips/new", "/trips/:slug/settings", "/trips/:slug/import", "/photos", "/photos/:path*", "/collections/new", "/collections/:slug/settings", "/privacy"],
+  matcher: ["/upload", "/admin/:path*", "/trips/new", "/trips/:slug/settings", "/trips/:slug/import", "/photos", "/photos/:path*", "/collections/new", "/collections/:slug/settings", "/privacy", "/review"],
 };

@@ -237,6 +237,9 @@ S += [P("6. Using the album", H1),
         "Each collection has its own cover, theme, order (drag to arrange, or sort by date), timeline and map, and is private, shared by secret link, or public, "
         "exactly like a trip. Because a photo is visible to anyone who may open its trip or any collection holding it, putting a private trip's photo into a "
         "public collection publishes that photo; the album warns before it happens."),
+      P("Reviewing uploads and searching", H2),
+      P("After an upload, choose <b>Add notes and file them</b> to open the review screen. Type a note for the whole batch or for a selection (\"Grandma Jo's 80th at the lake house, everyone came\"), attach items to a trip or a collection, and mark them reviewed. "
+        "The <b>Review</b> page lists everything nobody has reviewed yet. The search box finds photos by caption, note, title, trip or collection name; visitors without an account search only public content."),
       P("Videos", H2),
       P("Short clips (MP4, MOV or WebM, up to 90 seconds) upload like photos and are converted in the background to a web-playable file with a poster; they play muted when you hover over them in a gallery and with controls in the viewer. A longer file is refused before it uploads."),
       P("Longer videos live on YouTube. Upload the video there as <b>Unlisted</b>, then choose <b>Add a YouTube video</b> on a trip's or collection's Photos tab (or the Upload page) and paste the link. "

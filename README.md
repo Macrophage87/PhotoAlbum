@@ -16,6 +16,8 @@ A self-hosted photo album for family trips. Photos are grouped into **trips** an
 - **Sharing.** Each trip and each collection is private, shared by secret link, or public. Public ones appear on the front page for anyone.
 - **Short clips.** MP4, MOV or WebM clips up to 90 seconds (`MAX_CLIP_SECONDS`) are transcoded with ffmpeg to a web-playable 1080p H.264 MP4 with a poster; HDR phone footage is tone-mapped. Clips play muted on hover in grids and with controls in the lightbox. Longer files are refused in the browser before upload and again on the server.
 - **Videos on YouTube.** Longer videos are uploaded to YouTube as unlisted and embedded: paste the link, the album keeps the title and poster and plays the video in place through the privacy-enhanced player only when someone presses play. A weekly check flags videos that were deleted or made private.
+- **Review and notes.** After an upload, a review screen lets you add a note to one photo or a whole batch ("Grandma Jo's 80th at the lake house"), file items into trips and collections, and mark them reviewed; an Unreviewed queue shows what nobody has looked at.
+- **Search.** Captions, notes, titles, trip and collection names, and for members uploader names, through Postgres full-text search with filters by trip, collection, uploader, year and type. Anonymous visitors search only public content and only the column that carries no names.
 - **Photo links.** Mark photos as the same scene, before/after, parts of a panorama, or related.
 - **Family sign-in** by emailed magic link; an admin invites members. No passwords.
 - **Installable.** Add it to a phone's home screen and it opens full-screen like an app, with its own icon.
