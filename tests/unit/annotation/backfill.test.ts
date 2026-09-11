@@ -42,7 +42,7 @@ vi.mock("@/lib/annotation/request", () => ({
 }));
 
 import { db } from "@/lib/db";
-import { annotationBackfill, annotationBatchPoll, BATCH_CHUNK, familyCancelled } from "@/lib/jobs/handlers/annotation-batch";
+import { annotationBackfill, annotationBatchPoll, BATCH_CHUNK, familyCancelled, RUN_IDLE_MS } from "@/lib/jobs/handlers/annotation-batch";
 import { resetTestDb } from "../helpers/reset";
 
 async function seed(count: number) {
@@ -95,7 +95,7 @@ describe("the backfill run", () => {
     expect(rows[0].status).toBe("SUBMITTED");
     expect(rows[0].anthropicBatchId).toBe("msgbatch_1");
     expect(rows[1].status).toBe("FAILED");
-    expect(rows[1].anthropicBatchId.startsWith("pending-")).toBe(true);
+    expect(rows[1].anthropicBatchId.startsWith("failed-")).toBe(true);
     expect(rows[0].runEndedAt).not.toBeNull();
 
     const originId2 = await (async () => { await resetTestDb(); return seed(3); })();
@@ -106,14 +106,30 @@ describe("the backfill run", () => {
     expect(only[0].status).toBe("FAILED");
   });
 
-  it("records a cut-short run when pg-boss re-delivers it after a worker restart", async () => {
+  it("records a cut-short run when pg-boss re-delivers it after a worker restart, but not while it is alive or cancelled", async () => {
     const originId = await seed(3);
-    await db.annotationBatch.update({ where: { id: originId }, data: { anthropicBatchId: "msgbatch_old" } });
+    const old = new Date(Date.now() - 2 * RUN_IDLE_MS);
+    await db.annotationBatch.update({ where: { id: originId }, data: { anthropicBatchId: "msgbatch_old", startedAt: old, createdAt: old } });
+    // A fresh continuation row means the loop is still running: no marker.
+    const fresh = await db.annotationBatch.create({ data: { anthropicBatchId: "msgbatch_fresh", parentId: originId, scope: { kind: "all" }, requested: 1, createdById: (await db.user.findFirstOrThrow()).id } });
     await annotationBackfill({ batchId: originId });
-    const rows = await family(originId);
-    expect(rows[0].runEndedAt).not.toBeNull();
-    expect(rows[1].anthropicBatchId).toBe(`failed-${originId}-retry`);
-    expect(rows[1].status).toBe("FAILED");
+    expect((await family(originId)).map((r) => r.anthropicBatchId)).toEqual(["msgbatch_old", "msgbatch_fresh"]);
+    expect((await db.annotationBatch.findUniqueOrThrow({ where: { id: originId } })).runEndedAt).toBeNull();
+    // Once the family has been idle, the re-delivery ends the run and leaves the marker.
+    await db.annotationBatch.update({ where: { id: fresh.id }, data: { createdAt: old } });
+    await annotationBackfill({ batchId: originId });
+    const origin = await db.annotationBatch.findUniqueOrThrow({ where: { id: originId } });
+    expect(origin.runEndedAt).not.toBeNull();
+    const marker = await db.annotationBatch.findFirst({ where: { anthropicBatchId: `failed-${originId}-retry` } });
+    expect(marker?.status).toBe("FAILED");
+    // A run cancelled while still queued never started: it ends quietly, with no marker.
+    await resetTestDb();
+    const queued = await seed(3);
+    await db.annotationBatch.update({ where: { id: queued }, data: { status: "CANCELLED", cancelRequestedAt: new Date(), endedAt: new Date() } });
+    await annotationBackfill({ batchId: queued });
+    const only = await family(queued);
+    expect(only).toHaveLength(1);
+    expect(only[0].runEndedAt).not.toBeNull();
   });
 
   it("applies results, counting cancelled requests apart from failures, and ends the family's run for stale placeholders", async () => {
@@ -126,8 +142,8 @@ describe("the backfill run", () => {
       { custom_id: ids[1], result: { type: "canceled" } },
       { custom_id: ids[2], result: { type: "expired" } },
     ]);
-    // A dead run's placeholder: started long ago, still pending.
-    const stale = await db.annotationBatch.create({ data: { anthropicBatchId: "pending-stale", scope: { kind: "all" }, requested: 0, createdById: row.createdById, startedAt: new Date(Date.now() - 2 * 3_600_000) } });
+    // A dead run: its first batch is live and still open, its next placeholder was created long ago and never submitted.
+    const stale = await db.annotationBatch.create({ data: { anthropicBatchId: "msgbatch_stale_live", scope: { kind: "all" }, requested: 5, createdById: row.createdById, startedAt: new Date(Date.now() - 2 * 3_600_000) } });
     await db.annotationBatch.create({ data: { anthropicBatchId: `pending-${stale.id}-1`, parentId: stale.id, scope: { kind: "all" }, requested: 0, createdById: row.createdById, createdAt: new Date(Date.now() - 2 * 3_600_000) } });
     await annotationBatchPoll();
     const done = await db.annotationBatch.findUniqueOrThrow({ where: { id: row.id } });
@@ -136,8 +152,9 @@ describe("the backfill run", () => {
     expect(done.canceled).toBe(1);
     const photos = await db.photo.findMany({ where: { id: { in: ids } }, select: { annotationError: true, annotatedAt: true } });
     expect(photos.every((p) => p.annotatedAt === null && p.annotationError?.startsWith("batch:"))).toBe(true);
-    const staleRows = await family(stale.id);
-    expect(staleRows.every((r) => r.status === "FAILED")).toBe(true);
-    expect(staleRows[0].runEndedAt).not.toBeNull();
+    // The placeholder is failed; the live origin's run is over even though its own batch is handled separately.
+    const placeholder = await db.annotationBatch.findFirst({ where: { parentId: stale.id } });
+    expect(placeholder?.status).toBe("FAILED");
+    expect((await db.annotationBatch.findUniqueOrThrow({ where: { id: stale.id } })).runEndedAt).not.toBeNull();
   });
 });

@@ -29,19 +29,15 @@ export default async function AdminPage() {
   const [counts, decisions] = await Promise.all([faceCounts(fg.retentionDays), needsDecision()]);
   const [gates, batches, tripOptions, collectionOptions] = await Promise.all([
     annotationGates(),
-    db.annotationBatch.findMany({ orderBy: { createdAt: "desc" }, take: 60 }),
+    db.annotationBatch.findMany({ where: { parentId: null }, orderBy: { createdAt: "desc" }, take: 8 }),
     db.trip.findMany({ orderBy: { startDate: "desc" }, select: { id: true, title: true } }),
     db.collection.findMany({ orderBy: { title: "asc" }, select: { id: true, title: true } }),
   ]);
   const usageRows = await db.photo.findMany({ where: { annotationInputTokens: { not: null } }, select: { annotationModel: true, annotationInputTokens: true, annotationCacheReadTokens: true, annotationCacheWriteTokens: true, annotationOutputTokens: true, annotationBatched: true } });
   const spend = actualSpend(env().ANNOTATION_MODEL, usageRows.map((r) => ({ model: r.annotationModel, input: r.annotationInputTokens ?? 0, cacheRead: r.annotationCacheReadTokens ?? 0, cacheWrite: r.annotationCacheWriteTokens ?? 0, output: r.annotationOutputTokens ?? 0, batched: r.annotationBatched ?? false })));
-  // Show each run as a group: the row the admin started first, its continuation rows in order beneath it.
-  const familyKey = (b: (typeof batches)[number]) => b.parentId ?? b.id;
-  const familyStart = new Map<string, number>();
-  for (const b of batches) familyStart.set(familyKey(b), Math.max(familyStart.get(familyKey(b)) ?? 0, b.parentId ? 0 : b.createdAt.getTime()));
-  const orderedBatches = [...batches]
-    .sort((a, b) => (familyStart.get(familyKey(b)) ?? 0) - (familyStart.get(familyKey(a)) ?? 0) || (a.parentId ? 1 : 0) - (b.parentId ? 1 : 0) || a.createdAt.getTime() - b.createdAt.getTime())
-    .slice(0, 30);
+  // Show each run whole: the row the admin started, then its continuation rows in order beneath it.
+  const children = await db.annotationBatch.findMany({ where: { parentId: { in: batches.map((b) => b.id) } }, orderBy: { createdAt: "asc" } });
+  const orderedBatches = batches.flatMap((origin) => [origin, ...children.filter((c) => c.parentId === origin.id)]);
   const describeScope = (scope: unknown) => {
     const s = scope as { kind: string; tripId?: string; collectionId?: string; from?: string; to?: string };
     if (s.kind === "trip") return `trip ${tripOptions.find((t) => t.id === s.tripId)?.title ?? s.tripId}`;
@@ -94,7 +90,7 @@ export default async function AdminPage() {
             model={gates.model}
             trips={tripOptions}
             collections={collectionOptions}
-            spend={spend} rawRetentionDays={env().ANNOTATION_RAW_RETENTION_DAYS} batches={orderedBatches.map((b) => ({ id: b.id, parentId: b.parentId, running: !b.parentId && !b.runEndedAt && !b.cancelRequestedAt && b.status !== "FAILED", marker: b.anthropicBatchId.startsWith("failed-") ? (b.anthropicBatchId.endsWith("-retry") ? "restart" : "error") : null, canceled: b.canceled, skippedReasons: (b.skippedReasons as Record<string, number> | null) ?? null, status: b.status, requested: b.requested, succeeded: b.succeeded, errored: b.errored, skipped: b.skipped, createdAt: b.createdAt.toISOString(), endedAt: b.endedAt?.toISOString() ?? null, scope: describeScope(b.scope) }))}
+            spend={spend} rawRetentionDays={env().ANNOTATION_RAW_RETENTION_DAYS} batches={orderedBatches.map((b) => ({ id: b.id, parentId: b.parentId, running: !b.parentId && !b.runEndedAt && !b.cancelRequestedAt && b.status !== "FAILED", marker: b.anthropicBatchId.startsWith("failed-") ? (b.anthropicBatchId.endsWith("-retry") ? "restart" : "error") : b.parentId && b.status === "FAILED" && b.requested === 0 ? "error" : null, canceled: b.canceled, skippedReasons: (b.skippedReasons as Record<string, number> | null) ?? null, status: b.status, requested: b.requested, succeeded: b.succeeded, errored: b.errored, skipped: b.skipped, createdAt: b.createdAt.toISOString(), endedAt: b.endedAt?.toISOString() ?? null, scope: describeScope(b.scope) }))}
           />
         </section>
 

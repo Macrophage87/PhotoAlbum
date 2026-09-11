@@ -92,7 +92,7 @@ export default async function PeoplePage() {
                     ))}
                     <span className="text-sm text-muted ml-1">{c.faceCount} face{c.faceCount === 1 ? "" : "s"} that look alike</span>
                   </div>
-                  <NameClusterForm clusterId={c.id} isAdmin={isAdmin} people={people.map((p) => ({ id: p.id, name: p.name }))} />
+                  <NameClusterForm clusterId={c.id} isAdmin={isAdmin} people={people.filter((p) => !p.optedOut).map((p) => ({ id: p.id, name: p.name }))} />
                 </Card>
               ))}
             </div>

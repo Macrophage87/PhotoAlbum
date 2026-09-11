@@ -145,7 +145,8 @@ export async function startBackfill(scope: BackfillScope, typedConfirmation: str
   const id = `b${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
   // The placeholder is unique per batch so two submissions never collide on the unique column.
   const batch = await db.annotationBatch.create({ data: { id, anthropicBatchId: `pending-${id}`, scope: s, requested: items.length, createdById: admin.id } });
-  await enqueue(QUEUES.annotationBackfill, { batchId: batch.id });
+  // A full run can take hours of building and uploading; the job must not expire and be re-delivered meanwhile.
+  await enqueue(QUEUES.annotationBackfill, { batchId: batch.id }, { expireInSeconds: 12 * 3600, retryLimit: 0 });
   revalidatePath("/admin");
   return batch.id;
 }

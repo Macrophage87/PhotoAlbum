@@ -49,6 +49,8 @@ export async function backfillExclusions(scope: BackfillScope): Promise<{ inScop
 /** Items per Message Batch, and the byte budget of image data per batch: well under the API's 256 MB cap, and small enough to upload from a home connection within the request timeout. */
 export const BATCH_CHUNK = 200;
 export const BATCH_BYTE_BUDGET = 32 * 1024 * 1024;
+/** A run with no new row for this long, whose job comes back, is taken to be dead. */
+export const RUN_IDLE_MS = 20 * 60_000;
 
 export function chunk<T>(items: T[], size: number): T[][] {
   const out: T[][] = [];
@@ -99,12 +101,20 @@ export async function annotationBackfill(job: AnnotationBackfillJob): Promise<vo
   const batch = await db.annotationBatch.findUnique({ where: { id: job.batchId } });
   if (!batch) return;
   if (batch.status !== "SUBMITTED" || !batch.anthropicBatchId.startsWith("pending-")) {
-    // pg-boss re-delivering a run whose worker died after the first chunk was claimed: the rest was never sent.
-    if (!batch.parentId && !batch.runEndedAt) {
+    if (batch.parentId || batch.runEndedAt) return;
+    // Cancelled before the worker got to it: the run simply never started.
+    if (batch.status === "CANCELLED" || batch.cancelRequestedAt) {
       await db.annotationBatch.update({ where: { id: batch.id }, data: { runEndedAt: new Date() } });
-      await db.annotationBatch.create({ data: { anthropicBatchId: `failed-${batch.id}-retry`, parentId: batch.id, scope: batch.scope as object, requested: 0, status: "FAILED", endedAt: new Date(), createdById: batch.createdById } }).catch(() => undefined);
-      console.error(`[annotation-backfill] ${batch.id} was cut short (worker restarted); run it again for the remaining items`);
+      return;
     }
+    // A run whose loop is still alive keeps creating rows; only a family idle for a while is a dead one
+    // (pg-boss re-delivering after a worker restart), and then the rest was never sent.
+    const newest = await db.annotationBatch.findFirst({ where: { OR: [{ id: batch.id }, { parentId: batch.id }] }, orderBy: { createdAt: "desc" }, select: { createdAt: true } });
+    const lastSign = Math.max(newest?.createdAt.getTime() ?? 0, batch.startedAt?.getTime() ?? 0);
+    if (Date.now() - lastSign < RUN_IDLE_MS) return;
+    await db.annotationBatch.update({ where: { id: batch.id }, data: { runEndedAt: new Date() } });
+    await db.annotationBatch.create({ data: { anthropicBatchId: `failed-${batch.id}-retry`, parentId: batch.id, scope: batch.scope as object, requested: 0, status: "FAILED", endedAt: new Date(), createdById: batch.createdById } }).catch(() => undefined);
+    console.error(`[annotation-backfill] ${batch.id} was cut short (worker restarted); run it again for the remaining items`);
     return;
   }
   await db.annotationBatch.update({ where: { id: batch.id }, data: { startedAt: new Date() } });
@@ -172,7 +182,7 @@ export async function annotationBackfill(job: AnnotationBackfillJob): Promise<vo
   } catch (err) {
     // Fail only a placeholder row; a live row keeps polling so its billed results are still applied.
     const message = err instanceof Error ? err.message.slice(0, 200) : String(err);
-    const failedInPlace = rowLive ? 0 : (await db.annotationBatch.updateMany({ where: { id: rowId, anthropicBatchId: { startsWith: "pending-" } }, data: { status: "FAILED", endedAt: new Date() } }).catch(() => ({ count: 0 }))).count;
+    const failedInPlace = rowLive ? 0 : (await db.annotationBatch.updateMany({ where: { id: rowId, anthropicBatchId: { startsWith: "pending-" } }, data: { status: "FAILED", endedAt: new Date(), anthropicBatchId: `failed-${batch.id}-${chunkNo}` } }).catch(() => ({ count: 0 }))).count;
     // A live row, or one already closed as empty, keeps its state; a marker row records that the rest was not sent.
     if (failedInPlace === 0) await db.annotationBatch.create({ data: { anthropicBatchId: `failed-${batch.id}-${chunkNo}`, parentId: batch.id, scope: batch.scope as object, requested: 0, status: "FAILED", endedAt: new Date(), createdById: batch.createdById } }).catch(() => undefined);
     console.error(`[annotation-backfill] ${rowId} failed: ${message}`);
@@ -233,7 +243,7 @@ export async function annotationBatchPoll(): Promise<void> {
       await applyAnnotation(photoId, message.model, parsed, { content: message.content, usage: message.usage, stop_reason: message.stop_reason, batched: true });
       succeeded++;
     }
-    console.log(`[annotation-backfill] batch ${b.anthropicBatchId} ended: ${succeeded} ok, ${errored} failed`);
+    console.log(`[annotation-backfill] batch ${b.anthropicBatchId} ended: ${succeeded} ok, ${errored} failed, ${canceled} cancelled`);
     await db.annotationBatch.update({ where: { id: b.id }, data: { status: b.status === "CANCELLED" || remote.request_counts.canceled ? "CANCELLED" : "ENDED", succeeded, errored, canceled, endedAt: new Date() } });
   }
 }
