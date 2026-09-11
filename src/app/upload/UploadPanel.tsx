@@ -5,7 +5,7 @@ import { Label, Select } from "@/components/ui";
 import { Uploader } from "@/components/photos/Uploader";
 import { YouTubeAddForm } from "@/components/videos/YouTubeAddForm";
 
-export function UploadPanel({ trips, initialTripId, maxClipSeconds }: { trips: { id: string; slug: string; title: string }[]; initialTripId?: string; maxClipSeconds: number }) {
+export function UploadPanel({ trips, initialTripId, maxClipSeconds, annotationActive }: { trips: { id: string; slug: string; title: string }[]; initialTripId?: string; maxClipSeconds: number; annotationActive: boolean }) {
   const [tripId, setTripId] = useState(initialTripId ?? "");
   return (
     <div className="space-y-4">
@@ -20,7 +20,7 @@ export function UploadPanel({ trips, initialTripId, maxClipSeconds }: { trips: {
           ))}
         </Select>
       </div>
-      <Uploader key={tripId} tripId={tripId || undefined} maxClipSeconds={maxClipSeconds} />
+      <Uploader key={tripId} tripId={tripId || undefined} maxClipSeconds={maxClipSeconds} annotationActive={annotationActive} />
       <YouTubeAddForm tripId={tripId || undefined} defaultDate={new Date().toISOString().slice(0, 10)} />
     </div>
   );

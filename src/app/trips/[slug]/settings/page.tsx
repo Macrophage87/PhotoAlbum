@@ -9,6 +9,7 @@ import { shareableTripUrl } from "@/lib/share/social";
 import { Button, Card, ConfirmSubmitButton } from "@/components/ui";
 import { deleteTrip, detachExposedFromCollections, regeotagPhotos, rotateShareToken, setVisibility, updateTrip } from "../actions";
 import { VisibilityForm } from "@/components/trips/VisibilityForm";
+import { OptOutToggle } from "@/components/annotation/OptOutToggle";
 import { visibilityWarnings } from "@/lib/visibility/settings";
 import Link from "next/link";
 
@@ -92,6 +93,11 @@ export default async function TripSettingsPage({ params, searchParams }: PagePro
             <ShareButtons url={shareUrl} />
           </Card>
         )}
+      </section>
+
+      <section>
+        <h2 className="font-display text-xl font-semibold mb-2">AI descriptions</h2>
+        <OptOutToggle target={{ kind: "trip", id: trip.id }} initial={trip.annotationOptOut} />
       </section>
 
       <section>

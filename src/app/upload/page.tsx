@@ -4,6 +4,7 @@ import { getViewer, requireUser } from "@/lib/auth/viewer";
 import { AppShell, Container } from "@/components/layout/AppShell";
 import { UploadPanel } from "./UploadPanel";
 import { env } from "@/lib/env";
+import { annotationGates } from "@/lib/annotation/eligibility";
 
 export const metadata = { title: "Upload" };
 
@@ -14,6 +15,7 @@ export default async function UploadPage({ searchParams }: PageProps<"/upload">)
   const tripSlug = typeof sp.trip === "string" ? sp.trip : undefined;
   const trips = await db.trip.findMany({ orderBy: { startDate: "desc" }, select: { id: true, slug: true, title: true } });
   const selected = trips.find((t) => t.slug === tripSlug);
+  const gates = await annotationGates();
 
   return (
     <AppShell viewer={viewer}>
@@ -24,7 +26,7 @@ export default async function UploadPage({ searchParams }: PageProps<"/upload">)
             Photos are matched to a trip by the date they were taken unless you pick one; the rest wait under <Link href="/photos" className="text-primary underline-offset-2 hover:underline">photos without a trip</Link>. {selected && <>Uploading to <Link href={`/trips/${selected.slug}`} className="text-primary underline-offset-2 hover:underline">{selected.title}</Link>.</>}
           </p>
         </div>
-        <UploadPanel trips={trips} initialTripId={selected?.id} maxClipSeconds={env().MAX_CLIP_SECONDS} />
+        <UploadPanel trips={trips} initialTripId={selected?.id} maxClipSeconds={env().MAX_CLIP_SECONDS} annotationActive={gates.active} />
       </Container>
     </AppShell>
   );

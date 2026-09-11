@@ -6,6 +6,8 @@ import { AppShell, Container } from "@/components/layout/AppShell";
 import { InviteForm } from "@/components/admin/InviteForm";
 import { Badge, Button, Card } from "@/components/ui";
 import { removeMember, revokeInvite, setRole } from "./actions";
+import { AnnotationAdmin } from "@/components/annotation/AnnotationAdmin";
+import { annotationGates } from "@/lib/annotation/eligibility";
 
 export const metadata = { title: "Admin" };
 
@@ -17,6 +19,19 @@ export default async function AdminPage() {
     db.invite.findMany({ where: { acceptedAt: null, expiresAt: { gt: new Date() } }, orderBy: { createdAt: "desc" }, include: { invitedBy: { select: { email: true, name: true } } } }),
   ]);
   const smtp = Boolean(env().SMTP_HOST);
+  const [gates, batches, tripOptions, collectionOptions] = await Promise.all([
+    annotationGates(),
+    db.annotationBatch.findMany({ orderBy: { createdAt: "desc" }, take: 20 }),
+    db.trip.findMany({ orderBy: { startDate: "desc" }, select: { id: true, title: true } }),
+    db.collection.findMany({ orderBy: { title: "asc" }, select: { id: true, title: true } }),
+  ]);
+  const describeScope = (scope: unknown) => {
+    const s = scope as { kind: string; tripId?: string; collectionId?: string; from?: string; to?: string };
+    if (s.kind === "trip") return `trip ${tripOptions.find((t) => t.id === s.tripId)?.title ?? s.tripId}`;
+    if (s.kind === "collection") return `collection ${collectionOptions.find((c) => c.id === s.collectionId)?.title ?? s.collectionId}`;
+    if (s.kind === "range") return `${s.from} to ${s.to}`;
+    return "everything not yet described";
+  };
   const unavailable = await db.photo.findMany({ where: { kind: "EXTERNAL_VIDEO", externalStatus: "UNAVAILABLE" }, orderBy: { externalCheckedAt: "desc" }, select: { id: true, title: true, externalUrl: true, externalCheckedAt: true } });
 
   return (
@@ -53,6 +68,18 @@ export default async function AdminPage() {
             </Card>
           </section>
         )}
+
+        <section>
+          <h2 className="font-display text-xl font-semibold mb-1">AI descriptions</h2>
+          <p className="text-sm text-muted mb-3">An AI helper (Anthropic&apos;s Claude) can describe each photo so it can be found by searching. It is off until both the operator flag and your opt-in here are set.</p>
+          <AnnotationAdmin
+            gates={{ envEnabled: gates.envEnabled, hasKey: gates.hasKey, optedInAt: gates.optedInAt?.toISOString() ?? null, active: gates.active }}
+            model={gates.model}
+            trips={tripOptions}
+            collections={collectionOptions}
+            batches={batches.map((b) => ({ id: b.id, status: b.status, requested: b.requested, succeeded: b.succeeded, errored: b.errored, skipped: b.skipped, createdAt: b.createdAt.toISOString(), endedAt: b.endedAt?.toISOString() ?? null, scope: describeScope(b.scope) }))}
+          />
+        </section>
 
         <section>
           <h2 className="font-display text-xl font-semibold mb-3">Embedded videos no longer available</h2>

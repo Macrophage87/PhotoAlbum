@@ -34,6 +34,7 @@ const headerSchema = z.object({
   contentType: z.string().optional(),
   tripId: z.string().optional(),
   lastModified: z.coerce.number().optional(),
+  annotationOptOut: z.string().optional(),
 });
 
 /** Streams one file to storage and queues processing. Body is the raw file; metadata rides in headers. */
@@ -47,6 +48,7 @@ export async function POST(request: Request) {
     contentType: request.headers.get("content-type") ?? undefined,
     tripId: request.headers.get("x-trip-id") ?? undefined,
     lastModified: request.headers.get("x-last-modified") ?? undefined,
+    annotationOptOut: request.headers.get("x-annotation-opt-out") ?? undefined,
   });
   if (!parsed.success) return Response.json({ error: "Bad upload headers" }, { status: 400 });
   const { fileName, tripId, lastModified } = parsed.data;
@@ -67,6 +69,7 @@ export async function POST(request: Request) {
       uploaderId: viewer.user.id,
       tripId: tripId ?? null,
       kind: isVideo ? "VIDEO" : "PHOTO",
+      annotationOptOut: parsed.data.annotationOptOut === "1",
       status: "PENDING",
       originalName: fileName,
       mimeType: mime,

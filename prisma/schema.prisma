@@ -79,6 +79,23 @@ enum ExternalStatus {
   UNAVAILABLE
 }
 
+enum AnnotationSource {
+  MACHINE
+  EDITED
+}
+
+enum EstimatedDateSource {
+  MODEL
+  MEMBER
+}
+
+enum AnnotationBatchStatus {
+  SUBMITTED
+  ENDED
+  CANCELLED
+  FAILED
+}
+
 enum PhotoRelation {
   SAME_SCENE
   BEFORE_AFTER
@@ -151,6 +168,7 @@ model Trip {
   coverPhoto   Photo?         @relation("TripCover", fields: [coverPhotoId], references: [id], onDelete: SetNull)
   visibility   TripVisibility @default(PRIVATE)
   shareToken   String?        @unique
+  annotationOptOut Boolean    @default(false)
   createdById  String
   createdBy    User           @relation(fields: [createdById], references: [id])
   createdAt    DateTime       @default(now())
@@ -225,6 +243,20 @@ model Photo {
   context          String?
   contextUpdatedAt DateTime?
   reviewedAt       DateTime?
+  /// Structured description from the AI helper (caption, description, tags, place, ...). Machine-generated until a member edits it.
+  annotation        Json?
+  annotationModel   String?
+  annotatedAt       DateTime?
+  annotationSource  AnnotationSource?
+  /// A refusal or failure reason code from the last attempt; never the content.
+  annotationError   String?
+  /// Never send this item to the AI helper (also inherited from its trip and collections).
+  annotationOptOut  Boolean  @default(false)
+  /// For undated items: the helper's estimated year range, kept until a member sets a real date.
+  estimatedDate           DateTime?
+  estimatedDateConfidence Float?
+  estimatedDateSource     EstimatedDateSource?
+  estimatedDateNote       String?
   /// Full-text index over caption, context, title, place and container titles: the only column anonymous search queries.
   searchVector        Unsupported("tsvector")?
   /// Adds people's, pets' and the uploader's names; queried for members only.
@@ -237,6 +269,7 @@ model Photo {
   linksB      PhotoLink[]      @relation("LinkB")
   collections CollectionItem[]
   coverOfCollection Collection? @relation("CollectionCover")
+  annotationRaw     MediaAnnotationRaw[]
 
   @@index([takenAt])
   @@index([tripId, takenAt])
@@ -259,6 +292,7 @@ model Collection {
   shareToken   String?        @unique
   coverPhotoId String?        @unique
   coverPhoto   Photo?         @relation("CollectionCover", fields: [coverPhotoId], references: [id], onDelete: SetNull)
+  annotationOptOut Boolean    @default(false)
   createdById  String
   createdBy    User           @relation(fields: [createdById], references: [id])
   createdAt    DateTime       @default(now())
@@ -283,6 +317,45 @@ model CollectionItem {
   @@unique([collectionId, photoId])
   @@index([photoId])
   @@index([collectionId, position])
+}
+
+/// Single-row settings that need an audit trail: who turned a data-leaving feature on, and when.
+model AppSetting {
+  id                     String    @id @default("app")
+  annotationOptInAt      DateTime?
+  annotationOptInById    String?
+  faceDetectionOptInAt   DateTime?
+  faceDetectionOptInById String?
+  faceDataDeletedAt      DateTime?
+  updatedAt              DateTime  @updatedAt
+}
+
+/// The helper's raw response, kept briefly for debugging and purged by a scheduled job; deleted with the item.
+model MediaAnnotationRaw {
+  id        String   @id @default(cuid())
+  photoId   String
+  photo     Photo    @relation(fields: [photoId], references: [id], onDelete: Cascade)
+  model     String
+  response  Json
+  createdAt DateTime @default(now())
+
+  @@index([photoId])
+  @@index([createdAt])
+}
+
+/// A backfill submitted through the Message Batches API.
+model AnnotationBatch {
+  id               String                @id @default(cuid())
+  anthropicBatchId String                @unique
+  status           AnnotationBatchStatus @default(SUBMITTED)
+  scope            Json
+  requested        Int
+  succeeded        Int                   @default(0)
+  errored          Int                   @default(0)
+  skipped          Int                   @default(0)
+  createdById      String
+  createdAt        DateTime              @default(now())
+  endedAt          DateTime?
 }
 
 model PhotoLink {

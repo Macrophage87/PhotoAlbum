@@ -108,6 +108,8 @@ Gmail example: `SMTP_HOST=smtp.gmail.com`, `SMTP_PORT=587`, `SMTP_SECURE=false`,
 
 Leave `DATABASE_URL` as it is. Inside Docker Compose the app is pointed at the database container automatically using the `POSTGRES_*` values.
 
+To let an AI helper describe photos for search, set `ANTHROPIC_API_KEY` and `ANNOTATION_ENABLED=true`, then turn the opt-in on from the Admin page; nothing is sent until both are set. See the README's privacy section for exactly what is sent.
+
 Keep `.env` private: it is ignored by git and should never be committed.
 
 ## 6. Put HTTPS in front with Caddy

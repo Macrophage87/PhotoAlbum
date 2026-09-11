@@ -17,7 +17,7 @@ type Item = {
 
 const CONCURRENCY = 3;
 
-function uploadOne(file: File, tripId: string | undefined, onProgress: (p: number) => void): Promise<{ photoId: string }> {
+function uploadOne(file: File, tripId: string | undefined, optOut: boolean, onProgress: (p: number) => void): Promise<{ photoId: string }> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", "/api/upload");
@@ -25,6 +25,7 @@ function uploadOne(file: File, tripId: string | undefined, onProgress: (p: numbe
     xhr.setRequestHeader("content-type", file.type || "application/octet-stream");
     xhr.setRequestHeader("x-last-modified", String(file.lastModified));
     if (tripId) xhr.setRequestHeader("x-trip-id", tripId);
+    if (optOut) xhr.setRequestHeader("x-annotation-opt-out", "1");
     xhr.upload.onprogress = (e) => e.lengthComputable && onProgress(e.loaded / e.total);
     xhr.onload = () => {
       try {
@@ -66,7 +67,9 @@ export function tooLongMessage(durationS: number, limit: number): string {
   return `This video is ${Math.round(durationS)} seconds long; clips uploaded here are limited to ${limit} seconds. Upload longer videos to YouTube as Unlisted and add the link instead.`;
 }
 
-export function Uploader({ tripId, onDone, maxClipSeconds = 90 }: { tripId?: string; onDone?: (photoIds: string[]) => void; maxClipSeconds?: number }) {
+export function Uploader({ tripId, onDone, maxClipSeconds = 90, annotationActive = false }: { tripId?: string; onDone?: (photoIds: string[]) => void; maxClipSeconds?: number; /** Whether the AI helper is on, so the opt-out checkbox is worth showing. */ annotationActive?: boolean }) {
+  const [optOut, setOptOut] = useState(false);
+  const optOutRef = useRef(false);
   const [items, setItems] = useState<Item[]>([]);
   const [dragging, setDragging] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -82,6 +85,9 @@ export function Uploader({ tripId, onDone, maxClipSeconds = 90 }: { tripId?: str
   useEffect(() => {
     tripIdRef.current = tripId;
   }, [tripId]);
+  useEffect(() => {
+    optOutRef.current = optOut;
+  }, [optOut]);
   // The queue runner lives in a ref so async completions can re-enter it without stale closures.
   useEffect(() => {
     pumpRef.current = () => {
@@ -89,7 +95,7 @@ export function Uploader({ tripId, onDone, maxClipSeconds = 90 }: { tripId?: str
         const item = queue.current.shift()!;
         active.current += 1;
         update(item.localId, { status: "uploading" });
-        uploadOne(item.file, tripIdRef.current, (p) => update(item.localId, { progress: p }))
+        uploadOne(item.file, tripIdRef.current, optOutRef.current, (p) => update(item.localId, { progress: p }))
           .then(({ photoId }) => update(item.localId, { photoId, status: "processing", progress: 1 }))
           .catch((err: Error) => update(item.localId, { status: "failed", error: err.message }))
           .finally(() => {
@@ -181,6 +187,12 @@ export function Uploader({ tripId, onDone, maxClipSeconds = 90 }: { tripId?: str
         </Button>
       </div>
 
+      {annotationActive && (
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={optOut} onChange={(e) => setOptOut(e.target.checked)} />
+          Don&apos;t send these to the AI helper (no description will be generated; they stay on the server)
+        </label>
+      )}
       {items.length > 0 && (
         <ul className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-3">
           {items.map((it) => (

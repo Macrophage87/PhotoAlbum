@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { requireUserOrThrow } from "@/lib/auth/viewer";
+import { enqueueAnnotation } from "@/lib/jobs/handlers/annotation-sweep";
 
 const ids = z.array(z.string().min(1)).min(1).max(500);
 const text = z.string().max(4000);
@@ -30,6 +31,7 @@ export async function markReviewed(photoIds: string[]): Promise<number> {
   await requireUserOrThrow();
   const list = ids.parse(photoIds);
   const res = await db.photo.updateMany({ where: { id: { in: list }, reviewedAt: null }, data: { reviewedAt: new Date() } });
+  await enqueueAnnotation(list);
   revalidatePath("/review");
   return res.count;
 }

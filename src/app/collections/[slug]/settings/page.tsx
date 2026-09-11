@@ -8,6 +8,7 @@ import { ShareButtons } from "@/components/trips/ShareButtons";
 import { Button, Card, ConfirmSubmitButton } from "@/components/ui";
 import { deleteCollection, rotateCollectionShareToken, setCollectionVisibility, updateCollection } from "../../actions";
 import { VisibilityForm } from "@/components/trips/VisibilityForm";
+import { OptOutToggle } from "@/components/annotation/OptOutToggle";
 import { visibilityWarnings } from "@/lib/visibility/settings";
 import Link from "next/link";
 
@@ -78,6 +79,11 @@ export default async function CollectionSettingsPage({ params, searchParams }: P
             <ShareButtons url={shareUrl} />
           </Card>
         )}
+      </section>
+
+      <section>
+        <h2 className="font-display text-xl font-semibold mb-2">AI descriptions</h2>
+        <OptOutToggle target={{ kind: "collection", id: collection.id }} initial={collection.annotationOptOut} />
       </section>
 
       <section>

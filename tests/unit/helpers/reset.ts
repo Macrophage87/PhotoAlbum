@@ -2,6 +2,9 @@ import { db } from "@/lib/db";
 
 /** Empty every table in dependency order so tests can start from nothing. */
 export async function resetTestDb(): Promise<void> {
+  await db.mediaAnnotationRaw.deleteMany();
+  await db.annotationBatch.deleteMany();
+  await db.appSetting.deleteMany();
   await db.collectionItem.deleteMany();
   await db.collection.deleteMany();
   await db.photoLink.deleteMany();

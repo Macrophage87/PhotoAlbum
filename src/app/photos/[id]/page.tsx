@@ -20,6 +20,10 @@ import { YouTubeEmbed } from "@/components/videos/YouTubeEmbed";
 import { updateExternalVideo } from "@/app/videos/actions";
 import { Input } from "@/components/ui";
 import { localDayFromOffset } from "@/lib/time/local-day";
+import { AnnotationCard } from "@/components/annotation/AnnotationCard";
+import { EstimatedDate } from "@/components/annotation/EstimatedDate";
+import { annotationGates, optOutReason } from "@/lib/annotation/eligibility";
+import type { StoredAnnotation } from "@/lib/annotation/schema";
 
 export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
   const { id } = await params;
@@ -31,6 +35,7 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
   });
   if (!photo) notFound();
 
+  const [gates, optOutWhy] = await Promise.all([annotationGates(), optOutReason(photo.id)]);
   const [trips, activities, links, candidates, collections] = await Promise.all([
     db.trip.findMany({ orderBy: { startDate: "desc" }, select: { id: true, title: true } }),
     photo.tripId ? db.activity.findMany({ where: { tripId: photo.tripId }, orderBy: { startTime: "asc" }, select: { id: true, title: true, startTime: true } }) : Promise.resolve([]),
@@ -156,6 +161,11 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
                 <Button type="submit">Save</Button>
               </form>
             </Card>
+
+            <AnnotationCard photoId={photo.id} annotation={photo.annotation as StoredAnnotation | null} source={photo.annotationSource} model={photo.annotationModel} error={photo.annotationError} optOut={photo.annotationOptOut} optOutReason={optOutWhy} active={gates.active} editable />
+            {(!photo.takenAt || photo.takenAtSource === "FILE_MTIME" || photo.takenAtSource === "UPLOAD_TIME") && (
+              <EstimatedDate photoId={photo.id} estimatedDate={photo.estimatedDate} confidence={photo.estimatedDateConfidence} note={photo.estimatedDateNote} />
+            )}
 
             <Card className="p-4">
               <h2 className="font-medium mb-2">Details</h2>

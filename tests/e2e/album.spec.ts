@@ -307,3 +307,61 @@ test("notes from the review screen and the item page are searchable, within what
   await expect(anonPage.getByRole("status")).toContainText("Nothing matches");
   await anon.close();
 });
+
+test("the AI helper describes reviewed items once an admin opts in, and opted-out trips are never sent", async ({ context, page }) => {
+  await signIn(context, ADMIN);
+  await page.goto("/admin");
+  await expect(page.getByText("nothing is sent")).toBeVisible();
+  await page.getByRole("button", { name: "Turn on annotation" }).click();
+  await expect(page.getByText("sending new items after review")).toBeVisible();
+
+  // Opt the Yosemite trip out before anything is described, then review everything.
+  await page.goto("/trips/yosemite/settings");
+  await page.getByLabel("Never send to the AI helper").check();
+  await expect(page.getByLabel("Never send to the AI helper")).toBeChecked();
+  await page.goto("/review");
+  await page.getByRole("button", { name: /Mark all \d+ reviewed/ }).click();
+  // Once everything is reviewed the queue page re-renders empty.
+  await expect(page.getByText("0 items nobody has reviewed yet.")).toBeVisible();
+
+  // The Acadia photo (already reviewed earlier) is described on demand; the mock answers with the recorded record.
+  const acadia = await withDb((c) => c.query('SELECT p.id FROM "Photo" p JOIN "Trip" t ON t.id = p."tripId" WHERE t.slug = $1', ["acadia"]));
+  await page.goto(`/photos/${acadia.rows[0].id}`);
+  await page.getByRole("button", { name: "Describe now" }).click();
+  await expect
+    .poll(async () => {
+      await page.reload();
+      return page.getByText("written by the AI helper").count();
+    }, { timeout: 30_000, intervals: [1000] })
+    .toBe(1);
+  await expect(page.getByLabel("Caption", { exact: true }).nth(1)).toHaveValue("Lobster rolls on the mail boat");
+  await page.goto("/search?q=seafood");
+  await expect(page.getByRole("status")).toContainText("1 result");
+
+  // Nothing on the opted-out trip was sent, even though it was reviewed.
+  const yosemite = await withDb((c) => c.query('SELECT p."annotatedAt", p.annotation FROM "Photo" p JOIN "Trip" t ON t.id = p."tripId" WHERE t.slug = $1', ["yosemite"]));
+  expect(yosemite.rows.length).toBeGreaterThan(0);
+  expect(yosemite.rows.every((r) => r.annotatedAt === null && r.annotation === null)).toBe(true);
+  const yid = await withDb((c) => c.query('SELECT p.id FROM "Photo" p JOIN "Trip" t ON t.id = p."tripId" WHERE t.slug = $1 AND p.kind = $2 LIMIT 1', ["yosemite", "PHOTO"]));
+  await page.goto(`/photos/${yid.rows[0].id}`);
+  await expect(page.getByText("Not sent to the AI helper.")).toBeVisible();
+
+  // Let Yosemite be described again, then a backfill over everything sends only what is eligible, through the (mock) Batches API.
+  await page.goto("/trips/yosemite/settings");
+  await page.getByLabel("Never send to the AI helper").uncheck();
+  await expect(page.getByLabel("Never send to the AI helper")).not.toBeChecked();
+  await page.goto("/admin");
+  await page.getByRole("button", { name: "Estimate" }).click();
+  const status = page.getByRole("status").first();
+  await expect(status).toContainText("would be sent");
+  const count = Number((await status.textContent())!.match(/(\d+) items? would be sent/)![1]);
+  expect(count).toBeGreaterThan(0);
+  await page.getByLabel(`Type ${count} to confirm`).fill(String(count));
+  await page.getByRole("button", { name: "Send to the helper" }).click();
+  await expect(page.getByText("Backfill submitted")).toBeVisible();
+  await expect
+    .poll(async () => (await withDb((c) => c.query('SELECT status, succeeded FROM "AnnotationBatch" ORDER BY "createdAt" DESC LIMIT 1'))).rows[0], { timeout: 45_000, intervals: [1500] })
+    .toMatchObject({ status: "ENDED", succeeded: count });
+  const described = await withDb((c) => c.query('SELECT count(*)::int AS n FROM "Photo" p JOIN "Trip" t ON t.id = p."tripId" WHERE t.slug = $1 AND p."annotatedAt" IS NOT NULL', ["yosemite"]));
+  expect(described.rows[0].n).toBe(count);
+});

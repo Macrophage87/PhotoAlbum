@@ -29,6 +29,13 @@ const schema = z.object({
   YOUTUBE_THUMBNAIL_URL: z.string().url().default("https://i.ytimg.com/vi"),
   YOUTUBE_DATA_API_URL: z.string().url().default("https://www.googleapis.com/youtube/v3"),
   YOUTUBE_API_KEY: z.string().optional().transform((v) => (v ? v : undefined)),
+  // AI annotation: off until both the operator flag and an admin's opt-in on the disclosure screen are set.
+  ANTHROPIC_API_KEY: z.string().optional().transform((v) => (v ? v : undefined)),
+  ANTHROPIC_BASE_URL: z.string().url().optional().transform((v) => (v ? v : undefined)),
+  ANNOTATION_ENABLED: boolish.transform((v) => v ?? false),
+  ANNOTATION_MODEL: z.enum(["claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5"]).default("claude-opus-5"),
+  ANNOTATION_QUIET_MINUTES: z.coerce.number().int().positive().default(30),
+  ANNOTATION_RAW_RETENTION_DAYS: z.coerce.number().int().positive().default(30),
 });
 
 export type Env = z.infer<typeof schema>;

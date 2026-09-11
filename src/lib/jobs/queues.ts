@@ -6,6 +6,11 @@ export const QUEUES = {
   deletePhoto: "delete-photo",
   checkExternalVideos: "check-external-videos",
   transcodeVideo: "transcode-video",
+  annotatePhoto: "annotate-photo",
+  annotationSweep: "annotation-sweep",
+  annotationBackfill: "annotation-backfill",
+  annotationBatchPoll: "annotation-batch-poll",
+  purgeAnnotationRaw: "purge-annotation-raw",
 } as const;
 
 export type QueueName = (typeof QUEUES)[keyof typeof QUEUES];
@@ -23,3 +28,5 @@ export type ImportTrackJob = {
 };
 export type GeotagPhotosJob = { tripId: string; trackIds?: string[] };
 export type DeletePhotoJob = { storageKey: string };
+export type AnnotatePhotoJob = { photoId: string };
+export type AnnotationBackfillJob = { batchId: string };

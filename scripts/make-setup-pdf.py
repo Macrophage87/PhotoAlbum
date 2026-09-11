@@ -240,6 +240,10 @@ S += [P("6. Using the album", H1),
       P("Reviewing uploads and searching", H2),
       P("After an upload, choose <b>Add notes and file them</b> to open the review screen. Type a note for the whole batch or for a selection (\"Grandma Jo's 80th at the lake house, everyone came\"), attach items to a trip or a collection, and mark them reviewed. "
         "The <b>Review</b> page lists everything nobody has reviewed yet. The search box finds photos by caption, note, title, trip or collection name; visitors without an account search only public content."),
+      P("AI descriptions (optional)", H2),
+      P("An AI helper (Anthropic's Claude) can write a caption, a description and search tags for each photo, using the notes you typed. It is off until two switches are on: "
+        "ANNOTATION_ENABLED with an API key in the configuration, and an admin's opt-in on the Admin page, which lists exactly what is sent (a reduced copy of the image, your notes, the date and camera, the trip and collection names; never the original file or any face data). "
+        "Each item is sent once after it is reviewed. Any photo, trip or collection can be marked as never to be sent. The Admin page can also describe the existing library in one go, showing the count and an approximate cost first and asking you to type the number to confirm."),
       P("Videos", H2),
       P("Short clips (MP4, MOV or WebM, up to 90 seconds) upload like photos and are converted in the background to a web-playable file with a poster; they play muted when you hover over them in a gallery and with controls in the viewer. A longer file is refused before it uploads."),
       P("Longer videos live on YouTube. Upload the video there as <b>Unlisted</b>, then choose <b>Add a YouTube video</b> on a trip's or collection's Photos tab (or the Upload page) and paste the link. "

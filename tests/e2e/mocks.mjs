@@ -6,10 +6,54 @@ import { fileURLToPath } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const poster = readFileSync(path.join(here, "../fixtures/photo-no-gps.jpg"));
+const annotation = readFileSync(path.join(here, "../fixtures/annotation-response.json"), "utf8");
+const batches = new Map();
+
+/** A Messages API reply shaped like the real one, with the recorded structured record as its text block. */
+function message(model, text = annotation) {
+  return { id: `msg_${Date.now()}`, type: "message", role: "assistant", model, content: [{ type: "text", text }], stop_reason: "end_turn", stop_sequence: null, stop_details: null, usage: { input_tokens: 3200, output_tokens: 380, cache_read_input_tokens: 900, cache_creation_input_tokens: 0 } };
+}
+
+function readBody(req) {
+  return new Promise((resolve) => {
+    const chunks = [];
+    req.on("data", (c) => chunks.push(c));
+    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+  });
+}
 
 export function startMocks(port = 3201) {
-  const server = createServer((req, res) => {
+  const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", `http://localhost:${port}`);
+    const json = (status, body) => { res.writeHead(status, { "content-type": "application/json" }); res.end(JSON.stringify(body)); };
+    // --- Anthropic Messages API stand-in ---
+    if (url.pathname === "/v1/messages" && req.method === "POST") {
+      const body = JSON.parse((await readBody(req)) || "{}");
+      const text = JSON.stringify(body.messages ?? []);
+      // An item whose notes ask for it exercises the refusal path.
+      if (text.includes("REFUSE-ME")) return json(200, { ...message(body.model, ""), stop_reason: "refusal", stop_details: { type: "refusal", category: "other", explanation: "mock" } });
+      const estimate = text.includes("Please estimate a year range") ? { ...JSON.parse(annotation), estimatedYear: { from: 1990, to: 1994, confidence: 0.55, evidence: "print border and the notes" } } : null;
+      return json(200, message(body.model, estimate ? JSON.stringify(estimate) : annotation));
+    }
+    if (url.pathname === "/v1/messages/batches" && req.method === "POST") {
+      const body = JSON.parse((await readBody(req)) || "{}");
+      const id = `msgbatch_${Date.now()}`;
+      batches.set(id, body.requests ?? []);
+      return json(200, { id, type: "message_batch", processing_status: "in_progress", request_counts: { processing: body.requests.length, succeeded: 0, errored: 0, canceled: 0, expired: 0 }, created_at: new Date().toISOString(), expires_at: new Date(Date.now() + 86400000).toISOString(), ended_at: null, cancel_initiated_at: null, results_url: null, archived_at: null });
+    }
+    const batchMatch = /^\/v1\/messages\/batches\/([^/]+)(\/results|\/cancel)?$/.exec(url.pathname);
+    if (batchMatch) {
+      const [, id, tail] = batchMatch;
+      const requests = batches.get(id);
+      if (!requests) return json(404, { type: "error", error: { type: "not_found_error", message: "no such batch" } });
+      if (tail === "/cancel") return json(200, { id, type: "message_batch", processing_status: "canceling", request_counts: { processing: 0, succeeded: 0, errored: 0, canceled: requests.length, expired: 0 } });
+      if (tail === "/results") {
+        res.writeHead(200, { "content-type": "application/x-jsonl" });
+        res.end(requests.map((r) => JSON.stringify({ custom_id: r.custom_id, result: { type: "succeeded", message: message(r.params.model) } })).join("\n") + "\n");
+        return;
+      }
+      return json(200, { id, type: "message_batch", processing_status: "ended", request_counts: { processing: 0, succeeded: requests.length, errored: 0, canceled: 0, expired: 0 }, created_at: new Date().toISOString(), expires_at: new Date(Date.now() + 86400000).toISOString(), ended_at: new Date().toISOString(), cancel_initiated_at: null, results_url: `http://127.0.0.1:${port}/v1/messages/batches/${id}/results`, archived_at: null });
+    }
     if (url.pathname === "/oembed") {
       const target = url.searchParams.get("url") ?? "";
       const id = /v=([A-Za-z0-9_-]{11})/.exec(target)?.[1];

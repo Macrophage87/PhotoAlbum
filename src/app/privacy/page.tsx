@@ -2,6 +2,7 @@ import { env } from "@/lib/env";
 import { getViewer, requireUser } from "@/lib/auth/viewer";
 import { AppShell, Container } from "@/components/layout/AppShell";
 import { Card } from "@/components/ui";
+import { annotationGates } from "@/lib/annotation/eligibility";
 
 export const metadata = { title: "Privacy", robots: { index: false, follow: false } };
 
@@ -15,7 +16,15 @@ export default async function PrivacyPage() {
   await requireUser("/privacy");
   const viewer = await getViewer();
   const e = env();
+  const gates = await annotationGates();
   const flows: Flow[] = [
+    {
+      name: "AI descriptions (Anthropic)",
+      what: "For each new item after review: the 1600-pixel rendition (three or four frames for a clip), the uploader's notes, caption and title, the date and camera when known, and the trip and collection titles. Never the original file, never face data, and people's names only under the consent rule for confirmed people. The helper answers with a caption, description, tags and a search summary.",
+      when: `Only while both switches are on: the operator flag (${gates.envEnabled ? "on" : "off"}) and an admin's opt-in on the Admin page (${gates.optedInAt ? "on" : "off"}). Items, trips and collections can be opted out individually and are then never sent.`,
+      off: `Turn the opt-in off on the Admin page, or set ANNOTATION_ENABLED=false. Raw responses are kept ${e.ANNOTATION_RAW_RETENTION_DAYS} days for debugging, then purged; they are deleted with the item.`,
+      enabled: gates.active,
+    },
     {
       name: "Sign-in and invite email",
       what: "The recipient's address and a one-time sign-in link.",
@@ -66,7 +75,7 @@ export default async function PrivacyPage() {
               <p><span className="text-muted">To turn off:</span> {f.off}</p>
             </Card>
           ))}
-          <p className="text-sm text-muted">Photos, short clips (transcoded here with ffmpeg, originals kept) and location traces are stored on this server only; longer videos live on YouTube as unlisted videos, which means anyone with the YouTube link can watch them regardless of this album&apos;s settings. No AI service or face recognition is connected yet; when one is, it appears here with its own switch.</p>
+          <p className="text-sm text-muted">Photos, short clips (transcoded here with ffmpeg, originals kept) and location traces are stored on this server only; longer videos live on YouTube as unlisted videos, which means anyone with the YouTube link can watch them regardless of this album&apos;s settings. Face recognition is not connected yet; when it is, it appears here with its own switch.</p>
         </section>
 
         <section className="space-y-2 text-sm">
