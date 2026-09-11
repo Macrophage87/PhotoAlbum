@@ -4,6 +4,8 @@ import { AppShell, Container } from "@/components/layout/AppShell";
 import { Card } from "@/components/ui";
 import { annotationGates } from "@/lib/annotation/eligibility";
 import { mlConfigured } from "@/lib/ml/client";
+import { faceGates } from "@/lib/people/gates";
+import { faceCounts } from "@/lib/people/queries";
 
 export const metadata = { title: "Privacy", robots: { index: false, follow: false } };
 
@@ -18,6 +20,8 @@ export default async function PrivacyPage() {
   const viewer = await getViewer();
   const e = env();
   const gates = await annotationGates();
+  const fg = await faceGates();
+  const fc = await faceCounts(fg.retentionDays);
   const flows: Flow[] = [
     {
       name: "AI descriptions (Anthropic)",
@@ -76,7 +80,12 @@ export default async function PrivacyPage() {
               <p><span className="text-muted">To turn off:</span> {f.off}</p>
             </Card>
           ))}
-          <p className="text-sm text-muted">Photos, short clips (transcoded here with ffmpeg, originals kept) and location traces are stored on this server only; longer videos live on YouTube as unlisted videos, which means anyone with the YouTube link can watch them regardless of this album&apos;s settings. The optional ML sidecar (image and text embeddings for similarity, suggestions and semantic search; face templates in a later phase) runs on this server only, on an internal network with no outbound access, and writes nothing to disk or logs{mlConfigured() ? " (configured)" : " (not configured)"}. Face recognition is not connected yet; when it is, it appears here with its own switch.</p>
+          <p className="text-sm text-muted">Photos, short clips (transcoded here with ffmpeg, originals kept) and location traces are stored on this server only; longer videos live on YouTube as unlisted videos, which means anyone with the YouTube link can watch them regardless of this album&apos;s settings. The optional ML sidecar (image and text embeddings for similarity, suggestions and semantic search; face templates in a later phase) runs on this server only, on an internal network with no outbound access, and writes nothing to disk or logs{mlConfigured() ? " (configured)" : " (not configured)"}. </p>
+        </section>
+
+        <section className="space-y-2 text-sm">
+          <h2 className="font-display text-xl font-semibold">Faces (stays on this server)</h2>
+          <p>Face detection is {fg.active ? "on" : "off"}: operator flag {fg.envEnabled ? "on" : "off"}, admin opt-in {fg.optedInAt ? "on" : "off"}, sidecar {fg.sidecar ? "configured" : "not configured"}. When on, a face template is computed for every face in every new photo and kept in this server&apos;s database only; nothing is sent anywhere. Templates: {fc.templates} stored, {fc.unnamed} unnamed{fc.nextPurge ? `, the oldest purged by ${fc.nextPurge.toLocaleDateString("en-US")}` : ""}; unnamed faces are deleted after {fg.retentionDays} days. Recognising a named person is a separate per-person decision by an admin, off by default, never for a minor without a parent&apos;s instruction; a person can be forgotten at any time, which deletes their templates and removes their name from descriptions and search. A person&apos;s name reaches the AI helper only when their recognition is on and they are not a minor.</p>
         </section>
 
         <section className="space-y-2 text-sm">

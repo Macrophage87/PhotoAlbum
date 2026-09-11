@@ -8,6 +8,11 @@ import { Badge, Button, Card } from "@/components/ui";
 import { removeMember, revokeInvite, setRole } from "./actions";
 import { AnnotationAdmin } from "@/components/annotation/AnnotationAdmin";
 import { annotationGates } from "@/lib/annotation/eligibility";
+import { faceGates } from "@/lib/people/gates";
+import { faceCounts, needsDecision } from "@/lib/people/queries";
+import { FacesAdmin } from "@/components/people/FacesAdmin";
+import { decideIndexing } from "@/app/people/actions";
+import { isMinor } from "@/lib/people/consent";
 
 export const metadata = { title: "Admin" };
 
@@ -19,6 +24,8 @@ export default async function AdminPage() {
     db.invite.findMany({ where: { acceptedAt: null, expiresAt: { gt: new Date() } }, orderBy: { createdAt: "desc" }, include: { invitedBy: { select: { email: true, name: true } } } }),
   ]);
   const smtp = Boolean(env().SMTP_HOST);
+  const fg = await faceGates();
+  const [counts, decisions] = await Promise.all([faceCounts(fg.retentionDays), needsDecision()]);
   const [gates, batches, tripOptions, collectionOptions] = await Promise.all([
     annotationGates(),
     db.annotationBatch.findMany({ orderBy: { createdAt: "desc" }, take: 20 }),
@@ -79,6 +86,30 @@ export default async function AdminPage() {
             collections={collectionOptions}
             batches={batches.map((b) => ({ id: b.id, status: b.status, requested: b.requested, succeeded: b.succeeded, errored: b.errored, skipped: b.skipped, createdAt: b.createdAt.toISOString(), endedAt: b.endedAt?.toISOString() ?? null, scope: describeScope(b.scope) }))}
           />
+        </section>
+
+        <section>
+          <h2 className="font-display text-xl font-semibold mb-1">Faces</h2>
+          <p className="text-sm text-muted mb-3">Face detection runs on this server through the ML sidecar. It is off until both the operator flag and your opt-in here are set.</p>
+          <FacesAdmin gates={{ sidecar: fg.sidecar, envEnabled: fg.envEnabled, optedInAt: fg.optedInAt?.toISOString() ?? null, active: fg.active, retentionDays: fg.retentionDays }} counts={{ ...counts, nextPurge: counts.nextPurge?.toISOString() ?? null }} />
+          {decisions.length > 0 && (
+            <div className="mt-4 space-y-3">
+              <h3 className="font-medium">Needs a decision</h3>
+              <p className="text-sm text-muted">Named by a member, or turned 18 recently: decide whether recognition is on. Nothing is matched until you do.</p>
+              {decisions.map((p) => (
+                <Card key={p.id} className="p-3 text-sm">
+                  <form action={decideIndexing.bind(null, p.id)} className="flex flex-wrap items-center gap-3">
+                    <Link href={`/people/${p.id}`} className="font-medium text-primary hover:underline">{p.name}</Link>
+                    <label className="flex items-center gap-1">Birthday <input type="date" name="birthday" defaultValue={p.birthday ? p.birthday.toISOString().slice(0, 10) : ""} className="h-8 rounded-theme border border-border px-2" /></label>
+                    {!p.birthday && <label className="flex items-center gap-1"><input type="checkbox" name="attest" /> adult, has agreed</label>}
+                    {isMinor(p) && <label className="flex items-center gap-1"><input type="checkbox" name="parentInstruction" /> a parent asked</label>}
+                    <label className="flex items-center gap-1"><input type="checkbox" name="faceIndexing" /> recognise</label>
+                    <Button type="submit" size="sm" variant="secondary">Decide</Button>
+                  </form>
+                </Card>
+              ))}
+            </div>
+          )}
         </section>
 
         <section>

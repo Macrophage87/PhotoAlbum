@@ -386,3 +386,57 @@ test("uploads get embeddings from the sidecar and the review screen suggests whe
     .poll(async () => (await withDb((c) => c.query('SELECT ("embedding" IS NOT NULL) AS e FROM "Photo" WHERE id = $1', [id]))).rows[0].e, { timeout: 30_000, intervals: [1000] })
     .toBe(true);
 });
+
+test("faces are found once an admin opts in, named with consent recorded, shown to members only, and forgotten on request", async ({ browser, context, page }) => {
+  await signIn(context, ADMIN);
+  await page.goto("/admin");
+  await expect(page.getByText("not scanning")).toBeVisible();
+  await page.getByRole("button", { name: "Turn on face detection" }).click();
+  await expect(page.getByText("scanning new photos")).toBeVisible();
+
+  // The sweep only runs every few minutes; a fresh upload is scanned right away.
+  await page.goto("/upload");
+  await chooseFile(page, "photo-with-gps.jpg");
+  await expect(page.locator("img[src*='/api/photos/']")).toBeVisible({ timeout: 30_000 });
+  await expect
+    .poll(async () => (await withDb((c) => c.query('SELECT count(*)::int AS n FROM "Face"'))).rows[0].n, { timeout: 30_000, intervals: [1000] })
+    .toBeGreaterThan(0);
+
+  await page.goto("/people");
+  await expect(page.getByText(/face(s)? that look alike/).first()).toBeVisible();
+  const form = page.locator("form").filter({ hasText: "Name these faces" }).first();
+  await form.getByRole("textbox", { name: "Name", exact: true }).fill("Grandma Jo");
+  await form.getByRole("textbox", { name: "Birthday" }).fill("1946-03-02");
+  await form.getByRole("checkbox", { name: /Recognise this person/ }).check();
+  await form.getByRole("button", { name: "Name these faces" }).click();
+  await expect(page.getByRole("link", { name: /Grandma Jo/ })).toBeVisible();
+  await expect(page.getByText("recognised · by birthday")).toBeVisible();
+  const person = await withDb((c) => c.query('SELECT id, "faceIndexing", "faceIndexingSetById" FROM "Person" WHERE name = $1', ["Grandma Jo"]));
+  expect(person.rows[0].faceIndexing).toBe(true);
+  expect(person.rows[0].faceIndexingSetById).toBeTruthy();
+  const kept = await withDb((c) => c.query('SELECT count(*)::int AS n FROM "Face" WHERE "personId" = $1 AND embedding IS NOT NULL', [person.rows[0].id]));
+  expect(kept.rows[0].n).toBeGreaterThan(0);
+
+  // Members see the name; anonymous visitors never do, even on a public collection.
+  await page.goto(`/people/${person.rows[0].id}`);
+  await expect(page.getByRole("heading", { name: "Grandma Jo" })).toBeVisible();
+  await page.goto("/search?q=Grandma");
+  await expect(page.getByRole("status")).toContainText(/\d+ result/);
+  const anon = await browser.newContext();
+  const anonPage = await anon.newPage();
+  await anonPage.goto(`/people/${person.rows[0].id}`);
+  await expect(anonPage).toHaveURL(/\/auth\/signin/);
+  await anonPage.goto("/search?q=Grandma");
+  await expect(anonPage.getByRole("status")).toContainText("Nothing matches");
+  await anon.close();
+
+  // Forgetting deletes the templates and the appearance record.
+  await page.goto(`/people/${person.rows[0].id}`);
+  page.once("dialog", (d) => void d.accept());
+  await page.getByRole("button", { name: "Forget face data" }).click();
+  await expect
+    .poll(async () => (await withDb((c) => c.query('SELECT count(*)::int AS n FROM "Face" WHERE "personId" = $1', [person.rows[0].id]))).rows[0].n, { timeout: 15_000 })
+    .toBe(0);
+  const clusters = await withDb((c) => c.query('SELECT count(*)::int AS n FROM "FaceCluster" WHERE "personId" = $1', [person.rows[0].id]));
+  expect(clusters.rows[0].n).toBe(0);
+});

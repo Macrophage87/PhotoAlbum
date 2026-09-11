@@ -5,6 +5,7 @@ import { buildRequest, loadItem } from "@/lib/annotation/request";
 import { applyAnnotation, parseMessageContent, recordFailure } from "@/lib/annotation/apply";
 import { enqueue } from "../boss";
 import { QUEUES, type AnnotationBackfillJob } from "../queues";
+import { permittedNames } from "@/lib/people/gates";
 
 export type BackfillScope = { kind: "all" } | { kind: "trip"; tripId: string } | { kind: "collection"; collectionId: string } | { kind: "range"; from: string; to: string };
 
@@ -38,7 +39,7 @@ export async function annotationBackfill(job: AnnotationBackfillJob): Promise<vo
     const item = await loadItem(c.id);
     if (!item) { skipped++; continue; }
     try {
-      requests.push({ custom_id: c.id, params: await buildRequest(item, gates.model, []) });
+      requests.push({ custom_id: c.id, params: await buildRequest(item, gates.model, await permittedNames(item.id)) });
     } catch {
       skipped++;
     }

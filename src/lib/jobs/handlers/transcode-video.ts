@@ -11,6 +11,7 @@ import { localDayFromOffset, offsetMinutesInZone } from "@/lib/time/local-day";
 import { withHeavyLock } from "../heavy-lock";
 import type { TranscodeVideoJob } from "../queues";
 import { enqueueEmbedding } from "./embed-photo";
+import { enqueueFaceDetection } from "./detect-faces";
 
 export type VideoRenditions = { mp4: { key: string; w: number; h: number; bytes: number }; poster: { key: string } };
 
@@ -89,6 +90,7 @@ export async function transcodeVideo(job: TranscodeVideoJob): Promise<void> {
       });
     });
     await enqueueEmbedding(photo.id);
+    await enqueueFaceDetection(photo.id);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[transcode-video] ${photo.id} failed:`, message);

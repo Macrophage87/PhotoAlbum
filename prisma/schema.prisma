@@ -96,6 +96,26 @@ enum AnnotationBatchStatus {
   FAILED
 }
 
+enum PersonKind {
+  HUMAN
+  PET
+}
+
+enum Species {
+  DOG
+  CAT
+  CHICKEN
+  HORSE
+  OTHER
+}
+
+enum FaceStatus {
+  DETECTED
+  PROPOSED
+  CONFIRMED
+  REJECTED
+}
+
 enum PhotoRelation {
   SAME_SCENE
   BEFORE_AFTER
@@ -266,6 +286,7 @@ model Photo {
   /// all-MiniLM-L6-v2 embedding of the description text, for semantic search.
   textEmbedding Unsupported("vector(384)")?
   embeddedAt    DateTime?
+  facesDetectedAt DateTime?
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
 
@@ -275,6 +296,7 @@ model Photo {
   collections CollectionItem[]
   coverOfCollection Collection? @relation("CollectionCover")
   annotationRaw     MediaAnnotationRaw[]
+  faces             Face[]
 
   @@index([takenAt])
   @@index([tripId, takenAt])
@@ -361,6 +383,82 @@ model AnnotationBatch {
   createdById      String
   createdAt        DateTime              @default(now())
   endedAt          DateTime?
+}
+
+/// A family member or a pet. Recognition data lives in Face and FaceCluster and follows the consent fields here.
+model Person {
+  id                  String     @id @default(cuid())
+  kind                PersonKind @default(HUMAN)
+  name                String
+  relationship        String?
+  birthday            DateTime?  @db.Date
+  species             Species?
+  livedFrom           DateTime?  @db.Date
+  livedTo             DateTime?  @db.Date
+  isFlock             Boolean    @default(false)
+  /// Matching and template storage are allowed for this person. Off until an admin turns it on.
+  faceIndexing        Boolean    @default(false)
+  faceIndexingSetById String?
+  faceIndexingSetAt   DateTime?
+  /// "I confirm this person is an adult and has agreed to face recognition", when no birthday is known.
+  adultAttestedById   String?
+  adultAttestedAt     DateTime?
+  /// Named by a member: waits for an admin's consent decision (embeddings kept until then, capped by retention).
+  pendingDecision     Boolean    @default(false)
+  /// The person asked to be forgotten by the recogniser but kept their name on confirmed photos.
+  keepNameOnPhotos    Boolean    @default(false)
+  createdById         String
+  createdAt           DateTime   @default(now())
+  updatedAt           DateTime   @updatedAt
+
+  clusters FaceCluster[]
+  faces    Face[]        @relation("FacePerson")
+  proposed Face[]        @relation("FaceProposed")
+
+  @@index([name])
+}
+
+/// A group of similar faces. Named clusters belong to a person; one person may own several (one per era).
+model FaceCluster {
+  id          String   @id @default(cuid())
+  personId    String?
+  person      Person?  @relation(fields: [personId], references: [id], onDelete: SetNull)
+  label       String?
+  ageBandMin  Int?
+  ageBandMax  Int?
+  centroid    Unsupported("vector(512)")?
+  faceCount   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  faces Face[]
+
+  @@index([personId])
+}
+
+/// One detected face. The embedding is the biometric template and is NULLed or deleted per the consent rules.
+model Face {
+  id                String     @id @default(cuid())
+  photoId           String
+  photo             Photo      @relation(fields: [photoId], references: [id], onDelete: Cascade)
+  clusterId         String?
+  cluster           FaceCluster? @relation(fields: [clusterId], references: [id], onDelete: SetNull)
+  personId          String?
+  person            Person?    @relation("FacePerson", fields: [personId], references: [id], onDelete: SetNull)
+  proposedPersonId  String?
+  proposedPerson    Person?    @relation("FaceProposed", fields: [proposedPersonId], references: [id], onDelete: SetNull)
+  /// x, y, w, h as fractions of the image.
+  box               Json
+  embedding         Unsupported("vector(512)")?
+  confidence        Float
+  ageAtCaptureYears Float?
+  status            FaceStatus @default(DETECTED)
+  createdAt         DateTime   @default(now())
+
+  @@index([photoId])
+  @@index([clusterId])
+  @@index([personId])
+  @@index([status])
 }
 
 model PhotoLink {

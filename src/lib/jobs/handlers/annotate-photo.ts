@@ -2,6 +2,7 @@ import { anthropic } from "@/lib/annotation/client";
 import { annotationGates, optOutReason } from "@/lib/annotation/eligibility";
 import { buildRequest, loadItem } from "@/lib/annotation/request";
 import { applyAnnotation, recordFailure } from "@/lib/annotation/apply";
+import { permittedNames } from "@/lib/people/gates";
 import type { AnnotatePhotoJob } from "../queues";
 
 /**
@@ -15,8 +16,8 @@ export async function annotatePhoto(job: AnnotatePhotoJob): Promise<void> {
   if (!item || item.status !== "READY") return;
   const reason = await optOutReason(item.id);
   if (reason) return;
-  const permittedNames: string[] = []; // People arrive in a later phase; names are passed only under the consent rule.
-  const request = await buildRequest(item, gates.model, permittedNames);
+  // Names go to the helper only for confirmed people whose indexing is on and who are not minors; pets always.
+  const request = await buildRequest(item, gates.model, await permittedNames(item.id));
   try {
     const response = await anthropic().messages.parse(request);
     const usage = response.usage;
