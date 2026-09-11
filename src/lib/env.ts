@@ -5,9 +5,16 @@ const boolish = z
   .optional()
   .transform((v) => v === undefined || v === "" ? undefined : ["1", "true", "yes", "on"].includes(v.toLowerCase()));
 
+/** A URL that may be left blank: .env.example ships the optional endpoints
+ *  as `NAME=`, and an empty value means "unset" (zod's url() check would
+ *  otherwise reject the empty string before any transform runs). */
+const optionalUrl = z.string().optional().transform((v) => (v ? v : undefined)).pipe(z.string().url().optional());
+/** A URL with a default that also applies when the variable is present but blank. */
+const urlWithDefault = (fallback: string) => z.string().optional().transform((v) => (v ? v : fallback)).pipe(z.string().url());
+
 const schema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
-  APP_URL: z.string().url().default("http://localhost:3000"),
+  APP_URL: urlWithDefault("http://localhost:3000"),
   DATABASE_URL: z.string().min(1),
   ADMIN_EMAIL: z.string().email().optional().or(z.literal("").transform(() => undefined)),
   SMTP_HOST: z.string().optional().transform((v) => (v ? v : undefined)),
@@ -25,19 +32,19 @@ const schema = z.object({
   MAX_VIDEO_UPLOAD_BYTES: z.coerce.number().int().positive().default(1024 * 1024 * 1024),
   RUN_WORKER: boolish.transform((v) => v ?? true),
   // External services are reached only through these base URLs so tests can point them at a mock server.
-  YOUTUBE_OEMBED_URL: z.string().url().default("https://www.youtube.com/oembed"),
-  YOUTUBE_THUMBNAIL_URL: z.string().url().default("https://i.ytimg.com/vi"),
-  YOUTUBE_DATA_API_URL: z.string().url().default("https://www.googleapis.com/youtube/v3"),
+  YOUTUBE_OEMBED_URL: urlWithDefault("https://www.youtube.com/oembed"),
+  YOUTUBE_THUMBNAIL_URL: urlWithDefault("https://i.ytimg.com/vi"),
+  YOUTUBE_DATA_API_URL: urlWithDefault("https://www.googleapis.com/youtube/v3"),
   YOUTUBE_API_KEY: z.string().optional().transform((v) => (v ? v : undefined)),
   // AI annotation: off until both the operator flag and an admin's opt-in on the disclosure screen are set.
   ANTHROPIC_API_KEY: z.string().optional().transform((v) => (v ? v : undefined)),
-  ANTHROPIC_BASE_URL: z.string().url().optional().transform((v) => (v ? v : undefined)),
+  ANTHROPIC_BASE_URL: optionalUrl,
   ANNOTATION_ENABLED: boolish.transform((v) => v ?? false),
   ANNOTATION_MODEL: z.enum(["claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5"]).default("claude-opus-5"),
   ANNOTATION_QUIET_MINUTES: z.coerce.number().int().positive().default(30),
   ANNOTATION_RAW_RETENTION_DAYS: z.coerce.number().int().positive().default(30),
   // Local ML sidecar (faces, image and text embeddings). Optional; when set, ML_TOKEN is required so the app fails closed.
-  ML_URL: z.string().url().optional().transform((v) => (v ? v : undefined)),
+  ML_URL: optionalUrl,
   ML_TOKEN: z.string().optional().transform((v) => (v ? v : undefined)),
   // Documented pass-through for the sidecar (compose hands it to the ml service); the app itself does not read it.
   ML_IDLE_UNLOAD_SECONDS: z.coerce.number().int().positive().default(300),
@@ -50,9 +57,9 @@ const schema = z.object({
   GOOGLE_OAUTH_CLIENT_ID: z.string().optional().transform((v) => (v ? v : undefined)),
   GOOGLE_OAUTH_CLIENT_SECRET: z.string().optional().transform((v) => (v ? v : undefined)),
   TOKEN_ENCRYPTION_KEY: z.string().optional().transform((v) => (v ? v : undefined)),
-  GOOGLE_ACCOUNTS_URL: z.string().url().default("https://accounts.google.com"),
-  GOOGLE_OAUTH_BASE_URL: z.string().url().default("https://oauth2.googleapis.com"),
-  GOOGLE_PHOTOS_API_URL: z.string().url().default("https://photospicker.googleapis.com/v1"),
+  GOOGLE_ACCOUNTS_URL: urlWithDefault("https://accounts.google.com"),
+  GOOGLE_OAUTH_BASE_URL: urlWithDefault("https://oauth2.googleapis.com"),
+  GOOGLE_PHOTOS_API_URL: urlWithDefault("https://photospicker.googleapis.com/v1"),
   // Automatic pet matching through the sidecar's animal detector (needs ML_URL); on by default when the sidecar is set.
   PET_MATCHING_ENABLED: boolish.transform((v) => v ?? true),
   // Send the page Content-Security-Policy as report-only (browser console warnings instead of blocking) while trying a new tile or style host.

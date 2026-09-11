@@ -55,3 +55,6 @@ next-env.d.ts
 /public/maplibre
 __pycache__/
 *.pyc
+
+# server-specific compose overrides (docs/DEPLOY.md step 6)
+docker-compose.override.yml
