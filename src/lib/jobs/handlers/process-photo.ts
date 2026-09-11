@@ -8,6 +8,7 @@ import { pickActivityByTime, pickTripByDay } from "@/lib/photos/assign";
 import { localDayFromOffset, offsetMinutesInZone } from "@/lib/time/local-day";
 import { enqueue } from "../boss";
 import { QUEUES, type ProcessPhotoJob } from "../queues";
+import { enqueueEmbedding } from "./embed-photo";
 
 /**
  * Turn an uploaded original into a usable photo: EXIF, timezone-correct takenAt, GPS,
@@ -28,6 +29,7 @@ export async function processPhoto(job: ProcessPhotoJob): Promise<void> {
     if (job.mode === "renditions" || photo.kind === "EXTERNAL_VIDEO") {
       const { width, height, renditions } = await makeRenditions(localPath, photo.storageKey, (key, buf) => store.putBuffer(key, buf));
       await db.photo.update({ where: { id: photo.id }, data: { status: "READY", width, height, renditions } });
+      await enqueueEmbedding(photo.id);
       return;
     }
 
@@ -120,6 +122,8 @@ export async function processPhoto(job: ProcessPhotoJob): Promise<void> {
         activityId,
       },
     });
+
+    await enqueueEmbedding(photo.id);
 
     // 7. Position GPS-less photos from any track covering that moment (handler lands in Phase 5)
     if (trip && !hasGps && takenAt) {

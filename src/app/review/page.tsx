@@ -11,6 +11,8 @@ import { annotationGates } from "@/lib/annotation/eligibility";
 import { env } from "@/lib/env";
 import { EstimatedDate } from "@/components/annotation/EstimatedDate";
 import type { StoredAnnotation } from "@/lib/annotation/schema";
+import { suggestionsFor } from "@/lib/suggest";
+import { SuggestionList } from "@/components/suggest/SuggestionList";
 
 export const metadata = { title: "Review uploads" };
 
@@ -32,6 +34,7 @@ export default async function ReviewPage({ searchParams }: PageProps<"/review">)
     db.photo.count({ where: { reviewedAt: null } }),
   ]);
   const allIds = photos.map((p) => p.id);
+  const suggestions = await suggestionsFor(allIds);
   return (
     <AppShell viewer={viewer}>
       <Container className="py-10 space-y-5">
@@ -55,6 +58,14 @@ export default async function ReviewPage({ searchParams }: PageProps<"/review">)
           <SelectionProvider trips={trips} collections={collections}>
             <ReviewPanel allIds={allIds} annotation={gates.active ? { quietMinutes: env().ANNOTATION_QUIET_MINUTES, pending: photos.filter((p) => !p.annotatedAt && !p.annotationOptOut && !p.trip?.annotationOptOut).length } : null} />
             <PhotoGrid photos={photos.map((p) => toGridPhoto(p, p.reviewedAt ? null : "unreviewed", true))} />
+            {photos.some((p) => suggestions[p.id]?.length) && (
+              <section className="space-y-3">
+                <h2 className="font-display text-lg font-semibold">Where these might belong</h2>
+                {photos.filter((p) => suggestions[p.id]?.length).map((p) => (
+                  <SuggestionList key={p.id} photoId={p.id} label={p.caption ?? p.title ?? p.originalName} suggestions={suggestions[p.id]} />
+                ))}
+              </section>
+            )}
             <ul className="text-sm space-y-2">
               {photos.filter((p) => p.context || p.annotation || p.annotationOptOut).map((p) => {
                 const a = p.annotation as StoredAnnotation | null;

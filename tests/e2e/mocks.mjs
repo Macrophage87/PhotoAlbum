@@ -14,6 +14,22 @@ function message(model, text = annotation) {
   return { id: `msg_${Date.now()}`, type: "message", role: "assistant", model, content: [{ type: "text", text }], stop_reason: "end_turn", stop_sequence: null, stop_details: null, usage: { input_tokens: 3200, output_tokens: 380, cache_read_input_tokens: 900, cache_creation_input_tokens: 0 } };
 }
 
+import { createHash } from "node:crypto";
+function hash(s) {
+  return createHash("sha256").update(s).digest("hex");
+}
+/** A unit vector whose components come from a hash of the seed, so equal inputs give equal vectors. */
+function seeded(seed, dim) {
+  const out = [];
+  let h = createHash("sha256").update(seed).digest();
+  while (out.length < dim) {
+    for (let i = 0; i + 4 <= h.length && out.length < dim; i += 4) out.push((h.readUInt32LE(i) / 0xffffffff) * 2 - 1);
+    h = createHash("sha256").update(h).digest();
+  }
+  const norm = Math.sqrt(out.reduce((a, v) => a + v * v, 0));
+  return out.map((v) => v / norm);
+}
+
 function readBody(req) {
   return new Promise((resolve) => {
     const chunks = [];
@@ -26,6 +42,18 @@ export function startMocks(port = 3201) {
   const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", `http://localhost:${port}`);
     const json = (status, body) => { res.writeHead(status, { "content-type": "application/json" }); res.end(JSON.stringify(body)); };
+    // --- ML sidecar stand-in: deterministic unit vectors derived from the input, like the Python stub ---
+    if (url.pathname === "/health") return json(200, { ok: true, models: "stub", dims: { image: 512, text: 384, face: 512 } });
+    if (url.pathname.startsWith("/embed/") || url.pathname === "/faces") {
+      if (req.headers["x-ml-token"] !== "e2e-ml-token") return json(401, { detail: "missing or wrong token" });
+      const body = await readBody(req);
+      if (url.pathname === "/embed/text") {
+        const texts = JSON.parse(body || "{}").texts ?? [];
+        return json(200, { embeddings: texts.map((t) => seeded(`text:${String(t).trim().toLowerCase()}`, 384)), dim: 384 });
+      }
+      if (url.pathname === "/embed/image") return json(200, { embedding: seeded(`image:${hash(body)}`, 512), dim: 512 });
+      return json(200, { faces: [{ box: [0.3, 0.2, 0.25, 0.35], confidence: 0.98, embedding: seeded(`face:${hash(body)}`, 512), age: 34 }], dim: 512 });
+    }
     // --- Anthropic Messages API stand-in ---
     if (url.pathname === "/v1/messages" && req.method === "POST") {
       const body = JSON.parse((await readBody(req)) || "{}");

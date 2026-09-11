@@ -1,0 +1,7 @@
+# Real models (CPU builds). Installed in the image; weights are fetched by `python -m ml.download` (the ml-init service).
+onnxruntime==1.21.1
+insightface==0.7.3
+open_clip_torch==2.32.0
+torch==2.7.0
+torchvision==0.22.0
+sentence-transformers==4.1.0

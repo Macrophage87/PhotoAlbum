@@ -4,7 +4,7 @@ This guide takes a fresh Linux server to a running, HTTPS-secured Family Album t
 
 Rough time: 30 minutes. You will need:
 
-- A server with at least 2 GB RAM and enough disk for your photos (originals are kept, so budget your library size plus about 15 percent). Clip transcoding runs one at a time in the background; a 90-second 1080p clip takes 2 to 5 minutes on a 2-vCPU server, 4K HDR footage 5 to 15 minutes.
+- A server with at least 2 GB RAM for the basic stack, or 4 GB with a swap file (8 GB without) if you run the optional ML sidecar for faces and similarity; enough disk for your photos (originals are kept, so budget your library size plus about 15 percent). Clip transcoding runs one at a time in the background; a 90-second 1080p clip takes 2 to 5 minutes on a 2-vCPU server, 4K HDR footage 5 to 15 minutes.
 - SSH access as root or a sudo user.
 - A domain name you control, for example `album.example.com`.
 - An SMTP account for sign-in emails (Gmail with an app password, Fastmail, Postmark, Mailgun, your ISP). Optional at first; links can be read from the log.
@@ -174,6 +174,24 @@ curl -s https://album.example.com/api/health
 ```
 
 It should print `{"ok":true}`.
+
+### Optional: the ML sidecar (faces, similarity, semantic search)
+
+The sidecar runs local models on the CPU and needs about 2 GB of RAM to itself. Add a swap file first on a 4 GB server:
+
+```bash
+sudo fallocate -l 4G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+```
+
+Then in `.env` set `ML_URL=http://ml:8000` and `ML_TOKEN` to a long random string, fetch the model weights once (about 1.5 GB, on the default network; the sidecar itself has no outbound access), and start the profile:
+
+```bash
+docker compose run --rm ml-init
+docker compose --profile ml up -d --build
+```
+
+`docker compose exec app node -e "fetch('http://ml:8000/health').then(r=>r.json()).then(j=>console.log(j))"` should print `models: idle` or `loaded`. The app refuses to start if `ML_URL` is set without `ML_TOKEN`.
 
 ## 8. First sign-in
 

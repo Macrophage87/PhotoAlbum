@@ -3,6 +3,7 @@ import { getViewer, requireUser } from "@/lib/auth/viewer";
 import { AppShell, Container } from "@/components/layout/AppShell";
 import { Card } from "@/components/ui";
 import { annotationGates } from "@/lib/annotation/eligibility";
+import { mlConfigured } from "@/lib/ml/client";
 
 export const metadata = { title: "Privacy", robots: { index: false, follow: false } };
 
@@ -75,7 +76,7 @@ export default async function PrivacyPage() {
               <p><span className="text-muted">To turn off:</span> {f.off}</p>
             </Card>
           ))}
-          <p className="text-sm text-muted">Photos, short clips (transcoded here with ffmpeg, originals kept) and location traces are stored on this server only; longer videos live on YouTube as unlisted videos, which means anyone with the YouTube link can watch them regardless of this album&apos;s settings. Face recognition is not connected yet; when it is, it appears here with its own switch.</p>
+          <p className="text-sm text-muted">Photos, short clips (transcoded here with ffmpeg, originals kept) and location traces are stored on this server only; longer videos live on YouTube as unlisted videos, which means anyone with the YouTube link can watch them regardless of this album&apos;s settings. The optional ML sidecar (image and text embeddings for similarity, suggestions and semantic search; face templates in a later phase) runs on this server only, on an internal network with no outbound access, and writes nothing to disk or logs{mlConfigured() ? " (configured)" : " (not configured)"}. Face recognition is not connected yet; when it is, it appears here with its own switch.</p>
         </section>
 
         <section className="space-y-2 text-sm">

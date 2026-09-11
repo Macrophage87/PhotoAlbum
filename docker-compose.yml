@@ -1,6 +1,7 @@
 services:
   db:
-    image: postgres:16-alpine
+    # Postgres 16 with pgvector, for image and text embeddings.
+    image: pgvector/pgvector:pg16
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-photoalbum}
@@ -37,6 +38,9 @@ services:
       - photos:/data/photos
     ports:
       - "${APP_PORT:-3000}:3000"
+    networks:
+      - default
+      - internal
 
   # Optional: run background jobs in their own container.
   # Set RUN_WORKER=false in .env and start with `docker compose --profile worker up -d`.
@@ -57,8 +61,46 @@ services:
       RUN_WORKER: "true"
     volumes:
       - photos:/data/photos
+    networks:
+      - default
+      - internal
     command: ["./node_modules/.bin/tsx", "scripts/worker.ts"]
+
+  # Local ML sidecar (faces, image and text embeddings). Optional: set ML_URL=http://ml:8000 and ML_TOKEN in .env,
+  # run `docker compose run --rm ml-init` once to fetch weights, then `docker compose --profile ml up -d`.
+  # No host ports, internal network only, nothing written to disk or logs. Needs about 2 GB of RAM to itself.
+  ml:
+    build: ./ml
+    image: photoalbum-ml:local
+    profiles: ["ml"]
+    restart: unless-stopped
+    environment:
+      ML_TOKEN: ${ML_TOKEN:-}
+      ML_IDLE_UNLOAD_SECONDS: ${ML_IDLE_UNLOAD_SECONDS:-300}
+      ML_MODEL_DIR: /models
+    volumes:
+      - ml-models:/models
+    networks:
+      - internal
+    mem_limit: 2500m
+
+  # One-time weight download on the default network (the ml service itself has no outbound access).
+  ml-init:
+    image: photoalbum-ml:local
+    build: ./ml
+    profiles: ["ml-init"]
+    environment:
+      ML_MODEL_DIR: /models
+    volumes:
+      - ml-models:/models
+    command: ["python", "-m", "ml.download"]
+
+networks:
+  default:
+  internal:
+    internal: true
 
 volumes:
   pgdata:
   photos:
+  ml-models:

@@ -36,7 +36,10 @@ const schema = z.object({
   ANNOTATION_MODEL: z.enum(["claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5"]).default("claude-opus-5"),
   ANNOTATION_QUIET_MINUTES: z.coerce.number().int().positive().default(30),
   ANNOTATION_RAW_RETENTION_DAYS: z.coerce.number().int().positive().default(30),
-});
+  // Local ML sidecar (faces, image and text embeddings). Optional; when set, ML_TOKEN is required so the app fails closed.
+  ML_URL: z.string().url().optional().transform((v) => (v ? v : undefined)),
+  ML_TOKEN: z.string().optional().transform((v) => (v ? v : undefined)),
+}).refine((e) => !e.ML_URL || Boolean(e.ML_TOKEN), { message: "ML_TOKEN is required when ML_URL is set", path: ["ML_TOKEN"] });
 
 export type Env = z.infer<typeof schema>;
 

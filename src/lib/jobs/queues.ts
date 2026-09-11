@@ -11,6 +11,8 @@ export const QUEUES = {
   annotationBackfill: "annotation-backfill",
   annotationBatchPoll: "annotation-batch-poll",
   purgeAnnotationRaw: "purge-annotation-raw",
+  embedPhoto: "embed-photo",
+  embedSweep: "embed-sweep",
 } as const;
 
 export type QueueName = (typeof QUEUES)[keyof typeof QUEUES];
@@ -30,3 +32,4 @@ export type GeotagPhotosJob = { tripId: string; trackIds?: string[] };
 export type DeletePhotoJob = { storageKey: string };
 export type AnnotatePhotoJob = { photoId: string };
 export type AnnotationBackfillJob = { batchId: string };
+export type EmbedPhotoJob = { photoId: string; textOnly?: boolean };

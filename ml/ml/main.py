@@ -1,0 +1,81 @@
+"""HTTP surface of the sidecar. Every request needs the shared token; nothing is written to disk or logs."""
+from __future__ import annotations
+
+import os
+import threading
+
+from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile
+from pydantic import BaseModel, Field
+
+from .models import FACE_DIM, IMAGE_DIM, TEXT_DIM, Models
+
+TOKEN = os.environ.get("ML_TOKEN", "")
+MAX_IMAGE_BYTES = int(os.environ.get("ML_MAX_IMAGE_BYTES", str(20 * 1024 * 1024)))
+
+app = FastAPI(title="Family Album ML sidecar", docs_url=None, redoc_url=None, openapi_url=None)
+models = Models()
+
+
+def require_token(x_ml_token: str | None = Header(default=None)) -> None:
+    """Fail closed: with no ML_TOKEN configured the sidecar answers nothing but /health."""
+    if not TOKEN or x_ml_token != TOKEN:
+        raise HTTPException(status_code=401, detail="missing or wrong token")
+
+
+async def read_image(file: UploadFile) -> bytes:
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="empty image")
+    if len(data) > MAX_IMAGE_BYTES:
+        raise HTTPException(status_code=413, detail="image too large")
+    return data
+
+
+class TextRequest(BaseModel):
+    texts: list[str] = Field(min_length=1, max_length=64)
+
+
+class Health(BaseModel):
+    ok: bool
+    models: str
+    dims: dict[str, int]
+
+
+@app.get("/health", response_model=Health)
+def health() -> Health:
+    models.maybe_unload()
+    return Health(ok=True, models=models.status(), dims={"image": IMAGE_DIM, "text": TEXT_DIM, "face": FACE_DIM})
+
+
+@app.post("/embed/image", dependencies=[Depends(require_token)])
+async def embed_image(file: UploadFile = File(...)) -> dict:
+    data = await read_image(file)
+    with models.lock:
+        vec = models.embed_image(data)
+    return {"embedding": vec, "dim": IMAGE_DIM}
+
+
+@app.post("/embed/text", dependencies=[Depends(require_token)])
+def embed_text(body: TextRequest) -> dict:
+    with models.lock:
+        vecs = models.embed_text(body.texts)
+    return {"embeddings": vecs, "dim": TEXT_DIM}
+
+
+@app.post("/faces", dependencies=[Depends(require_token)])
+async def faces(file: UploadFile = File(...)) -> dict:
+    data = await read_image(file)
+    with models.lock:
+        found = models.faces(data)
+    return {"faces": [{"box": list(f.box), "confidence": f.confidence, "embedding": f.embedding, "age": f.age} for f in found], "dim": FACE_DIM}
+
+
+def _unloader() -> None:
+    import time
+
+    while True:
+        time.sleep(30)
+        models.maybe_unload()
+
+
+threading.Thread(target=_unloader, daemon=True).start()

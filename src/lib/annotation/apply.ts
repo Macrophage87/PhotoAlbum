@@ -1,5 +1,6 @@
 import { db } from "@/lib/db";
 import { annotationSchema, toStored, type Annotation } from "./schema";
+import { enqueueEmbedding } from "@/lib/jobs/handlers/embed-photo";
 
 export type ApplyResult = { ok: true } | { ok: false; reason: "refusal" | "invalid" | "max_tokens" };
 
@@ -28,6 +29,8 @@ export async function applyAnnotation(photoId: string, model: string, parsed: An
     }),
     db.mediaAnnotationRaw.create({ data: { photoId, model, response: raw as object } }),
   ]);
+  // The description changed, so the semantic index for this item is stale.
+  await enqueueEmbedding(photoId, true);
 }
 
 /** Validate a message the way `messages.parse` would, for batch results that come back as plain messages. */

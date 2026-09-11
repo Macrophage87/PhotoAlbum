@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:16-alpine
+        image: pgvector/pgvector:pg16
         env:
           POSTGRES_USER: photoalbum
           POSTGRES_PASSWORD: photoalbum
@@ -47,6 +47,10 @@ jobs:
         env:
           DATABASE_URL: postgresql://photoalbum:photoalbum@localhost:5432/photoalbum_test
       - run: pnpm test
+      - name: ML sidecar tests (stub mode, no weights)
+        run: |
+          pip install -r ml/requirements.txt
+          cd ml && python -m pytest -q
       - run: pnpm build
       - name: Install Playwright browsers
         run: pnpm exec playwright install --with-deps chromium
@@ -70,3 +74,10 @@ jobs:
           push: false
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      - name: Build ML sidecar image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./ml
+          push: false
+          cache-from: type=gha,scope=ml
+          cache-to: type=gha,mode=max,scope=ml

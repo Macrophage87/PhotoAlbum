@@ -244,6 +244,9 @@ S += [P("6. Using the album", H1),
       P("An AI helper (Anthropic's Claude) can write a caption, a description and search tags for each photo, using the notes you typed. It is off until two switches are on: "
         "ANNOTATION_ENABLED with an API key in the configuration, and an admin's opt-in on the Admin page, which lists exactly what is sent (a reduced copy of the image, your notes, the date and camera, the trip and collection names; never the original file or any face data). "
         "Each item is sent once after it is reviewed. Any photo, trip or collection can be marked as never to be sent. The Admin page can also describe the existing library in one go, showing the count and an approximate cost first and asking you to type the number to confirm."),
+      P("Suggestions and the ML helper (optional)", H2),
+      P("With the local ML sidecar running (see the deployment guide), the review screen suggests which trip or collection each new photo belongs to, with the reason (\"taken during the trip, 2 km from the Ocean Path hike\"), and search understands meaning as well as words. "
+        "The sidecar runs entirely on your own server: nothing about a photo leaves it. It needs about 2 GB of memory of its own, so plan on 4 GB with a swap file, or 8 GB."),
       P("Videos", H2),
       P("Short clips (MP4, MOV or WebM, up to 90 seconds) upload like photos and are converted in the background to a web-playable file with a poster; they play muted when you hover over them in a gallery and with controls in the viewer. A longer file is refused before it uploads."),
       P("Longer videos live on YouTube. Upload the video there as <b>Unlisted</b>, then choose <b>Add a YouTube video</b> on a trip's or collection's Photos tab (or the Upload page) and paste the link. "

@@ -30,6 +30,7 @@ export async function startWorker(): Promise<void> {
   const { annotatePhoto } = await import("./handlers/annotate-photo");
   const { annotationSweep, purgeAnnotationRaw } = await import("./handlers/annotation-sweep");
   const { annotationBackfill, annotationBatchPoll } = await import("./handlers/annotation-batch");
+  const { embedPhoto, embedSweep } = await import("./handlers/embed-photo");
 
   await boss.work(QUEUES.processPhoto, { batchSize: 1, localConcurrency: 2, pollingIntervalSeconds: 2 }, async ([job]) =>
     processPhoto(job.data as never),
@@ -50,12 +51,16 @@ export async function startWorker(): Promise<void> {
   await boss.work(QUEUES.annotationSweep, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 30 }, async () => void (await annotationSweep()));
   await boss.work(QUEUES.annotationBackfill, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 5 }, async ([job]) => annotationBackfill(job.data as never));
   await boss.work(QUEUES.annotationBatchPoll, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 30 }, async () => annotationBatchPoll());
+  // Sidecar calls: one at a time and under the heavy lock, so they never overlap a transcode.
+  await boss.work(QUEUES.embedPhoto, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 3 }, async ([job]) => embedPhoto(job.data as never));
+  await boss.work(QUEUES.embedSweep, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 30 }, async () => void (await embedSweep()));
   await boss.work(QUEUES.purgeAnnotationRaw, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60 }, async () => void (await purgeAnnotationRaw()));
   // Schedules (idempotent): weekly video re-check, the annotation quiet-period sweep, batch polling, raw-response purge.
   await boss.schedule(QUEUES.checkExternalVideos, "0 4 * * 1", {}, { retryLimit: 1 });
   await boss.schedule(QUEUES.annotationSweep, "*/5 * * * *", {}, { retryLimit: 0 });
   await boss.schedule(QUEUES.annotationBatchPoll, "*/5 * * * *", {}, { retryLimit: 0 });
   await boss.schedule(QUEUES.purgeAnnotationRaw, "30 3 * * *", {}, { retryLimit: 0 });
+  await boss.schedule(QUEUES.embedSweep, "*/5 * * * *", {}, { retryLimit: 0 });
   console.log("[worker] pg-boss handlers registered");
   await reconcileStalePhotos().catch((err) => console.error("[worker] stale-photo reconciliation failed", err));
 }

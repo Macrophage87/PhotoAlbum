@@ -365,3 +365,24 @@ test("the AI helper describes reviewed items once an admin opts in, and opted-ou
   const described = await withDb((c) => c.query('SELECT count(*)::int AS n FROM "Photo" p JOIN "Trip" t ON t.id = p."tripId" WHERE t.slug = $1 AND p."annotatedAt" IS NOT NULL', ["yosemite"]));
   expect(described.rows[0].n).toBe(count);
 });
+
+test("uploads get embeddings from the sidecar and the review screen suggests where they belong", async ({ context, page }) => {
+  await signIn(context, ADMIN);
+  // A photo taken on 12 August 2025 near Bar Harbor, left without a trip: Acadia (10–16 Aug) should be suggested.
+  await page.goto("/upload");
+  await chooseFile(page, "photo-with-gps.jpg");
+  await expect(page.locator("img[src*='/api/photos/']")).toBeVisible({ timeout: 30_000 });
+  const fresh = await withDb((c) => c.query('SELECT id FROM "Photo" WHERE "originalName" = $1 ORDER BY "createdAt" DESC LIMIT 1', ["photo-with-gps.jpg"]));
+  const id = fresh.rows[0].id as string;
+  // The photo matched Acadia by date; move it off so the suggestion has something to suggest.
+  await withDb((c) => c.query('UPDATE "Photo" SET "tripId" = NULL WHERE id = $1', [id]));
+  await page.goto(`/review?ids=${id}`);
+  const suggestion = page.getByRole("button", { name: /Add to trip Acadia/ }).first();
+  await expect(suggestion).toBeVisible();
+  await expect(suggestion).toContainText("taken during the trip");
+  await suggestion.click();
+  await expect(page.getByRole("button", { name: /Added to Acadia/ })).toBeVisible();
+  await expect
+    .poll(async () => (await withDb((c) => c.query('SELECT ("embedding" IS NOT NULL) AS e FROM "Photo" WHERE id = $1', [id]))).rows[0].e, { timeout: 30_000, intervals: [1000] })
+    .toBe(true);
+});

@@ -261,6 +261,11 @@ model Photo {
   searchVector        Unsupported("tsvector")?
   /// Adds people's, pets' and the uploader's names; queried for members only.
   searchVectorMembers Unsupported("tsvector")?
+  /// OpenCLIP ViT-B/32 image embedding (cosine), for similarity, suggestions and the graph.
+  embedding     Unsupported("vector(512)")?
+  /// all-MiniLM-L6-v2 embedding of the description text, for semantic search.
+  textEmbedding Unsupported("vector(384)")?
+  embeddedAt    DateTime?
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
 
