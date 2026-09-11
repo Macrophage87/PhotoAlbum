@@ -10,6 +10,7 @@ export function uploaderLabel(name: string | null | undefined): string {
 export function toGridPhoto(p: PhotoCard, badge?: string | null, member = false): GridPhoto {
   return {
     uploadedBy: member ? uploaderLabel(p.uploader?.name) : null,
+    canTag: member && p.status === "READY",
     youtubeId: p.kind === "EXTERNAL_VIDEO" ? p.externalId : null,
     videoUrl: p.kind === "VIDEO" && p.status === "READY" ? photoUrl(p, "video") : null,
     durationS: p.durationS,

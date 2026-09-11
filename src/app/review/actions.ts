@@ -5,6 +5,7 @@ import { z } from "zod";
 import { db } from "@/lib/db";
 import { requireUserOrThrow } from "@/lib/auth/viewer";
 import { enqueueAnnotation } from "@/lib/jobs/handlers/annotation-sweep";
+import { enqueueMatch } from "@/lib/jobs/handlers/match-photo";
 
 const ids = z.array(z.string().min(1)).min(1).max(500);
 const text = z.string().max(4000);
@@ -17,11 +18,13 @@ export async function setContext(photoIds: string[], value: string, mode: "repla
   const now = new Date();
   if (mode === "replace") {
     const res = await db.photo.updateMany({ where: { id: { in: list } }, data: { context: note || null, contextUpdatedAt: now } });
+    await enqueueMatch(list);
     revalidatePath("/", "layout");
     return res.count;
   }
   const rows = await db.photo.findMany({ where: { id: { in: list } }, select: { id: true, context: true } });
   await db.$transaction(rows.map((r) => db.photo.update({ where: { id: r.id }, data: { context: [r.context?.trim(), note].filter(Boolean).join("\n") || null, contextUpdatedAt: now } })));
+  await enqueueMatch(list);
   revalidatePath("/", "layout");
   return rows.length;
 }

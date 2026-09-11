@@ -24,7 +24,8 @@ import { AnnotationCard } from "@/components/annotation/AnnotationCard";
 import { EstimatedDate } from "@/components/annotation/EstimatedDate";
 import { annotationGates, optOutReason } from "@/lib/annotation/eligibility";
 import type { StoredAnnotation } from "@/lib/annotation/schema";
-import { peopleOnPhoto } from "@/lib/people/queries";
+import { peopleOnPhoto, proposalsFor } from "@/lib/people/queries";
+import { ProposalList } from "@/components/people/ProposalList";
 import { PersonChips } from "@/components/people/PersonChips";
 
 export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
@@ -37,7 +38,7 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
   });
   if (!photo) notFound();
 
-  const [gates, optOutWhy, faces] = await Promise.all([annotationGates(), optOutReason(photo.id), peopleOnPhoto(photo.id)]);
+  const [gates, optOutWhy, faces, proposals, people] = await Promise.all([annotationGates(), optOutReason(photo.id), peopleOnPhoto(photo.id), proposalsFor([photo.id]), db.person.findMany({ where: { kind: "HUMAN" }, orderBy: { name: "asc" }, select: { id: true, name: true } })]);
   const [trips, activities, links, candidates, collections] = await Promise.all([
     db.trip.findMany({ orderBy: { startDate: "desc" }, select: { id: true, title: true } }),
     photo.tripId ? db.activity.findMany({ where: { tripId: photo.tripId }, orderBy: { startTime: "asc" }, select: { id: true, title: true, startTime: true } }) : Promise.resolve([]),
@@ -105,7 +106,7 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
             {isClip && photo.durationS && <p className="mt-2 text-sm text-muted">{Math.round(photo.durationS)} second clip{photo.status === "READY" ? " · original kept" : ""}</p>}
             {isVideo && photo.externalStatus === "UNAVAILABLE" && <p className="mt-1 text-sm text-amber-800">This video is no longer available on YouTube (deleted or made private). Replace the link below or delete the item.</p>}
             {photo.caption && <p className="mt-3 text-lg">{photo.caption}</p>}
-            <div className="mt-2"><PersonChips faces={faces} /></div>
+            <div className="mt-2 space-y-2"><PersonChips photoId={photo.id} faces={faces} people={people} /><ProposalList proposals={proposals} /></div>
             {photo.takenAt && <p className="text-sm text-muted mt-1">{formatDateTime(photo.takenAt, photo.trip?.timezone ?? "UTC")}</p>}
           </div>
 

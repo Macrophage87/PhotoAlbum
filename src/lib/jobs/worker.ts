@@ -32,6 +32,7 @@ export async function startWorker(): Promise<void> {
   const { annotationBackfill, annotationBatchPoll } = await import("./handlers/annotation-batch");
   const { embedPhoto, embedSweep } = await import("./handlers/embed-photo");
   const { detectFacesJob, faceSweep, purgeUnnamedFaces } = await import("./handlers/detect-faces");
+  const { matchPhoto } = await import("./handlers/match-photo");
 
   await boss.work(QUEUES.processPhoto, { batchSize: 1, localConcurrency: 2, pollingIntervalSeconds: 2 }, async ([job]) =>
     processPhoto(job.data as never),
@@ -56,6 +57,7 @@ export async function startWorker(): Promise<void> {
   await boss.work(QUEUES.embedPhoto, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 3 }, async ([job]) => embedPhoto(job.data as never));
   await boss.work(QUEUES.embedSweep, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 30 }, async () => void (await embedSweep()));
   await boss.work(QUEUES.detectFaces, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 3 }, async ([job]) => detectFacesJob(job.data as never));
+  await boss.work(QUEUES.matchPhoto, { batchSize: 1, localConcurrency: 2, pollingIntervalSeconds: 2 }, async ([job]) => matchPhoto(job.data as never));
   await boss.work(QUEUES.faceSweep, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 30 }, async () => void (await faceSweep()));
   await boss.work(QUEUES.purgeUnnamedFaces, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60 }, async () => void (await purgeUnnamedFaces()));
   await boss.work(QUEUES.purgeAnnotationRaw, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60 }, async () => void (await purgeAnnotationRaw()));

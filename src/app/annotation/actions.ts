@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { db } from "@/lib/db";
+import { enqueueMatch } from "@/lib/jobs/handlers/match-photo";
 import { env } from "@/lib/env";
 import { requireUserOrThrow } from "@/lib/auth/viewer";
 import { enqueue } from "@/lib/jobs/boss";
@@ -100,6 +101,7 @@ export async function confirmEstimatedDate(photoId: string, fd: FormData): Promi
   await requireUserOrThrow();
   const day = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).parse(fd.get("date"));
   await db.photo.update({ where: { id: photoId }, data: { takenAt: new Date(`${day}T12:00:00Z`), takenAtSource: "MANUAL", tzOffsetMin: 0, estimatedDateSource: "MEMBER", estimatedDateNote: null, estimatedDateConfidence: null } });
+  await enqueueMatch([photoId]);
   revalidatePath(`/photos/${photoId}`);
   revalidatePath("/review");
 }

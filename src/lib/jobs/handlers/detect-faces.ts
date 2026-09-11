@@ -6,6 +6,8 @@ import type { Renditions } from "@/lib/images/renditions";
 import { detectFaces, vectorLiteral } from "@/lib/ml/client";
 import { faceGates } from "@/lib/people/gates";
 import { nearestCluster, updatedCentroid } from "@/lib/people/cluster";
+import { boxIou } from "@/lib/people/match";
+import { proposeForPhoto } from "@/lib/people/matching";
 import { withHeavyLock } from "../heavy-lock";
 import { enqueue } from "../boss";
 import { QUEUES, type DetectFacesJob } from "../queues";
@@ -23,8 +25,18 @@ export async function detectFacesJob(job: DetectFacesJob): Promise<void> {
   const local = medium ? storage().localPath?.(medium.key) : undefined;
   if (!local) return;
   await withHeavyLock(async () => {
-    const found = await detectFaces(await readFile(local));
-    await db.face.deleteMany({ where: { photoId: photo.id, status: "DETECTED" } });
+    const detected = await detectFaces(await readFile(local));
+    // A re-scan keeps what people decided (confirmed and rejected faces) and only re-finds the rest.
+    await db.face.deleteMany({ where: { photoId: photo.id, status: { in: ["DETECTED", "PROPOSED"] } } });
+    const kept = await db.face.findMany({ where: { photoId: photo.id }, select: { id: true, box: true, personId: true, confidence: true } });
+    const found = detected.filter((f) => !kept.some((k) => k.confidence > 0 && boxIou(k.box as [number, number, number, number], f.box) > 0.5));
+    // Kept faces of consented people get their template back (it was nulled while recognition was off).
+    for (const k of kept) {
+      const again = detected.find((f) => k.confidence > 0 && boxIou(k.box as [number, number, number, number], f.box) > 0.5);
+      if (!again || !k.personId) continue;
+      const person = await db.person.findUnique({ where: { id: k.personId }, select: { faceIndexing: true } });
+      if (person?.faceIndexing) await db.$executeRaw`UPDATE "Face" SET embedding = ${vectorLiteral(again.embedding)}::vector WHERE id = ${k.id} AND embedding IS NULL`;
+    }
     // Unnamed clusters only: named ones are the matcher's business.
     const clusters = (await db.$queryRaw<{ id: string; centroid: string; faceCount: number }[]>`SELECT id, centroid::text AS centroid, "faceCount" FROM "FaceCluster" WHERE "personId" IS NULL AND centroid IS NOT NULL`).map((c) => ({ id: c.id, centroid: JSON.parse(c.centroid) as number[], faceCount: c.faceCount }));
     for (const f of found) {
@@ -47,6 +59,7 @@ export async function detectFacesJob(job: DetectFacesJob): Promise<void> {
     }
     await db.photo.update({ where: { id: photo.id }, data: { facesDetectedAt: new Date() } });
   });
+  await proposeForPhoto(photo.id);
 }
 
 export async function enqueueFaceDetection(photoId: string): Promise<void> {
@@ -68,7 +81,7 @@ export async function faceSweep(): Promise<number> {
 export async function purgeUnnamedFaces(): Promise<number> {
   const gates = await faceGates();
   const cutoff = new Date(Date.now() - gates.retentionDays * 86_400_000);
-  const res = await db.face.deleteMany({ where: { personId: null, proposedPersonId: null, createdAt: { lt: cutoff }, cluster: { OR: [{ personId: null }, { person: { pendingDecision: false, faceIndexing: false } }] } } });
+  const res = await db.face.deleteMany({ where: { personId: null, createdAt: { lt: cutoff }, OR: [{ clusterId: null }, { cluster: { personId: null } }] } });
   await db.faceCluster.deleteMany({ where: { personId: null, faces: { none: {} } } });
   return res.count;
 }

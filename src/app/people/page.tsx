@@ -1,7 +1,9 @@
 import Link from "next/link";
 import { getViewer, requireUser } from "@/lib/auth/viewer";
 import { faceGates } from "@/lib/people/gates";
-import { listPeople, listUnnamedClusters } from "@/lib/people/queries";
+import { listPeople, listUnnamedClusters, proposalsFor } from "@/lib/people/queries";
+import { ProposalList } from "@/components/people/ProposalList";
+import { PetForm } from "@/components/people/PetForm";
 import { AppShell, Container } from "@/components/layout/AppShell";
 import { FaceThumb } from "@/components/people/FaceThumb";
 import { NameClusterForm } from "@/components/people/NameClusterForm";
@@ -13,7 +15,9 @@ export const metadata = { title: "People", robots: { index: false, follow: false
 export default async function PeoplePage() {
   const user = await requireUser("/people");
   const viewer = await getViewer();
-  const [people, clusters, gates] = await Promise.all([listPeople(), listUnnamedClusters(), faceGates()]);
+  const [everyone, clusters, gates, proposals] = await Promise.all([listPeople(), listUnnamedClusters(), faceGates(), proposalsFor()]);
+  const people = everyone.filter((p) => p.kind === "HUMAN");
+  const pets = everyone.filter((p) => p.kind === "PET");
   const isAdmin = user.role === "ADMIN";
   return (
     <AppShell viewer={viewer}>
@@ -46,6 +50,34 @@ export default async function PeoplePage() {
           )}
         </section>
 
+        {proposals.length > 0 && (
+          <section className="space-y-3">
+            <h2 className="font-display text-xl font-semibold">Probably…</h2>
+            <p className="text-sm text-muted">Faces that look like someone already named, or people named in the notes. Nothing is named until you say so.</p>
+            <ProposalList proposals={proposals} />
+          </section>
+        )}
+
+        <section className="space-y-3">
+          <h2 className="font-display text-xl font-semibold">Pets</h2>
+          {pets.length > 0 && (
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
+              {pets.map((p) => (
+                <Link key={p.id} href={`/people/${p.id}`} className="block rounded-theme border border-border bg-surface p-4 hover:shadow-md transition-shadow">
+                  <div className="font-medium">{p.name}</div>
+                  <div className="text-xs text-muted">{p.isFlock ? "flock" : p.species?.toLowerCase()}</div>
+                  <div className="text-xs text-muted mt-1">{p.photoCount} photo{p.photoCount === 1 ? "" : "s"}</div>
+                </Link>
+              ))}
+            </div>
+          )}
+          <Card className="p-4">
+            <p className="text-sm font-medium mb-2">Add a pet</p>
+            <p className="text-xs text-muted mb-3">Pets are tagged by hand from a photo, or proposed when your notes mention their name. No recognition runs for animals.</p>
+            <PetForm />
+          </Card>
+        </section>
+
         <section className="space-y-3">
           <h2 className="font-display text-xl font-semibold">Unnamed faces</h2>
           {clusters.length === 0 ? (
@@ -60,7 +92,7 @@ export default async function PeoplePage() {
                     ))}
                     <span className="text-sm text-muted ml-1">{c.faceCount} face{c.faceCount === 1 ? "" : "s"} that look alike</span>
                   </div>
-                  <NameClusterForm clusterId={c.id} isAdmin={isAdmin} people={people.filter((p) => p.kind === "HUMAN").map((p) => ({ id: p.id, name: p.name }))} />
+                  <NameClusterForm clusterId={c.id} isAdmin={isAdmin} people={people.map((p) => ({ id: p.id, name: p.name }))} />
                 </Card>
               ))}
             </div>

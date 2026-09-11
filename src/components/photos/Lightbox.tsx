@@ -3,8 +3,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { YouTubeEmbed } from "@/components/videos/YouTubeEmbed";
+import { PetTagger } from "@/components/people/PetTagger";
 
-export type LightboxPhoto = { id: string; mediumUrl: string; width: number | null; height: number | null; caption: string | null; alt: string; /** Shown to members only; never set for anonymous viewers. */ uploadedBy?: string | null; /** Set for embedded videos: the lightbox shows the click-to-play facade instead of the image. */ youtubeId?: string | null; title?: string | null; /** Set for uploaded clips: plays inline with controls. */ videoUrl?: string | null; durationS?: number | null };
+export type LightboxPhoto = { id: string; mediumUrl: string; width: number | null; height: number | null; caption: string | null; alt: string; /** Shown to members only; never set for anonymous viewers. */ uploadedBy?: string | null; /** Set for embedded videos: the lightbox shows the click-to-play facade instead of the image. */ youtubeId?: string | null; title?: string | null; /** Set for uploaded clips: plays inline with controls. */ videoUrl?: string | null; durationS?: number | null; /** Members can tag a pet from here. */ canTag?: boolean };
 
 export function Lightbox({ photos, index, onClose, onNavigate, showDetailLink = true }: { photos: LightboxPhoto[]; index: number; onClose: () => void; onNavigate: (i: number) => void; showDetailLink?: boolean }) {
   const photo = photos[index];
@@ -87,11 +88,12 @@ export function Lightbox({ photos, index, onClose, onNavigate, showDetailLink = 
           </button>
         )}
       </div>
-      {(photo.caption || photo.uploadedBy) && (
-        <p className="text-center text-white/90 p-3 text-sm">
+      {(photo.caption || photo.uploadedBy || photo.canTag) && (
+        <div className="text-center text-white/90 p-3 text-sm" onClick={(e) => e.stopPropagation()}>
           {photo.caption}
           {photo.uploadedBy && <span className="block text-white/60 text-xs mt-1">Uploaded by {photo.uploadedBy}</span>}
-        </p>
+          {photo.canTag && <span className="block mt-1"><PetTagger photoId={photo.id} dark /></span>}
+        </div>
       )}
     </div>
   );

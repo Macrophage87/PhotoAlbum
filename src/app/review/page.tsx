@@ -13,6 +13,8 @@ import { EstimatedDate } from "@/components/annotation/EstimatedDate";
 import type { StoredAnnotation } from "@/lib/annotation/schema";
 import { suggestionsFor } from "@/lib/suggest";
 import { SuggestionList } from "@/components/suggest/SuggestionList";
+import { proposalsFor } from "@/lib/people/queries";
+import { ProposalList } from "@/components/people/ProposalList";
 
 export const metadata = { title: "Review uploads" };
 
@@ -34,7 +36,7 @@ export default async function ReviewPage({ searchParams }: PageProps<"/review">)
     db.photo.count({ where: { reviewedAt: null } }),
   ]);
   const allIds = photos.map((p) => p.id);
-  const suggestions = await suggestionsFor(allIds);
+  const [suggestions, proposals] = await Promise.all([suggestionsFor(allIds), proposalsFor(allIds)]);
   return (
     <AppShell viewer={viewer}>
       <Container className="py-10 space-y-5">
@@ -58,6 +60,12 @@ export default async function ReviewPage({ searchParams }: PageProps<"/review">)
           <SelectionProvider trips={trips} collections={collections}>
             <ReviewPanel allIds={allIds} annotation={gates.active ? { quietMinutes: env().ANNOTATION_QUIET_MINUTES, pending: photos.filter((p) => !p.annotatedAt && !p.annotationOptOut && !p.trip?.annotationOptOut).length } : null} />
             <PhotoGrid photos={photos.map((p) => toGridPhoto(p, p.reviewedAt ? null : "unreviewed", true))} />
+            {proposals.length > 0 && (
+              <section className="space-y-2">
+                <h2 className="font-display text-lg font-semibold">Who might be in these</h2>
+                <ProposalList proposals={proposals} />
+              </section>
+            )}
             {photos.some((p) => suggestions[p.id]?.length) && (
               <section className="space-y-3">
                 <h2 className="font-display text-lg font-semibold">Where these might belong</h2>

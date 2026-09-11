@@ -440,3 +440,81 @@ test("faces are found once an admin opts in, named with consent recorded, shown 
   const clusters = await withDb((c) => c.query('SELECT count(*)::int AS n FROM "FaceCluster" WHERE "personId" = $1', [person.rows[0].id]));
   expect(clusters.rows[0].n).toBe(0);
 });
+
+test("a consented person is proposed on the next upload, names in the notes propose people and pets, and pets are tagged from the lightbox", async ({ page, context }) => {
+  await signIn(context, ADMIN);
+  await page.goto("/admin");
+  await expect(page.getByText(/scanning new photos|not scanning/)).toBeVisible();
+  if (await page.getByRole("button", { name: "Turn on face detection" }).isVisible()) await page.getByRole("button", { name: "Turn on face detection" }).click();
+  await expect(page.getByText("scanning new photos")).toBeVisible();
+
+  // Name the first face as a consented adult.
+  await page.goto("/upload");
+  await chooseFile(page, "photo-with-gps.jpg");
+  await expect(page.locator("img[src*='/api/photos/']")).toBeVisible({ timeout: 30_000 });
+  await expect.poll(async () => (await withDb((c) => c.query('SELECT count(*)::int AS n FROM "Face" WHERE status = $1', ["DETECTED"]))).rows[0].n, { timeout: 30_000 }).toBeGreaterThan(0);
+  await page.goto("/people");
+  const form = page.locator("form").filter({ hasText: "Name these faces" }).first();
+  await form.getByRole("textbox", { name: "Name", exact: true }).fill("Uncle Dan");
+  await form.getByRole("textbox", { name: "Birthday" }).fill("1970-01-15");
+  await form.getByRole("checkbox", { name: /Recognise this person/ }).check();
+  await form.getByRole("button", { name: "Name these faces" }).click();
+  await expect(page.getByRole("link", { name: /Uncle Dan/ })).toBeVisible();
+
+  // The mock sidecar returns the same face for the same bytes, so the next upload of that image is a match.
+  await page.goto("/upload");
+  await chooseFile(page, "photo-with-gps.jpg");
+  await expect(page.locator("img[src*='/api/photos/']")).toBeVisible({ timeout: 30_000 });
+  const ids = await page.getByRole("link", { name: /Add notes and file/ }).getAttribute("href");
+  await page.goto(ids!);
+  await expect.poll(async () => { await page.reload(); return page.getByText(/Probably/).count(); }, { timeout: 30_000, intervals: [1500] }).toBeGreaterThan(0);
+  await expect(page.getByTestId("proposal").first()).toContainText("Uncle Dan");
+  await page.waitForLoadState("networkidle"); // a click before hydration is lost
+  await page.getByRole("button", { name: /Yes, that's Uncle/ }).click();
+  await expect(page.getByTestId("proposal")).toHaveCount(0);
+  const confirmed = await withDb((c) => c.query('SELECT count(*)::int AS n FROM "Face" f JOIN "Person" p ON p.id = f."personId" WHERE p.name = $1 AND f.status = $2', ["Uncle Dan", "CONFIRMED"]));
+  expect(confirmed.rows[0].n).toBe(2);
+  const eras = await withDb((c) => c.query('SELECT "ageBandMin", "ageBandMax" FROM "FaceCluster" fc JOIN "Person" p ON p.id = fc."personId" WHERE p.name = $1', ["Uncle Dan"]));
+  expect(eras.rows.length).toBe(1);
+
+  // Pets: add one, then a note naming it proposes it; tag another from the lightbox; search finds both.
+  await page.goto("/people");
+  await page.getByLabel("Name", { exact: true }).last().fill("Biscuit");
+  await page.getByLabel("Species").selectOption("DOG");
+  await page.getByRole("button", { name: "Add pet" }).click();
+  await expect(page.getByRole("link", { name: /Biscuit/ })).toBeVisible();
+  await page.goto("/upload");
+  await chooseFile(page, "photo-no-gps.jpg");
+  await expect(page.locator("img[src*='/api/photos/']")).toBeVisible({ timeout: 30_000 });
+  const ids2 = await page.getByRole("link", { name: /Add notes and file/ }).getAttribute("href");
+  await page.goto(ids2!);
+  await page.getByLabel(/Notes for/).fill("Biscuit asleep on the porch");
+  await page.getByRole("button", { name: "Set note" }).click();
+  await expect.poll(async () => { await page.reload(); return page.getByText(/Probably Biscuit/).count(); }, { timeout: 30_000, intervals: [1500] }).toBe(1);
+  await page.waitForLoadState("networkidle");
+  await page.getByRole("button", { name: /Yes, that's Biscuit/ }).click();
+  await expect(page.getByTestId("proposal").filter({ hasText: "Biscuit" })).toHaveCount(0);
+  // The two fixture images have the same pixels, so Dan is proposed here too; saying no records a negative example.
+  const danRow = page.getByTestId("proposal").filter({ hasText: "Uncle Dan" });
+  await expect.poll(async () => { await page.reload(); return danRow.count(); }, { timeout: 30_000, intervals: [1500] }).toBe(1);
+  await page.waitForLoadState("networkidle");
+  await danRow.getByRole("button", { name: "No" }).click();
+  await expect(page.getByTestId("proposal")).toHaveCount(0);
+  const negatives = await withDb((c) => c.query('SELECT count(*)::int AS n FROM "Face" f JOIN "Person" p ON p.id = f."proposedPersonId" WHERE p.name = $1 AND f.status = $2', ["Uncle Dan", "REJECTED"]));
+  expect(negatives.rows[0].n).toBe(1);
+
+  // Open a photo with no pet tag yet in the lightbox, wherever it was filed (a trip by date, or the unassigned page).
+  const target = await withDb((c) => c.query(`SELECT p.id, t.slug FROM "Photo" p LEFT JOIN "Trip" t ON t.id = p."tripId" WHERE p.status = 'READY' AND p.kind = 'PHOTO' AND NOT EXISTS (SELECT 1 FROM "Face" f WHERE f."photoId" = p.id AND f.confidence = 0) ORDER BY p."createdAt" DESC LIMIT 1`));
+  await page.goto(target.rows[0].slug ? `/trips/${target.rows[0].slug}/photos` : "/photos");
+  await page.locator(`button:has(img[src*='/api/photos/${target.rows[0].id}/'])`).first().click();
+  const dialog = page.getByRole("dialog", { name: "Photo viewer" });
+  await dialog.getByRole("button", { name: "Tag a pet" }).click();
+  await dialog.getByLabel("Pet").selectOption({ label: "Biscuit" });
+  await dialog.getByRole("button", { name: "Tag", exact: true }).click();
+  await expect(dialog.getByRole("button", { name: "Tag a pet" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  const tags = await withDb((c) => c.query('SELECT count(*)::int AS n FROM "Face" f JOIN "Person" p ON p.id = f."personId" WHERE p.name = $1 AND f.status = $2', ["Biscuit", "CONFIRMED"]));
+  expect(tags.rows[0].n).toBe(2);
+  await page.goto("/search?q=Biscuit");
+  await expect(page.getByRole("status")).toContainText(/2 results/);
+});

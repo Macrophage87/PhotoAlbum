@@ -250,7 +250,8 @@ S += [P("6. Using the album", H1),
       P("People (optional)", H2),
       P("With the ML sidecar running, an admin can turn on face detection from the Admin page after reading what it does. Faces are then found and grouped on your own server. "
         "On the People page, name a group once and it becomes a person with a page of their photos. Whether that person is recognised in new photos is a separate decision only an admin can make, "
-        "off by default and never for a child without a parent's instruction; faces nobody names are deleted after six months, and anyone can be forgotten at any time. Names are only ever shown to family members."),
+        "off by default and never for a child without a parent's instruction; faces nobody names are deleted after six months, and anyone can be forgotten at any time. Names are only ever shown to family members. "
+        "Once someone is recognised, the album asks \"Probably Grandma Jo?\" on later photos and waits for you to say yes or no. Pets get a record with their species and years, and are tagged by hand from the photo viewer."),
       P("Videos", H2),
       P("Short clips (MP4, MOV or WebM, up to 90 seconds) upload like photos and are converted in the background to a web-playable file with a poster; they play muted when you hover over them in a gallery and with controls in the viewer. A longer file is refused before it uploads."),
       P("Longer videos live on YouTube. Upload the video there as <b>Unlisted</b>, then choose <b>Add a YouTube video</b> on a trip's or collection's Photos tab (or the Upload page) and paste the link. "

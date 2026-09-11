@@ -7,7 +7,8 @@ import { AppShell, Container } from "@/components/layout/AppShell";
 import { PhotoGrid } from "@/components/photos/PhotoGrid";
 import { toGridPhoto } from "@/components/photos/toGrid";
 import { Badge, Button, Card, ConfirmSubmitButton, Input, Label } from "@/components/ui";
-import { decideIndexing, optOutPerson, updatePerson } from "../actions";
+import { decideIndexing, deletePerson, optOutPerson, updatePerson } from "../actions";
+import { PetForm } from "@/components/people/PetForm";
 import { dateColumnToDay } from "@/lib/time/local-day";
 
 export const metadata = { robots: { index: false, follow: false } };
@@ -31,7 +32,7 @@ export default async function PersonPage({ params }: PageProps<"/people/[id]">) 
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
             <h1 className="font-display text-3xl font-semibold">{person.name}</h1>
-            <p className="text-muted mt-1">{person.relationship}{person.kind === "PET" ? ` · ${person.species?.toLowerCase() ?? "pet"}` : ""} · {photos.length} photo{photos.length === 1 ? "" : "s"}</p>
+            <p className="text-muted mt-1">{person.relationship}{person.kind === "PET" ? `${person.isFlock ? "flock of " : ""}${person.species?.toLowerCase() ?? "pet"}${person.livedFrom ? ` · ${person.livedFrom.getUTCFullYear()}–${person.livedTo ? person.livedTo.getUTCFullYear() : ""}` : ""}` : ""} · {photos.length} photo{photos.length === 1 ? "" : "s"}</p>
           </div>
           {person.kind === "HUMAN" && (person.faceIndexing ? <Badge tone="success">recognised in new photos · {person.adultAttestedAt ? "attested adult" : "by birthday"}</Badge> : <Badge tone="neutral">{person.pendingDecision ? "awaiting an admin's decision" : "not recognised"}</Badge>)}
         </div>
@@ -39,6 +40,16 @@ export default async function PersonPage({ params }: PageProps<"/people/[id]">) 
         <PhotoGrid photos={photos.map((p) => toGridPhoto(p, null, true))} emptyMessage="No photos you can see." />
 
         <div className="grid md:grid-cols-2 gap-6">
+          {person.kind === "PET" ? (
+            <Card className="p-4 space-y-3">
+              <PetForm pet={person} />
+              {isAdmin && (
+                <form action={deletePerson.bind(null, id)}>
+                  <ConfirmSubmitButton variant="danger" size="sm" confirmMessage={`Remove ${person.name} and every tag of them?`}>Remove this pet</ConfirmSubmitButton>
+                </form>
+              )}
+            </Card>
+          ) : (
           <Card className="p-4">
             <form action={update} className="space-y-3 text-sm">
               <div>
@@ -52,6 +63,7 @@ export default async function PersonPage({ params }: PageProps<"/people/[id]">) 
               <Button type="submit" size="sm">Save</Button>
             </form>
           </Card>
+          )}
 
           {person.kind === "HUMAN" && (
             <Card className="p-4 space-y-4 text-sm">

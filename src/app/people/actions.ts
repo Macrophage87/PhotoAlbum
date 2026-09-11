@@ -1,11 +1,14 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { requireUserOrThrow } from "@/lib/auth/viewer";
 import { namingOutcome } from "@/lib/people/consent";
 import { enqueueEmbedding } from "@/lib/jobs/handlers/embed-photo";
+import { enqueueMatchAllOpen } from "@/lib/jobs/handlers/match-photo";
+import { confirmFaceAs, rejectProposal } from "@/lib/people/matching";
 import type { StoredAnnotation } from "@/lib/annotation/schema";
 
 async function requireAdmin() {
@@ -95,9 +98,10 @@ export async function decideIndexing(personId: string, fd: FormData): Promise<vo
   });
   if (outcome.nullTemplates) await nullTemplatesFor(personId);
   else {
-    // Enabling later: templates of confirmed faces are recomputed by re-scanning their photos.
+    // Enabling later: templates of confirmed faces are recomputed by re-scanning their photos, then open faces are re-matched.
     const photos = await db.face.findMany({ where: { personId, status: "CONFIRMED" }, select: { photoId: true }, distinct: ["photoId"] });
     await db.photo.updateMany({ where: { id: { in: photos.map((p) => p.photoId) } }, data: { facesDetectedAt: null } });
+    await enqueueMatchAllOpen();
   }
   revalidatePath("/people", "layout");
   revalidatePath("/admin");
@@ -164,4 +168,86 @@ export async function deleteAllFaceData(): Promise<void> {
   await db.appSetting.upsert({ where: { id: "app" }, create: { id: "app", faceDataDeletedAt: new Date() }, update: { faceDataDeletedAt: new Date() } });
   revalidatePath("/people", "layout");
   revalidatePath("/admin");
+}
+
+/** A member confirms a proposal ("Probably Grandma Jo?"). */
+export async function confirmProposal(faceId: string): Promise<void> {
+  await requireUserOrThrow();
+  const face = await db.face.findUniqueOrThrow({ where: { id: faceId }, select: { proposedPersonId: true, photoId: true } });
+  if (!face.proposedPersonId) throw new Error("Nothing proposed for this face");
+  await confirmFaceAs(faceId, face.proposedPersonId);
+  revalidatePath(`/photos/${face.photoId}`);
+  revalidatePath("/review");
+  revalidatePath("/people", "layout");
+}
+
+/** A member rejects a proposal; the face stays unnamed and counts against that person from now on. */
+export async function rejectProposalAction(faceId: string): Promise<void> {
+  await requireUserOrThrow();
+  const face = await db.face.findUniqueOrThrow({ where: { id: faceId }, select: { photoId: true } });
+  await rejectProposal(faceId);
+  revalidatePath(`/photos/${face.photoId}`);
+  revalidatePath("/review");
+}
+
+/** Name one unnamed face by hand (a person with no era cluster near enough, or a face the matcher missed). */
+export async function nameFace(faceId: string, personId: string): Promise<void> {
+  await requireUserOrThrow();
+  const face = await db.face.findUniqueOrThrow({ where: { id: faceId }, select: { photoId: true, personId: true } });
+  if (face.personId) throw new Error("Already named");
+  await confirmFaceAs(faceId, personId);
+  revalidatePath(`/photos/${face.photoId}`);
+  revalidatePath("/people", "layout");
+}
+
+const petSchema = z.object({
+  name: z.string().trim().min(1).max(80),
+  species: z.enum(["DOG", "CAT", "CHICKEN", "HORSE", "OTHER"]),
+  livedFrom: day,
+  livedTo: day,
+  isFlock: z.boolean(),
+});
+
+/** Pets have no consent settings: a record with species and lifespan, or a flock record for a species nobody tells apart. */
+export async function createPet(fd: FormData): Promise<void> {
+  const user = await requireUserOrThrow();
+  const v = petSchema.parse({ name: fd.get("name"), species: fd.get("species"), livedFrom: fd.get("livedFrom") || undefined, livedTo: fd.get("livedTo") || undefined, isFlock: fd.get("isFlock") === "on" });
+  await db.person.create({ data: { kind: "PET", name: v.name, species: v.species, livedFrom: v.livedFrom, livedTo: v.livedTo, isFlock: v.isFlock, createdById: user.id } });
+  revalidatePath("/people", "layout");
+}
+
+export async function updatePet(personId: string, fd: FormData): Promise<void> {
+  await requireUserOrThrow();
+  const v = petSchema.parse({ name: fd.get("name"), species: fd.get("species"), livedFrom: fd.get("livedFrom") || undefined, livedTo: fd.get("livedTo") || undefined, isFlock: fd.get("isFlock") === "on" });
+  await db.person.update({ where: { id: personId, kind: "PET" }, data: { name: v.name, species: v.species, livedFrom: v.livedFrom, livedTo: v.livedTo, isFlock: v.isFlock } });
+  revalidatePath("/people", "layout");
+}
+
+/**
+ * Tag a pet on a photo by hand (from the lightbox or the photo page). Pets are not detected, so the appearance is a
+ * whole-image record: a Face row with a full box, no confidence and no template.
+ */
+export async function tagPet(photoId: string, personId: string): Promise<void> {
+  await requireUserOrThrow();
+  const pet = await db.person.findUniqueOrThrow({ where: { id: personId }, select: { kind: true } });
+  if (pet.kind !== "PET") throw new Error("Not a pet");
+  const existing = await db.face.findFirst({ where: { photoId, personId, status: "CONFIRMED" }, select: { id: true } });
+  if (!existing) await db.face.create({ data: { photoId, personId, status: "CONFIRMED", box: [0, 0, 1, 1], confidence: 0 } });
+  revalidatePath(`/photos/${photoId}`);
+  revalidatePath("/people", "layout");
+}
+
+export async function untagPerson(photoId: string, personId: string): Promise<void> {
+  await requireUserOrThrow();
+  await db.face.deleteMany({ where: { photoId, personId, confidence: 0 } });
+  await db.face.updateMany({ where: { photoId, personId, confidence: { gt: 0 } }, data: { personId: null, status: "REJECTED", proposedPersonId: personId, clusterId: null } });
+  revalidatePath(`/photos/${photoId}`);
+  revalidatePath("/people", "layout");
+}
+
+export async function deletePerson(personId: string): Promise<void> {
+  await requireAdmin();
+  await db.person.delete({ where: { id: personId } });
+  revalidatePath("/people", "layout");
+  redirect("/people");
 }

@@ -18,6 +18,12 @@ import { createHash } from "node:crypto";
 function hash(s) {
   return createHash("sha256").update(s).digest("hex");
 }
+/** The file bytes inside a multipart body, so the same image hashes the same whatever the random boundary is. */
+function filePart(body) {
+  const start = body.indexOf("\r\n\r\n");
+  const end = body.lastIndexOf("\r\n--");
+  return start >= 0 && end > start ? body.slice(start + 4, end) : body;
+}
 /** A unit vector whose components come from a hash of the seed, so equal inputs give equal vectors. */
 function seeded(seed, dim) {
   const out = [];
@@ -51,8 +57,8 @@ export function startMocks(port = 3201) {
         const texts = JSON.parse(body || "{}").texts ?? [];
         return json(200, { embeddings: texts.map((t) => seeded(`text:${String(t).trim().toLowerCase()}`, 384)), dim: 384 });
       }
-      if (url.pathname === "/embed/image") return json(200, { embedding: seeded(`image:${hash(body)}`, 512), dim: 512 });
-      return json(200, { faces: [{ box: [0.3, 0.2, 0.25, 0.35], confidence: 0.98, embedding: seeded(`face:${hash(body)}`, 512), age: 34 }], dim: 512 });
+      if (url.pathname === "/embed/image") return json(200, { embedding: seeded(`image:${hash(filePart(body))}`, 512), dim: 512 });
+      return json(200, { faces: [{ box: [0.3, 0.2, 0.25, 0.35], confidence: 0.98, embedding: seeded(`face:${hash(filePart(body))}`, 512), age: 34 }], dim: 512 });
     }
     // --- Anthropic Messages API stand-in ---
     if (url.pathname === "/v1/messages" && req.method === "POST") {

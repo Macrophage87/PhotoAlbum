@@ -16,6 +16,7 @@ export const QUEUES = {
   detectFaces: "detect-faces",
   faceSweep: "face-sweep",
   purgeUnnamedFaces: "purge-unnamed-faces",
+  matchPhoto: "match-photo",
 } as const;
 
 export type QueueName = (typeof QUEUES)[keyof typeof QUEUES];
@@ -37,3 +38,4 @@ export type AnnotatePhotoJob = { photoId: string };
 export type AnnotationBackfillJob = { batchId: string };
 export type EmbedPhotoJob = { photoId: string; textOnly?: boolean };
 export type DetectFacesJob = { photoId: string };
+export type MatchPhotoJob = { photoId: string };
