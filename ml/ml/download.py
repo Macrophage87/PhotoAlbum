@@ -7,6 +7,9 @@ import os
 import sys
 
 MODEL_DIR = os.environ.get("ML_MODEL_DIR", "/models")
+# torchvision fetches its pretrained weights through torch.hub, whose cache defaults to ~/.cache/torch —
+# and the image's mluser has no writable home. Point the hub at the models volume instead.
+os.environ.setdefault("TORCH_HOME", os.path.join(MODEL_DIR, "torch"))
 
 
 def main() -> int:
