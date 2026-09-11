@@ -18,7 +18,7 @@ export default async function TripPhotosPage({ params, searchParams }: PageProps
     editable ? db.activity.findMany({ where: { tripId: trip.id }, orderBy: { startTime: "asc" }, select: { id: true, title: true } }) : Promise.resolve([]),
     editable ? db.trip.findMany({ where: { id: { not: trip.id } }, orderBy: { startDate: "desc" }, select: { id: true, title: true } }) : Promise.resolve([]),
     editable ? db.collection.findMany({ orderBy: { title: "asc" }, select: { id: true, title: true } }) : Promise.resolve([]),
-    editable ? db.user.findMany({ where: { photos: { some: { tripId: trip.id } } }, orderBy: { name: "asc" }, select: { id: true, name: true } }) : Promise.resolve([]),
+    editable ? db.user.findMany({ where: { photos: { some: { tripId: trip.id } } }, orderBy: { name: "asc" }, select: { id: true, name: true, email: true } }) : Promise.resolve([]),
   ]);
   const photos = page.photos;
   const moreUrl = `/api/trips/${trip.slug}/photos${uploaderId ? `?uploader=${encodeURIComponent(uploaderId)}` : ""}`;
@@ -35,7 +35,7 @@ export default async function TripPhotosPage({ params, searchParams }: PageProps
               <select id="uploader" name="uploader" defaultValue={uploaderId ?? ""} className="h-8 rounded-theme border border-border bg-surface px-2 text-sm">
                 <option value="">Anyone</option>
                 {members.map((m) => (
-                  <option key={m.id} value={m.id}>{uploaderLabel(m.name)}</option>
+                  <option key={m.id} value={m.id}>{uploaderLabel(m.name, m.email)}</option>
                 ))}
               </select>
               <Button type="submit" variant="ghost" size="sm">Filter</Button>

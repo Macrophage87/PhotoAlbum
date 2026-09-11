@@ -234,7 +234,7 @@ test("exposure warnings fire when widening and when lowering, and bulk actions a
   // Uploader names are a members-only layer.
   await page.goto("/collections/best-of-2025/photos");
   await page.locator("li button").first().click();
-  await expect(page.getByText("Uploaded by a family member")).toBeVisible();
+  await expect(page.getByText("Uploaded by e2e-admin").first()).toBeVisible();
   const anon = await browser.newContext();
   const anonPage = await anon.newPage();
   await anonPage.goto("/collections/best-of-2025/photos");
@@ -316,7 +316,7 @@ test("notes from the review screen and the item page are searchable, within what
 
   await page.goto("/search?q=lobster");
   await expect(page.getByRole("status")).toContainText("1 result");
-  await expect(page.getByText("Uploaded by a family member")).toBeVisible();
+  await expect(page.getByText("Uploaded by e2e-admin").first()).toBeVisible();
   await page.goto("/search?q=Mock+video");
   await expect(page.getByRole("status")).toContainText("1 result");
 
@@ -659,6 +659,18 @@ test("a pet tagged on a spotted animal is proposed on the next look-alike and co
   await dialog.getByLabel("Pet").selectOption({ label: "Rex" });
   await dialog.getByRole("button", { name: "Tag", exact: true }).click();
   await expect(dialog.getByRole("button", { name: "Tag a pet" })).toBeVisible();
+  // The viewer's side panel: date, an Edit link for members, and a date that can be changed and put back.
+  const info = dialog.getByTestId("lightbox-info");
+  await expect(info.getByTestId("lightbox-edit")).toHaveAttribute("href", `/photos/${first.rows[0].id}`);
+  await expect(info.getByText("Uploaded by e2e-admin")).toBeVisible();
+  await expect(dialog.locator(`a[href*='/api/photos/${first.rows[0].id}/original']`)).toBeVisible();
+  await info.getByRole("button", { name: "Change date" }).click();
+  await info.getByLabel("Date taken").fill("2019-07-04T10:30");
+  await info.getByRole("button", { name: "Save date" }).click();
+  await expect(info.getByText("set by a family member")).toBeVisible();
+  const manual = await withDb((c) => c.query('SELECT "takenAtSource", "takenAt" FROM "Photo" WHERE id = $1', [first.rows[0].id]));
+  expect(manual.rows[0].takenAtSource).toBe("MANUAL");
+  expect(new Date(manual.rows[0].takenAt).getUTCFullYear()).toBe(2019);
   await page.keyboard.press("Escape");
   await expect.poll(async () => (await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "AnimalDetection" a JOIN "Person" p ON p.id = a."personId" WHERE p.name = 'Rex' AND a.status = 'CONFIRMED'`))).rows[0].n).toBe(1);
   // Same bytes again: the mock sidecar returns the same crop embedding, so Rex is proposed.

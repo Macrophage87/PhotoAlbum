@@ -4,10 +4,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { YouTubeEmbed } from "@/components/videos/YouTubeEmbed";
 import { PetTagger } from "@/components/people/PetTagger";
+import { LightboxInfo } from "./LightboxInfo";
 
-export type LightboxPhoto = { id: string; mediumUrl: string; width: number | null; height: number | null; caption: string | null; alt: string; /** Shown to members only; never set for anonymous viewers. */ uploadedBy?: string | null; /** Set for embedded videos: the lightbox shows the click-to-play facade instead of the image. */ youtubeId?: string | null; title?: string | null; /** Set for uploaded clips: plays inline with controls. */ videoUrl?: string | null; durationS?: number | null; /** Members can tag a pet from here. */ canTag?: boolean };
+export type LightboxPhoto = { id: string; mediumUrl: string; width: number | null; height: number | null; caption: string | null; alt: string; /** Shown to members only; never set for anonymous viewers. */ uploadedBy?: string | null; /** Set for embedded videos: the lightbox shows the click-to-play facade instead of the image. */ youtubeId?: string | null; title?: string | null; /** Set for uploaded clips: plays inline with controls. */ videoUrl?: string | null; durationS?: number | null; /** Members can tag a pet from here. */ canTag?: boolean; /** Full-size file, opened by a second click on the picture. */ originalUrl?: string | null };
 
-export function Lightbox({ photos, index, onClose, onNavigate, showDetailLink = true }: { photos: LightboxPhoto[]; index: number; onClose: () => void; onNavigate: (i: number) => void; showDetailLink?: boolean }) {
+export function Lightbox({ photos, index, onClose, onNavigate, showDetailLink = true, share = null }: { photos: LightboxPhoto[]; index: number; onClose: () => void; onNavigate: (i: number) => void; showDetailLink?: boolean; /** On a share page: the token that lets the info request through without a cookie. */ share?: { token: string; kind: string } | null }) {
   const photo = photos[index];
   const prev = useCallback(() => onNavigate((index - 1 + photos.length) % photos.length), [index, photos.length, onNavigate]);
   const next = useCallback(() => onNavigate((index + 1) % photos.length), [index, photos.length, onNavigate]);
@@ -21,7 +22,7 @@ export function Lightbox({ photos, index, onClose, onNavigate, showDetailLink = 
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Tab" && dialogRef.current) {
         // Keep keyboard focus inside the dialog.
-        const focusable = Array.from(dialogRef.current.querySelectorAll<HTMLElement>("a[href], button:not([disabled])"));
+        const focusable = Array.from(dialogRef.current.querySelectorAll<HTMLElement>("a[href], button:not([disabled]), input, select, textarea"));
         if (!focusable.length) return;
         const first = focusable[0], last = focusable[focusable.length - 1];
         if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
@@ -66,35 +67,40 @@ export function Lightbox({ photos, index, onClose, onNavigate, showDetailLink = 
           </button>
         </div>
       </div>
-      <div className="flex-1 relative flex items-center justify-center min-h-0 px-12">
-        {photos.length > 1 && (
-          <button onClick={(e) => { e.stopPropagation(); prev(); }} className="absolute left-2 top-1/2 -translate-y-1/2 text-white/80 hover:text-white text-3xl p-3" aria-label="Previous">
-            ‹
-          </button>
-        )}
-        {photo.videoUrl ? (
-          <video key={photo.id} src={photo.videoUrl} poster={photo.mediumUrl} controls autoPlay playsInline className="max-h-full max-w-full" onClick={(e) => e.stopPropagation()} />
-        ) : photo.youtubeId ? (
-          <div className="w-full max-w-5xl" onClick={(e) => e.stopPropagation()}>
-            <YouTubeEmbed videoId={photo.youtubeId} posterUrl={photo.mediumUrl} title={photo.title ?? photo.alt} />
-          </div>
-        ) : (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={photo.mediumUrl} alt={photo.alt} className="max-h-full max-w-full object-contain select-none" onClick={(e) => e.stopPropagation()} />
-        )}
-        {photos.length > 1 && (
-          <button onClick={(e) => { e.stopPropagation(); next(); }} className="absolute right-2 top-1/2 -translate-y-1/2 text-white/80 hover:text-white text-3xl p-3" aria-label="Next">
-            ›
-          </button>
-        )}
-      </div>
-      {(photo.caption || photo.uploadedBy || photo.canTag) && (
-        <div className="text-center text-white/90 p-3 text-sm" onClick={(e) => e.stopPropagation()}>
-          {photo.caption}
-          {photo.uploadedBy && <span className="block text-white/60 text-xs mt-1">Uploaded by {photo.uploadedBy}</span>}
-          {photo.canTag && <span className="block mt-1"><PetTagger photoId={photo.id} dark /></span>}
+      <div className="flex-1 min-h-0 flex flex-col lg:flex-row overflow-y-auto lg:overflow-hidden">
+        <div className="relative flex items-center justify-center min-h-[45vh] lg:min-h-0 lg:flex-1 px-12 py-2">
+          {photos.length > 1 && (
+            <button onClick={(e) => { e.stopPropagation(); prev(); }} className="absolute left-2 top-1/2 -translate-y-1/2 text-white/80 hover:text-white text-3xl p-3" aria-label="Previous">
+              ‹
+            </button>
+          )}
+          {photo.videoUrl ? (
+            <video key={photo.id} src={photo.videoUrl} poster={photo.mediumUrl} controls autoPlay playsInline className="max-h-[80vh] max-w-full" onClick={(e) => e.stopPropagation()} />
+          ) : photo.youtubeId ? (
+            <div className="w-full max-w-5xl" onClick={(e) => e.stopPropagation()}>
+              <YouTubeEmbed videoId={photo.youtubeId} posterUrl={photo.mediumUrl} title={photo.title ?? photo.alt} />
+            </div>
+          ) : photo.originalUrl ? (
+            // A second click on the picture opens the full-size file in its own tab.
+            <a href={photo.originalUrl} target="_blank" rel="noreferrer" title="Open the full-size photo" className="max-h-full max-w-full" onClick={(e) => e.stopPropagation()}>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={photo.mediumUrl} alt={photo.alt} className="max-h-[80vh] max-w-full object-contain select-none" />
+            </a>
+          ) : (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={photo.mediumUrl} alt={photo.alt} className="max-h-[80vh] max-w-full object-contain select-none" onClick={(e) => e.stopPropagation()} />
+          )}
+          {photos.length > 1 && (
+            <button onClick={(e) => { e.stopPropagation(); next(); }} className="absolute right-2 top-1/2 -translate-y-1/2 text-white/80 hover:text-white text-3xl p-3" aria-label="Next">
+              ›
+            </button>
+          )}
         </div>
-      )}
+        <aside className="lg:w-80 xl:w-96 shrink-0 lg:overflow-y-auto bg-black/40 border-t lg:border-t-0 lg:border-l border-white/10" onClick={(e) => e.stopPropagation()}>
+          <LightboxInfo key={photo.id} photoId={photo.id} share={share} />
+          {photo.canTag && <div className="px-4 pb-4 text-sm text-white/90"><PetTagger photoId={photo.id} dark /></div>}
+        </aside>
+      </div>
     </div>
   );
 }

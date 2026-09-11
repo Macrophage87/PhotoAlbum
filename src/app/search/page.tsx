@@ -82,7 +82,7 @@ export default async function SearchPage({ searchParams }: PageProps<"/search">)
               <select name="uploader" defaultValue={params.uploaderId ?? ""} className={select} aria-label="Uploaded by">
                 <option value="">Uploaded by anyone</option>
                 {facets.uploaders.map((u) => (
-                  <option key={u.id} value={u.id}>{uploaderLabel(u.name)}</option>
+                  <option key={u.id} value={u.id}>{uploaderLabel(u.name, u.email)}</option>
                 ))}
               </select>
             )}

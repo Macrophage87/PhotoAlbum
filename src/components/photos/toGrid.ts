@@ -2,18 +2,22 @@ import type { PhotoCard } from "@/lib/photos/queries";
 import { photoUrl } from "@/lib/photos/urls";
 import type { GridPhoto } from "./PhotoGrid";
 
-/** Uploader names are part of the members-only layer: pass `member` only for signed-in viewers. */
-export function uploaderLabel(name: string | null | undefined): string {
-  return name?.trim() || "a family member";
+/**
+ * Uploader names are part of the members-only layer: pass `member` only for signed-in viewers. A member who has not
+ * set a name on their account page is shown by the part of their address before the @.
+ */
+export function uploaderLabel(name: string | null | undefined, email?: string | null): string {
+  return name?.trim() || email?.split("@")[0]?.trim() || "a family member";
 }
 
 export function toGridPhoto(p: PhotoCard, badge?: string | null, member = false): GridPhoto {
   return {
-    uploadedBy: member ? uploaderLabel(p.uploader?.name) : null,
+    uploadedBy: member ? uploaderLabel(p.uploader?.name, p.uploader?.email) : null,
     canTag: member && p.status === "READY",
     collections: member ? p.collections.map((c) => c.collection) : [],
     youtubeId: p.kind === "EXTERNAL_VIDEO" ? p.externalId : null,
     videoUrl: p.kind === "VIDEO" && p.status === "READY" ? photoUrl(p, "video") : null,
+    originalUrl: p.kind === "PHOTO" && p.status === "READY" ? photoUrl(p, "original") : null,
     durationS: p.durationS,
     title: p.title,
     unavailable: p.externalStatus === "UNAVAILABLE",

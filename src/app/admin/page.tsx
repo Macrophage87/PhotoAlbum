@@ -6,6 +6,7 @@ import { AppShell, Container } from "@/components/layout/AppShell";
 import { InviteForm } from "@/components/admin/InviteForm";
 import { Badge, Button, Card } from "@/components/ui";
 import { removeMember, revokeInvite, setRole } from "./actions";
+import { setMemberName } from "@/app/account/actions";
 import { AnnotationAdmin } from "@/components/annotation/AnnotationAdmin";
 import { annotationGates } from "@/lib/annotation/eligibility";
 import { actualSpend } from "@/lib/annotation/pricing";
@@ -166,6 +167,10 @@ export default async function AdminPage() {
                     {m.email} · {m._count.photos} photo{m._count.photos === 1 ? "" : "s"} · {m._count.trips} trip{m._count.trips === 1 ? "" : "s"}
                   </div>
                 </div>
+                <form action={setMemberName.bind(null, m.id)} className="flex items-center gap-1">
+                  <input name="name" defaultValue={m.name ?? ""} placeholder="Name" aria-label={`Name for ${m.email}`} maxLength={80} className="h-8 w-36 rounded-theme border border-border px-2 text-sm" />
+                  <Button type="submit" variant="secondary" size="sm">Save</Button>
+                </form>
                 {m.id !== me.id && (
                   <div className="flex gap-2">
                     <form action={setRole.bind(null, m.id, m.role === "ADMIN" ? "MEMBER" : "ADMIN")}>

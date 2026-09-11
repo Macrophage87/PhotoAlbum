@@ -8,7 +8,10 @@ import { requireUserOrThrow } from "@/lib/auth/viewer";
 import { enqueue } from "@/lib/jobs/boss";
 import { QUEUES } from "@/lib/jobs/queues";
 import { pickActivityByTime, pickTripByDay } from "@/lib/photos/assign";
-import { localDayFromOffset, offsetMinutesInZone } from "@/lib/time/local-day";
+import { localDayFromOffset, offsetMinutesInZone, wallTimeWithOffsetToInstant } from "@/lib/time/local-day";
+import { storage } from "@/lib/storage";
+import { readExif, resolveTakenAt } from "@/lib/images/exif";
+import type { TakenAtSource } from "@/generated/prisma/enums";
 
 const updateSchema = z.object({
   title: z.string().trim().max(120).optional().transform((v) => v || null),
@@ -93,7 +96,52 @@ export async function shiftPhotoTimezone(id: string, fd: FormData): Promise<void
   }
   const oldOffset = photo.tzOffsetMin ?? 0;
   const takenAt = new Date(photo.takenAt.getTime() + (oldOffset - newOffset) * 60_000);
+  await applyInstant(photo, takenAt, newOffset, "MANUAL");
+  revalidatePath(`/photos/${id}`);
+  revalidatePath("/trips", "layout");
+}
 
+export type DateResult = { ok: true; takenAt: string; tzOffsetMin: number; source: string } | { ok: false; message: string };
+
+/**
+ * Set the moment an item was taken from a wall-clock value typed by a member (interpreted in the item's current zone,
+ * or the trip's, or UTC). The trip and activity are re-derived and, when the item had been placed from a track, it is
+ * re-placed for the new time.
+ */
+export async function setPhotoDate(id: string, fd: FormData): Promise<DateResult> {
+  await requireUserOrThrow();
+  const photo = await db.photo.findUnique({ where: { id }, include: { trip: { select: { timezone: true } } } });
+  if (!photo) return { ok: false, message: "Photo not found" };
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(String(fd.get("takenAt") ?? "").trim());
+  if (!m) return { ok: false, message: "Enter a date and time" };
+  const wall = { year: Number(m[1]), month: Number(m[2]), day: Number(m[3]), hour: Number(m[4]), minute: Number(m[5]), second: Number(m[6] ?? 0) };
+  if (wall.year < 1800 || wall.year > 2100) return { ok: false, message: "That year looks wrong" };
+  const tzOffsetMin = photo.tzOffsetMin ?? (photo.trip ? offsetMinutesInZone(wallTimeWithOffsetToInstant(wall, 0), photo.trip.timezone) : 0);
+  const takenAt = wallTimeWithOffsetToInstant(wall, tzOffsetMin);
+  await applyInstant(photo, takenAt, tzOffsetMin, "MANUAL");
+  revalidatePath(`/photos/${id}`);
+  revalidatePath("/trips", "layout");
+  return { ok: true, takenAt: takenAt.toISOString(), tzOffsetMin, source: "MANUAL" };
+}
+
+/** Go back to what the camera wrote in the file: the EXIF date, resolved the same way processing does. */
+export async function resetPhotoDateToCamera(id: string): Promise<DateResult> {
+  await requireUserOrThrow();
+  const photo = await db.photo.findUnique({ where: { id }, include: { trip: { select: { timezone: true } } } });
+  if (!photo) return { ok: false, message: "Photo not found" };
+  const local = storage().localPath?.(photo.originalPath);
+  if (!local || photo.kind !== "PHOTO") return { ok: false, message: "No camera date is available for this item" };
+  const exif = await readExif(local).catch(() => null);
+  const resolved = exif ? resolveTakenAt(exif, photo.trip?.timezone ?? null) : null;
+  if (!resolved) return { ok: false, message: "This file carries no camera date" };
+  await applyInstant(photo, resolved.takenAt, resolved.tzOffsetMin, resolved.source);
+  revalidatePath(`/photos/${id}`);
+  revalidatePath("/trips", "layout");
+  return { ok: true, takenAt: resolved.takenAt.toISOString(), tzOffsetMin: resolved.tzOffsetMin, source: resolved.source };
+}
+
+async function applyInstant(photo: { id: string; tripId: string | null; gpsSource: string | null }, takenAt: Date, newOffset: number, source: TakenAtSource): Promise<void> {
+  const id = photo.id;
   let tripId = photo.tripId;
   if (!tripId) {
     const trips = await db.trip.findMany({ select: { id: true, startDate: true, endDate: true } });
@@ -109,13 +157,11 @@ export async function shiftPhotoTimezone(id: string, fd: FormData): Promise<void
     data: {
       takenAt,
       tzOffsetMin: newOffset,
-      takenAtSource: "MANUAL",
+      takenAtSource: source,
       tripId,
       activityId,
       ...(photo.gpsSource === "TRACK" ? { lat: null, lng: null, altitude: null, gpsSource: null } : {}),
     },
   });
   if (tripId) await enqueue(QUEUES.geotagPhotos, { tripId }, { singletonKey: `geotag:${tripId}`, singletonSeconds: 10, singletonNextSlot: true });
-  revalidatePath(`/photos/${id}`);
-  revalidatePath("/trips", "layout");
 }

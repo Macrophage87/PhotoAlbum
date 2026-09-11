@@ -11,9 +11,9 @@ export function UserMenu({ viewer }: { viewer: Viewer }) {
   }
   return (
     <form action="/auth/signout" method="post" className="ml-2 flex items-center gap-2">
-      <span className="hidden sm:inline text-muted truncate max-w-[12rem]" title={viewer.user.email}>
+      <Link href="/account" aria-label="Your account" className="hidden sm:inline text-muted truncate max-w-[12rem] hover:underline" title={`${viewer.user.email} · your account`}>
         {viewer.user.name ?? viewer.user.email}
-      </span>
+      </Link>
       <button type="submit" className="px-3 py-1.5 rounded-theme border border-border hover:bg-surface-alt">
         Sign out
       </button>

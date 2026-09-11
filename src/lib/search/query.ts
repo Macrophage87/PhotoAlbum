@@ -75,7 +75,7 @@ export async function searchMedia(viewer: Viewer, params: SearchParams, limit = 
   if (params.year) filters.push(Prisma.sql`EXTRACT(YEAR FROM (p."takenAt" + make_interval(mins => COALESCE(p."tzOffsetMin", 0)))) = ${params.year}`);
   if (params.kind) filters.push(Prisma.sql`p.kind = ${params.kind}::"MediaKind"`);
   const where = filters.length ? Prisma.join(filters, " AND ") : Prisma.sql`TRUE`;
-  const uploader = member ? Prisma.sql`u.name` : Prisma.sql`NULL`;
+  const uploader = member ? Prisma.sql`COALESCE(NULLIF(u.name, ''), split_part(u.email, '@', 1))` : Prisma.sql`NULL`;
   // A private trip's title is members-only metadata: anonymous visitors see the trip of a hit only when they may open that trip.
   // Same rule as canViewTrip: a held share cookie counts only while the trip is LINK and the token still matches.
   const shareTokens = [...viewer.shareTokens.entries()].filter(([k]) => k.startsWith("trip_")).map(([, v]) => v);
@@ -119,7 +119,7 @@ export type SearchFacets = {
   trips: { id: string; title: string }[];
   collections: { id: string; title: string }[];
   /** Empty for anonymous viewers: the member list is never served to them. */
-  uploaders: { id: string; name: string | null }[];
+  uploaders: { id: string; name: string | null; email: string }[];
   /** Members only: every confirmed person and pet who has not opted out. */
   people: { id: string; name: string }[];
   years: number[];
@@ -131,7 +131,7 @@ export async function searchFacets(viewer: Viewer): Promise<SearchFacets> {
   const [trips, collections, uploaders, people, years] = await Promise.all([
     db.trip.findMany({ where: visibleContainersWhere(viewer), orderBy: { startDate: "desc" }, select: { id: true, title: true } }),
     db.collection.findMany({ where: visibleContainersWhere(viewer), orderBy: { title: "asc" }, select: { id: true, title: true } }),
-    member ? db.user.findMany({ where: { photos: { some: {} } }, orderBy: { name: "asc" }, select: { id: true, name: true } }) : Promise.resolve([]),
+    member ? db.user.findMany({ where: { photos: { some: {} } }, orderBy: { name: "asc" }, select: { id: true, name: true, email: true } }) : Promise.resolve([]),
     member ? db.person.findMany({ where: { optedOutAt: null, faces: { some: { status: "CONFIRMED" } } }, orderBy: { name: "asc" }, select: { id: true, name: true } }) : Promise.resolve([]),
     db.$queryRaw<{ year: number }[]>`
       SELECT DISTINCT EXTRACT(YEAR FROM (p."takenAt" + make_interval(mins => COALESCE(p."tzOffsetMin", 0))))::int AS year

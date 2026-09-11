@@ -8,7 +8,9 @@ import { AppShell, Container } from "@/components/layout/AppShell";
 import { ExifPanel } from "@/components/photos/ExifPanel";
 import { Button, Card, Label, Select, Textarea, ConfirmSubmitButton } from "@/components/ui";
 import { formatDateTime } from "@/lib/time/format";
-import { deletePhoto, reprocessPhoto, setAsCover, shiftPhotoTimezone, updatePhoto } from "./actions";
+import { deletePhoto, reprocessPhoto, resetPhotoDateToCamera, setAsCover, setPhotoDate, shiftPhotoTimezone, updatePhoto } from "./actions";
+
+const SOURCE_LABEL: Record<string, string> = { EXIF_OFFSET: "from the camera", EXIF_TZLOOKUP: "from the camera", TRIP_TZ: "from the camera, in the trip's zone", SIDECAR: "from Google Photos", FILE_MTIME: "from the file's modified time", UPLOAD_TIME: "the upload time", MANUAL: "set by a family member" };
 import { TimezoneShift } from "@/components/photos/TimezoneShift";
 import { PhotoLinkEditor } from "@/components/photos/PhotoLinkEditor";
 import { LinkedPhotos } from "@/components/photos/LinkedPhotos";
@@ -47,7 +49,7 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
   const viewer = await getViewer();
   const photo = await db.photo.findUnique({
     where: { id },
-    include: { trip: { select: { id: true, slug: true, title: true, timezone: true, coverPhotoId: true } }, activity: { select: { id: true, title: true } }, uploader: { select: { name: true } } },
+    include: { trip: { select: { id: true, slug: true, title: true, timezone: true, coverPhotoId: true } }, activity: { select: { id: true, title: true } }, uploader: { select: { name: true, email: true } } },
   });
   if (!photo) notFound();
 
@@ -194,7 +196,18 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
             <Card className="p-4">
               <h2 className="font-medium mb-2">Details</h2>
               <ExifPanel photo={photo} tripTimezone={photo.trip?.timezone} />
-              <p className="text-xs text-muted mt-2">Uploaded by {uploaderLabel(photo.uploader.name)}</p>
+              <p className="text-xs text-muted mt-2">Uploaded by {uploaderLabel(photo.uploader.name, photo.uploader.email)}</p>
+              {!isVideo && (
+                <form action={async (fd) => { "use server"; await setPhotoDate(photo.id, fd); }} className="mt-3 pt-3 border-t border-border space-y-2">
+                  <div className="text-xs font-medium">Date taken</div>
+                  <p className="text-xs text-muted">Defaults to what the camera wrote in the file{photo.takenAtSource ? ` (currently ${SOURCE_LABEL[photo.takenAtSource] ?? photo.takenAtSource})` : ""}. Change it here when the camera was wrong or a scan has no date.</p>
+                  <div className="flex flex-wrap gap-2">
+                    <input type="datetime-local" name="takenAt" aria-label="Date taken" defaultValue={photo.takenAt ? new Date(photo.takenAt.getTime() + (photo.tzOffsetMin ?? 0) * 60_000).toISOString().slice(0, 16) : ""} required className="h-8 rounded-theme border border-border px-2 text-sm" />
+                    <Button type="submit" variant="secondary" size="sm">Save date</Button>
+                    <Button type="submit" variant="secondary" size="sm" formAction={async () => { "use server"; await resetPhotoDateToCamera(photo.id); }}>Use camera date</Button>
+                  </div>
+                </form>
+              )}
               {photo.takenAt && <TimezoneShift action={shift} currentOffsetMin={photo.tzOffsetMin} hasTrip={Boolean(photo.trip)} tripTimezone={photo.trip?.timezone} />}
             </Card>
 
