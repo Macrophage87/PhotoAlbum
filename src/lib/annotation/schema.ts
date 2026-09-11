@@ -2,6 +2,7 @@ import { z } from "zod";
 
 /** What the helper returns for one item. Everything is optional-tolerant on the way in and normalised on the way out. */
 export const annotationSchema = z.object({
+  title: z.string().max(80).default("").describe("A headline of two to six words for the item, the way an album page would be titled; distinct from the caption"),
   caption: z.string().max(200).describe("One line, under fifteen words, what a family member would write under the photo"),
   description: z.string().max(2000).describe("Two to five sentences: who is doing what, where, the mood; use the notes and names you were given"),
   tags: z.array(z.string().max(40)).max(25).describe("Lowercase keywords a family would search for: activities, food, objects, weather, occasions"),
@@ -47,7 +48,7 @@ export function clampAnnotation(raw: unknown): unknown {
   const r = { ...(raw as Record<string, unknown>) };
   const str = (k: string, max: number) => { if (typeof r[k] === "string") r[k] = (r[k] as string).slice(0, max); };
   const list = (k: string, max: number, each: number) => { if (Array.isArray(r[k])) r[k] = (r[k] as unknown[]).filter((x) => typeof x === "string").slice(0, max).map((x) => (x as string).slice(0, each)); };
-  str("caption", 200); str("description", 2000); str("place", 120); str("activity", 80); str("visibleText", 500); str("mood", 60); str("searchSummary", 600);
+  str("title", 80); str("caption", 200); str("description", 2000); str("place", 120); str("activity", 80); str("visibleText", 500); str("mood", 60); str("searchSummary", 600);
   list("tags", 25, 40); list("objects", 20, 40);
   if (r.estimatedYear && typeof r.estimatedYear === "object") { const e = { ...(r.estimatedYear as Record<string, unknown>) }; if (typeof e.evidence === "string") e.evidence = e.evidence.slice(0, 300); r.estimatedYear = e; }
   return r;

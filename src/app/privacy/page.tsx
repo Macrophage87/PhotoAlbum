@@ -26,7 +26,7 @@ export default async function PrivacyPage() {
   const flows: Flow[] = [
     {
       name: "AI descriptions (Anthropic)",
-      what: "For each new item after review: the 1600-pixel rendition (three or four frames for a clip), the uploader's notes, caption and title, the date and camera when known, and the trip and collection titles. Never the original file, never face data, and people's names only for confirmed people whose recognition is on and who are adults, plus confirmed pet names. The helper answers with a caption, description, tags and a search summary.",
+      what: "For each new item after review: the 1600-pixel rendition (three or four frames for a clip), the uploader's notes, caption and title, the date and camera when known, and the trip and collection titles. Never the original file, never face data, and people's names only for confirmed people whose recognition is on and who are adults, plus confirmed pet names. The helper answers with a short title (used only where the item has none), a caption, description, tags and a search summary.",
       when: `Only while both switches are on: the operator flag (${gates.envEnabled ? "on" : "off"}) and an admin's opt-in on the Admin page (${gates.optedInAt ? "on" : "off"}). Items, trips and collections can be opted out individually and are then never sent.`,
       off: `Turn the opt-in off on the Admin page, or set ANNOTATION_ENABLED=false. Raw responses are kept ${e.ANNOTATION_RAW_RETENTION_DAYS} days for debugging, then purged; they are deleted with the item.`,
       enabled: gates.active,

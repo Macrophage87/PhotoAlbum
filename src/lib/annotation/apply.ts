@@ -8,7 +8,7 @@ export type ApplyResult = { ok: true } | { ok: false; reason: "refusal" | "inval
 export type Usage = { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null };
 
 export async function applyAnnotation(photoId: string, model: string, parsed: Annotation, raw: { usage?: Usage; batched?: boolean } & Record<string, unknown>): Promise<void> {
-  const current = await db.photo.findUnique({ where: { id: photoId }, select: { takenAt: true, takenAtSource: true, estimatedDateSource: true, annotationSource: true } });
+  const current = await db.photo.findUnique({ where: { id: photoId }, select: { takenAt: true, takenAtSource: true, estimatedDateSource: true, annotationSource: true, title: true, kind: true } });
   if (!current) return;
   const stored = toStored(parsed);
   const est = parsed.estimatedYear;
@@ -24,6 +24,8 @@ export async function applyAnnotation(photoId: string, model: string, parsed: An
         // A member's edits are never overwritten silently: re-annotation only refreshes machine text.
         annotationSource: current.annotationSource === "EDITED" ? "EDITED" : "MACHINE",
         annotationError: null,
+        // A title the family did not write themselves: only ever filled in where there is none (embedded videos keep YouTube's).
+        ...(!current.title?.trim() && current.kind !== "EXTERNAL_VIDEO" && stored.title.trim() ? { title: stored.title.trim() } : {}),
         annotationInputTokens: raw.usage?.input_tokens ?? null,
         annotationCacheReadTokens: raw.usage?.cache_read_input_tokens ?? null,
         annotationCacheWriteTokens: raw.usage?.cache_creation_input_tokens ?? null,

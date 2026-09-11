@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { db } from "@/lib/db";
@@ -29,6 +30,16 @@ import { ProposalList } from "@/components/people/ProposalList";
 import { similarTo } from "@/lib/graph/query";
 import { SimilarStrip } from "@/components/graph/SimilarStrip";
 import { PersonChips } from "@/components/people/PersonChips";
+
+/** The tab and link-preview title: the item's title, else its caption, else the file name. Members only, like the page. */
+export async function generateMetadata({ params }: PageProps<"/photos/[id]">): Promise<Metadata> {
+  const { id } = await params;
+  const viewer = await getViewer();
+  if (viewer.kind !== "user") return { title: "Photo" };
+  const photo = await db.photo.findUnique({ where: { id }, select: { title: true, caption: true, originalName: true } });
+  if (!photo) return { title: "Photo" };
+  return { title: photo.title ?? photo.caption ?? photo.originalName, description: photo.title ? (photo.caption ?? undefined) : undefined, robots: { index: false, follow: false } };
+}
 
 export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
   const { id } = await params;
@@ -104,7 +115,7 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
                 {photo.status === "FAILED" ? `Processing failed: ${photo.error}` : "Processing…"}
               </div>
             )}
-            {isVideo && photo.title && <p className="mt-3 text-lg font-medium">{photo.title}</p>}
+            {photo.title && <h1 className="mt-3 text-xl font-semibold font-display">{photo.title}</h1>}
             {isClip && photo.durationS && <p className="mt-2 text-sm text-muted">{Math.round(photo.durationS)} second clip{photo.status === "READY" ? " · original kept" : ""}</p>}
             {isVideo && photo.externalStatus === "UNAVAILABLE" && <p className="mt-1 text-sm text-amber-800">This video is no longer available on YouTube (deleted or made private). Replace the link below or delete the item.</p>}
             {photo.caption && <p className="mt-3 text-lg">{photo.caption}</p>}
@@ -135,6 +146,13 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
             )}
             <Card className="p-4">
               <form action={update} className="space-y-4">
+                {!isVideo && (
+                  <div>
+                    <Label htmlFor="photo-title">Title</Label>
+                    <Input id="photo-title" name="title" defaultValue={photo.title ?? ""} placeholder="Mail boat lunch" />
+                    <p className="text-xs text-muted mt-1">Shown when the item is listed or shared. Left empty, the AI helper writes one when it describes the item.</p>
+                  </div>
+                )}
                 <div>
                   <Label htmlFor="caption">Caption</Label>
                   <Textarea id="caption" name="caption" rows={2} defaultValue={photo.caption ?? ""} />

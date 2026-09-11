@@ -359,6 +359,9 @@ test("the AI helper describes reviewed items once an admin opts in, and opted-ou
     }, { timeout: 30_000, intervals: [1000] })
     .toBe(1);
   await expect(page.getByLabel("Caption", { exact: true }).nth(1)).toHaveValue("Lobster rolls on the mail boat");
+  // The helper's title lands on the item because the member left it empty; it heads the page and its tab.
+  await expect(page.getByLabel("Title", { exact: true })).toHaveValue("Mail boat lunch");
+  await expect(page).toHaveTitle(/Mail boat lunch/);
   await page.goto("/search?q=seafood");
   await expect(page.getByRole("status")).toContainText("1 result");
 

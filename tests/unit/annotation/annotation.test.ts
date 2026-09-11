@@ -102,6 +102,17 @@ describe("applying a record", () => {
     const hit = await db.$queryRaw<{ id: string }[]>`SELECT id FROM "Photo" WHERE "searchVector" @@ websearch_to_tsquery('english', 'seafood harbour')`;
     expect(hit.map((h) => h.id)).toEqual([photoId]);
   });
+  it("fills in a title only where the item has none, and never for an embedded video", async () => {
+    const parsed = annotationSchema.parse(fixture);
+    await applyAnnotation(photoId, "claude-opus-5", parsed, {});
+    expect((await db.photo.findUniqueOrThrow({ where: { id: photoId } })).title).toBe("Mail boat lunch");
+    await db.photo.update({ where: { id: photoId }, data: { title: "Nana's boat day" } });
+    await applyAnnotation(photoId, "claude-opus-5", parsed, {});
+    expect((await db.photo.findUniqueOrThrow({ where: { id: photoId } })).title).toBe("Nana's boat day");
+    await db.photo.update({ where: { id: photoId }, data: { title: null, kind: "EXTERNAL_VIDEO" } });
+    await applyAnnotation(photoId, "claude-opus-5", parsed, {});
+    expect((await db.photo.findUniqueOrThrow({ where: { id: photoId } })).title).toBeNull();
+  });
   it("never overwrites a member's edits and never replaces a member's date", async () => {
     await db.photo.update({ where: { id: photoId }, data: { annotationSource: "EDITED", estimatedDateSource: "MEMBER", estimatedDate: new Date("1980-01-01") } });
     await applyAnnotation(photoId, "claude-opus-5", annotationSchema.parse({ ...fixture, estimatedYear: { from: 1990, to: 1994, confidence: 0.9, evidence: "x" } }), {});

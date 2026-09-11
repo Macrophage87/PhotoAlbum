@@ -11,6 +11,7 @@ import { pickActivityByTime, pickTripByDay } from "@/lib/photos/assign";
 import { localDayFromOffset, offsetMinutesInZone } from "@/lib/time/local-day";
 
 const updateSchema = z.object({
+  title: z.string().trim().max(120).optional().transform((v) => v || null),
   caption: z.string().trim().max(1000).transform((v) => v || null),
   context: z.string().trim().max(4000).transform((v) => v || null),
   tripId: z.string().transform((v) => v || null),
@@ -21,7 +22,7 @@ export async function updatePhoto(id: string, fd: FormData): Promise<void> {
   await requireUserOrThrow();
   const photo = await db.photo.findUnique({ where: { id } });
   if (!photo) throw new Error("Photo not found");
-  const v = updateSchema.parse({ caption: fd.get("caption") ?? "", context: fd.get("context") ?? "", tripId: fd.get("tripId") ?? "", activityId: fd.get("activityId") ?? undefined });
+  const v = updateSchema.parse({ title: fd.get("title") ?? undefined, caption: fd.get("caption") ?? "", context: fd.get("context") ?? "", tripId: fd.get("tripId") ?? "", activityId: fd.get("activityId") ?? undefined });
 
   if (v.tripId && !(await db.trip.findUnique({ where: { id: v.tripId }, select: { id: true } }))) throw new Error("That trip no longer exists");
 
@@ -37,7 +38,9 @@ export async function updatePhoto(id: string, fd: FormData): Promise<void> {
     const act = await db.activity.findFirst({ where: { id: activityId, tripId: v.tripId ?? "" }, select: { id: true } });
     if (!act) activityId = null;
   }
-  await db.photo.update({ where: { id }, data: { caption: v.caption, context: v.context, ...(v.context !== photo.context ? { contextUpdatedAt: new Date(), annotationError: null } : {}), tripId: v.tripId, activityId } });
+  // The title field is on the photo form only; an embedded video's title is edited with its link, so it is left alone here.
+  const title = fd.has("title") && photo.kind !== "EXTERNAL_VIDEO" ? v.title : photo.title;
+  await db.photo.update({ where: { id }, data: { title, caption: v.caption, context: v.context, ...(v.context !== photo.context ? { contextUpdatedAt: new Date(), annotationError: null } : {}), tripId: v.tripId, activityId } });
   revalidatePath(`/photos/${id}`);
   if (photo.tripId) revalidatePath(`/trips`, "layout");
 }

@@ -80,6 +80,7 @@ export async function updateAnnotation(photoId: string, fd: FormData): Promise<v
     mood: text(fd.get("mood")),
   });
   const merged = toStored({
+    title: current.title ?? "",
     caption: next.caption ?? current.caption ?? "",
     description: next.description ?? current.description ?? "",
     tags: next.tags ?? current.tags ?? [],
