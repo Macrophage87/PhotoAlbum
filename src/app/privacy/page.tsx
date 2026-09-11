@@ -1,0 +1,79 @@
+import { env } from "@/lib/env";
+import { getViewer, requireUser } from "@/lib/auth/viewer";
+import { AppShell, Container } from "@/components/layout/AppShell";
+import { Card } from "@/components/ui";
+
+export const metadata = { title: "Privacy", robots: { index: false, follow: false } };
+
+type Flow = { name: string; what: string; when: string; off: string; enabled: boolean };
+
+/**
+ * Members-only page listing every way data leaves this server, which switch controls it, and what is kept.
+ * Each phase that adds an outbound flow extends this list in the same commit.
+ */
+export default async function PrivacyPage() {
+  await requireUser("/privacy");
+  const viewer = await getViewer();
+  const e = env();
+  const flows: Flow[] = [
+    {
+      name: "Sign-in and invite email",
+      what: "The recipient's address and a one-time sign-in link.",
+      when: "When a member requests a sign-in link or an admin sends an invite.",
+      off: "Leave SMTP_HOST empty; links are printed to the server log instead.",
+      enabled: Boolean(e.SMTP_HOST),
+    },
+    {
+      name: "Map tiles",
+      what: "Your browser asks the configured tile server for map images as you pan; the server learns this site's origin, never a photo, trip or share link.",
+      when: "Whenever a map is open.",
+      off: "Point NEXT_PUBLIC_TILE_URL at a self-hosted tile server, or avoid the map pages.",
+      enabled: true,
+    },
+    {
+      name: "Facebook share button",
+      what: "Nothing until pressed. Pressing it opens Facebook in a new tab with the trip or collection address; Facebook then fetches that public page or secret link to build a preview.",
+      when: "Only when a member or visitor presses the button on a public or link-shared trip or collection.",
+      off: "Keep trips and collections private; the button appears only on shared ones.",
+      enabled: true,
+    },
+  ];
+  return (
+    <AppShell viewer={viewer}>
+      <Container className="py-10 max-w-3xl space-y-8">
+        <div>
+          <h1 className="font-display text-3xl font-semibold">Privacy</h1>
+          <p className="text-muted mt-1">What leaves this server, what stays, and who can see what.</p>
+        </div>
+
+        <section className="space-y-3">
+          <h2 className="font-display text-xl font-semibold">What leaves the server</h2>
+          {flows.map((f) => (
+            <Card key={f.name} className="p-4 space-y-1 text-sm">
+              <div className="flex items-center justify-between gap-3">
+                <span className="font-medium">{f.name}</span>
+                <span className={`text-xs rounded-full px-2 py-0.5 ${f.enabled ? "bg-emerald-100 text-emerald-800" : "bg-surface-alt text-muted"}`}>{f.enabled ? "on" : "off"}</span>
+              </div>
+              <p><span className="text-muted">Sent:</span> {f.what}</p>
+              <p><span className="text-muted">When:</span> {f.when}</p>
+              <p><span className="text-muted">To turn off:</span> {f.off}</p>
+            </Card>
+          ))}
+          <p className="text-sm text-muted">Photos, videos and location traces are stored on this server only. No AI service, face recognition or video host is connected yet; when one is, it appears here with its own switch.</p>
+        </section>
+
+        <section className="space-y-2 text-sm">
+          <h2 className="font-display text-xl font-semibold">Who can see what</h2>
+          <p>Every signed-in family member sees everything. Anonymous visitors see only trips and collections marked public. A secret link opens exactly one trip or collection and never the front page, timeline, map or search.</p>
+          <p>A photo is visible to anyone who may open its trip or any collection holding it. Putting a private trip&apos;s photo into a public collection publishes that photo; the album warns before it happens and again when lowering a container would leave photos exposed elsewhere.</p>
+          <p>Who uploaded a photo is shown to family members only, by name; email addresses appear only on the admin page.</p>
+        </section>
+
+        <section className="space-y-2 text-sm">
+          <h2 className="font-display text-xl font-semibold">What is kept</h2>
+          <p>Originals are kept as uploaded, plus web-sized renditions. Deleting a photo removes its files. Sign-in sessions last about three months; magic links expire after fifteen minutes and work once.</p>
+        </section>
+      </Container>
+    </AppShell>
+  );
+}

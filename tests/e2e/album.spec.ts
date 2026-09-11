@@ -137,6 +137,8 @@ test("a collection gathers photos from two trips and can be shared by link", asy
 
   await page.goto("/collections/best-of-2025/settings");
   await page.getByLabel("Anyone with the link").check();
+  // Sharing private-trip photos by link widens their exposure, so the form asks first.
+  page.once("dialog", (d) => void d.accept());
   await page.getByRole("button", { name: "Update visibility" }).click();
   const shareUrl = (await page.locator("code").first().textContent())!.trim();
   expect(shareUrl).toMatch(/\/share\/c\//);
@@ -156,5 +158,59 @@ test("a collection gathers photos from two trips and can be shared by link", asy
   const crawler = await browser.newContext();
   expect((await crawler.request.get(ogImage!)).ok()).toBe(true);
   await crawler.close();
+  await anon.close();
+});
+
+test("exposure warnings fire when widening and when lowering, and bulk actions attach photos", async ({ browser, context, page }) => {
+  await signIn(context, ADMIN);
+
+  // Raising the collection to PUBLIC exposes private-trip photos: the settings page warns and asks to confirm.
+  await page.goto("/collections/best-of-2025/settings");
+  await page.getByLabel(/^Public/).check();
+  await expect(page.getByRole("note")).toContainText("anyone on the internet");
+  let dialogText = "";
+  page.once("dialog", (d) => { dialogText = d.message(); void d.accept(); });
+  await page.getByRole("button", { name: "Update visibility" }).click();
+  await expect(page.getByText("Share", { exact: true })).toBeVisible();
+  expect(dialogText).toContain("anyone on the internet");
+
+  // Lowering: Acadia is private, but its photo sits in the now-public collection, so the trip settings say so.
+  await page.goto("/trips/acadia/settings");
+  await expect(page.getByText("Still visible elsewhere")).toBeVisible();
+  await expect(page.getByText(/also in the public collection Best of 2025/)).toBeVisible();
+
+  // A photo with no date lands nowhere; attach it from the unassigned gallery, with a warning when the target is public.
+  await page.goto("/upload");
+  await page.setInputFiles('input[type="file"]', fixture("photo-no-exif.jpg"));
+  await expect(page.locator("img[src*='/api/photos/']")).toBeVisible({ timeout: 30_000 });
+  await page.goto("/photos");
+  await expect(page.getByRole("heading", { name: "Photos without a trip" })).toBeVisible();
+  await page.getByRole("button", { name: "Select photos" }).click();
+  await page.locator("li button").first().click();
+  await page.getByLabel("Collection to add to").selectOption({ label: "Best of 2025" });
+  dialogText = "";
+  page.once("dialog", (d) => { dialogText = d.message(); void d.accept(); });
+  await page.getByRole("button", { name: "Add", exact: true }).click();
+  await expect(page.getByRole("status")).toContainText("added to the collection");
+  expect(dialogText).toContain("only family members could see");
+  await page.getByRole("button", { name: "Select photos" }).click();
+  await page.locator("li button").first().click();
+  await page.getByLabel("Trip to move to").selectOption({ label: "Yosemite" });
+  await page.getByRole("button", { name: "Move", exact: true }).click();
+  await expect(page.getByRole("status")).toContainText("moved");
+  await page.goto("/trips/yosemite/photos");
+  await expect(page.getByRole("heading", { name: /2 photos/ })).toBeVisible();
+
+  // Uploader names are a members-only layer.
+  await page.goto("/collections/best-of-2025/photos");
+  await page.locator("li button").first().click();
+  await expect(page.getByText("Uploaded by a family member")).toBeVisible();
+  const anon = await browser.newContext();
+  const anonPage = await anon.newPage();
+  await anonPage.goto("/collections/best-of-2025/photos");
+  await expect(anonPage.locator("img[src*='/api/photos/']").first()).toBeVisible();
+  await anonPage.locator("li button").first().click();
+  await expect(anonPage.getByRole("dialog")).toBeVisible();
+  await expect(anonPage.getByText(/Uploaded by/)).toHaveCount(0);
   await anon.close();
 });

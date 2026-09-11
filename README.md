@@ -131,6 +131,10 @@ See `.env.example` for every variable. The important ones:
 | `POSTGRES_PASSWORD` | Database password for the `db` container; change it from the default |
 | `NEXT_PUBLIC_TILE_URL`, `NEXT_PUBLIC_MAP_STYLE_URL`, `NEXT_PUBLIC_MAP_GLYPHS_URL` | Map basemap. Compiled into the browser bundle, so rebuild the image after changing them |
 
+## How the AI features work and what leaves the server
+
+Nothing leaves the server today except sign-in email (through your SMTP provider, or the log when `SMTP_HOST` is empty), map tile requests made by the browser to the configured tile host (which sees only this site's origin), and the Facebook share button, which does nothing until pressed. There is no AI service, face recognition or video host connected. The members-only **Privacy** page in the app lists the same flows with each switch's current state, and every feature that adds an outbound flow will extend both this section and that page, naming what is sent, which variable switches it off, and what is retained for how long.
+
 ## Privacy notes
 
 A shared link or a public trip exposes every photo, activity and location trace on that trip, which reveals where people were and when. Trips and collections are private by default, the settings page spells out what each level shows, and a shared link can be rotated at any time.

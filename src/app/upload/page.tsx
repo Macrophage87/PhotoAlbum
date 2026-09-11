@@ -20,7 +20,7 @@ export default async function UploadPage({ searchParams }: PageProps<"/upload">)
         <div>
           <h1 className="font-display text-3xl font-semibold">Upload photos</h1>
           <p className="text-muted mt-1">
-            Photos are matched to a trip by the date they were taken unless you pick one. {selected && <>Uploading to <Link href={`/trips/${selected.slug}`} className="text-primary underline-offset-2 hover:underline">{selected.title}</Link>.</>}
+            Photos are matched to a trip by the date they were taken unless you pick one; the rest wait under <Link href="/photos" className="text-primary underline-offset-2 hover:underline">photos without a trip</Link>. {selected && <>Uploading to <Link href={`/trips/${selected.slug}`} className="text-primary underline-offset-2 hover:underline">{selected.title}</Link>.</>}
           </p>
         </div>
         <UploadPanel trips={trips} initialTripId={selected?.id} />

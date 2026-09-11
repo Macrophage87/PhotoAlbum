@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 
-export type LightboxPhoto = { id: string; mediumUrl: string; width: number | null; height: number | null; caption: string | null; alt: string };
+export type LightboxPhoto = { id: string; mediumUrl: string; width: number | null; height: number | null; caption: string | null; alt: string; /** Shown to members only; never set for anonymous viewers. */ uploadedBy?: string | null };
 
 export function Lightbox({ photos, index, onClose, onNavigate, showDetailLink = true }: { photos: LightboxPhoto[]; index: number; onClose: () => void; onNavigate: (i: number) => void; showDetailLink?: boolean }) {
   const photo = photos[index];
@@ -78,7 +78,12 @@ export function Lightbox({ photos, index, onClose, onNavigate, showDetailLink = 
           </button>
         )}
       </div>
-      {photo.caption && <p className="text-center text-white/90 p-3 text-sm">{photo.caption}</p>}
+      {(photo.caption || photo.uploadedBy) && (
+        <p className="text-center text-white/90 p-3 text-sm">
+          {photo.caption}
+          {photo.uploadedBy && <span className="block text-white/60 text-xs mt-1">Uploaded by {photo.uploadedBy}</span>}
+        </p>
+      )}
     </div>
   );
 }

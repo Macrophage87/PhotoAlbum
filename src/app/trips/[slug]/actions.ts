@@ -11,6 +11,7 @@ import { generateToken } from "@/lib/auth/tokens";
 import { enqueue } from "@/lib/jobs/boss";
 import { QUEUES } from "@/lib/jobs/queues";
 import type { TripFormState } from "@/app/trips/new/actions";
+import { levelOf } from "@/lib/visibility/exposure";
 
 async function loadEditableTrip(slug: string) {
   await requireUserOrThrow();
@@ -83,4 +84,21 @@ export async function regeotagPhotos(slug: string): Promise<void> {
   await enqueue(QUEUES.geotagPhotos, { tripId: trip.id });
   revalidatePath(`/trips/${slug}`, "layout");
   redirect(`/trips/${slug}/settings?regeotag=1`);
+}
+
+/** Remove this trip's photos from every collection that shows them more widely than the trip does. */
+export async function detachExposedFromCollections(slug: string): Promise<void> {
+  const trip = await loadEditableTrip(slug);
+  const level = levelOf(trip.visibility);
+  const items = await db.collectionItem.findMany({ where: { photo: { tripId: trip.id } }, select: { id: true, photoId: true, collection: { select: { visibility: true, coverPhotoId: true, id: true } } } });
+  const doomed = items.filter((i) => levelOf(i.collection.visibility) > level);
+  if (doomed.length) {
+    await db.collectionItem.deleteMany({ where: { id: { in: doomed.map((d) => d.id) } } });
+    const covers = doomed.filter((d) => d.collection.coverPhotoId === d.photoId);
+    for (const c of covers) await db.collection.update({ where: { id: c.collection.id }, data: { coverPhotoId: null } });
+    await db.photo.updateMany({ where: { id: { in: doomed.map((d) => d.photoId) } }, data: { updatedAt: new Date() } });
+  }
+  revalidatePath(`/trips/${slug}`, "layout");
+  revalidatePath("/", "layout");
+  redirect(`/trips/${slug}/settings?saved=1`);
 }

@@ -15,6 +15,7 @@ import { linkedPhotos } from "@/lib/photos/links";
 import { linkPhotos, unlinkPhotos } from "@/app/photos/link-actions";
 import { collectionsForPhoto } from "@/lib/collections/queries";
 import { CollectionPicker } from "@/components/collections/CollectionPicker";
+import { uploaderLabel } from "@/components/photos/toGrid";
 
 export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
   const { id } = await params;
@@ -22,7 +23,7 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
   const viewer = await getViewer();
   const photo = await db.photo.findUnique({
     where: { id },
-    include: { trip: { select: { id: true, slug: true, title: true, timezone: true, coverPhotoId: true } }, activity: { select: { id: true, title: true } }, uploader: { select: { name: true, email: true } } },
+    include: { trip: { select: { id: true, slug: true, title: true, timezone: true, coverPhotoId: true } }, activity: { select: { id: true, title: true } }, uploader: { select: { name: true } } },
   });
   if (!photo) notFound();
 
@@ -107,7 +108,7 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
             <Card className="p-4">
               <h2 className="font-medium mb-2">Details</h2>
               <ExifPanel photo={photo} tripTimezone={photo.trip?.timezone} />
-              <p className="text-xs text-muted mt-2">Uploaded by {photo.uploader.name ?? photo.uploader.email}</p>
+              <p className="text-xs text-muted mt-2">Uploaded by {uploaderLabel(photo.uploader.name)}</p>
               {photo.takenAt && <TimezoneShift action={shift} currentOffsetMin={photo.tzOffsetMin} hasTrip={Boolean(photo.trip)} tripTimezone={photo.trip?.timezone} />}
             </Card>
 

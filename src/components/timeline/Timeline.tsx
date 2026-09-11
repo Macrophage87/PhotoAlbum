@@ -26,7 +26,7 @@ export function Timeline({ groups, tripSlug, timezone, showDetailLink, idPrefix 
                     <ActivityCard activity={item.activity} tripSlug={tripSlug} timezone={timezone} hrefBase={activityHrefBase}>
                       {item.photos.length > 0 && (
                         <div className="px-4 pb-4">
-                          <PhotoGrid photos={item.photos.map((p) => toGridPhoto(p))} showDetailLink={showDetailLink} />
+                          <PhotoGrid photos={item.photos.map((p) => toGridPhoto(p, null, showDetailLink))} showDetailLink={showDetailLink} />
                         </div>
                       )}
                     </ActivityCard>
@@ -39,7 +39,7 @@ export function Timeline({ groups, tripSlug, timezone, showDetailLink, idPrefix 
                           <span className="ml-2">· {item.photos.length} photo{item.photos.length === 1 ? "" : "s"}</span>
                         </div>
                       )}
-                      <PhotoGrid photos={item.photos.map((p) => toGridPhoto(p))} showDetailLink={showDetailLink} />
+                      <PhotoGrid photos={item.photos.map((p) => toGridPhoto(p, null, showDetailLink))} showDetailLink={showDetailLink} />
                     </div>
                   )}
                 </li>

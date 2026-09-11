@@ -2,8 +2,10 @@
 
 import { useState, useTransition } from "react";
 import { PhotoGrid, type GridPhoto } from "@/components/photos/PhotoGrid";
-import { Button } from "@/components/ui";
-import { removeFromCollection, reorderCollection, setCollectionCover, sortCollectionByDate } from "@/app/collections/actions";
+import { Button, Select } from "@/components/ui";
+import { addToCollection, removeFromCollection, reorderCollection, setCollectionCover, sortCollectionByDate } from "@/app/collections/actions";
+import { bulkMoveToTrip } from "@/app/photos/bulk-actions";
+import { previewAddToCollection, previewMoveToTrip } from "@/app/photos/exposure-actions";
 
 export type CollectionGridPhoto = GridPhoto & { itemId: string };
 
@@ -11,11 +13,16 @@ export type CollectionGridPhoto = GridPhoto & { itemId: string };
  * A collection's items for members: select to remove or set the cover, arrange by drag, or sort by date.
  * Read-only viewers get the plain grid.
  */
-export function CollectionGallery({ collectionId, slug, photos, editable, emptyMessage }: { collectionId: string; slug: string; photos: CollectionGridPhoto[]; editable: boolean; emptyMessage: string }) {
+type Option = { id: string; title: string };
+
+export function CollectionGallery({ collectionId, slug, photos, editable, emptyMessage, trips = [], collections = [] }: { collectionId: string; slug: string; photos: CollectionGridPhoto[]; editable: boolean; emptyMessage: string; trips?: Option[]; collections?: Option[] }) {
   const [mode, setMode] = useState<"view" | "select" | "arrange">("view");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [order, setOrder] = useState<CollectionGridPhoto[]>(photos);
   const [dragging, setDragging] = useState<string | null>(null);
+  const [tripId, setTripId] = useState("");
+  const [otherId, setOtherId] = useState("");
+  const confirmExposure = async (warnings: string[]) => warnings.length === 0 || window.confirm(`${warnings.join("\n")}\n\nContinue?`);
   const [pending, start] = useTransition();
   const ids = [...selected];
 
@@ -58,6 +65,33 @@ export function CollectionGallery({ collectionId, slug, photos, editable, emptyM
               <span className="mx-1 text-border">|</span>
               <Button size="sm" variant="secondary" disabled={ids.length !== 1 || pending} onClick={() => finish(() => setCollectionCover(slug, ids[0]))}>Set as cover</Button>
               <Button size="sm" variant="danger" disabled={!ids.length || pending} onClick={() => finish(() => removeFromCollection(collectionId, ids))}>Remove from collection</Button>
+              {trips.length > 0 && (
+                <>
+                  <div className="w-44">
+                    <Select aria-label="Trip to move to" value={tripId} onChange={(e) => setTripId(e.target.value)} className="h-8 text-sm">
+                      <option value="">Add to trip…</option>
+                      <option value="__none">No trip</option>
+                      {trips.map((t) => (
+                        <option key={t.id} value={t.id}>{t.title}</option>
+                      ))}
+                    </Select>
+                  </div>
+                  <Button size="sm" variant="secondary" disabled={!ids.length || !tripId || pending} onClick={() => finish(async () => { const target = tripId === "__none" ? null : tripId; if (await confirmExposure(await previewMoveToTrip(ids, target))) await bulkMoveToTrip(ids, target); })}>Move</Button>
+                </>
+              )}
+              {collections.length > 0 && (
+                <>
+                  <div className="w-44">
+                    <Select aria-label="Collection to add to" value={otherId} onChange={(e) => setOtherId(e.target.value)} className="h-8 text-sm">
+                      <option value="">Add to collection…</option>
+                      {collections.map((c) => (
+                        <option key={c.id} value={c.id}>{c.title}</option>
+                      ))}
+                    </Select>
+                  </div>
+                  <Button size="sm" variant="secondary" disabled={!ids.length || !otherId || pending} onClick={() => finish(async () => { if (await confirmExposure(await previewAddToCollection(ids, otherId))) await addToCollection(otherId, ids); })}>Add</Button>
+                </>
+              )}
               <Button variant="ghost" size="sm" onClick={() => { setMode("view"); setSelected(new Set()); }}>Done</Button>
             </>
           )}

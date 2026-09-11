@@ -7,7 +7,10 @@ import { TripForm } from "@/components/trips/TripForm";
 import { ShareButtons } from "@/components/trips/ShareButtons";
 import { shareableTripUrl } from "@/lib/share/social";
 import { Button, Card, ConfirmSubmitButton } from "@/components/ui";
-import { deleteTrip, regeotagPhotos, rotateShareToken, setVisibility, updateTrip } from "../actions";
+import { deleteTrip, detachExposedFromCollections, regeotagPhotos, rotateShareToken, setVisibility, updateTrip } from "../actions";
+import { VisibilityForm } from "@/components/trips/VisibilityForm";
+import { visibilityWarnings } from "@/lib/visibility/settings";
+import Link from "next/link";
 
 const VISIBILITY = [
   { value: "PRIVATE", label: "Private", help: "Only signed-in family members can see this trip." },
@@ -27,6 +30,8 @@ export default async function TripSettingsPage({ params, searchParams }: PagePro
   const remove = deleteTrip.bind(null, slug);
   const regeotag = regeotagPhotos.bind(null, slug);
   const shareUrl = shareableTripUrl(trip, env().APP_URL);
+  const warnings = await visibilityWarnings("trip", trip.id, trip.visibility, "this trip");
+  const detach = detachExposedFromCollections.bind(null, slug);
 
   return (
     <div className="max-w-2xl space-y-10">
@@ -44,20 +49,27 @@ export default async function TripSettingsPage({ params, searchParams }: PagePro
 
       <section>
         <h2 className="font-display text-xl font-semibold mb-4">Who can see this trip</h2>
-        <form action={visibility} className="space-y-3">
-          {VISIBILITY.map((v) => (
-            <label key={v.value} className="flex gap-3 items-start rounded-theme border border-border p-3 cursor-pointer has-[:checked]:border-primary has-[:checked]:ring-2 has-[:checked]:ring-ring">
-              <input type="radio" name="visibility" value={v.value} defaultChecked={trip.visibility === v.value} className="mt-1" />
-              <span>
-                <span className="font-medium">{v.label}</span>
-                <span className="block text-sm text-muted">{v.help}</span>
-              </span>
-            </label>
-          ))}
-          <Button type="submit" variant="secondary">
-            Update visibility
-          </Button>
-        </form>
+        <VisibilityForm action={visibility} current={trip.visibility} options={VISIBILITY.map((v) => ({ ...v, warnings: warnings.byTarget[v.value] }))} />
+        {warnings.stillExposed.length > 0 && (
+          <Card className="mt-4 p-4 space-y-2 border-amber-300 bg-amber-50 text-amber-900">
+            <div className="text-sm font-medium">Still visible elsewhere</div>
+            {warnings.stillExposed.map((line) => (
+              <p key={line} className="text-sm">{line}</p>
+            ))}
+            <p className="text-sm">Visibility is a union: a photo can be seen by anyone who may open its trip or any collection holding it.</p>
+            <div className="flex flex-wrap gap-2 items-center">
+              <form action={detach}>
+                <Button type="submit" variant="secondary" size="sm">Make these photos private everywhere (remove them from those collections)</Button>
+              </form>
+              {warnings.exposingContainers.filter((c) => c.kind === "collection").map((c) => (
+                <Link key={c.id} href={`/collections/${c.slug}/settings`} className="text-sm underline underline-offset-2">Open {c.title}</Link>
+              ))}
+            </div>
+          </Card>
+        )}
+        {warnings.alsoElsewhere > 0 && warnings.stillExposed.length === 0 && (
+          <p className="mt-3 text-sm text-muted">{warnings.alsoElsewhere} of this trip&apos;s {warnings.total} photos are also in a collection; changing visibility here does not change theirs.</p>
+        )}
         {trip.visibility === "LINK" && shareUrl && (
           <Card className="mt-4 p-4 space-y-2">
             <div className="text-sm font-medium">Share link</div>

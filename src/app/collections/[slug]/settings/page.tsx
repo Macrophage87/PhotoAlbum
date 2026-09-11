@@ -7,6 +7,9 @@ import { CollectionForm } from "@/components/collections/CollectionForm";
 import { ShareButtons } from "@/components/trips/ShareButtons";
 import { Button, Card, ConfirmSubmitButton } from "@/components/ui";
 import { deleteCollection, rotateCollectionShareToken, setCollectionVisibility, updateCollection } from "../../actions";
+import { VisibilityForm } from "@/components/trips/VisibilityForm";
+import { visibilityWarnings } from "@/lib/visibility/settings";
+import Link from "next/link";
 
 const VISIBILITY = [
   { value: "PRIVATE", label: "Private", help: "Only signed-in family members can see this collection." },
@@ -25,6 +28,7 @@ export default async function CollectionSettingsPage({ params, searchParams }: P
   const rotate = rotateCollectionShareToken.bind(null, slug);
   const remove = deleteCollection.bind(null, slug);
   const shareUrl = shareableCollectionUrl(collection, env().APP_URL);
+  const warnings = await visibilityWarnings("collection", collection.id, collection.visibility, "this collection");
 
   return (
     <div className="max-w-2xl space-y-10">
@@ -36,18 +40,24 @@ export default async function CollectionSettingsPage({ params, searchParams }: P
 
       <section>
         <h2 className="font-display text-xl font-semibold mb-4">Who can see this collection</h2>
-        <form action={visibility} className="space-y-3">
-          {VISIBILITY.map((v) => (
-            <label key={v.value} className="flex gap-3 items-start rounded-theme border border-border p-3 cursor-pointer has-[:checked]:border-primary has-[:checked]:ring-2 has-[:checked]:ring-ring">
-              <input type="radio" name="visibility" value={v.value} defaultChecked={collection.visibility === v.value} className="mt-1" />
-              <span>
-                <span className="font-medium">{v.label}</span>
-                <span className="block text-sm text-muted">{v.help}</span>
-              </span>
-            </label>
-          ))}
-          <Button type="submit" variant="secondary">Update visibility</Button>
-        </form>
+        <VisibilityForm action={visibility} current={collection.visibility} options={VISIBILITY.map((v) => ({ ...v, warnings: warnings.byTarget[v.value] }))} />
+        {warnings.stillExposed.length > 0 && (
+          <Card className="mt-4 p-4 space-y-2 border-amber-300 bg-amber-50 text-amber-900">
+            <div className="text-sm font-medium">Still visible elsewhere</div>
+            {warnings.stillExposed.map((line) => (
+              <p key={line} className="text-sm">{line}</p>
+            ))}
+            <p className="text-sm">Visibility is a union: a photo can be seen by anyone who may open its trip or any collection holding it. Change those containers to hide the photos everywhere.</p>
+            <div className="flex flex-wrap gap-3">
+              {warnings.exposingContainers.map((c) => (
+                <Link key={`${c.kind}_${c.id}`} href={c.kind === "trip" ? `/trips/${c.slug}/settings` : `/collections/${c.slug}/settings`} className="text-sm underline underline-offset-2">Open {c.title}</Link>
+              ))}
+            </div>
+          </Card>
+        )}
+        {warnings.alsoElsewhere > 0 && warnings.stillExposed.length === 0 && (
+          <p className="mt-3 text-sm text-muted">{warnings.alsoElsewhere} of this collection&apos;s {warnings.total} photos are also on a trip or in another collection; changing visibility here does not change theirs.</p>
+        )}
         {collection.visibility === "LINK" && shareUrl && (
           <Card className="mt-4 p-4 space-y-2">
             <div className="text-sm font-medium">Share link</div>

@@ -15,6 +15,7 @@ export function Nav({ viewer }: { viewer: Viewer }) {
   const links = [
     ...(signedIn ? memberLinks : memberLinks.slice(0, 3)),
     ...(signedIn && viewer.user.role === "ADMIN" ? [{ href: "/admin", label: "Admin" }] : []),
+    ...(signedIn ? [{ href: "/privacy", label: "Privacy" }] : []),
   ];
   return (
     <header className="border-b border-border bg-surface/80 backdrop-blur sticky top-0 z-40">

@@ -4,24 +4,29 @@ import { useState, useTransition } from "react";
 import { PhotoGrid, type GridPhoto } from "./PhotoGrid";
 import { Button, Select } from "@/components/ui";
 import { bulkAssignActivity, bulkDelete, bulkMoveToTrip } from "@/app/photos/bulk-actions";
+import { addToCollection } from "@/app/collections/actions";
+import { previewAddToCollection, previewMoveToTrip } from "@/app/photos/exposure-actions";
 
 type Option = { id: string; title: string };
 
 /** Gallery with an optional selection mode for members: assign to an activity, move trips, or delete. */
-export function TripGallery({ photos, activities, trips, editable, emptyMessage }: { photos: GridPhoto[]; activities: Option[]; trips: Option[]; editable: boolean; emptyMessage: string }) {
+export function TripGallery({ photos, activities, trips, collections = [], editable, emptyMessage }: { photos: GridPhoto[]; activities: Option[]; trips: Option[]; collections?: Option[]; editable: boolean; emptyMessage: string }) {
   const [selecting, setSelecting] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [activityId, setActivityId] = useState("");
   const [tripId, setTripId] = useState("");
+  const [collectionId, setCollectionId] = useState("");
   const [pending, start] = useTransition();
   const ids = [...selected];
 
-  const run = (fn: () => Promise<void>) =>
+  const run = (fn: () => Promise<unknown>) =>
     start(async () => {
       await fn();
       setSelected(new Set());
       setSelecting(false);
     });
+  /** Ask before a change that makes photos visible to more people. */
+  const confirmExposure = async (warnings: string[]) => warnings.length === 0 || window.confirm(`${warnings.join("\n")}\n\nContinue?`);
 
   return (
     <div className="space-y-3">
@@ -66,9 +71,45 @@ export function TripGallery({ photos, activities, trips, editable, emptyMessage 
                   ))}
                 </Select>
               </div>
-              <Button size="sm" variant="secondary" disabled={!ids.length || !tripId || pending} onClick={() => run(() => bulkMoveToTrip(ids, tripId === "__none" ? null : tripId))}>
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={!ids.length || !tripId || pending}
+                onClick={() =>
+                  run(async () => {
+                    const target = tripId === "__none" ? null : tripId;
+                    if (await confirmExposure(await previewMoveToTrip(ids, target))) await bulkMoveToTrip(ids, target);
+                  })
+                }
+              >
                 Move
               </Button>
+              {collections.length > 0 && (
+                <>
+                  <div className="w-48">
+                    <Select aria-label="Collection to add to" value={collectionId} onChange={(e) => setCollectionId(e.target.value)} className="h-8 text-sm">
+                      <option value="">Add to collection…</option>
+                      {collections.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.title}
+                        </option>
+                      ))}
+                    </Select>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    disabled={!ids.length || !collectionId || pending}
+                    onClick={() =>
+                      run(async () => {
+                        if (await confirmExposure(await previewAddToCollection(ids, collectionId))) await addToCollection(collectionId, ids);
+                      })
+                    }
+                  >
+                    Add
+                  </Button>
+                </>
+              )}
               <Button
                 size="sm"
                 variant="danger"

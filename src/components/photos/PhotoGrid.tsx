@@ -1,11 +1,17 @@
 "use client";
 
 import { Lightbox, useLightbox, type LightboxPhoto } from "./Lightbox";
+import { useSelectionContext } from "./selection";
 
 export type GridPhoto = LightboxPhoto & { thumbUrl: string; status: "PENDING" | "PROCESSING" | "READY" | "FAILED"; badge?: string | null };
 
-export function PhotoGrid({ photos, showDetailLink = true, emptyMessage = "No photos yet.", selectable = false, selected, onToggle }: { photos: GridPhoto[]; showDetailLink?: boolean; emptyMessage?: string; selectable?: boolean; selected?: Set<string>; onToggle?: (id: string) => void }) {
+export function PhotoGrid({ photos, showDetailLink = true, emptyMessage = "No photos yet.", selectable: selectableProp, selected: selectedProp, onToggle: onToggleProp }: { photos: GridPhoto[]; showDetailLink?: boolean; emptyMessage?: string; selectable?: boolean; selected?: Set<string>; onToggle?: (id: string) => void }) {
   const lb = useLightbox();
+  // A grid inside a SelectionProvider (global timeline, unassigned photos) takes its selection from context.
+  const ctx = useSelectionContext();
+  const selectable = selectableProp ?? (ctx?.active ?? false);
+  const selected = selectedProp ?? ctx?.selected;
+  const onToggle = onToggleProp ?? ctx?.toggle;
   const ready = photos.filter((p) => p.status === "READY");
   if (photos.length === 0) return <p className="text-muted text-sm">{emptyMessage}</p>;
 
@@ -19,7 +25,7 @@ export function PhotoGrid({ photos, showDetailLink = true, emptyMessage = "No ph
               {p.status === "READY" ? (
                 <button onClick={() => (selectable ? onToggle?.(p.id) : lb.open(readyIndex))} className={`block w-full h-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring ${selectable && selected?.has(p.id) ? "ring-4 ring-primary ring-inset" : ""}`} aria-pressed={selectable ? selected?.has(p.id) : undefined}>
                   {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={p.thumbUrl} alt={p.alt} loading="lazy" className="w-full h-full object-cover transition-transform group-hover:scale-[1.03]" />
+                  <img src={p.thumbUrl} alt={p.alt} title={p.uploadedBy ? `Uploaded by ${p.uploadedBy}` : undefined} loading="lazy" className="w-full h-full object-cover transition-transform group-hover:scale-[1.03]" />
                 </button>
               ) : (
                 <div className="w-full h-full flex items-center justify-center text-xs text-muted p-2 text-center">

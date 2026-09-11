@@ -227,7 +227,7 @@ S += [P("6. Using the album", H1),
         "A photo uploaded from a trip page is attached to that trip. Uploaded from the global page, it is matched to whichever trip's dates contain the day it was taken. If several trips overlap, it stays unassigned and shows a 'needs trip' badge until you assign it.",
         "If the photo's time falls inside an activity's window on that trip, it is attached to the activity too.",
         "The photo detail page shows EXIF data, lets you edit the caption, move the photo to a trip or activity, shift the time zone if the camera was set wrong, set it as the trip cover, and link it to other photos.",
-        "In the gallery, select several photos for bulk actions: assign to an activity, move to another trip, or delete.",
+        "In any gallery, select several photos for bulk actions: assign to an activity, add to a trip or a collection, or delete. Photos that matched no trip wait on the <b>Photos without a trip</b> page. Before a change makes photos visible to more people (adding a private trip's photo to a public collection, say) the album says so and asks you to confirm.",
       ]),
       note("<b>iPhone HEIC photos</b> work, but conversion is slow (a few seconds each). If you prefer, set the iPhone camera to "
            "'Most Compatible' so it saves JPEG. Renditions are always WebP, so browsers never need HEIC support."),

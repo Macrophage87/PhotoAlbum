@@ -34,7 +34,7 @@ export default async function CollectionOverviewPage({ params }: PageProps<"/col
             <Link href={`/collections/${slug}/photos`} className="text-sm text-primary underline-offset-2 hover:underline self-center">All photos →</Link>
           </div>
         </div>
-        <PhotoGrid photos={ready.slice(0, 12).map((p) => toGridPhoto(p))} showDetailLink={editable} emptyMessage={editable ? "Nothing here yet. Open a photo and tick this collection, or select photos in any gallery." : "Nothing here yet."} />
+        <PhotoGrid photos={ready.slice(0, 12).map((p) => toGridPhoto(p, null, editable))} showDetailLink={editable} emptyMessage={editable ? "Nothing here yet. Open a photo and tick this collection, or select photos in any gallery." : "Nothing here yet."} />
       </section>
     </div>
   );
