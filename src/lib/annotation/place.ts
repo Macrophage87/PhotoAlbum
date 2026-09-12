@@ -20,7 +20,8 @@ export const PLACE_RULES = `Estimating a place:
 - lat and lng are the centre of what you recognised, in decimal degrees. radiusM says how tightly you can pin it: about 100 m for a monument you can stand in front of, 2000 m for a neighbourhood or a park, 5000 m or more for a town or city, 50000 m or more for a region. Never give a small radius for a broad guess, and never a radius under 2000 m with precision "city".
 - confidence is between 0 and 1 and means how sure you are of the place, not of the coordinates. Below about 0.5 the album throws the guess away, so an honest low number is better than a confident wrong one.
 - evidence is one short sentence naming what you recognised ("the Domino Sugar sign across the water and the Inner Harbor pagoda"). It is shown to the family beside the pin, so it must be something they can check.
-- When you do not recognise the place, or it is somewhere private, return null. A blank is always better than a guess.`;
+- evidence for a town-level answer must justify the town, not describe the house: "the mountains behind the houses and the Dutch street signs" is right, "the white house with the green door on Elm Street" is not. Never name the street, the block or the building a home is on, and never repeat a house number, even as evidence.
+- When you cannot tell where it was at all, return null. A blank is always better than a guess. But a private place you can put in a town is not a blank: give the town.`;
 
 /** One estimate: where the helper thinks this was taken, and why. */
 export const placeEstimateSchema = z
@@ -58,6 +59,30 @@ export const MIN_PLACE_CONFIDENCE = 0.5;
  */
 export const CITY_RADIUS_M = 5_000;
 export const REGION_RADIUS_M = 25_000;
+
+/**
+ * A named street, with or without a house number ("Elm Street", "12 Oak Rd"). A town-level answer must never carry
+ * this much detail, in the name or in the evidence: the pin would be at the city while the words beside it said
+ * exactly which house. Only ever applied to a coarse answer, so a public place really called Abbey Road is untouched.
+ */
+const NAMED_STREET = /\b(?:\d{1,5}[a-z]?\s+)?[A-Z\u00C0-\u00DE][\w\u00C0-\u00FF'\u2019-]*\s+(?:Street|Road|Avenue|Lane|Drive|Court|Boulevard|Crescent|Terrace|Close|Place|St|Rd|Ave|Ln|Dr|Ct|Blvd|Pl)\.?(?=\s|,|$)/;
+const HOUSE_NUMBER = /^\s*\d{1,5}[a-z]?[\s,]+/i;
+
+/**
+ * Hold a town-level answer to the town. The name keeps only the parts that read as a place rather than an address,
+ * and evidence that names a street is replaced rather than shown: the family still learns the pin is a guess and
+ * roughly why, without the album recording where somebody lives. Returns null when nothing usable is left.
+ */
+export function scrubCoarsePlace(estimate: PlaceEstimate): PlaceEstimate {
+  if (!estimate || estimate.precision === "exact") return estimate;
+  const parts = estimate.name.split(",").map((p) => p.trim().replace(HOUSE_NUMBER, "")).filter((p) => p && !NAMED_STREET.test(p));
+  const name = parts.join(", ");
+  if (!name) return null;
+  const evidence = NAMED_STREET.test(estimate.evidence) || HOUSE_NUMBER.test(estimate.evidence)
+    ? "Placed at the town rather than the spot itself, which looks like somewhere private."
+    : estimate.evidence;
+  return { ...estimate, name, evidence };
+}
 
 /** Clamp a raw response to the schema's limits before validating, the way the description response is clamped. */
 export function clampPlace(raw: unknown): unknown {
@@ -122,23 +147,24 @@ export async function recordPlaceFailure(photoId: string, opts: { terminal?: boo
 export async function applyPlaceEstimate(photoId: string, estimate: PlaceEstimate): Promise<"placed" | "declined" | "skipped"> {
   const current = await db.photo.findUnique({ where: { id: photoId }, select: { lat: true, gpsSource: true } });
   if (!current) return "skipped";
-  const usable = estimate && estimate.confidence >= MIN_PLACE_CONFIDENCE;
+  // A town-level answer is held to the town before anything is written, name and evidence alike.
+  const place = estimate && estimate.confidence >= MIN_PLACE_CONFIDENCE ? scrubCoarsePlace(estimate) : null;
   const free = current.lat === null && (current.gpsSource === null || current.gpsSource === "ESTIMATE");
-  if (!usable || !free) {
+  if (!place || !free) {
     await db.photo.update({ where: { id: photoId }, data: { placeEstimatedAt: new Date() } });
-    return usable ? "skipped" : "declined";
+    return place ? "skipped" : "declined";
   }
   await db.photo.update({
     where: { id: photoId },
     data: {
-      lat: estimate.lat,
-      lng: estimate.lng,
+      lat: place.lat,
+      lng: place.lng,
       gpsSource: "ESTIMATE",
-      placeEstimateName: estimate.name,
-      placeEstimateConfidence: estimate.confidence,
-      placeEstimateRadiusM: estimate.radiusM,
-      placeEstimatePrecision: estimate.precision === "city" ? "CITY" : estimate.precision === "region" ? "REGION" : "EXACT",
-      placeEstimateNote: estimate.evidence,
+      placeEstimateName: place.name,
+      placeEstimateConfidence: place.confidence,
+      placeEstimateRadiusM: place.radiusM,
+      placeEstimatePrecision: place.precision === "city" ? "CITY" : place.precision === "region" ? "REGION" : "EXACT",
+      placeEstimateNote: place.evidence,
       placeEstimatedAt: new Date(),
     },
   });

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
-import { applyPlaceEstimate, CITY_RADIUS_M, clampPlace, MIN_PLACE_CONFIDENCE, needsPlaceEstimate, parsePlaceContent, PLACE_ONLY_INSTRUCTIONS, placeEstimateSchema, recordPlaceFailure, REGION_RADIUS_M } from "@/lib/annotation/place";
+import { applyPlaceEstimate, CITY_RADIUS_M, clampPlace, MIN_PLACE_CONFIDENCE, needsPlaceEstimate, parsePlaceContent, PLACE_ONLY_INSTRUCTIONS, placeEstimateSchema, recordPlaceFailure, REGION_RADIUS_M, scrubCoarsePlace } from "@/lib/annotation/place";
 import { describePlaceItem } from "@/lib/annotation/request";
 import { pendingWhere, taskOf } from "@/lib/jobs/handlers/annotation-batch";
 import { withinLabel } from "@/components/photos/PlaceEditor";
@@ -9,6 +9,13 @@ import { resetTestDb } from "../helpers/reset";
 const vatican = { name: "St Peter's Square, Vatican City", precision: "exact" as const, lat: 41.9022, lng: 12.4568, radiusM: 200, confidence: 0.82, evidence: "the colonnade and the obelisk" };
 
 describe("what the helper is asked for", () => {
+  it("asks for the town when the spot is private, rather than for nothing at all", () => {
+    // The rules once said to decline anywhere private; a town-level answer is wanted instead, and only a place it
+    // cannot put in a town at all is a blank.
+    expect(PLACE_ONLY_INSTRUCTIONS).not.toContain("or it is somewhere private, return null");
+    expect(PLACE_ONLY_INSTRUCTIONS).toContain("a private place you can put in a town is not a blank: give the town");
+    expect(PLACE_ONLY_INSTRUCTIONS).toContain("evidence for a town-level answer must justify the town");
+  });
   it("tells it to place public landmarks and to leave homes alone", () => {
     expect(PLACE_ONLY_INSTRUCTIONS).toContain("landmark or monument");
     expect(PLACE_ONLY_INSTRUCTIONS).toContain("only as far as the town or city");
@@ -50,6 +57,22 @@ describe("what the helper is asked for", () => {
     expect(withinLabel(5000, "CITY")).toBe("the town, not the exact spot");
     expect(withinLabel(40_000, "REGION")).toBe("the area, not the exact spot");
   });
+  it("keeps the street out of a town-level answer, in the name and in the words beside it", () => {
+    const leaky = { ...vatican, precision: "city" as const, name: "12 Elm Street, Towson, Maryland", evidence: "the white house with the green door on Elm Street" };
+    const held = scrubCoarsePlace(leaky)!;
+    expect(held.name).toBe("Towson, Maryland");
+    expect(held.evidence).not.toContain("Elm Street");
+    expect(held.evidence).toContain("somewhere private");
+    // A landmark really called Abbey Road is placed exactly and is left alone.
+    const abbey = { ...vatican, name: "Abbey Road, London", evidence: "the zebra crossing outside the studios" };
+    expect(scrubCoarsePlace(abbey)).toEqual(abbey);
+    // Evidence about street signs in general is not an address, and survives.
+    const dutch = { ...vatican, precision: "city" as const, name: "Delft, the Netherlands", evidence: "the canal houses and Dutch street signs" };
+    expect(scrubCoarsePlace(dutch)!.evidence).toBe("the canal houses and Dutch street signs");
+    // Nothing but an address left: no answer at all rather than a bad one.
+    expect(scrubCoarsePlace({ ...vatican, precision: "city" as const, name: "14 Oak Rd" })).toBeNull();
+  });
+
   it("never pins somewhere private tighter than its town, whatever radius comes back", () => {
     const home = { place: { ...vatican, name: "Towson, Maryland", precision: "city", radiusM: 120 } };
     expect((clampPlace(home) as { place: { radiusM: number } }).place.radiusM).toBe(CITY_RADIUS_M);
@@ -114,12 +137,13 @@ describe("recording a guess", () => {
     });
   }
 
-  it("places somewhere private at its town rather than at the house", async () => {
-    await applyPlaceEstimate(photoId, { name: "Towson, Maryland", precision: "city", lat: 39.4015, lng: -76.6019, radiusM: 6000, confidence: 0.6, evidence: "the water tower and the courthouse a street away" });
+  it("places somewhere private at its town rather than at the house, and records no address with it", async () => {
+    await applyPlaceEstimate(photoId, { name: "31 Cedar Lane, Towson, Maryland", precision: "city", lat: 39.4015, lng: -76.6019, radiusM: 6000, confidence: 0.6, evidence: "the porch of the house on Cedar Lane" });
     const p = await photo();
     expect(p.placeEstimatePrecision).toBe("CITY");
     expect(p.placeEstimateRadiusM).toBeGreaterThanOrEqual(CITY_RADIUS_M);
     expect(p.placeEstimateName).toBe("Towson, Maryland");
+    expect(p.placeEstimateNote).not.toContain("Cedar Lane");
   });
 
   it("leaves a failed run's item alone unless the failure was final", async () => {
