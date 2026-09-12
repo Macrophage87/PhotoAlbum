@@ -10,15 +10,20 @@ import type { MapTheme } from "@/lib/map/theme";
 const SOURCE: Record<string, string> = { EXIF: "from the camera", TRACK: "from a track", MANUAL: "set by hand", SIDECAR: "from Google Photos", ESTIMATE: "estimated from the photo" };
 
 /** What the helper recognised and how sure it was, kept beside the pin so a guess never passes for a record. */
-export type PlaceEstimate = { name: string | null; confidence: number | null; radiusM: number | null; note: string | null };
+export type PlaceEstimate = { name: string | null; confidence: number | null; radiusM: number | null; note: string | null; /** EXACT, or CITY/REGION when the spot itself is private and only the area is given. */ precision: string | null };
 
 /** The same wording as the date estimate uses, so "fairly sure" means the same thing everywhere. */
 function sureness(confidence: number | null): string {
   return confidence === null ? "" : confidence >= 0.7 ? "fairly sure" : confidence >= 0.4 ? "a guess" : "a rough guess";
 }
 
-/** How tightly the guess is pinned, in words a family reads rather than metres. */
-export function withinLabel(radiusM: number | null): string {
+/**
+ * How tightly the guess is pinned, in words a family reads rather than metres. Somewhere private is only ever placed
+ * at its town, and the label says so rather than leaving a wide circle to be read as a vague pin.
+ */
+export function withinLabel(radiusM: number | null, precision?: string | null): string {
+  if (precision === "CITY") return "the town, not the exact spot";
+  if (precision === "REGION") return "the area, not the exact spot";
   if (radiusM === null) return "";
   if (radiusM < 1000) return `within about ${Math.round(radiusM / 50) * 50} m`;
   if (radiusM < 20_000) return `within about ${Number((radiusM / 1000).toFixed(1))} km`;
@@ -27,7 +32,7 @@ export function withinLabel(radiusM: number | null): string {
 
 /** The helper's guess, shown under the pin: the place, how sure it was, and what it recognised. */
 export function PlaceProvenance({ estimate, muted }: { estimate: PlaceEstimate; muted: string }) {
-  const detail = [sureness(estimate.confidence), withinLabel(estimate.radiusM)].filter(Boolean).join(" · ");
+  const detail = [sureness(estimate.confidence), withinLabel(estimate.radiusM, estimate.precision)].filter(Boolean).join(" · ");
   return (
     <span className={`block text-xs ${muted}`} data-testid="place-estimate">
       {estimate.name && <span className="block">{estimate.name}{detail && ` · ${detail}`}</span>}

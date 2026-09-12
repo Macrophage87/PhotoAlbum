@@ -43,6 +43,25 @@ enum PhotoStatus {
   FAILED
 }
 
+/// Why a family member moved an item to the trash. Recorded so an admin deciding whether to restore it can see the
+/// reason without having to ask, and so "someone asked me to remove it" is never mistaken for "it was blurry".
+/// How closely an estimated place is pinned. Anywhere private is placed at CITY or wider, never at the address.
+enum PlacePrecision {
+  EXACT
+  CITY
+  REGION
+}
+
+enum TrashReason {
+  BLURRY
+  DUPLICATE
+  ACCIDENT
+  PRIVATE
+  SOMEONE_ASKED
+  NOT_WORTH_KEEPING
+  OTHER
+}
+
 enum GpsSource {
   EXIF
   TRACK
@@ -155,6 +174,7 @@ model User {
   trips    Trip[]
   photos   Photo[]
   placesSet Photo[] @relation("PlaceSetBy")
+  trashed   Photo[] @relation("TrashedBy")
   datesSet  Photo[] @relation("DateSetBy")
   tracks   Track[]
   collections     Collection[]
@@ -304,12 +324,22 @@ model Photo {
   annotationCacheWriteTokens Int?
   annotationOutputTokens    Int?
   annotationBatched         Boolean?
+  /// In the trash: hidden everywhere and skipped by every background job, but still on disk until an admin decides.
+  /// Any member may trash an item and must give a reason; only an admin can restore it or delete it for good.
+  trashedAt     DateTime?
+  trashedById   String?
+  trashedBy     User?          @relation("TrashedBy", fields: [trashedById], references: [id], onDelete: SetNull)
+  trashReason   TrashReason?
+  trashNote     String?
   /// For items with no recorded position: the helper's guess at a recognisable public place, with the evidence it
   /// used, so the album can always say where the pin came from. placeEstimatedAt is set even when the helper declined
   /// to guess, so a backfill asks about each item once.
   placeEstimateName       String?
   placeEstimateConfidence Float?
   placeEstimateRadiusM    Int?
+  /// How closely the helper placed it: EXACT for a public place it could point at, CITY for the town something
+  /// private sits in (never the building or the street), REGION for a wider area.
+  placeEstimatePrecision  PlacePrecision?
   placeEstimateNote       String?
   placeEstimatedAt        DateTime?
   /// For undated items: the helper's estimated year range, kept until a member sets a real date.
@@ -356,6 +386,7 @@ model Photo {
   @@index([sourceKind, sourceId])
   @@index([provider, externalId])
   @@index([reviewedAt])
+  @@index([trashedAt])
 }
 
 /// A named, themed, shareable set of media that is independent of trips. A photo may sit in any number of collections.

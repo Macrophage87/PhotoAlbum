@@ -13,8 +13,8 @@ const fixtureBytes = (name) => readFileSync(path.join(here, "../fixtures", name)
 
 /** A Messages API reply shaped like the real one, with the recorded structured record as its text block. */
 /** Two different places, so a test can tell the full description apart from the place-only pass. */
-const PLACE_WITH_DESCRIPTION = { name: "Inner Harbor, Baltimore", lat: 39.2853, lng: -76.6093, radiusM: 800, confidence: 0.78, evidence: "the Domino Sugar sign across the water" };
-const PLACE_ONLY = { name: "Washington Monument", lat: 38.8895, lng: -77.0353, radiusM: 150, confidence: 0.81, evidence: "the obelisk and the ring of flags" };
+const PLACE_WITH_DESCRIPTION = { name: "Inner Harbor, Baltimore", precision: "exact", lat: 39.2853, lng: -76.6093, radiusM: 800, confidence: 0.78, evidence: "the Domino Sugar sign across the water" };
+const PLACE_ONLY = { name: "Washington Monument", precision: "exact", lat: 38.8895, lng: -77.0353, radiusM: 150, confidence: 0.81, evidence: "the obelisk and the ring of flags" };
 
 /** What the stand-in answers one request: a place when only a place was asked for, the recorded description otherwise. */
 function answerFor(params) {

@@ -7,6 +7,7 @@ import { applyPlaceEstimate, parsePlaceContent, recordPlaceFailure } from "@/lib
 import { enqueue } from "../boss";
 import { QUEUES, type AnnotationBackfillJob } from "../queues";
 import { permittedNames } from "@/lib/people/gates";
+import { NOT_TRASHED } from "@/lib/photos/trash";
 
 export type BackfillWhere = { kind: "all" } | { kind: "trip"; tripId: string } | { kind: "collection"; collectionId: string } | { kind: "range"; from: string; to: string };
 /**
@@ -30,6 +31,7 @@ export function pendingWhere(task: BackfillTask) {
 export async function backfillCandidates(scope: BackfillScope) {
   const base = {
     status: "READY" as const,
+    ...NOT_TRASHED,
     ...pendingWhere(taskOf(scope)),
     annotationOptOut: false,
     OR: [{ tripId: null }, { trip: { annotationOptOut: false } }],
@@ -53,7 +55,7 @@ export async function backfillExclusions(scope: BackfillScope): Promise<{ inScop
     : scope.kind === "collection" ? { collections: { some: { collectionId: scope.collectionId } } }
     : scope.kind === "range" ? { takenAt: { gte: new Date(`${scope.from}T00:00:00Z`), lte: new Date(`${scope.to}T23:59:59Z`) } }
     : {};
-  const ready = { status: "READY" as const, ...scopeWhere };
+  const ready = { status: "READY" as const, ...NOT_TRASHED, ...scopeWhere };
   const pending = pendingWhere(taskOf(scope));
   // "described" is the run's done pile: items already described, or (for the place pass) already placed or asked about.
   const done = taskOf(scope) === "place" ? { NOT: pending } : { annotatedAt: { not: null } };
@@ -156,7 +158,7 @@ export async function annotationBackfill(job: AnnotationBackfillJob): Promise<vo
       if (await familyCancelled(batch.id)) return;
       await heartbeat();
       // Re-check now: an item opted out or described since the run started must not be sent.
-      const still = new Set((await db.photo.findMany({ where: { id: { in: part.map((c) => c.id) }, status: "READY", ...pendingWhere(task), annotationOptOut: false, OR: [...notOptedOutWhere.OR], collections: notOptedOutWhere.collections }, select: { id: true } })).map((p) => p.id));
+      const still = new Set((await db.photo.findMany({ where: { id: { in: part.map((c) => c.id) }, status: "READY", ...NOT_TRASHED, ...pendingWhere(task), annotationOptOut: false, OR: [...notOptedOutWhere.OR], collections: notOptedOutWhere.collections }, select: { id: true } })).map((p) => p.id));
       const built: { custom_id: string; params: Awaited<ReturnType<typeof buildRequest>>; bytes: number }[] = [];
       const reasons: Record<string, number> = {};
       const skip = (why: string) => { reasons[why] = (reasons[why] ?? 0) + 1; };

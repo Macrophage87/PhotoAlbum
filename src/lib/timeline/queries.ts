@@ -2,6 +2,7 @@ import { db } from "@/lib/db";
 import { photoCardSelect } from "@/lib/photos/queries";
 import { buildTimeline } from "./build";
 import type { TimelineGroups } from "@/components/timeline/Timeline";
+import { NOT_TRASHED } from "@/lib/photos/trash";
 
 /** Photos per timeline page; the page ends at a day boundary so no day is split. */
 export const TIMELINE_PAGE = 400;
@@ -31,7 +32,7 @@ export async function tripTimeline(tripId: string, timezone: string, opts: { cur
   const cursor = opts.cursor ?? null;
   const [batch, activities] = await Promise.all([
     db.photo.findMany({
-      where: { tripId, status: "READY", takenAt: { not: null }, ...(cursor ? { OR: [{ takenAt: { gt: cursor.after } }, { takenAt: cursor.after, id: { gt: cursor.afterId } }] } : {}) },
+      where: { tripId, ...NOT_TRASHED, status: "READY", takenAt: { not: null }, ...(cursor ? { OR: [{ takenAt: { gt: cursor.after } }, { takenAt: cursor.after, id: { gt: cursor.afterId } }] } : {}) },
       orderBy: [{ takenAt: "asc" }, { id: "asc" }],
       select: photoCardSelect,
       take: limit + 1,
@@ -49,7 +50,7 @@ export async function tripTimeline(tripId: string, timezone: string, opts: { cur
     const last = photos[photos.length - 1];
     next = { after: last.takenAt!, afterId: last.id };
   }
-  const undated = more ? [] : await db.photo.findMany({ where: { tripId, status: "READY", takenAt: null }, orderBy: { createdAt: "asc" }, select: photoCardSelect });
+  const undated = more ? [] : await db.photo.findMany({ where: { tripId, ...NOT_TRASHED, status: "READY", takenAt: null }, orderBy: { createdAt: "asc" }, select: photoCardSelect });
   const from = cursor?.after ?? photos[0]?.takenAt ?? null;
   const to = next?.after ?? null;
   // On a paged view only the activities inside the window are shown, so they do not repeat on every page.

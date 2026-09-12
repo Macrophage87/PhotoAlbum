@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { requireUserOrThrow } from "@/lib/auth/viewer";
+import { trashSchema } from "@/lib/photos/trash";
 import { enqueue } from "@/lib/jobs/boss";
 import { QUEUES } from "@/lib/jobs/queues";
 import { pickActivityByTime, pickTripByDay } from "@/lib/photos/assign";
@@ -58,12 +59,19 @@ export async function updatePhoto(id: string, fd: FormData): Promise<void> {
   if (photo.tripId) revalidatePath(`/trips`, "layout");
 }
 
-export async function deletePhoto(id: string): Promise<void> {
-  await requireUserOrThrow();
-  const photo = await db.photo.findUnique({ where: { id }, include: { trip: { select: { slug: true } } } });
+/**
+ * Move an item to the trash. Any member may do this and must say why; nothing is deleted, so an admin can put it
+ * back exactly as it was. The item leaves every gallery, the timeline, the map, search and every share page at once,
+ * which is what makes this the right button for "take that down now".
+ */
+export async function trashPhoto(id: string, fd: FormData): Promise<void> {
+  const user = await requireUserOrThrow();
+  const v = trashSchema.parse({ reason: fd.get("reason"), note: fd.get("note") ?? "" });
+  const photo = await db.photo.findUnique({ where: { id }, select: { trashedAt: true, trip: { select: { slug: true } } } });
   if (!photo) return;
-  await db.photo.delete({ where: { id } });
-  await enqueue(QUEUES.deletePhoto, { storageKey: photo.storageKey });
+  if (!photo.trashedAt) {
+    await db.photo.update({ where: { id }, data: { trashedAt: new Date(), trashedById: user.id, trashReason: v.reason, trashNote: v.note || null } });
+  }
   revalidatePath("/", "layout");
   redirect(photo.trip ? `/trips/${photo.trip.slug}/photos` : "/upload");
 }
@@ -215,7 +223,7 @@ export async function clearPhotoPlace(id: string): Promise<PlaceResult> {
   await requireUserOrThrow();
   const photo = await db.photo.findUnique({ where: { id }, select: { tripId: true } });
   if (!photo) return { ok: false, message: "Photo not found" };
-  await db.photo.update({ where: { id }, data: { lat: null, lng: null, altitude: null, gpsSource: null, placeSetById: null, placeEstimateName: null, placeEstimateConfidence: null, placeEstimateRadiusM: null, placeEstimateNote: null } });
+  await db.photo.update({ where: { id }, data: { lat: null, lng: null, altitude: null, gpsSource: null, placeSetById: null, placeEstimateName: null, placeEstimateConfidence: null, placeEstimateRadiusM: null, placeEstimatePrecision: null, placeEstimateNote: null } });
   if (photo.tripId) await enqueue(QUEUES.geotagPhotos, { tripId: photo.tripId }, { singletonKey: `geotag:${photo.tripId}`, singletonSeconds: 10, singletonNextSlot: true });
   revalidatePath(`/photos/${id}`);
   revalidatePath("/trips", "layout");

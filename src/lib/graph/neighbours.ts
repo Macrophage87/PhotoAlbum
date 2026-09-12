@@ -13,7 +13,7 @@ export function orderPair(a: string, b: string): [string, string] {
 export async function upsertNeighbours(photoId: string): Promise<number> {
   const rows = await db.$queryRaw<{ id: string; score: number }[]>`
     SELECT o.id, 1 - (o.embedding <=> p.embedding) AS score
-    FROM "Photo" p JOIN "Photo" o ON o.id <> p.id AND o.embedding IS NOT NULL
+    FROM "Photo" p JOIN "Photo" o ON o.id <> p.id AND o.embedding IS NOT NULL AND o."trashedAt" IS NULL
     WHERE p.id = ${photoId} AND p.embedding IS NOT NULL
     ORDER BY o.embedding <=> p.embedding
     LIMIT ${NEIGHBOURS}`;

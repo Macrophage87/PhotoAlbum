@@ -4,7 +4,8 @@ import { useState, useTransition } from "react";
 import { PhotoGrid, type GridPhoto } from "./PhotoGrid";
 import { LoadMoreSentinel, useLoadMore } from "./LoadMore";
 import { Button, Select } from "@/components/ui";
-import { bulkAssignActivity, bulkDelete, bulkMoveToTrip } from "@/app/photos/bulk-actions";
+import { bulkAssignActivity, bulkMoveToTrip, bulkTrash } from "@/app/photos/bulk-actions";
+import { BulkTrashControl } from "./TrashButton";
 import { addToCollection } from "@/app/collections/actions";
 import { previewAddToCollection, previewMoveToTrip } from "@/app/photos/exposure-actions";
 
@@ -113,16 +114,7 @@ export function TripGallery({ photos: initialPhotos, activities, trips, collecti
                   </Button>
                 </>
               )}
-              <Button
-                size="sm"
-                variant="danger"
-                disabled={!ids.length || pending}
-                onClick={() => {
-                  if (window.confirm(`Delete ${ids.length} photo${ids.length === 1 ? "" : "s"}? This cannot be undone.`)) run(() => bulkDelete(ids));
-                }}
-              >
-                Delete
-              </Button>
+              <BulkTrashControl count={ids.length} disabled={!ids.length || pending} onTrash={async (reason, note) => { await bulkTrash(ids, reason, note); setSelected(new Set()); }} />
               <Button variant="ghost" size="sm" onClick={() => { setSelecting(false); setSelected(new Set()); }}>
                 Done
               </Button>

@@ -3,6 +3,7 @@ import type { Prisma } from "@/generated/prisma/client";
 import type { Viewer } from "@/lib/auth/viewer";
 import { visibleContainersWhere } from "@/lib/auth/access";
 import { photoCardSelect, type PhotoCard } from "@/lib/photos/queries";
+import { NOT_TRASHED } from "@/lib/photos/trash";
 
 export const collectionCardSelect = {
   id: true,
@@ -13,7 +14,7 @@ export const collectionCardSelect = {
   visibility: true,
   shareToken: true,
   coverPhoto: { select: { id: true, updatedAt: true, width: true, height: true } },
-  _count: { select: { items: true } },
+  _count: { select: { items: { where: { photo: NOT_TRASHED } } } },
 } satisfies Prisma.CollectionSelect;
 
 export type CollectionCardData = Prisma.CollectionGetPayload<{ select: typeof collectionCardSelect }>;
@@ -26,7 +27,7 @@ export async function listVisibleCollections(viewer: Viewer): Promise<Collection
 export async function getCollectionBySlug(slug: string) {
   return db.collection.findUnique({
     where: { slug },
-    include: { coverPhoto: { select: { id: true, updatedAt: true, width: true, height: true } }, _count: { select: { items: true } } },
+    include: { coverPhoto: { select: { id: true, updatedAt: true, width: true, height: true } }, _count: { select: { items: { where: { photo: NOT_TRASHED } } } } },
   });
 }
 

@@ -1,4 +1,5 @@
 import type { TripVisibility } from "@/generated/prisma/enums";
+import { NOT_TRASHED } from "@/lib/photos/trash";
 import type { Prisma } from "@/generated/prisma/client";
 import type { Viewer } from "./viewer";
 
@@ -33,20 +34,25 @@ export function canViewCollection(viewer: Viewer, collection: ContainerAccessFie
 }
 
 /** Everything a media item's visibility depends on: its trip (if any) and the collections holding it. */
-export type MediaAccessFields = { trip: ContainerAccessFields | null; collections: ContainerAccessFields[] };
+export type MediaAccessFields = { trip: ContainerAccessFields | null; collections: ContainerAccessFields[]; /** Set while the item is in the trash: out of the album for everyone but a signed-in member. */ trashedAt?: Date | null };
 
 /**
  * Media visibility is computed, never stored, and is the union of its containers: a viewer who may open the
  * item's trip or any collection holding it may see the item. Media in no container is members-only.
+ *
+ * An item in the trash is out of the album the moment it goes in: a share link or a public trip no longer reaches
+ * it, however it was reachable before. Members keep access so it can be reviewed and restored.
  */
 export function canViewMedia(viewer: Viewer, media: MediaAccessFields): boolean {
   if (viewer.kind === "user") return true;
+  if (media.trashedAt) return false;
   if (media.trip && canView(viewer, "trip", media.trip)) return true;
   return media.collections.some((c) => canView(viewer, "collection", c));
 }
 
 /** True when an anonymous visitor with no cookie and no share token could see this item (it sits in a PUBLIC container). */
 export function isPubliclyViewable(media: MediaAccessFields): boolean {
+  if (media.trashedAt) return false;
   return media.trip?.visibility === "PUBLIC" || media.collections.some((c) => c.visibility === "PUBLIC");
 }
 
@@ -70,10 +76,11 @@ export function visibleTripsWhere(viewer: Viewer): { visibility?: TripVisibility
 /**
  * The one Prisma filter for media on any surface (galleries, timeline, map, search, graph, people pages, JSON routes).
  * Anonymous visitors see items in a PUBLIC trip or a PUBLIC collection; share cookies never widen global surfaces.
+ * Nobody, member or not, sees anything in the trash.
  */
 export function visibleMediaWhere(viewer: Viewer): Prisma.PhotoWhereInput {
-  if (viewer.kind === "user") return {};
-  return { OR: [{ trip: { visibility: "PUBLIC" } }, { collections: { some: { collection: { visibility: "PUBLIC" } } } }] };
+  if (viewer.kind === "user") return { ...NOT_TRASHED };
+  return { ...NOT_TRASHED, OR: [{ trip: { visibility: "PUBLIC" } }, { collections: { some: { collection: { visibility: "PUBLIC" } } } }] };
 }
 
 /** Is this viewer in read-only mode? (i.e. can view but not edit) */

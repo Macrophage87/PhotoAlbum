@@ -1,18 +1,19 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
-import { applyPlaceEstimate, clampPlace, MIN_PLACE_CONFIDENCE, needsPlaceEstimate, parsePlaceContent, PLACE_ONLY_INSTRUCTIONS, placeEstimateSchema, recordPlaceFailure } from "@/lib/annotation/place";
+import { applyPlaceEstimate, CITY_RADIUS_M, clampPlace, MIN_PLACE_CONFIDENCE, needsPlaceEstimate, parsePlaceContent, PLACE_ONLY_INSTRUCTIONS, placeEstimateSchema, recordPlaceFailure, REGION_RADIUS_M } from "@/lib/annotation/place";
 import { describePlaceItem } from "@/lib/annotation/request";
 import { pendingWhere, taskOf } from "@/lib/jobs/handlers/annotation-batch";
 import { withinLabel } from "@/components/photos/PlaceEditor";
 import { resetTestDb } from "../helpers/reset";
 
-const vatican = { name: "St Peter's Square, Vatican City", lat: 41.9022, lng: 12.4568, radiusM: 200, confidence: 0.82, evidence: "the colonnade and the obelisk" };
+const vatican = { name: "St Peter's Square, Vatican City", precision: "exact" as const, lat: 41.9022, lng: 12.4568, radiusM: 200, confidence: 0.82, evidence: "the colonnade and the obelisk" };
 
 describe("what the helper is asked for", () => {
   it("tells it to place public landmarks and to leave homes alone", () => {
     expect(PLACE_ONLY_INSTRUCTIONS).toContain("landmark or monument");
-    expect(PLACE_ONLY_INSTRUCTIONS).toContain("Never estimate a private place");
+    expect(PLACE_ONLY_INSTRUCTIONS).toContain("only as far as the town or city");
     expect(PLACE_ONLY_INSTRUCTIONS).toContain("house number");
+    expect(PLACE_ONLY_INSTRUCTIONS).toContain("never the building, the street or the address");
     // Above the 512-token cache minimum on Opus 5, so the block is paid for once per batch rather than per item.
     expect(PLACE_ONLY_INSTRUCTIONS.length).toBeGreaterThan(2048);
   });
@@ -41,11 +42,21 @@ describe("what the helper is asked for", () => {
     expect(raw.place.radiusM).toBe(50);
     expect(placeEstimateSchema.safeParse(raw.place).success).toBe(true);
   });
-  it("puts the radius in words a family reads", () => {
+  it("puts the radius in words a family reads, and names a private place only by its area", () => {
     expect(withinLabel(200)).toBe("within about 200 m");
     expect(withinLabel(2000)).toBe("within about 2 km");
     expect(withinLabel(60_000)).toBe("somewhere within about 60 km");
     expect(withinLabel(null)).toBe("");
+    expect(withinLabel(5000, "CITY")).toBe("the town, not the exact spot");
+    expect(withinLabel(40_000, "REGION")).toBe("the area, not the exact spot");
+  });
+  it("never pins somewhere private tighter than its town, whatever radius comes back", () => {
+    const home = { place: { ...vatican, name: "Towson, Maryland", precision: "city", radiusM: 120 } };
+    expect((clampPlace(home) as { place: { radiusM: number } }).place.radiusM).toBe(CITY_RADIUS_M);
+    const area = { place: { ...vatican, name: "the Cotswolds", precision: "region", radiusM: 300 } };
+    expect((clampPlace(area) as { place: { radiusM: number } }).place.radiusM).toBe(REGION_RADIUS_M);
+    // A public landmark keeps the tight pin it asked for.
+    expect((clampPlace({ place: { ...vatican, radiusM: 200 } }) as { place: { radiusM: number } }).place.radiusM).toBe(200);
   });
 });
 
@@ -74,6 +85,7 @@ describe("recording a guess", () => {
     expect(p.gpsSource).toBe("ESTIMATE");
     expect(p.placeEstimateName).toBe(vatican.name);
     expect(p.placeEstimateRadiusM).toBe(200);
+    expect(p.placeEstimatePrecision).toBe("EXACT");
     expect(p.placeEstimateNote).toBe(vatican.evidence);
     expect(p.placeEstimatedAt).not.toBeNull();
   });
@@ -101,6 +113,14 @@ describe("recording a guess", () => {
       expect(p.placeEstimateName).toBeNull();
     });
   }
+
+  it("places somewhere private at its town rather than at the house", async () => {
+    await applyPlaceEstimate(photoId, { name: "Towson, Maryland", precision: "city", lat: 39.4015, lng: -76.6019, radiusM: 6000, confidence: 0.6, evidence: "the water tower and the courthouse a street away" });
+    const p = await photo();
+    expect(p.placeEstimatePrecision).toBe("CITY");
+    expect(p.placeEstimateRadiusM).toBeGreaterThanOrEqual(CITY_RADIUS_M);
+    expect(p.placeEstimateName).toBe("Towson, Maryland");
+  });
 
   it("leaves a failed run's item alone unless the failure was final", async () => {
     await recordPlaceFailure(photoId, { terminal: false });

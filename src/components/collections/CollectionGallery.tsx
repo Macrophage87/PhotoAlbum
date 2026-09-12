@@ -4,7 +4,8 @@ import { useState, useTransition } from "react";
 import { PhotoGrid, type GridPhoto } from "@/components/photos/PhotoGrid";
 import { Button, Select } from "@/components/ui";
 import { addToCollection, removeFromCollection, reorderCollection, setCollectionCover, sortCollectionByDate } from "@/app/collections/actions";
-import { bulkMoveToTrip } from "@/app/photos/bulk-actions";
+import { bulkMoveToTrip, bulkTrash } from "@/app/photos/bulk-actions";
+import { BulkTrashControl } from "@/components/photos/TrashButton";
 import { previewAddToCollection, previewMoveToTrip } from "@/app/photos/exposure-actions";
 
 export type CollectionGridPhoto = GridPhoto & { itemId: string };
@@ -92,6 +93,7 @@ export function CollectionGallery({ collectionId, slug, photos, editable, emptyM
                   <Button size="sm" variant="secondary" disabled={!ids.length || !otherId || pending} onClick={() => finish(async () => { if (await confirmExposure(await previewAddToCollection(ids, otherId))) await addToCollection(otherId, ids); })}>Add</Button>
                 </>
               )}
+              <BulkTrashControl count={ids.length} disabled={!ids.length || pending} onTrash={async (reason, note) => { await bulkTrash(ids, reason, note); setSelected(new Set()); }} />
               <Button variant="ghost" size="sm" onClick={() => { setMode("view"); setSelected(new Set()); }}>Done</Button>
             </>
           )}

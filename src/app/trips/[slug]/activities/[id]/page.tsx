@@ -4,6 +4,7 @@ import { loadViewableTrip } from "@/lib/trips/access";
 import { photoCardSelect } from "@/lib/photos/queries";
 import { ActivityDetail } from "@/components/activities/ActivityDetail";
 import { deleteActivity, updateActivity } from "../actions";
+import { NOT_TRASHED } from "@/lib/photos/trash";
 
 export default async function ActivityPage({ params, searchParams }: PageProps<"/trips/[slug]/activities/[id]">) {
   const { slug, id } = await params;
@@ -11,7 +12,7 @@ export default async function ActivityPage({ params, searchParams }: PageProps<"
   const { trip, editable } = await loadViewableTrip(slug, `/trips/${slug}/activities/${id}`);
   const activity = await db.activity.findFirst({ where: { id, tripId: trip.id }, include: { track: { select: { id: true, simplified: true, stats: true } } } });
   if (!activity) notFound();
-  const photos = await db.photo.findMany({ where: { activityId: activity.id }, orderBy: [{ takenAt: "asc" }], select: photoCardSelect });
+  const photos = await db.photo.findMany({ where: { activityId: activity.id, ...NOT_TRASHED }, orderBy: [{ takenAt: "asc" }], select: photoCardSelect });
 
   if (!editable) return <ActivityDetail trip={trip} activity={activity} photos={photos} editable={false} />;
   return (

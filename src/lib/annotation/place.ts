@@ -12,10 +12,12 @@ import { thinkingParams } from "./client";
 export const PLACE_RULES = `Estimating a place:
 - Only when the text block says the item has no location and asks you to estimate one.
 - Estimate only somewhere public and recognisable: a landmark or monument, a national or city park, a named beach, a harbour or waterfront, a plaza or square, a famous street or avenue, a stadium, a museum, a cathedral, a bridge, a ski resort, a well-known trail, or a region with a distinctive look (the Amalfi coast, Tuscany, the Scottish highlands). It does not have to be world-famous — the Inner Harbor in Baltimore, a state park, a college quad and a town's main street all count if the photo really shows which one it is.
-- Never estimate a private place: a house, a garden or backyard, a driveway, a residential street, a block of flats, a school, a workplace, or the inside of anyone's home. Never work a location out from a house number, a name on a mailbox, a vehicle registration, a school uniform, or a delivery label. If the most identifiable thing in the photo is where somebody lives, return null.
+- Somewhere private is different: a house, a garden or backyard, a driveway, a residential street, a block of flats, a school, a workplace, or the inside of a home. You may still say where these are, but only as far as the town or city — never the building, the street or the address. Set precision to "city", give the centre of the town or city and a radius that covers it, and name it as a town ("Towson, Maryland"), never as an address. If you cannot tell the town either, but you can tell the wider area, use precision "region"; when you can tell neither, return null.
+- Whatever you recognise, never work a location out from a house number, a name on a mailbox, a vehicle registration plate, a school uniform, or a delivery label, and never name the street a home is on. Those identify where a family lives, which is exactly what must not end up in the album.
 - Never estimate from the people in the photo, and never from a photo that is mostly one person's face.
 - Estimate from the place itself: the building, the skyline, the monument, the coastline, the signage, the landscape, the vegetation, the language on public signs. A place named in the notes, the title or the trip is good evidence and you should use it.
-- lat and lng are the centre of what you recognised, in decimal degrees. radiusM says how tightly you can pin it: about 100 m for a monument you can stand in front of, 2000 m for a neighbourhood or a park, 50000 m or more for a region. Never give a small radius for a broad guess.
+- precision says how closely you are placing it: "exact" for a public place you can point at, "city" for the town or city something sits in (always use this for somewhere private), "region" for a wider area.
+- lat and lng are the centre of what you recognised, in decimal degrees. radiusM says how tightly you can pin it: about 100 m for a monument you can stand in front of, 2000 m for a neighbourhood or a park, 5000 m or more for a town or city, 50000 m or more for a region. Never give a small radius for a broad guess, and never a radius under 2000 m with precision "city".
 - confidence is between 0 and 1 and means how sure you are of the place, not of the coordinates. Below about 0.5 the album throws the guess away, so an honest low number is better than a confident wrong one.
 - evidence is one short sentence naming what you recognised ("the Domino Sugar sign across the water and the Inner Harbor pagoda"). It is shown to the family beside the pin, so it must be something they can check.
 - When you do not recognise the place, or it is somewhere private, return null. A blank is always better than a guess.`;
@@ -23,7 +25,8 @@ export const PLACE_RULES = `Estimating a place:
 /** One estimate: where the helper thinks this was taken, and why. */
 export const placeEstimateSchema = z
   .object({
-    name: z.string().max(120).describe("The place in words, as a person would say it: \"Inner Harbor, Baltimore\", \"Tuscany, Italy\""),
+    name: z.string().max(120).describe("The place in words, as a person would say it: \"Inner Harbor, Baltimore\", \"Tuscany, Italy\". Never a street address."),
+    precision: z.enum(["exact", "city", "region"]).describe("How closely it is being placed; always \"city\" or wider for somewhere private"),
     lat: z.number().min(-90).max(90),
     lng: z.number().min(-180).max(180),
     radiusM: z.number().int().min(50).max(300_000).describe("How tightly the place is pinned, in metres"),
@@ -48,6 +51,14 @@ Answer only with the structured record. Do not describe the photo.`;
 /** Below this the guess is thrown away rather than shown: a pin nobody trusts is worse than no pin. */
 export const MIN_PLACE_CONFIDENCE = 0.5;
 
+/**
+ * Floors for a coarse guess. Somewhere private is placed at its town and never tighter, so a photo of a back garden
+ * can say "Towson, Maryland" without the pin ever landing on the house. The helper is asked for these radii and the
+ * answer is clamped to them anyway, because this is the part that must not go wrong.
+ */
+export const CITY_RADIUS_M = 5_000;
+export const REGION_RADIUS_M = 25_000;
+
 /** Clamp a raw response to the schema's limits before validating, the way the description response is clamped. */
 export function clampPlace(raw: unknown): unknown {
   if (!raw || typeof raw !== "object") return raw;
@@ -58,6 +69,8 @@ export function clampPlace(raw: unknown): unknown {
     if (typeof e.name === "string") e.name = e.name.slice(0, 120);
     if (typeof e.evidence === "string") e.evidence = e.evidence.slice(0, 300);
     if (typeof e.radiusM === "number") e.radiusM = Math.min(300_000, Math.max(50, Math.round(e.radiusM)));
+    // A private place is placed at its town, so the pin must cover the town however tight the helper wanted to be.
+    if (typeof e.radiusM === "number") e.radiusM = Math.max(e.radiusM, e.precision === "city" ? CITY_RADIUS_M : e.precision === "region" ? REGION_RADIUS_M : 0);
     r.place = e;
   }
   return r;
@@ -124,6 +137,7 @@ export async function applyPlaceEstimate(photoId: string, estimate: PlaceEstimat
       placeEstimateName: estimate.name,
       placeEstimateConfidence: estimate.confidence,
       placeEstimateRadiusM: estimate.radiusM,
+      placeEstimatePrecision: estimate.precision === "city" ? "CITY" : estimate.precision === "region" ? "REGION" : "EXACT",
       placeEstimateNote: estimate.evidence,
       placeEstimatedAt: new Date(),
     },

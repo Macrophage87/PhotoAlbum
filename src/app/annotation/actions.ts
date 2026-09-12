@@ -5,7 +5,7 @@ import { z } from "zod";
 import { db } from "@/lib/db";
 import { enqueueMatch } from "@/lib/jobs/handlers/match-photo";
 import { env } from "@/lib/env";
-import { requireUserOrThrow } from "@/lib/auth/viewer";
+import { requireAdminOrThrow, requireUserOrThrow } from "@/lib/auth/viewer";
 import { enqueue } from "@/lib/jobs/boss";
 import { QUEUES } from "@/lib/jobs/queues";
 import { annotationGates } from "@/lib/annotation/eligibility";
@@ -13,12 +13,6 @@ import { estimateCost, TOKENS_PER_PLACE, type Estimate } from "@/lib/annotation/
 import { BACKFILL_CAP, backfillCandidates, backfillExclusions, taskOf, type BackfillScope, type BackfillTask } from "@/lib/jobs/handlers/annotation-batch";
 import { annotationSchema, toStored, type StoredAnnotation } from "@/lib/annotation/schema";
 import { anthropic } from "@/lib/annotation/client";
-
-async function requireAdminOrThrow() {
-  const user = await requireUserOrThrow();
-  if (user.role !== "ADMIN") throw new Error("Admins only");
-  return user;
-}
 
 /** The admin's half of the two gates. Recorded with who and when so the decision is auditable. */
 export async function setAnnotationOptIn(on: boolean): Promise<void> {

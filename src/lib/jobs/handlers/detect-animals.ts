@@ -10,6 +10,7 @@ import { proposeAnimalsForPhoto, setAnimalEmbedding } from "@/lib/pets/proposals
 import { withHeavyLock } from "../heavy-lock";
 import { enqueue } from "../boss";
 import { QUEUES, type DetectAnimalsJob } from "../queues";
+import { NOT_TRASHED } from "@/lib/photos/trash";
 
 /**
  * Find animals on the medium rendition and keep each with its species and crop embedding, then propose pets.
@@ -60,7 +61,7 @@ export async function enqueueAnimalDetection(...photoIds: string[]): Promise<voi
 /** Catch-up: ready items not yet scanned for animals. */
 export async function animalSweep(): Promise<number> {
   if (!petGates().active) return 0;
-  const rows = await db.photo.findMany({ where: { status: "READY", animalsDetectedAt: null, renditions: { not: Prisma.DbNull } }, select: { id: true }, orderBy: { createdAt: "desc" }, take: 100 });
+  const rows = await db.photo.findMany({ where: { ...NOT_TRASHED, status: "READY", animalsDetectedAt: null, renditions: { not: Prisma.DbNull } }, select: { id: true }, orderBy: { createdAt: "desc" }, take: 100 });
   for (const r of rows) await enqueue(QUEUES.detectAnimals, { photoId: r.id }, { singletonKey: `animals:${r.id}`, singletonSeconds: 60 });
   return rows.length;
 }

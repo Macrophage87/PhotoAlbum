@@ -4,6 +4,7 @@ import { positionAt } from "@/lib/tracks/interpolate";
 import type { TrackPoint } from "@/lib/tracks/types";
 import type { GeotagPhotosJob } from "../queues";
 import type { TakenAtSource } from "@/generated/prisma/enums";
+import { NOT_TRASHED } from "@/lib/photos/trash";
 
 /** Only timestamps that came from the camera (or were set by hand) are trustworthy enough to place a photo on a track. */
 const TRUSTED_TIME_SOURCES: TakenAtSource[] = ["EXIF_OFFSET", "EXIF_TZLOOKUP", "TRIP_TZ", "MANUAL", "SIDECAR"];
@@ -30,6 +31,7 @@ export async function geotagPhotos(job: GeotagPhotosJob): Promise<{ updated: num
   const photos = await db.photo.findMany({
     where: {
       tripId: job.tripId,
+      ...NOT_TRASHED,
       OR: [
         { lat: null, gpsSource: null, ...trusted },
         // A place the helper recognised is a guess; a track that covers the moment is a record, so it wins.

@@ -19,6 +19,7 @@ import { YouTubeAddForm } from "@/components/videos/YouTubeAddForm";
 import { GooglePickerButton } from "@/components/google/GooglePickerButton";
 import { googleStatus } from "@/lib/google/account";
 import { googleConfigured } from "@/lib/google/oauth";
+import { NOT_TRASHED } from "@/lib/photos/trash";
 
 export const metadata = { title: "Review uploads" };
 
@@ -36,10 +37,10 @@ export default async function ReviewPage({ searchParams }: PageProps<"/review">)
   const batch = ids.length > 0;
   const gates = await annotationGates();
   const [photos, trips, collections, unreviewedCount] = await Promise.all([
-    db.photo.findMany({ where: batch ? { id: { in: ids } } : { reviewedAt: null }, orderBy: { createdAt: "desc" }, select: { ...photoCardSelect, context: true, reviewedAt: true, annotation: true, annotationOptOut: true, annotatedAt: true, estimatedDate: true, estimatedDateConfidence: true, estimatedDateNote: true, takenAtSource: true, trip: { select: { annotationOptOut: true } }, collections: { select: { collection: { select: { slug: true, title: true, annotationOptOut: true } } } } } }),
+    db.photo.findMany({ where: batch ? { id: { in: ids }, ...NOT_TRASHED } : { reviewedAt: null, ...NOT_TRASHED }, orderBy: { createdAt: "desc" }, select: { ...photoCardSelect, context: true, reviewedAt: true, annotation: true, annotationOptOut: true, annotatedAt: true, estimatedDate: true, estimatedDateConfidence: true, estimatedDateNote: true, takenAtSource: true, trip: { select: { annotationOptOut: true } }, collections: { select: { collection: { select: { slug: true, title: true, annotationOptOut: true } } } } } }),
     db.trip.findMany({ orderBy: { startDate: "desc" }, select: { id: true, title: true } }),
     db.collection.findMany({ orderBy: { title: "asc" }, select: { id: true, title: true } }),
-    db.photo.count({ where: { reviewedAt: null } }),
+    db.photo.count({ where: { reviewedAt: null, ...NOT_TRASHED } }),
   ]);
   const allIds = photos.map((p) => p.id);
   const [suggestions, proposals, unnamedFaces] = await Promise.all([suggestionsFor(allIds), proposalsFor(allIds), db.face.count({ where: { photoId: { in: allIds }, personId: null, clusterId: { not: null }, status: { in: ["DETECTED", "REJECTED"] } } })]);

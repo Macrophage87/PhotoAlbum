@@ -46,7 +46,7 @@ export async function embedSweep(): Promise<number> {
   if (!mlConfigured()) return 0;
   const rows = await db.$queryRaw<{ id: string; textOnly: boolean }[]>`
     SELECT id, ("embedding" IS NOT NULL) AS "textOnly" FROM "Photo"
-    WHERE status = 'READY' AND renditions IS NOT NULL
+    WHERE status = 'READY' AND renditions IS NOT NULL AND "trashedAt" IS NULL
       AND ("embedding" IS NULL OR ("annotatedAt" IS NOT NULL AND ("embeddedAt" IS NULL OR "annotatedAt" > "embeddedAt")))
     ORDER BY "createdAt" DESC LIMIT 100`;
   for (const r of rows) await enqueueEmbedding(r.id, r.textOnly);

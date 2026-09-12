@@ -13,6 +13,7 @@ import { normalise } from "@/lib/people/cluster";
 import { withHeavyLock } from "../heavy-lock";
 import { enqueue } from "../boss";
 import { QUEUES, type DetectFacesJob } from "../queues";
+import { NOT_TRASHED } from "@/lib/photos/trash";
 
 /**
  * Detect faces on the medium rendition, store templates, and place each face in the nearest unnamed cluster
@@ -106,7 +107,7 @@ export async function enqueueFaceDetection(...photoIds: string[]): Promise<void>
 export async function faceSweep(): Promise<number> {
   const gates = await faceGates();
   if (!gates.active) return 0;
-  const rows = await db.photo.findMany({ where: { status: "READY", facesDetectedAt: null, renditions: { not: Prisma.DbNull } }, select: { id: true }, orderBy: { createdAt: "desc" }, take: 100 });
+  const rows = await db.photo.findMany({ where: { ...NOT_TRASHED, status: "READY", facesDetectedAt: null, renditions: { not: Prisma.DbNull } }, select: { id: true }, orderBy: { createdAt: "desc" }, take: 100 });
   for (const r of rows) await enqueue(QUEUES.detectFaces, { photoId: r.id }, { singletonKey: `faces:${r.id}`, singletonSeconds: 60 });
   return rows.length;
 }

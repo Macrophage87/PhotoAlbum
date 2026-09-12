@@ -6,13 +6,14 @@ import { PhotoGrid } from "@/components/photos/PhotoGrid";
 import { toGridPhoto } from "@/components/photos/toGrid";
 import { ButtonLink, Card } from "@/components/ui";
 import { dateColumnToDay } from "@/lib/time/local-day";
+import { NOT_TRASHED } from "@/lib/photos/trash";
 
 export default async function TripOverviewPage({ params }: PageProps<"/trips/[slug]">) {
   const { slug } = await params;
   const { trip, editable } = await loadViewableTrip(slug);
 
   const [latest, trackAgg] = await Promise.all([
-    db.photo.findMany({ where: { tripId: trip.id, status: "READY" }, orderBy: [{ takenAt: "desc" }], take: 10, select: photoCardSelect }),
+    db.photo.findMany({ where: { tripId: trip.id, ...NOT_TRASHED, status: "READY" }, orderBy: [{ takenAt: "desc" }], take: 10, select: photoCardSelect }),
     db.trackStats.aggregate({ where: { track: { tripId: trip.id, activity: { isNot: null } } }, _sum: { distanceM: true, elevGainM: true } }),
   ]);
   const days = Math.round((Date.parse(dateColumnToDay(trip.endDate)) - Date.parse(dateColumnToDay(trip.startDate))) / 86_400_000) + 1;

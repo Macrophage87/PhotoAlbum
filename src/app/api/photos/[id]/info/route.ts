@@ -41,7 +41,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   const { id } = await params;
   const photo = await db.photo.findUnique({
     where: { id },
-    select: { id: true, status: true, kind: true, title: true, caption: true, context: true, annotation: true, takenAt: true, tzOffsetMin: true, takenAtSource: true, lat: true, lng: true, gpsSource: true, placeEstimateName: true, placeEstimateConfidence: true, placeEstimateRadiusM: true, placeEstimateNote: true, updatedAt: true, renditions: true, originalPath: true, uploader: { select: { name: true, email: true } }, placeSetBy: { select: { name: true, email: true } }, dateSetBy: { select: { name: true, email: true } }, ...mediaAccessInclude, trip: { select: { id: true, slug: true, title: true, timezone: true, themeKey: true, visibility: true, shareToken: true } } },
+    select: { id: true, status: true, kind: true, title: true, caption: true, context: true, annotation: true, takenAt: true, tzOffsetMin: true, takenAtSource: true, lat: true, lng: true, gpsSource: true, placeEstimateName: true, placeEstimateConfidence: true, placeEstimateRadiusM: true, placeEstimatePrecision: true, placeEstimateNote: true, updatedAt: true, renditions: true, originalPath: true, uploader: { select: { name: true, email: true } }, placeSetBy: { select: { name: true, email: true } }, dateSetBy: { select: { name: true, email: true } }, ...mediaAccessInclude, trip: { select: { id: true, slug: true, title: true, timezone: true, themeKey: true, visibility: true, shareToken: true } } },
   });
   if (!photo || photo.status !== "READY") return Response.json({ error: "Not found" }, { status: 404 });
   const url = new URL(request.url);
@@ -66,7 +66,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     gpsSource: photo.gpsSource,
     placeSetBy: member && photo.placeSetBy ? uploaderLabel(photo.placeSetBy.name, photo.placeSetBy.email) : null,
     dateSetBy: member && photo.dateSetBy ? uploaderLabel(photo.dateSetBy.name, photo.dateSetBy.email) : null,
-    placeEstimate: photo.gpsSource === "ESTIMATE" ? { name: photo.placeEstimateName, confidence: photo.placeEstimateConfidence, radiusM: photo.placeEstimateRadiusM, note: photo.placeEstimateNote } : null,
+    placeEstimate: photo.gpsSource === "ESTIMATE" ? { name: photo.placeEstimateName, confidence: photo.placeEstimateConfidence, radiusM: photo.placeEstimateRadiusM, note: photo.placeEstimateNote, precision: photo.placeEstimatePrecision } : null,
     themeKey: photo.trip?.themeKey ?? null,
     originalUrl: photo.kind === "PHOTO" ? photoUrl(photo, "original") : null,
     editable: canEdit(viewer),

@@ -51,6 +51,13 @@ export async function requireUserOrThrow(): Promise<ViewerUser> {
   return viewer.user;
 }
 
+/** Throws instead of redirecting, for the Server Actions only an admin may run. */
+export async function requireAdminOrThrow(): Promise<ViewerUser> {
+  const user = await requireUserOrThrow();
+  if (user.role !== "ADMIN") throw new Error("Admins only");
+  return user;
+}
+
 export class HttpError extends Error {
   constructor(public status: number, message: string) {
     super(message);

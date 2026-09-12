@@ -1,5 +1,6 @@
 import { db } from "@/lib/db";
 import { summarizeExposure, type Change, type ContainerRef, type ExposureSummary, type ItemContainers } from "./exposure";
+import { NOT_TRASHED } from "@/lib/photos/trash";
 
 const include = {
   trip: { select: { id: true, slug: true, title: true, visibility: true } },
@@ -18,13 +19,13 @@ function toItem(row: Row): ItemContainers {
 
 /** Items with their containers, by photo id. */
 export async function itemsById(photoIds: string[]): Promise<ItemContainers[]> {
-  const rows = await db.photo.findMany({ where: { id: { in: photoIds } }, select: { id: true, ...include } });
+  const rows = await db.photo.findMany({ where: { id: { in: photoIds }, ...NOT_TRASHED }, select: { id: true, ...include } });
   return rows.map(toItem);
 }
 
 /** Every item held by one container. */
 export async function itemsOfContainer(kind: "trip" | "collection", id: string): Promise<ItemContainers[]> {
-  const rows = await db.photo.findMany({ where: kind === "trip" ? { tripId: id } : { collections: { some: { collectionId: id } } }, select: { id: true, ...include } });
+  const rows = await db.photo.findMany({ where: { ...NOT_TRASHED, ...(kind === "trip" ? { tripId: id } : { collections: { some: { collectionId: id } } }) }, select: { id: true, ...include } });
   return rows.map(toItem);
 }
 

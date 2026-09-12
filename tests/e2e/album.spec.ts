@@ -752,3 +752,74 @@ test("a pet tagged on a spotted animal is proposed on the next look-alike and co
   await page.goto(`/people/${rex.rows[0].id}`);
   await expect(page.getByText(/black lab · 2 photos/)).toBeVisible();
 });
+
+test("a family member moves an item to the trash with a reason, and an admin restores it or deletes it for good", async ({ browser, context, page }) => {
+  await signIn(context, ADMIN);
+  // A plain member, not an admin: trashing is something anyone in the family may do.
+  const memberEmail = "e2e-member@example.com";
+  await page.goto("/admin");
+  await page.getByLabel("Email address").fill(memberEmail);
+  await page.getByRole("button", { name: /Send invite|Invite/ }).click();
+  await expect(page.getByText(`Invitation sent to ${memberEmail}`)).toBeVisible();
+  const memberContext = await browser.newContext();
+  await signIn(memberContext, memberEmail);
+  const memberPage = await memberContext.newPage();
+
+  // Two items on a public trip: one to trash, one to prove the rest of the album is untouched.
+  await memberPage.goto("/upload");
+  await chooseFile(memberPage, "photo-no-gps.jpg");
+  await expect(memberPage.getByText("1 of 1 uploaded.")).toBeVisible({ timeout: 30_000 });
+  const fresh = await withDb((c) => c.query(`SELECT id FROM "Photo" WHERE "originalName" = 'photo-no-gps.jpg' ORDER BY "createdAt" DESC LIMIT 1`));
+  const victim = fresh.rows[0].id as string;
+  await withDb((c) => c.query(`UPDATE "Photo" SET caption = 'trashcandidate lobster', "searchVector" = to_tsvector('english', 'trashcandidate lobster'), "searchVectorMembers" = to_tsvector('english', 'trashcandidate lobster') WHERE id = $1`, [victim]));
+  await memberPage.goto("/search?q=trashcandidate");
+  await expect(memberPage.getByRole("status")).toContainText("1 result");
+
+  // The member says why, and it leaves the album everywhere at once.
+  await memberPage.goto(`/photos/${victim}`);
+  await memberPage.waitForLoadState("networkidle");
+  await memberPage.getByRole("button", { name: "Move to trash" }).click();
+  await memberPage.getByLabel("Why is it going to the trash?").selectOption("DUPLICATE");
+  await memberPage.getByRole("button", { name: "Move to trash" }).click();
+  await expect
+    .poll(async () => (await withDb((c) => c.query('SELECT "trashedAt", "trashReason" FROM "Photo" WHERE id = $1', [victim]))).rows[0].trashReason, { timeout: 20_000 })
+    .toBe("DUPLICATE");
+  await memberPage.goto("/search?q=trashcandidate");
+  await expect(memberPage.getByRole("status")).toContainText("Nothing matches");
+
+  // Not even a public trip or a share link reaches its bytes now.
+  const anon = await browser.newContext();
+  const anonPage = await anon.newPage();
+  const bytes = await anonPage.request.get(`/api/photos/${victim}/thumb`);
+  expect(bytes.status()).toBe(401);
+  await anon.close();
+
+  // The admin sees why it went, and puts it back.
+  await page.goto("/admin/trash");
+  await expect(page.getByText("A duplicate of another item")).toBeVisible();
+  await page.getByRole("checkbox", { name: /^Select / }).first().check();
+  await page.getByRole("button", { name: "Restore" }).click();
+  await expect(page.getByRole("status")).toContainText("1 item restored");
+  await memberPage.goto("/search?q=trashcandidate");
+  await expect(memberPage.getByRole("status")).toContainText("1 result");
+
+  // Trashed again, an admin can delete it for good: the row goes and the page is gone.
+  await memberPage.goto(`/photos/${victim}`);
+  await memberPage.waitForLoadState("networkidle");
+  await memberPage.getByRole("button", { name: "Move to trash" }).click();
+  await memberPage.getByLabel("Why is it going to the trash?").selectOption("OTHER");
+  await memberPage.getByLabel(/Anything to add/).fill("uploaded twice by mistake");
+  await memberPage.getByRole("button", { name: "Move to trash" }).click();
+  await expect
+    .poll(async () => (await withDb((c) => c.query('SELECT "trashedAt" FROM "Photo" WHERE id = $1', [victim]))).rows[0]?.trashedAt !== null, { timeout: 20_000 })
+    .toBe(true);
+  await page.goto("/admin/trash");
+  await expect(page.getByText("Something else — uploaded twice by mistake")).toBeVisible();
+  page.once("dialog", (d) => d.accept());
+  await page.getByRole("checkbox", { name: /^Select / }).first().check();
+  await page.getByRole("button", { name: "Delete for good" }).click();
+  await expect(page.getByRole("status")).toContainText("1 item deleted for good");
+  const gone = await withDb((c) => c.query('SELECT id FROM "Photo" WHERE id = $1', [victim]));
+  expect(gone.rows).toHaveLength(0);
+  await memberContext.close();
+});

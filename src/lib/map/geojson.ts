@@ -5,6 +5,7 @@ import { photoUrl } from "@/lib/photos/urls";
 import { mergeBounds, type Bounds } from "@/lib/geo/bounds";
 import { getTheme } from "@/themes";
 import { ACTIVITY_COLOR } from "@/lib/activities/types";
+import { NOT_TRASHED } from "@/lib/photos/trash";
 
 export type PhotoFeatureProps = { id: string; thumbUrl: string; mediumUrl: string; caption: string | null; takenAt: string | null; tripSlug: string; tripTitle: string; activityId: string | null; gpsSource: string | null };
 export type TrackFeatureProps = { trackId: string; activityId: string | null; activityTitle: string | null; activityType: string | null; source: string; name: string; tripSlug: string; tripTitle: string; color: string; startTime: string; distanceM: number | null };
@@ -25,7 +26,7 @@ export async function buildMapPayload(viewer: Viewer, tripId?: string): Promise<
 
   const [photos, tracks] = await Promise.all([
     db.photo.findMany({
-      where: { tripId: { in: tripIds }, status: "READY", lat: { not: null }, lng: { not: null } },
+      where: { tripId: { in: tripIds }, ...NOT_TRASHED, status: "READY", lat: { not: null }, lng: { not: null } },
       select: { id: true, lat: true, lng: true, caption: true, takenAt: true, updatedAt: true, tripId: true, activityId: true, gpsSource: true },
       orderBy: { takenAt: "asc" },
     }),
@@ -85,7 +86,7 @@ export async function buildMapPayload(viewer: Viewer, tripId?: string): Promise<
 /** Photos in a collection (no tracks). The caller has already checked the viewer may open the collection; a photo's trip is named only when the viewer may open that trip too. */
 export async function buildCollectionMapPayload(viewer: Viewer, collectionId: string): Promise<MapPayload> {
   const photos = await db.photo.findMany({
-    where: { status: "READY", lat: { not: null }, lng: { not: null }, collections: { some: { collectionId } } },
+    where: { ...NOT_TRASHED, status: "READY", lat: { not: null }, lng: { not: null }, collections: { some: { collectionId } } },
     select: { id: true, lat: true, lng: true, caption: true, takenAt: true, updatedAt: true, activityId: true, gpsSource: true, trip: { select: { id: true, slug: true, title: true, visibility: true, shareToken: true } } },
     orderBy: { takenAt: "asc" },
   });

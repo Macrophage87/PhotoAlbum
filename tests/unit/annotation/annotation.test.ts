@@ -114,7 +114,7 @@ describe("applying a record", () => {
     expect((await db.photo.findUniqueOrThrow({ where: { id: photoId } })).title).toBeNull();
   });
   it("places an item the helper recognised, and asks only when the item has no position", async () => {
-    const withPlace = { ...fixture, estimatedPlace: { name: "Inner Harbor, Baltimore", lat: 39.2853, lng: -76.6093, radiusM: 800, confidence: 0.75, evidence: "the Domino Sugar sign" } };
+    const withPlace = { ...fixture, estimatedPlace: { name: "Inner Harbor, Baltimore", precision: "exact", lat: 39.2853, lng: -76.6093, radiusM: 800, confidence: 0.75, evidence: "the Domino Sugar sign" } };
     await applyAnnotation(photoId, "claude-opus-5", annotationSchema.parse(withPlace), {});
     const placed = await db.photo.findUniqueOrThrow({ where: { id: photoId } });
     expect(placed.gpsSource).toBe("ESTIMATE");

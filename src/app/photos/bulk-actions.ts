@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { requireUserOrThrow } from "@/lib/auth/viewer";
+import { trashSchema } from "@/lib/photos/trash";
 import { enqueue } from "@/lib/jobs/boss";
 import { QUEUES } from "@/lib/jobs/queues";
 
@@ -31,13 +32,14 @@ export async function bulkMoveToTrip(photoIds: string[], tripId: string | null):
   revalidatePath("/", "layout");
 }
 
-export async function bulkDelete(photoIds: string[]): Promise<void> {
-  await requireUserOrThrow();
+/** Move a selection to the trash, all for the same reason. Nothing is deleted; an admin decides what happens next. */
+export async function bulkTrash(photoIds: string[], reason: string, note: string): Promise<number> {
+  const user = await requireUserOrThrow();
   const list = ids.parse(photoIds);
-  const photos = await db.photo.findMany({ where: { id: { in: list } }, select: { id: true, storageKey: true } });
-  await db.photo.deleteMany({ where: { id: { in: photos.map((p) => p.id) } } });
-  for (const p of photos) await enqueue(QUEUES.deletePhoto, { storageKey: p.storageKey });
+  const v = trashSchema.parse({ reason, note });
+  const r = await db.photo.updateMany({ where: { id: { in: list }, trashedAt: null }, data: { trashedAt: new Date(), trashedById: user.id, trashReason: v.reason, trashNote: v.note || null } });
   revalidatePath("/", "layout");
+  return r.count;
 }
 
 /** Pin every selected item to one spot (a group of prints from the same place). */

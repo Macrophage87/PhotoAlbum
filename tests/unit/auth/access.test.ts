@@ -52,8 +52,8 @@ describe("media access is the union of its containers", () => {
     expect(canViewMedia(anon([["trip_c2", "tok"]]), { trip: priv, collections: [link] })).toBe(false);
     expect(isPubliclyViewable({ trip: priv, collections: [link] })).toBe(false);
   });
-  it("the global media filter admits only public containers for anonymous visitors", () => {
-    expect(visibleMediaWhere(member)).toEqual({});
-    expect(visibleMediaWhere(anon([["collection_c2", "tok"]]))).toEqual({ OR: [{ trip: { visibility: "PUBLIC" } }, { collections: { some: { collection: { visibility: "PUBLIC" } } } }] });
+  it("the global media filter admits only public containers for anonymous visitors, and nothing in the trash for anyone", () => {
+    expect(visibleMediaWhere(member)).toEqual({ trashedAt: null });
+    expect(visibleMediaWhere(anon([["collection_c2", "tok"]]))).toEqual({ trashedAt: null, OR: [{ trip: { visibility: "PUBLIC" } }, { collections: { some: { collection: { visibility: "PUBLIC" } } } }] });
   });
 });

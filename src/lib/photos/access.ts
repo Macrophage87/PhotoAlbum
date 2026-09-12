@@ -1,16 +1,18 @@
-import { db } from "@/lib/db";
 import type { Viewer } from "@/lib/auth/viewer";
 import { canViewMedia, isPubliclyViewable, type ContainerKind, type MediaAccessFields } from "@/lib/auth/access";
 
+/** The fields a media route selects to decide whether it may answer at all: where the item lives, and whether it is
+ * in the trash. Spread into a `select`, never an `include`: `trashedAt` is a column, not a relation. */
 export const mediaAccessInclude = {
+  trashedAt: true,
   trip: { select: { id: true, visibility: true, shareToken: true } },
   collections: { select: { collection: { select: { id: true, visibility: true, shareToken: true } } } },
 } as const;
 
-type Loaded = { trip: { id: string; visibility: "PRIVATE" | "LINK" | "PUBLIC"; shareToken: string | null } | null; collections: { collection: { id: string; visibility: "PRIVATE" | "LINK" | "PUBLIC"; shareToken: string | null } }[] };
+type Loaded = { trashedAt?: Date | null; trip: { id: string; visibility: "PRIVATE" | "LINK" | "PUBLIC"; shareToken: string | null } | null; collections: { collection: { id: string; visibility: "PRIVATE" | "LINK" | "PUBLIC"; shareToken: string | null } }[] };
 
 export function toMediaAccess(photo: Loaded): MediaAccessFields {
-  return { trip: photo.trip, collections: photo.collections.map((c) => c.collection) };
+  return { trashedAt: photo.trashedAt ?? null, trip: photo.trip, collections: photo.collections.map((c) => c.collection) };
 }
 
 /**
@@ -30,11 +32,4 @@ export function mediaBytesAllowed(viewer: Viewer, media: MediaAccessFields, shar
 export function mediaCacheControl(media: MediaAccessFields, versioned: boolean): string {
   if (!versioned) return "private, max-age=0, must-revalidate";
   return isPubliclyViewable(media) ? "public, max-age=31536000, immutable" : "private, max-age=86400";
-}
-
-/** Load one photo with the containers its visibility depends on, or null. */
-export async function loadViewablePhoto(viewer: Viewer, id: string) {
-  const photo = await db.photo.findUnique({ where: { id }, include: mediaAccessInclude });
-  if (!photo || !canViewMedia(viewer, toMediaAccess(photo))) return null;
-  return photo;
 }

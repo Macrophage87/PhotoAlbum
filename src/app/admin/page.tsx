@@ -25,6 +25,7 @@ export const metadata = { title: "Admin" };
 export default async function AdminPage() {
   const me = await requireAdmin("/admin");
   const viewer = await getViewer();
+  const trashed = await db.photo.count({ where: { trashedAt: { not: null } } });
   const [members, invites] = await Promise.all([
     db.user.findMany({ orderBy: { createdAt: "asc" }, include: { _count: { select: { photos: true, trips: true } } } }),
     db.invite.findMany({ where: { acceptedAt: null, expiresAt: { gt: new Date() } }, orderBy: { createdAt: "desc" }, include: { invitedBy: { select: { email: true, name: true } } } }),
@@ -131,6 +132,16 @@ export default async function AdminPage() {
         <section>
           <h2 className="font-display text-xl font-semibold mb-1">Import from Google Photos (Takeout)</h2>
           <TakeoutAdmin configured={Boolean(inboxDir())} dir={inboxDir()} archives={archives.map((a) => ({ ...a, modifiedAt: a.modifiedAt.toISOString() }))} imports={takeoutImports.map((i) => ({ id: i.id, archiveName: i.archiveName, status: i.status, imported: i.imported, skipped: i.skipped, failed: i.failed, repaired: i.repaired, collectionsCreated: i.collectionsCreated, startedAt: i.startedAt.toISOString(), endedAt: i.endedAt?.toISOString() ?? null, report: (i.report as never) ?? null }))} />
+        </section>
+
+        <section>
+          <h2 className="font-display text-xl font-semibold mb-1">Trash</h2>
+          <p className="text-sm text-muted mb-3">
+            {trashed === 0
+              ? "Nothing in the trash. Any family member can take an item out of the album and say why; it disappears everywhere at once and waits here for you."
+              : `${trashed} item${trashed === 1 ? "" : "s"} taken out of the album by family members, hidden everywhere but still on disk. Restore or delete for good.`}
+          </p>
+          <Link href="/admin/trash" className="text-primary hover:underline text-sm">Open the trash</Link>
         </section>
 
         <section>

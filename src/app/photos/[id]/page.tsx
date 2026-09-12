@@ -6,15 +6,17 @@ import { getViewer, requireUser } from "@/lib/auth/viewer";
 import { photoUrl } from "@/lib/photos/urls";
 import { AppShell, Container } from "@/components/layout/AppShell";
 import { ExifPanel } from "@/components/photos/ExifPanel";
-import { Button, Card, Label, Select, Textarea, ConfirmSubmitButton } from "@/components/ui";
+import { Button, Card, Label, Select, Textarea } from "@/components/ui";
 import { formatDateTime } from "@/lib/time/format";
-import { deletePhoto, reprocessPhoto, resetPhotoDateToCamera, setAsCover, setPhotoDate, shiftPhotoTimezone, updatePhoto } from "./actions";
+import { reprocessPhoto, resetPhotoDateToCamera, setAsCover, setPhotoDate, shiftPhotoTimezone, trashPhoto, updatePhoto } from "./actions";
 
 const SOURCE_LABEL: Record<string, string> = { EXIF_OFFSET: "from the camera", EXIF_TZLOOKUP: "from the camera", TRIP_TZ: "from the camera, in the trip's zone", SIDECAR: "from Google Photos", FILE_MTIME: "from the file's modified time", UPLOAD_TIME: "the upload time" };
 import { TimezoneShift } from "@/components/photos/TimezoneShift";
 import { PhotoLinkEditor } from "@/components/photos/PhotoLinkEditor";
 import { LinkedPhotos } from "@/components/photos/LinkedPhotos";
 import { PlaceEditor } from "@/components/photos/PlaceEditor";
+import { TrashButton } from "@/components/photos/TrashButton";
+import { trashReasonLabel } from "@/lib/photos/trash";
 import { mapThemeOf } from "@/lib/map/theme";
 import { getTheme } from "@/themes";
 import { linkedPhotos } from "@/lib/photos/links";
@@ -34,6 +36,7 @@ import { ProposalList } from "@/components/people/ProposalList";
 import { similarTo } from "@/lib/graph/query";
 import { SimilarStrip } from "@/components/graph/SimilarStrip";
 import { PersonChips } from "@/components/people/PersonChips";
+import { NOT_TRASHED } from "@/lib/photos/trash";
 
 /** The tab and link-preview title: the item's title, else its caption, else the file name. Members only, like the page. */
 export async function generateMetadata({ params }: PageProps<"/photos/[id]">): Promise<Metadata> {
@@ -51,7 +54,7 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
   const viewer = await getViewer();
   const photo = await db.photo.findUnique({
     where: { id },
-    include: { trip: { select: { id: true, slug: true, title: true, timezone: true, coverPhotoId: true } }, activity: { select: { id: true, title: true } }, uploader: { select: { name: true, email: true } }, placeSetBy: { select: { name: true, email: true } }, dateSetBy: { select: { name: true, email: true } } },
+    include: { trip: { select: { id: true, slug: true, title: true, timezone: true, coverPhotoId: true } }, activity: { select: { id: true, title: true } }, uploader: { select: { name: true, email: true } }, placeSetBy: { select: { name: true, email: true } }, dateSetBy: { select: { name: true, email: true } }, trashedBy: { select: { name: true, email: true } } },
   });
   if (!photo) notFound();
 
@@ -62,13 +65,13 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
     photo.tripId ? db.activity.findMany({ where: { tripId: photo.tripId }, orderBy: { startTime: "asc" }, select: { id: true, title: true, startTime: true } }) : Promise.resolve([]),
     linkedPhotos(photo.id),
     photo.tripId
-      ? db.photo.findMany({ where: { tripId: photo.tripId, status: "READY", id: { not: photo.id } }, orderBy: [{ takenAt: "asc" }], select: { id: true, caption: true, originalName: true, takenAt: true, updatedAt: true } })
+      ? db.photo.findMany({ where: { tripId: photo.tripId, ...NOT_TRASHED, status: "READY", id: { not: photo.id } }, orderBy: [{ takenAt: "asc" }], select: { id: true, caption: true, originalName: true, takenAt: true, updatedAt: true } })
       : Promise.resolve([]),
     collectionsForPhoto(photo.id),
   ]);
   const link = linkPhotos.bind(null, id);
   const update = updatePhoto.bind(null, id);
-  const remove = deletePhoto.bind(null, id);
+  const remove = trashPhoto.bind(null, id);
   const reprocess = reprocessPhoto.bind(null, id);
   const cover = setAsCover.bind(null, id);
   const shift = shiftPhotoTimezone.bind(null, id);
@@ -81,6 +84,11 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
   return (
     <AppShell viewer={viewer}>
       <Container className="py-8">
+        {photo.trashedAt && (
+          <div className="rounded-theme border border-amber-300 bg-amber-50 text-amber-900 p-3 mb-4 text-sm">
+            <b>In the trash.</b> Moved {photo.trashedBy ? `by ${uploaderLabel(photo.trashedBy.name, photo.trashedBy.email)} ` : ""}on {formatDateTime(photo.trashedAt, photo.trip?.timezone ?? "UTC", "MMMM d, yyyy")}: {trashReasonLabel(photo.trashReason, photo.trashNote)}. It is out of every gallery, the timeline, the map and any share link. An admin can restore it or delete it for good from <Link href="/admin/trash" className="underline underline-offset-2">the trash</Link>.
+          </div>
+        )}
         <div className="text-sm text-muted mb-4">
           {photo.trip ? (
             <>
@@ -217,7 +225,7 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
 
             <Card className="p-4">
               <h2 className="font-medium mb-2">Place</h2>
-              <PlaceEditor photoId={photo.id} initial={photo.lat !== null && photo.lng !== null ? { lat: photo.lat, lng: photo.lng } : null} gpsSource={photo.gpsSource} setBy={photo.placeSetBy ? uploaderLabel(photo.placeSetBy.name, photo.placeSetBy.email) : null} estimate={{ name: photo.placeEstimateName, confidence: photo.placeEstimateConfidence, radiusM: photo.placeEstimateRadiusM, note: photo.placeEstimateNote }} theme={mapThemeOf(getTheme(tripTheme))} />
+              <PlaceEditor photoId={photo.id} initial={photo.lat !== null && photo.lng !== null ? { lat: photo.lat, lng: photo.lng } : null} gpsSource={photo.gpsSource} setBy={photo.placeSetBy ? uploaderLabel(photo.placeSetBy.name, photo.placeSetBy.email) : null} estimate={{ name: photo.placeEstimateName, confidence: photo.placeEstimateConfidence, radiusM: photo.placeEstimateRadiusM, note: photo.placeEstimateNote, precision: photo.placeEstimatePrecision }} theme={mapThemeOf(getTheme(tripTheme))} />
             </Card>
             <Card className="p-4">
               <h2 className="font-medium mb-2">Details</h2>
@@ -258,9 +266,7 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
               <form action={reprocess}>
                 <Button type="submit" variant="secondary" size="sm">Re-process</Button>
               </form>
-              <form action={remove}>
-                <ConfirmSubmitButton variant="danger" size="sm" confirmMessage="Delete this photo and its original file? This cannot be undone.">Delete photo</ConfirmSubmitButton>
-              </form>
+              <TrashButton action={remove} />
             </div>
           </div>
         </div>

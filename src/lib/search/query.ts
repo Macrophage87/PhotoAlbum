@@ -51,10 +51,11 @@ export function normalizeQuery(q: string): string {
   return q.replace(/\s+/g, " ").trim().slice(0, MAX_QUERY_LENGTH);
 }
 
-/** SQL restricting media to what the viewer may see on a global surface; share cookies never widen it. */
+/** SQL restricting media to what the viewer may see on a global surface; share cookies never widen it, and
+ * nothing in the trash is searchable by anyone. */
 export function visibilitySql(viewer: Viewer): Prisma.Sql {
-  if (viewer.kind === "user") return Prisma.sql`TRUE`;
-  return Prisma.sql`(t.visibility = 'PUBLIC' OR EXISTS (SELECT 1 FROM "CollectionItem" ci JOIN "Collection" c ON c.id = ci."collectionId" WHERE ci."photoId" = p.id AND c.visibility = 'PUBLIC'))`;
+  if (viewer.kind === "user") return Prisma.sql`p."trashedAt" IS NULL`;
+  return Prisma.sql`p."trashedAt" IS NULL AND (t.visibility = 'PUBLIC' OR EXISTS (SELECT 1 FROM "CollectionItem" ci JOIN "Collection" c ON c.id = ci."collectionId" WHERE ci."photoId" = p.id AND c.visibility = 'PUBLIC'))`;
 }
 
 /**

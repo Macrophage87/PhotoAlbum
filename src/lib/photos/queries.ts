@@ -1,5 +1,6 @@
 import { db } from "@/lib/db";
 import type { Prisma } from "@/generated/prisma/client";
+import { NOT_TRASHED } from "@/lib/photos/trash";
 
 export const photoCardSelect = {
   id: true,
@@ -29,7 +30,7 @@ export type PhotoCard = Prisma.PhotoGetPayload<{ select: typeof photoCardSelect 
 
 export async function listTripPhotos(tripId: string, uploaderId?: string): Promise<PhotoCard[]> {
   return db.photo.findMany({
-    where: { tripId, ...(uploaderId ? { uploaderId } : {}), status: { in: ["READY", "PENDING", "PROCESSING", "FAILED"] } },
+    where: { tripId, ...NOT_TRASHED, ...(uploaderId ? { uploaderId } : {}), status: { in: ["READY", "PENDING", "PROCESSING", "FAILED"] } },
     orderBy: [{ takenAt: { sort: "asc", nulls: "last" } }, { createdAt: "asc" }],
     select: photoCardSelect,
   });
@@ -37,7 +38,7 @@ export async function listTripPhotos(tripId: string, uploaderId?: string): Promi
 
 export async function listUnassignedPhotos(): Promise<PhotoCard[]> {
   return db.photo.findMany({
-    where: { tripId: null },
+    where: { tripId: null, ...NOT_TRASHED },
     orderBy: [{ createdAt: "desc" }],
     select: photoCardSelect,
   });
