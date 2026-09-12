@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { clampPlace, placeEstimateSchema } from "./place";
 
 /** What the helper returns for one item. Everything is optional-tolerant on the way in and normalised on the way out. */
 export const annotationSchema = z.object({
@@ -22,16 +23,18 @@ export const annotationSchema = z.object({
     })
     .nullable()
     .describe("Only when asked to estimate a date: a year range with the evidence used; otherwise null"),
+  estimatedPlace: placeEstimateSchema.describe("Only when asked to estimate a place: a recognisable public place with the evidence used; otherwise null"),
 });
 
 export type Annotation = z.infer<typeof annotationSchema>;
 
 /** The part stored on the item (the estimate lives in its own columns). */
-export type StoredAnnotation = Omit<Annotation, "estimatedYear">;
+export type StoredAnnotation = Omit<Annotation, "estimatedYear" | "estimatedPlace">;
 
 export function toStored(a: Annotation): StoredAnnotation {
-  const { estimatedYear: _drop, ...rest } = a;
-  void _drop;
+  const { estimatedYear: _year, estimatedPlace: _place, ...rest } = a;
+  void _year;
+  void _place;
   return { ...rest, tags: uniqueLower(rest.tags), objects: uniqueLower(rest.objects) };
 }
 
@@ -50,6 +53,7 @@ export function clampAnnotation(raw: unknown): unknown {
   const list = (k: string, max: number, each: number) => { if (Array.isArray(r[k])) r[k] = (r[k] as unknown[]).filter((x) => typeof x === "string").slice(0, max).map((x) => (x as string).slice(0, each)); };
   str("title", 80); str("caption", 200); str("description", 2000); str("place", 120); str("activity", 80); str("visibleText", 500); str("mood", 60); str("searchSummary", 600);
   list("tags", 25, 40); list("objects", 20, 40);
+  if (r.estimatedPlace && typeof r.estimatedPlace === "object") r.estimatedPlace = (clampPlace({ place: r.estimatedPlace }) as { place: unknown }).place;
   if (r.estimatedYear && typeof r.estimatedYear === "object") { const e = { ...(r.estimatedYear as Record<string, unknown>) }; if (typeof e.evidence === "string") e.evidence = e.evidence.slice(0, 300); r.estimatedYear = e; }
   return r;
 }

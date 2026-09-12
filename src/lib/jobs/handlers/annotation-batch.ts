@@ -1,19 +1,36 @@
 import { db } from "@/lib/db";
 import { anthropic } from "@/lib/annotation/client";
 import { annotationGates, notOptedOutWhere } from "@/lib/annotation/eligibility";
-import { buildRequest, loadItem } from "@/lib/annotation/request";
+import { buildPlaceRequest, buildRequest, loadItem } from "@/lib/annotation/request";
 import { applyAnnotation, parseMessageContent, recordFailure } from "@/lib/annotation/apply";
+import { applyPlaceEstimate, parsePlaceContent, recordPlaceFailure } from "@/lib/annotation/place";
 import { enqueue } from "../boss";
 import { QUEUES, type AnnotationBackfillJob } from "../queues";
 import { permittedNames } from "@/lib/people/gates";
 
-export type BackfillScope = { kind: "all" } | { kind: "trip"; tripId: string } | { kind: "collection"; collectionId: string } | { kind: "range"; from: string; to: string };
+export type BackfillWhere = { kind: "all" } | { kind: "trip"; tripId: string } | { kind: "collection"; collectionId: string } | { kind: "range"; from: string; to: string };
+/**
+ * What a run asks for. "describe" writes the full record for items that have none; "place" asks only where an item
+ * was taken, for items with no location. The place pass is deliberately a separate question rather than a second
+ * description: most of the items it covers already have descriptions, some of them written by the family.
+ */
+export type BackfillTask = "describe" | "place";
+export type BackfillScope = BackfillWhere & { task?: BackfillTask };
 
-/** Items a backfill would send: in scope, never annotated, not opted out directly or by inheritance. */
+export function taskOf(scope: BackfillScope): BackfillTask {
+  return scope.task === "place" ? "place" : "describe";
+}
+
+/** What a run has left to do: never described, or (for the place pass) no location and never asked about one. */
+export function pendingWhere(task: BackfillTask) {
+  return task === "place" ? { lat: null, placeEstimatedAt: null } : { annotatedAt: null };
+}
+
+/** Items a backfill would send: in scope, still pending its task, not opted out directly or by inheritance. */
 export async function backfillCandidates(scope: BackfillScope) {
   const base = {
     status: "READY" as const,
-    annotatedAt: null,
+    ...pendingWhere(taskOf(scope)),
     annotationOptOut: false,
     OR: [{ tripId: null }, { trip: { annotationOptOut: false } }],
     collections: { none: { collection: { annotationOptOut: true } } },
@@ -29,7 +46,7 @@ export async function backfillCandidates(scope: BackfillScope) {
 /** One run sends at most this many items; the preview says so when a scope is larger. */
 export const BACKFILL_CAP = 10_000;
 
-/** How many items in scope a backfill leaves out, and why: already described, opted out directly, or by a trip or collection. */
+/** How many items in scope a backfill leaves out, and why: already done, opted out directly, or by a trip or collection. */
 export async function backfillExclusions(scope: BackfillScope): Promise<{ inScope: number; described: number; optedOutSelf: number; optedOutInherited: number }> {
   const scopeWhere =
     scope.kind === "trip" ? { tripId: scope.tripId }
@@ -37,11 +54,14 @@ export async function backfillExclusions(scope: BackfillScope): Promise<{ inScop
     : scope.kind === "range" ? { takenAt: { gte: new Date(`${scope.from}T00:00:00Z`), lte: new Date(`${scope.to}T23:59:59Z`) } }
     : {};
   const ready = { status: "READY" as const, ...scopeWhere };
+  const pending = pendingWhere(taskOf(scope));
+  // "described" is the run's done pile: items already described, or (for the place pass) already placed or asked about.
+  const done = taskOf(scope) === "place" ? { NOT: pending } : { annotatedAt: { not: null } };
   const [inScope, described, optedOutSelf, optedOutInherited] = await Promise.all([
     db.photo.count({ where: ready }),
-    db.photo.count({ where: { ...ready, annotatedAt: { not: null } } }),
-    db.photo.count({ where: { ...ready, annotatedAt: null, annotationOptOut: true } }),
-    db.photo.count({ where: { ...ready, annotatedAt: null, annotationOptOut: false, OR: [{ trip: { annotationOptOut: true } }, { collections: { some: { collection: { annotationOptOut: true } } } }] } }),
+    db.photo.count({ where: { ...ready, ...done } }),
+    db.photo.count({ where: { ...ready, ...pending, annotationOptOut: true } }),
+    db.photo.count({ where: { ...ready, ...pending, annotationOptOut: false, OR: [{ trip: { annotationOptOut: true } }, { collections: { some: { collection: { annotationOptOut: true } } } }] } }),
   ]);
   return { inScope, described, optedOutSelf, optedOutInherited };
 }
@@ -123,6 +143,7 @@ export async function annotationBackfill(job: AnnotationBackfillJob): Promise<vo
   // startedAt doubles as the run's last sign of life: it is refreshed before every part and every upload.
   const heartbeat = () => db.annotationBatch.updateMany({ where: { id: batch.id, runEndedAt: null }, data: { startedAt: new Date() } }).catch(() => undefined);
   await heartbeat();
+  const task = taskOf(batch.scope as BackfillScope);
   const candidates = await backfillCandidates(batch.scope as BackfillScope);
   let rowId = batch.id;
   let rowLive = false; // whether rowId already carries a real batch id (its results must never be lost)
@@ -135,7 +156,7 @@ export async function annotationBackfill(job: AnnotationBackfillJob): Promise<vo
       if (await familyCancelled(batch.id)) return;
       await heartbeat();
       // Re-check now: an item opted out or described since the run started must not be sent.
-      const still = new Set((await db.photo.findMany({ where: { id: { in: part.map((c) => c.id) }, status: "READY", annotatedAt: null, annotationOptOut: false, OR: [...notOptedOutWhere.OR], collections: notOptedOutWhere.collections }, select: { id: true } })).map((p) => p.id));
+      const still = new Set((await db.photo.findMany({ where: { id: { in: part.map((c) => c.id) }, status: "READY", ...pendingWhere(task), annotationOptOut: false, OR: [...notOptedOutWhere.OR], collections: notOptedOutWhere.collections }, select: { id: true } })).map((p) => p.id));
       const built: { custom_id: string; params: Awaited<ReturnType<typeof buildRequest>>; bytes: number }[] = [];
       const reasons: Record<string, number> = {};
       const skip = (why: string) => { reasons[why] = (reasons[why] ?? 0) + 1; };
@@ -144,7 +165,7 @@ export async function annotationBackfill(job: AnnotationBackfillJob): Promise<vo
         const item = await loadItem(c.id);
         if (!item) { skip("missing"); continue; }
         try {
-          const params = await buildRequest(item, gates.model, await permittedNames(item.id));
+          const params = task === "place" ? await buildPlaceRequest(item, gates.model) : await buildRequest(item, gates.model, await permittedNames(item.id));
           built.push({ custom_id: c.id, params, bytes: imageBytes(params) });
         } catch {
           skip("noRendition");
@@ -246,34 +267,49 @@ export async function annotationBatchPoll(): Promise<void> {
   // Cancelled rows with a live batch id still get their (already billed) results applied once the batch ends.
   const open = (await db.annotationBatch.findMany({ where: { OR: [{ status: "SUBMITTED" }, { status: "CANCELLED", endedAt: null }] } })).filter((b) => !b.anthropicBatchId.startsWith("pending-") && !b.anthropicBatchId.startsWith("empty-"));
   for (const b of open) {
+    // A place-pass row has nothing to say about descriptions, so its results are read the other way round.
+    const task = taskOf(b.scope as BackfillScope);
     const remote = await anthropic().messages.batches.retrieve(b.anthropicBatchId).catch(() => null);
     if (!remote) continue;
     if (remote.processing_status !== "ended") continue;
     let succeeded = 0, errored = 0, canceled = 0;
     for await (const result of await anthropic().messages.batches.results(b.anthropicBatchId)) {
       const photoId = result.custom_id;
+      // A place run never writes annotation state: an item it could not place keeps whatever description it has.
+      const fail = (reason: string, opts?: { terminal?: boolean }) => (task === "place" ? recordPlaceFailure(photoId, opts ?? {}) : recordFailure(photoId, reason, opts ?? {}));
       if (result.result.type !== "succeeded") {
         // Errored, expired or cancelled: the helper never saw the item, so leave it eligible for a later backfill.
         if (result.result.type === "canceled") canceled++;
         else errored++;
-        await recordFailure(photoId, `batch:${result.result.type}`, { terminal: false });
+        await fail(`batch:${result.result.type}`, { terminal: false });
         continue;
       }
       const message = result.result.message;
       if (message.stop_reason === "refusal") {
         errored++;
-        await recordFailure(photoId, `refusal:${message.stop_details?.category ?? "unspecified"}`);
+        await fail(`refusal:${message.stop_details?.category ?? "unspecified"}`);
         continue;
       }
       if (message.stop_reason === "max_tokens") {
         errored++;
-        await recordFailure(photoId, "max_tokens");
+        await fail("max_tokens");
+        continue;
+      }
+      if (task === "place") {
+        const place = parsePlaceContent(message.content as { type: string; text?: string }[]);
+        if (place === undefined) {
+          errored++;
+          await fail("invalid_output");
+          continue;
+        }
+        await applyPlaceEstimate(photoId, place);
+        succeeded++;
         continue;
       }
       const parsed = parseMessageContent(message.content as { type: string; text?: string }[]);
       if (!parsed) {
         errored++;
-        await recordFailure(photoId, "invalid_output");
+        await fail("invalid_output");
         continue;
       }
       await applyAnnotation(photoId, message.model, parsed, { content: message.content, usage: message.usage, stop_reason: message.stop_reason, batched: true });

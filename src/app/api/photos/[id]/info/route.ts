@@ -4,6 +4,7 @@ import { canEdit } from "@/lib/auth/access";
 import { mediaAccessInclude, mediaBytesAllowed, toMediaAccess } from "@/lib/photos/access";
 import { photoUrl } from "@/lib/photos/urls";
 import { uploaderLabel } from "@/components/photos/toGrid";
+import type { PlaceEstimate } from "@/components/photos/PlaceEditor";
 
 export const dynamic = "force-dynamic";
 
@@ -23,6 +24,8 @@ export type PhotoInfo = {
   /** Who pinned the place / set the date by hand, for members; null when the album does not know. */
   placeSetBy: string | null;
   dateSetBy: string | null;
+  /** When the position is the helper's guess: what it recognised, and how sure it was. */
+  placeEstimate: PlaceEstimate | null;
   themeKey: string | null;
   originalUrl: string | null;
   editable: boolean;
@@ -38,7 +41,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   const { id } = await params;
   const photo = await db.photo.findUnique({
     where: { id },
-    select: { id: true, status: true, kind: true, title: true, caption: true, context: true, annotation: true, takenAt: true, tzOffsetMin: true, takenAtSource: true, lat: true, lng: true, gpsSource: true, updatedAt: true, renditions: true, originalPath: true, uploader: { select: { name: true, email: true } }, placeSetBy: { select: { name: true, email: true } }, dateSetBy: { select: { name: true, email: true } }, ...mediaAccessInclude, trip: { select: { id: true, slug: true, title: true, timezone: true, themeKey: true, visibility: true, shareToken: true } } },
+    select: { id: true, status: true, kind: true, title: true, caption: true, context: true, annotation: true, takenAt: true, tzOffsetMin: true, takenAtSource: true, lat: true, lng: true, gpsSource: true, placeEstimateName: true, placeEstimateConfidence: true, placeEstimateRadiusM: true, placeEstimateNote: true, updatedAt: true, renditions: true, originalPath: true, uploader: { select: { name: true, email: true } }, placeSetBy: { select: { name: true, email: true } }, dateSetBy: { select: { name: true, email: true } }, ...mediaAccessInclude, trip: { select: { id: true, slug: true, title: true, timezone: true, themeKey: true, visibility: true, shareToken: true } } },
   });
   if (!photo || photo.status !== "READY") return Response.json({ error: "Not found" }, { status: 404 });
   const url = new URL(request.url);
@@ -63,6 +66,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     gpsSource: photo.gpsSource,
     placeSetBy: member && photo.placeSetBy ? uploaderLabel(photo.placeSetBy.name, photo.placeSetBy.email) : null,
     dateSetBy: member && photo.dateSetBy ? uploaderLabel(photo.dateSetBy.name, photo.dateSetBy.email) : null,
+    placeEstimate: photo.gpsSource === "ESTIMATE" ? { name: photo.placeEstimateName, confidence: photo.placeEstimateConfidence, radiusM: photo.placeEstimateRadiusM, note: photo.placeEstimateNote } : null,
     themeKey: photo.trip?.themeKey ?? null,
     originalUrl: photo.kind === "PHOTO" ? photoUrl(photo, "original") : null,
     editable: canEdit(viewer),

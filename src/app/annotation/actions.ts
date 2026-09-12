@@ -9,8 +9,8 @@ import { requireUserOrThrow } from "@/lib/auth/viewer";
 import { enqueue } from "@/lib/jobs/boss";
 import { QUEUES } from "@/lib/jobs/queues";
 import { annotationGates } from "@/lib/annotation/eligibility";
-import { estimateCost, type Estimate } from "@/lib/annotation/pricing";
-import { BACKFILL_CAP, backfillCandidates, backfillExclusions, type BackfillScope } from "@/lib/jobs/handlers/annotation-batch";
+import { estimateCost, TOKENS_PER_PLACE, type Estimate } from "@/lib/annotation/pricing";
+import { BACKFILL_CAP, backfillCandidates, backfillExclusions, taskOf, type BackfillScope, type BackfillTask } from "@/lib/jobs/handlers/annotation-batch";
 import { annotationSchema, toStored, type StoredAnnotation } from "@/lib/annotation/schema";
 import { anthropic } from "@/lib/annotation/client";
 
@@ -92,6 +92,7 @@ export async function updateAnnotation(photoId: string, fd: FormData): Promise<v
     mood: next.mood ?? null,
     searchSummary: current.searchSummary ?? "",
     estimatedYear: null,
+    estimatedPlace: null,
   });
   await db.photo.update({ where: { id: photoId }, data: { annotation: merged, annotationSource: "EDITED" } });
   revalidatePath(`/photos/${photoId}`);
@@ -107,14 +108,22 @@ export async function confirmEstimatedDate(photoId: string, fd: FormData): Promi
   revalidatePath("/review");
 }
 
-const scopeSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("all") }),
-  z.object({ kind: z.literal("trip"), tripId: z.string().min(1) }),
-  z.object({ kind: z.literal("collection"), collectionId: z.string().min(1) }),
-  z.object({ kind: z.literal("range"), from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }),
-]);
+const taskSchema = z.enum(["describe", "place"]).optional();
+const scopeSchema = z.intersection(
+  z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("all") }),
+    z.object({ kind: z.literal("trip"), tripId: z.string().min(1) }),
+    z.object({ kind: z.literal("collection"), collectionId: z.string().min(1) }),
+    z.object({ kind: z.literal("range"), from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }),
+  ]),
+  z.object({ task: taskSchema }),
+);
 
-export type BackfillPreview = { estimate: Estimate; photos: number; videos: number; sends: string[]; /** What in scope is left out, and why. */ excluded: { inScope: number; described: number; optedOutSelf: number; optedOutInherited: number }; /** Set when the scope holds more than one run sends. */ cap: number | null };
+/** What one item costs the run to send, and what the family gets back. */
+const PLACE_SENDS = ["the 1600-pixel rendition of each photo (three or four frames for a clip)", "the uploader's notes, caption and title", "the date when known", "the trip and collection titles"];
+const DESCRIBE_SENDS = ["the 1600-pixel rendition of each photo (three or four frames for a clip)", "the uploader's notes, caption and title", "the date and camera when known", "the trip and collection titles", "the names of confirmed people whose recognition is on and who are adults, and confirmed pet names; never face data"];
+
+export type BackfillPreview = { estimate: Estimate; task: BackfillTask; photos: number; videos: number; sends: string[]; /** What in scope is left out, and why. */ excluded: { inScope: number; described: number; optedOutSelf: number; optedOutInherited: number }; /** Set when the scope holds more than one run sends. */ cap: number | null };
 
 /** What a backfill would send and roughly what it would cost, before anything is submitted. */
 export async function previewBackfill(scope: BackfillScope): Promise<BackfillPreview> {
@@ -124,13 +133,15 @@ export async function previewBackfill(scope: BackfillScope): Promise<BackfillPre
   const videos = items.filter((i) => i.kind === "VIDEO").length;
   const photos = items.length - videos;
   const excluded = await backfillExclusions(s);
+  const task = taskOf(s);
   return {
-    estimate: estimateCost(env().ANNOTATION_MODEL, { photos, videos }, { batch: true }),
+    estimate: estimateCost(env().ANNOTATION_MODEL, { photos, videos }, { batch: true, shape: task === "place" ? TOKENS_PER_PLACE : undefined }),
+    task,
     photos,
     videos,
     excluded,
     cap: excluded.inScope - excluded.described - excluded.optedOutSelf - excluded.optedOutInherited > BACKFILL_CAP ? BACKFILL_CAP : null,
-    sends: ["the 1600-pixel rendition of each photo (three or four frames for a clip)", "the uploader's notes, caption and title", "the date and camera when known", "the trip and collection titles", "the names of confirmed people whose recognition is on and who are adults, and confirmed pet names; never face data"],
+    sends: task === "place" ? PLACE_SENDS : DESCRIBE_SENDS,
   };
 }
 

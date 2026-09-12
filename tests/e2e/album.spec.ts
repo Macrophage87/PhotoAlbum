@@ -409,6 +409,36 @@ test("the AI helper describes reviewed items once an admin opts in, and opted-ou
     .toMatchObject({ status: "ENDED", succeeded: count });
   const described = await withDb((c) => c.query('SELECT count(*)::int AS n FROM "Photo" p JOIN "Trip" t ON t.id = p."tripId" WHERE t.slug = $1 AND p."annotatedAt" IS NOT NULL', ["yosemite"]));
   expect(described.rows[0].n).toBe(count);
+
+  // An item with no location of its own is placed by the same pass, and the page says the pin is a guess.
+  const guessed = await withDb((c) => c.query(`SELECT id, lat, "placeEstimateName" FROM "Photo" WHERE "gpsSource" = 'ESTIMATE' LIMIT 1`));
+  expect(guessed.rows[0].placeEstimateName).toBe("Inner Harbor, Baltimore");
+  await page.goto(`/photos/${guessed.rows[0].id}`);
+  const guessedPlace = page.getByTestId("place-editor");
+  await expect(guessedPlace.getByText("estimated from the photo")).toBeVisible();
+  await expect(guessedPlace.getByText(/Inner Harbor, Baltimore · fairly sure · within about 800 m/)).toBeVisible();
+  await expect(guessedPlace.getByText("the Domino Sugar sign across the water")).toBeVisible();
+  // Accepting it keeps the position but stops it being a guess, and records who agreed.
+  await guessedPlace.getByRole("button", { name: "Use this place" }).click();
+  await expect(guessedPlace.getByText("set by e2e-admin")).toBeVisible();
+  const accepted = await withDb((c) => c.query('SELECT lat, "gpsSource" FROM "Photo" WHERE id = $1', [guessed.rows[0].id]));
+  expect(accepted.rows[0]).toMatchObject({ gpsSource: "MANUAL", lat: guessed.rows[0].lat });
+
+  // A library described before places were ever estimated: the place-only pass asks about it without touching its
+  // description, and its answer (a different landmark in the stand-in) is what lands.
+  await withDb((c) => c.query(`UPDATE "Photo" SET lat = NULL, lng = NULL, "gpsSource" = NULL, "placeEstimatedAt" = NULL, "placeEstimateName" = NULL WHERE id = $1`, [guessed.rows[0].id]));
+  await page.goto("/admin");
+  await page.getByLabel("What to ask for").selectOption("place");
+  await page.getByRole("button", { name: "Estimate" }).click();
+  await expect(status).toContainText("would be sent");
+  const places = Number((await status.textContent())!.match(/(\d+) items? would be sent/)![1]);
+  expect(places).toBeGreaterThan(0);
+  await page.getByLabel(`Type ${places} to confirm`).fill(String(places));
+  await page.getByRole("button", { name: "Send to the helper" }).click();
+  await expect(page.getByText("Backfill submitted")).toBeVisible();
+  await expect
+    .poll(async () => (await withDb((c) => c.query('SELECT "placeEstimateName", "gpsSource" FROM "Photo" WHERE id = $1', [guessed.rows[0].id]))).rows[0], { timeout: 45_000, intervals: [1500] })
+    .toMatchObject({ placeEstimateName: "Washington Monument", gpsSource: "ESTIMATE" });
 });
 
 test("uploads get embeddings from the sidecar and the review screen suggests where they belong", async ({ context, page }) => {

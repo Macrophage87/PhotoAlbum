@@ -32,6 +32,10 @@ describe("what a Takeout sidecar may fill in", () => {
     expect(plan.data).toMatchObject({ lat: 44.3186, gpsSource: "SIDECAR", caption: "Otter Cliff" });
     expect(plan.data.takenAt).toBeUndefined();
   });
+  it("replaces a place the helper only guessed at", () => {
+    const guessed: RepairTarget = { ...bare, lat: 41.9, lng: 12.45, gpsSource: "ESTIMATE", takenAt: new Date("2025-08-12T13:00:00Z"), takenAtSource: "EXIF_OFFSET", context: "kept", sourceId: "kept" };
+    expect(planSidecarRepair(guessed, sidecar)!.data).toMatchObject({ lat: 44.3186, gpsSource: "SIDECAR" });
+  });
   it("has nothing to say without a sidecar, or when the sidecar itself is empty", () => {
     expect(planSidecarRepair(bare, null)).toBeNull();
     expect(planSidecarRepair(bare, { title: null, description: null, takenAt: null, lat: null, lng: null, googleId: null })).toBeNull();

@@ -3,7 +3,7 @@
 import { useState, useTransition } from "react";
 import { Button, Input, Label } from "@/components/ui";
 import { cancelBackfill, previewBackfill, setAnnotationOptIn, startBackfill, type BackfillPreview } from "@/app/annotation/actions";
-import type { BackfillScope } from "@/lib/jobs/handlers/annotation-batch";
+import type { BackfillScope, BackfillTask } from "@/lib/jobs/handlers/annotation-batch";
 
 const SKIP_LABELS: Record<string, string> = { noRendition: "file could not be read", missing: "deleted meanwhile", optedOutOrDescribedMeanwhile: "opted out or described meanwhile" };
 type Collapsed = (Batch & { kind: "row" }) | { kind: "more"; id: string; count: number; described: number; errored: number; canceled: number; skipped: number };
@@ -50,6 +50,7 @@ type Option = { id: string; title: string };
 
 export function AnnotationAdmin({ gates, model, trips, collections, batches, spend, rawRetentionDays }: { gates: { envEnabled: boolean; hasKey: boolean; optedInAt: string | null; active: boolean }; model: string; trips: Option[]; collections: Option[]; batches: Batch[]; /** Real spend from recorded token usage, each item at the price of the model that answered it. */ spend: { items: number; inputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; outputTokens: number; usd: number; pricesAsOf: string }; rawRetentionDays: number }) {
   const [pending, start] = useTransition();
+  const [task, setTask] = useState<BackfillTask>("describe");
   const [scopeKind, setScopeKind] = useState<BackfillScope["kind"]>("all");
   const [tripId, setTripId] = useState(trips[0]?.id ?? "");
   const [collectionId, setCollectionId] = useState(collections[0]?.id ?? "");
@@ -58,8 +59,10 @@ export function AnnotationAdmin({ gates, model, trips, collections, batches, spe
   const [preview, setPreview] = useState<BackfillPreview | null>(null);
   const [typed, setTyped] = useState("");
   const [message, setMessage] = useState<string | null>(null);
-  const scope = (): BackfillScope =>
-    scopeKind === "trip" ? { kind: "trip", tripId } : scopeKind === "collection" ? { kind: "collection", collectionId } : scopeKind === "range" ? { kind: "range", from, to } : { kind: "all" };
+  const scope = (): BackfillScope => ({
+    task,
+    ...(scopeKind === "trip" ? { kind: "trip" as const, tripId } : scopeKind === "collection" ? { kind: "collection" as const, collectionId } : scopeKind === "range" ? { kind: "range" as const, from, to } : { kind: "all" as const }),
+  });
   const select = "h-9 rounded-theme border border-border bg-surface px-2 text-sm";
 
   return (
@@ -90,10 +93,14 @@ export function AnnotationAdmin({ gates, model, trips, collections, batches, spe
       </div>
 
       <div className="rounded-theme border border-border bg-surface p-4 space-y-3 text-sm">
-        <p className="font-medium">Describe the existing library (backfill, at half price through the Batches API)</p>
+        <p className="font-medium">Work through the existing library (backfill, at half price through the Batches API)</p>
         <div className="flex flex-wrap gap-2 items-center">
+          <select value={task} onChange={(e) => { setTask(e.target.value as BackfillTask); setPreview(null); setTyped(""); }} className={select} aria-label="What to ask for">
+            <option value="describe">Describe items that have no description</option>
+            <option value="place">Place items that have no location</option>
+          </select>
           <select value={scopeKind} onChange={(e) => { setScopeKind(e.target.value as BackfillScope["kind"]); setPreview(null); }} className={select} aria-label="Scope">
-            <option value="all">Everything not yet described</option>
+            <option value="all">Everywhere</option>
             <option value="trip">One trip</option>
             <option value="collection">One collection</option>
             <option value="range">A date range</option>
@@ -121,9 +128,10 @@ export function AnnotationAdmin({ gates, model, trips, collections, batches, spe
             <p>
               <b>{preview.estimate.items}</b> item{preview.estimate.items === 1 ? "" : "s"} would be sent ({preview.photos} photo{preview.photos === 1 ? "" : "s"}, {preview.videos} clip{preview.videos === 1 ? "" : "s"}), about <b>{preview.estimate.inputTokens.toLocaleString()}</b> input tokens and <b>{preview.estimate.outputTokens.toLocaleString()}</b> output tokens, roughly <b>${preview.estimate.usd.toFixed(2)}</b> on {preview.estimate.model} (approximate; prices as of {preview.estimate.pricesAsOf}).
             </p>
-            <p className="text-muted">Sent per item: {preview.sends.join("; ")}. Opted-out and already described items are skipped.</p>
+            <p className="text-muted">Sent per item: {preview.sends.join("; ")}. Opted-out items are skipped, and so is anything this run has already been through.</p>
+            {preview.task === "place" && <p className="text-muted">The helper is asked only where each item was taken, and only answers for places anyone could name: landmarks, parks, waterfronts, plazas, a region with a look of its own. It is told to leave homes, gardens and residential streets alone. A guess never replaces a location from the camera, a track, Google or a family member, and a track imported later replaces the guess.</p>}
             <p className="text-muted">
-              {preview.excluded.inScope} item{preview.excluded.inScope === 1 ? "" : "s"} in scope: {preview.excluded.described} already described, {preview.excluded.optedOutSelf} opted out, {preview.excluded.optedOutInherited} opted out through a trip or collection, {preview.estimate.items} would be sent{preview.cap ? ` (one run sends at most ${preview.cap.toLocaleString()}; run it again for the rest)` : ""}. Items whose files cannot be read are skipped at submission and counted below.
+              {preview.excluded.inScope} item{preview.excluded.inScope === 1 ? "" : "s"} in scope: {preview.excluded.described} {preview.task === "place" ? "already placed or asked about" : "already described"}, {preview.excluded.optedOutSelf} opted out, {preview.excluded.optedOutInherited} opted out through a trip or collection, {preview.estimate.items} would be sent{preview.cap ? ` (one run sends at most ${preview.cap.toLocaleString()}; run it again for the rest)` : ""}. Items whose files cannot be read are skipped at submission and counted below.
             </p>
             {preview.estimate.items > 0 && (
               <div className="flex flex-wrap items-center gap-2">

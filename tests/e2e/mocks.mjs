@@ -12,6 +12,21 @@ const pickerSessions = new Map();
 const fixtureBytes = (name) => readFileSync(path.join(here, "../fixtures", name));
 
 /** A Messages API reply shaped like the real one, with the recorded structured record as its text block. */
+/** Two different places, so a test can tell the full description apart from the place-only pass. */
+const PLACE_WITH_DESCRIPTION = { name: "Inner Harbor, Baltimore", lat: 39.2853, lng: -76.6093, radiusM: 800, confidence: 0.78, evidence: "the Domino Sugar sign across the water" };
+const PLACE_ONLY = { name: "Washington Monument", lat: 38.8895, lng: -77.0353, radiusM: 150, confidence: 0.81, evidence: "the obelisk and the ring of flags" };
+
+/** What the stand-in answers one request: a place when only a place was asked for, the recorded description otherwise. */
+function answerFor(params) {
+  const system = JSON.stringify(params.system ?? "");
+  if (system.includes("placing photos and short video clips")) return JSON.stringify({ place: PLACE_ONLY });
+  const text = JSON.stringify(params.messages ?? []);
+  const record = JSON.parse(annotation);
+  if (text.includes("Please estimate a year range")) record.estimatedYear = { from: 1990, to: 1994, confidence: 0.55, evidence: "print border and the notes" };
+  if (text.includes("no location recorded")) record.estimatedPlace = PLACE_WITH_DESCRIPTION;
+  return JSON.stringify(record);
+}
+
 function message(model, text = annotation) {
   return { id: `msg_${Date.now()}`, type: "message", role: "assistant", model, content: [{ type: "text", text }], stop_reason: "end_turn", stop_sequence: null, stop_details: null, usage: { input_tokens: 3200, output_tokens: 380, cache_read_input_tokens: 900, cache_creation_input_tokens: 0 } };
 }
@@ -69,8 +84,7 @@ export function startMocks(port = 3201) {
       const text = JSON.stringify(body.messages ?? []);
       // An item whose notes ask for it exercises the refusal path.
       if (text.includes("REFUSE-ME")) return json(200, { ...message(body.model, ""), stop_reason: "refusal", stop_details: { type: "refusal", category: "other", explanation: "mock" } });
-      const estimate = text.includes("Please estimate a year range") ? { ...JSON.parse(annotation), estimatedYear: { from: 1990, to: 1994, confidence: 0.55, evidence: "print border and the notes" } } : null;
-      return json(200, message(body.model, estimate ? JSON.stringify(estimate) : annotation));
+      return json(200, message(body.model, answerFor(body)));
     }
     if (url.pathname === "/v1/messages/batches" && req.method === "POST") {
       const body = JSON.parse((await readBody(req)) || "{}");
@@ -86,7 +100,7 @@ export function startMocks(port = 3201) {
       if (tail === "/cancel") return json(200, { id, type: "message_batch", processing_status: "canceling", request_counts: { processing: 0, succeeded: 0, errored: 0, canceled: requests.length, expired: 0 } });
       if (tail === "/results") {
         res.writeHead(200, { "content-type": "application/x-jsonl" });
-        res.end(requests.map((r) => JSON.stringify({ custom_id: r.custom_id, result: { type: "succeeded", message: message(r.params.model) } })).join("\n") + "\n");
+        res.end(requests.map((r) => JSON.stringify({ custom_id: r.custom_id, result: { type: "succeeded", message: message(r.params.model, answerFor(r.params)) } })).join("\n") + "\n");
         return;
       }
       return json(200, { id, type: "message_batch", processing_status: "ended", request_counts: { processing: 0, succeeded: requests.length, errored: 0, canceled: 0, expired: 0 }, created_at: new Date().toISOString(), expires_at: new Date(Date.now() + 86400000).toISOString(), ended_at: new Date().toISOString(), cancel_initiated_at: null, results_url: `http://127.0.0.1:${port}/v1/messages/batches/${id}/results`, archived_at: null });

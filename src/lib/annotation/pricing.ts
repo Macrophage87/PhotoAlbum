@@ -12,19 +12,22 @@ export const PRICES: Record<string, { inputPerMTok: number; outputPerMTok: numbe
 
 /** Rough per-item token shape: a 1600px image, the cached instructions, a structured answer. */
 export const TOKENS_PER_PHOTO = { image: 2500, instructions: 1000, output: 400 };
+/** The place-only pass sends the same frames but asks a much smaller question and gets a much shorter answer. */
+export const TOKENS_PER_PLACE = { image: 2500, instructions: 650, output: 120 };
 export const VIDEO_FRAME_MULTIPLIER = 3.5;
 export const BATCH_DISCOUNT = 0.5;
 
 export type Estimate = { items: number; inputTokens: number; outputTokens: number; usd: number; approximate: true; pricesAsOf: string; model: string };
 
 /** Estimate a run. Instructions bill at the cache-read rate when the block can cache on this model, full price otherwise. */
-export function estimateCost(model: string, counts: { photos: number; videos: number }, opts: { batch: boolean }): Estimate {
+export function estimateCost(model: string, counts: { photos: number; videos: number }, opts: { batch: boolean; shape?: typeof TOKENS_PER_PHOTO }): Estimate {
   const price = PRICES[model] ?? PRICES["claude-opus-5"];
+  const shape = opts.shape ?? TOKENS_PER_PHOTO;
   const items = counts.photos + counts.videos;
-  const imageTokens = counts.photos * TOKENS_PER_PHOTO.image + counts.videos * TOKENS_PER_PHOTO.image * VIDEO_FRAME_MULTIPLIER;
-  const cached = TOKENS_PER_PHOTO.instructions >= price.cacheMinTokens;
-  const instructionTokens = items * TOKENS_PER_PHOTO.instructions;
-  const outputTokens = items * TOKENS_PER_PHOTO.output;
+  const imageTokens = counts.photos * shape.image + counts.videos * shape.image * VIDEO_FRAME_MULTIPLIER;
+  const cached = shape.instructions >= price.cacheMinTokens;
+  const instructionTokens = items * shape.instructions;
+  const outputTokens = items * shape.output;
   const usdInput = (imageTokens / 1e6) * price.inputPerMTok + (instructionTokens / 1e6) * price.inputPerMTok * (cached ? price.cacheReadFactor : 1);
   const usdOutput = (outputTokens / 1e6) * price.outputPerMTok;
   const usd = (usdInput + usdOutput) * (opts.batch ? BATCH_DISCOUNT : 1);

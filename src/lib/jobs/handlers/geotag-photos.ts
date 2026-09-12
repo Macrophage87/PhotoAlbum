@@ -10,9 +10,10 @@ const TRUSTED_TIME_SOURCES: TakenAtSource[] = ["EXIF_OFFSET", "EXIF_TZLOOKUP", "
 
 /**
  * Give GPS-less photos a position by interpolating along any track that covers the moment they were taken.
- * Never overwrites EXIF or manual positions. Activity tracks (GPX/FIT) are preferred over Google traces,
- * and when a GPX/FIT track is imported later, photos previously placed from a coarser trace inside its
- * time window are re-positioned from it.
+ * Never overwrites EXIF or manual positions; a place the AI helper guessed at is replaced, since a track is a
+ * record and the guess is not. Activity tracks (GPX/FIT) are preferred over Google traces, and when a GPX/FIT
+ * track is imported later, photos previously placed from a coarser trace inside its time window are
+ * re-positioned from it.
  */
 export async function geotagPhotos(job: GeotagPhotosJob): Promise<{ updated: number }> {
   const tracks = await db.track.findMany({
@@ -31,6 +32,8 @@ export async function geotagPhotos(job: GeotagPhotosJob): Promise<{ updated: num
       tripId: job.tripId,
       OR: [
         { lat: null, gpsSource: null, ...trusted },
+        // A place the helper recognised is a guess; a track that covers the moment is a record, so it wins.
+        { gpsSource: "ESTIMATE" as const, ...trusted },
         // Already placed from a track: re-evaluate only inside the windows of newly available precise tracks.
         ...(precise.length ? [{ gpsSource: "TRACK" as const, ...trusted, OR: precise.map((t) => ({ takenAt: { gte: t.startTime, lte: t.endTime } })) }] : []),
       ],

@@ -191,12 +191,31 @@ export async function setPhotoPlace(id: string, fd: FormData): Promise<PlaceResu
   return { ok: true, lat: pos.lat, lng: pos.lng, gpsSource: "MANUAL", setBy: uploaderLabel(user.name, user.email) };
 }
 
-/** Forget a hand-set (or any) position; a track covering the moment may place it again. */
+/**
+ * Accept the helper's guess as the item's place. The position does not move; it stops being a guess, which means a
+ * track imported later no longer replaces it, and the album records who agreed to it.
+ */
+export async function confirmPlaceEstimate(id: string): Promise<PlaceResult> {
+  const user = await requireUserOrThrow();
+  const photo = await db.photo.findUnique({ where: { id }, select: { lat: true, lng: true, gpsSource: true } });
+  if (!photo) return { ok: false, message: "Photo not found" };
+  if (photo.gpsSource !== "ESTIMATE" || photo.lat === null || photo.lng === null) return { ok: false, message: "There is no estimated place to accept" };
+  await db.photo.update({ where: { id }, data: { gpsSource: "MANUAL", placeSetById: user.id } });
+  revalidatePath(`/photos/${id}`);
+  revalidatePath("/trips", "layout");
+  return { ok: true, lat: photo.lat, lng: photo.lng, gpsSource: "MANUAL", setBy: uploaderLabel(user.name, user.email) };
+}
+
+/**
+ * Forget a hand-set (or any) position; a track covering the moment may place it again. Clearing the helper's guess
+ * drops what it recognised with it, but keeps the record that it was asked, so a later backfill does not put the
+ * same guess back after a member has rejected it.
+ */
 export async function clearPhotoPlace(id: string): Promise<PlaceResult> {
   await requireUserOrThrow();
   const photo = await db.photo.findUnique({ where: { id }, select: { tripId: true } });
   if (!photo) return { ok: false, message: "Photo not found" };
-  await db.photo.update({ where: { id }, data: { lat: null, lng: null, altitude: null, gpsSource: null, placeSetById: null } });
+  await db.photo.update({ where: { id }, data: { lat: null, lng: null, altitude: null, gpsSource: null, placeSetById: null, placeEstimateName: null, placeEstimateConfidence: null, placeEstimateRadiusM: null, placeEstimateNote: null } });
   if (photo.tripId) await enqueue(QUEUES.geotagPhotos, { tripId: photo.tripId }, { singletonKey: `geotag:${photo.tripId}`, singletonSeconds: 10, singletonNextSlot: true });
   revalidatePath(`/photos/${id}`);
   revalidatePath("/trips", "layout");

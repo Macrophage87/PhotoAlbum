@@ -48,6 +48,7 @@ enum GpsSource {
   TRACK
   MANUAL
   SIDECAR
+  ESTIMATE
 }
 
 enum TakenAtSource {
@@ -303,6 +304,14 @@ model Photo {
   annotationCacheWriteTokens Int?
   annotationOutputTokens    Int?
   annotationBatched         Boolean?
+  /// For items with no recorded position: the helper's guess at a recognisable public place, with the evidence it
+  /// used, so the album can always say where the pin came from. placeEstimatedAt is set even when the helper declined
+  /// to guess, so a backfill asks about each item once.
+  placeEstimateName       String?
+  placeEstimateConfidence Float?
+  placeEstimateRadiusM    Int?
+  placeEstimateNote       String?
+  placeEstimatedAt        DateTime?
   /// For undated items: the helper's estimated year range, kept until a member sets a real date.
   estimatedDate           DateTime?
   estimatedDateConfidence Float?

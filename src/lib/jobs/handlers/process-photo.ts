@@ -101,7 +101,10 @@ export async function processPhoto(job: ProcessPhotoJob): Promise<void> {
     }
 
     const hasGps = exif.lat !== null && exif.lng !== null;
-    const sidecarGps = photo.gpsSource === "SIDECAR" && photo.lat !== null && photo.lng !== null;
+    // A position the album did not read out of this file: Google's sidecar, or the helper's guess at the place. Both
+    // survive a re-process, since re-reading the same file will not produce a better one.
+    const keptGps = (photo.gpsSource === "SIDECAR" || photo.gpsSource === "ESTIMATE") && photo.lat !== null && photo.lng !== null;
+    const sidecarGps = keptGps && photo.gpsSource === "SIDECAR";
     const contentHash = photo.contentHash ?? (await sha256File(localPath));
     await db.photo.update({
       where: { id: photo.id },
@@ -112,10 +115,10 @@ export async function processPhoto(job: ProcessPhotoJob): Promise<void> {
         takenAt,
         takenAtSource,
         tzOffsetMin,
-        lat: hasGps ? exif.lat : photo.gpsSource === "MANUAL" || sidecarGps ? photo.lat : null,
-        lng: hasGps ? exif.lng : photo.gpsSource === "MANUAL" || sidecarGps ? photo.lng : null,
+        lat: hasGps ? exif.lat : photo.gpsSource === "MANUAL" || keptGps ? photo.lat : null,
+        lng: hasGps ? exif.lng : photo.gpsSource === "MANUAL" || keptGps ? photo.lng : null,
         altitude: hasGps ? exif.altitude : null,
-        gpsSource: hasGps ? "EXIF" : photo.gpsSource === "MANUAL" ? "MANUAL" : sidecarGps ? "SIDECAR" : null,
+        gpsSource: hasGps ? "EXIF" : photo.gpsSource === "MANUAL" ? "MANUAL" : keptGps ? photo.gpsSource : null,
         contentHash,
         camera: cameraLabel(exif),
         lens: exif.lens,
@@ -139,7 +142,8 @@ export async function processPhoto(job: ProcessPhotoJob): Promise<void> {
     await enqueueFaceDetection(photo.id);
     await enqueueAnimalDetection(photo.id);
 
-    // 7. Position GPS-less photos from any track covering that moment (handler lands in Phase 5)
+    // 7. Position GPS-less photos from any track covering that moment (handler lands in Phase 5). A place the helper
+    // guessed at does not count as positioned: a track that covers the moment is better than a guess.
     if (trip && !hasGps && !sidecarGps && takenAt) {
       await enqueue(QUEUES.geotagPhotos, { tripId: trip.id }, { singletonKey: `geotag:${trip.id}`, singletonSeconds: 10, singletonNextSlot: true });
     }

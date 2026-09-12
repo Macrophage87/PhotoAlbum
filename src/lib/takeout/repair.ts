@@ -19,8 +19,9 @@ export type RepairPlan = { data: Record<string, unknown>; filled: RepairField[] 
 
 /** A date the album only guessed from the file itself, so Google's own record of the capture time is better. */
 const WEAK_DATE: TakenAtSource[] = ["FILE_MTIME", "UPLOAD_TIME"];
-/** A position the album interpolated from a track, so a recorded position is better. No EXIF or hand-set value is touched. */
-const WEAK_PLACE: GpsSource[] = ["TRACK"];
+/** A position the album worked out itself, by interpolating a track or by recognising the place, so a position Google
+ * actually recorded is better. No EXIF or hand-set value is touched. */
+const WEAK_PLACE: GpsSource[] = ["TRACK", "ESTIMATE"];
 
 /**
  * What a Takeout sidecar can add to a photo the album already holds. Only gaps are filled: anything a family member

@@ -217,7 +217,7 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
 
             <Card className="p-4">
               <h2 className="font-medium mb-2">Place</h2>
-              <PlaceEditor photoId={photo.id} initial={photo.lat !== null && photo.lng !== null ? { lat: photo.lat, lng: photo.lng } : null} gpsSource={photo.gpsSource} setBy={photo.placeSetBy ? uploaderLabel(photo.placeSetBy.name, photo.placeSetBy.email) : null} theme={mapThemeOf(getTheme(tripTheme))} />
+              <PlaceEditor photoId={photo.id} initial={photo.lat !== null && photo.lng !== null ? { lat: photo.lat, lng: photo.lng } : null} gpsSource={photo.gpsSource} setBy={photo.placeSetBy ? uploaderLabel(photo.placeSetBy.name, photo.placeSetBy.email) : null} estimate={{ name: photo.placeEstimateName, confidence: photo.placeEstimateConfidence, radiusM: photo.placeEstimateRadiusM, note: photo.placeEstimateNote }} theme={mapThemeOf(getTheme(tripTheme))} />
             </Card>
             <Card className="p-4">
               <h2 className="font-medium mb-2">Details</h2>

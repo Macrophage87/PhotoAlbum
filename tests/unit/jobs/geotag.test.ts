@@ -31,6 +31,18 @@ describe("geotagPhotos", () => {
     tripId = trip.id;
   });
 
+  it("replaces a place the helper guessed at, since a track is a record and a guess is not", async () => {
+    await makeTrack(tripId, userId, line(10), "GPX");
+    const guessed = await makePhoto(tripId, userId, new Date(T0 + 4.5 * 60_000), { lat: 41.9, lng: 12.45, gpsSource: "ESTIMATE", placeEstimateName: "St Peter's Square", placeEstimatedAt: new Date() });
+
+    expect((await geotagPhotos({ tripId })).updated).toBe(1);
+    const p = await db.photo.findUniqueOrThrow({ where: { id: guessed.id } });
+    expect(p.gpsSource).toBe("TRACK");
+    expect(p.lat).toBeCloseTo(44.0045, 4);
+    // The item has been asked about, so a later place backfill leaves it alone whatever happens to this position.
+    expect(p.placeEstimatedAt).not.toBeNull();
+  });
+
   it("positions photos inside a track window and leaves the rest alone", async () => {
     await makeTrack(tripId, userId, line(10), "GPX");
     const inside = await makePhoto(tripId, userId, new Date(T0 + 4.5 * 60_000));

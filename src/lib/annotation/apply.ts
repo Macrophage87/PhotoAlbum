@@ -1,6 +1,7 @@
 import { db } from "@/lib/db";
 import { annotationSchema, clampAnnotation, toStored, type Annotation } from "./schema";
 import { enqueueEmbedding } from "@/lib/jobs/handlers/embed-photo";
+import { applyPlaceEstimate, needsPlaceEstimate } from "./place";
 
 export type ApplyResult = { ok: true } | { ok: false; reason: "refusal" | "invalid" | "max_tokens" };
 
@@ -8,7 +9,7 @@ export type ApplyResult = { ok: true } | { ok: false; reason: "refusal" | "inval
 export type Usage = { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null };
 
 export async function applyAnnotation(photoId: string, model: string, parsed: Annotation, raw: { usage?: Usage; batched?: boolean } & Record<string, unknown>): Promise<void> {
-  const current = await db.photo.findUnique({ where: { id: photoId }, select: { takenAt: true, takenAtSource: true, estimatedDateSource: true, annotationSource: true, title: true, kind: true } });
+  const current = await db.photo.findUnique({ where: { id: photoId }, select: { takenAt: true, takenAtSource: true, estimatedDateSource: true, annotationSource: true, title: true, kind: true, lat: true, placeEstimatedAt: true } });
   if (!current) return;
   const stored = toStored(parsed);
   const est = parsed.estimatedYear;
@@ -38,6 +39,9 @@ export async function applyAnnotation(photoId: string, model: string, parsed: An
     }),
     db.mediaAnnotationRaw.create({ data: { photoId, model, response: raw as object } }),
   ]);
+  // The place guess is only ever recorded for an item that was actually asked, so clearing a position later still
+  // leaves it eligible for the backfill.
+  if (needsPlaceEstimate(current)) await applyPlaceEstimate(photoId, parsed.estimatedPlace);
   // The description changed, so the semantic index for this item is stale.
   await enqueueEmbedding(photoId, true);
 }

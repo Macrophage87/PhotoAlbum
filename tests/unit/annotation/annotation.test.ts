@@ -47,7 +47,7 @@ describe("annotation schema and pricing", () => {
     expect(haiku.thinking).toBeUndefined();
   });
   it("clamps over-long fields instead of rejecting a good answer", () => {
-    const raw = { caption: "x".repeat(250), description: "d", tags: Array.from({ length: 30 }, (_, i) => `t${i}`), place: null, activity: null, objects: [], visibleText: null, season: "summer", mood: null, searchSummary: "s", estimatedYear: null };
+    const raw = { caption: "x".repeat(250), description: "d", tags: Array.from({ length: 30 }, (_, i) => `t${i}`), place: null, activity: null, objects: [], visibleText: null, season: "summer", mood: null, searchSummary: "s", estimatedYear: null, estimatedPlace: null };
     const parsed = parseMessageContent([{ type: "text", text: JSON.stringify(raw) }]);
     expect(parsed?.caption).toHaveLength(200);
     expect(parsed?.tags).toHaveLength(25);
@@ -65,7 +65,7 @@ describe("annotation schema and pricing", () => {
 });
 
 describe("the text block", () => {
-  const base = { id: "p", kind: "PHOTO" as const, status: "READY" as const, storageKey: "k", renditions: null, videoRenditions: null, takenAt: new Date("2025-08-12T12:00:00Z"), takenAtSource: "EXIF_OFFSET" as const, tzOffsetMin: -240, camera: "iPhone 15", context: "lobster rolls on the mail boat", caption: null, title: null, durationS: null, trip: { title: "Acadia", timezone: "America/New_York" }, collections: [{ collection: { title: "Summer" } }] };
+  const base = { id: "p", kind: "PHOTO" as const, status: "READY" as const, storageKey: "k", renditions: null, videoRenditions: null, takenAt: new Date("2025-08-12T12:00:00Z"), takenAtSource: "EXIF_OFFSET" as const, tzOffsetMin: -240, camera: "iPhone 15", lat: null, lng: null, placeEstimatedAt: null, context: "lobster rolls on the mail boat", caption: null, title: null, durationS: null, trip: { title: "Acadia", timezone: "America/New_York" }, collections: [{ collection: { title: "Summer" } }] };
   it("includes notes, containers and the names rule, and asks for a date only when needed", () => {
     const text = describeItem(base, ["Sam"], false);
     expect(text).toContain("Notes from the person who uploaded it: lobster rolls");
@@ -112,6 +112,20 @@ describe("applying a record", () => {
     await db.photo.update({ where: { id: photoId }, data: { title: null, kind: "EXTERNAL_VIDEO" } });
     await applyAnnotation(photoId, "claude-opus-5", parsed, {});
     expect((await db.photo.findUniqueOrThrow({ where: { id: photoId } })).title).toBeNull();
+  });
+  it("places an item the helper recognised, and asks only when the item has no position", async () => {
+    const withPlace = { ...fixture, estimatedPlace: { name: "Inner Harbor, Baltimore", lat: 39.2853, lng: -76.6093, radiusM: 800, confidence: 0.75, evidence: "the Domino Sugar sign" } };
+    await applyAnnotation(photoId, "claude-opus-5", annotationSchema.parse(withPlace), {});
+    const placed = await db.photo.findUniqueOrThrow({ where: { id: photoId } });
+    expect(placed.gpsSource).toBe("ESTIMATE");
+    expect(placed.placeEstimateName).toBe("Inner Harbor, Baltimore");
+
+    // A second pass over an item that now has a position must not move it, whatever comes back.
+    await db.photo.update({ where: { id: photoId }, data: { lat: 44.35, lng: -68.2, gpsSource: "EXIF", placeEstimatedAt: null, placeEstimateName: null } });
+    await applyAnnotation(photoId, "claude-opus-5", annotationSchema.parse(withPlace), {});
+    const kept = await db.photo.findUniqueOrThrow({ where: { id: photoId } });
+    expect([kept.lat, kept.gpsSource]).toEqual([44.35, "EXIF"]);
+    expect(kept.placeEstimatedAt).toBeNull();
   });
   it("never overwrites a member's edits and never replaces a member's date", async () => {
     await db.photo.update({ where: { id: photoId }, data: { annotationSource: "EDITED", estimatedDateSource: "MEMBER", estimatedDate: new Date("1980-01-01") } });
