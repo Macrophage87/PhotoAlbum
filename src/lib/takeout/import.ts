@@ -12,10 +12,14 @@ import { enqueue } from "@/lib/jobs/boss";
 import { QUEUES } from "@/lib/jobs/queues";
 import { EXT_BY_MIME, EXT_MIME } from "@/lib/media/mime";
 import { safeArchivePath } from "./inbox";
-import { albumFolderOf, isMediaName, isVideoName, pairSidecars, parseSidecar, type SidecarData } from "./sidecar";
+import { albumFolderOf, captionFromTitle, isMediaName, isVideoName, pairSidecars, parseSidecar, type SidecarData } from "./sidecar";
 import { readStreamToString, walkZip } from "./zip";
+import { describeRepair, planSidecarRepair } from "./repair";
+import { pickActivityByTime, pickTripByDay } from "@/lib/photos/assign";
+import { localDayFromOffset, offsetMinutesInZone } from "@/lib/time/local-day";
+import { timezoneForCoords } from "@/lib/geo/tz";
 
-export type ImportReport = { albums: { title: string; items: number; created: boolean }[]; duplicates: number; unsupported: number; failures: { file: string; reason: string }[]; noSidecar: number };
+export type ImportReport = { albums: { title: string; items: number; created: boolean }[]; duplicates: number; unsupported: number; failures: { file: string; reason: string }[]; noSidecar: number; repairs?: string[] };
 
 const IGNORED_JSON = new Set(["metadata.json", "print-subscriptions.json", "shared_album_comments.json", "user-generated-memory-titles.json"]);
 
@@ -27,8 +31,8 @@ const IGNORED_JSON = new Set(["metadata.json", "print-subscriptions.json", "shar
 export async function importTakeoutArchive(importId: string): Promise<void> {
   const run = await db.takeoutImport.findUnique({ where: { id: importId } });
   if (!run || run.status !== "RUNNING") return;
-  const report: ImportReport = { albums: [], duplicates: 0, unsupported: 0, failures: [], noSidecar: 0 };
-  let imported = 0, skipped = 0, failed = 0, collectionsCreated = 0;
+  const report: ImportReport = { albums: [], duplicates: 0, unsupported: 0, failures: [], noSidecar: 0, repairs: [] };
+  let imported = 0, skipped = 0, failed = 0, collectionsCreated = 0, repaired = 0;
   const work = await mkdtemp(path.join(tmpdir(), "takeout-"));
   // A live run refreshes heartbeatAt every half minute; closeDeadImports() fails runs whose worker stopped doing so.
   const heartbeat = () => db.takeoutImport.updateMany({ where: { id: importId, status: "RUNNING" }, data: { heartbeatAt: new Date() } }).catch(() => undefined);
@@ -55,6 +59,31 @@ export async function importTakeoutArchive(importId: string): Promise<void> {
     const albums = new Map<string, { id: string; created: boolean; items: number; title: string }>();
     const store = storage();
 
+    /** Put a photo in the collection standing for its Google album folder, creating that collection once per run. */
+    const joinAlbum = async (entryPath: string, photoId: string): Promise<void> => {
+      const albumTitle = albumFolderOf(entryPath);
+      if (!albumTitle) return;
+      let album = albums.get(albumTitle);
+      if (!album) {
+        // Only a private, unshared collection may be reused; a public or link-shared one of the same name would
+        // publish the whole album silently, so the import makes its own private collection instead.
+        const existing = await db.collection.findFirst({ where: { title: albumTitle, visibility: "PRIVATE", shareToken: null }, select: { id: true } });
+        if (existing) album = { id: existing.id, created: false, items: 0, title: albumTitle };
+        else {
+          const slug = await uniqueSlug(albumTitle, async (s) => Boolean(await db.collection.findUnique({ where: { slug: s }, select: { id: true } })));
+          const created = await db.collection.create({ data: { slug, title: albumTitle, description: "Imported from Google Photos", themeKey: "default", visibility: "PRIVATE", shareToken: null, createdById: run.startedById }, select: { id: true } });
+          album = { id: created.id, created: true, items: 0, title: albumTitle };
+          collectionsCreated++;
+        }
+        albums.set(albumTitle, album);
+      }
+      const already = await db.collectionItem.findFirst({ where: { collectionId: album.id, photoId }, select: { id: true } });
+      if (already) return;
+      const position = await db.collectionItem.count({ where: { collectionId: album.id } });
+      await db.collectionItem.create({ data: { collectionId: album.id, photoId, position, addedById: run.startedById } }).catch(() => undefined);
+      album.items++;
+    };
+
     // Pass two: the media itself.
     await walkZip(archive, async (entry, open) => {
       if (entry.isDirectory || !isMediaName(path.basename(entry.path))) return;
@@ -72,8 +101,26 @@ export async function importTakeoutArchive(importId: string): Promise<void> {
         const tap = new Transform({ transform(chunk, _e, cb) { hash.update(chunk); cb(null, chunk); } });
         await pipeline(await open(), tap, createWriteStream(tmp));
         const contentHash = hash.digest("hex");
-        const dupe = await db.photo.findFirst({ where: { OR: [{ contentHash }, ...(meta?.googleId ? [{ sourceKind: "TAKEOUT" as const, sourceId: meta.googleId }] : [])] }, select: { id: true } });
-        if (dupe) { report.duplicates++; skipped++; await rm(tmp, { force: true }); return; }
+        const dupe = await db.photo.findFirst({
+          where: { OR: [{ contentHash }, ...(meta?.googleId ? [{ sourceKind: "TAKEOUT" as const, sourceId: meta.googleId }] : [])] },
+          select: { id: true, lat: true, lng: true, gpsSource: true, takenAt: true, takenAtSource: true, context: true, caption: true, sourceId: true, originalName: true, tripId: true },
+        });
+        if (dupe) {
+          // Already in the album: keep the bytes we have, but let the sidecar fill in whatever is still missing, and
+          // put the photo in this Google album's collection all the same.
+          report.duplicates++;
+          skipped++;
+          await rm(tmp, { force: true });
+          const plan = planSidecarRepair(dupe, meta);
+          if (plan) {
+            await db.photo.update({ where: { id: dupe.id }, data: plan.data });
+            if (plan.filled.includes("date")) await refileByDate(dupe.id);
+            repaired++;
+            if (report.repairs!.length < 200) report.repairs!.push(describeRepair(dupe.originalName, plan.filled));
+          }
+          await joinAlbum(entry.path, dupe.id);
+          return;
+        }
         const isVideo = isVideoName(file);
         const photo = await db.photo.create({
           data: {
@@ -88,7 +135,7 @@ export async function importTakeoutArchive(importId: string): Promise<void> {
             storageKey: "pending",
             originalPath: "pending",
             sizeBytes: 0,
-            caption: meta?.title && meta.title !== file ? meta.title : null,
+            caption: captionFromTitle(meta?.title ?? null, file),
             context: meta?.description ?? null,
             contextUpdatedAt: meta?.description ? new Date() : null,
             takenAt: meta?.takenAt ?? null,
@@ -103,27 +150,7 @@ export async function importTakeoutArchive(importId: string): Promise<void> {
         const { bytes } = await store.putStream(originalPath, createReadStream(tmp));
         await rm(tmp, { force: true });
         await db.photo.update({ where: { id: photo.id }, data: { storageKey, originalPath, sizeBytes: bytes } });
-        // Album folder → private collection, created once per run and reused across archives of the same export.
-        const albumTitle = albumFolderOf(entry.path);
-        if (albumTitle) {
-          let album = albums.get(albumTitle);
-          if (!album) {
-            // Only a private, unshared collection may be reused; a public or link-shared one of the same name would
-            // publish the whole album silently, so the import makes its own private collection instead.
-            const existing = await db.collection.findFirst({ where: { title: albumTitle, visibility: "PRIVATE", shareToken: null }, select: { id: true } });
-            if (existing) album = { id: existing.id, created: false, items: 0, title: albumTitle };
-            else {
-              const slug = await uniqueSlug(albumTitle, async (s) => Boolean(await db.collection.findUnique({ where: { slug: s }, select: { id: true } })));
-              const created = await db.collection.create({ data: { slug, title: albumTitle, description: "Imported from Google Photos", themeKey: "default", visibility: "PRIVATE", shareToken: null, createdById: run.startedById }, select: { id: true } });
-              album = { id: created.id, created: true, items: 0, title: albumTitle };
-              collectionsCreated++;
-            }
-            albums.set(albumTitle, album);
-          }
-          const position = await db.collectionItem.count({ where: { collectionId: album.id } });
-          await db.collectionItem.create({ data: { collectionId: album.id, photoId: photo.id, position, addedById: run.startedById } }).catch(() => undefined);
-          album.items++;
-        }
+        await joinAlbum(entry.path, photo.id);
         if (isVideo) await enqueue(QUEUES.transcodeVideo, { photoId: photo.id, tripId: null });
         else await enqueue(QUEUES.processPhoto, { photoId: photo.id, tripId: null });
         imported++;
@@ -131,14 +158,14 @@ export async function importTakeoutArchive(importId: string): Promise<void> {
         failed++;
         if (report.failures.length < 50) report.failures.push({ file, reason: err instanceof Error ? err.message.slice(0, 120) : String(err) });
       }
-      if ((imported + skipped + failed) % 25 === 0) await db.takeoutImport.update({ where: { id: importId }, data: { imported, skipped, failed, collectionsCreated } }).catch(() => undefined);
+      if ((imported + skipped + failed) % 25 === 0) await db.takeoutImport.update({ where: { id: importId }, data: { imported, skipped, failed, repaired, collectionsCreated } }).catch(() => undefined);
     });
     report.albums = [...albums.values()].map((a) => ({ title: a.title, items: a.items, created: a.created }));
-    await db.takeoutImport.update({ where: { id: importId }, data: { status: "ENDED", imported, skipped, failed, collectionsCreated, report, endedAt: new Date() } });
-    console.log(`[takeout] ${run.archiveName}: ${imported} imported, ${skipped} skipped, ${failed} failed, ${collectionsCreated} private collections created`);
+    await db.takeoutImport.update({ where: { id: importId }, data: { status: "ENDED", imported, skipped, failed, repaired, collectionsCreated, report, endedAt: new Date() } });
+    console.log(`[takeout] ${run.archiveName}: ${imported} imported, ${skipped} skipped, ${repaired} repaired, ${failed} failed, ${collectionsCreated} private collections created`);
   } catch (err) {
     report.failures.push({ file: run.archiveName, reason: err instanceof Error ? err.message.slice(0, 200) : String(err) });
-    await db.takeoutImport.update({ where: { id: importId }, data: { status: "FAILED", imported, skipped, failed, collectionsCreated, report, endedAt: new Date() } }).catch(() => undefined);
+    await db.takeoutImport.update({ where: { id: importId }, data: { status: "FAILED", imported, skipped, failed, repaired, collectionsCreated, report, endedAt: new Date() } }).catch(() => undefined);
     console.error(`[takeout] ${run.archiveName} failed: ${err instanceof Error ? err.message.slice(0, 200) : String(err)}`);
   } finally {
     clearInterval(pulse);
@@ -158,4 +185,26 @@ export async function closeDeadImports(now = new Date()): Promise<number> {
     data: { status: "FAILED", endedAt: now, report: { albums: [], duplicates: 0, unsupported: 0, noSidecar: 0, failures: [{ file: "(import)", reason: "The import was interrupted by a restart. Import the archive again; items already in the album are skipped." }] } },
   });
   return r.count;
+}
+
+/**
+ * A repaired date can mean the photo belongs to a different day, and so to a different trip and activity. Work out
+ * the zone the way processing does (the position if there is one, else the trip's, else UTC) and re-file it.
+ */
+async function refileByDate(photoId: string): Promise<void> {
+  const photo = await db.photo.findUnique({ where: { id: photoId }, select: { id: true, takenAt: true, tripId: true, lat: true, lng: true, trip: { select: { timezone: true } } } });
+  if (!photo?.takenAt) return;
+  const zone = (photo.lat !== null && photo.lng !== null ? timezoneForCoords(photo.lat, photo.lng) : null) ?? photo.trip?.timezone ?? "UTC";
+  const tzOffsetMin = offsetMinutesInZone(photo.takenAt, zone);
+  let tripId = photo.tripId;
+  if (!tripId) {
+    const trips = await db.trip.findMany({ select: { id: true, startDate: true, endDate: true } });
+    tripId = pickTripByDay(trips, localDayFromOffset(photo.takenAt, tzOffsetMin))?.id ?? null;
+  }
+  let activityId: string | null = null;
+  if (tripId) {
+    const acts = await db.activity.findMany({ where: { tripId }, select: { id: true, startTime: true, endTime: true } });
+    activityId = pickActivityByTime(acts, photo.takenAt)?.id ?? null;
+  }
+  await db.photo.update({ where: { id: photoId }, data: { tzOffsetMin, tripId, activityId } });
 }

@@ -45,17 +45,45 @@ describe("importing a Takeout archive", () => {
     const album = await db.collection.findFirstOrThrow({ where: { title: "Lake House" }, include: { items: true } });
     expect(album.visibility).toBe("PRIVATE");
     expect(album.shareToken).toBeNull();
-    expect(album.items.map((i) => i.photoId).sort()).toEqual([lake.id, clip.id].sort());
+    // The album folder also holds a counter-suffixed copy of the year-bin photo, as real exports do; it joins the
+    // collection without being imported twice.
+    expect(album.items.map((i) => i.photoId).sort()).toEqual([lake.id, clip.id, gps.id].sort());
     expect(enqueued.map((e) => e.queue).sort()).toEqual(["process-photo", "process-photo", "process-photo", "transcode-video"]);
     const report = r.report as { duplicates: number; albums: { title: string; created: boolean }[] };
     expect(report.duplicates).toBe(1);
-    expect(report.albums).toEqual([{ title: "Lake House", items: 2, created: true }]);
+    expect(report.albums).toEqual([{ title: "Lake House", items: 3, created: true }]);
   });
-  it("is idempotent: a second run of the same archive imports nothing", async () => {
+  it("is idempotent: a second run of the same archive imports nothing and repairs nothing", async () => {
     await run();
     const again = await run();
-    expect({ imported: again.imported, skipped: again.skipped }).toEqual({ imported: 0, skipped: 5 });
+    expect({ imported: again.imported, skipped: again.skipped, repaired: again.repaired }).toEqual({ imported: 0, skipped: 5, repaired: 0 });
     expect(await db.photo.count()).toBe(4);
+    expect(await db.collection.count()).toBe(1);
+    expect(await db.collectionItem.count()).toBe(3);
+  });
+  it("a second run gives back a place and a date the album lost, and leaves what the family wrote alone", async () => {
+    await run();
+    const gps = await db.photo.findFirstOrThrow({ where: { originalName: "photo-with-gps.jpg" } });
+    const lake = await db.photo.findFirstOrThrow({ where: { originalName: "photo-no-gps.jpg" } });
+    // As a phone upload arrives once Android has removed the position, with only the file's own date to go on.
+    await db.photo.update({ where: { id: gps.id }, data: { lat: null, lng: null, gpsSource: null, takenAt: new Date("2025-09-01T00:00:00Z"), takenAtSource: "FILE_MTIME", context: null, sourceId: null } });
+    // A member has since written their own note on the other one; the import must not touch it.
+    await db.photo.update({ where: { id: lake.id }, data: { context: "Nana wrote this" } });
+    const again = await run();
+    expect({ imported: again.imported, repaired: again.repaired }).toEqual({ imported: 0, repaired: 1 });
+    const fixed = await db.photo.findUniqueOrThrow({ where: { id: gps.id } });
+    expect(fixed).toMatchObject({ lat: 44.3186, lng: -68.1917, gpsSource: "SIDECAR", takenAtSource: "SIDECAR", context: "Otter Cliff from the Ocean Path", sourceId: "AF1QipMockOtterCliff" });
+    expect(fixed.takenAt?.toISOString()).toBe("2025-08-12T13:30:00.000Z");
+    expect((await db.photo.findUniqueOrThrow({ where: { id: lake.id } })).context).toBe("Nana wrote this");
+    expect((again.report as { repairs: string[] }).repairs).toEqual(["photo-with-gps.jpg: place, date, notes, Google id"]);
+  });
+  it("puts a photo that is already in the album into its Google album's collection", async () => {
+    await run();
+    const album = await db.collection.findFirstOrThrow({ where: { title: "Lake House" } });
+    await db.collectionItem.deleteMany({ where: { collectionId: album.id } });
+    const again = await run();
+    expect(again.imported).toBe(0);
+    expect(await db.collectionItem.count({ where: { collectionId: album.id } })).toBe(3);
     expect(await db.collection.count()).toBe(1);
   });
   it("never files an album into a public or link-shared collection of the same name", async () => {
@@ -63,13 +91,13 @@ describe("importing a Takeout archive", () => {
     const r = await run();
     expect(r.collectionsCreated).toBe(1);
     const all = await db.collection.findMany({ where: { title: "Lake House" }, orderBy: { slug: "asc" }, include: { items: true } });
-    expect(all.map((c) => [c.slug, c.visibility, c.items.length])).toEqual([["lake-house", "PUBLIC", 0], ["lake-house-2", "PRIVATE", 2]]);
+    expect(all.map((c) => [c.slug, c.visibility, c.items.length])).toEqual([["lake-house", "PUBLIC", 0], ["lake-house-2", "PRIVATE", 3]]);
   });
   it("reuses a private, unshared collection of the same name", async () => {
     const mine = await db.collection.create({ data: { slug: "lake-house", title: "Lake House", themeKey: "default", visibility: "PRIVATE", createdById: userId } });
     const r = await run();
     expect(r.collectionsCreated).toBe(0);
-    expect(await db.collectionItem.count({ where: { collectionId: mine.id } })).toBe(2);
+    expect(await db.collectionItem.count({ where: { collectionId: mine.id } })).toBe(3);
   });
   it("closes a run whose worker stopped sending heartbeats", async () => {
     const old = new Date(Date.now() - 20 * 60_000);

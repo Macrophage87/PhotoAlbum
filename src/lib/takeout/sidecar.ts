@@ -74,6 +74,16 @@ export function pairSidecars(entryPaths: string[]): Map<string, string | null> {
 
 export type SidecarData = { title: string | null; description: string | null; takenAt: Date | null; lat: number | null; lng: number | null; googleId: string | null };
 
+/**
+ * A sidecar's `title` is nearly always the file name, which is no use as a caption. Take it only when it reads like
+ * something a person typed, never when it still carries a media extension.
+ */
+export function captionFromTitle(title: string | null, originalName: string): string | null {
+  if (!title || title === originalName) return null;
+  if (/\.(jpe?g|png|heic|heif|gif|webp|tiff?|avif|mp4|mov|m4v|webm)$/i.test(title)) return null;
+  return title;
+}
+
 /** The fields the album uses from a sidecar; `geoData` and `geoDataExif` carry 0.0 when Google has no position. */
 export function parseSidecar(json: unknown): SidecarData {
   const j = (json ?? {}) as Record<string, unknown>;

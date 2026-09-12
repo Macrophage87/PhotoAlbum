@@ -5,7 +5,7 @@ import { Button, Card } from "@/components/ui";
 import { deleteTakeoutArchive, startTakeoutImport } from "@/app/admin/actions";
 
 export type ArchiveRow = { name: string; bytes: number; modifiedAt: string };
-export type ImportRow = { id: string; archiveName: string; status: "RUNNING" | "ENDED" | "FAILED"; imported: number; skipped: number; failed: number; collectionsCreated: number; startedAt: string; endedAt: string | null; report: { albums?: { title: string; items: number; created: boolean }[]; duplicates?: number; unsupported?: number; noSidecar?: number; failures?: { file: string; reason: string }[] } | null };
+export type ImportRow = { id: string; archiveName: string; status: "RUNNING" | "ENDED" | "FAILED"; imported: number; skipped: number; failed: number; repaired: number; collectionsCreated: number; startedAt: string; endedAt: string | null; report: { albums?: { title: string; items: number; created: boolean }[]; duplicates?: number; unsupported?: number; noSidecar?: number; failures?: { file: string; reason: string }[]; repairs?: string[] } | null };
 
 function size(bytes: number): string {
   if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(1)} GB`;
@@ -33,7 +33,7 @@ export function TakeoutAdmin({ configured, dir, archives, imports }: { configure
   return (
     <div className="space-y-4" data-testid="takeout-admin">
       <p className="text-sm text-muted">
-        Export from Google Takeout with only Google Photos selected, copy the zip files into <code>{dir}</code> on the server, then import them here one at a time. Dates, places, descriptions and albums come across; albums become private collections; a photo already in the album (same bytes or the same Google item) is skipped.
+        Export from Google Takeout with only Google Photos selected, copy the zip files into <code>{dir}</code> on the server, then import them here one at a time. Dates, places, descriptions and albums come across, and albums become private collections. A photo already in the album is not duplicated: instead the export fills in whatever it is still missing, which is how photos uploaded from a phone get their place back, since Android removes it on the way out.
       </p>
       {error && <p role="alert" className="text-sm rounded-theme bg-red-50 border border-red-200 text-red-900 p-3">{error}</p>}
       {archives.length === 0 ? (
@@ -65,10 +65,13 @@ export function TakeoutAdmin({ configured, dir, archives, imports }: { configure
                   <span className="text-muted">{i.status === "RUNNING" ? "in progress" : i.status === "ENDED" ? "done" : "failed"} · started {new Date(i.startedAt).toLocaleString("en-US")}</span>
                 </div>
                 <div className="text-muted">
-                  {i.imported} imported · {i.skipped} skipped{i.report?.duplicates ? ` (${i.report.duplicates} already in the album)` : ""} · {i.failed} failed · {i.collectionsCreated} collection{i.collectionsCreated === 1 ? "" : "s"} created
+                  {i.imported} imported · {i.skipped} skipped{i.report?.duplicates ? ` (${i.report.duplicates} already in the album)` : ""} · {i.repaired} repaired · {i.failed} failed · {i.collectionsCreated} private collection{i.collectionsCreated === 1 ? "" : "s"} created
                   {i.report?.noSidecar ? ` · ${i.report.noSidecar} without Google metadata` : ""}
                 </div>
                 {i.report?.albums && i.report.albums.length > 0 && <div className="text-muted">Albums: {i.report.albums.map((a) => `${a.title} (${a.items}${a.created ? "" : ", existing"})`).join(", ")}</div>}
+                {i.report?.repairs && i.report.repairs.length > 0 && (
+                  <details className="text-muted"><summary>{i.repaired} photo{i.repaired === 1 ? "" : "s"} filled in from the export</summary><ul className="list-disc ml-5">{i.report.repairs.map((r, n) => <li key={n}>{r}</li>)}</ul></details>
+                )}
                 {i.report?.failures && i.report.failures.length > 0 && (
                   <details className="text-muted"><summary>{i.report.failures.length} failure{i.report.failures.length === 1 ? "" : "s"}</summary><ul className="list-disc ml-5">{i.report.failures.map((f, n) => <li key={n}>{f.file}: {f.reason}</li>)}</ul></details>
                 )}

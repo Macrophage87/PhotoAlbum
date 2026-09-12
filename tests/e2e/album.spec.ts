@@ -502,7 +502,8 @@ test("a consented person is proposed on the next upload, names in the notes prop
   await page.goto("/upload");
   await chooseFile(page, "photo-with-gps.jpg");
   await expect(page.locator("img[src*='/api/photos/']")).toBeVisible({ timeout: 30_000 });
-  await expect.poll(async () => (await withDb((c) => c.query('SELECT count(*)::int AS n FROM "Face" WHERE status = $1', ["DETECTED"]))).rows[0].n, { timeout: 30_000 }).toBeGreaterThan(0);
+  // Detection waits its turn behind every other heavy job (transcodes, embeddings, animals), so allow for a queue.
+  await expect.poll(async () => (await withDb((c) => c.query('SELECT count(*)::int AS n FROM "Face" WHERE status = $1', ["DETECTED"]))).rows[0].n, { timeout: 60_000 }).toBeGreaterThan(0);
   await page.goto("/people");
   const form = page.locator("form").filter({ hasText: "Name these faces" }).first();
   await form.getByRole("textbox", { name: "Name", exact: true }).fill("Uncle Dan");
@@ -517,7 +518,7 @@ test("a consented person is proposed on the next upload, names in the notes prop
   await expect(page.locator("img[src*='/api/photos/']")).toBeVisible({ timeout: 30_000 });
   const ids = await page.getByRole("link", { name: /Add notes and file/ }).getAttribute("href");
   await page.goto(ids!);
-  await expect.poll(async () => { await page.reload(); return page.getByText(/Probably/).count(); }, { timeout: 30_000, intervals: [1500] }).toBeGreaterThan(0);
+  await expect.poll(async () => { await page.reload(); return page.getByText(/Probably/).count(); }, { timeout: 60_000, intervals: [1500] }).toBeGreaterThan(0);
   await expect(page.getByTestId("proposal").first()).toContainText("Uncle Dan");
   const danConfirmed = async () => (await withDb((c) => c.query('SELECT count(*)::int AS n FROM "Face" f JOIN "Person" p ON p.id = f."personId" WHERE p.name = $1 AND f.status = $2', ["Uncle Dan", "CONFIRMED"]))).rows[0].n === 2;
   await clickUntil(page, () => page.getByRole("button", { name: /Yes, that's Uncle/ }), danConfirmed);
@@ -601,11 +602,25 @@ test("a Google Takeout archive in the inbox imports with dates, places, notes an
   const gps = await withDb((c) => c.query(`SELECT "takenAtSource", "gpsSource", lat, context, "contentHash" FROM "Photo" WHERE "originalName" = 'photo-with-gps.jpg' AND "sourceKind" = 'TAKEOUT'`));
   expect(gps.rows[0]).toMatchObject({ takenAtSource: "SIDECAR", gpsSource: "EXIF", context: "Otter Cliff from the Ocean Path" });
   expect(gps.rows[0].contentHash).toHaveLength(64);
+  // Transcoding a clip keeps the date Google recorded for it rather than falling back to the file's own.
+  const clip = await withDb((c) => c.query(`SELECT "takenAtSource" FROM "Photo" WHERE "originalName" = 'clip.mp4' AND "sourceKind" = 'TAKEOUT'`));
+  expect(clip.rows[0].takenAtSource).toBe("SIDECAR");
   const album = await withDb((c) => c.query(`SELECT visibility, "shareToken" FROM "Collection" WHERE title = 'Lake House'`));
   expect(album.rows[0]).toEqual({ visibility: "PRIVATE", shareToken: null });
   await page.reload();
   await expect(page.getByTestId("takeout-import").first()).toHaveAttribute("data-status", "ENDED");
   await expect(page.getByTestId("takeout-import").first()).toContainText("4 imported");
+
+  // A phone upload loses its position to Android on the way out; a second run of the same export gives it back.
+  await withDb((c) => c.query(`UPDATE "Photo" SET lat = NULL, lng = NULL, "gpsSource" = NULL WHERE "originalName" = 'photo-with-gps.jpg'`));
+  await page.waitForLoadState("networkidle");
+  await page.getByTestId("takeout-admin").getByText("takeout-e2e.zip").locator("..").locator("..").getByRole("button", { name: "Import" }).click();
+  await expect.poll(async () => (await withDb((c) => c.query('SELECT count(*)::int AS n FROM "TakeoutImport" WHERE status = $1', ["ENDED"]))).rows[0].n, { timeout: 60_000 }).toBe(2);
+  const repaired = await withDb((c) => c.query(`SELECT lat, lng, "gpsSource" FROM "Photo" WHERE "originalName" = 'photo-with-gps.jpg' AND "sourceKind" = 'TAKEOUT'`));
+  expect(repaired.rows[0]).toEqual({ lat: 44.3186, lng: -68.1917, gpsSource: "SIDECAR" });
+  await page.reload();
+  await expect(page.getByTestId("takeout-import").first()).toContainText("1 repaired");
+  await expect(page.getByTestId("takeout-import").first()).toContainText("0 imported");
   page.once("dialog", (d) => d.accept());
   await page.waitForLoadState("networkidle");
   await page.getByTestId("takeout-admin").getByText("takeout-e2e.zip").locator("..").locator("..").getByRole("button", { name: "Delete" }).click();

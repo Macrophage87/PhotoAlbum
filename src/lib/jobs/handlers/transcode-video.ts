@@ -51,10 +51,12 @@ export async function transcodeVideo(job: TranscodeVideoJob): Promise<void> {
       const { renditions } = await makeRenditions(poster, photo.storageKey, (key, buf) => store.putBuffer(key, buf));
       const bytes = (await stat(mp4)).size;
 
-      // Dates: the container's creation time, else the file's modified time sent by the browser, else upload time.
+      // Dates: a Takeout sidecar's date wins (Google's own record of when it was filmed), then the container's
+      // creation time, then the file's modified time sent by the browser, then upload time.
       const mtimeHeader = (photo.exif as { fileLastModified?: number } | null)?.fileLastModified;
-      let instant = info.createdAt ?? (mtimeHeader && Number.isFinite(mtimeHeader) ? new Date(mtimeHeader) : photo.createdAt);
-      let takenAtSource: "EXIF_OFFSET" | "FILE_MTIME" | "UPLOAD_TIME" = info.createdAt ? "EXIF_OFFSET" : mtimeHeader ? "FILE_MTIME" : "UPLOAD_TIME";
+      const fromSidecar = photo.takenAtSource === "SIDECAR" && photo.takenAt ? photo.takenAt : null;
+      let instant = fromSidecar ?? info.createdAt ?? (mtimeHeader && Number.isFinite(mtimeHeader) ? new Date(mtimeHeader) : photo.createdAt);
+      let takenAtSource: "SIDECAR" | "EXIF_OFFSET" | "FILE_MTIME" | "UPLOAD_TIME" = fromSidecar ? "SIDECAR" : info.createdAt ? "EXIF_OFFSET" : mtimeHeader ? "FILE_MTIME" : "UPLOAD_TIME";
       if (Number.isNaN(instant.getTime())) {
         instant = photo.createdAt;
         takenAtSource = "UPLOAD_TIME";

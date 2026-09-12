@@ -555,6 +555,7 @@ model TakeoutImport {
   imported           Int                 @default(0)
   skipped            Int                 @default(0)
   failed             Int                 @default(0)
+  repaired           Int                 @default(0)
   collectionsCreated Int                 @default(0)
   report             Json?
   startedById        String

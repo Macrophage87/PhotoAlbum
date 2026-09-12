@@ -130,7 +130,7 @@ export default async function AdminPage() {
 
         <section>
           <h2 className="font-display text-xl font-semibold mb-1">Import from Google Photos (Takeout)</h2>
-          <TakeoutAdmin configured={Boolean(inboxDir())} dir={inboxDir()} archives={archives.map((a) => ({ ...a, modifiedAt: a.modifiedAt.toISOString() }))} imports={takeoutImports.map((i) => ({ id: i.id, archiveName: i.archiveName, status: i.status, imported: i.imported, skipped: i.skipped, failed: i.failed, collectionsCreated: i.collectionsCreated, startedAt: i.startedAt.toISOString(), endedAt: i.endedAt?.toISOString() ?? null, report: (i.report as never) ?? null }))} />
+          <TakeoutAdmin configured={Boolean(inboxDir())} dir={inboxDir()} archives={archives.map((a) => ({ ...a, modifiedAt: a.modifiedAt.toISOString() }))} imports={takeoutImports.map((i) => ({ id: i.id, archiveName: i.archiveName, status: i.status, imported: i.imported, skipped: i.skipped, failed: i.failed, repaired: i.repaired, collectionsCreated: i.collectionsCreated, startedAt: i.startedAt.toISOString(), endedAt: i.endedAt?.toISOString() ?? null, report: (i.report as never) ?? null }))} />
         </section>
 
         <section>

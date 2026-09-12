@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { albumFolderOf, candidateSidecarNames, pairSidecars, parseSidecar, splitCounter } from "@/lib/takeout/sidecar";
+import { albumFolderOf, candidateSidecarNames, captionFromTitle, pairSidecars, parseSidecar, splitCounter } from "@/lib/takeout/sidecar";
 
 describe("sidecar pairing", () => {
   it("splits a counter suffix off the media name", () => {
@@ -41,6 +41,13 @@ describe("sidecar pairing", () => {
     expect(s).toMatchObject({ lat: 44.3, lng: -68.2, description: "Otter Cliff", googleId: "AF1QipAbc_-123", title: "x.jpg" });
     expect(parseSidecar({ geoData: { latitude: 0, longitude: 0 } })).toMatchObject({ lat: null, lng: null, takenAt: null, googleId: null });
     expect(parseSidecar(null).takenAt).toBeNull();
+  });
+  it("takes a title as a caption only when it is not just a file name", () => {
+    expect(captionFromTitle("photo-with-gps.jpg", "photo-with-gps.jpg")).toBeNull();
+    expect(captionFromTitle("photo-with-gps(1).jpg", "photo-with-gps.jpg")).toBeNull();
+    expect(captionFromTitle("IMG_20250812_094512.HEIC", "x.jpg")).toBeNull();
+    expect(captionFromTitle("Otter Cliff at dawn", "IMG_2001.jpg")).toBe("Otter Cliff at dawn");
+    expect(captionFromTitle(null, "x.jpg")).toBeNull();
   });
   it("tells album folders from year bins", () => {
     expect(albumFolderOf("Takeout/Google Photos/Photos from 2019/a.jpg")).toBeNull();
