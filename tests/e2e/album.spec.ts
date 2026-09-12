@@ -69,7 +69,8 @@ test("uploading a photo processes it and assigns it to the trip by date", async 
   await place.getByRole("button", { name: "Look up" }).click();
   await place.getByRole("button", { name: /Jordan Pond, Mount Desert Island/ }).click();
   await place.getByRole("button", { name: "Save place" }).click();
-  await expect(place.getByText("set by a family member")).toBeVisible();
+  // The label names whoever pinned it, falling back to the part of their address before the @.
+  await expect(place.getByText("set by e2e-admin")).toBeVisible();
   const placed = await withDb((c) => c.query('SELECT lat, lng, "gpsSource" FROM "Photo" WHERE id = $1', [row.rows[0].id]));
   expect(placed.rows[0]).toEqual({ lat: 44.326, lng: -68.253, gpsSource: "MANUAL" });
   expect(Number(row.rows[0].lat)).toBeCloseTo(44.35, 3);
@@ -186,7 +187,7 @@ test("a collection gathers photos from two trips and can be shared by link", asy
   await page.getByLabel("Anyone with the link").check();
   // Sharing private-trip photos by link widens their exposure, so the form asks first.
   page.once("dialog", (d) => void d.accept());
-  await page.getByRole("button", { name: "Update visibility" }).click();
+  await page.getByRole("button", { name: "Save changes" }).click();
   const shareUrl = (await page.locator("code").first().textContent())!.trim();
   expect(shareUrl).toMatch(/\/share\/c\//);
 
@@ -217,7 +218,7 @@ test("exposure warnings fire when widening and when lowering, and bulk actions a
   await expect(page.getByRole("note")).toContainText("anyone on the internet");
   let dialogText = "";
   page.once("dialog", (d) => { dialogText = d.message(); void d.accept(); });
-  await page.getByRole("button", { name: "Update visibility" }).click();
+  await page.getByRole("button", { name: "Save changes" }).click();
   await expect(page.getByText("Share", { exact: true })).toBeVisible();
   expect(dialogText).toContain("anyone on the internet");
 
@@ -700,7 +701,7 @@ test("a pet tagged on a spotted animal is proposed on the next look-alike and co
   await info.getByRole("button", { name: "Change date" }).click();
   await info.getByLabel("Date taken").fill("2019-07-04T10:30");
   await info.getByRole("button", { name: "Save date" }).click();
-  await expect(info.getByText("set by a family member")).toBeVisible();
+  await expect(info.getByText("set by e2e-admin")).toBeVisible();
   const manual = await withDb((c) => c.query('SELECT "takenAtSource", "takenAt" FROM "Photo" WHERE id = $1', [first.rows[0].id]));
   expect(manual.rows[0].takenAtSource).toBe("MANUAL");
   expect(new Date(manual.rows[0].takenAt).getUTCFullYear()).toBe(2019);

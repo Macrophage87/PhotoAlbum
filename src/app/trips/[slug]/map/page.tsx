@@ -5,6 +5,6 @@ import { TripMap } from "@/components/map/TripMap";
 
 export default async function TripMapPage({ params }: PageProps<"/trips/[slug]/map">) {
   const { slug } = await params;
-  const { trip, editable } = await loadViewableTrip(slug, `/trips/${slug}/map`);
-  return <TripMap src={`/api/trips/${slug}/geojson`} theme={mapThemeOf(getTheme(trip.themeKey))} showDetailLink={editable} />;
+  const { trip } = await loadViewableTrip(slug, `/trips/${slug}/map`);
+  return <TripMap src={`/api/trips/${slug}/geojson`} theme={mapThemeOf(getTheme(trip.themeKey))} />;
 }

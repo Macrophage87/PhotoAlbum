@@ -10,7 +10,7 @@ import { Button, Card, Label, Select, Textarea, ConfirmSubmitButton } from "@/co
 import { formatDateTime } from "@/lib/time/format";
 import { deletePhoto, reprocessPhoto, resetPhotoDateToCamera, setAsCover, setPhotoDate, shiftPhotoTimezone, updatePhoto } from "./actions";
 
-const SOURCE_LABEL: Record<string, string> = { EXIF_OFFSET: "from the camera", EXIF_TZLOOKUP: "from the camera", TRIP_TZ: "from the camera, in the trip's zone", SIDECAR: "from Google Photos", FILE_MTIME: "from the file's modified time", UPLOAD_TIME: "the upload time", MANUAL: "set by a family member" };
+const SOURCE_LABEL: Record<string, string> = { EXIF_OFFSET: "from the camera", EXIF_TZLOOKUP: "from the camera", TRIP_TZ: "from the camera, in the trip's zone", SIDECAR: "from Google Photos", FILE_MTIME: "from the file's modified time", UPLOAD_TIME: "the upload time" };
 import { TimezoneShift } from "@/components/photos/TimezoneShift";
 import { PhotoLinkEditor } from "@/components/photos/PhotoLinkEditor";
 import { LinkedPhotos } from "@/components/photos/LinkedPhotos";
@@ -51,7 +51,7 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
   const viewer = await getViewer();
   const photo = await db.photo.findUnique({
     where: { id },
-    include: { trip: { select: { id: true, slug: true, title: true, timezone: true, coverPhotoId: true } }, activity: { select: { id: true, title: true } }, uploader: { select: { name: true, email: true } } },
+    include: { trip: { select: { id: true, slug: true, title: true, timezone: true, coverPhotoId: true } }, activity: { select: { id: true, title: true } }, uploader: { select: { name: true, email: true } }, placeSetBy: { select: { name: true, email: true } }, dateSetBy: { select: { name: true, email: true } } },
   });
   if (!photo) notFound();
 
@@ -217,7 +217,7 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
 
             <Card className="p-4">
               <h2 className="font-medium mb-2">Place</h2>
-              <PlaceEditor photoId={photo.id} initial={photo.lat !== null && photo.lng !== null ? { lat: photo.lat, lng: photo.lng } : null} gpsSource={photo.gpsSource} theme={mapThemeOf(getTheme(tripTheme))} />
+              <PlaceEditor photoId={photo.id} initial={photo.lat !== null && photo.lng !== null ? { lat: photo.lat, lng: photo.lng } : null} gpsSource={photo.gpsSource} setBy={photo.placeSetBy ? uploaderLabel(photo.placeSetBy.name, photo.placeSetBy.email) : null} theme={mapThemeOf(getTheme(tripTheme))} />
             </Card>
             <Card className="p-4">
               <h2 className="font-medium mb-2">Details</h2>
@@ -226,7 +226,7 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
               {!isVideo && (
                 <form action={async (fd) => { "use server"; await setPhotoDate(photo.id, fd); }} className="mt-3 pt-3 border-t border-border space-y-2">
                   <div className="text-xs font-medium">Date taken</div>
-                  <p className="text-xs text-muted">Defaults to what the camera wrote in the file{photo.takenAtSource ? ` (currently ${SOURCE_LABEL[photo.takenAtSource] ?? photo.takenAtSource})` : ""}. Change it here when the camera was wrong or a scan has no date.</p>
+                  <p className="text-xs text-muted">Defaults to what the camera wrote in the file{photo.takenAtSource ? ` (currently ${photo.takenAtSource === "MANUAL" ? `set by ${photo.dateSetBy ? uploaderLabel(photo.dateSetBy.name, photo.dateSetBy.email) : "a family member"}` : SOURCE_LABEL[photo.takenAtSource] ?? photo.takenAtSource})` : ""}. Change it here when the camera was wrong or a scan has no date.</p>
                   <div className="flex flex-wrap gap-2">
                     <input type="datetime-local" name="takenAt" aria-label="Date taken" defaultValue={photo.takenAt ? new Date(photo.takenAt.getTime() + (photo.tzOffsetMin ?? 0) * 60_000).toISOString().slice(0, 16) : ""} required className="h-8 rounded-theme border border-border px-2 text-sm" />
                     <Button type="submit" variant="secondary" size="sm">Save date</Button>

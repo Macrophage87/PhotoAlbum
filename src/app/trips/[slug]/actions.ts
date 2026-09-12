@@ -20,30 +20,38 @@ async function loadEditableTrip(slug: string) {
   return trip;
 }
 
+const visibilitySchema = z.enum(["PRIVATE", "LINK", "PUBLIC"]);
+
+/** Save the trip's details and, when the settings form sends one, its visibility, under a single button. */
 export async function updateTrip(slug: string, _prev: TripFormState, fd: FormData): Promise<TripFormState> {
   const trip = await loadEditableTrip(slug);
   const parsed = tripInputFromForm(fd);
   if (!parsed.success) return { status: "error", fieldErrors: fieldErrors(parsed.error) };
   const v = parsed.data;
+  const chosen = fd.has("visibility") ? visibilitySchema.safeParse(fd.get("visibility")) : null;
+  if (chosen && !chosen.success) return { status: "error", message: "Pick who can see this trip." };
+  const visibility = chosen?.data;
+  const changed = visibility !== undefined && visibility !== trip.visibility;
   await db.trip.update({
     where: { id: trip.id },
-    data: { title: v.title, description: v.description, startDate: dayToDateColumn(v.startDate), endDate: dayToDateColumn(v.endDate), timezone: v.timezone, themeKey: v.themeKey },
+    data: {
+      title: v.title,
+      description: v.description,
+      startDate: dayToDateColumn(v.startDate),
+      endDate: dayToDateColumn(v.endDate),
+      timezone: v.timezone,
+      themeKey: v.themeKey,
+      // A link is minted the first time this trip is shared that way, and dropped whenever it stops being.
+      ...(changed ? { visibility, shareToken: visibility === "LINK" ? (trip.shareToken ?? generateToken()) : null } : {}),
+    },
   });
+  if (changed) {
+    // Bump photo versions so public caches stop matching after a change in exposure.
+    await db.photo.updateMany({ where: { tripId: trip.id }, data: { updatedAt: new Date() } });
+    revalidatePath("/");
+  }
   revalidatePath(`/trips/${slug}`, "layout");
   redirect(`/trips/${slug}/settings?saved=1`);
-}
-
-const visibilitySchema = z.enum(["PRIVATE", "LINK", "PUBLIC"]);
-
-export async function setVisibility(slug: string, fd: FormData): Promise<void> {
-  const trip = await loadEditableTrip(slug);
-  const visibility = visibilitySchema.parse(fd.get("visibility"));
-  const shareToken = visibility === "LINK" ? (trip.shareToken ?? generateToken()) : null;
-  await db.trip.update({ where: { id: trip.id }, data: { visibility, shareToken } });
-  // Bump photo versions so public caches stop matching after a change in exposure.
-  await db.photo.updateMany({ where: { tripId: trip.id }, data: { updatedAt: new Date() } });
-  revalidatePath(`/trips/${slug}`, "layout");
-  revalidatePath("/");
 }
 
 export async function rotateShareToken(slug: string): Promise<void> {

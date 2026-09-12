@@ -124,7 +124,6 @@ export function CollectionGallery({ collectionId, slug, photos, editable, emptyM
       ) : (
         <PhotoGrid
           photos={photos}
-          showDetailLink={editable}
           emptyMessage={emptyMessage}
           selectable={mode === "select"}
           selected={selected}

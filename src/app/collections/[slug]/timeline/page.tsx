@@ -6,5 +6,5 @@ export default async function CollectionTimelinePage({ params }: PageProps<"/col
   const { slug } = await params;
   const { collection, editable } = await loadViewableCollection(slug, `/collections/${slug}/timeline`);
   const groups = await collectionTimeline(collection.id);
-  return <Timeline groups={groups} tripSlug="" timezone="UTC" showDetailLink={editable} />;
+  return <Timeline groups={groups} tripSlug="" timezone="UTC" member={editable} />;
 }

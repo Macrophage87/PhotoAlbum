@@ -8,5 +8,5 @@ export default async function SharedCollectionTimelinePage({ params }: PageProps
   const collection = await getSharedCollection(token);
   if (!collection) notFound();
   const groups = await collectionTimeline(collection.id);
-  return <Timeline groups={groups} tripSlug="" timezone="UTC" showDetailLink={false} />;
+  return <Timeline groups={groups} tripSlug="" timezone="UTC" member={false} />;
 }

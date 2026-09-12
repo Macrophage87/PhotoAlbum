@@ -1,5 +1,5 @@
 import { PhotoGrid, type GridPhoto } from "@/components/photos/PhotoGrid";
 
-export function PhotoStrip({ photos, showDetailLink }: { photos: GridPhoto[]; showDetailLink: boolean }) {
-  return <PhotoGrid photos={photos} showDetailLink={showDetailLink} />;
+export function PhotoStrip({ photos }: { photos: GridPhoto[] }) {
+  return <PhotoGrid photos={photos} />;
 }

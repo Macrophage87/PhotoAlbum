@@ -8,7 +8,7 @@ export function SharedGallery({ photos: initial, more }: { photos: GridPhoto[]; 
   const paged = useLoadMore(more.url, more.nextCursor, initial);
   return (
     <>
-      <PhotoGrid photos={paged.photos} showDetailLink={false} />
+      <PhotoGrid photos={paged.photos} />
       <LoadMoreSentinel hasMore={paged.hasMore} loading={paged.loading} error={paged.error} onLoad={paged.loadMore} shown={paged.photos.length} total={more.total} />
     </>
   );

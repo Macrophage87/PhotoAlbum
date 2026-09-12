@@ -1,14 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import Link from "next/link";
 import { YouTubeEmbed } from "@/components/videos/YouTubeEmbed";
 import { PetTagger } from "@/components/people/PetTagger";
 import { LightboxInfo } from "./LightboxInfo";
 
 export type LightboxPhoto = { id: string; mediumUrl: string; width: number | null; height: number | null; caption: string | null; alt: string; /** Shown to members only; never set for anonymous viewers. */ uploadedBy?: string | null; /** Set for embedded videos: the lightbox shows the click-to-play facade instead of the image. */ youtubeId?: string | null; title?: string | null; /** Set for uploaded clips: plays inline with controls. */ videoUrl?: string | null; durationS?: number | null; /** Members can tag a pet from here. */ canTag?: boolean; /** Full-size file, opened by a second click on the picture. */ originalUrl?: string | null };
 
-export function Lightbox({ photos, index, onClose, onNavigate, showDetailLink = true, share = null }: { photos: LightboxPhoto[]; index: number; onClose: () => void; onNavigate: (i: number) => void; showDetailLink?: boolean; /** On a share page: the token that lets the info request through without a cookie. */ share?: { token: string; kind: string } | null }) {
+export function Lightbox({ photos, index, onClose, onNavigate, share = null }: { photos: LightboxPhoto[]; index: number; onClose: () => void; onNavigate: (i: number) => void; /** On a share page: the token that lets the info request through without a cookie. */ share?: { token: string; kind: string } | null }) {
   const photo = photos[index];
   const prev = useCallback(() => onNavigate((index - 1 + photos.length) % photos.length), [index, photos.length, onNavigate]);
   const next = useCallback(() => onNavigate((index + 1) % photos.length), [index, photos.length, onNavigate]);
@@ -57,11 +56,6 @@ export function Lightbox({ photos, index, onClose, onNavigate, showDetailLink = 
           {index + 1} / {photos.length}
         </span>
         <div className="flex items-center gap-3">
-          {showDetailLink && (
-            <Link href={`/photos/${photo.id}`} className="underline underline-offset-2 hover:text-white">
-              Details
-            </Link>
-          )}
           <button ref={closeRef} onClick={onClose} className="px-2 py-1 rounded hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white" aria-label="Close">
             ✕
           </button>

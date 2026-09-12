@@ -85,13 +85,13 @@ export function ActivityDetail({ trip, activity, photos, ...mode }: { trip: { sl
         </Card>
       )}
 
-      {activity.track && <ActivityMapSection tripSlug={trip.slug} trackId={activity.track.id} activityId={activity.id} type={activity.type} theme={mapThemeOf(getTheme(trip.themeKey))} showDetailLink={mode.editable} />}
+      {activity.track && <ActivityMapSection tripSlug={trip.slug} trackId={activity.track.id} activityId={activity.id} type={activity.type} theme={mapThemeOf(getTheme(trip.themeKey))} />}
 
       <section>
         <h3 className="font-display text-lg font-semibold mb-3">
           {photos.length} photo{photos.length === 1 ? "" : "s"}
         </h3>
-        <PhotoGrid photos={photos.map((p) => toGridPhoto(p))} showDetailLink={mode.editable} emptyMessage="No photos in this time window yet." />
+        <PhotoGrid photos={photos.map((p) => toGridPhoto(p))} emptyMessage="No photos in this time window yet." />
       </section>
     </div>
   );

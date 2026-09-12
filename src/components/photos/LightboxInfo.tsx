@@ -9,7 +9,13 @@ import { getTheme } from "@/themes";
 import { resetPhotoDateToCamera, setPhotoDate } from "@/app/photos/[id]/actions";
 import type { PhotoInfo } from "@/app/api/photos/[id]/info/route";
 
-const SOURCE_LABEL: Record<string, string> = { EXIF_OFFSET: "from the camera", EXIF_TZLOOKUP: "from the camera", TRIP_TZ: "from the camera, in the trip's zone", SIDECAR: "from Google Photos", FILE_MTIME: "from the file's modified time", UPLOAD_TIME: "the upload time", MANUAL: "set by a family member" };
+const SOURCE_LABEL: Record<string, string> = { EXIF_OFFSET: "from the camera", EXIF_TZLOOKUP: "from the camera", TRIP_TZ: "from the camera, in the trip's zone", SIDECAR: "from Google Photos", FILE_MTIME: "from the file's modified time", UPLOAD_TIME: "the upload time" };
+
+/** "set by Grandma Jo" where the album knows whose choice it was, "set by a family member" where it does not. */
+function dateSourceLabel(source: string, setBy: string | null): string {
+  if (source !== "MANUAL") return SOURCE_LABEL[source] ?? source;
+  return setBy ? `set by ${setBy}` : "set by a family member";
+}
 
 /** "Wed, Aug 12, 2025 · 3:04 PM" in the item's own zone, from the instant and its offset. */
 export function formatTaken(takenAt: string, tzOffsetMin: number | null): string {
@@ -44,12 +50,12 @@ export function LightboxInfo({ photoId, share }: { photoId: string; share?: { to
   if (failed) return null;
   if (!info) return <div className="text-white/50 text-sm p-4" aria-busy="true">Loading…</div>;
 
-  const apply = (fn: () => Promise<{ ok: true; takenAt: string; tzOffsetMin: number; source: string } | { ok: false; message: string }>) =>
+  const apply = (fn: () => Promise<{ ok: true; takenAt: string; tzOffsetMin: number; source: string; setBy: string | null } | { ok: false; message: string }>) =>
     start(async () => {
       setMessage(null);
       const r = await fn();
       if (!r.ok) { setMessage(r.message); return; }
-      setInfo((prev) => (prev ? { ...prev, takenAt: r.takenAt, tzOffsetMin: r.tzOffsetMin, takenAtSource: r.source } : prev));
+      setInfo((prev) => (prev ? { ...prev, takenAt: r.takenAt, tzOffsetMin: r.tzOffsetMin, takenAtSource: r.source, dateSetBy: r.setBy } : prev));
       setEditingDate(false);
     });
 
@@ -61,7 +67,7 @@ export function LightboxInfo({ photoId, share }: { photoId: string; share?: { to
         {info.takenAt ? (
           <p>
             <time dateTime={info.takenAt}>{formatTaken(info.takenAt, info.tzOffsetMin)}</time>
-            {info.takenAtSource && <span className="block text-white/50 text-xs">{SOURCE_LABEL[info.takenAtSource] ?? info.takenAtSource}</span>}
+            {info.takenAtSource && <span className="block text-white/50 text-xs">{dateSourceLabel(info.takenAtSource, info.dateSetBy)}</span>}
           </p>
         ) : (
           <p className="text-white/60">Unknown</p>
@@ -89,7 +95,7 @@ export function LightboxInfo({ photoId, share }: { photoId: string; share?: { to
           {info.trip && info.lat !== null && <p className="text-white/60 text-xs mt-1">On <Link href={`/trips/${info.trip.slug}/map`} className="underline underline-offset-2 hover:text-white" onClick={(e) => e.stopPropagation()}>{info.trip.title}</Link></p>}
           {info.editable && (
             <div className="mt-2">
-              <PlaceEditor photoId={info.id} initial={info.lat !== null && info.lng !== null ? { lat: info.lat, lng: info.lng } : null} gpsSource={info.gpsSource} theme={mapThemeOf(getTheme(info.themeKey))} dark onSaved={(v) => setInfo((prev) => (prev ? { ...prev, lat: v.lat, lng: v.lng, gpsSource: v.gpsSource } : prev))} />
+              <PlaceEditor photoId={info.id} initial={info.lat !== null && info.lng !== null ? { lat: info.lat, lng: info.lng } : null} gpsSource={info.gpsSource} setBy={info.placeSetBy} theme={mapThemeOf(getTheme(info.themeKey))} dark onSaved={(v) => setInfo((prev) => (prev ? { ...prev, lat: v.lat, lng: v.lng, gpsSource: v.gpsSource, placeSetBy: v.setBy } : prev))} />
             </div>
           )}
         </div>

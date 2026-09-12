@@ -40,27 +40,32 @@ export async function createCollection(_prev: CollectionFormState, fd: FormData)
   redirect(`/collections/${slug}`);
 }
 
+const visibilitySchema = z.enum(["PRIVATE", "LINK", "PUBLIC"]);
+
+/** Save the collection's details and, when the settings form sends one, its visibility, under a single button. */
 export async function updateCollection(slug: string, _prev: CollectionFormState, fd: FormData): Promise<CollectionFormState> {
   const collection = await loadEditableCollection(slug);
   const parsed = collectionInputFromForm(fd);
   if (!parsed.success) return { status: "error", fieldErrors: fieldErrors(parsed.error) };
   const v = parsed.data;
-  await db.collection.update({ where: { id: collection.id }, data: { title: v.title, description: v.description, themeKey: v.themeKey } });
+  const chosen = fd.has("visibility") ? visibilitySchema.safeParse(fd.get("visibility")) : null;
+  if (chosen && !chosen.success) return { status: "error", message: "Pick who can see this collection." };
+  const visibility = chosen?.data;
+  const changed = visibility !== undefined && visibility !== collection.visibility;
+  await db.collection.update({
+    where: { id: collection.id },
+    data: {
+      title: v.title,
+      description: v.description,
+      themeKey: v.themeKey,
+      // A link is minted the first time this collection is shared that way, and dropped whenever it stops being.
+      ...(changed ? { visibility, shareToken: visibility === "LINK" ? (collection.shareToken ?? generateToken()) : null } : {}),
+    },
+  });
+  if (changed) await bumpItemVersions(collection.id);
   revalidatePath(`/collections/${slug}`, "layout");
   revalidatePath("/");
   redirect(`/collections/${slug}/settings?saved=1`);
-}
-
-const visibilitySchema = z.enum(["PRIVATE", "LINK", "PUBLIC"]);
-
-export async function setCollectionVisibility(slug: string, fd: FormData): Promise<void> {
-  const collection = await loadEditableCollection(slug);
-  const visibility = visibilitySchema.parse(fd.get("visibility"));
-  const shareToken = visibility === "LINK" ? (collection.shareToken ?? generateToken()) : null;
-  await db.collection.update({ where: { id: collection.id }, data: { visibility, shareToken } });
-  await bumpItemVersions(collection.id);
-  revalidatePath(`/collections/${slug}`, "layout");
-  revalidatePath("/");
 }
 
 export async function rotateCollectionShareToken(slug: string): Promise<void> {

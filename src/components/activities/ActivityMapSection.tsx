@@ -9,7 +9,7 @@ import { TrackCharts } from "@/components/charts/TrackCharts";
 import { Lightbox, type LightboxPhoto } from "@/components/photos/Lightbox";
 
 /** Map of one activity's track plus its photos, with charts whose cursor drives a marker on the map. */
-export function ActivityMapSection({ tripSlug, trackId, activityId, type, theme, showDetailLink }: { tripSlug: string; trackId: string; activityId: string; type: ActivityType; theme: MapTheme; showDetailLink: boolean }) {
+export function ActivityMapSection({ tripSlug, trackId, activityId, type, theme }: { tripSlug: string; trackId: string; activityId: string; type: ActivityType; theme: MapTheme }) {
   const [data, setData] = useState<MapPayload | null>(null);
   const [marker, setMarker] = useState<{ lat: number; lng: number } | null>(null);
   const [lightbox, setLightbox] = useState<number | null>(null);
@@ -56,7 +56,7 @@ export function ActivityMapSection({ tripSlug, trackId, activityId, type, theme,
       <div className="rounded-theme border border-border bg-surface p-3">
         <TrackCharts trackId={trackId} type={type} onHover={setMarker} />
       </div>
-      {lightbox !== null && photos.length > 0 && <Lightbox photos={photos} index={lightbox} onClose={() => setLightbox(null)} onNavigate={setLightbox} showDetailLink={showDetailLink} />}
+      {lightbox !== null && photos.length > 0 && <Lightbox photos={photos} index={lightbox} onClose={() => setLightbox(null)} onNavigate={setLightbox} />}
     </section>
   );
 }

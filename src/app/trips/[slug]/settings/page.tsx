@@ -7,8 +7,7 @@ import { TripForm } from "@/components/trips/TripForm";
 import { ShareButtons } from "@/components/trips/ShareButtons";
 import { shareableTripUrl } from "@/lib/share/social";
 import { Button, Card, ConfirmSubmitButton } from "@/components/ui";
-import { deleteTrip, detachExposedFromCollections, regeotagPhotos, rotateShareToken, setVisibility, updateTrip } from "../actions";
-import { VisibilityForm } from "@/components/trips/VisibilityForm";
+import { deleteTrip, detachExposedFromCollections, regeotagPhotos, rotateShareToken, updateTrip } from "../actions";
 import { OptOutToggle } from "@/components/annotation/OptOutToggle";
 import { visibilityWarnings } from "@/lib/visibility/settings";
 import Link from "next/link";
@@ -26,7 +25,6 @@ export default async function TripSettingsPage({ params, searchParams }: PagePro
   const trip = await getTripBySlug(slug);
   if (!trip) notFound();
   const update = updateTrip.bind(null, slug);
-  const visibility = setVisibility.bind(null, slug);
   const rotate = rotateShareToken.bind(null, slug);
   const remove = deleteTrip.bind(null, slug);
   const regeotag = regeotagPhotos.bind(null, slug);
@@ -45,14 +43,13 @@ export default async function TripSettingsPage({ params, searchParams }: PagePro
           action={update}
           submitLabel="Save changes"
           initial={{ title: trip.title, description: trip.description ?? "", startDate: dateColumnToDay(trip.startDate), endDate: dateColumnToDay(trip.endDate), timezone: trip.timezone, themeKey: trip.themeKey }}
+          visibility={{ current: trip.visibility, legend: "Who can see this trip", options: VISIBILITY.map((v) => ({ ...v, warnings: warnings.byTarget[v.value] })) }}
         />
       </section>
 
-      <section>
-        <h2 className="font-display text-xl font-semibold mb-4">Who can see this trip</h2>
-        <VisibilityForm action={visibility} current={trip.visibility} options={VISIBILITY.map((v) => ({ ...v, warnings: warnings.byTarget[v.value] }))} />
+      <section className="space-y-4">
         {warnings.stillExposed.length > 0 && (
-          <Card className="mt-4 p-4 space-y-2 border-amber-300 bg-amber-50 text-amber-900">
+          <Card className="p-4 space-y-2 border-amber-300 bg-amber-50 text-amber-900">
             <div className="text-sm font-medium">Still visible elsewhere</div>
             {warnings.stillExposed.map((line) => (
               <p key={line} className="text-sm">{line}</p>
@@ -69,10 +66,10 @@ export default async function TripSettingsPage({ params, searchParams }: PagePro
           </Card>
         )}
         {warnings.alsoElsewhere > 0 && warnings.stillExposed.length === 0 && (
-          <p className="mt-3 text-sm text-muted">{warnings.alsoElsewhere} of this trip&apos;s {warnings.total} photos are also in a collection; changing visibility here does not change theirs.</p>
+          <p className="text-sm text-muted">{warnings.alsoElsewhere} of this trip&apos;s {warnings.total} photos are also in a collection; changing visibility here does not change theirs.</p>
         )}
         {trip.visibility === "LINK" && shareUrl && (
-          <Card className="mt-4 p-4 space-y-2">
+          <Card className="p-4 space-y-2">
             <div className="text-sm font-medium">Share link</div>
             <code className="block text-xs break-all bg-surface-alt rounded p-2">{shareUrl}</code>
             <div className="flex flex-wrap gap-2">
@@ -87,7 +84,7 @@ export default async function TripSettingsPage({ params, searchParams }: PagePro
           </Card>
         )}
         {trip.visibility === "PUBLIC" && shareUrl && (
-          <Card className="mt-4 p-4 space-y-2">
+          <Card className="p-4 space-y-2">
             <div className="text-sm font-medium">Share</div>
             <code className="block text-xs break-all bg-surface-alt rounded p-2">{shareUrl}</code>
             <ShareButtons url={shareUrl} />

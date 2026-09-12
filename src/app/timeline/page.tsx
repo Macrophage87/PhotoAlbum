@@ -37,7 +37,7 @@ export default async function GlobalTimelinePage({ searchParams }: PageProps<"/t
           <h2 className="font-display text-2xl font-semibold mb-4">
             <Link href={`/collections/${filter.slug}`} className="hover:underline underline-offset-2">{filter.title}</Link>
           </h2>
-          <Timeline groups={collectionGroups} tripSlug="" timezone="UTC" showDetailLink={editable} idPrefix={`c-${filter.slug}`} />
+          <Timeline groups={collectionGroups} tripSlug="" timezone="UTC" member={editable} idPrefix={`c-${filter.slug}`} />
         </TripTheme>
       )}
       {!filter && trips.length === 0 && <p className="text-muted">Nothing to show yet.</p>}
@@ -52,7 +52,7 @@ export default async function GlobalTimelinePage({ searchParams }: PageProps<"/t
               </h2>
               <p className="text-muted text-sm">{formatDayRange(dateColumnToDay(trip.startDate), dateColumnToDay(trip.endDate))}</p>
             </div>
-            <Timeline groups={groups[i].groups} tripSlug={trip.slug} timezone={trip.timezone} showDetailLink={editable} idPrefix={`t-${trip.slug}`} />
+            <Timeline groups={groups[i].groups} tripSlug={trip.slug} timezone={trip.timezone} member={editable} idPrefix={`t-${trip.slug}`} />
             {groups[i].next && (
               <p className="text-sm mt-4">
                 <Link href={`/trips/${trip.slug}/timeline?after=${encodeURIComponent(encodeCursor(groups[i].next!))}`} className="text-primary hover:underline">Later days of {trip.title} on its own timeline →</Link>

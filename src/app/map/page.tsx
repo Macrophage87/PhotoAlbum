@@ -1,5 +1,4 @@
 import { getViewer } from "@/lib/auth/viewer";
-import { canEditTrip } from "@/lib/auth/access";
 import { getTheme } from "@/themes";
 import { mapThemeOf } from "@/lib/map/theme";
 import { AppShell, Container } from "@/components/layout/AppShell";
@@ -21,7 +20,7 @@ export default async function GlobalMapPage({ searchParams }: PageProps<"/map">)
           <h1 className="font-display text-3xl font-semibold">Map</h1>
           <CollectionFilter collections={collections.map((c) => ({ slug: c.slug, title: c.title }))} current={filter?.slug ?? ""} basePath="/map" />
         </div>
-        <TripMap key={filter?.slug ?? "all"} src={filter ? `/api/collections/${filter.slug}/geojson` : "/api/map/geojson"} theme={mapThemeOf(getTheme(filter?.themeKey ?? "default"))} showDetailLink={canEditTrip(viewer)} showTripList={!filter} />
+        <TripMap key={filter?.slug ?? "all"} src={filter ? `/api/collections/${filter.slug}/geojson` : "/api/map/geojson"} theme={mapThemeOf(getTheme(filter?.themeKey ?? "default"))} showTripList={!filter} />
       </Container>
     </AppShell>
   );

@@ -72,7 +72,7 @@ export function AddPhotosPicker({ collection, trips, filter, initial }: { collec
         </form>
       </div>
       {message && <p role="alert" className="text-sm rounded-theme bg-red-50 border border-red-200 text-red-900 p-3">{message}</p>}
-      <PhotoGrid photos={photos} selectable selected={selected} onToggle={toggle} showDetailLink={false} emptyMessage={filter.trip || filter.q || filter.from || filter.to ? "Nothing matches this filter." : "Every ready photo is already in this collection."} />
+      <PhotoGrid photos={photos} selectable selected={selected} onToggle={toggle} emptyMessage={filter.trip || filter.q || filter.from || filter.to ? "Nothing matches this filter." : "Every ready photo is already in this collection."} />
       {nextCursor && (
         <div className="text-center">
           <Button variant="secondary" size="sm" onClick={loadMore} disabled={pending}>Load more</Button>

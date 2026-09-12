@@ -47,7 +47,7 @@ export default async function TripOverviewPage({ params }: PageProps<"/trips/[sl
             </Link>
           </div>
         </div>
-        <PhotoGrid photos={latest.map((p) => toGridPhoto(p, null, editable))} showDetailLink={editable} emptyMessage={editable ? "No photos yet. Upload some to get started." : "No photos yet."} />
+        <PhotoGrid photos={latest.map((p) => toGridPhoto(p, null, editable))} emptyMessage={editable ? "No photos yet. Upload some to get started." : "No photos yet."} />
       </section>
     </div>
   );

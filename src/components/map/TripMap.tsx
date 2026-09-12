@@ -12,7 +12,7 @@ import type { ActivityType } from "@/generated/prisma/enums";
 import { ActivityTypeIcon } from "@/components/activities/ActivityTypeIcon";
 import { formatDistance } from "@/lib/time/format";
 
-export function TripMap({ src, theme, showDetailLink, showTripList = false, activityHrefBase }: { src: string; theme: MapTheme; showDetailLink: boolean; showTripList?: boolean; /** Override the activity link root, e.g. for share pages. */ activityHrefBase?: string }) {
+export function TripMap({ src, theme, showTripList = false, activityHrefBase }: { src: string; theme: MapTheme; showTripList?: boolean; /** Override the activity link root, e.g. for share pages. */ activityHrefBase?: string }) {
   const activityHref = (tripSlug: string, activityId: string) => `${activityHrefBase ?? `/trips/${tripSlug}/activities`}/${activityId}`;
   const [data, setData] = useState<MapPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -101,7 +101,7 @@ export function TripMap({ src, theme, showDetailLink, showTripList = false, acti
           </ul>
         </div>
       </aside>
-      {lightbox !== null && <Lightbox photos={photos} index={lightbox} onClose={() => setLightbox(null)} onNavigate={setLightbox} showDetailLink={showDetailLink} />}
+      {lightbox !== null && <Lightbox photos={photos} index={lightbox} onClose={() => setLightbox(null)} onNavigate={setLightbox} />}
     </div>
   );
 }

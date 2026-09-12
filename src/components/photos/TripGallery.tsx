@@ -132,7 +132,6 @@ export function TripGallery({ photos: initialPhotos, activities, trips, collecti
       )}
       <PhotoGrid
         photos={photos}
-        showDetailLink={editable}
         emptyMessage={emptyMessage}
         selectable={selecting}
         selected={selected}

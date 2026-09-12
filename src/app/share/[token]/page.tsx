@@ -18,7 +18,7 @@ export default async function SharedOverviewPage({ params }: PageProps<"/share/[
     <div className="space-y-8">
       <section>
         <h2 className="font-display text-xl font-semibold mb-3">Latest photos</h2>
-        <PhotoGrid photos={latest.map((p) => toGridPhoto(p))} showDetailLink={false} />
+        <PhotoGrid photos={latest.map((p) => toGridPhoto(p))} />
       </section>
       {activities.length > 0 && (
         <section>

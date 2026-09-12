@@ -46,7 +46,7 @@ export function SearchResults({ results, member }: { results: SearchResult[]; me
           </li>
         ))}
       </ul>
-      {lb.index !== null && <Lightbox photos={results} index={lb.index} onClose={lb.close} onNavigate={lb.open} showDetailLink={member} />}
+      {lb.index !== null && <Lightbox photos={results} index={lb.index} onClose={lb.close} onNavigate={lb.open} />}
     </>
   );
 }

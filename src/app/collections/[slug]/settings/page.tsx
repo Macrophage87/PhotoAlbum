@@ -6,8 +6,7 @@ import { shareableCollectionUrl } from "@/lib/share/social";
 import { CollectionForm } from "@/components/collections/CollectionForm";
 import { ShareButtons } from "@/components/trips/ShareButtons";
 import { Button, Card, ConfirmSubmitButton } from "@/components/ui";
-import { deleteCollection, detachExposedFromOtherCollections, rotateCollectionShareToken, setCollectionVisibility, updateCollection } from "../../actions";
-import { VisibilityForm } from "@/components/trips/VisibilityForm";
+import { deleteCollection, detachExposedFromOtherCollections, rotateCollectionShareToken, updateCollection } from "../../actions";
 import { OptOutToggle } from "@/components/annotation/OptOutToggle";
 import { visibilityWarnings } from "@/lib/visibility/settings";
 import Link from "next/link";
@@ -25,7 +24,6 @@ export default async function CollectionSettingsPage({ params, searchParams }: P
   const collection = await getCollectionBySlug(slug);
   if (!collection) notFound();
   const update = updateCollection.bind(null, slug);
-  const visibility = setCollectionVisibility.bind(null, slug);
   const rotate = rotateCollectionShareToken.bind(null, slug);
   const remove = deleteCollection.bind(null, slug);
   const shareUrl = shareableCollectionUrl(collection, env().APP_URL);
@@ -36,14 +34,17 @@ export default async function CollectionSettingsPage({ params, searchParams }: P
       {sp.saved && <p className="rounded-theme bg-emerald-50 border border-emerald-200 text-emerald-900 text-sm p-3">Saved.</p>}
       <section>
         <h2 className="font-display text-xl font-semibold mb-4">Collection details</h2>
-        <CollectionForm action={update} submitLabel="Save changes" initial={{ title: collection.title, description: collection.description ?? "", themeKey: collection.themeKey }} />
+        <CollectionForm
+          action={update}
+          submitLabel="Save changes"
+          initial={{ title: collection.title, description: collection.description ?? "", themeKey: collection.themeKey }}
+          visibility={{ current: collection.visibility, legend: "Who can see this collection", options: VISIBILITY.map((v) => ({ ...v, warnings: warnings.byTarget[v.value] })) }}
+        />
       </section>
 
-      <section>
-        <h2 className="font-display text-xl font-semibold mb-4">Who can see this collection</h2>
-        <VisibilityForm action={visibility} current={collection.visibility} options={VISIBILITY.map((v) => ({ ...v, warnings: warnings.byTarget[v.value] }))} />
+      <section className="space-y-4">
         {warnings.stillExposed.length > 0 && (
-          <Card className="mt-4 p-4 space-y-2 border-amber-300 bg-amber-50 text-amber-900">
+          <Card className="p-4 space-y-2 border-amber-300 bg-amber-50 text-amber-900">
             <div className="text-sm font-medium">Still visible elsewhere</div>
             {warnings.stillExposed.map((line) => (
               <p key={line} className="text-sm">{line}</p>
@@ -70,10 +71,10 @@ export default async function CollectionSettingsPage({ params, searchParams }: P
           </Card>
         )}
         {warnings.alsoElsewhere > 0 && warnings.stillExposed.length === 0 && (
-          <p className="mt-3 text-sm text-muted">{warnings.alsoElsewhere} of this collection&apos;s {warnings.total} photos are also on a trip or in another collection; changing visibility here does not change theirs.</p>
+          <p className="text-sm text-muted">{warnings.alsoElsewhere} of this collection&apos;s {warnings.total} photos are also on a trip or in another collection; changing visibility here does not change theirs.</p>
         )}
         {collection.visibility === "LINK" && shareUrl && (
-          <Card className="mt-4 p-4 space-y-2">
+          <Card className="p-4 space-y-2">
             <div className="text-sm font-medium">Share link</div>
             <code className="block text-xs break-all bg-surface-alt rounded p-2">{shareUrl}</code>
             <div className="flex flex-wrap gap-2">
@@ -86,7 +87,7 @@ export default async function CollectionSettingsPage({ params, searchParams }: P
           </Card>
         )}
         {collection.visibility === "PUBLIC" && shareUrl && (
-          <Card className="mt-4 p-4 space-y-2">
+          <Card className="p-4 space-y-2">
             <div className="text-sm font-medium">Share</div>
             <code className="block text-xs break-all bg-surface-alt rounded p-2">{shareUrl}</code>
             <ShareButtons url={shareUrl} />

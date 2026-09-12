@@ -6,7 +6,7 @@ import { ClipTile } from "./ClipTile";
 
 export type GridPhoto = LightboxPhoto & { thumbUrl: string; status: "PENDING" | "PROCESSING" | "READY" | "FAILED"; badge?: string | null; unavailable?: boolean; /** Members only: the collections holding this item, shown as chips. */ collections?: { slug: string; title: string }[] };
 
-export function PhotoGrid({ photos, showDetailLink = true, emptyMessage = "No photos yet.", selectable: selectableProp, selected: selectedProp, onToggle: onToggleProp }: { photos: GridPhoto[]; showDetailLink?: boolean; emptyMessage?: string; selectable?: boolean; selected?: Set<string>; onToggle?: (id: string) => void }) {
+export function PhotoGrid({ photos, emptyMessage = "No photos yet.", selectable: selectableProp, selected: selectedProp, onToggle: onToggleProp }: { photos: GridPhoto[]; emptyMessage?: string; selectable?: boolean; selected?: Set<string>; onToggle?: (id: string) => void }) {
   const lb = useLightbox();
   // A grid inside a SelectionProvider (global timeline, unassigned photos) takes its selection from context.
   const ctx = useSelectionContext();
@@ -60,7 +60,7 @@ export function PhotoGrid({ photos, showDetailLink = true, emptyMessage = "No ph
           );
         })}
       </ul>
-      {lb.index !== null && <Lightbox photos={ready} index={lb.index} onClose={lb.close} onNavigate={lb.open} showDetailLink={showDetailLink} />}
+      {lb.index !== null && <Lightbox photos={ready} index={lb.index} onClose={lb.close} onNavigate={lb.open} />}
     </>
   );
 }

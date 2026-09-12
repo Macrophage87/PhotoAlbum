@@ -11,7 +11,7 @@ export type TimelineGroups = DayGroup<PhotoCard, ActivityCardData>[];
 
 export type TimelinePaging = { base: string; /** True on any page after the first. */ paged: boolean; /** Encoded cursor for the next page, or null on the last. */ next: string | null };
 
-export function Timeline({ groups, tripSlug, timezone, showDetailLink, idPrefix = "day", activityHrefBase, paging }: { groups: TimelineGroups; tripSlug: string; timezone: string; showDetailLink: boolean; idPrefix?: string; activityHrefBase?: string; /** Day-boundary paging for long trips. */ paging?: TimelinePaging }) {
+export function Timeline({ groups, tripSlug, timezone, member, idPrefix = "day", activityHrefBase, paging }: { groups: TimelineGroups; tripSlug: string; timezone: string; member: boolean; idPrefix?: string; activityHrefBase?: string; /** Day-boundary paging for long trips. */ paging?: TimelinePaging }) {
   if (groups.length === 0 && !paging?.paged) return <p className="text-muted text-sm">Nothing on the timeline yet. Upload photos or add an activity.</p>;
   const days = groups.map((g) => ({ key: g.dayKey ?? "undated", id: `${idPrefix}-${g.dayKey ?? "undated"}`, count: g.items.reduce((n, i) => n + (i.kind === "activity" ? 1 : i.photos.length), 0) }));
   return (
@@ -29,7 +29,7 @@ export function Timeline({ groups, tripSlug, timezone, showDetailLink, idPrefix 
                     <ActivityCard activity={item.activity} tripSlug={tripSlug} timezone={timezone} hrefBase={activityHrefBase}>
                       {item.photos.length > 0 && (
                         <div className="px-4 pb-4">
-                          <PhotoGrid photos={item.photos.map((p) => toGridPhoto(p, null, showDetailLink))} showDetailLink={showDetailLink} />
+                          <PhotoGrid photos={item.photos.map((p) => toGridPhoto(p, null, member))} />
                         </div>
                       )}
                     </ActivityCard>
@@ -42,7 +42,7 @@ export function Timeline({ groups, tripSlug, timezone, showDetailLink, idPrefix 
                           <span className="ml-2">· {item.photos.length} photo{item.photos.length === 1 ? "" : "s"}</span>
                         </div>
                       )}
-                      <PhotoGrid photos={item.photos.map((p) => toGridPhoto(p, null, showDetailLink))} showDetailLink={showDetailLink} />
+                      <PhotoGrid photos={item.photos.map((p) => toGridPhoto(p, null, member))} />
                     </div>
                   )}
                 </li>

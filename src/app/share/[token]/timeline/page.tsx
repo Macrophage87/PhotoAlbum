@@ -10,5 +10,5 @@ export default async function SharedTimelinePage({ params, searchParams }: PageP
   const trip = await getSharedTrip(token);
   if (!trip) notFound();
   const page = await tripTimeline(trip.id, trip.timezone, { cursor });
-  return <Timeline groups={page.groups} tripSlug={trip.slug} timezone={trip.timezone} showDetailLink={false} activityHrefBase={`/share/${token}/activities`} paging={{ base: `/share/${token}/timeline`, paged: Boolean(cursor), next: page.next ? encodeCursor(page.next) : null }} />;
+  return <Timeline groups={page.groups} tripSlug={trip.slug} timezone={trip.timezone} member={false} activityHrefBase={`/share/${token}/activities`} paging={{ base: `/share/${token}/timeline`, paged: Boolean(cursor), next: page.next ? encodeCursor(page.next) : null }} />;
 }

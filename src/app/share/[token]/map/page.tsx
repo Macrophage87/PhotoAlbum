@@ -8,5 +8,5 @@ export default async function SharedMapPage({ params }: PageProps<"/share/[token
   const { token } = await params;
   const trip = await getSharedTrip(token);
   if (!trip) notFound();
-  return <TripMap src={`/api/trips/${trip.slug}/geojson`} theme={mapThemeOf(getTheme(trip.themeKey))} showDetailLink={false} activityHrefBase={`/share/${token}/activities`} />;
+  return <TripMap src={`/api/trips/${trip.slug}/geojson`} theme={mapThemeOf(getTheme(trip.themeKey))} activityHrefBase={`/share/${token}/activities`} />;
 }

@@ -153,6 +153,8 @@ model User {
   invites  Invite[]  @relation("InvitedBy")
   trips    Trip[]
   photos   Photo[]
+  placesSet Photo[] @relation("PlaceSetBy")
+  datesSet  Photo[] @relation("DateSetBy")
   tracks   Track[]
   collections     Collection[]
   collectionItems CollectionItem[]
@@ -246,6 +248,11 @@ model Photo {
   activity      Activity?      @relation(fields: [activityId], references: [id], onDelete: SetNull)
   uploaderId    String
   uploader      User           @relation(fields: [uploaderId], references: [id])
+  /// Who pinned this item's place by hand, and who set its date by hand, so the album can say whose choice it was.
+  placeSetById  String?
+  placeSetBy    User?          @relation("PlaceSetBy", fields: [placeSetById], references: [id], onDelete: SetNull)
+  dateSetById   String?
+  dateSetBy     User?          @relation("DateSetBy", fields: [dateSetById], references: [id], onDelete: SetNull)
   status        PhotoStatus    @default(PENDING)
   error         String?
   originalName  String

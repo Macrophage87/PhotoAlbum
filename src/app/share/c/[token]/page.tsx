@@ -9,5 +9,5 @@ export default async function SharedCollectionPage({ params }: PageProps<"/share
   const collection = await getSharedCollection(token);
   if (!collection) notFound();
   const items = await listCollectionItems(collection.id);
-  return <PhotoGrid photos={items.filter((p) => p.status === "READY").map((p) => toGridPhoto(p))} showDetailLink={false} emptyMessage="Nothing here yet." />;
+  return <PhotoGrid photos={items.filter((p) => p.status === "READY").map((p) => toGridPhoto(p))} emptyMessage="Nothing here yet." />;
 }

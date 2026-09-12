@@ -3,6 +3,7 @@
 import { useActionState } from "react";
 import { Button, FieldError, Input, Label, Select, Textarea } from "@/components/ui";
 import { ThemePicker } from "./ThemePicker";
+import { confirmExposure, VisibilityChoice, type VisibilitySection } from "./VisibilityChoice";
 import type { TripFormState } from "@/app/trips/new/actions";
 
 export type TripFormValues = { title: string; description: string; startDate: string; endDate: string; timezone: string; themeKey: string };
@@ -48,12 +49,12 @@ const COMMON_ZONES = [
   "America/Santiago",
 ];
 
-export function TripForm({ action, initial, submitLabel }: { action: (prev: TripFormState, fd: FormData) => Promise<TripFormState>; initial: TripFormValues; submitLabel: string }) {
+export function TripForm({ action, initial, submitLabel, visibility }: { action: (prev: TripFormState, fd: FormData) => Promise<TripFormState>; initial: TripFormValues; submitLabel: string; visibility?: VisibilitySection }) {
   const [state, formAction, pending] = useActionState<TripFormState, FormData>(action, { status: "idle" });
   const err = (k: keyof TripFormValues) => (state.status === "error" ? state.fieldErrors?.[k] : undefined);
   const zones = COMMON_ZONES.includes(initial.timezone) ? COMMON_ZONES : [initial.timezone, ...COMMON_ZONES];
   return (
-    <form action={formAction} className="space-y-6">
+    <form action={formAction} className="space-y-6" onSubmit={(e) => { if (!confirmExposure(e.currentTarget, visibility)) e.preventDefault(); }}>
       <div>
         <Label htmlFor="title">Title</Label>
         <Input id="title" name="title" required defaultValue={initial.title} placeholder="Acadia, Maine" />
@@ -91,6 +92,7 @@ export function TripForm({ action, initial, submitLabel }: { action: (prev: Trip
         <Label>Theme</Label>
         <ThemePicker value={initial.themeKey} />
       </div>
+      {visibility && <VisibilityChoice current={visibility.current} options={visibility.options} legend={visibility.legend} />}
       {state.status === "error" && state.message && <FieldError>{state.message}</FieldError>}
       <Button type="submit" disabled={pending}>
         {pending ? "Saving…" : submitLabel}
