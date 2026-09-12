@@ -20,7 +20,6 @@ import { getTheme } from "@/themes";
 import { linkedPhotos } from "@/lib/photos/links";
 import { linkPhotos, unlinkPhotos } from "@/app/photos/link-actions";
 import { collectionsForPhoto } from "@/lib/collections/queries";
-import { CollectionPicker } from "@/components/collections/CollectionPicker";
 import { uploaderLabel } from "@/components/photos/toGrid";
 import { YouTubeEmbed } from "@/components/videos/YouTubeEmbed";
 import { updateExternalVideo } from "@/app/videos/actions";
@@ -177,6 +176,25 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
                     ))}
                   </Select>
                 </div>
+                <fieldset>
+                  <input type="hidden" name="collectionsPresent" value="1" />
+                  <legend className="text-sm font-medium mb-1">Collections</legend>
+                  {collections.length === 0 ? (
+                    <p className="text-sm text-muted">No collections yet. <Link href="/collections/new" className="text-primary hover:underline">Create one</Link>.</p>
+                  ) : (
+                    <div className="rounded-theme border border-border divide-y divide-border max-h-48 overflow-y-auto" data-testid="collection-picker">
+                      {collections.map((c) => (
+                        <label key={c.id} className="flex items-center gap-2 px-3 py-1.5 text-sm cursor-pointer hover:bg-surface-alt">
+                          <input type="checkbox" name="collectionIds" value={c.id} defaultChecked={c.member} />
+                          <span className="flex-1">{c.title}</span>
+                          {c.visibility !== "PRIVATE" && <span className="text-xs text-muted">{c.visibility === "PUBLIC" ? "public" : "shared by link"}</span>}
+                          {c.member && <Link href={`/collections/${c.slug}`} className="text-xs text-primary hover:underline">Open</Link>}
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                  <p className="text-xs text-muted mt-1">Tick every collection this photo belongs in. A public or link-shared collection shows the photo to everyone who can open that collection.</p>
+                </fieldset>
                 {photo.tripId && (
                   <div>
                     <Label htmlFor="activityId">Activity</Label>
@@ -217,11 +235,6 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
                 </form>
               )}
               {photo.takenAt && <TimezoneShift action={shift} currentOffsetMin={photo.tzOffsetMin} hasTrip={Boolean(photo.trip)} tripTimezone={photo.trip?.timezone} />}
-            </Card>
-
-            <Card className="p-4 space-y-3">
-              <h2 className="font-medium">Collections</h2>
-              <CollectionPicker photoId={photo.id} collections={collections} />
             </Card>
 
             {similar.length > 0 && (

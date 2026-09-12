@@ -160,7 +160,9 @@ test("a collection gathers photos from two trips and can be shared by link", asy
   expect(photos.rows).toHaveLength(2);
   // One photo through the per-photo checkbox, the other through the collection's own "Add existing photos" picker.
   await page.goto(`/photos/${photos.rows[0].id}`);
+  await page.waitForLoadState("networkidle");
   await page.getByLabel("Best of 2025").check();
+  await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByRole("link", { name: "Open", exact: true })).toBeVisible();
   await page.reload();
   await expect(page.getByLabel("Best of 2025")).toBeChecked();
@@ -421,7 +423,8 @@ test("uploads get embeddings from the sidecar and the review screen suggests whe
   await page.goto(`/review?ids=${id}`);
   const suggestion = page.getByRole("button", { name: /Add to trip Acadia/ }).first();
   // Background jobs on a fresh upload can still be writing; the suggestion appears once the row settles.
-  await expect.poll(async () => { await page.reload(); return suggestion.count(); }, { timeout: 20_000, intervals: [1000] }).toBe(1);
+  // The embedding waits its turn behind other heavy jobs (a transcode from an earlier test can hold the lock), so allow for that.
+  await expect.poll(async () => { await page.reload(); return suggestion.count(); }, { timeout: 45_000, intervals: [1000] }).toBe(1);
   await page.waitForLoadState("networkidle");
   await expect(suggestion).toContainText("taken during the trip");
   await suggestion.click();

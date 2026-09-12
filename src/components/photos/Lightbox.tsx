@@ -68,7 +68,7 @@ export function Lightbox({ photos, index, onClose, onNavigate, showDetailLink = 
         </div>
       </div>
       <div className="flex-1 min-h-0 flex flex-col lg:flex-row overflow-y-auto lg:overflow-hidden">
-        <div className="relative flex items-center justify-center min-h-[45vh] lg:min-h-0 lg:flex-1 px-12 py-2">
+        <div className="relative flex flex-col items-center justify-center min-h-[45vh] lg:min-h-0 lg:flex-1 px-12 py-2 gap-3">
           {photos.length > 1 && (
             <button onClick={(e) => { e.stopPropagation(); prev(); }} className="absolute left-2 top-1/2 -translate-y-1/2 text-white/80 hover:text-white text-3xl p-3" aria-label="Previous">
               ‹
@@ -84,16 +84,19 @@ export function Lightbox({ photos, index, onClose, onNavigate, showDetailLink = 
             // A second click on the picture opens the full-size file in its own tab.
             <a href={photo.originalUrl} target="_blank" rel="noreferrer" title="Open the full-size photo" className="max-h-full max-w-full" onClick={(e) => e.stopPropagation()}>
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={photo.mediumUrl} alt={photo.alt} className="max-h-[80vh] max-w-full object-contain select-none" />
+              <img src={photo.mediumUrl} alt={photo.alt} className="max-h-[72vh] max-w-full object-contain select-none" />
             </a>
           ) : (
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={photo.mediumUrl} alt={photo.alt} className="max-h-[80vh] max-w-full object-contain select-none" onClick={(e) => e.stopPropagation()} />
+            <img src={photo.mediumUrl} alt={photo.alt} className="max-h-[72vh] max-w-full object-contain select-none" onClick={(e) => e.stopPropagation()} />
           )}
           {photos.length > 1 && (
             <button onClick={(e) => { e.stopPropagation(); next(); }} className="absolute right-2 top-1/2 -translate-y-1/2 text-white/80 hover:text-white text-3xl p-3" aria-label="Next">
               ›
             </button>
+          )}
+          {photo.caption && (
+            <p className="max-w-3xl text-center text-white text-lg sm:text-xl font-medium leading-snug drop-shadow" data-testid="lightbox-caption" onClick={(e) => e.stopPropagation()}>{photo.caption}</p>
           )}
         </div>
         <aside className="lg:w-80 xl:w-96 shrink-0 lg:overflow-y-auto bg-black/40 border-t lg:border-t-0 lg:border-l border-white/10" onClick={(e) => e.stopPropagation()}>

@@ -13,6 +13,7 @@ import { storage } from "@/lib/storage";
 import { readExif, resolveTakenAt } from "@/lib/images/exif";
 import type { TakenAtSource } from "@/generated/prisma/enums";
 import { parseLatLng } from "@/lib/geo/parse";
+import { addToCollection, removeFromCollection } from "@/app/collections/actions";
 
 const updateSchema = z.object({
   title: z.string().trim().max(120).optional().transform((v) => v || null),
@@ -44,6 +45,13 @@ export async function updatePhoto(id: string, fd: FormData): Promise<void> {
   }
   // The title field is on the photo form only; an embedded video's title is edited with its link, so it is left alone here.
   const title = fd.has("title") && photo.kind !== "EXTERNAL_VIDEO" ? v.title : photo.title;
+  // Collections come from the form's checkbox group; membership is reconciled to exactly what is ticked.
+  if (fd.has("collectionsPresent")) {
+    const wanted = new Set(fd.getAll("collectionIds").map(String).filter(Boolean));
+    const held = new Set((await db.collectionItem.findMany({ where: { photoId: id }, select: { collectionId: true } })).map((c) => c.collectionId));
+    for (const cid of wanted) if (!held.has(cid)) await addToCollection(cid, [id]);
+    for (const cid of held) if (!wanted.has(cid)) await removeFromCollection(cid, [id]);
+  }
   await db.photo.update({ where: { id }, data: { title, caption: v.caption, context: v.context, ...(v.context !== photo.context ? { contextUpdatedAt: new Date(), annotationError: null } : {}), tripId: v.tripId, activityId } });
   revalidatePath(`/photos/${id}`);
   if (photo.tripId) revalidatePath(`/trips`, "layout");

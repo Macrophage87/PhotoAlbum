@@ -55,12 +55,7 @@ export function LightboxInfo({ photoId, share }: { photoId: string; share?: { to
 
   return (
     <div className="text-sm text-white/90 space-y-3 p-4" data-testid="lightbox-info">
-      {(info.title || info.caption) && (
-        <div>
-          {info.title && <h2 className="text-lg font-semibold leading-snug">{info.title}</h2>}
-          {info.caption && info.caption !== info.title && <p className="text-white/80 mt-0.5">{info.caption}</p>}
-        </div>
-      )}
+      {info.title && <h2 className="text-lg font-semibold leading-snug">{info.title}</h2>}
       <div>
         <div className="text-white/60 text-xs uppercase tracking-wide">Date</div>
         {info.takenAt ? (
