@@ -17,14 +17,16 @@ type Item = {
 
 const CONCURRENCY = 3;
 
-function uploadOne(file: File, tripId: string | undefined, optOut: boolean, onProgress: (p: number) => void): Promise<{ photoId: string }> {
+function uploadOne(file: File, target: { tripId?: string; activityId?: string }, optOut: boolean, onProgress: (p: number) => void): Promise<{ photoId: string }> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", "/api/upload");
     xhr.setRequestHeader("x-file-name", encodeURIComponent(file.name));
     xhr.setRequestHeader("content-type", file.type || "application/octet-stream");
     xhr.setRequestHeader("x-last-modified", String(file.lastModified));
-    if (tripId) xhr.setRequestHeader("x-trip-id", tripId);
+    if (target.tripId) xhr.setRequestHeader("x-trip-id", target.tripId);
+    // An activity also settles the trip, whatever the file's own date says.
+    if (target.activityId) xhr.setRequestHeader("x-activity-id", target.activityId);
     if (optOut) xhr.setRequestHeader("x-annotation-opt-out", "1");
     xhr.upload.onprogress = (e) => e.lengthComputable && onProgress(e.loaded / e.total);
     xhr.onload = () => {
@@ -90,7 +92,7 @@ export function tooLongMessage(durationS: number, limit: number): string {
   return `This video is ${Math.round(durationS)} seconds long; clips uploaded here are limited to ${limit} seconds. Upload longer videos to YouTube as Unlisted and add the link instead.`;
 }
 
-export function Uploader({ tripId, onDone, maxClipSeconds = 90, annotationActive = false }: { tripId?: string; onDone?: (photoIds: string[]) => void; maxClipSeconds?: number; /** Whether the AI helper is on, so the opt-out checkbox is worth showing. */ annotationActive?: boolean }) {
+export function Uploader({ tripId, activityId, onDone, maxClipSeconds = 90, annotationActive = false }: { tripId?: string; /** Put what is uploaded straight into this activity, and on its trip. */ activityId?: string; onDone?: (photoIds: string[]) => void; maxClipSeconds?: number; /** Whether the AI helper is on, so the opt-out checkbox is worth showing. */ annotationActive?: boolean }) {
   const [optOut, setOptOut] = useState(false);
   const optOutRef = useRef(false);
   const [items, setItems] = useState<Item[]>([]);
@@ -104,10 +106,10 @@ export function Uploader({ tripId, onDone, maxClipSeconds = 90, annotationActive
   }, []);
 
   const pumpRef = useRef<() => void>(() => {});
-  const tripIdRef = useRef(tripId);
+  const targetRef = useRef({ tripId, activityId });
   useEffect(() => {
-    tripIdRef.current = tripId;
-  }, [tripId]);
+    targetRef.current = { tripId, activityId };
+  }, [tripId, activityId]);
   useEffect(() => {
     optOutRef.current = optOut;
   }, [optOut]);
@@ -118,7 +120,7 @@ export function Uploader({ tripId, onDone, maxClipSeconds = 90, annotationActive
         const item = queue.current.shift()!;
         active.current += 1;
         update(item.localId, { status: "uploading" });
-        uploadOne(item.file, tripIdRef.current, optOutRef.current, (p) => update(item.localId, { progress: p }))
+        uploadOne(item.file, targetRef.current, optOutRef.current, (p) => update(item.localId, { progress: p }))
           .then(({ photoId }) => update(item.localId, { photoId, status: "processing", progress: 1 }))
           .catch((err: Error) => update(item.localId, { status: "failed", error: err.message }))
           .finally(() => {

@@ -205,7 +205,8 @@ test("a collection gathers photos from two trips and can be shared by link", asy
   await expect(page).toHaveURL(/\/collections\/best-of-2025$/);
   await expect(page.getByRole("heading", { name: "Best of 2025" })).toBeVisible();
 
-  const photos = await withDb((c) => c.query('SELECT p.id, t.slug FROM "Photo" p JOIN "Trip" t ON t.id = p."tripId" WHERE t.slug IN (\'acadia\', \'yosemite\') ORDER BY t.slug'));
+  // The first photo uploaded to each of the two trips, whatever else has landed on them by now.
+  const photos = await withDb((c) => c.query('SELECT DISTINCT ON (t.slug) p.id, t.slug FROM "Photo" p JOIN "Trip" t ON t.id = p."tripId" WHERE t.slug IN (\'acadia\', \'yosemite\') ORDER BY t.slug, p."createdAt"'));
   expect(photos.rows).toHaveLength(2);
   // One photo through the item's own collections field, the other through the collection's "Add existing photos".
   await page.goto(`/photos/${photos.rows[0].id}`);
@@ -937,8 +938,10 @@ test("a favourite leads the list, and a tile says what it is on hover", async ({
 
 test("the date troubleshooter shows every witness and lets one be taken", async ({ context, page }) => {
   await signIn(context, ADMIN);
-  const scan = await withDb((c) => c.query(`SELECT id FROM "Photo" WHERE "takenAtSource" IN ('FILE_MTIME','UPLOAD_TIME') LIMIT 1`));
-  const row = scan.rows[0] ?? (await withDb((c) => c.query(`SELECT id FROM "Photo" WHERE kind = 'PHOTO' LIMIT 1`))).rows[0];
+  // An uploaded photo with a file of its own: one imported through Google's picker has no file to read a modified
+  // time from, so the only reading it carries is the one it already has and there would be nothing to take.
+  const scan = await withDb((c) => c.query(`SELECT id FROM "Photo" WHERE kind = 'PHOTO' AND "sourceKind" = 'UPLOAD' AND "takenAtSource" IN ('FILE_MTIME','UPLOAD_TIME') ORDER BY "createdAt" LIMIT 1`));
+  const row = scan.rows[0] ?? (await withDb((c) => c.query(`SELECT id FROM "Photo" WHERE kind = 'PHOTO' AND "sourceKind" = 'UPLOAD' ORDER BY "createdAt" LIMIT 1`))).rows[0];
   await page.goto(`/photos/${row.id}`);
   await page.waitForLoadState("networkidle");
   await page.getByRole("button", { name: "Where did this date come from?" }).click();

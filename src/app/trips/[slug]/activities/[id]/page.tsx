@@ -5,6 +5,8 @@ import { photoCardSelect } from "@/lib/photos/queries";
 import { ActivityDetail } from "@/components/activities/ActivityDetail";
 import { deleteActivity, updateActivity } from "../actions";
 import { NOT_TRASHED } from "@/lib/photos/trash";
+import { env } from "@/lib/env";
+import { annotationGates } from "@/lib/annotation/eligibility";
 
 export default async function ActivityPage({ params, searchParams }: PageProps<"/trips/[slug]/activities/[id]">) {
   const { slug, id } = await params;
@@ -15,11 +17,13 @@ export default async function ActivityPage({ params, searchParams }: PageProps<"
   const photos = await db.photo.findMany({ where: { activityId: activity.id, ...NOT_TRASHED }, orderBy: [{ takenAt: "asc" }], select: photoCardSelect });
 
   if (!editable) return <ActivityDetail trip={trip} activity={activity} photos={photos} editable={false} />;
+  const gates = await annotationGates();
   return (
     <ActivityDetail
       trip={trip}
       activity={activity}
       photos={photos}
+      upload={{ maxClipSeconds: env().MAX_CLIP_SECONDS, annotationActive: gates.active }}
       editable
       editing={sp.edit === "1"}
       updateAction={updateActivity.bind(null, slug, activity.id) as never}

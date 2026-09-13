@@ -186,6 +186,7 @@ model User {
   favouriteTrips       TripFavorite[]
   favouriteCollections CollectionFavorite[]
   datesSet  Photo[] @relation("DateSetBy")
+  activitiesSet Photo[] @relation("ActivitySetBy")
   tracks   Track[]
   collections     Collection[]
   collectionItems CollectionItem[]
@@ -285,6 +286,11 @@ model Photo {
   placeSetBy    User?          @relation("PlaceSetBy", fields: [placeSetById], references: [id], onDelete: SetNull)
   dateSetById   String?
   dateSetBy     User?          @relation("DateSetBy", fields: [dateSetById], references: [id], onDelete: SetNull)
+  /// Set when a member put this item in its activity themselves — uploaded into it, or chose it on the item's page.
+  /// An activity's own time window then leaves it alone: a scan with no date, or a photo taken before the walk
+  /// began, stays where a person put it.
+  activitySetById String?
+  activitySetBy   User?        @relation("ActivitySetBy", fields: [activitySetById], references: [id], onDelete: SetNull)
   status        PhotoStatus    @default(PENDING)
   error         String?
   originalName  String

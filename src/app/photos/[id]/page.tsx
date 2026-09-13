@@ -61,7 +61,7 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
   const viewer = await getViewer();
   const photo = await db.photo.findUnique({
     where: { id },
-    include: { trip: { select: { id: true, slug: true, title: true, timezone: true, coverPhotoId: true } }, activity: { select: { id: true, title: true } }, uploader: { select: { name: true, email: true } }, placeSetBy: { select: { name: true, email: true } }, dateSetBy: { select: { name: true, email: true } }, trashedBy: { select: { name: true, email: true } }, editedBy: { select: { name: true, email: true } } },
+    include: { trip: { select: { id: true, slug: true, title: true, timezone: true, coverPhotoId: true } }, activity: { select: { id: true, title: true } }, uploader: { select: { name: true, email: true } }, placeSetBy: { select: { name: true, email: true } }, dateSetBy: { select: { name: true, email: true } }, activitySetBy: { select: { name: true, email: true } }, trashedBy: { select: { name: true, email: true } }, editedBy: { select: { name: true, email: true } } },
   });
   if (!photo) notFound();
 
@@ -220,6 +220,11 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
                         <option key={a.id} value={a.id}>{a.title}</option>
                       ))}
                     </Select>
+                    <p className="text-xs text-muted mt-1">
+                      {photo.activitySetBy
+                        ? `Put here by ${uploaderLabel(photo.activitySetBy.name, photo.activitySetBy.email)}, so the activity's hours leave it alone.`
+                        : "Left alone, this follows the time it was taken. Choosing one keeps it there whatever its date says."}
+                    </p>
                   </div>
                 )}
                 <Button type="submit">Save</Button>

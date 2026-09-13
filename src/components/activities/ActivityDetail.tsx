@@ -13,6 +13,7 @@ import { ActivityMapSection } from "./ActivityMapSection";
 import { PhotoGrid } from "@/components/photos/PhotoGrid";
 import { toGridPhoto } from "@/components/photos/toGrid";
 import { Card, ConfirmSubmitButton } from "@/components/ui";
+import { ActivityUploader } from "./ActivityUploader";
 
 export type ActivityDetailData = {
   id: string;
@@ -33,7 +34,7 @@ type EditProps = {
 type ReadOnlyProps = { editable: false };
 
 /** Shared body of the activity page for members (editable) and shared/public viewers. */
-export function ActivityDetail({ trip, activity, photos, ...mode }: { trip: { slug: string; timezone: string; themeKey: string }; activity: ActivityDetailData; photos: PhotoCard[] } & (EditProps | ReadOnlyProps)) {
+export function ActivityDetail({ trip, activity, photos, upload, ...mode }: { trip: { slug: string; timezone: string; themeKey: string }; activity: ActivityDetailData; photos: PhotoCard[]; /** Members only: what the uploader needs to offer adding photos straight to this activity. */ upload?: { maxClipSeconds: number; annotationActive: boolean }; } & (EditProps | ReadOnlyProps)) {
   const toLocalInput = (d: Date) => format(new TZDate(d, trip.timezone), "yyyy-MM-dd'T'HH:mm");
   const editing = mode.editable && mode.editing;
   return (
@@ -87,11 +88,14 @@ export function ActivityDetail({ trip, activity, photos, ...mode }: { trip: { sl
 
       {activity.track && <ActivityMapSection tripSlug={trip.slug} trackId={activity.track.id} activityId={activity.id} type={activity.type} theme={mapThemeOf(getTheme(trip.themeKey))} />}
 
-      <section>
-        <h3 className="font-display text-lg font-semibold mb-3">
-          {photos.length} photo{photos.length === 1 ? "" : "s"}
-        </h3>
-        <PhotoGrid photos={photos.map((p) => toGridPhoto(p))} emptyMessage="No photos in this time window yet." />
+      <section className="space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 className="font-display text-lg font-semibold">
+            {photos.length} photo{photos.length === 1 ? "" : "s"}
+          </h3>
+          {mode.editable && upload && <ActivityUploader activityId={activity.id} maxClipSeconds={upload.maxClipSeconds} annotationActive={upload.annotationActive} />}
+        </div>
+        <PhotoGrid photos={photos.map((p) => toGridPhoto(p))} emptyMessage={mode.editable ? "Nothing here yet. Photos taken during these hours arrive on their own; anything else can be added above." : "No photos on this activity yet."} />
       </section>
     </div>
   );

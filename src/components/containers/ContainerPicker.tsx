@@ -4,14 +4,14 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 import type { ContainerHit } from "@/app/api/containers/route";
 
 export type Container = { id: string; title: string; slug?: string; visibility?: string };
-export type ContainerKind = "trip" | "collection";
+export type ContainerKind = "trip" | "collection" | "activity";
 
-const WORD = { trip: { one: "trip", many: "trips" }, collection: { one: "collection", many: "collections" } } as const;
+const WORD = { trip: { one: "trip", many: "trips" }, collection: { one: "collection", many: "collections" }, activity: { one: "activity", many: "activities" } } as const;
 
 /** Wait this long after the last keystroke before asking the server, so typing a title is one request, not ten. */
 const DEBOUNCE_MS = 180;
 
-function useSearch(kind: ContainerKind, query: string, open: boolean) {
+function useSearch(kind: ContainerKind, query: string, open: boolean, tripId?: string) {
   const [hits, setHits] = useState<ContainerHit[]>([]);
   const [loading, setLoading] = useState(false);
   useEffect(() => {
@@ -19,14 +19,14 @@ function useSearch(kind: ContainerKind, query: string, open: boolean) {
     let live = true;
     const timer = setTimeout(() => {
       setLoading(true);
-      fetch(`/api/containers?kind=${kind}&q=${encodeURIComponent(query)}`, { credentials: "same-origin" })
+      fetch(`/api/containers?kind=${kind}&q=${encodeURIComponent(query)}${tripId ? `&trip=${encodeURIComponent(tripId)}` : ""}`, { credentials: "same-origin" })
         .then((r) => (r.ok ? r.json() : { hits: [] }))
         .then((j: { hits: ContainerHit[] }) => { if (live) setHits(j.hits ?? []); })
         .catch(() => { if (live) setHits([]); })
         .finally(() => { if (live) setLoading(false); });
     }, query ? DEBOUNCE_MS : 0);
     return () => { live = false; clearTimeout(timer); };
-  }, [kind, query, open]);
+  }, [kind, query, open, tripId]);
   return { hits, loading };
 }
 
@@ -65,8 +65,10 @@ function Results({ hits, loading, kind, active, onPick, exclude, listId, emptyNo
  * fiftieth: this asks the server as you type and shows a shortlist, so it reads the same with five or five hundred.
  * With the box empty it offers the most recent, which is what people reach for most of the time.
  */
-export function ContainerPicker({ kind, value, onChange, placeholder, allowNone, noneLabel, name, extras = [], className }: {
+export function ContainerPicker({ kind, value, onChange, placeholder, allowNone, noneLabel, name, extras = [], className, tripId }: {
   kind: ContainerKind;
+  /** Which trip's activities to search, for kind="activity". */
+  tripId?: string;
   value: Container | null;
   onChange: (v: Container | null) => void;
   placeholder?: string;
@@ -84,7 +86,7 @@ export function ContainerPicker({ kind, value, onChange, placeholder, allowNone,
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const box = useRef<HTMLDivElement>(null);
-  const { hits, loading } = useSearch(kind, query, open);
+  const { hits, loading } = useSearch(kind, query, open, tripId);
 
   useEffect(() => {
     if (!open) return;

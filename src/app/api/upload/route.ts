@@ -14,6 +14,7 @@ const headerSchema = z.object({
   fileName: z.string().min(1).max(255),
   contentType: z.string().optional(),
   tripId: z.string().optional(),
+  activityId: z.string().optional(),
   lastModified: z.coerce.number().optional(),
   annotationOptOut: z.string().optional(),
 });
@@ -28,11 +29,13 @@ export async function POST(request: Request) {
     fileName: decodeURIComponent(request.headers.get("x-file-name") ?? ""),
     contentType: request.headers.get("content-type") ?? undefined,
     tripId: request.headers.get("x-trip-id") ?? undefined,
+    activityId: request.headers.get("x-activity-id") ?? undefined,
     lastModified: request.headers.get("x-last-modified") ?? undefined,
     annotationOptOut: request.headers.get("x-annotation-opt-out") ?? undefined,
   });
   if (!parsed.success) return Response.json({ error: "Bad upload headers" }, { status: 400 });
-  const { fileName, tripId, lastModified } = parsed.data;
+  const { fileName, lastModified } = parsed.data;
+  let tripId = parsed.data.tripId;
 
   const ext = fileName.toLowerCase().split(".").pop() ?? "";
   let mime = parsed.data.contentType?.split(";")[0].trim() ?? "";
@@ -43,12 +46,22 @@ export async function POST(request: Request) {
     const trip = await db.trip.findUnique({ where: { id: tripId }, select: { id: true } });
     if (!trip) return Response.json({ error: "Trip not found" }, { status: 404 });
   }
+  // Uploading into an activity says both where it belongs and which trip it is on, whatever its own date turns out
+  // to be — a scan of a photograph from the walk belongs on the walk.
+  const activityId = parsed.data.activityId;
+  if (activityId) {
+    const activity = await db.activity.findUnique({ where: { id: activityId }, select: { id: true, tripId: true } });
+    if (!activity) return Response.json({ error: "Activity not found" }, { status: 404 });
+    tripId = activity.tripId;
+  }
 
   const isVideo = VIDEO.has(mime);
   const photo = await db.photo.create({
     data: {
       uploaderId: viewer.user.id,
       tripId: tripId ?? null,
+      activityId: activityId ?? null,
+      activitySetById: activityId ? viewer.user.id : null,
       kind: isVideo ? "VIDEO" : "PHOTO",
       annotationOptOut: parsed.data.annotationOptOut === "1",
       status: "PENDING",

@@ -29,8 +29,15 @@ const updateSchema = z.object({
   activityId: z.string().optional().transform((v) => v || null),
 });
 
+/** Who, if anyone, chose this activity: the member making this change, whoever chose it before, or nobody. */
+function activitySetter(activityId: string | null, chosenByHand: boolean, userId: string, photo: { activityId: string | null; activitySetById: string | null }): string | null {
+  if (!activityId) return null;
+  if (chosenByHand) return userId;
+  return activityId === photo.activityId ? photo.activitySetById : null;
+}
+
 export async function updatePhoto(id: string, fd: FormData): Promise<void> {
-  await requireUserOrThrow();
+  const user = await requireUserOrThrow();
   const photo = await db.photo.findUnique({ where: { id } });
   if (!photo) throw new Error("Photo not found");
   const v = updateSchema.parse({ title: fd.get("title") ?? undefined, caption: fd.get("caption") ?? "", context: fd.get("context") ?? "", tripId: fd.get("tripId") ?? "", activityId: fd.get("activityId") ?? undefined });
@@ -38,16 +45,20 @@ export async function updatePhoto(id: string, fd: FormData): Promise<void> {
   if (v.tripId && !(await db.trip.findUnique({ where: { id: v.tripId }, select: { id: true } }))) throw new Error("That trip no longer exists");
 
   let activityId = v.activityId;
+  // Whether this filing is a person's choice, which an activity's time window must then respect, or the album's own.
+  // Only an actual change counts: saving a caption on a photo the album filed by time does not pin it there.
+  let chosenByHand = fd.has("activityId") && v.activityId !== null && v.activityId !== photo.activityId;
   if (v.tripId !== photo.tripId) {
     // Trip changed: re-derive the activity from the new trip's windows.
     activityId = null;
+    chosenByHand = false;
     if (v.tripId && photo.takenAt) {
       const acts = await db.activity.findMany({ where: { tripId: v.tripId }, select: { id: true, startTime: true, endTime: true } });
       activityId = pickActivityByTime(acts, photo.takenAt)?.id ?? null;
     }
   } else if (activityId) {
     const act = await db.activity.findFirst({ where: { id: activityId, tripId: v.tripId ?? "" }, select: { id: true } });
-    if (!act) activityId = null;
+    if (!act) { activityId = null; chosenByHand = false; }
   }
   // The title field is on the photo form only; an embedded video's title is edited with its link, so it is left alone here.
   const title = fd.has("title") && photo.kind !== "EXTERNAL_VIDEO" ? v.title : photo.title;
@@ -58,7 +69,7 @@ export async function updatePhoto(id: string, fd: FormData): Promise<void> {
     for (const cid of wanted) if (!held.has(cid)) await addToCollection(cid, [id]);
     for (const cid of held) if (!wanted.has(cid)) await removeFromCollection(cid, [id]);
   }
-  await db.photo.update({ where: { id }, data: { title, caption: v.caption, context: v.context, ...(v.context !== photo.context ? { contextUpdatedAt: new Date(), annotationError: null } : {}), tripId: v.tripId, activityId } });
+  await db.photo.update({ where: { id }, data: { title, caption: v.caption, context: v.context, ...(v.context !== photo.context ? { contextUpdatedAt: new Date(), annotationError: null } : {}), tripId: v.tripId, activityId, activitySetById: activitySetter(activityId, chosenByHand, user.id, photo) } });
   revalidatePath(`/photos/${id}`);
   if (photo.tripId) revalidatePath(`/trips`, "layout");
 }
@@ -252,7 +263,7 @@ export async function setDateFromNeighbours(id: string): Promise<DateGuessResult
   const user = await requireUserOrThrow();
   const guess = await guessDateFromTrip(id);
   if (!guess) return { ok: false, message: "The other photos on this trip do not say anything about this one" };
-  const photo = await db.photo.findUnique({ where: { id }, select: { id: true, tripId: true, gpsSource: true } });
+  const photo = await db.photo.findUnique({ where: { id }, select: { id: true, tripId: true, gpsSource: true, activityId: true, activitySetById: true } });
   if (!photo) return { ok: false, message: "Photo not found" };
   await applyPhotoInstant(photo, guess.takenAt, guess.tzOffsetMin, "MANUAL", user.id);
   return { ok: true, takenAt: guess.takenAt.toISOString(), tzOffsetMin: guess.tzOffsetMin, source: "MANUAL", setBy: uploaderLabel(user.name, user.email) };
@@ -264,7 +275,7 @@ export async function setTripDatesFromNeighbours(tripId: string): Promise<number
   const guesses = await guessDatesForTrip(tripId);
   let n = 0;
   for (const g of guesses) {
-    const photo = await db.photo.findUnique({ where: { id: g.id }, select: { id: true, tripId: true, gpsSource: true } });
+    const photo = await db.photo.findUnique({ where: { id: g.id }, select: { id: true, tripId: true, gpsSource: true, activityId: true, activitySetById: true } });
     if (!photo) continue;
     await applyPhotoInstant(photo, g.guess.takenAt, g.guess.tzOffsetMin, "MANUAL", user.id);
     n += 1;
@@ -284,7 +295,7 @@ export async function applyReportedDate(id: string, iso: string): Promise<DateGu
   const user = await requireUserOrThrow();
   const at = new Date(iso);
   if (Number.isNaN(at.getTime())) return { ok: false, message: "That is not a date" };
-  const photo = await db.photo.findUnique({ where: { id }, select: { id: true, tripId: true, gpsSource: true, tzOffsetMin: true, trip: { select: { timezone: true } } } });
+  const photo = await db.photo.findUnique({ where: { id }, select: { id: true, tripId: true, gpsSource: true, activityId: true, activitySetById: true, tzOffsetMin: true, trip: { select: { timezone: true } } } });
   if (!photo) return { ok: false, message: "Photo not found" };
   const offset = photo.trip ? offsetMinutesInZone(at, photo.trip.timezone) : photo.tzOffsetMin ?? 0;
   await applyPhotoInstant(photo, at, offset, "MANUAL", user.id);

@@ -65,7 +65,7 @@ async function planSelection(photoIds: string[], plan: unknown) {
   const p = datePlanSchema.parse(plan);
   const photos = await db.photo.findMany({
     where: { id: { in: list }, trashedAt: null },
-    select: { id: true, tripId: true, gpsSource: true, takenAt: true, tzOffsetMin: true, caption: true, title: true, originalName: true, trip: { select: { timezone: true } } },
+    select: { id: true, tripId: true, gpsSource: true, activityId: true, activitySetById: true, takenAt: true, tzOffsetMin: true, caption: true, title: true, originalName: true, trip: { select: { timezone: true } } },
     orderBy: dateOrder,
   });
   const rows: (PlannedRow & { photo: (typeof photos)[number] })[] = [];

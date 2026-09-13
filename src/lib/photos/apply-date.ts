@@ -5,7 +5,7 @@ import { enqueue } from "@/lib/jobs/boss";
 import { QUEUES } from "@/lib/jobs/queues";
 import type { TakenAtSource } from "@/generated/prisma/enums";
 
-export type DatedPhoto = { id: string; tripId: string | null; gpsSource: string | null };
+export type DatedPhoto = { id: string; tripId: string | null; gpsSource: string | null; activityId?: string | null; activitySetById?: string | null };
 
 /**
  * Give one item a new instant, and let everything that hangs off a date follow it: which trip it belongs to, which
@@ -26,8 +26,9 @@ export async function applyPhotoInstant(
     const trips = await db.trip.findMany({ select: { id: true, startDate: true, endDate: true } });
     tripId = pickTripByDay(trips, localDayFromOffset(takenAt, tzOffsetMin))?.id ?? null;
   }
-  let activityId: string | null = null;
-  if (tripId) {
+  // An activity a member chose stays chosen: a corrected date does not move a photo out of the walk it was on.
+  let activityId: string | null = photo.activitySetById ? photo.activityId ?? null : null;
+  if (!activityId && tripId) {
     const acts = await db.activity.findMany({ where: { tripId }, select: { id: true, startTime: true, endTime: true } });
     activityId = pickActivityByTime(acts, takenAt)?.id ?? null;
   }
