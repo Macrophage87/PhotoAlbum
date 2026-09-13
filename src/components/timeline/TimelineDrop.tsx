@@ -7,8 +7,27 @@ import { moveToDay, putInActivity } from "@/app/photos/activity-actions";
 /** What a tile puts on the drag, and a drop target reads back off it. */
 export const PHOTO_DRAG_TYPE = "application/x-album-photo";
 
+/**
+ * What is being dragged, held here as well as on the transfer.
+ *
+ * A drag carries its payload on the DataTransfer, which is where a drop should read it from — but the data is
+ * readable only on the drop itself, and some browsers hand a drop a transfer stripped of anything but the plain
+ * text. Remembering the id the tile picked up means the highlight can appear while the drag is still in the air,
+ * and a drop still knows what it caught even where the transfer arrives empty.
+ */
+let inFlight: string | null = null;
+
+export function photoPickedUp(id: string | null): void {
+  inFlight = id;
+}
+
 export function photoFromDrag(e: React.DragEvent): string | null {
-  return e.dataTransfer.getData(PHOTO_DRAG_TYPE) || e.dataTransfer.getData("text/plain") || null;
+  return e.dataTransfer.getData(PHOTO_DRAG_TYPE) || e.dataTransfer.getData("text/plain") || inFlight;
+}
+
+/** Whether what is being dragged over is one of ours, decided without reading data the browser will not give yet. */
+function ourDrag(e: React.DragEvent): boolean {
+  return e.dataTransfer.types.includes(PHOTO_DRAG_TYPE) || inFlight !== null;
 }
 
 /**
@@ -43,7 +62,7 @@ export function TimelineDrop({ kind, target, label, children, className }: {
 
   return (
     <div
-      onDragOver={(e) => { if (e.dataTransfer.types.includes(PHOTO_DRAG_TYPE)) { e.preventDefault(); setOver(true); } }}
+      onDragOver={(e) => { if (ourDrag(e)) { e.preventDefault(); setOver(true); } }}
       onDragLeave={() => setOver(false)}
       onDrop={(e) => {
         e.preventDefault();

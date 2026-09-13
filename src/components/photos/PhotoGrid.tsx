@@ -5,7 +5,7 @@ import { useSelectionContext } from "./selection";
 import { ClipTile } from "./ClipTile";
 import { FavouriteButton } from "@/components/favourites/FavouriteButton";
 import type { FavouriteState } from "@/lib/favourites/queries";
-import { PHOTO_DRAG_TYPE } from "@/components/timeline/TimelineDrop";
+import { PHOTO_DRAG_TYPE, photoPickedUp } from "@/components/timeline/TimelineDrop";
 
 export type GridPhoto = LightboxPhoto & {
   thumbUrl: string;
@@ -64,7 +64,9 @@ export function PhotoGrid({ photos, emptyMessage = "No photos yet.", selectable:
                 e.dataTransfer.setData(PHOTO_DRAG_TYPE, p.id);
                 e.dataTransfer.setData("text/plain", p.id);
                 e.dataTransfer.effectAllowed = "move";
+                photoPickedUp(p.id);
               }}
+              onDragEnd={() => photoPickedUp(null)}
             >
               {p.status === "READY" ? (
                 <button onClick={() => (selectable ? onToggle?.(p.id) : lb.open(readyIndex))} className={`block w-full h-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring ${selectable && selected?.has(p.id) ? "ring-4 ring-primary ring-inset" : ""}`} aria-pressed={selectable ? selected?.has(p.id) : undefined}>

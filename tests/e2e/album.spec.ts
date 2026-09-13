@@ -1200,7 +1200,17 @@ test("a photo is dragged onto an activity on the timeline, and a selection can b
   await page.waitForLoadState("networkidle");
   const tile = page.locator(`li.tile-lazy:has(img[src*='/api/photos/${photoId}/'])`).first();
   await expect(tile).toBeVisible();
-  await tile.dragTo(page.getByTestId("drop-activity").filter({ hasText: "Ocean Path loop" }).first());
+  // The drag is played out by hand — one DataTransfer carried from the tile's dragstart to the activity's drop, as
+  // a browser does — because Playwright's own drag dispatch does not reach this Chromium build reliably. What is
+  // under test is what the album does with the drag: pick the id up, take it, and file the photograph.
+  await page.evaluate(({ id, activity }) => {
+    const from = document.querySelector(`li.tile-lazy:has(img[src*='/api/photos/${id}/'])`)!;
+    const onto = document.querySelector(`[data-testid='drop-activity'][data-drop-target='${activity}']`)!;
+    const dt = new DataTransfer();
+    from.dispatchEvent(new DragEvent("dragstart", { dataTransfer: dt, bubbles: true, cancelable: true }));
+    onto.dispatchEvent(new DragEvent("dragover", { dataTransfer: dt, bubbles: true, cancelable: true }));
+    onto.dispatchEvent(new DragEvent("drop", { dataTransfer: dt, bubbles: true, cancelable: true }));
+  }, { id: photoId, activity: activityId });
 
   await expect
     .poll(async () => (await withDb((c) => c.query('SELECT "activityId", "activitySetById" FROM "Photo" WHERE id = $1', [photoId]))).rows[0], { timeout: 20_000, intervals: [1000] })
