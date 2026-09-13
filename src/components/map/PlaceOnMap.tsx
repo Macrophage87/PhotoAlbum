@@ -28,6 +28,8 @@ export function PlaceOnMap({ src, theme, initial, tripTitle }: { src: string; th
   const [data, setData] = useState<MapPayload | null>(null);
   const [placed, setPlaced] = useState<GeoJSON.Feature<GeoJSON.Point, PhotoFeatureProps>[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
+  /** A photograph already on the map that is being moved to where it actually was. */
+  const [moving, setMoving] = useState<{ id: string; label: string } | null>(null);
   const [pending, start] = useTransition();
 
   useEffect(() => {
@@ -87,13 +89,29 @@ export function PlaceOnMap({ src, theme, initial, tripTitle }: { src: string; th
           tracks={data?.tracks ?? { type: "FeatureCollection", features: [] }}
           bounds={data?.bounds ?? null}
           theme={theme}
-          onMapClick={(at) => (chosen.length ? place(chosen, at) : setNotice("Pick a photograph from the list first, then point at the map."))}
+          onMapClick={(at) => {
+            if (moving) { place([moving.id], at); setMoving(null); return; }
+            if (chosen.length) { place(chosen, at); return; }
+            setNotice("Pick a photograph from the list, or one already on the map, then point at where it was taken.");
+          }}
+          // A pin that is in the wrong spot is picked up by touching it, and put down with the next point at the map.
+          onPhotoClick={(id) => {
+            const f = photos.features.find((x) => x.properties.id === id);
+            setMoving({ id, label: f?.properties.caption ?? "that photograph" });
+            setNotice(null);
+          }}
           acceptsDrop={(e) => e.dataTransfer.types.includes(PHOTO_DRAG_TYPE)}
           onDropAt={(at, e) => {
             const id = e.dataTransfer.getData(PHOTO_DRAG_TYPE);
             if (id) dropped(id, at);
           }}
         />
+        {moving && (
+          <p role="status" className="absolute left-2 top-2 right-2 rounded-theme bg-primary text-primary-fg text-xs px-3 py-2 flex items-center justify-between gap-2" data-testid="moving-pin">
+            <span>Moving “{moving.label}” — point at where it was taken.</span>
+            <button type="button" className="underline underline-offset-2" onClick={() => setMoving(null)}>Cancel</button>
+          </p>
+        )}
         {notice && (
           <p role="status" className="absolute left-2 bottom-2 right-2 rounded-theme bg-black/70 text-white text-xs px-3 py-2" data-testid="place-notice">{notice}</p>
         )}
@@ -103,7 +121,9 @@ export function PlaceOnMap({ src, theme, initial, tripTitle }: { src: string; th
         <div>
           <h2 className="font-display text-lg font-semibold">{initial.total} to place{tripTitle ? ` on ${tripTitle}` : ""}</h2>
           <p className="text-muted text-sm mt-1">
-            Drag one onto the map, or tap it and then tap the spot. Tick several that were taken in the same place and they all land together.
+            Drag one onto the map, or tap it and then tap the spot. Tick several that were taken in the same place and
+            they all land together. A pin already on the map can be picked up the same way and put down where it
+            actually was.
           </p>
         </div>
         {chosen.length > 0 && (
