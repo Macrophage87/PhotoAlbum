@@ -11,6 +11,9 @@ import { deleteTrip, detachExposedFromCollections, regeotagPhotos, rotateShareTo
 import { OptOutToggle } from "@/components/annotation/OptOutToggle";
 import { visibilityWarnings } from "@/lib/visibility/settings";
 import Link from "next/link";
+import { guessDatesForTrip } from "@/lib/photos/date-guess-query";
+import { DateUndated } from "@/components/trips/DateUndated";
+import { formatDateTime } from "@/lib/time/format";
 
 const VISIBILITY = [
   { value: "PRIVATE", label: "Private", help: "Only signed-in family members can see this trip." },
@@ -31,6 +34,8 @@ export default async function TripSettingsPage({ params, searchParams }: PagePro
   const shareUrl = shareableTripUrl(trip, env().APP_URL);
   const warnings = await visibilityWarnings("trip", trip.id, trip.visibility, "this trip");
   const detach = detachExposedFromCollections.bind(null, slug);
+  // What the trip's own photos say about the ones that arrived without a date.
+  const undated = await guessDatesForTrip(trip.id);
 
   return (
     <div className="max-w-2xl space-y-10">
@@ -95,6 +100,19 @@ export default async function TripSettingsPage({ params, searchParams }: PagePro
       <section>
         <h2 className="font-display text-xl font-semibold mb-2">AI descriptions</h2>
         <OptOutToggle target={{ kind: "trip", id: trip.id }} initial={trip.annotationOptOut} />
+      </section>
+
+      <section>
+        <h2 className="font-display text-xl font-semibold mb-2">Photos with no date</h2>
+        <DateUndated
+          tripId={trip.id}
+          undated={undated.length}
+          examples={undated.slice(0, 4).map((u) => ({
+            originalName: u.originalName,
+            reading: formatDateTime(u.guess.takenAt, trip.timezone, "MMMM d, yyyy, h:mm a"),
+            evidence: u.guess.evidence,
+          }))}
+        />
       </section>
 
       <section>

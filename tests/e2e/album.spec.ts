@@ -322,7 +322,9 @@ test("a short clip is transcoded with a poster and streams with range requests; 
   await signIn(context, ADMIN);
   await page.goto("/upload?trip=yosemite");
   await chooseFile(page, "long-clip.mp4");
-  await expect(page.getByRole("alert").getByText(/limited to 90 seconds/)).toBeVisible();
+  // Headless Chromium cannot decode H.264, so the browser cannot read the length and the file goes up to be refused
+  // by the server: this message arrives once the upload has been processed, not the moment the file is chosen.
+  await expect(page.getByRole("alert").getByText(/limited to 90 seconds/)).toBeVisible({ timeout: 90_000 });
   await chooseFile(page, "clip.mp4");
   await expect(page.locator("img[src*='/api/photos/']")).toBeVisible({ timeout: 90_000 });
   // Headless Chromium cannot decode H.264, so the browser reports an unknown duration and the server is the authority:

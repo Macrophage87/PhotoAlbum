@@ -10,7 +10,7 @@ import { Button, Card, Label, Select, Textarea } from "@/components/ui";
 import { formatDateTime } from "@/lib/time/format";
 import { reprocessPhoto, resetPhotoDateToCamera, setAsCover, setPhotoDate, shiftPhotoTimezone, trashPhoto, updatePhoto } from "./actions";
 
-const SOURCE_LABEL: Record<string, string> = { EXIF_OFFSET: "from the camera", EXIF_TZLOOKUP: "from the camera", TRIP_TZ: "from the camera, in the trip's zone", SIDECAR: "from Google Photos", FILE_NAME: "from the file name", FILE_MTIME: "from the file's modified time", UPLOAD_TIME: "the upload time" };
+const SOURCE_LABEL: Record<string, string> = { EXIF_OFFSET: "from the camera", EXIF_TZLOOKUP: "from the camera", TRIP_TZ: "from the camera, in the trip's zone", SIDECAR: "from Google Photos", FILE_NAME: "from the file name", EXIF_CREATED: "from the file\u2019s created-date tag, which may be when it was edited", FILE_MTIME: "from the file's modified time", UPLOAD_TIME: "the upload time" };
 import { TimezoneShift } from "@/components/photos/TimezoneShift";
 import { PhotoLinkEditor } from "@/components/photos/PhotoLinkEditor";
 import { LinkedPhotos } from "@/components/photos/LinkedPhotos";
@@ -19,6 +19,9 @@ import { TrashButton } from "@/components/photos/TrashButton";
 import { PhotoEditorPanel } from "@/components/photos/PhotoEditorPanel";
 import { editsOf } from "@/lib/jobs/handlers/process-photo";
 import { trashReasonLabel } from "@/lib/photos/trash";
+import { isWeakDate } from "@/lib/photos/date-from-neighbours";
+import { guessDateFromTrip } from "@/lib/photos/date-guess-query";
+import { NeighbourDate } from "@/components/photos/NeighbourDate";
 import { mapThemeOf } from "@/lib/map/theme";
 import { getTheme } from "@/themes";
 import { linkedPhotos } from "@/lib/photos/links";
@@ -80,6 +83,8 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
   const isCover = photo.trip?.coverPhotoId === photo.id;
   // Cropping and colour are the uploader's call, or an admin's: an edit changes what the whole family sees.
   const canEditPixels = me.role === "ADMIN" || photo.uploaderId === me.id;
+  // What the rest of the trip says about an item whose own date was lost; null when its date is trustworthy.
+  const neighbourGuess = await guessDateFromTrip(photo.id);
   const isVideo = photo.kind === "EXTERNAL_VIDEO";
   const isClip = photo.kind === "VIDEO";
   const updateVideo = updateExternalVideo.bind(null, id);
@@ -235,7 +240,8 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
             </Card>
 
             <AnnotationCard photoId={photo.id} annotation={photo.annotation as StoredAnnotation | null} source={photo.annotationSource} model={photo.annotationModel} error={photo.annotationError} optOut={photo.annotationOptOut} optOutReason={optOutWhy} active={gates.active} editable />
-            {(!photo.takenAt || photo.takenAtSource === "FILE_MTIME" || photo.takenAtSource === "UPLOAD_TIME") && (
+            {neighbourGuess && <div className="mb-3"><NeighbourDate photoId={photo.id} guess={{ ...neighbourGuess, takenAt: neighbourGuess.takenAt.toISOString() }} /></div>}
+            {isWeakDate(photo.takenAtSource, photo.takenAt) && (
               <EstimatedDate photoId={photo.id} estimatedDate={photo.estimatedDate} confidence={photo.estimatedDateConfidence} note={photo.estimatedDateNote} />
             )}
 

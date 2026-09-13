@@ -8,6 +8,7 @@ import { Prisma } from "@/generated/prisma/client";
 import { editsSchema, tidyEdits } from "@/lib/images/edits";
 import { requireUserOrThrow } from "@/lib/auth/viewer";
 import { trashSchema } from "@/lib/photos/trash";
+import { guessDateFromTrip, guessDatesForTrip } from "@/lib/photos/date-guess-query";
 import { enqueue } from "@/lib/jobs/boss";
 import { QUEUES } from "@/lib/jobs/queues";
 import { pickActivityByTime, pickTripByDay } from "@/lib/photos/assign";
@@ -264,4 +265,35 @@ export async function savePhotoEdits(id: string, raw: unknown): Promise<EditResu
 /** Put the item back exactly as it was uploaded. The original never changed, so this only forgets the instructions. */
 export async function revertPhotoEdits(id: string): Promise<EditResult> {
   return savePhotoEdits(id, {});
+}
+
+export type DateGuessResult = { ok: true; takenAt: string; tzOffsetMin: number; source: string; setBy: string | null } | { ok: false; message: string };
+
+/**
+ * Take the date the rest of the trip points at. It is recorded as set by hand, by the member who accepted it, because
+ * that is what happened: the album offered a reading of the neighbours and a person agreed with it.
+ */
+export async function setDateFromNeighbours(id: string): Promise<DateGuessResult> {
+  const user = await requireUserOrThrow();
+  const guess = await guessDateFromTrip(id);
+  if (!guess) return { ok: false, message: "The other photos on this trip do not say anything about this one" };
+  const photo = await db.photo.findUnique({ where: { id }, select: { id: true, tripId: true, gpsSource: true } });
+  if (!photo) return { ok: false, message: "Photo not found" };
+  await applyInstant(photo, guess.takenAt, guess.tzOffsetMin, "MANUAL", user.id);
+  return { ok: true, takenAt: guess.takenAt.toISOString(), tzOffsetMin: guess.tzOffsetMin, source: "MANUAL", setBy: uploaderLabel(user.name, user.email) };
+}
+
+/** The same across a whole trip, for a box of scans or a folder an editor stripped on the way out. */
+export async function setTripDatesFromNeighbours(tripId: string): Promise<number> {
+  const user = await requireUserOrThrow();
+  const guesses = await guessDatesForTrip(tripId);
+  let n = 0;
+  for (const g of guesses) {
+    const photo = await db.photo.findUnique({ where: { id: g.id }, select: { id: true, tripId: true, gpsSource: true } });
+    if (!photo) continue;
+    await applyInstant(photo, g.guess.takenAt, g.guess.tzOffsetMin, "MANUAL", user.id);
+    n += 1;
+  }
+  revalidatePath("/trips", "layout");
+  return n;
 }

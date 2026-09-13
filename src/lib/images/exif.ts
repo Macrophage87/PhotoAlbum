@@ -9,7 +9,13 @@ import {
 import type { TakenAtSource } from "@/generated/prisma/enums";
 
 export type ExifSummary = {
-  dateTimeOriginal: string | null; // "YYYY:MM:DD HH:MM:SS" wall time
+  dateTimeOriginal: string | null; // "YYYY:MM:DD HH:MM:SS" wall time: when the shutter fired
+  /**
+   * DateTimeDigitized, which a camera writes the same as the original but a photo editor very often rewrites to the
+   * moment it exported the file. Kept apart from the real capture time for exactly that reason, and only used when
+   * there is nothing better — labelled so nobody mistakes an export date for the day they were there.
+   */
+  dateTimeDigitized: string | null;
   subSec: string | null;
   offsetTimeOriginal: string | null; // "+02:00"
   lat: number | null;
@@ -77,7 +83,8 @@ export async function readExif(input: string | Buffer): Promise<ExifSummary> {
   return {
     // DateTimeOriginal is when the shutter fired; CreateDate (DateTimeDigitized) is the same moment on a camera and
     // survives some of the re-encoding that strips the first, so it stands in rather than falling through to the file.
-    dateTimeOriginal: str(r.DateTimeOriginal) ?? str(r.CreateDate) ?? str(r.DateTimeDigitized),
+    dateTimeOriginal: str(r.DateTimeOriginal),
+    dateTimeDigitized: str(r.CreateDate) ?? str(r.DateTimeDigitized),
     subSec: str(r.SubSecTimeOriginal),
     offsetTimeOriginal: str(r.OffsetTimeOriginal),
     lat: lat !== null && lng !== null && (lat !== 0 || lng !== 0) ? lat : null,
@@ -118,6 +125,9 @@ export type TakenAtResolution = { takenAt: Date; tzOffsetMin: number; source: Ta
 /**
  * Turn an EXIF wall time into a UTC instant.
  * Order: explicit EXIF offset -> zone from GPS -> the trip's zone (or UTC when unknown).
+ *
+ * `digitized` reads the same tags but from DateTimeDigitized, which is only reached when nothing better exists and
+ * is recorded under its own name, because an editor may well have written the day it exported the file there.
  */
 export function resolveTakenAt(
   exif: Pick<ExifSummary, "dateTimeOriginal" | "subSec" | "offsetTimeOriginal" | "lat" | "lng">,
@@ -150,4 +160,16 @@ export function cameraLabel(exif: Pick<ExifSummary, "make" | "model">): string |
   if (!make && !model) return null;
   if (make && model && model.toLowerCase().startsWith(make.toLowerCase())) return model;
   return [make, model].filter(Boolean).join(" ");
+}
+
+/**
+ * The same resolution from DateTimeDigitized, for a file whose capture time was stripped. It is recorded as its own
+ * source so the album can say where it came from and treat it as something to check rather than as the camera's word.
+ */
+export function resolveDigitizedTakenAt(
+  exif: Pick<ExifSummary, "dateTimeDigitized" | "subSec" | "offsetTimeOriginal" | "lat" | "lng">,
+  tripTimezone: string | null,
+): TakenAtResolution | null {
+  const resolved = resolveTakenAt({ ...exif, dateTimeOriginal: exif.dateTimeDigitized }, tripTimezone);
+  return resolved ? { ...resolved, source: "EXIF_CREATED" } : null;
 }

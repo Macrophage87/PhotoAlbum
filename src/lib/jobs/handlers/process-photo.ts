@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import { db } from "@/lib/db";
 import { storage } from "@/lib/storage";
-import { cameraLabel, readExif, resolveTakenAt, type TakenAtResolution } from "@/lib/images/exif";
+import { cameraLabel, readExif, resolveDigitizedTakenAt, resolveTakenAt, type TakenAtResolution } from "@/lib/images/exif";
 import { resolveFilenameTakenAt } from "@/lib/images/filename-date";
 import { timezoneForCoords } from "@/lib/geo/tz";
 import { sha256File } from "@/lib/media/hash";
@@ -74,7 +74,13 @@ export async function processPhoto(job: ProcessPhotoJob): Promise<void> {
     let trip = explicitTrip;
     // The name is read only when the file itself says nothing: a phone's IMG_20250812_143015 is the capture time,
     // where the file's modified time is usually just when it was copied onto something.
-    let resolved = resolveTakenAt(exif, trip?.timezone ?? null) ?? resolveFilenameTakenAt(photo.originalName, trip?.timezone ?? null);
+    // In order of how much each can be trusted: when the shutter fired, then the capture time in the file's name,
+    // then DateTimeDigitized — which an editor may have rewritten to the day it exported the file, so it comes last
+    // of the readable sources and is recorded under its own name rather than as the camera's word.
+    let resolved =
+      resolveTakenAt(exif, trip?.timezone ?? null) ??
+      resolveFilenameTakenAt(photo.originalName, trip?.timezone ?? null) ??
+      resolveDigitizedTakenAt(exif, trip?.timezone ?? null);
     // A Takeout sidecar's date is authoritative (Google's own record of the capture time); EXIF supplies the zone.
     if (photo.takenAtSource === "SIDECAR" && photo.takenAt) resolved = sidecarResolution(photo.takenAt, resolved, exif, trip?.timezone ?? null, photo.gpsSource === "SIDECAR" ? { lat: photo.lat, lng: photo.lng } : null);
     if (!trip && resolved) {
@@ -85,6 +91,7 @@ export async function processPhoto(job: ProcessPhotoJob): Promise<void> {
         // Re-resolve now that we know the trip's zone (matters when EXIF has no offset and no GPS).
         if (resolved.source === "TRIP_TZ") resolved = resolveTakenAt(exif, trip?.timezone ?? null);
         else if (resolved.source === "FILE_NAME") resolved = resolveFilenameTakenAt(photo.originalName, trip?.timezone ?? null);
+        else if (resolved.source === "EXIF_CREATED") resolved = resolveDigitizedTakenAt(exif, trip?.timezone ?? null);
         else if (resolved.source === "SIDECAR" && photo.takenAt) resolved = sidecarResolution(photo.takenAt, resolveTakenAt(exif, trip?.timezone ?? null), exif, trip?.timezone ?? null, photo.gpsSource === "SIDECAR" ? { lat: photo.lat, lng: photo.lng } : null);
       }
     }

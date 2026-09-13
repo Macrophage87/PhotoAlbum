@@ -2,6 +2,7 @@ import { db } from "@/lib/db";
 import { annotationSchema, clampAnnotation, toStored, type Annotation } from "./schema";
 import { enqueueEmbedding } from "@/lib/jobs/handlers/embed-photo";
 import { applyPlaceEstimate, needsPlaceEstimate } from "./place";
+import { isWeakDate } from "@/lib/photos/date-from-neighbours";
 
 export type ApplyResult = { ok: true } | { ok: false; reason: "refusal" | "invalid" | "max_tokens" };
 
@@ -13,7 +14,7 @@ export async function applyAnnotation(photoId: string, model: string, parsed: An
   if (!current) return;
   const stored = toStored(parsed);
   const est = parsed.estimatedYear;
-  const noReliableDate = !current.takenAt || current.takenAtSource === "FILE_MTIME" || current.takenAtSource === "UPLOAD_TIME";
+  const noReliableDate = isWeakDate(current.takenAtSource, current.takenAt);
   const keepMemberEstimate = current.estimatedDateSource === "MEMBER";
   await db.$transaction([
     db.photo.update({

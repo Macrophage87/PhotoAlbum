@@ -14,6 +14,7 @@ import { SYSTEM_INSTRUCTIONS } from "./prompt";
 import { annotationSchema } from "./schema";
 import { thinkingParams } from "./client";
 import { needsPlaceEstimate, placeRequestParams } from "./place";
+import { isWeakDate } from "@/lib/photos/date-from-neighbours";
 
 export type ItemForAnnotation = NonNullable<Awaited<ReturnType<typeof loadItem>>>;
 
@@ -74,7 +75,7 @@ export function describeItem(item: ItemForAnnotation, permittedNames: string[], 
 
 /** Whether an item needs a date estimate: it has no trustworthy time of capture. */
 export function needsDateEstimate(item: Pick<ItemForAnnotation, "takenAt" | "takenAtSource">): boolean {
-  return !item.takenAt || item.takenAtSource === "FILE_MTIME" || item.takenAtSource === "UPLOAD_TIME";
+  return isWeakDate(item.takenAtSource, item.takenAt);
 }
 
 /** The frames to send for one item: its medium rendition, plus three frames for a clip. Nothing else is fetched. */

@@ -48,18 +48,41 @@ const isVideoFile = (f: File) => f.type.startsWith("video/") || VIDEO_EXT.test(f
  * Read a clip's duration in the browser so an over-long file is refused before any bytes are sent.
  * Browsers that cannot decode the file (HEVC on many desktops) report NaN: treat as unknown and let the server decide.
  */
+/** Long enough that a local file always has time to give up its length, short enough never to strand an upload. */
+const DURATION_TIMEOUT_MS = 10_000;
+
+/**
+ * How long a clip is, read from the file itself before anything is sent. A detached video element is not always
+ * given the priority to load its metadata, and if neither event ever fires the promise used to hang and the upload
+ * with it — so the element goes into the page out of sight, `load()` is asked for explicitly, both events that carry
+ * a duration are listened for, and a timeout settles it either way.
+ */
 function readDuration(file: File): Promise<number | null> {
   return new Promise((resolve) => {
     const url = URL.createObjectURL(file);
     const v = document.createElement("video");
     v.preload = "metadata";
+    v.muted = true;
+    v.playsInline = true;
+    v.style.cssText = "position:fixed;left:-9999px;top:0;width:1px;height:1px;opacity:0";
+    let settled = false;
     const done = (d: number | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
       URL.revokeObjectURL(url);
+      v.removeAttribute("src");
+      v.remove();
       resolve(d);
     };
-    v.onloadedmetadata = () => done(Number.isFinite(v.duration) ? v.duration : null);
+    const fromElement = () => (Number.isFinite(v.duration) && v.duration > 0 ? v.duration : null);
+    const timer = setTimeout(() => done(fromElement()), DURATION_TIMEOUT_MS);
+    v.onloadedmetadata = () => done(fromElement());
+    v.ondurationchange = () => { if (fromElement() !== null) done(fromElement()); };
     v.onerror = () => done(null);
     v.src = url;
+    document.body.appendChild(v);
+    v.load();
   });
 }
 
