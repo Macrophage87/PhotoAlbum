@@ -92,6 +92,7 @@ export function LightboxInfo({ photoId, share }: { photoId: string; share?: { to
         <div>
           <div className="text-white/60 text-xs uppercase tracking-wide mb-1">Place</div>
           {info.lat !== null && info.lng !== null && <StaticMapTile lat={info.lat} lng={info.lng} height={150} />}
+          {info.placeName && <p className="text-white/85 mt-1" data-testid="lightbox-place-name">{info.placeName}</p>}
           {info.trip && info.lat !== null && <p className="text-white/60 text-xs mt-1">On <Link href={`/trips/${info.trip.slug}/map`} className="underline underline-offset-2 hover:text-white" onClick={(e) => e.stopPropagation()}>{info.trip.title}</Link></p>}
           {/* A guessed pin says so to everyone who can see it; a member gets the same words inside the editor, with a way to accept it. */}
           {!info.editable && info.placeEstimate && (
@@ -102,7 +103,7 @@ export function LightboxInfo({ photoId, share }: { photoId: string; share?: { to
           )}
           {info.editable && (
             <div className="mt-2">
-              <PlaceEditor photoId={info.id} initial={info.lat !== null && info.lng !== null ? { lat: info.lat, lng: info.lng } : null} gpsSource={info.gpsSource} setBy={info.placeSetBy} estimate={info.placeEstimate} theme={mapThemeOf(getTheme(info.themeKey))} dark onSaved={(v) => setInfo((prev) => (prev ? { ...prev, lat: v.lat, lng: v.lng, gpsSource: v.gpsSource, placeSetBy: v.setBy } : prev))} />
+              <PlaceEditor photoId={info.id} initial={info.lat !== null && info.lng !== null ? { lat: info.lat, lng: info.lng } : null} gpsSource={info.gpsSource} setBy={info.placeSetBy} placeName={info.placeName} estimate={info.placeEstimate} theme={mapThemeOf(getTheme(info.themeKey))} dark onSaved={(v) => setInfo((prev) => (prev ? { ...prev, lat: v.lat, lng: v.lng, gpsSource: v.gpsSource, placeSetBy: v.setBy, placeName: v.placeName } : prev))} />
             </div>
           )}
         </div>

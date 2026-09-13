@@ -7,7 +7,8 @@ import type { GeocodeHit } from "@/app/api/geocode/route";
 
 const EMPTY = { type: "FeatureCollection" as const, features: [] };
 
-export type PlaceValue = { lat: number; lng: number };
+/** A spot, and what it is called when it was chosen by name rather than by pointing at the map. */
+export type PlaceValue = { lat: number; lng: number; name?: string | null };
 
 /**
  * Pick a spot: click the map, type coordinates, or look an address up. Purely a chooser; the caller saves. `dark`
@@ -24,8 +25,10 @@ export function PlacePicker({ initial, theme, onChange, lookup = true, dark = fa
   const muted = dark ? "text-white/60" : "text-muted";
   const input = `h-8 rounded px-2 text-sm border ${dark ? "bg-white text-black border-white/30" : "border-border bg-surface"}`;
 
+  // A name belongs to a spot, not to the photo: moving the pin or typing coordinates drops it, because those
+  // coordinates are no longer the place that was named.
   const pick = (v: PlaceValue, fly = false) => {
-    const rounded = { lat: Math.round(v.lat * 1e6) / 1e6, lng: Math.round(v.lng * 1e6) / 1e6 };
+    const rounded = { lat: Math.round(v.lat * 1e6) / 1e6, lng: Math.round(v.lng * 1e6) / 1e6, name: v.name ?? null };
     setValue(rounded);
     setLatText(String(rounded.lat));
     setLngText(String(rounded.lng));
@@ -68,7 +71,7 @@ export function PlacePicker({ initial, theme, onChange, lookup = true, dark = fa
         <ul className={`text-xs divide-y ${dark ? "divide-white/10" : "divide-border"} max-h-32 overflow-y-auto rounded border ${dark ? "border-white/20" : "border-border"}`} aria-label="Places found">
           {hits.map((h) => (
             <li key={`${h.lat},${h.lng}`}>
-              <button type="button" className={`w-full text-left px-2 py-1.5 ${dark ? "hover:bg-white/10" : "hover:bg-surface-alt"}`} onClick={() => { pick({ lat: h.lat, lng: h.lng }, true); setHits(null); }}>{h.label}</button>
+              <button type="button" className={`w-full text-left px-2 py-1.5 ${dark ? "hover:bg-white/10" : "hover:bg-surface-alt"}`} onClick={() => { pick({ lat: h.lat, lng: h.lng, name: h.label }, true); setHits(null); }}>{h.label}</button>
             </li>
           ))}
         </ul>

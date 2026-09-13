@@ -6,3 +6,9 @@ export function parseLatLng(latRaw: unknown, lngRaw: unknown): { lat: number; ln
   if (lat === 0 && lng === 0) return null;
   return { lat: Math.round(lat * 1e6) / 1e6, lng: Math.round(lng * 1e6) / 1e6 };
 }
+
+/** The name a member picked out of the address lookup, kept as it was shown to them; blank means they pointed at the map. */
+export function placeNameOf(raw: FormDataEntryValue | null): string | null {
+  const name = typeof raw === "string" ? raw.trim().slice(0, 200) : "";
+  return name || null;
+}

@@ -59,7 +59,7 @@ export function SelectionProvider({ trips, collections, children }: { trips: Opt
   const applyPlace = () =>
     start(async () => {
       if (!place) return;
-      const n = await bulkSetPlace(ids, place.lat, place.lng);
+      const n = await bulkSetPlace(ids, place.lat, place.lng, place.name);
       setPlacing(false);
       finish(`${n} photo${n === 1 ? "" : "s"} placed.`);
     });

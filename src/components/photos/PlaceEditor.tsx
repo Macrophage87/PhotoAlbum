@@ -49,10 +49,10 @@ export function sourceLabel(source: string | null, setBy: string | null): string
 }
 
 /** Where an item was taken: shows the current position and its source, and lets a member set or clear it. */
-export function PlaceEditor({ photoId, initial, gpsSource, setBy, estimate, theme, dark = false, onSaved }: { photoId: string; initial: PlaceValue | null; gpsSource: string | null; /** Who pinned it, when a member did. */ setBy?: string | null; /** What the helper recognised, when the position is its guess. */ estimate?: PlaceEstimate | null; theme: MapTheme; dark?: boolean; onSaved?: (v: { lat: number | null; lng: number | null; gpsSource: string | null; setBy: string | null }) => void }) {
+export function PlaceEditor({ photoId, initial, gpsSource, setBy, placeName, estimate, theme, dark = false, onSaved }: { photoId: string; initial: PlaceValue | null; gpsSource: string | null; /** Who pinned it, when a member did. */ setBy?: string | null; /** What the place is called, when the album knows. */ placeName?: string | null; /** What the helper recognised, when the position is its guess. */ estimate?: PlaceEstimate | null; theme: MapTheme; dark?: boolean; onSaved?: (v: { lat: number | null; lng: number | null; gpsSource: string | null; setBy: string | null; placeName: string | null }) => void }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
-  const [current, setCurrent] = useState<{ pos: PlaceValue | null; source: string | null; setBy: string | null }>({ pos: initial, source: gpsSource, setBy: setBy ?? null });
+  const [current, setCurrent] = useState<{ pos: PlaceValue | null; source: string | null; setBy: string | null; name: string | null }>({ pos: initial, source: gpsSource, setBy: setBy ?? null, name: placeName ?? null });
   const [draft, setDraft] = useState<PlaceValue | null>(initial);
   const [message, setMessage] = useState<string | null>(null);
   const [pending, start] = useTransition();
@@ -63,9 +63,10 @@ export function PlaceEditor({ photoId, initial, gpsSource, setBy, estimate, them
     setMessage(null);
     const fd = new FormData();
     fd.set("lat", String(draft.lat)); fd.set("lng", String(draft.lng));
+    if (draft.name) fd.set("name", draft.name);
     const r = await setPhotoPlace(photoId, fd);
     if (!r.ok) { setMessage(r.message); return; }
-    setCurrent({ pos: { lat: r.lat!, lng: r.lng! }, source: r.gpsSource, setBy: r.setBy });
+    setCurrent({ pos: { lat: r.lat!, lng: r.lng! }, source: r.gpsSource, setBy: r.setBy, name: r.placeName });
     setOpen(false);
     onSaved?.(r);
     router.refresh();
@@ -74,14 +75,14 @@ export function PlaceEditor({ photoId, initial, gpsSource, setBy, estimate, them
     setMessage(null);
     const r = await confirmPlaceEstimate(photoId);
     if (!r.ok) { setMessage(r.message); return; }
-    setCurrent({ pos: { lat: r.lat!, lng: r.lng! }, source: r.gpsSource, setBy: r.setBy });
+    setCurrent({ pos: { lat: r.lat!, lng: r.lng! }, source: r.gpsSource, setBy: r.setBy, name: r.placeName });
     onSaved?.(r);
     router.refresh();
   });
   const clear = () => start(async () => {
     const r = await clearPhotoPlace(photoId);
     if (!r.ok) { setMessage(r.message); return; }
-    setCurrent({ pos: null, source: null, setBy: null });
+    setCurrent({ pos: null, source: null, setBy: null, name: null });
     setDraft(null);
     setOpen(false);
     onSaved?.(r);
@@ -92,7 +93,15 @@ export function PlaceEditor({ photoId, initial, gpsSource, setBy, estimate, them
     <div className="space-y-2 text-sm" data-testid="place-editor">
       {current.pos ? (
         <p>
-          {current.pos.lat.toFixed(5)}, {current.pos.lng.toFixed(5)}
+          {/* The name leads where there is one: "Jordan Pond" is what a family recognises, the coordinates are only proof. */}
+          {current.name ? (
+            <>
+              <span className="block font-medium" data-testid="place-name">{current.name}</span>
+              <span className={`block text-xs ${muted}`}>{current.pos.lat.toFixed(5)}, {current.pos.lng.toFixed(5)}</span>
+            </>
+          ) : (
+            <>{current.pos.lat.toFixed(5)}, {current.pos.lng.toFixed(5)}</>
+          )}
           {current.source && <span className={`block text-xs ${muted}`}>{sourceLabel(current.source, current.setBy)}</span>}
           {current.source === "ESTIMATE" && estimate && <PlaceProvenance estimate={estimate} muted={muted} />}
         </p>

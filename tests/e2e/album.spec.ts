@@ -71,8 +71,12 @@ test("uploading a photo processes it and assigns it to the trip by date", async 
   await place.getByRole("button", { name: "Save place" }).click();
   // The label names whoever pinned it, falling back to the part of their address before the @.
   await expect(place.getByText("set by e2e-admin")).toBeVisible();
-  const placed = await withDb((c) => c.query('SELECT lat, lng, "gpsSource" FROM "Photo" WHERE id = $1', [row.rows[0].id]));
-  expect(placed.rows[0]).toEqual({ lat: 44.326, lng: -68.253, gpsSource: "MANUAL" });
+  // What was looked up is what the place is called: the coordinates are shown under the name, not instead of it.
+  await expect(place.getByTestId("place-name")).toHaveText(/Jordan Pond/);
+  await expect(place.getByText("44.32600, -68.25300")).toBeVisible();
+  const placed = await withDb((c) => c.query('SELECT lat, lng, "gpsSource", "placeName" FROM "Photo" WHERE id = $1', [row.rows[0].id]));
+  expect(placed.rows[0]).toMatchObject({ lat: 44.326, lng: -68.253, gpsSource: "MANUAL" });
+  expect(placed.rows[0].placeName).toMatch(/Jordan Pond/);
   expect(Number(row.rows[0].lat)).toBeCloseTo(44.35, 3);
 });
 

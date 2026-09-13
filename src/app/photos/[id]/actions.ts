@@ -13,7 +13,7 @@ import { localDayFromOffset, offsetMinutesInZone, wallTimeWithOffsetToInstant } 
 import { storage } from "@/lib/storage";
 import { readExif, resolveTakenAt } from "@/lib/images/exif";
 import type { TakenAtSource } from "@/generated/prisma/enums";
-import { parseLatLng } from "@/lib/geo/parse";
+import { parseLatLng, placeNameOf } from "@/lib/geo/parse";
 import { uploaderLabel } from "@/components/photos/toGrid";
 import { addToCollection, removeFromCollection } from "@/app/collections/actions";
 
@@ -185,18 +185,19 @@ async function applyInstant(photo: { id: string; tripId: string | null; gpsSourc
   if (tripId) await enqueue(QUEUES.geotagPhotos, { tripId }, { singletonKey: `geotag:${tripId}`, singletonSeconds: 10, singletonNextSlot: true });
 }
 
-export type PlaceResult = { ok: true; lat: number | null; lng: number | null; gpsSource: string | null; setBy: string | null } | { ok: false; message: string };
+export type PlaceResult = { ok: true; lat: number | null; lng: number | null; gpsSource: string | null; setBy: string | null; placeName: string | null } | { ok: false; message: string };
 
 /** Pin an item to a spot a member chose (a click on the map or a looked-up address). Never touched by later geotagging. */
 export async function setPhotoPlace(id: string, fd: FormData): Promise<PlaceResult> {
   const user = await requireUserOrThrow();
   const pos = parseLatLng(fd.get("lat"), fd.get("lng"));
   if (!pos) return { ok: false, message: "Enter a latitude between -90 and 90 and a longitude between -180 and 180" };
-  const r = await db.photo.updateMany({ where: { id }, data: { lat: pos.lat, lng: pos.lng, altitude: null, gpsSource: "MANUAL", placeSetById: user.id } });
+  const name = placeNameOf(fd.get("name"));
+  const r = await db.photo.updateMany({ where: { id }, data: { lat: pos.lat, lng: pos.lng, altitude: null, gpsSource: "MANUAL", placeSetById: user.id, placeName: name } });
   if (!r.count) return { ok: false, message: "Photo not found" };
   revalidatePath(`/photos/${id}`);
   revalidatePath("/trips", "layout");
-  return { ok: true, lat: pos.lat, lng: pos.lng, gpsSource: "MANUAL", setBy: uploaderLabel(user.name, user.email) };
+  return { ok: true, lat: pos.lat, lng: pos.lng, gpsSource: "MANUAL", setBy: uploaderLabel(user.name, user.email), placeName: name };
 }
 
 /**
@@ -205,13 +206,15 @@ export async function setPhotoPlace(id: string, fd: FormData): Promise<PlaceResu
  */
 export async function confirmPlaceEstimate(id: string): Promise<PlaceResult> {
   const user = await requireUserOrThrow();
-  const photo = await db.photo.findUnique({ where: { id }, select: { lat: true, lng: true, gpsSource: true } });
+  const photo = await db.photo.findUnique({ where: { id }, select: { lat: true, lng: true, gpsSource: true, placeName: true, placeEstimateName: true } });
   if (!photo) return { ok: false, message: "Photo not found" };
   if (photo.gpsSource !== "ESTIMATE" || photo.lat === null || photo.lng === null) return { ok: false, message: "There is no estimated place to accept" };
-  await db.photo.update({ where: { id }, data: { gpsSource: "MANUAL", placeSetById: user.id } });
+  // The helper's name for the place becomes the item's own, so accepting a guess does not turn it back into coordinates.
+  const name = photo.placeName ?? photo.placeEstimateName;
+  await db.photo.update({ where: { id }, data: { gpsSource: "MANUAL", placeSetById: user.id, placeName: name } });
   revalidatePath(`/photos/${id}`);
   revalidatePath("/trips", "layout");
-  return { ok: true, lat: photo.lat, lng: photo.lng, gpsSource: "MANUAL", setBy: uploaderLabel(user.name, user.email) };
+  return { ok: true, lat: photo.lat, lng: photo.lng, gpsSource: "MANUAL", setBy: uploaderLabel(user.name, user.email), placeName: name };
 }
 
 /**
@@ -223,9 +226,9 @@ export async function clearPhotoPlace(id: string): Promise<PlaceResult> {
   await requireUserOrThrow();
   const photo = await db.photo.findUnique({ where: { id }, select: { tripId: true } });
   if (!photo) return { ok: false, message: "Photo not found" };
-  await db.photo.update({ where: { id }, data: { lat: null, lng: null, altitude: null, gpsSource: null, placeSetById: null, placeEstimateName: null, placeEstimateConfidence: null, placeEstimateRadiusM: null, placeEstimatePrecision: null, placeEstimateNote: null } });
+  await db.photo.update({ where: { id }, data: { lat: null, lng: null, altitude: null, gpsSource: null, placeSetById: null, placeName: null, placeEstimateName: null, placeEstimateConfidence: null, placeEstimateRadiusM: null, placeEstimatePrecision: null, placeEstimateNote: null } });
   if (photo.tripId) await enqueue(QUEUES.geotagPhotos, { tripId: photo.tripId }, { singletonKey: `geotag:${photo.tripId}`, singletonSeconds: 10, singletonNextSlot: true });
   revalidatePath(`/photos/${id}`);
   revalidatePath("/trips", "layout");
-  return { ok: true, lat: null, lng: null, gpsSource: null, setBy: null };
+  return { ok: true, lat: null, lng: null, gpsSource: null, setBy: null, placeName: null };
 }

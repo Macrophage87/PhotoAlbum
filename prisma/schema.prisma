@@ -324,6 +324,9 @@ model Photo {
   annotationCacheWriteTokens Int?
   annotationOutputTokens    Int?
   annotationBatched         Boolean?
+  /// What the place is called, when the album knows: the name a member picked out of the address lookup, or the one
+  /// they accepted from the helper. Coordinates are exact but say nothing; this is what a family reads.
+  placeName     String?
   /// In the trash: hidden everywhere and skipped by every background job, but still on disk until an admin decides.
   /// Any member may trash an item and must give a reason; only an admin can restore it or delete it for good.
   trashedAt     DateTime?
