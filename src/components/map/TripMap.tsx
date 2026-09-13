@@ -61,7 +61,13 @@ export function TripMap({ src, theme, showTripList = false, activityHrefBase }: 
             if (p.activityId) router.push(activityHref(p.tripSlug, p.activityId));
           }}
         />
-        {empty && <div className="absolute inset-x-0 top-3 text-center pointer-events-none"><span className="bg-surface/90 text-muted text-sm px-3 py-1.5 rounded-theme border border-border">No geotagged photos or tracks yet.</span></div>}
+        {empty && (
+          <div className="absolute inset-x-0 top-3 px-3 text-center pointer-events-none">
+            <span className="inline-block max-w-md bg-surface/90 text-muted text-sm px-3 py-1.5 rounded-theme border border-border">
+              Nothing to put on the map here yet. A photo gets its place from the camera, from a track covering the moment it was taken, or from one a family member sets by hand.
+            </span>
+          </div>
+        )}
       </div>
       <aside className="space-y-4 lg:max-h-[70vh] overflow-y-auto">
         {showTripList && (

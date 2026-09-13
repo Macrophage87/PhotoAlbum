@@ -1,8 +1,9 @@
 import { db } from "@/lib/db";
-import { canViewTrip, visibleTripsWhere } from "@/lib/auth/access";
+import { canViewTrip, visibleMediaWhere, visibleTripsWhere } from "@/lib/auth/access";
 import type { Viewer } from "@/lib/auth/viewer";
 import { photoUrl } from "@/lib/photos/urls";
 import { mergeBounds, type Bounds } from "@/lib/geo/bounds";
+import { spreadOverlapping } from "./jitter";
 import { getTheme } from "@/themes";
 import { ACTIVITY_COLOR } from "@/lib/activities/types";
 import { NOT_TRASHED } from "@/lib/photos/trash";
@@ -17,16 +18,28 @@ export type MapPayload = {
   trips: { slug: string; title: string; themeKey: string; bounds: [[number, number], [number, number]] | null }[];
 };
 
-/** Photos and tracks for one trip, or for every trip the viewer may see. */
+/**
+ * Photos and tracks for one trip, or everything the viewer may see.
+ *
+ * Across all trips the photos are not looked up through the trips: an item can be on no trip at all, or live only in
+ * a collection, and those used to be missing from this map while showing up perfectly well on a collection's own map.
+ * The filter every other surface uses decides what is here, and a trip is only needed to name and colour what it holds.
+ */
 export async function buildMapPayload(viewer: Viewer, tripId?: string): Promise<MapPayload> {
   const tripWhere = tripId ? { id: tripId } : visibleTripsWhere(viewer);
   const trips = await db.trip.findMany({ where: tripWhere, select: { id: true, slug: true, title: true, themeKey: true }, orderBy: { startDate: "desc" } });
   const tripIds = trips.map((t) => t.id);
   const tripById = new Map(trips.map((t) => [t.id, t]));
 
-  const [photos, tracks] = await Promise.all([
+  const [found, tracks] = await Promise.all([
     db.photo.findMany({
-      where: { tripId: { in: tripIds }, ...NOT_TRASHED, status: "READY", lat: { not: null }, lng: { not: null } },
+      where: {
+        ...(tripId ? { tripId } : visibleMediaWhere(viewer)),
+        ...NOT_TRASHED,
+        status: "READY",
+        lat: { not: null },
+        lng: { not: null },
+      },
       select: { id: true, lat: true, lng: true, caption: true, takenAt: true, updatedAt: true, tripId: true, activityId: true, gpsSource: true },
       orderBy: { takenAt: "asc" },
     }),
@@ -39,14 +52,18 @@ export async function buildMapPayload(viewer: Viewer, tripId?: string): Promise<
 
   const tripBounds = new Map<string, Bounds | null>();
   const add = (id: string, b: Bounds) => tripBounds.set(id, mergeBounds(tripBounds.get(id) ?? null, b));
+  let loose: Bounds | null = null; // photos on no trip the viewer can see: part of the map, part of no trip's bounds
 
+  const photos = spreadOverlapping(found.map((p) => ({ ...p, lat: p.lat!, lng: p.lng! })));
   const photoFeatures = photos.map((p) => {
-    const trip = tripById.get(p.tripId!)!;
-    add(trip.id, { minLat: p.lat!, maxLat: p.lat!, minLng: p.lng!, maxLng: p.lng! });
+    const trip = p.tripId ? tripById.get(p.tripId) : undefined;
+    const box = { minLat: p.lat, maxLat: p.lat, minLng: p.lng, maxLng: p.lng };
+    if (trip) add(trip.id, box);
+    else loose = mergeBounds(loose, box);
     return {
       type: "Feature" as const,
-      geometry: { type: "Point" as const, coordinates: [p.lng!, p.lat!] },
-      properties: { id: p.id, thumbUrl: photoUrl(p, "thumb"), mediumUrl: photoUrl(p, "medium"), caption: p.caption, takenAt: p.takenAt?.toISOString() ?? null, tripSlug: trip.slug, tripTitle: trip.title, activityId: p.activityId, gpsSource: p.gpsSource },
+      geometry: { type: "Point" as const, coordinates: [p.lng, p.lat] },
+      properties: { id: p.id, thumbUrl: photoUrl(p, "thumb"), mediumUrl: photoUrl(p, "medium"), caption: p.caption, takenAt: p.takenAt?.toISOString() ?? null, tripSlug: trip?.slug ?? "", tripTitle: trip?.title ?? "", activityId: p.activityId, gpsSource: p.gpsSource },
     };
   });
   const trackFeatures = tracks.map((t) => {
@@ -73,7 +90,7 @@ export async function buildMapPayload(viewer: Viewer, tripId?: string): Promise<
   });
 
   const toPair = (b: Bounds | null | undefined): MapPayload["bounds"] => (b ? [[b.minLng, b.minLat], [b.maxLng, b.maxLat]] : null);
-  let all: Bounds | null = null;
+  let all: Bounds | null = loose;
   for (const b of tripBounds.values()) all = mergeBounds(all, b);
   return {
     photos: { type: "FeatureCollection", features: photoFeatures },
@@ -85,17 +102,18 @@ export async function buildMapPayload(viewer: Viewer, tripId?: string): Promise<
 
 /** Photos in a collection (no tracks). The caller has already checked the viewer may open the collection; a photo's trip is named only when the viewer may open that trip too. */
 export async function buildCollectionMapPayload(viewer: Viewer, collectionId: string): Promise<MapPayload> {
-  const photos = await db.photo.findMany({
+  const found = await db.photo.findMany({
     where: { ...NOT_TRASHED, status: "READY", lat: { not: null }, lng: { not: null }, collections: { some: { collectionId } } },
     select: { id: true, lat: true, lng: true, caption: true, takenAt: true, updatedAt: true, activityId: true, gpsSource: true, trip: { select: { id: true, slug: true, title: true, visibility: true, shareToken: true } } },
     orderBy: { takenAt: "asc" },
   });
   let all: Bounds | null = null;
+  const photos = spreadOverlapping(found.map((p) => ({ ...p, lat: p.lat!, lng: p.lng! })));
   const features = photos.map((p) => {
-    all = mergeBounds(all, { minLat: p.lat!, maxLat: p.lat!, minLng: p.lng!, maxLng: p.lng! });
+    all = mergeBounds(all, { minLat: p.lat, maxLat: p.lat, minLng: p.lng, maxLng: p.lng });
     return {
       type: "Feature" as const,
-      geometry: { type: "Point" as const, coordinates: [p.lng!, p.lat!] },
+      geometry: { type: "Point" as const, coordinates: [p.lng, p.lat] },
       properties: { id: p.id, thumbUrl: photoUrl(p, "thumb"), mediumUrl: photoUrl(p, "medium"), caption: p.caption, takenAt: p.takenAt?.toISOString() ?? null, tripSlug: p.trip && canViewTrip(viewer, p.trip) ? p.trip.slug : "", tripTitle: p.trip && canViewTrip(viewer, p.trip) ? p.trip.title : "", activityId: p.activityId, gpsSource: p.gpsSource },
     };
   });

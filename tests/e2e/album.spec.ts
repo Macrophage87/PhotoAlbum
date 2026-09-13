@@ -76,6 +76,23 @@ test("uploading a photo processes it and assigns it to the trip by date", async 
   expect(Number(row.rows[0].lat)).toBeCloseTo(44.35, 3);
 });
 
+test("the map across everything shows a photo that is on no trip", async ({ context, page }) => {
+  await signIn(context, ADMIN);
+  // A placed photo filed under no trip: it used to be missing from the map across everything, while a trip's own map
+  // and a collection's map both showed their photos perfectly well.
+  const loose = await withDb((c) => c.query(
+    `INSERT INTO "Photo" (id, "uploaderId", "originalName", "mimeType", "storageKey", "originalPath", "sizeBytes", status, lat, lng, "gpsSource", "updatedAt", "createdAt")
+     SELECT 'e2eloosephoto', id, 'loose.jpg', 'image/jpeg', 'k', 'k/o.jpg', 1, 'READY', 41.9022, 12.4568, 'MANUAL', now(), now() FROM "User" WHERE email = $1 RETURNING id`,
+    [ADMIN],
+  ));
+  expect(loose.rows).toHaveLength(1);
+  const payload = await page.request.get("/api/map/geojson");
+  expect(payload.ok()).toBe(true);
+  const body = await payload.json();
+  expect(body.photos.features.map((f: { properties: { id: string } }) => f.properties.id)).toContain("e2eloosephoto");
+  await withDb((c) => c.query(`DELETE FROM "Photo" WHERE id = 'e2eloosephoto'`));
+});
+
 test("importing a GPX file creates an activity with stats and a track on the map", async ({ context, page }) => {
   await signIn(context, ADMIN);
   await page.goto("/trips/acadia/import");
