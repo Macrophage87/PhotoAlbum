@@ -1,6 +1,6 @@
 import { getTheme } from "@/themes";
 import { Badge } from "@/components/ui";
-import { ShareButtons } from "@/components/trips/ShareButtons";
+import { ShareBar } from "@/components/share/ShareBar";
 
 export function CollectionHeader({ collection, shareUrl }: { collection: { title: string; description: string | null; themeKey: string; visibility: "PRIVATE" | "LINK" | "PUBLIC"; _count: { items: number } }; shareUrl?: string | null }) {
   const theme = getTheme(collection.themeKey);
@@ -23,7 +23,7 @@ export function CollectionHeader({ collection, shareUrl }: { collection: { title
             {collection.visibility !== "PRIVATE" && (
               <div className="flex items-center gap-3">
                 <Badge tone={collection.visibility === "PUBLIC" ? "success" : "warning"}>{collection.visibility === "PUBLIC" ? "Public" : "Shared by link"}</Badge>
-                {shareUrl && <ShareButtons url={shareUrl} />}
+                {shareUrl && <ShareBar url={shareUrl} what="collection" />}
               </div>
             )}
           </div>

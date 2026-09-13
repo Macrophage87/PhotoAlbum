@@ -50,12 +50,12 @@ export async function getCollectionBySlug(slug: string) {
 export type CollectionWithCounts = NonNullable<Awaited<ReturnType<typeof getCollectionBySlug>>>;
 
 /** Cover photo, or the first ready item when no cover is set. */
-export async function collectionCoverFor(collection: { id: string; coverPhoto: { id: string; updatedAt: Date } | null }) {
+export async function collectionCoverFor(collection: { id: string; coverPhoto: { id: string; updatedAt: Date; width?: number | null; height?: number | null } | null }) {
   if (collection.coverPhoto) return collection.coverPhoto;
   const item = await db.collectionItem.findFirst({
     where: { collectionId: collection.id, photo: { status: "READY" } },
     orderBy: [{ position: "asc" }, { createdAt: "asc" }],
-    select: { photo: { select: { id: true, updatedAt: true } } },
+    select: { photo: { select: { id: true, updatedAt: true, width: true, height: true } } },
   });
   return item?.photo ?? null;
 }

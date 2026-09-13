@@ -2,7 +2,7 @@ import { getTheme } from "@/themes";
 import { formatDayRange } from "@/lib/time/format";
 import { dateColumnToDay } from "@/lib/time/local-day";
 import { Badge } from "@/components/ui";
-import { ShareButtons } from "./ShareButtons";
+import { ShareBar } from "@/components/share/ShareBar";
 
 export function TripHeader({ trip, shareUrl }: { trip: { title: string; description: string | null; startDate: Date; endDate: Date; themeKey: string; visibility: "PRIVATE" | "LINK" | "PUBLIC" }; shareUrl?: string | null }) {
   const theme = getTheme(trip.themeKey);
@@ -22,7 +22,7 @@ export function TripHeader({ trip, shareUrl }: { trip: { title: string; descript
             {trip.visibility !== "PRIVATE" && (
               <div className="flex items-center gap-3">
                 <Badge tone={trip.visibility === "PUBLIC" ? "success" : "warning"}>{trip.visibility === "PUBLIC" ? "Public" : "Shared by link"}</Badge>
-                {shareUrl && <ShareButtons url={shareUrl} />}
+                {shareUrl && <ShareBar url={shareUrl} what="trip" />}
               </div>
             )}
           </div>

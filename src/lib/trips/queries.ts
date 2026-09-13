@@ -56,11 +56,12 @@ export async function getTripBySlug(slug: string) {
 export type TripWithCounts = NonNullable<Awaited<ReturnType<typeof getTripBySlug>>>;
 
 /** Cover photo, or the newest ready photo when no cover is set. */
-export async function coverFor(trip: { id: string; coverPhoto: { id: string; updatedAt: Date } | null }) {
+export async function coverFor(trip: { id: string; coverPhoto: { id: string; updatedAt: Date; width?: number | null; height?: number | null } | null }) {
   if (trip.coverPhoto) return trip.coverPhoto;
   return db.photo.findFirst({
     where: { tripId: trip.id, ...NOT_TRASHED, status: "READY" },
     orderBy: [{ takenAt: "asc" }],
-    select: { id: true, updatedAt: true },
+    // Width and height go into the link preview: a card without them is often drawn small, or not at all.
+    select: { id: true, updatedAt: true, width: true, height: true },
   });
 }

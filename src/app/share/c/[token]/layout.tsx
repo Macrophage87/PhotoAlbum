@@ -10,14 +10,15 @@ import { TripTheme } from "@/themes/TripTheme";
 import { CollectionHeader } from "@/components/collections/CollectionHeader";
 import { TripTabs } from "@/components/trips/TripTabs";
 import { ShareCookie } from "@/app/share/[token]/ShareCookie";
-import { openGraphForCollection } from "@/app/collections/[slug]/layout";
+import { collectionCard } from "@/app/collections/[slug]/layout";
 
 export async function generateMetadata({ params }: LayoutProps<"/share/c/[token]">): Promise<Metadata> {
   const { token } = await params;
   const collection = await getSharedCollection(token);
   if (!collection) return { title: "Shared collection", robots: { index: false, follow: false } };
   // The cover image URL carries the share token so link previews can fetch it without the cookie.
-  return { title: collection.title, robots: { index: false, follow: false }, openGraph: await openGraphForCollection(collection, new URL(`/share/c/${token}`, env().APP_URL).toString(), token) };
+  const card = await collectionCard(collection, new URL(`/share/c/${token}`, env().APP_URL).toString(), token);
+  return { title: collection.title, robots: { index: false, follow: false }, openGraph: card.openGraph, twitter: card.twitter };
 }
 
 /** Read-only collection view for people holding the secret link. Sets a cookie so image requests are authorised. */

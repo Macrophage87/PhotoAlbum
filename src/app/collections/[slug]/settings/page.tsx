@@ -3,6 +3,7 @@ import { requireCollectionOwnerPage } from "@/lib/collections/access";
 import { shareableCollectionUrl } from "@/lib/share/social";
 import { CollectionForm } from "@/components/collections/CollectionForm";
 import { ShareButtons } from "@/components/trips/ShareButtons";
+import { CopyLink } from "@/components/share/CopyLink";
 import { Button, ButtonLink, Card, ConfirmSubmitButton } from "@/components/ui";
 import { photoUrl } from "@/lib/photos/urls";
 import { collectionCoverFor } from "@/lib/collections/queries";
@@ -75,20 +76,24 @@ export default async function CollectionSettingsPage({ params, searchParams }: P
         {collection.visibility === "LINK" && shareUrl && (
           <Card className="p-4 space-y-2">
             <div className="text-sm font-medium">Share link</div>
-            <code className="block text-xs break-all bg-surface-alt rounded p-2">{shareUrl}</code>
+            <CopyLink url={shareUrl} note="Anyone with this link can open the collection without signing in." />
             <div className="flex flex-wrap gap-2">
               <form action={rotate}>
                 <Button type="submit" variant="secondary" size="sm">Generate a new link (old link stops working)</Button>
               </form>
               <ShareButtons url={shareUrl} />
             </div>
-            <p className="text-xs text-muted">Anyone who sees the link can open the collection, so prefer a private group or message.</p>
+            <p className="text-xs text-muted">
+              Posted anywhere that shows a preview, the link brings the collection&apos;s title and cover photo with it.
+              Anyone who sees it can open the collection, so prefer a private group or a message. Facebook remembers
+              the first preview it sees for a link, so a cover changed later may take a while to catch up there.
+            </p>
           </Card>
         )}
         {collection.visibility === "PUBLIC" && shareUrl && (
           <Card className="p-4 space-y-2">
             <div className="text-sm font-medium">Share</div>
-            <code className="block text-xs break-all bg-surface-alt rounded p-2">{shareUrl}</code>
+            <CopyLink url={shareUrl} note="This collection is public: anyone with the link can open it." />
             <ShareButtons url={shareUrl} />
           </Card>
         )}

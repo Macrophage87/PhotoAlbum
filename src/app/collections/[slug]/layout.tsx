@@ -5,30 +5,32 @@ import { getViewer } from "@/lib/auth/viewer";
 import { canEditContainer } from "@/lib/auth/ownership";
 import { canViewCollection } from "@/lib/auth/access";
 import { collectionCoverFor, getCollectionBySlug, type CollectionWithCounts } from "@/lib/collections/queries";
-import { photoUrl } from "@/lib/photos/urls";
 import { shareableCollectionUrl } from "@/lib/share/social";
 import { TripTheme } from "@/themes/TripTheme";
 import { Nav } from "@/components/layout/Nav";
 import { CollectionHeader } from "@/components/collections/CollectionHeader";
 import { TripTabs } from "@/components/trips/TripTabs";
+import { previewCard } from "@/lib/share/preview";
 
 export async function generateMetadata({ params }: LayoutProps<"/collections/[slug]">): Promise<Metadata> {
   const { slug } = await params;
   const collection = await getCollectionBySlug(slug);
   if (!collection) return { title: "Collection" };
   const isPublic = collection.visibility === "PUBLIC";
+  const card = isPublic ? await collectionCard(collection, new URL(`/collections/${slug}`, env().APP_URL).toString()) : null;
   return {
     title: collection.title,
     robots: isPublic ? undefined : { index: false, follow: false },
-    openGraph: isPublic ? await openGraphForCollection(collection, new URL(`/collections/${slug}`, env().APP_URL).toString()) : undefined,
+    openGraph: card?.openGraph,
+    twitter: card?.twitter,
   };
 }
 
-/** Open Graph tags so link previews show the title and cover; `imageToken` lets a LINK collection's cover load without a cookie. */
-export async function openGraphForCollection(collection: CollectionWithCounts, pageUrl: string, imageToken?: string): Promise<Metadata["openGraph"]> {
+/** The card a link to this collection carries; `shareToken` lets a secret link's cover load without a cookie. */
+export async function collectionCard(collection: CollectionWithCounts, pageUrl: string, shareToken?: string) {
   const cover = await collectionCoverFor(collection);
-  const images = cover ? [{ url: new URL(`${photoUrl(cover, "medium")}${imageToken ? `&share=${encodeURIComponent(imageToken)}&kind=collection` : ""}`, env().APP_URL).toString() }] : [];
-  return { type: "website", siteName: "Family Album", title: collection.title, description: collection.description ?? `${collection._count.items} photos`, url: pageUrl, images };
+  const description = collection.description?.trim() || `${collection._count.items} photo${collection._count.items === 1 ? "" : "s"}`;
+  return previewCard({ title: collection.title, description, pageUrl, cover, appUrl: env().APP_URL, shareToken, shareKind: "collection" });
 }
 
 export default async function CollectionLayout({ params, children }: LayoutProps<"/collections/[slug]">) {

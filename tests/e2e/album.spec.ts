@@ -155,6 +155,9 @@ test("a share link opens the trip read-only, and stops working when rotated", as
   await expect(img).toBeVisible();
   await expect.poll(async () => img.evaluate((el: HTMLImageElement) => el.naturalWidth)).toBeGreaterThan(0);
   await expect(page.getByRole("link", { name: "Settings" })).toHaveCount(0);
+  // Sharing starts with the link itself, ready to copy; Facebook is beside it rather than instead of it.
+  await page.getByTestId("share-open").click();
+  await expect(page.getByTestId("copy-link").getByRole("textbox")).toHaveValue(/\/share\/e2e-share-token/);
   await expect(page.getByTestId("share-facebook")).toHaveAttribute("href", /%2Fshare%2Fe2e-share-token/);
   // Link previews fetch the cover without a cookie, so the og:image URL must work on its own.
   const ogImage = await page.locator('meta[property="og:image"]').getAttribute("content");
@@ -178,10 +181,19 @@ test("public trips are browsable anonymously without edit controls", async ({ br
   await page.goto("/trips/acadia");
   await expect(page.getByRole("heading", { name: "Acadia" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Family sign in" })).toBeVisible();
-  const fb = page.getByTestId("share-facebook");
-  await expect(fb).toHaveAttribute("href", /facebook\.com\/sharer\/sharer\.php\?u=.*%2Ftrips%2Facadia/);
+  await page.getByTestId("share-open").click();
+  const shareField = page.getByTestId("copy-link").getByRole("textbox");
+  await expect(shareField).toHaveValue(/\/trips\/acadia$/);
+  await page.getByTestId("copy-link-button").click();
+  await expect(page.getByTestId("copy-link-button")).toHaveText("Copied");
+  await expect(page.getByTestId("share-facebook")).toHaveAttribute("href", /facebook\.com\/sharer\/sharer\.php\?u=.*%2Ftrips%2Facadia/);
+  // What a link brings with it: the title, a line about the trip, and a cover big enough to be drawn large.
   await expect(page.locator('meta[property="og:title"]')).toHaveAttribute("content", "Acadia");
   await expect(page.locator('meta[property="og:image"]')).toHaveAttribute("content", /\/api\/photos\//);
+  await expect(page.locator('meta[property="og:image:width"]')).toHaveAttribute("content", /\d+/);
+  await expect(page.locator('meta[property="og:image:height"]')).toHaveAttribute("content", /\d+/);
+  await expect(page.locator('meta[property="og:description"]')).toHaveAttribute("content", /\w/);
+  await expect(page.locator('meta[name="twitter:card"]')).toHaveAttribute("content", "summary_large_image");
   await expect(page.getByRole("link", { name: "Settings" })).toHaveCount(0);
   await page.goto("/trips/acadia/settings");
   await expect(page).toHaveURL(/\/auth\/signin/);
@@ -247,7 +259,7 @@ test("a collection gathers photos from two trips and can be shared by link", asy
   // Sharing private-trip photos by link widens their exposure, so the form asks first.
   page.once("dialog", (d) => void d.accept());
   await page.getByRole("button", { name: "Save changes" }).click();
-  const shareUrl = (await page.locator("code").first().textContent())!.trim();
+  const shareUrl = (await page.getByTestId("copy-link").getByRole("textbox").first().inputValue()).trim();
   expect(shareUrl).toMatch(/\/share\/c\//);
 
   const anon = await browser.newContext();

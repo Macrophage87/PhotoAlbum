@@ -3,6 +3,7 @@ import { requireTripOwnerPage } from "@/lib/trips/access";
 import { dateColumnToDay } from "@/lib/time/local-day";
 import { TripForm } from "@/components/trips/TripForm";
 import { ShareButtons } from "@/components/trips/ShareButtons";
+import { CopyLink } from "@/components/share/CopyLink";
 import { shareableTripUrl } from "@/lib/share/social";
 import { Button, ButtonLink, Card, ConfirmSubmitButton } from "@/components/ui";
 import { photoUrl } from "@/lib/photos/urls";
@@ -75,7 +76,7 @@ export default async function TripSettingsPage({ params, searchParams }: PagePro
         {trip.visibility === "LINK" && shareUrl && (
           <Card className="p-4 space-y-2">
             <div className="text-sm font-medium">Share link</div>
-            <code className="block text-xs break-all bg-surface-alt rounded p-2">{shareUrl}</code>
+            <CopyLink url={shareUrl} note="Anyone with this link can open the trip without signing in." />
             <div className="flex flex-wrap gap-2">
               <form action={rotate}>
                 <Button type="submit" variant="secondary" size="sm">
@@ -84,13 +85,18 @@ export default async function TripSettingsPage({ params, searchParams }: PagePro
               </form>
               <ShareButtons url={shareUrl} />
             </div>
-            <p className="text-xs text-muted">Posting the link on Facebook shows the trip title and cover photo. Anyone who sees the post can open the trip, so prefer a private group or message.</p>
+            <p className="text-xs text-muted">
+              Posted anywhere that shows a preview — Facebook, Messages, WhatsApp, Slack — the link brings the trip&apos;s
+              title, dates and cover photo with it. Anyone who sees the post can open the trip, so prefer a private
+              group or a message. Facebook remembers the first preview it sees for a link, so a cover changed later
+              may take a while to catch up there.
+            </p>
           </Card>
         )}
         {trip.visibility === "PUBLIC" && shareUrl && (
           <Card className="p-4 space-y-2">
             <div className="text-sm font-medium">Share</div>
-            <code className="block text-xs break-all bg-surface-alt rounded p-2">{shareUrl}</code>
+            <CopyLink url={shareUrl} note="This trip is public: anyone with the link can open it, and it is listed on the front page." />
             <ShareButtons url={shareUrl} />
           </Card>
         )}
