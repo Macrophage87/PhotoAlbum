@@ -896,21 +896,24 @@ test("a favourite leads the list, and a tile says what it is on hover", async ({
   await page.goto("/trips/acadia/photos");
   const tiles = page.locator("ul li.tile-lazy");
   await expect(tiles.first()).toBeVisible();
-  const before = await tiles.first().locator("img").getAttribute("src");
+  // Which photo a tile shows, not which URL: the version on the end of the URL changes whenever anything touches
+  // the item, including a background job finishing from an earlier test.
+  const photoOf = async (tile: Locator) => (await tile.locator("img").getAttribute("src"))?.match(/\/api\/photos\/([^/]+)\//)?.[1] ?? null;
+  const before = await photoOf(tiles.first());
   const count = await tiles.count();
   expect(count).toBeGreaterThan(1);
 
   // Mark the last one: it should move to the front, because a member's own favourites lead.
   const last = tiles.nth(count - 1);
-  const lastSrc = await last.locator("img").getAttribute("src");
-  expect(lastSrc).not.toBe(before);
+  const lastPhoto = await photoOf(last);
+  expect(lastPhoto).not.toBe(before);
   await last.getByTestId("favourite-photo").click();
   await expect
     .poll(async () => {
       await page.reload();
-      return page.locator("ul li.tile-lazy").first().locator("img").getAttribute("src");
+      return photoOf(page.locator("ul li.tile-lazy").first());
     }, { timeout: 20_000, intervals: [1000] })
-    .toBe(lastSrc);
+    .toBe(lastPhoto);
   // The heart shows it is mine, and how many of us have marked it.
   await expect(page.locator("ul li.tile-lazy").first().getByTestId("favourite-photo")).toHaveAttribute("aria-pressed", "true");
 
