@@ -25,6 +25,10 @@ export type MapViewProps = {
   interactive?: boolean;
   /** A click on the map itself (not on a photo or track), for placing things. */
   onMapClick?: (pos: { lat: number; lng: number }) => void;
+  /** Something dropped on the map, with the spot it landed on. Nothing is dropped unless `acceptsDrop` says so. */
+  onDropAt?: (pos: { lat: number; lng: number }, e: React.DragEvent) => void;
+  /** Whether a hovering drag is one this map wants, decided without reading data the browser will not give yet. */
+  acceptsDrop?: (e: React.DragEvent) => boolean;
 };
 
 const EMPTY: GeoJSON.FeatureCollection = { type: "FeatureCollection", features: [] };
@@ -41,7 +45,7 @@ function svgToImage(svg: string): Promise<HTMLImageElement> {
   });
 }
 
-export function MapView({ photos, tracks, bounds, theme, className = "", onPhotoClick, onTrackClick, onTrackHover, highlightTrackId, marker, focusBounds, interactive = true, onMapClick }: MapViewProps) {
+export function MapView({ photos, tracks, bounds, theme, className = "", onPhotoClick, onTrackClick, onTrackHover, highlightTrackId, marker, focusBounds, interactive = true, onMapClick, onDropAt, acceptsDrop }: MapViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MLMap | null>(null);
   const markerRef = useRef<Marker | null>(null);
@@ -257,5 +261,22 @@ export function MapView({ photos, tracks, bounds, theme, className = "", onPhoto
     map.fitBounds(focusBounds as LngLatBoundsLike, { padding: 48, maxZoom: 15, duration: 800 });
   }, [focusBounds]);
 
-  return <div ref={containerRef} className={`relative w-full h-full ${className}`} />;
+  return (
+    <div
+      ref={containerRef}
+      className={`relative w-full h-full ${className}`}
+      // A photograph dropped on the map is placed where it landed: the map turns the point on the screen back into
+      // a position on the ground, which is the one thing only the map itself can do.
+      onDragOver={onDropAt && acceptsDrop ? (e) => { if (acceptsDrop(e)) { e.preventDefault(); e.dataTransfer.dropEffect = "move"; } } : undefined}
+      onDrop={onDropAt && acceptsDrop
+        ? (e) => {
+            if (!acceptsDrop(e) || !mapRef.current || !containerRef.current) return;
+            e.preventDefault();
+            const rect = containerRef.current.getBoundingClientRect();
+            const at = mapRef.current.unproject([e.clientX - rect.left, e.clientY - rect.top]);
+            onDropAt({ lat: at.lat, lng: at.lng }, e);
+          }
+        : undefined}
+    />
+  );
 }

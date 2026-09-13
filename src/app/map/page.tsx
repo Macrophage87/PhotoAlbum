@@ -5,6 +5,7 @@ import { AppShell, Container } from "@/components/layout/AppShell";
 import { TripMap } from "@/components/map/TripMap";
 import { listVisibleCollections } from "@/lib/collections/queries";
 import { CollectionFilter } from "@/components/collections/CollectionFilter";
+import { ButtonLink } from "@/components/ui";
 
 export const metadata = { title: "Map" };
 
@@ -18,7 +19,10 @@ export default async function GlobalMapPage({ searchParams }: PageProps<"/map">)
       <Container className="py-8 space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h1 className="font-display text-3xl font-semibold">Map</h1>
-          <CollectionFilter current={filter ? { slug: filter.slug, title: filter.title } : null} basePath="/map" />
+          <div className="flex flex-wrap items-center gap-2">
+            {viewer.kind === "user" && <ButtonLink href="/place" size="sm" variant="secondary">Place photos</ButtonLink>}
+            <CollectionFilter current={filter ? { slug: filter.slug, title: filter.title } : null} basePath="/map" />
+          </div>
         </div>
         <TripMap key={filter?.slug ?? "all"} src={filter ? `/api/collections/${filter.slug}/geojson` : "/api/map/geojson"} theme={mapThemeOf(getTheme(filter?.themeKey ?? "default"))} showTripList={!filter} />
       </Container>

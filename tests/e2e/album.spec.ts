@@ -1265,3 +1265,34 @@ test("a cover is chosen from the photographs themselves, by whoever made the tri
   await memberPage.goto("/trips/acadia/cover");
   await expect(memberPage).toHaveURL(/\/trips\/acadia$/);
 });
+
+test("photographs with no place are dropped onto the map, several at a time", async ({ context, page }) => {
+  await signIn(context, ADMIN);
+  // Something of the admin's with no position at all: the map cannot know where a file with no GPS was taken.
+  await withDb((c) => c.query(`UPDATE "Photo" SET lat = NULL, lng = NULL, "gpsSource" = NULL WHERE "originalName" = 'photo-no-exif.jpg'`));
+  const waiting = await withDb((c) => c.query(`SELECT p.id FROM "Photo" p JOIN "User" u ON u.id = p."uploaderId" WHERE u.email = $1 AND p.lat IS NULL AND p.status = 'READY' AND p."trashedAt" IS NULL ORDER BY p."createdAt" LIMIT 2`, [ADMIN]));
+  test.skip(waiting.rows.length < 1, "nothing is waiting for a place");
+
+  await page.goto("/place");
+  const tray = page.getByTestId("place-tray");
+  await expect(tray).toBeVisible();
+  // The map itself, drawn by MapLibre. Its tiles never load in here (no way out to the tile server) but the canvas
+  // is real, which is all that placing needs: the map turns a point on the screen into a position on the ground.
+  const map = page.locator(".maplibregl-canvas");
+  await expect(map).toBeVisible({ timeout: 30_000 });
+
+  // Tap one, then tap the map: the path that works on a phone and from a keyboard.
+  await tray.locator(`button:has(img[src*='/api/photos/${waiting.rows[0].id}/'])`).click();
+  const box = (await map.boundingBox())!;
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  await expect(page.getByTestId("place-notice")).toContainText("placed");
+  await expect
+    .poll(async () => (await withDb((c) => c.query('SELECT lat, "gpsSource" FROM "Photo" WHERE id = $1', [waiting.rows[0].id]))).rows[0].gpsSource, { timeout: 20_000, intervals: [1000] })
+    .toBe("MANUAL");
+  const row = (await withDb((c) => c.query('SELECT lat, lng FROM "Photo" WHERE id = $1', [waiting.rows[0].id]))).rows[0];
+  expect(Number(row.lat)).toBeGreaterThan(-90);
+  expect(Number(row.lng)).toBeGreaterThan(-180);
+
+  // And it leaves the list of things still waiting.
+  await expect(tray.locator(`button:has(img[src*='/api/photos/${waiting.rows[0].id}/'])`)).toHaveCount(0);
+});
