@@ -1,5 +1,7 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import path from "node:path";
+import sharp from "sharp";
+import { stillIsBlank } from "@/lib/images/poster";
 import { createTrip, resetDb, setVisibility, signIn, withDb } from "./helpers";
 
 // Must match ADMIN_EMAIL as set by scripts/e2e-server.mjs: only that address may bootstrap the admin account.
@@ -1337,6 +1339,17 @@ test("a 3D scan is uploaded, kept whole, and shown in a viewer that can be turne
     .poll(async () => Boolean((await scan())?.renditions), { timeout: 40_000, intervals: [2000] })
     .toBe(true);
 
+  // And the still is a picture of the scan, in the scan's own colours — not the blank rectangle a capture taken
+  // before the browser has drawn anything produces, which comes out white on a phone and black on a desktop.
+  const thumb = await page.request.get(`/api/photos/${row.id}/thumb`);
+  expect(thumb.ok()).toBe(true);
+  const { channels } = await sharp(Buffer.from(await thumb.body())).stats();
+  expect(stillIsBlank(channels)).toBe(false);
+  // And it is the scan's own colours, not the plain grey a mesh is drawn in when its texture never arrived — which
+  // is what a policy that would not let the page read its own blobs used to produce.
+  const [red, green, blue] = channels.map((c) => c.mean);
+  expect(Math.max(Math.abs(red - green), Math.abs(green - blue))).toBeGreaterThan(3);
+
   // With a still taken, the grids show it like anything else, marked for what it is.
   await page.goto("/photos");
   const tile = page.locator("li.tile-lazy").filter({ has: page.locator(`img[src*='/api/photos/${row.id}/']`) });
@@ -1346,6 +1359,16 @@ test("a 3D scan is uploaded, kept whole, and shown in a viewer that can be turne
   // And the helper is never shown a scan: there is no photograph in it to describe.
   await page.goto(`/photos/${row.id}`);
   await expect(page.getByText(/never sent to the helper/i)).toBeVisible();
+
+  // A still that came out wrong is not permanent. Whoever may change the scan can throw it away, and the next
+  // time the scan is looked at the viewer takes another — otherwise one bad tile would be the tile for good.
+  await page.getByTestId("retake-still").click();
+  await expect.poll(async () => (await scan())?.renditions, { timeout: 20_000, intervals: [500] }).toBeNull();
+  await page.reload();
+  await expect(page.getByTestId("scan-viewer")).toBeVisible({ timeout: 30_000 });
+  await expect
+    .poll(async () => Boolean((await scan())?.renditions), { timeout: 40_000, intervals: [2000] })
+    .toBe(true);
 });
 
 test("a whole selection is auto-coloured in one go, and handed back in one press", async ({ context, page }) => {

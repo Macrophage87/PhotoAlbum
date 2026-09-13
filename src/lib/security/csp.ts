@@ -18,7 +18,9 @@ export const DEFAULT_GLYPH_ORIGIN = "https://demotiles.maplibre.org";
 
 export function buildCsp(input: CspInput): string {
   const mapHosts = [...new Set([originOf(input.tileUrl) ?? DEFAULT_TILE_ORIGIN, originOf(input.styleUrl), originOf(input.glyphsUrl) ?? DEFAULT_GLYPH_ORIGIN].filter(Boolean) as string[])];
-  const script = [`'self'`, `'nonce-${input.nonce}'`, `'strict-dynamic'`, ...(input.dev ? [`'unsafe-eval'`] : [])].join(" ");
+  // 'wasm-unsafe-eval' lets WebAssembly compile without letting anything call eval: the 3D viewer decodes a
+  // compressed scan's geometry in WebAssembly, and without this a scan that was exported compressed shows nothing.
+  const script = [`'self'`, `'nonce-${input.nonce}'`, `'strict-dynamic'`, `'wasm-unsafe-eval'`, ...(input.dev ? [`'unsafe-eval'`] : [])].join(" ");
   return [
     `default-src 'self'`,
     `script-src ${script}`,
@@ -27,7 +29,10 @@ export function buildCsp(input: CspInput): string {
     `img-src 'self' data: blob: ${mapHosts.join(" ")}`,
     `media-src 'self' blob:`,
     `font-src 'self' data:`,
-    `connect-src 'self' ${mapHosts.join(" ")}`,
+    // blob: is not an outside host — it is the page reading bytes it already holds. The 3D viewer unpacks the
+    // picture baked into a scan by handing itself the bytes as a blob and fetching them back; without this every
+    // scan loses its colours and is drawn plain white.
+    `connect-src 'self' blob: data: ${mapHosts.join(" ")}`,
     // MapLibre's worker is served from /maplibre; Sigma and uPlot draw on canvases.
     `worker-src 'self' blob:`,
     `frame-src https://www.youtube-nocookie.com`,

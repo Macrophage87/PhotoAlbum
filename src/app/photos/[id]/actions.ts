@@ -335,3 +335,19 @@ export async function applyReportedDate(id: string, iso: string): Promise<DateGu
   await applyPhotoInstant(photo, at, offset, "MANUAL", user.id);
   return { ok: true, takenAt: at.toISOString(), tzOffsetMin: offset, source: "MANUAL", setBy: uploaderLabel(user.name, user.email) };
 }
+
+/**
+ * Forget the picture a scan shows in the grids, so the next member to open it takes a new one.
+ *
+ * A scan's tile is a still of what somebody's browser drew, taken once and kept — which is fine until the still is
+ * wrong. A browser asked at the wrong moment, or one that could not fetch the colours baked into the scan, hands
+ * back a blank rectangle, and the album has no way of knowing it was looking at nothing. This is the way back:
+ * whoever may change the item can throw the still away, and the viewer takes another the next time it is opened.
+ */
+export async function retakeScanStill(id: string): Promise<void> {
+  const user = await editor(id);
+  const photo = await db.photo.findUnique({ where: { id }, select: { id: true, kind: true } });
+  if (!photo || photo.kind !== "SCAN") throw new Error("That is not a 3D scan");
+  await db.photo.update({ where: { id: photo.id }, data: { renditions: Prisma.DbNull, editedById: user.id } });
+  revalidatePath("/", "layout");
+}

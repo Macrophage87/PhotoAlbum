@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { MIN_DRAWN } from "@/lib/images/poster";
 
 /**
  * A 3D scan, turned and looked at.
@@ -14,7 +15,42 @@ import { useEffect, useRef, useState } from "react";
  * the grids comes from: the server has no way to draw a scan itself.
  */
 
-type ModelViewerElement = HTMLElement & { toBlob?: (opts?: { mimeType?: string; qualityArgument?: number }) => Promise<Blob> };
+type ModelViewerElement = HTMLElement & {
+  toBlob?: (opts?: { mimeType?: string; qualityArgument?: number }) => Promise<Blob>;
+  /** False until the scan is actually drawn on screen. See the still-taking below: it decides what a capture reads. */
+  modelIsVisible?: boolean;
+  updateComplete?: Promise<unknown>;
+};
+
+/** Two frames, so a capture reads one the browser has finished drawing rather than one it is part-way through. */
+const twoFrames = () => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
+
+/**
+ * How much of a still was drawn into at all. A capture taken at the wrong moment is empty, and an empty picture
+ * saved as a tile is one the album would never think to take again, so it is measured before it is sent.
+ */
+async function drawnFraction(blob: Blob): Promise<number> {
+  try {
+    const bitmap = await createImageBitmap(blob);
+    // A small copy answers the question just as well and costs a phone nothing.
+    const w = Math.min(bitmap.width, 160);
+    const h = Math.max(1, Math.round((bitmap.height / bitmap.width) * w));
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    if (!ctx) return 1;
+    ctx.drawImage(bitmap, 0, 0, w, h);
+    const px = ctx.getImageData(0, 0, w, h).data;
+    bitmap.close?.();
+    let drawn = 0;
+    for (let i = 3; i < px.length; i += 4) if (px[i] > 8) drawn += 1;
+    return drawn / (w * h);
+  } catch {
+    // A browser that will not measure is not a reason to refuse a still; the server checks it too.
+    return 1;
+  }
+}
 
 export function ScanViewer({ photoId, modelUrl, format, posterUrl, canPoster, alt, className }: {
   photoId: string;
@@ -43,23 +79,53 @@ export function ScanViewer({ photoId, modelUrl, format, posterUrl, canPoster, al
     return () => { live = false; };
   }, [viewable]);
 
-  // One still, taken once the scan is actually on screen, so the grids have something to show.
+  /**
+   * One still, taken once the scan is actually drawn, so the grids have something to show.
+   *
+   * The moment matters more than it looks. The viewer finishes loading the file a little before it puts the first
+   * frame of it on screen, and a capture taken in between does not read the drawing the member can see: it reads a
+   * canvas nothing has painted into, and comes back as a rectangle of nothing — which a phone then writes out as
+   * plain white. So the wait is for the scan to be *visible*, not merely loaded, and the still is measured before
+   * it is sent and taken again if the frame was empty. It is kept as a PNG, which carries its own transparency, so
+   * that no browser has to decide what colour the empty parts of the picture are.
+   */
   useEffect(() => {
     if (!ready || !canPoster || posterUrl) return;
     const el = ref.current;
     if (!el) return;
     let live = true;
+    let started = false; // The scan can come and go from view; one round of this is enough.
+    /** A few goes, a frame apart: on a slow phone the first drawn frame can be a moment behind the word for it. */
+    const ATTEMPTS = 5;
+
     const send = async () => {
-      if (!live || !el.toBlob) return;
-      try {
-        const blob = await el.toBlob({ mimeType: "image/jpeg", qualityArgument: 0.85 });
-        await fetch(`/api/photos/${photoId}/poster`, { method: "POST", body: blob, credentials: "same-origin" });
-      } catch {
-        // A tile is a nicety; never let taking one break looking at the scan.
+      if (!el.toBlob) return;
+      for (let attempt = 0; attempt < ATTEMPTS && live; attempt += 1) {
+        try {
+          await el.updateComplete;
+          await twoFrames();
+          if (!live) return;
+          const blob = await el.toBlob({ mimeType: "image/png" });
+          if (!live) return;
+          if ((await drawnFraction(blob)) < MIN_DRAWN) continue;
+          await fetch(`/api/photos/${photoId}/poster`, { method: "POST", body: blob, credentials: "same-origin" });
+          return;
+        } catch {
+          // A tile is a nicety; never let taking one break looking at the scan.
+          return;
+        }
       }
     };
-    el.addEventListener("load", send, { once: true });
-    return () => { live = false; el.removeEventListener("load", send); };
+
+    const begin = () => {
+      if (started || !el.modelIsVisible) return;
+      started = true;
+      el.removeEventListener("model-visibility", begin);
+      void send();
+    };
+    el.addEventListener("model-visibility", begin);
+    begin();
+    return () => { live = false; el.removeEventListener("model-visibility", begin); };
   }, [ready, canPoster, posterUrl, photoId]);
 
   if (!viewable) {

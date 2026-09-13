@@ -43,26 +43,55 @@ const sweep = await sharp({ create: { width: 2400, height: 1200, channels: 3, ba
   .toBuffer();
 out("panorama.jpg", withXmp(sweep, GPANO));
 
-// A 3D scan, as a phone scanner exports one: a glTF binary holding a single coloured triangle. Small enough to sit
-// in the repository, real enough that a viewer draws it and reports its dimensions.
-function glb() {
-  // One triangle: three positions, float32, and the accessor bounds glTF insists on.
-  const positions = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
-  const bin = Buffer.from(positions.buffer);
+// A 3D scan, as a phone scanner exports one: a glTF binary holding a small textured shape. Small enough to sit in
+// the repository, real enough that a viewer draws it in colour — which is the point, since the tile the album shows
+// for a scan is a still of what a browser drew, and a still with no colours in it means something has gone wrong.
+const scanTexture = await sharp({ create: { width: 64, height: 64, channels: 3, background: { r: 210, g: 60, b: 50 } } })
+  .composite([
+    { input: await sharp({ create: { width: 32, height: 32, channels: 3, background: { r: 40, g: 150, b: 80 } } }).png().toBuffer(), left: 32, top: 0 },
+    { input: await sharp({ create: { width: 32, height: 32, channels: 3, background: { r: 40, g: 90, b: 200 } } }).png().toBuffer(), left: 0, top: 32 },
+    { input: await sharp({ create: { width: 32, height: 32, channels: 3, background: { r: 240, g: 210, b: 60 } } }).png().toBuffer(), left: 32, top: 32 },
+  ])
+  .png()
+  .toBuffer();
+
+function glb(texture) {
+  // A square facing the camera, so a viewer that frames the model shows the whole texture.
+  const positions = new Float32Array([-1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 1, 0]);
+  const uvs = new Float32Array([0, 1, 1, 1, 1, 0, 0, 0]);
+  const indices = new Uint16Array([0, 1, 2, 0, 2, 3]);
+  const pad4 = (buf) => (buf.length % 4 === 0 ? buf : Buffer.concat([buf, Buffer.alloc(4 - (buf.length % 4), 0)]));
+  // Every bufferView starts on a four-byte boundary, which glTF requires of anything an accessor reads.
+  const parts = [pad4(texture), pad4(Buffer.from(positions.buffer)), pad4(Buffer.from(uvs.buffer)), pad4(Buffer.from(indices.buffer))];
+  const offsets = [];
+  let at = 0;
+  for (const part of parts) { offsets.push(at); at += part.length; }
+  const bin = Buffer.concat(parts);
   const json = {
     asset: { version: "2.0", generator: "photoalbum fixtures" },
     scene: 0,
     scenes: [{ nodes: [0] }],
     nodes: [{ mesh: 0, name: "scan" }],
-    meshes: [{ primitives: [{ attributes: { POSITION: 0 }, material: 0 }] }],
-    materials: [{ pbrMetallicRoughness: { baseColorFactor: [0.4, 0.6, 0.9, 1], metallicFactor: 0, roughnessFactor: 1 } }],
-    accessors: [{ bufferView: 0, componentType: 5126, count: 3, type: "VEC3", min: [0, 0, 0], max: [1, 1, 0] }],
-    bufferViews: [{ buffer: 0, byteOffset: 0, byteLength: bin.length, target: 34962 }],
+    meshes: [{ primitives: [{ attributes: { POSITION: 0, TEXCOORD_0: 1 }, indices: 2, material: 0 }] }],
+    materials: [{ name: "main", pbrMetallicRoughness: { baseColorTexture: { index: 0 }, metallicFactor: 0, roughnessFactor: 1 }, doubleSided: true }],
+    textures: [{ source: 0, sampler: 0 }],
+    samplers: [{ magFilter: 9729, minFilter: 9729 }],
+    images: [{ name: "texture.png", bufferView: 0, mimeType: "image/png" }],
+    accessors: [
+      { bufferView: 1, componentType: 5126, count: 4, type: "VEC3", min: [-1, -1, 0], max: [1, 1, 0] },
+      { bufferView: 2, componentType: 5126, count: 4, type: "VEC2", min: [0, 0], max: [1, 1] },
+      { bufferView: 3, componentType: 5123, count: 6, type: "SCALAR", min: [0], max: [3] },
+    ],
+    bufferViews: [
+      { buffer: 0, byteOffset: offsets[0], byteLength: texture.length },
+      { buffer: 0, byteOffset: offsets[1], byteLength: positions.byteLength, target: 34962 },
+      { buffer: 0, byteOffset: offsets[2], byteLength: uvs.byteLength, target: 34962 },
+      { buffer: 0, byteOffset: offsets[3], byteLength: indices.byteLength, target: 34963 },
+    ],
     buffers: [{ byteLength: bin.length }],
   };
-  const pad = (buf, to) => (buf.length % to === 0 ? buf : Buffer.concat([buf, Buffer.alloc(to - (buf.length % to), 0x20)]));
-  const jsonChunk = pad(Buffer.from(JSON.stringify(json), "utf8"), 4);
-  const binChunk = pad(bin, 4);
+  const jsonChunk = (() => { const b = Buffer.from(JSON.stringify(json), "utf8"); return b.length % 4 === 0 ? b : Buffer.concat([b, Buffer.alloc(4 - (b.length % 4), 0x20)]); })();
+  const binChunk = pad4(bin);
   const header = Buffer.alloc(12);
   header.write("glTF", 0, "ascii");
   header.writeUInt32LE(2, 4);
@@ -75,7 +104,7 @@ function glb() {
   };
   return Buffer.concat([header, chunk(jsonChunk, "JSON"), chunk(binChunk, "BIN\0")]);
 }
-out("scan.glb", glb());
+out("scan.glb", glb(scanTexture));
 
 // ---------- a synthetic hike: 1 point / 5 s, ~3 km loop near Acadia with a climb ----------
 const T0 = Date.parse("2025-08-12T13:00:00Z");

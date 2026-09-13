@@ -26,6 +26,7 @@ import { DateTroubleshooter } from "@/components/photos/DateTroubleshooter";
 import { canEditContainer, canEditMedia, NOT_YOURS } from "@/lib/auth/ownership";
 import { PanoramaView, PanoramaHint } from "@/components/photos/PanoramaView";
 import { ScanViewer } from "@/components/scans/ScanViewer";
+import { RetakeStill } from "@/components/scans/RetakeStill";
 import { panoramaLabel } from "@/lib/images/panorama";
 import { CollectionsField, TripField } from "@/components/containers/PhotoContainerFields";
 import { mapThemeOf } from "@/lib/map/theme";
@@ -153,6 +154,8 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
                     3D scan ({photo.scanFormat ?? "unknown format"}), {formatBytes(photo.sizeBytes)}.{" "}
                     <a href={photoUrl(photo, "model")} download className="underline underline-offset-2">Download it</a> to open in Scaniverse or any 3D app.
                   </p>
+                  {/* A still taken at the wrong moment, or before the scan's colours could be read, is a blank tile for good otherwise. */}
+                  {mine && photo.renditions ? <RetakeStill photoId={photo.id} /> : null}
                 </div>
               ) : (
                 <div className="aspect-video rounded-theme bg-surface-alt flex items-center justify-center text-muted p-4 text-center">Getting the scan ready…</div>
