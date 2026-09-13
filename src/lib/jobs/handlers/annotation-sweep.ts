@@ -18,6 +18,8 @@ export async function annotationSweep(): Promise<number> {
     LEFT JOIN "Trip" t ON t.id = p."tripId"
     WHERE p.status = 'READY'
       AND p."trashedAt" IS NULL
+      -- A 3D scan has no photograph in it to describe.
+      AND p.kind <> 'SCAN'
       AND p."annotationOptOut" = false
       AND COALESCE(t."annotationOptOut", false) = false
       AND NOT EXISTS (SELECT 1 FROM "CollectionItem" ci JOIN "Collection" c ON c.id = ci."collectionId" WHERE ci."photoId" = p.id AND c."annotationOptOut")
@@ -37,7 +39,7 @@ export async function enqueueAnnotation(photoIds: string[]): Promise<number> {
   const gates = await annotationGates();
   if (!gates.active || !photoIds.length) return 0;
   const rows = await db.photo.findMany({
-    where: { id: { in: photoIds }, status: "READY", ...NOT_TRASHED, annotationOptOut: false, OR: [{ tripId: null }, { trip: { annotationOptOut: false } }], collections: { none: { collection: { annotationOptOut: true } } } },
+    where: { id: { in: photoIds }, status: "READY", ...NOT_TRASHED, kind: { not: "SCAN" }, annotationOptOut: false, OR: [{ tripId: null }, { trip: { annotationOptOut: false } }], collections: { none: { collection: { annotationOptOut: true } } } },
     select: { id: true, annotatedAt: true, contextUpdatedAt: true },
   });
   let n = 0;

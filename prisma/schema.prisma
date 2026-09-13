@@ -91,6 +91,8 @@ enum MediaKind {
   PHOTO
   VIDEO
   EXTERNAL_VIDEO
+  /// A 3D scan — a room, an object, a gravestone — made by a phone app like Scaniverse and kept whole.
+  SCAN
 }
 
 enum MediaSourceKind {
@@ -318,6 +320,8 @@ model Photo {
   caption       String?
   renditions    Json?
   kind          MediaKind         @default(PHOTO)
+  /// For a scan: what kind of file it is, since that decides whether the album can show it or only keep it.
+  scanFormat    String?
   sourceKind    MediaSourceKind   @default(UPLOAD)
   provider      ExternalProvider?
   externalId    String?

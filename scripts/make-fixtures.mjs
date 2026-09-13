@@ -43,6 +43,40 @@ const sweep = await sharp({ create: { width: 2400, height: 1200, channels: 3, ba
   .toBuffer();
 out("panorama.jpg", withXmp(sweep, GPANO));
 
+// A 3D scan, as a phone scanner exports one: a glTF binary holding a single coloured triangle. Small enough to sit
+// in the repository, real enough that a viewer draws it and reports its dimensions.
+function glb() {
+  // One triangle: three positions, float32, and the accessor bounds glTF insists on.
+  const positions = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+  const bin = Buffer.from(positions.buffer);
+  const json = {
+    asset: { version: "2.0", generator: "photoalbum fixtures" },
+    scene: 0,
+    scenes: [{ nodes: [0] }],
+    nodes: [{ mesh: 0, name: "scan" }],
+    meshes: [{ primitives: [{ attributes: { POSITION: 0 }, material: 0 }] }],
+    materials: [{ pbrMetallicRoughness: { baseColorFactor: [0.4, 0.6, 0.9, 1], metallicFactor: 0, roughnessFactor: 1 } }],
+    accessors: [{ bufferView: 0, componentType: 5126, count: 3, type: "VEC3", min: [0, 0, 0], max: [1, 1, 0] }],
+    bufferViews: [{ buffer: 0, byteOffset: 0, byteLength: bin.length, target: 34962 }],
+    buffers: [{ byteLength: bin.length }],
+  };
+  const pad = (buf, to) => (buf.length % to === 0 ? buf : Buffer.concat([buf, Buffer.alloc(to - (buf.length % to), 0x20)]));
+  const jsonChunk = pad(Buffer.from(JSON.stringify(json), "utf8"), 4);
+  const binChunk = pad(bin, 4);
+  const header = Buffer.alloc(12);
+  header.write("glTF", 0, "ascii");
+  header.writeUInt32LE(2, 4);
+  header.writeUInt32LE(12 + 8 + jsonChunk.length + 8 + binChunk.length, 8);
+  const chunk = (data, type) => {
+    const head = Buffer.alloc(8);
+    head.writeUInt32LE(data.length, 0);
+    head.write(type, 4, "ascii");
+    return Buffer.concat([head, data]);
+  };
+  return Buffer.concat([header, chunk(jsonChunk, "JSON"), chunk(binChunk, "BIN\0")]);
+}
+out("scan.glb", glb());
+
 // ---------- a synthetic hike: 1 point / 5 s, ~3 km loop near Acadia with a climb ----------
 const T0 = Date.parse("2025-08-12T13:00:00Z");
 const N = 600; // 50 minutes

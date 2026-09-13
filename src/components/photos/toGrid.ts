@@ -18,6 +18,8 @@ export function toGridPhoto(p: PhotoCard, badge?: string | null, member = false,
     collections: member ? p.collections.map((c) => c.collection) : [],
     youtubeId: p.kind === "EXTERNAL_VIDEO" ? p.externalId : null,
     videoUrl: p.kind === "VIDEO" && p.status === "READY" ? photoUrl(p, "video") : null,
+    // A scan has no picture of its own until somebody has opened it once: until then the tile says what it is.
+    scan: p.kind === "SCAN" ? { format: p.scanFormat, modelUrl: photoUrl(p, "model"), hasPoster: Boolean(p.renditions) } : null,
     // The full-size view follows the picture as it is now; an item nobody has edited links straight to its own file.
     originalUrl: p.kind === "PHOTO" && p.status === "READY" ? photoUrl(p, p.edits ? "edited" : "original") : null,
     durationS: p.durationS,

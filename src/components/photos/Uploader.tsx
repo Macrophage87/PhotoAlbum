@@ -45,6 +45,9 @@ function uploadOne(file: File, target: { tripId?: string; activityId?: string },
 
 const VIDEO_EXT = /\.(mp4|m4v|mov|webm)$/i;
 const isVideoFile = (f: File) => f.type.startsWith("video/") || VIDEO_EXT.test(f.name);
+/** What a phone scanner exports: a mesh the album can show, or a splat it keeps whole. */
+const SCAN_EXT = /\.(glb|usdz|ply|spz)$/i;
+const isScanFile = (f: File) => SCAN_EXT.test(f.name);
 
 /**
  * Read a clip's duration in the browser so an over-long file is refused before any bytes are sent.
@@ -133,12 +136,12 @@ export function Uploader({ tripId, activityId, onDone, maxClipSeconds = 90, anno
 
   const addFiles = useCallback(
     async (files: FileList | File[]) => {
-      const accepted = Array.from(files).filter((f) => f.type.startsWith("image/") || /\.(heic|heif)$/i.test(f.name) || isVideoFile(f));
+      const accepted = Array.from(files).filter((f) => f.type.startsWith("image/") || /\.(heic|heif)$/i.test(f.name) || isVideoFile(f) || isScanFile(f));
       const fresh: Item[] = [];
       const refused: Item[] = [];
       for (const file of accepted) {
         const item: Item = { localId: `${file.name}-${file.size}-${file.lastModified}-${Math.random().toString(36).slice(2)}`, file, progress: 0, status: "queued" };
-        if (isVideoFile(file)) {
+        if (isVideoFile(file) && !isScanFile(file)) {
           const d = await readDuration(file);
           if (d !== null && d > maxClipSeconds) {
             refused.push({ ...item, status: "failed", error: tooLongMessage(d, maxClipSeconds) });
@@ -204,9 +207,12 @@ export function Uploader({ tripId, activityId, onDone, maxClipSeconds = 90, anno
         }}
         className={`rounded-theme border-2 border-dashed p-10 text-center transition-colors ${dragging ? "border-primary bg-primary/5" : "border-border hover:bg-surface-alt"}`}
       >
-        <input ref={inputRef} id="photo-file-input" type="file" multiple accept="image/*,.heic,.heif,video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm" className="sr-only" tabIndex={-1} aria-label="Choose files" onChange={(e) => e.target.files && addFiles(e.target.files)} />
-        <p className="font-medium">Drop photos or short clips here</p>
-        <p className="text-sm text-muted mt-1">JPEG, PNG, HEIC and more; MP4, MOV or WebM clips up to {maxClipSeconds} seconds (longer videos go on YouTube). Several at a time is fine.</p>
+        <input ref={inputRef} id="photo-file-input" type="file" multiple accept="image/*,.heic,.heif,video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm,.glb,.usdz,.ply,.spz" className="sr-only" tabIndex={-1} aria-label="Choose files" onChange={(e) => e.target.files && addFiles(e.target.files)} />
+        <p className="font-medium">Drop photos, short clips or 3D scans here</p>
+        <p className="text-sm text-muted mt-1">
+          JPEG, PNG, HEIC and more; MP4, MOV or WebM clips up to {maxClipSeconds} seconds (longer videos go on YouTube);
+          3D scans from Scaniverse and the like as GLB, USDZ, PLY or SPZ. Several at a time is fine.
+        </p>
         <Button type="button" variant="secondary" className="mt-4" onClick={() => inputRef.current?.click()}>
           Choose files
         </Button>

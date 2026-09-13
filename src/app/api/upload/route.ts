@@ -6,7 +6,7 @@ import { getViewer } from "@/lib/auth/viewer";
 import { storage, StorageLimitError } from "@/lib/storage";
 import { enqueue } from "@/lib/jobs/boss";
 import { QUEUES } from "@/lib/jobs/queues";
-import { ALLOWED_MIMES as ALLOWED, EXT_BY_MIME, EXT_MIME, VIDEO_MIMES as VIDEO } from "@/lib/media/mime";
+import { ALLOWED_MIMES as ALLOWED, EXT_BY_MIME, EXT_MIME, kindForMime, scanFormatOf, VIDEO_MIMES as VIDEO } from "@/lib/media/mime";
 
 export const dynamic = "force-dynamic";
 
@@ -56,13 +56,15 @@ export async function POST(request: Request) {
   }
 
   const isVideo = VIDEO.has(mime);
+  const kind = kindForMime(mime);
   const photo = await db.photo.create({
     data: {
       uploaderId: viewer.user.id,
       tripId: tripId ?? null,
       activityId: activityId ?? null,
       activitySetById: activityId ? viewer.user.id : null,
-      kind: isVideo ? "VIDEO" : "PHOTO",
+      kind,
+      scanFormat: scanFormatOf(mime),
       annotationOptOut: parsed.data.annotationOptOut === "1",
       status: "PENDING",
       originalName: fileName,
@@ -87,6 +89,8 @@ export async function POST(request: Request) {
   }
 
   try {
+    // A scan goes through the photo handler too, which dates it and files it on a trip — it just has no pixels to
+    // render, so nothing is made from it.
     if (isVideo) await enqueue(QUEUES.transcodeVideo, { photoId: photo.id, tripId: tripId ?? null });
     else await enqueue(QUEUES.processPhoto, { photoId: photo.id, tripId: tripId ?? null });
   } catch (err) {

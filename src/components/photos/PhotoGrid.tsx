@@ -22,6 +22,8 @@ export type GridPhoto = LightboxPhoto & {
   favourite?: FavouriteState | null;
   /** A panorama: given a tile of its own shape rather than a square crop of its middle. */
   panorama?: { projection: string | null; panoUrl: string } | null;
+  /** A 3D scan, which has no picture of its own until a member has opened it once. */
+  scan?: { format: string | null; modelUrl: string; hasPoster: boolean } | null;
 };
 
 /** The date a tile shows on hover, in the photo's own zone rather than the reader's. */
@@ -70,7 +72,14 @@ export function PhotoGrid({ photos, emptyMessage = "No photos yet.", selectable:
             >
               {p.status === "READY" ? (
                 <button onClick={() => (selectable ? onToggle?.(p.id) : lb.open(readyIndex))} className={`block w-full h-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring ${selectable && selected?.has(p.id) ? "ring-4 ring-primary ring-inset" : ""}`} aria-pressed={selectable ? selected?.has(p.id) : undefined}>
-                  {p.videoUrl ? (
+                  {p.scan && !p.scan.hasPoster ? (
+                    // Nobody has opened it yet, so there is nothing to show but what it is.
+                    <span className="flex h-full w-full flex-col items-center justify-center gap-1 text-muted text-xs p-2 text-center">
+                      <span aria-hidden className="text-2xl">◈</span>
+                      <span>3D scan</span>
+                      {p.scan.format && <span className="text-[10px] uppercase tracking-wide">{p.scan.format}</span>}
+                    </span>
+                  ) : p.videoUrl ? (
                     <ClipTile src={p.videoUrl} poster={p.thumbUrl} alt={p.alt} durationS={p.durationS ?? null} />
                   ) : (
                     // eslint-disable-next-line @next/next/no-img-element
@@ -97,6 +106,7 @@ export function PhotoGrid({ photos, emptyMessage = "No photos yet.", selectable:
                 </span>
               )}
               {p.badge && <span className="absolute top-1 left-1 text-[10px] bg-black/60 text-white rounded px-1.5 py-0.5">{p.badge}</span>}
+              {p.scan && p.scan.hasPoster && <span className="absolute top-1 left-1 text-[10px] bg-black/60 text-white rounded px-1.5 py-0.5">3D</span>}
               {wideTile(p) && <span className="absolute top-1 left-1 text-[10px] bg-black/60 text-white rounded px-1.5 py-0.5" style={p.badge ? { top: "1.6rem" } : undefined}>{p.panorama!.projection === "EQUIRECTANGULAR_360" ? "360°" : "Panorama"}</span>}
               {p.collections && p.collections.length > 0 && (
                 <span className={`absolute bottom-1 left-1 flex flex-wrap gap-1 pointer-events-none ${p.youtubeId ? (p.unavailable ? "right-28" : "right-14") : "right-1"}`} aria-label={`In ${p.collections.map((c) => c.title).join(", ")}`}>

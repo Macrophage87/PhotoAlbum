@@ -3,11 +3,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { YouTubeEmbed } from "@/components/videos/YouTubeEmbed";
 import { PanoramaView, PanoramaHint } from "./PanoramaView";
+import { ScanViewer } from "@/components/scans/ScanViewer";
 import { panoramaLabel } from "@/lib/images/panorama";
 import { PetTagger } from "@/components/people/PetTagger";
 import { LightboxInfo } from "./LightboxInfo";
 
-export type LightboxPhoto = { id: string; mediumUrl: string; width: number | null; height: number | null; caption: string | null; alt: string; /** Shown to members only; never set for anonymous viewers. */ uploadedBy?: string | null; /** Set for embedded videos: the lightbox shows the click-to-play facade instead of the image. */ youtubeId?: string | null; title?: string | null; /** Set for uploaded clips: plays inline with controls. */ videoUrl?: string | null; durationS?: number | null; /** Members can tag a pet from here. */ canTag?: boolean; /** Full-size file, opened by a second click on the picture. */ originalUrl?: string | null; /** A panorama, shown filling the height and panned sideways rather than shrunk to fit. */ panorama?: { projection: string | null; panoUrl: string } | null };
+export type LightboxPhoto = { id: string; mediumUrl: string; width: number | null; height: number | null; caption: string | null; alt: string; /** Shown to members only; never set for anonymous viewers. */ uploadedBy?: string | null; /** Set for embedded videos: the lightbox shows the click-to-play facade instead of the image. */ youtubeId?: string | null; title?: string | null; /** Set for uploaded clips: plays inline with controls. */ videoUrl?: string | null; durationS?: number | null; /** Members can tag a pet from here. */ canTag?: boolean; /** Full-size file, opened by a second click on the picture. */ originalUrl?: string | null; /** A panorama, shown filling the height and panned sideways rather than shrunk to fit. */ panorama?: { projection: string | null; panoUrl: string } | null; /** A 3D scan, turned in place. */ scan?: { format: string | null; modelUrl: string; hasPoster: boolean } | null };
 
 export function Lightbox({ photos, index, onClose, onNavigate, share = null }: { photos: LightboxPhoto[]; index: number; onClose: () => void; onNavigate: (i: number) => void; /** On a share page: the token that lets the info request through without a cookie. */ share?: { token: string; kind: string } | null }) {
   const photo = photos[index];
@@ -80,6 +81,10 @@ export function Lightbox({ photos, index, onClose, onNavigate, share = null }: {
           ) : photo.youtubeId ? (
             <div className="w-full max-w-5xl" onClick={(e) => e.stopPropagation()}>
               <YouTubeEmbed videoId={photo.youtubeId} posterUrl={photo.mediumUrl} title={photo.title ?? photo.alt} />
+            </div>
+          ) : photo.scan ? (
+            <div className="w-full max-w-3xl" onClick={(e) => e.stopPropagation()}>
+              <ScanViewer photoId={photo.id} modelUrl={photo.scan.modelUrl} format={photo.scan.format} posterUrl={photo.scan.hasPoster ? photo.mediumUrl : null} canPoster={Boolean(photo.canTag)} alt={photo.alt} className="h-[46vh] lg:h-[62vh]" />
             </div>
           ) : photo.panorama ? (
             // A panorama fills the height and is dragged: fitting a 10:1 sweep to the width of a phone leaves a

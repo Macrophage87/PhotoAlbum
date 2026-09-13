@@ -1296,3 +1296,40 @@ test("photographs with no place are dropped onto the map, several at a time", as
   // And it leaves the list of things still waiting.
   await expect(tray.locator(`button:has(img[src*='/api/photos/${waiting.rows[0].id}/'])`)).toHaveCount(0);
 });
+
+test("a 3D scan is uploaded, kept whole, and shown in a viewer that can be turned", async ({ context, page }) => {
+  await signIn(context, ADMIN);
+  await page.goto("/upload");
+  await chooseFile(page, "scan.glb");
+  await expect(page.getByText("1 of 1 uploaded.")).toBeVisible({ timeout: 30_000 });
+
+  const scan = async () => (await withDb((c) => c.query('SELECT id, kind, "scanFormat", status, renditions, "sizeBytes" FROM "Photo" WHERE "originalName" = $1 ORDER BY "createdAt" DESC LIMIT 1', ["scan.glb"]))).rows[0];
+  await expect.poll(async () => (await scan())?.status, { timeout: 30_000, intervals: [1000] }).toBe("READY");
+  const row = await scan();
+  expect(row.kind).toBe("SCAN");
+  expect(row.scanFormat).toBe("GLB");
+  // Kept exactly as it came: the file the album hands back is the file that was uploaded.
+  const file = await page.request.get(`/api/photos/${row.id}/model`);
+  expect(file.ok()).toBe(true);
+  expect(file.headers()["content-type"]).toContain("model/gltf-binary");
+  expect((await file.body()).length).toBe(Number(row.sizeBytes));
+
+  // On its own page it is a viewer, not a broken image — and the first member to open it leaves a still behind,
+  // which is the only way the album can ever have a tile for a shape it cannot draw itself.
+  await page.goto(`/photos/${row.id}`);
+  await expect(page.getByTestId("scan-viewer")).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText(/3D scan \(GLB\)/)).toBeVisible();
+  await expect
+    .poll(async () => Boolean((await scan())?.renditions), { timeout: 40_000, intervals: [2000] })
+    .toBe(true);
+
+  // With a still taken, the grids show it like anything else, marked for what it is.
+  await page.goto("/photos");
+  const tile = page.locator("li.tile-lazy").filter({ has: page.locator(`img[src*='/api/photos/${row.id}/']`) });
+  await expect(tile).toBeVisible();
+  await expect(tile.getByText("3D")).toBeVisible();
+
+  // And the helper is never shown a scan: there is no photograph in it to describe.
+  await page.goto(`/photos/${row.id}`);
+  await expect(page.getByText(/never sent to the helper/i)).toBeVisible();
+});

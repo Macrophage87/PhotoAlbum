@@ -33,7 +33,7 @@ export function parseRange(header: string | null, size: number): { start: number
  */
 export async function GET(request: Request, { params }: { params: Promise<{ id: string; size: string }> }) {
   const { id, size } = await params;
-  if (!["thumb", "medium", "pano", "original", "edited", "source", "video", "poster"].includes(size)) return new Response("Not found", { status: 404 });
+  if (!["thumb", "medium", "pano", "original", "edited", "source", "video", "poster", "model"].includes(size)) return new Response("Not found", { status: 404 });
 
   const photo = await db.photo.findUnique({
     where: { id },
@@ -70,6 +70,11 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     if (!chosen) return new Response("Not ready", { status: 404 });
     key = chosen.key;
     contentType = MIME[key.split(".").pop() ?? ""] ?? "image/webp";
+  } else if (size === "model") {
+    // The scan itself, as it was uploaded. A viewer asks for it in ranges, which the response below already does.
+    if (photo.kind !== "SCAN") return new Response("Not a scan", { status: 404 });
+    key = photo.originalPath;
+    contentType = photo.mimeType;
   } else if (size === "pano") {
     // The long copy a panorama is panned across. Anything that is not a panorama, or is not long enough to have
     // earned one, answers with its medium copy rather than nothing.

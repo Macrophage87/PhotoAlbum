@@ -158,7 +158,7 @@ export async function annotationBackfill(job: AnnotationBackfillJob): Promise<vo
       if (await familyCancelled(batch.id)) return;
       await heartbeat();
       // Re-check now: an item opted out or described since the run started must not be sent.
-      const still = new Set((await db.photo.findMany({ where: { id: { in: part.map((c) => c.id) }, status: "READY", ...NOT_TRASHED, ...pendingWhere(task), annotationOptOut: false, OR: [...notOptedOutWhere.OR], collections: notOptedOutWhere.collections }, select: { id: true } })).map((p) => p.id));
+      const still = new Set((await db.photo.findMany({ where: { id: { in: part.map((c) => c.id) }, status: "READY", ...NOT_TRASHED, ...pendingWhere(task), kind: notOptedOutWhere.kind, annotationOptOut: false, OR: [...notOptedOutWhere.OR], collections: notOptedOutWhere.collections }, select: { id: true } })).map((p) => p.id));
       const built: { custom_id: string; params: Awaited<ReturnType<typeof buildRequest>>; bytes: number }[] = [];
       const reasons: Record<string, number> = {};
       const skip = (why: string) => { reasons[why] = (reasons[why] ?? 0) + 1; };

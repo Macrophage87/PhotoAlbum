@@ -13,8 +13,14 @@ export async function annotationGates(): Promise<AnnotationGates> {
   return { envEnabled, hasKey, optedInAt, optedInBy: setting?.annotationOptInById ?? null, active: envEnabled && hasKey && Boolean(optedInAt), model: e.ANNOTATION_MODEL };
 }
 
-/** Prisma filter: items not opted out directly or by inheritance from their trip or any collection holding them. */
+/**
+ * Prisma filter: items not opted out directly or by inheritance from their trip or any collection holding them.
+ *
+ * A 3D scan is never sent: what the helper would be shown is a still the album drew of a shape, not a photograph of
+ * anything, and describing that is worth nothing to anybody.
+ */
 export const notOptedOutWhere = {
+  kind: { not: "SCAN" as const },
   annotationOptOut: false,
   OR: [{ tripId: null }, { trip: { annotationOptOut: false } }],
   collections: { none: { collection: { annotationOptOut: true } } },
@@ -22,8 +28,9 @@ export const notOptedOutWhere = {
 
 /** Why an item will not be sent, or null when it may be. */
 export async function optOutReason(photoId: string): Promise<string | null> {
-  const p = await db.photo.findUnique({ where: { id: photoId }, select: { annotationOptOut: true, trip: { select: { title: true, annotationOptOut: true } }, collections: { select: { collection: { select: { title: true, annotationOptOut: true } } } } } });
+  const p = await db.photo.findUnique({ where: { id: photoId }, select: { kind: true, annotationOptOut: true, trip: { select: { title: true, annotationOptOut: true } }, collections: { select: { collection: { select: { title: true, annotationOptOut: true } } } } } });
   if (!p) return "missing";
+  if (p.kind === "SCAN") return "a 3D scan is never sent to the helper";
   if (p.annotationOptOut) return "this item is opted out";
   if (p.trip?.annotationOptOut) return `the trip ${p.trip.title} is opted out`;
   const col = p.collections.find((c) => c.collection.annotationOptOut);

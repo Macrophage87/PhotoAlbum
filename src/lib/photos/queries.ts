@@ -23,6 +23,9 @@ export const photoCardSelect = {
   uploader: { select: { name: true, email: true } },
   collections: { select: { collection: { select: { slug: true, title: true } } } },
   kind: true,
+  scanFormat: true,
+  /** Only to know whether a scan has had its still taken yet; the contents are never rendered from a card. */
+  renditions: true,
   externalId: true,
   title: true,
   durationS: true,

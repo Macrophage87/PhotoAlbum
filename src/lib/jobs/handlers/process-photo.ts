@@ -8,6 +8,7 @@ import { timezoneForCoords } from "@/lib/geo/tz";
 import { sha256File } from "@/lib/media/hash";
 import { heicToJpegBuffer, isHeic } from "@/lib/images/heic";
 import { makeRenditions } from "@/lib/images/renditions";
+import { applyPhotoInstant } from "@/lib/photos/apply-date";
 import { readGPano } from "@/lib/images/panorama-read";
 import { editsSchema, hasEdits, type PhotoEdits } from "@/lib/images/edits";
 import { pickActivityByTime, pickTripByDay } from "@/lib/photos/assign";
@@ -45,6 +46,18 @@ export async function processPhoto(job: ProcessPhotoJob): Promise<void> {
     const store = storage();
     const localPath = store.localPath?.(photo.originalPath);
     if (!localPath) throw new Error("process-photo requires a storage driver with local paths");
+
+    // A 3D scan has no pixels to read or render: it is dated by the file itself, filed on a trip by that date, and
+    // otherwise kept exactly as it arrived. A poster for the grids comes later, from the first member to open it.
+    if (photo.kind === "SCAN") {
+      const mtimeHeader = (photo.exif as { fileLastModified?: number } | null)?.fileLastModified;
+      const s = mtimeHeader && Number.isFinite(mtimeHeader) ? null : await stat(localPath).catch(() => null);
+      const takenAt = mtimeHeader && Number.isFinite(mtimeHeader) ? new Date(mtimeHeader) : s ? s.mtime : photo.createdAt;
+      const takenAtSource = mtimeHeader && Number.isFinite(mtimeHeader) ? "FILE_MTIME" : s ? "FILE_MTIME" : "UPLOAD_TIME";
+      await db.photo.update({ where: { id: photo.id }, data: { status: "READY", takenAt, takenAtSource, tzOffsetMin: photo.tzOffsetMin ?? 0 } });
+      await applyPhotoInstant({ id: photo.id, tripId: photo.tripId, gpsSource: photo.gpsSource, activityId: photo.activityId, activitySetById: photo.activitySetById }, takenAt, photo.tzOffsetMin ?? 0, takenAtSource, null, { geotag: false });
+      return;
+    }
 
     // Posters of external videos carry no EXIF worth trusting and their date and trip were set by the member:
     // make renditions and stop, never touching dates, GPS or trip assignment.

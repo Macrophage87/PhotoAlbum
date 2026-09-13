@@ -7,7 +7,7 @@ import { photoUrl } from "@/lib/photos/urls";
 import { AppShell, Container } from "@/components/layout/AppShell";
 import { ExifPanel } from "@/components/photos/ExifPanel";
 import { Button, Card, Label, Select, Textarea } from "@/components/ui";
-import { formatDateTime } from "@/lib/time/format";
+import { formatBytes, formatDateTime } from "@/lib/time/format";
 import { reprocessPhoto, resetPhotoDateToCamera, setAsCover, setPhotoDate, shiftPhotoTimezone, trashPhoto, updatePhoto } from "./actions";
 
 const SOURCE_LABEL: Record<string, string> = { EXIF_OFFSET: "from the camera", EXIF_TZLOOKUP: "from the camera", TRIP_TZ: "from the camera, in the trip's zone", SIDECAR: "from Google Photos", FILE_NAME: "from the file name", EXIF_CREATED: "from the file\u2019s created-date tag, which may be when it was edited", FILE_MTIME: "from the file's modified time", UPLOAD_TIME: "the upload time" };
@@ -25,6 +25,7 @@ import { NeighbourDate } from "@/components/photos/NeighbourDate";
 import { DateTroubleshooter } from "@/components/photos/DateTroubleshooter";
 import { canEditContainer, canEditMedia, NOT_YOURS } from "@/lib/auth/ownership";
 import { PanoramaView, PanoramaHint } from "@/components/photos/PanoramaView";
+import { ScanViewer } from "@/components/scans/ScanViewer";
 import { panoramaLabel } from "@/lib/images/panorama";
 import { CollectionsField, TripField } from "@/components/containers/PhotoContainerFields";
 import { mapThemeOf } from "@/lib/map/theme";
@@ -136,6 +137,26 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
                   <div className="aspect-video flex items-center justify-center text-white/70">Fetching poster…</div>
                 )}
               </div>
+            ) : photo.kind === "SCAN" ? (
+              photo.status === "READY" ? (
+                <div className="space-y-2">
+                  <ScanViewer
+                    photoId={photo.id}
+                    modelUrl={photoUrl(photo, "model")}
+                    format={photo.scanFormat}
+                    posterUrl={photo.renditions ? photoUrl(photo, "medium") : null}
+                    canPoster={mine}
+                    alt={photo.caption ?? photo.originalName}
+                    className="w-full min-h-80"
+                  />
+                  <p className="text-sm text-muted">
+                    3D scan ({photo.scanFormat ?? "unknown format"}), {formatBytes(photo.sizeBytes)}.{" "}
+                    <a href={photoUrl(photo, "model")} download className="underline underline-offset-2">Download it</a> to open in Scaniverse or any 3D app.
+                  </p>
+                </div>
+              ) : (
+                <div className="aspect-video rounded-theme bg-surface-alt flex items-center justify-center text-muted p-4 text-center">Getting the scan ready…</div>
+              )
             ) : photo.status === "READY" && photo.panorama ? (
               // Shown as a panorama: the height of a comfortable strip, dragged sideways, with the whole file a click away.
               <div className="space-y-2">
