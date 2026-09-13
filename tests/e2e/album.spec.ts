@@ -922,8 +922,11 @@ test("a favourite leads the list, and a tile says what it is on hover", async ({
   // Not the "New trip" button, which is also a link starting /trips/.
   const cards = page.locator("a[href^='/trips/']:not([href='/trips/new'])");
   await expect(cards.first()).toBeVisible();
-  await page.getByTestId("favourite-trip").last().click();
-  const favourited = await page.getByTestId("favourite-trip").last().locator("xpath=ancestor::a").getAttribute("href");
+  // Read which card it is before marking it: the mark re-orders the grid, so asking afterwards asks about a
+  // different card.
+  const lastHeart = page.getByTestId("favourite-trip").last();
+  const favourited = await lastHeart.locator("xpath=ancestor::a").getAttribute("href");
+  await lastHeart.click();
   await expect
     .poll(async () => {
       await page.reload();
