@@ -12,7 +12,7 @@ import { dateColumnToDay } from "@/lib/time/local-day";
 export default async function TripPhotosPage({ params, searchParams }: PageProps<"/trips/[slug]/photos">) {
   const { slug } = await params;
   const sp = await searchParams;
-  const { trip, editable } = await loadViewableTrip(slug, `/trips/${slug}/photos`);
+  const { trip, editable, owns } = await loadViewableTrip(slug, `/trips/${slug}/photos`);
   // The uploader filter is a members-only control; anonymous requests never see the member list.
   const uploaderId = editable && typeof sp.uploader === "string" && sp.uploader ? sp.uploader : undefined;
   const [page, activities, members] = await Promise.all([
@@ -42,6 +42,7 @@ export default async function TripPhotosPage({ params, searchParams }: PageProps
               <Button type="submit" variant="ghost" size="sm">Filter</Button>
             </form>
           )}
+          {owns && <ButtonLink href={`/trips/${slug}/cover`} size="sm" variant="secondary">Cover photo</ButtonLink>}
           {editable && <ButtonLink href={`/upload?trip=${trip.slug}`} size="sm">Upload photos</ButtonLink>}
         </div>
       </div>

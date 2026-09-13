@@ -22,7 +22,10 @@ export default async function CollectionPhotosPage({ params, searchParams }: Pag
         <h2 className="font-display text-xl font-semibold">
           {shown.length} item{shown.length === 1 ? "" : "s"}
         </h2>
-        {editable && <ButtonLink href={`/collections/${slug}/add`} size="sm">Add existing photos</ButtonLink>}
+        <div className="flex items-center gap-2">
+          {owns && <ButtonLink href={`/collections/${slug}/cover`} size="sm" variant="secondary">Cover photo</ButtonLink>}
+          {editable && <ButtonLink href={`/collections/${slug}/add`} size="sm">Add existing photos</ButtonLink>}
+        </div>
       </div>
       {Number.isFinite(added) && <p role="status" className="text-sm rounded-theme bg-emerald-50 border border-emerald-200 text-emerald-900 p-3">Added {added} photo{added === 1 ? "" : "s"} to this collection.</p>}
       {editable && <YouTubeAddForm collectionId={collection.id} defaultDate={new Date().toISOString().slice(0, 10)} />}

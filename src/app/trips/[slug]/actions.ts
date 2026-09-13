@@ -66,6 +66,7 @@ export async function rotateShareToken(slug: string): Promise<void> {
   revalidatePath(`/trips/${slug}/settings`);
 }
 
+/** Choose (or forget) the picture the trip is known by. The cover belongs to the trip, so it is the trip's to set. */
 export async function setCoverPhoto(slug: string, photoId: string | null): Promise<void> {
   const trip = await loadEditableTrip(slug);
   if (photoId) {

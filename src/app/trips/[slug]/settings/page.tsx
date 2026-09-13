@@ -4,7 +4,9 @@ import { dateColumnToDay } from "@/lib/time/local-day";
 import { TripForm } from "@/components/trips/TripForm";
 import { ShareButtons } from "@/components/trips/ShareButtons";
 import { shareableTripUrl } from "@/lib/share/social";
-import { Button, Card, ConfirmSubmitButton } from "@/components/ui";
+import { Button, ButtonLink, Card, ConfirmSubmitButton } from "@/components/ui";
+import { photoUrl } from "@/lib/photos/urls";
+import { coverFor } from "@/lib/trips/queries";
 import { deleteTrip, detachExposedFromCollections, regeotagPhotos, rotateShareToken, updateTrip } from "../actions";
 import { OptOutToggle } from "@/components/annotation/OptOutToggle";
 import { visibilityWarnings } from "@/lib/visibility/settings";
@@ -28,6 +30,7 @@ export default async function TripSettingsPage({ params, searchParams }: PagePro
   const remove = deleteTrip.bind(null, slug);
   const regeotag = regeotagPhotos.bind(null, slug);
   const shareUrl = shareableTripUrl(trip, env().APP_URL);
+  const cover = await coverFor(trip);
   const warnings = await visibilityWarnings("trip", trip.id, trip.visibility, "this trip");
   const detach = detachExposedFromCollections.bind(null, slug);
   // What the trip's own photos say about the ones that arrived without a date.
@@ -91,6 +94,22 @@ export default async function TripSettingsPage({ params, searchParams }: PagePro
             <ShareButtons url={shareUrl} />
           </Card>
         )}
+      </section>
+
+      <section>
+        <h2 className="font-display text-xl font-semibold mb-2">Cover photo</h2>
+        <Card className="p-4 flex flex-wrap items-center gap-4">
+          <div className="w-20 h-20 rounded-theme overflow-hidden bg-surface-alt border border-border shrink-0">
+            {cover && (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={photoUrl(cover, "thumb")} alt="" className="w-full h-full object-cover" />
+            )}
+          </div>
+          <div className="text-sm space-y-2">
+            <p className="text-muted">{trip.coverPhoto ? "Chosen by hand." : cover ? "Nobody has chosen one, so the album leads with the earliest photograph on the trip." : "Nothing to lead with yet."}</p>
+            <ButtonLink href={`/trips/${slug}/cover`} size="sm" variant="secondary">Choose a cover</ButtonLink>
+          </div>
+        </Card>
       </section>
 
       <section>

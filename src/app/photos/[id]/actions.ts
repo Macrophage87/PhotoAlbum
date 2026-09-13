@@ -7,7 +7,7 @@ import { db } from "@/lib/db";
 import { Prisma } from "@/generated/prisma/client";
 import { editsSchema, tidyEdits } from "@/lib/images/edits";
 import { requireUserOrThrow, type ViewerUser } from "@/lib/auth/viewer";
-import { canEditMedia, editableMediaIds, NOT_YOURS } from "@/lib/auth/ownership";
+import { canEditContainer, canEditMedia, editableMediaIds, NOT_YOURS, NOT_YOUR_CONTAINER } from "@/lib/auth/ownership";
 import { trashSchema } from "@/lib/photos/trash";
 import { guessDateFromTrip, guessDatesForTrip } from "@/lib/photos/date-guess-query";
 import { dateReport, type DateReport } from "@/lib/photos/date-report";
@@ -119,10 +119,17 @@ export async function reprocessPhoto(id: string): Promise<void> {
   revalidatePath(`/photos/${id}`);
 }
 
+/**
+ * Make this the picture its trip is known by, from the photograph's own page.
+ *
+ * What this asks of a member is the trip, not the photograph: a cover is a decision about the trip, so it belongs to
+ * whoever made it — who may well be leading with somebody else's picture, which is the usual case.
+ */
 export async function setAsCover(id: string): Promise<void> {
-  await editor(id);
-  const photo = await db.photo.findUnique({ where: { id }, select: { tripId: true, trip: { select: { slug: true } } } });
-  if (!photo?.tripId) return;
+  const user = await requireUserOrThrow();
+  const photo = await db.photo.findUnique({ where: { id }, select: { tripId: true, trip: { select: { slug: true, createdById: true } } } });
+  if (!photo?.tripId || !photo.trip) return;
+  if (!canEditContainer(user, photo.trip)) throw new Error(NOT_YOUR_CONTAINER);
   await db.trip.update({ where: { id: photo.tripId }, data: { coverPhotoId: id } });
   revalidatePath(`/trips/${photo.trip!.slug}`, "layout");
   revalidatePath("/");

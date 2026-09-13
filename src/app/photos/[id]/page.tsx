@@ -23,7 +23,7 @@ import { isWeakDate } from "@/lib/photos/date-from-neighbours";
 import { guessDateFromTrip } from "@/lib/photos/date-guess-query";
 import { NeighbourDate } from "@/components/photos/NeighbourDate";
 import { DateTroubleshooter } from "@/components/photos/DateTroubleshooter";
-import { canEditMedia, NOT_YOURS } from "@/lib/auth/ownership";
+import { canEditContainer, canEditMedia, NOT_YOURS } from "@/lib/auth/ownership";
 import { PanoramaView, PanoramaHint } from "@/components/photos/PanoramaView";
 import { panoramaLabel } from "@/lib/images/panorama";
 import { CollectionsField, TripField } from "@/components/containers/PhotoContainerFields";
@@ -64,7 +64,7 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
   const viewer = await getViewer();
   const photo = await db.photo.findUnique({
     where: { id },
-    include: { trip: { select: { id: true, slug: true, title: true, timezone: true, coverPhotoId: true } }, activity: { select: { id: true, title: true } }, uploader: { select: { name: true, email: true } }, placeSetBy: { select: { name: true, email: true } }, dateSetBy: { select: { name: true, email: true } }, activitySetBy: { select: { name: true, email: true } }, trashedBy: { select: { name: true, email: true } }, editedBy: { select: { name: true, email: true } } },
+    include: { trip: { select: { id: true, slug: true, title: true, timezone: true, coverPhotoId: true, createdById: true } }, activity: { select: { id: true, title: true } }, uploader: { select: { name: true, email: true } }, placeSetBy: { select: { name: true, email: true } }, dateSetBy: { select: { name: true, email: true } }, activitySetBy: { select: { name: true, email: true } }, trashedBy: { select: { name: true, email: true } }, editedBy: { select: { name: true, email: true } } },
   });
   if (!photo) notFound();
 
@@ -90,6 +90,8 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
   // The standing rule: an item is changed by whoever uploaded it, and by admins. Everyone else in the family reads
   // the same page without the controls — the details are shared, the account of them belongs to the person who gave it.
   const mine = canEditMedia(me, photo);
+  // A cover is the trip's decision, not the photograph's: it shows for whoever made the trip, however it got here.
+  const ownsTrip = Boolean(photo.trip) && canEditContainer(me, photo.trip!);
   // What the rest of the trip says about an item whose own date was lost; null when its date is trustworthy.
   const neighbourGuess = await guessDateFromTrip(photo.id);
   const isVideo = photo.kind === "EXTERNAL_VIDEO";
@@ -303,7 +305,7 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
             </Card>
 
             <div className="flex flex-wrap gap-2">
-              {mine && photo.tripId && (
+              {ownsTrip && photo.tripId && (
                 <form action={cover}>
                   <Button type="submit" variant="secondary" size="sm" disabled={isCover}>{isCover ? "Trip cover" : "Set as trip cover"}</Button>
                 </form>

@@ -1232,3 +1232,36 @@ test("a photo is dragged onto an activity on the timeline, and a selection can b
     .poll(async () => (await withDb((c) => c.query('SELECT "activityId" FROM "Photo" WHERE id = $1', [photoId]))).rows[0].activityId, { timeout: 20_000, intervals: [1000] })
     .toBe(activityId);
 });
+
+test("a cover is chosen from the photographs themselves, by whoever made the trip", async ({ context, page }) => {
+  await signIn(context, ADMIN);
+  await page.goto("/trips/acadia/settings");
+  await page.getByRole("link", { name: "Choose a cover" }).click();
+  await expect(page).toHaveURL(/\/trips\/acadia\/cover$/);
+
+  // Nobody has chosen one yet, so the album says which it is leading with.
+  const picker = page.getByTestId("cover-picker");
+  await expect(picker).toBeVisible();
+  const tiles = picker.locator("li");
+  const chosen = (await tiles.nth(1).locator("img").getAttribute("src"))?.match(/\/api\/photos\/([^/]+)\//)?.[1];
+  await tiles.nth(1).getByRole("button").click();
+  await expect
+    .poll(async () => (await withDb((c) => c.query(`SELECT "coverPhotoId" FROM "Trip" WHERE slug = 'acadia'`))).rows[0].coverPhotoId, { timeout: 20_000, intervals: [1000] })
+    .toBe(chosen);
+  await expect(page.getByText("This one was chosen by hand.")).toBeVisible();
+
+  // And handing it back leaves the album to lead with the earliest photograph again.
+  await page.getByRole("button", { name: "Let the album choose" }).click();
+  await expect
+    .poll(async () => (await withDb((c) => c.query(`SELECT "coverPhotoId" FROM "Trip" WHERE slug = 'acadia'`))).rows[0].coverPhotoId, { timeout: 20_000, intervals: [1000] })
+    .toBeNull();
+
+  // A member who did not make the trip is not offered it, and the page turns them away.
+  const memberContext = await context.browser()!.newContext();
+  await signIn(memberContext, "e2e-member@example.com");
+  const memberPage = await memberContext.newPage();
+  await memberPage.goto("/trips/acadia/photos");
+  await expect(memberPage.getByRole("link", { name: "Cover photo" })).toHaveCount(0);
+  await memberPage.goto("/trips/acadia/cover");
+  await expect(memberPage).toHaveURL(/\/trips\/acadia$/);
+});
