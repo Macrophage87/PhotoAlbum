@@ -16,6 +16,8 @@ import { PhotoLinkEditor } from "@/components/photos/PhotoLinkEditor";
 import { LinkedPhotos } from "@/components/photos/LinkedPhotos";
 import { PlaceEditor } from "@/components/photos/PlaceEditor";
 import { TrashButton } from "@/components/photos/TrashButton";
+import { PhotoEditorPanel } from "@/components/photos/PhotoEditorPanel";
+import { editsOf } from "@/lib/jobs/handlers/process-photo";
 import { trashReasonLabel } from "@/lib/photos/trash";
 import { mapThemeOf } from "@/lib/map/theme";
 import { getTheme } from "@/themes";
@@ -50,11 +52,11 @@ export async function generateMetadata({ params }: PageProps<"/photos/[id]">): P
 
 export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
   const { id } = await params;
-  await requireUser(`/photos/${id}`);
+  const me = await requireUser(`/photos/${id}`);
   const viewer = await getViewer();
   const photo = await db.photo.findUnique({
     where: { id },
-    include: { trip: { select: { id: true, slug: true, title: true, timezone: true, coverPhotoId: true } }, activity: { select: { id: true, title: true } }, uploader: { select: { name: true, email: true } }, placeSetBy: { select: { name: true, email: true } }, dateSetBy: { select: { name: true, email: true } }, trashedBy: { select: { name: true, email: true } } },
+    include: { trip: { select: { id: true, slug: true, title: true, timezone: true, coverPhotoId: true } }, activity: { select: { id: true, title: true } }, uploader: { select: { name: true, email: true } }, placeSetBy: { select: { name: true, email: true } }, dateSetBy: { select: { name: true, email: true } }, trashedBy: { select: { name: true, email: true } }, editedBy: { select: { name: true, email: true } } },
   });
   if (!photo) notFound();
 
@@ -76,6 +78,8 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
   const cover = setAsCover.bind(null, id);
   const shift = shiftPhotoTimezone.bind(null, id);
   const isCover = photo.trip?.coverPhotoId === photo.id;
+  // Cropping and colour are the uploader's call, or an admin's: an edit changes what the whole family sees.
+  const canEditPixels = me.role === "ADMIN" || photo.uploaderId === me.id;
   const isVideo = photo.kind === "EXTERNAL_VIDEO";
   const isClip = photo.kind === "VIDEO";
   const updateVideo = updateExternalVideo.bind(null, id);
@@ -119,13 +123,24 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
                 )}
               </div>
             ) : photo.status === "READY" ? (
-              <a href={photoUrl(photo, "original")} target="_blank" rel="noreferrer" title="Open original">
+              <a href={photoUrl(photo, photo.edits ? "edited" : "original")} target="_blank" rel="noreferrer" title="Open the full-size photo">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img src={photoUrl(photo, "medium")} alt={photo.caption ?? photo.originalName} className="w-full rounded-theme bg-surface-alt" />
               </a>
             ) : (
               <div className="aspect-[4/3] rounded-theme bg-surface-alt flex items-center justify-center text-muted">
                 {photo.status === "FAILED" ? `Processing failed: ${photo.error}` : "Processing…"}
+              </div>
+            )}
+            {photo.edits ? (
+              <p className="mt-2 text-sm text-muted" data-testid="edited-note">
+                Cropped or colour-corrected{photo.editedBy ? ` by ${uploaderLabel(photo.editedBy.name, photo.editedBy.email)}` : ""}. The file as it was uploaded is untouched:{" "}
+                <a href={photoUrl(photo, "original")} target="_blank" rel="noreferrer" className="underline underline-offset-2">see the original</a>.
+              </p>
+            ) : null}
+            {canEditPixels && photo.kind === "PHOTO" && photo.status === "READY" && (
+              <div className="mt-3">
+                <PhotoEditorPanel photoId={photo.id} src={photoUrl(photo, "medium")} initial={editsOf(photo.edits)} edited={Boolean(photo.edits)} />
               </div>
             )}
             {photo.title && <h1 className="mt-3 text-xl font-semibold font-display">{photo.title}</h1>}

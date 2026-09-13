@@ -24,6 +24,8 @@ export const photoCardSelect = {
   title: true,
   durationS: true,
   externalStatus: true,
+  /** Only to choose which full-size file to link to; the instructions themselves are never rendered on a card. */
+  edits: true,
 } satisfies Prisma.PhotoSelect;
 
 export type PhotoCard = Prisma.PhotoGetPayload<{ select: typeof photoCardSelect }>;

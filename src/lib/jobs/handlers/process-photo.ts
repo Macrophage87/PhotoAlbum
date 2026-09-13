@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import { db } from "@/lib/db";
 import { storage } from "@/lib/storage";
@@ -7,6 +8,7 @@ import { timezoneForCoords } from "@/lib/geo/tz";
 import { sha256File } from "@/lib/media/hash";
 import { heicToJpegBuffer, isHeic } from "@/lib/images/heic";
 import { makeRenditions } from "@/lib/images/renditions";
+import { editsSchema, hasEdits, type PhotoEdits } from "@/lib/images/edits";
 import { pickActivityByTime, pickTripByDay } from "@/lib/photos/assign";
 import { localDayFromOffset, offsetMinutesInZone } from "@/lib/time/local-day";
 import { enqueue } from "../boss";
@@ -19,6 +21,20 @@ import { enqueueAnimalDetection } from "./detect-animals";
  * Turn an uploaded original into a usable photo: EXIF, timezone-correct takenAt, GPS,
  * WebP renditions, then trip/activity assignment. Idempotent: re-running overwrites.
  */
+/** A HEIC original cannot be read by sharp, so a re-render uses the JPEG made at upload, or makes one again. */
+async function heicSource(store: ReturnType<typeof storage>, storageKey: string, localPath: string): Promise<string | Buffer> {
+  const converted = store.localPath?.(`${storageKey}/original-converted.jpg`);
+  if (converted && existsSync(converted)) return converted;
+  return heicToJpegBuffer(localPath);
+}
+
+/** The stored instructions, or null when the item has never been edited or the row holds something unreadable. */
+export function editsOf(raw: unknown): PhotoEdits | null {
+  if (!raw) return null;
+  const parsed = editsSchema.safeParse(raw);
+  return parsed.success && hasEdits(parsed.data) ? parsed.data : null;
+}
+
 export async function processPhoto(job: ProcessPhotoJob): Promise<void> {
   const photo = await db.photo.findUnique({ where: { id: job.photoId } });
   if (!photo) return;
@@ -32,7 +48,10 @@ export async function processPhoto(job: ProcessPhotoJob): Promise<void> {
     // Posters of external videos carry no EXIF worth trusting and their date and trip were set by the member:
     // make renditions and stop, never touching dates, GPS or trip assignment.
     if (job.mode === "renditions" || photo.kind === "EXTERNAL_VIDEO") {
-      const { width, height, renditions } = await makeRenditions(localPath, photo.storageKey, (key, buf) => store.putBuffer(key, buf));
+      // Also the path a darkroom edit takes: the renditions are made again from the untouched original with the
+      // current instructions on them, which is what makes an edit undoable by simply forgetting it.
+      const from = isHeic(photo.mimeType, photo.originalName) ? await heicSource(store, photo.storageKey, localPath) : localPath;
+      const { width, height, renditions } = await makeRenditions(from, photo.storageKey, (key, buf) => store.putBuffer(key, buf), editsOf(photo.edits));
       await db.photo.update({ where: { id: photo.id }, data: { status: "READY", width, height, renditions } });
       await enqueueEmbedding(photo.id);
       await enqueueFaceDetection(photo.id);
@@ -95,7 +114,7 @@ export async function processPhoto(job: ProcessPhotoJob): Promise<void> {
     }
 
     // 5. Renditions
-    const { width, height, renditions } = await makeRenditions(source, photo.storageKey, (key, buf) => store.putBuffer(key, buf));
+    const { width, height, renditions } = await makeRenditions(source, photo.storageKey, (key, buf) => store.putBuffer(key, buf), editsOf(photo.edits));
 
     // 6. Activity assignment within the trip
     let activityId: string | null = null;

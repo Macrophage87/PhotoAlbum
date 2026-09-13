@@ -109,7 +109,7 @@ export default async function PrivacyPage() {
               <p><span className="text-muted">To turn off:</span> {f.off}</p>
             </Card>
           ))}
-          <p className="text-sm text-muted">Photos, short clips (transcoded here with ffmpeg, originals kept) and location traces are stored on this server only; longer videos live on YouTube as unlisted videos, which means anyone with the YouTube link can watch them regardless of this album&apos;s settings. The optional ML sidecar (image and text embeddings for similarity, suggestions and semantic search; and face templates when detection is on) runs on this server only, on an internal network with no outbound access, and writes nothing to disk or logs{mlConfigured() ? " (configured)" : " (not configured)"}. </p>
+          <p className="text-sm text-muted">Cropping and colour correction are stored as instructions and applied when the album makes its own copies; the file you uploaded is never written over and stays on this server exactly as it arrived. Photos, short clips (transcoded here with ffmpeg, originals kept) and location traces are stored on this server only; longer videos live on YouTube as unlisted videos, which means anyone with the YouTube link can watch them regardless of this album&apos;s settings. The optional ML sidecar (image and text embeddings for similarity, suggestions and semantic search; and face templates when detection is on) runs on this server only, on an internal network with no outbound access, and writes nothing to disk or logs{mlConfigured() ? " (configured)" : " (not configured)"}. </p>
         </section>
 
         <section className="space-y-2 text-sm">

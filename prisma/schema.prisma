@@ -178,6 +178,7 @@ model User {
   photos   Photo[]
   placesSet Photo[] @relation("PlaceSetBy")
   trashed   Photo[] @relation("TrashedBy")
+  edited    Photo[] @relation("EditedBy")
   datesSet  Photo[] @relation("DateSetBy")
   tracks   Track[]
   collections     Collection[]
@@ -327,6 +328,13 @@ model Photo {
   annotationCacheWriteTokens Int?
   annotationOutputTokens    Int?
   annotationBatched         Boolean?
+  /// Darkroom edits, kept as instructions rather than applied to the file: crop, straighten, brightness, contrast,
+  /// colour. The original is never touched, the renditions are re-rendered from it whenever this changes, and
+  /// clearing it puts the item back exactly as it arrived. Only the uploader or an admin may set it.
+  edits         Json?
+  editedAt      DateTime?
+  editedById    String?
+  editedBy      User?          @relation("EditedBy", fields: [editedById], references: [id], onDelete: SetNull)
   /// What the place is called, when the album knows: the name a member picked out of the address lookup, or the one
   /// they accepted from the helper. Coordinates are exact but say nothing; this is what a family reads.
   placeName     String?

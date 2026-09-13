@@ -774,6 +774,57 @@ test("a pet tagged on a spotted animal is proposed on the next look-alike and co
   await expect(page.getByText(/black lab · 2 photos/)).toBeVisible();
 });
 
+test("the uploader crops and colour-corrects a photo, and the original stays untouched", async ({ context, page }) => {
+  await signIn(context, ADMIN);
+  await page.goto("/upload");
+  await chooseFile(page, "photo-with-gps.jpg");
+  await expect(page.getByText("1 of 1 uploaded.")).toBeVisible({ timeout: 30_000 });
+  const row = await withDb((c) => c.query(`SELECT id, renditions FROM "Photo" WHERE "originalName" = 'photo-with-gps.jpg' ORDER BY "createdAt" DESC LIMIT 1`));
+  const id = row.rows[0].id as string;
+  const before = row.rows[0].renditions as { medium: { w: number; h: number } };
+
+  await page.goto(`/photos/${id}`);
+  await page.waitForLoadState("networkidle");
+  await page.getByRole("button", { name: "Crop and colour" }).click();
+  await expect(page.getByTestId("photo-editor")).toBeVisible();
+  await page.getByLabel("Warmth").fill("40");
+  await page.getByRole("button", { name: "Turn right" }).click();
+  await page.getByRole("button", { name: "Save edits" }).click();
+
+  // The instructions are stored at once; the renditions are then made again from the original in the background,
+  // which is what turns the picture, so wait for that rather than for the row.
+  await expect
+    .poll(async () => {
+      const r = (await withDb((c) => c.query('SELECT edits, renditions FROM "Photo" WHERE id = $1', [id]))).rows[0];
+      return { edits: r.edits, full: Boolean(r.renditions?.full) };
+    }, { timeout: 60_000, intervals: [1500] })
+    .toMatchObject({ edits: { rotate: 90, warmth: 40 }, full: true });
+  const after = (await withDb((c) => c.query('SELECT renditions, width, height FROM "Photo" WHERE id = $1', [id]))).rows[0];
+  expect(after.renditions.medium.w).toBe(before.medium.h);
+
+  // The page says so and offers the file as it was uploaded, which still opens.
+  await page.reload();
+  await expect(page.getByTestId("edited-note")).toContainText("see the original");
+  const original = await page.request.get(`/api/photos/${id}/original`);
+  expect(original.ok()).toBe(true);
+  expect(original.headers()["content-type"]).toContain("image/jpeg");
+  const edited = await page.request.get(`/api/photos/${id}/edited`);
+  expect(edited.ok()).toBe(true);
+  expect(edited.headers()["content-type"]).toContain("image/webp");
+
+  // Reverting forgets the instructions and puts the picture back the way round it was.
+  await page.getByRole("button", { name: "Edit again" }).click();
+  await page.getByRole("button", { name: "Back to the original" }).click();
+  await expect
+    .poll(async () => {
+      const r = (await withDb((c) => c.query('SELECT edits, renditions FROM "Photo" WHERE id = $1', [id]))).rows[0];
+      return { edits: r.edits, width: r.renditions?.medium?.w };
+    }, { timeout: 60_000, intervals: [1500] })
+    .toEqual({ edits: null, width: before.medium.w });
+  const reverted = (await withDb((c) => c.query('SELECT renditions FROM "Photo" WHERE id = $1', [id]))).rows[0];
+  expect(reverted.renditions.full).toBeUndefined();
+});
+
 test("a family member moves an item to the trash with a reason, and an admin restores it or deletes it for good", async ({ browser, context, page }) => {
   await signIn(context, ADMIN);
   // A plain member, not an admin: trashing is something anyone in the family may do.
@@ -795,6 +846,19 @@ test("a family member moves an item to the trash with a reason, and an admin res
   await withDb((c) => c.query(`UPDATE "Photo" SET caption = 'trashcandidate lobster', "searchVector" = to_tsvector('english', 'trashcandidate lobster'), "searchVectorMembers" = to_tsvector('english', 'trashcandidate lobster') WHERE id = $1`, [victim]));
   await memberPage.goto("/search?q=trashcandidate");
   await expect(memberPage.getByRole("status")).toContainText("1 result");
+
+  // Cropping and colour are the uploader's or an admin's: the member sees the way in on their own upload, and not
+  // on somebody else's, while the admin sees it on both.
+  await memberPage.goto(`/photos/${victim}`);
+  await memberPage.waitForLoadState("networkidle");
+  await expect(memberPage.getByRole("button", { name: /Crop and colour|Edit again/ })).toBeVisible();
+  const adminsOwn = await withDb((c) => c.query(`SELECT p.id FROM "Photo" p JOIN "User" u ON u.id = p."uploaderId" WHERE u.email = $1 AND p.kind = 'PHOTO' AND p.status = 'READY' LIMIT 1`, [ADMIN]));
+  await memberPage.goto(`/photos/${adminsOwn.rows[0].id}`);
+  await memberPage.waitForLoadState("networkidle");
+  await expect(memberPage.getByRole("button", { name: /Crop and colour|Edit again/ })).toHaveCount(0);
+  await page.goto(`/photos/${victim}`);
+  await page.waitForLoadState("networkidle");
+  await expect(page.getByRole("button", { name: /Crop and colour|Edit again/ })).toBeVisible();
 
   // The member says why, and it leaves the album everywhere at once.
   await memberPage.goto(`/photos/${victim}`);

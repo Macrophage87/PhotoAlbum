@@ -114,6 +114,12 @@ export function LightboxInfo({ photoId, share }: { photoId: string; share?: { to
           <p className="text-white/85 whitespace-pre-line">{info.description}</p>
         </div>
       )}
+      {info.uneditedUrl && (
+        <p className="text-white/60 text-xs">
+          Cropped or colour-corrected here.{" "}
+          <a href={info.uneditedUrl} target="_blank" rel="noreferrer" className="underline underline-offset-2 hover:text-white" onClick={(e) => e.stopPropagation()}>See the original</a>
+        </p>
+      )}
       {info.uploadedBy && <p className="text-white/50 text-xs">Uploaded by {info.uploadedBy}</p>}
       {info.editable && (
         <Link href={`/photos/${info.id}`} className="inline-block px-3 py-1.5 rounded bg-white/15 hover:bg-white/25 text-white text-sm font-medium" data-testid="lightbox-edit">Edit details</Link>

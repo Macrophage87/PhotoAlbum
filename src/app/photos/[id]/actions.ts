@@ -4,6 +4,8 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { z } from "zod";
 import { db } from "@/lib/db";
+import { Prisma } from "@/generated/prisma/client";
+import { editsSchema, tidyEdits } from "@/lib/images/edits";
 import { requireUserOrThrow } from "@/lib/auth/viewer";
 import { trashSchema } from "@/lib/photos/trash";
 import { enqueue } from "@/lib/jobs/boss";
@@ -231,4 +233,35 @@ export async function clearPhotoPlace(id: string): Promise<PlaceResult> {
   revalidatePath(`/photos/${id}`);
   revalidatePath("/trips", "layout");
   return { ok: true, lat: null, lng: null, gpsSource: null, setBy: null, placeName: null };
+}
+
+export type EditResult = { ok: true; edited: boolean } | { ok: false; message: string };
+
+/**
+ * Save darkroom instructions. Nothing is written over: the renditions are made again from the untouched original,
+ * so reverting is simply forgetting them. Only the member who uploaded the item, or an admin, may do this — an
+ * edit changes what everyone else sees, and the uploader is who the album holds responsible for the picture.
+ */
+export async function savePhotoEdits(id: string, raw: unknown): Promise<EditResult> {
+  const user = await requireUserOrThrow();
+  const photo = await db.photo.findUnique({ where: { id }, select: { uploaderId: true, kind: true, status: true } });
+  if (!photo) return { ok: false, message: "Photo not found" };
+  if (photo.kind !== "PHOTO") return { ok: false, message: "Only photos can be edited here" };
+  if (user.role !== "ADMIN" && photo.uploaderId !== user.id) return { ok: false, message: "Only the person who uploaded this, or an admin, can edit it" };
+  const parsed = editsSchema.safeParse(raw);
+  if (!parsed.success) return { ok: false, message: "Those edits do not make sense" };
+  const edits = tidyEdits(parsed.data);
+  await db.photo.update({
+    where: { id },
+    data: edits ? { edits, editedAt: new Date(), editedById: user.id } : { edits: Prisma.DbNull, editedAt: null, editedById: null },
+  });
+  await enqueue(QUEUES.processPhoto, { photoId: id, mode: "renditions" }, { singletonKey: `renditions:${id}`, singletonSeconds: 5, singletonNextSlot: true });
+  revalidatePath(`/photos/${id}`);
+  revalidatePath("/trips", "layout");
+  return { ok: true, edited: Boolean(edits) };
+}
+
+/** Put the item back exactly as it was uploaded. The original never changed, so this only forgets the instructions. */
+export async function revertPhotoEdits(id: string): Promise<EditResult> {
+  return savePhotoEdits(id, {});
 }

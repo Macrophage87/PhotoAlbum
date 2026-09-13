@@ -26,6 +26,8 @@ export type PhotoInfo = {
   dateSetBy: string | null;
   /** What the place is called, when the album knows: what a family reads instead of coordinates. */
   placeName: string | null;
+  /** Set when a member has cropped or colour-corrected it: the file as uploaded, so anyone can check it. */
+  uneditedUrl: string | null;
   /** When the position is the helper's guess: what it recognised, and how sure it was. */
   placeEstimate: PlaceEstimate | null;
   themeKey: string | null;
@@ -43,7 +45,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   const { id } = await params;
   const photo = await db.photo.findUnique({
     where: { id },
-    select: { id: true, status: true, kind: true, title: true, caption: true, context: true, annotation: true, takenAt: true, tzOffsetMin: true, takenAtSource: true, lat: true, lng: true, gpsSource: true, placeName: true, placeEstimateName: true, placeEstimateConfidence: true, placeEstimateRadiusM: true, placeEstimatePrecision: true, placeEstimateNote: true, updatedAt: true, renditions: true, originalPath: true, uploader: { select: { name: true, email: true } }, placeSetBy: { select: { name: true, email: true } }, dateSetBy: { select: { name: true, email: true } }, ...mediaAccessInclude, trip: { select: { id: true, slug: true, title: true, timezone: true, themeKey: true, visibility: true, shareToken: true } } },
+    select: { id: true, status: true, kind: true, title: true, caption: true, context: true, annotation: true, takenAt: true, tzOffsetMin: true, takenAtSource: true, lat: true, lng: true, gpsSource: true, edits: true, placeName: true, placeEstimateName: true, placeEstimateConfidence: true, placeEstimateRadiusM: true, placeEstimatePrecision: true, placeEstimateNote: true, updatedAt: true, renditions: true, originalPath: true, uploader: { select: { name: true, email: true } }, placeSetBy: { select: { name: true, email: true } }, dateSetBy: { select: { name: true, email: true } }, ...mediaAccessInclude, trip: { select: { id: true, slug: true, title: true, timezone: true, themeKey: true, visibility: true, shareToken: true } } },
   });
   if (!photo || photo.status !== "READY") return Response.json({ error: "Not found" }, { status: 404 });
   const url = new URL(request.url);
@@ -71,9 +73,10 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     // Strictly the name the album holds for the item; a guess keeps its name inside its own provenance line, so the
     // panel never says the same thing twice.
     placeName: photo.placeName,
+    uneditedUrl: photo.kind === "PHOTO" && photo.edits ? photoUrl(photo, "original") : null,
     placeEstimate: photo.gpsSource === "ESTIMATE" ? { name: photo.placeEstimateName, confidence: photo.placeEstimateConfidence, radiusM: photo.placeEstimateRadiusM, note: photo.placeEstimateNote, precision: photo.placeEstimatePrecision } : null,
     themeKey: photo.trip?.themeKey ?? null,
-    originalUrl: photo.kind === "PHOTO" ? photoUrl(photo, "original") : null,
+    originalUrl: photo.kind === "PHOTO" ? photoUrl(photo, photo.edits ? "edited" : "original") : null,
     editable: canEdit(viewer),
     uploadedBy: member ? uploaderLabel(photo.uploader?.name, photo.uploader?.email) : null,
     trip: photo.trip ? { slug: photo.trip.slug, title: photo.trip.title } : null,

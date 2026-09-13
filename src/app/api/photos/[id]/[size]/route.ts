@@ -33,7 +33,7 @@ export function parseRange(header: string | null, size: number): { start: number
  */
 export async function GET(request: Request, { params }: { params: Promise<{ id: string; size: string }> }) {
   const { id, size } = await params;
-  if (!["thumb", "medium", "original", "video", "poster"].includes(size)) return new Response("Not found", { status: 404 });
+  if (!["thumb", "medium", "original", "edited", "video", "poster"].includes(size)) return new Response("Not found", { status: 404 });
 
   const photo = await db.photo.findUnique({
     where: { id },
@@ -62,6 +62,11 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     if (!video?.poster) return new Response("Not ready", { status: 404 });
     key = video.poster.key;
     contentType = "image/jpeg";
+  } else if (size === "edited") {
+    // The whole picture as it is now. An item with no edits has no such file, so the original is the right answer.
+    const full = (photo.renditions as Renditions | null)?.full;
+    key = full?.key ?? photo.originalPath;
+    contentType = full ? MIME[full.key.split(".").pop() ?? ""] ?? "image/webp" : photo.mimeType;
   } else {
     const r = (photo.renditions as Renditions | null)?.[size as "thumb" | "medium"];
     if (!r) return new Response("Not ready", { status: 404 });
