@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import sharp from "sharp";
-import { applyEdits, contrastTerms, editedSize, editsSchema, hasEdits, LEVELS_PERCENTILES, levelsStretch, tidyEdits, warmthChannels } from "@/lib/images/edits";
-import { makeRenditions } from "@/lib/images/renditions";
+import { applyEdits, contrastTerms, editedSize, editsSchema, hasEdits, LEVELS_PERCENTILES, LEVELS_SAMPLE_WIDTH, levelsOfRegion, levelsStretch, tidyEdits, warmthChannels } from "@/lib/images/edits";
+import { EDITOR_SIZE, makeRenditions } from "@/lib/images/renditions";
 
 /** A 200x100 image, left half red, right half blue, so a crop and a mirror are visible in the pixels. */
 async function twoTone(): Promise<Buffer> {
@@ -59,6 +59,35 @@ describe("the numbers the preview and the server share", () => {
     const { mul, off } = contrastTerms(1.5);
     expect(mul * 128 + off).toBeCloseTo(128, 5);
     expect(contrastTerms(1)).toEqual({ mul: 1, off: 0 });
+  });
+});
+
+describe("reading a picture's levels", () => {
+  /** A row of pixels at the given luminances, as an ImageData-shaped object. */
+  const strip = (values: number[]) => ({ width: values.length, height: 1, data: values.flatMap((v) => [v, v, v, 255]) });
+
+  it("finds the ends of the range the picture actually uses", () => {
+    const s = levelsOfRegion(strip(Array.from({ length: 100 }, (_, i) => 60 + i)), { x: 0, y: 0, w: 1, h: 1 })!;
+    // Roughly 60 to 159, so the darkest goes to black and the lightest to white.
+    expect(s.mul * 60 + s.off).toBeLessThan(10);
+    expect(s.mul * 159 + s.off).toBeGreaterThan(245);
+  });
+
+  it("measures only the part the crop keeps, because that is what the server stretches", () => {
+    // Dark on the left, bright on the right: cropping to one half must not see the other.
+    const pixels = strip([...Array.from({ length: 50 }, () => 20), ...Array.from({ length: 50 }, () => 230)]);
+    expect(levelsOfRegion(pixels, { x: 0, y: 0, w: 0.5, h: 1 })).toBeNull(); // a flat half has nothing to stretch
+    const both = levelsOfRegion(pixels, { x: 0, y: 0, w: 1, h: 1 })!;
+    expect(both.mul).toBeGreaterThan(1);
+  });
+
+  it("ignores what is transparent, and says nothing about an empty region", () => {
+    const clear = { width: 2, height: 1, data: [10, 10, 10, 0, 250, 250, 250, 0] };
+    expect(levelsOfRegion(clear, { x: 0, y: 0, w: 1, h: 1 })).toBeNull();
+  });
+
+  it("samples small enough to re-read while a crop is dragged", () => {
+    expect(LEVELS_SAMPLE_WIDTH).toBeLessThanOrEqual(256);
   });
 });
 
@@ -140,6 +169,8 @@ describe("rendering an edited item", () => {
     // …and the picture without the edits, which is what the editor opens so it does not apply them twice.
     expect(written).toContain("p/1/source.webp");
     expect(edited.renditions.source).toBeTruthy();
+    // The editor's copy is deliberately smaller than the one the album shows: it costs a phone less to load and filter.
+    expect(edited.renditions.source!.w).toBeLessThanOrEqual(EDITOR_SIZE);
     expect(edited.renditions.full).toBeTruthy();
     // The dimensions on the row describe the picture the album shows, not the file on disk.
     expect([edited.width, edited.height]).toEqual([100, 100]);

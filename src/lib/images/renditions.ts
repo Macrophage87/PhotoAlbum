@@ -2,12 +2,18 @@ import sharp from "sharp";
 import { applyEdits, editedSize, hasEdits, type PhotoEdits } from "./edits";
 
 export const RENDITION_SIZES = { thumb: 400, medium: 1600 } as const;
+/**
+ * The editor's copy. It is only ever shown at about half the height of a screen, and a crop is stored as fractions
+ * that the server applies to the full-size original, so nothing is lost by keeping this smaller than `medium`: it
+ * loads faster on a phone and the browser has less to filter while a slider is being dragged.
+ */
+export const EDITOR_SIZE = 1200;
 export type RenditionKey = keyof typeof RENDITION_SIZES;
 export type Rendition = { key: string; w: number; h: number };
 /**
  * `full` and `source` are written only for an edited item: `full` is the whole picture with the edits on it, for the
- * full-size view, and `source` is the same medium copy without them, which is what the editor shows so that opening
- * it again starts from the picture as it was rather than from a picture the edits have already been applied to.
+ * full-size view, and `source` is a smaller copy without them, which is what the editor shows so that opening it
+ * again starts from the picture as it was rather than from one the edits have already been applied to.
  */
 export type Renditions = Record<RenditionKey, Rendition> & { full?: Rendition; source?: Rendition };
 
@@ -51,7 +57,7 @@ export async function makeRenditions(
     // …and a medium copy with none of them on it, for the editor to start from.
     const source = await base
       .clone()
-      .resize({ width: RENDITION_SIZES.medium, height: RENDITION_SIZES.medium, fit: "inside", withoutEnlargement: true })
+      .resize({ width: EDITOR_SIZE, height: EDITOR_SIZE, fit: "inside", withoutEnlargement: true })
       .webp({ quality: 84 })
       .toBuffer({ resolveWithObject: true });
     const sourceKey = `${storageKeyPrefix}/source.webp`;

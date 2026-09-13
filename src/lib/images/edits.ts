@@ -78,6 +78,43 @@ export function levelsStretch(low: number, high: number): { mul: number; off: nu
   return { mul, off: -low * mul };
 }
 
+/** Enough pixels to find a percentile honestly, few enough to measure a hundred times a second while a crop is dragged. */
+export const LEVELS_SAMPLE_WIDTH = 256;
+
+/**
+ * The levels of one part of a small copy of a picture: a luminance histogram over the crop, then the percentiles
+ * auto levels pulls from. Pure, and deliberately over a cached copy rather than the picture itself — re-reading the
+ * full-size image on every pointer move while someone drags a crop is what makes an editor feel slow.
+ */
+export function levelsOfRegion(pixels: { data: Uint8ClampedArray | number[]; width: number; height: number }, crop: { x: number; y: number; w: number; h: number }): { mul: number; off: number } | null {
+  const { data, width, height } = pixels;
+  const x0 = Math.max(0, Math.min(width - 1, Math.floor(crop.x * width)));
+  const y0 = Math.max(0, Math.min(height - 1, Math.floor(crop.y * height)));
+  const x1 = Math.max(x0 + 1, Math.min(width, Math.ceil((crop.x + crop.w) * width)));
+  const y1 = Math.max(y0 + 1, Math.min(height, Math.ceil((crop.y + crop.h) * height)));
+  const histogram = new Array<number>(256).fill(0);
+  let counted = 0;
+  for (let y = y0; y < y1; y += 1) {
+    for (let x = x0; x < x1; x += 1) {
+      const i = (y * width + x) * 4;
+      if (data[i + 3] < 8) continue; // ignore what is transparent
+      histogram[Math.round(0.2126 * data[i] + 0.7152 * data[i + 1] + 0.0722 * data[i + 2])] += 1;
+      counted += 1;
+    }
+  }
+  if (!counted) return null;
+  const at = (percent: number) => {
+    let seen = 0;
+    const target = (counted * percent) / 100;
+    for (let v = 0; v < 256; v += 1) {
+      seen += histogram[v];
+      if (seen >= target) return v;
+    }
+    return 255;
+  };
+  return levelsStretch(at(LEVELS_PERCENTILES.lower), at(LEVELS_PERCENTILES.upper));
+}
+
 /** Contrast around mid grey, as a multiplier and an offset in 0-255 terms. */
 export function contrastTerms(contrast: number): { mul: number; off: number } {
   return { mul: contrast, off: 128 * (1 - contrast) };

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useId, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Button, Label } from "@/components/ui";
-import { LEVELS_PERCENTILES, NEUTRAL, contrastTerms, hasEdits, levelsStretch, warmthChannels, type PhotoEdits } from "@/lib/images/edits";
+import { LEVELS_SAMPLE_WIDTH, NEUTRAL, contrastTerms, hasEdits, levelsOfRegion, warmthChannels, type PhotoEdits } from "@/lib/images/edits";
 import { savePhotoEdits } from "@/app/photos/[id]/actions";
 
 type Crop = { x: number; y: number; w: number; h: number };
@@ -52,12 +52,18 @@ export function PhotoEditor({ photoId, src, initial, onDone }: { photoId: string
   ].join(" ");
   const draft: PhotoEdits = { ...edits, crop: crop.w < 1 || crop.h < 1 || crop.x > 0 || crop.y > 0 ? crop : undefined };
 
-  // Re-read the levels whenever the picture, or the part of it being kept, changes.
-  const remeasure = useCallback(() => {
+  // The small copy is read once per picture; the levels of whatever the crop keeps are then pure arithmetic over it,
+  // which is what lets this run while a crop is being dragged without the editor stuttering.
+  const sample = useRef<ImageData | null>(null);
+  const read = useCallback(() => {
     const img = imgRef.current;
-    setLevels(img?.complete ? measureLevels(img, crop) : null);
+    sample.current = img?.complete ? samplePixels(img) : null;
+    setLevels(sample.current ? levelsOfRegion(sample.current, FULL) : null);
+  }, []);
+  useEffect(() => { read(); }, [read, src]);
+  useEffect(() => {
+    if (sample.current) setLevels(levelsOfRegion(sample.current, crop));
   }, [crop]);
-  useEffect(() => { remeasure(); }, [remeasure, src]);
 
   const save = () => start(async () => {
     setMessage(null);
@@ -93,7 +99,7 @@ export function PhotoEditor({ photoId, src, initial, onDone }: { photoId: string
             className="max-h-[50vh] max-w-full object-contain block"
             style={{ filter: `url(#${filterId}) brightness(${brightness}) saturate(${saturation})` }}
             ref={imgRef}
-            onLoad={() => remeasure()}
+            onLoad={() => read()}
           />
         </div>
         {cropping && <CropOverlay crop={crop} onChange={setCrop} />}
@@ -134,42 +140,22 @@ export function PhotoEditor({ photoId, src, initial, onDone }: { photoId: string
 }
 
 /**
- * Read the picture's own levels: the brightness at the first and ninety-ninth percentile, which is where auto levels
- * pulls to black and to white. Measured on a small copy, which is plenty for a straight line and costs nothing.
+ * A small copy of the picture, read once, for the levels to be measured from. Everything after that is arithmetic
+ * over this array: dragging a crop re-measures without touching the image, the canvas or the DOM again.
  */
-function measureLevels(img: HTMLImageElement, crop: Crop): { mul: number; off: number } | null {
+function samplePixels(img: HTMLImageElement): ImageData | null {
   try {
     const natural = { w: img.naturalWidth || 0, h: img.naturalHeight || 0 };
     if (!natural.w || !natural.h) return null;
-    // Only the part the crop keeps: the server stretches the levels of the cropped picture, not of the whole frame.
-    const src = { x: crop.x * natural.w, y: crop.y * natural.h, w: Math.max(1, crop.w * natural.w), h: Math.max(1, crop.h * natural.h) };
-    const width = Math.max(1, Math.round(Math.min(200, src.w)));
-    const height = Math.max(1, Math.round((src.h / src.w) * width));
+    const width = Math.max(1, Math.round(Math.min(LEVELS_SAMPLE_WIDTH, natural.w)));
+    const height = Math.max(1, Math.round((natural.h / natural.w) * width));
     const canvas = document.createElement("canvas");
     canvas.width = width;
     canvas.height = height;
     const ctx = canvas.getContext("2d", { willReadFrequently: true });
     if (!ctx) return null;
-    ctx.drawImage(img, src.x, src.y, src.w, src.h, 0, 0, width, height);
-    const { data } = ctx.getImageData(0, 0, width, height);
-    const histogram = new Array<number>(256).fill(0);
-    let counted = 0;
-    for (let i = 0; i < data.length; i += 4) {
-      if (data[i + 3] < 8) continue; // ignore what is transparent
-      histogram[Math.round(0.2126 * data[i] + 0.7152 * data[i + 1] + 0.0722 * data[i + 2])] += 1;
-      counted += 1;
-    }
-    if (!counted) return null;
-    const at = (percent: number) => {
-      let seen = 0;
-      const target = (counted * percent) / 100;
-      for (let v = 0; v < 256; v += 1) {
-        seen += histogram[v];
-        if (seen >= target) return v;
-      }
-      return 255;
-    };
-    return levelsStretch(at(LEVELS_PERCENTILES.lower), at(LEVELS_PERCENTILES.upper));
+    ctx.drawImage(img, 0, 0, width, height);
+    return ctx.getImageData(0, 0, width, height);
   } catch {
     // A canvas the browser will not let us read (it should be same-origin, but never break the editor over it).
     return null;
