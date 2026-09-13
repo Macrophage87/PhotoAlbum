@@ -13,6 +13,7 @@ import { getTheme } from "@/themes";
 import { previewAddToCollection, previewMoveToTrip } from "@/app/photos/exposure-actions";
 import { BulkDate } from "./BulkDate";
 import { bulkPutInActivity, tripOfSelection } from "@/app/photos/activity-actions";
+import { bulkAutoColour, undoAutoColour } from "@/app/photos/bulk-actions";
 
 type Ctx = { active: boolean; selected: Set<string>; toggle: (id: string) => void; /** Take a whole run at once — a timeline day whose dates are all wrong. */ add: (ids: string[]) => void };
 const SelectionContext = createContext<Ctx | null>(null);
@@ -37,6 +38,8 @@ export function SelectionProvider({ children }: { children: ReactNode }) {
   const [selectionTrip, setSelectionTrip] = useState<{ key: string; trip: { id: string; title: string } | null } | null>(null);
   const [pending, start] = useTransition();
   const [notice, setNotice] = useState<string | null>(null);
+  /** What the last auto-colour run touched, so the whole batch can be handed back in one press. */
+  const [undoable, setUndoable] = useState<string[]>([]);
   const [placing, setPlacing] = useState(false);
   const [dating, setDating] = useState(false);
   const [place, setPlace] = useState<PlaceValue | null>(null);
@@ -68,6 +71,25 @@ export function SelectionProvider({ children }: { children: ReactNode }) {
     return () => { live = false; };
   }, [active, key]);
   const onOneTrip = selectionTrip && selectionTrip.key === key ? selectionTrip.trip : null;
+
+  const autoColour = () =>
+    start(async () => {
+      const r = await bulkAutoColour(ids);
+      const parts = [`${r.changed.length} corrected`];
+      if (r.already) parts.push(`${r.already} already were`);
+      if (r.notPhotos) parts.push(`${r.notPhotos} are not photographs`);
+      if (r.notYours) parts.push(`${r.notYours} not yours to change`);
+      setUndoable(r.changed);
+      finish(`Auto colour: ${parts.join(", ")}. The originals are untouched.`);
+    });
+
+  const undoColour = (which: string[]) =>
+    start(async () => {
+      const n = await undoAutoColour(which);
+      setUndoable([]);
+      setNotice(`${n} put back as ${n === 1 ? "it was" : "they were"}.`);
+      router.refresh();
+    });
 
   const finish = (message: string) => {
     setSelected(new Set());
@@ -116,6 +138,10 @@ export function SelectionProvider({ children }: { children: ReactNode }) {
           <>
             <Button variant="secondary" size="sm" onClick={() => { setActive(true); setNotice(null); }}>Select photos</Button>
             {notice && <span className="text-muted" role="status">{notice}</span>}
+            {/* The batch just corrected can be handed back whole, since nothing was written over. */}
+            {undoable.length > 0 && (
+              <Button variant="ghost" size="sm" disabled={pending} onClick={() => undoColour(undoable)} data-testid="undo-auto-colour">Undo auto colour</Button>
+            )}
           </>
         ) : (
           <>
@@ -132,6 +158,8 @@ export function SelectionProvider({ children }: { children: ReactNode }) {
             <Button size="sm" variant="secondary" disabled={!ids.length || !collection || pending} onClick={addToCol}>Add</Button>
             <Button size="sm" variant="secondary" disabled={!ids.length || pending} onClick={() => setPlacing((v) => !v)}>Set a place…</Button>
             <Button size="sm" variant="secondary" disabled={!ids.length || pending} onClick={() => setDating((v) => !v)}>Fix dates…</Button>
+            {/* Auto levels over the lot: a box of scans comes out flat in the same way across every frame. */}
+            <Button size="sm" variant="secondary" disabled={!ids.length || pending} onClick={autoColour} data-testid="auto-colour">{pending ? "Working…" : "Auto colour"}</Button>
             {/* The way to file a batch on an activity without dragging one tile at a time. */}
             {onOneTrip && (
               <>

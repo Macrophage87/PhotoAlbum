@@ -1345,3 +1345,28 @@ test("a 3D scan is uploaded, kept whole, and shown in a viewer that can be turne
   await page.goto(`/photos/${row.id}`);
   await expect(page.getByText(/never sent to the helper/i)).toBeVisible();
 });
+
+test("a whole selection is auto-coloured in one go, and handed back in one press", async ({ context, page }) => {
+  await signIn(context, ADMIN);
+  // Photographs of the admin's with nothing on them yet, so what the batch does to them is unambiguous.
+  const plain = await withDb((c) => c.query(`SELECT p.id FROM "Photo" p JOIN "User" u ON u.id = p."uploaderId" WHERE p."tripId" = (SELECT id FROM "Trip" WHERE slug = 'acadia') AND p.kind = 'PHOTO' AND p.status = 'READY' AND p."trashedAt" IS NULL AND p.edits IS NULL AND u.email = $1 ORDER BY p."createdAt" LIMIT 3`, [ADMIN]));
+  const picked = plain.rows.map((r: { id: string }) => r.id);
+  test.skip(picked.length === 0, "no untouched photographs on the trip");
+
+  await page.goto("/trips/acadia/photos");
+  await page.getByRole("button", { name: "Select photos" }).click();
+  for (const id of picked) await page.locator(`li.tile-lazy:has(img[src*='/api/photos/${id}/']) button[aria-pressed]`).first().click();
+
+  await page.getByTestId("auto-colour").click();
+  await expect(page.getByRole("status")).toContainText("Auto colour:");
+  // The instruction is stored beside the picture; the file that was uploaded is not written over.
+  await expect
+    .poll(async () => (await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "Photo" WHERE id = ANY($1) AND edits->>'auto' = 'true'`, [picked]))).rows[0].n, { timeout: 20_000, intervals: [1000] })
+    .toBe(picked.length);
+
+  // And the whole batch goes back with one press, leaving nothing behind on photographs that had nothing before.
+  await page.getByTestId("undo-auto-colour").click();
+  await expect
+    .poll(async () => (await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "Photo" WHERE id = ANY($1) AND edits IS NOT NULL`, [picked]))).rows[0].n, { timeout: 20_000, intervals: [1000] })
+    .toBe(0);
+});

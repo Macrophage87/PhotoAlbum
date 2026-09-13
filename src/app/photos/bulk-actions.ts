@@ -11,6 +11,8 @@ import { applyPhotoInstant, requestGeotag } from "@/lib/photos/apply-date";
 import { datePlanSchema, isEmptyPlan, planDate } from "@/lib/photos/bulk-date";
 import { offsetMinutesInZone } from "@/lib/time/local-day";
 import { editableMediaIds } from "@/lib/auth/ownership";
+import { Prisma } from "@/generated/prisma/client";
+import { editsSchema, tidyEdits, type PhotoEdits } from "@/lib/images/edits";
 
 const ids = z.array(z.string().min(1)).min(1).max(500);
 
@@ -58,6 +60,12 @@ export async function bulkSetPlace(photoIds: string[], lat: number, lng: number,
   const r = await db.photo.updateMany({ where: { id: { in: list } }, data: { lat, lng, altitude: null, gpsSource: "MANUAL", placeSetById: user.id, placeName: typeof name === "string" && name.trim() ? name.trim().slice(0, 200) : null } });
   revalidatePath("/", "layout");
   return r.count;
+}
+
+/** The instructions stored on a row, where they still make sense; anything unreadable is treated as none. */
+function editsOf(raw: unknown): PhotoEdits | null {
+  const parsed = editsSchema.safeParse(raw);
+  return parsed.success ? parsed.data : null;
 }
 
 const dateOrder = [{ takenAt: "asc" as const }, { originalName: "asc" as const }];
@@ -116,4 +124,64 @@ export async function bulkSetDate(photoIds: string[], plan: unknown): Promise<{ 
   for (const tripId of trips) await requestGeotag(tripId);
   revalidatePath("/", "layout");
   return { n: rows.length, skipped, notYours };
+}
+
+export type AutoColourResult = { changed: string[]; already: number; notPhotos: number; notYours: number };
+
+/**
+ * Run the darkroom's auto levels over a whole selection.
+ *
+ * A box of scans, or an afternoon indoors, comes out flat in the same way across every frame, and correcting them
+ * one at a time is the sort of chore that means it never gets done. Nothing is written over: "auto" is an
+ * instruction stored beside the picture, and every rendition is made again from the untouched original — so the
+ * whole batch can be handed back in one press, and the file that was uploaded is still exactly the file that was
+ * uploaded.
+ *
+ * The levels themselves are worked out per photograph at the moment it is rendered, not once for the batch: a
+ * sunset and a kitchen need different corrections, and one average across both would spoil each.
+ */
+export async function bulkAutoColour(photoIds: string[]): Promise<AutoColourResult> {
+  const user = await requireUserOrThrow();
+  const asked = ids.parse(photoIds);
+  const mine = await editableMediaIds(user, asked);
+  const photos = await db.photo.findMany({
+    where: { id: { in: mine }, trashedAt: null },
+    select: { id: true, kind: true, status: true, edits: true },
+  });
+  // A clip, an embedded video or a 3D scan has no levels to stretch; neither has anything still processing.
+  const usable = photos.filter((p) => p.kind === "PHOTO" && p.status === "READY");
+  const changed: string[] = [];
+  let already = 0;
+  for (const photo of usable) {
+    const current = editsOf(photo.edits);
+    if (current?.auto) { already += 1; continue; }
+    // Everything else a member set — a crop, a turn, a warmth — is left exactly as it is.
+    const next = tidyEdits({ ...(current ?? {}), auto: true });
+    await db.photo.update({ where: { id: photo.id }, data: { edits: next ?? Prisma.DbNull, editedAt: new Date(), editedById: user.id } });
+    await enqueue(QUEUES.processPhoto, { photoId: photo.id, mode: "renditions" }, { singletonKey: `renditions:${photo.id}`, singletonSeconds: 5, singletonNextSlot: true });
+    changed.push(photo.id);
+  }
+  if (changed.length) revalidatePath("/", "layout");
+  return { changed, already, notPhotos: photos.length - usable.length, notYours: asked.length - mine.length };
+}
+
+/** Hand the batch back: forget the auto-levels instruction on exactly the items it was just set on. */
+export async function undoAutoColour(photoIds: string[]): Promise<number> {
+  const user = await requireUserOrThrow();
+  const mine = await editableMediaIds(user, ids.parse(photoIds));
+  const photos = await db.photo.findMany({ where: { id: { in: mine } }, select: { id: true, edits: true } });
+  let n = 0;
+  for (const photo of photos) {
+    const current = editsOf(photo.edits);
+    if (!current?.auto) continue;
+    const next = tidyEdits({ ...current, auto: false });
+    await db.photo.update({
+      where: { id: photo.id },
+      data: next ? { edits: next, editedAt: new Date(), editedById: user.id } : { edits: Prisma.DbNull, editedAt: null, editedById: null },
+    });
+    await enqueue(QUEUES.processPhoto, { photoId: photo.id, mode: "renditions" }, { singletonKey: `renditions:${photo.id}`, singletonSeconds: 5, singletonNextSlot: true });
+    n += 1;
+  }
+  if (n) revalidatePath("/", "layout");
+  return n;
 }
