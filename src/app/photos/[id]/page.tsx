@@ -23,6 +23,8 @@ import { isWeakDate } from "@/lib/photos/date-from-neighbours";
 import { guessDateFromTrip } from "@/lib/photos/date-guess-query";
 import { NeighbourDate } from "@/components/photos/NeighbourDate";
 import { DateTroubleshooter } from "@/components/photos/DateTroubleshooter";
+import { PanoramaView, PanoramaHint } from "@/components/photos/PanoramaView";
+import { panoramaLabel } from "@/lib/images/panorama";
 import { CollectionsField, TripField } from "@/components/containers/PhotoContainerFields";
 import { mapThemeOf } from "@/lib/map/theme";
 import { getTheme } from "@/themes";
@@ -129,6 +131,23 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
                 ) : (
                   <div className="aspect-video flex items-center justify-center text-white/70">Fetching poster…</div>
                 )}
+              </div>
+            ) : photo.status === "READY" && photo.panorama ? (
+              // Shown as a panorama: the height of a comfortable strip, dragged sideways, with the whole file a click away.
+              <div className="space-y-2">
+                <PanoramaView
+                  src={photoUrl(photo, "pano")}
+                  alt={photo.caption ?? photo.originalName}
+                  wrap={photo.panoProjection === "EQUIRECTANGULAR_360"}
+                  axis={(photo.width ?? 0) >= (photo.height ?? 0) ? "horizontal" : "vertical"}
+                  className="h-[38vh] min-h-56 w-full rounded-theme bg-surface-alt"
+                >
+                  <PanoramaHint label={panoramaLabel(photo.panoProjection)} />
+                </PanoramaView>
+                <p className="text-sm text-muted">
+                  {panoramaLabel(photo.panoProjection)}{photo.width && photo.height ? ` · ${photo.width} × ${photo.height}` : ""}.{" "}
+                  <a href={photoUrl(photo, photo.edits ? "edited" : "original")} target="_blank" rel="noreferrer" className="underline underline-offset-2">Open the full-size photo</a>.
+                </p>
               </div>
             ) : photo.status === "READY" ? (
               <a href={photoUrl(photo, photo.edits ? "edited" : "original")} target="_blank" rel="noreferrer" title="Open the full-size photo">

@@ -9,6 +9,8 @@ export const photoCardSelect = {
   status: true,
   width: true,
   height: true,
+  panorama: true,
+  panoProjection: true,
   takenAt: true,
   tzOffsetMin: true,
   lat: true,

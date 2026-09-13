@@ -8,6 +8,7 @@ import { timezoneForCoords } from "@/lib/geo/tz";
 import { sha256File } from "@/lib/media/hash";
 import { heicToJpegBuffer, isHeic } from "@/lib/images/heic";
 import { makeRenditions } from "@/lib/images/renditions";
+import { readGPano } from "@/lib/images/panorama-read";
 import { editsSchema, hasEdits, type PhotoEdits } from "@/lib/images/edits";
 import { pickActivityByTime, pickTripByDay } from "@/lib/photos/assign";
 import { localDayFromOffset, offsetMinutesInZone } from "@/lib/time/local-day";
@@ -51,8 +52,9 @@ export async function processPhoto(job: ProcessPhotoJob): Promise<void> {
       // Also the path a darkroom edit takes: the renditions are made again from the untouched original with the
       // current instructions on them, which is what makes an edit undoable by simply forgetting it.
       const from = isHeic(photo.mimeType, photo.originalName) ? await heicSource(store, photo.storageKey, localPath) : localPath;
-      const { width, height, renditions } = await makeRenditions(from, photo.storageKey, (key, buf) => store.putBuffer(key, buf), editsOf(photo.edits));
-      await db.photo.update({ where: { id: photo.id }, data: { status: "READY", width, height, renditions } });
+      const gpano = photo.kind === "PHOTO" ? await readGPano(localPath) : null;
+      const { width, height, renditions, panorama } = await makeRenditions(from, photo.storageKey, (key, buf) => store.putBuffer(key, buf), editsOf(photo.edits), gpano);
+      await db.photo.update({ where: { id: photo.id }, data: { status: "READY", width, height, renditions, panorama, panoProjection: gpano?.projection ?? null } });
       await enqueueEmbedding(photo.id);
       await enqueueFaceDetection(photo.id);
       await enqueueAnimalDetection(photo.id);
@@ -120,12 +122,17 @@ export async function processPhoto(job: ProcessPhotoJob): Promise<void> {
       tzOffsetMin = trip ? offsetMinutesInZone(takenAt, trip.timezone) : 0;
     }
 
-    // 5. Renditions
-    const { width, height, renditions } = await makeRenditions(source, photo.storageKey, (key, buf) => store.putBuffer(key, buf), editsOf(photo.edits));
+    // 5. Renditions. Google's panorama tags are read from the original file, which is the only place a camera says
+    // that what looks like a wide photo is really a sweep of the whole horizon.
+    const gpano = await readGPano(localPath);
+    const { width, height, renditions, panorama } = await makeRenditions(source, photo.storageKey, (key, buf) => store.putBuffer(key, buf), editsOf(photo.edits), gpano);
 
-    // 6. Activity assignment within the trip
+    // 6. Activity assignment within the trip. A member who uploaded this into an activity, or put it there by hand,
+    // has already answered the question — the time window does not get to overrule them.
     let activityId: string | null = null;
-    if (trip && takenAt) {
+    const chosen = photo.activitySetById ? await db.activity.findFirst({ where: { id: photo.activityId ?? "", tripId: trip?.id ?? "" }, select: { id: true } }) : null;
+    if (chosen) activityId = chosen.id;
+    else if (trip && takenAt) {
       const activities = await db.activity.findMany({ where: { tripId: trip.id }, select: { id: true, startTime: true, endTime: true } });
       activityId = pickActivityByTime(activities, takenAt)?.id ?? null;
     }
@@ -163,8 +170,11 @@ export async function processPhoto(job: ProcessPhotoJob): Promise<void> {
           ...(mtimeHeader && Number.isFinite(mtimeHeader) ? { fileLastModified: mtimeHeader } : {}),
         },
         renditions,
+        panorama,
+        panoProjection: gpano?.projection ?? null,
         tripId: trip?.id ?? null,
         activityId,
+        ...(photo.activitySetById && !chosen ? { activitySetById: null } : {}),
       },
     });
 

@@ -1084,3 +1084,60 @@ test("a family member moves an item to the trash with a reason, and an admin res
   expect(gone.rows).toHaveLength(0);
   await memberContext.close();
 });
+
+test("photos can be uploaded straight into an activity, and stay there when its hours change", async ({ context, page }) => {
+  await signIn(context, ADMIN);
+  const act = await withDb((c) => c.query(`SELECT id, "startTime" FROM "Activity" WHERE title = 'Ocean Path loop' LIMIT 1`));
+  const activityId = act.rows[0].id as string;
+  await page.goto(`/trips/acadia/activities/${activityId}`);
+  await page.getByTestId("activity-upload-open").click();
+  await chooseFile(page, "photo-no-exif.jpg");
+  await expect(page.getByTestId("activity-upload").locator("img[src*='/api/photos/']")).toBeVisible({ timeout: 30_000 });
+
+  // It is on the activity because a member put it there, not because its date fell inside the walk.
+  const newest = async () => (await withDb((c) => c.query('SELECT id, "activityId", "activitySetById", "tripId" FROM "Photo" WHERE "originalName" = $1 ORDER BY "createdAt" DESC LIMIT 1', ["photo-no-exif.jpg"]))).rows[0];
+  await expect.poll(async () => (await newest())?.activityId, { timeout: 30_000, intervals: [1000] }).toBe(activityId);
+  const row = await newest();
+  expect(row.activitySetById).not.toBeNull();
+  expect(row.tripId).not.toBeNull();
+
+  await page.reload();
+  await expect(page.getByRole("heading", { name: /photo/ })).toBeVisible();
+
+  // Editing the activity re-files photos by time; one a member placed is not swept out again.
+  await page.goto(`/trips/acadia/activities/${activityId}?edit=1`);
+  await page.getByRole("button", { name: "Save" }).click();
+  await page.waitForURL(`**/activities/${activityId}`);
+  await expect
+    .poll(async () => (await withDb((c) => c.query('SELECT "activityId" FROM "Photo" WHERE id = $1', [row.id]))).rows[0].activityId, { timeout: 20_000, intervals: [1000] })
+    .toBe(activityId);
+});
+
+test("a panorama is recognised, kept long, and shown as a panorama rather than a sliver", async ({ context, page }) => {
+  await signIn(context, ADMIN);
+  await page.goto("/upload");
+  await chooseFile(page, "panorama.jpg");
+  await expect(page.locator("img[src*='/api/photos/']").first()).toBeVisible({ timeout: 30_000 });
+
+  // The file's own XMP says it is a full 360, which its 2:1 shape alone would never have told anyone.
+  const pano = async () => (await withDb((c) => c.query('SELECT id, status, panorama, "panoProjection" FROM "Photo" WHERE "originalName" = $1 ORDER BY "createdAt" DESC LIMIT 1', ["panorama.jpg"]))).rows[0];
+  await expect.poll(async () => (await pano())?.status, { timeout: 30_000, intervals: [1000] }).toBe("READY");
+  const row = await pano();
+  expect(row.panorama).toBe(true);
+  expect(row.panoProjection).toBe("EQUIRECTANGULAR_360");
+
+  // A long copy is kept to pan across, beyond the 1600-pixel one every other photo gets.
+  const long = await page.request.get(`/api/photos/${row.id}/pano`);
+  expect(long.ok()).toBe(true);
+
+  // Its own page shows it in a viewer that is dragged, and says what it is.
+  await page.goto(`/photos/${row.id}`);
+  await expect(page.getByTestId("panorama-view")).toBeVisible();
+  await expect(page.getByText(/360° panorama/).first()).toBeVisible();
+
+  // And in a grid it gets a tile of its own shape instead of a square crop of its middle.
+  await page.goto("/photos");
+  const tile = page.locator("li.tile-lazy").filter({ has: page.locator(`img[src*='/api/photos/${row.id}/']`) });
+  await expect(tile).toHaveClass(/col-span-2/);
+  await expect(tile.getByText("360°")).toBeVisible();
+});

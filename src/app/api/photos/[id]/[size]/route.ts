@@ -33,7 +33,7 @@ export function parseRange(header: string | null, size: number): { start: number
  */
 export async function GET(request: Request, { params }: { params: Promise<{ id: string; size: string }> }) {
   const { id, size } = await params;
-  if (!["thumb", "medium", "original", "edited", "source", "video", "poster"].includes(size)) return new Response("Not found", { status: 404 });
+  if (!["thumb", "medium", "pano", "original", "edited", "source", "video", "poster"].includes(size)) return new Response("Not found", { status: 404 });
 
   const photo = await db.photo.findUnique({
     where: { id },
@@ -67,6 +67,14 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     // because its medium copy already is one.
     const r = (photo.renditions as Renditions | null);
     const chosen = r?.source ?? r?.medium;
+    if (!chosen) return new Response("Not ready", { status: 404 });
+    key = chosen.key;
+    contentType = MIME[key.split(".").pop() ?? ""] ?? "image/webp";
+  } else if (size === "pano") {
+    // The long copy a panorama is panned across. Anything that is not a panorama, or is not long enough to have
+    // earned one, answers with its medium copy rather than nothing.
+    const r = photo.renditions as Renditions | null;
+    const chosen = r?.pano ?? r?.medium;
     if (!chosen) return new Response("Not ready", { status: 404 });
     key = chosen.key;
     contentType = MIME[key.split(".").pop() ?? ""] ?? "image/webp";

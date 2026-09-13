@@ -300,6 +300,11 @@ model Photo {
   sizeBytes     Int
   width         Int?
   height        Int?
+  /// A photo wide enough (or tall enough) that fitting it to a screen would waste it, so it is shown and kept
+  /// differently. `panoProjection` records what the camera claimed — a full 360 wraps round; anything else has two
+  /// ends — and is null for one recognised by its shape alone.
+  panorama      Boolean        @default(false)
+  panoProjection String?
   takenAt       DateTime?
   takenAtSource TakenAtSource?
   tzOffsetMin   Int?

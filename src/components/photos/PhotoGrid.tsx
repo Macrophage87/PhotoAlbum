@@ -19,9 +19,16 @@ export type GridPhoto = LightboxPhoto & {
   placeName?: string | null;
   /** Members only: whether this is one of theirs, and how many of the family have marked it. */
   favourite?: FavouriteState | null;
+  /** A panorama: given a tile of its own shape rather than a square crop of its middle. */
+  panorama?: { projection: string | null; panoUrl: string } | null;
 };
 
 /** The date a tile shows on hover, in the photo's own zone rather than the reader's. */
+/** A panorama gets the wide tile only once it is ready and there is a long copy to fill it. */
+function wideTile(p: GridPhoto): boolean {
+  return Boolean(p.panorama && p.status === "READY" && !p.videoUrl && !p.youtubeId);
+}
+
 export function tileDate(takenAt?: string | null, tzOffsetMin?: number | null): string | null {
   if (!takenAt) return null;
   const at = new Date(takenAt);
@@ -45,14 +52,16 @@ export function PhotoGrid({ photos, emptyMessage = "No photos yet.", selectable:
         {photos.map((p) => {
           const readyIndex = ready.findIndex((r) => r.id === p.id);
           return (
-            <li key={p.id} className="tile-lazy relative aspect-square rounded-theme overflow-hidden bg-surface-alt border border-border group">
+            // A panorama in a square tile is a crop of its middle, which is the one part that says least about it:
+            // it takes two columns and its own shape, and the whole sweep is shown rather than cut to fit.
+            <li key={p.id} className={`tile-lazy relative rounded-theme overflow-hidden bg-surface-alt border border-border group ${wideTile(p) ? "col-span-2 aspect-[2/1]" : "aspect-square"}`}>
               {p.status === "READY" ? (
                 <button onClick={() => (selectable ? onToggle?.(p.id) : lb.open(readyIndex))} className={`block w-full h-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring ${selectable && selected?.has(p.id) ? "ring-4 ring-primary ring-inset" : ""}`} aria-pressed={selectable ? selected?.has(p.id) : undefined}>
                   {p.videoUrl ? (
                     <ClipTile src={p.videoUrl} poster={p.thumbUrl} alt={p.alt} durationS={p.durationS ?? null} />
                   ) : (
                     // eslint-disable-next-line @next/next/no-img-element
-                    <img src={p.thumbUrl} alt={p.alt} loading="lazy" className="w-full h-full object-cover transition-transform group-hover:scale-[1.03]" />
+                    <img src={wideTile(p) ? p.panorama!.panoUrl : p.thumbUrl} alt={p.alt} loading="lazy" className={`w-full h-full transition-transform ${wideTile(p) ? "object-contain bg-black/5" : "object-cover group-hover:scale-[1.03]"}`} />
                   )}
                 </button>
               ) : (
@@ -75,6 +84,7 @@ export function PhotoGrid({ photos, emptyMessage = "No photos yet.", selectable:
                 </span>
               )}
               {p.badge && <span className="absolute top-1 left-1 text-[10px] bg-black/60 text-white rounded px-1.5 py-0.5">{p.badge}</span>}
+              {wideTile(p) && <span className="absolute top-1 left-1 text-[10px] bg-black/60 text-white rounded px-1.5 py-0.5" style={p.badge ? { top: "1.6rem" } : undefined}>{p.panorama!.projection === "EQUIRECTANGULAR_360" ? "360°" : "Panorama"}</span>}
               {p.collections && p.collections.length > 0 && (
                 <span className={`absolute bottom-1 left-1 flex flex-wrap gap-1 pointer-events-none ${p.youtubeId ? (p.unavailable ? "right-28" : "right-14") : "right-1"}`} aria-label={`In ${p.collections.map((c) => c.title).join(", ")}`}>
                   {p.collections.slice(0, 2).map((c) => (

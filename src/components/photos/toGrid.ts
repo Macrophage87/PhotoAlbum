@@ -29,6 +29,8 @@ export function toGridPhoto(p: PhotoCard, badge?: string | null, member = false,
     mediumUrl: photoUrl(p, "medium"),
     width: p.width,
     height: p.height,
+    // A panorama carries the long rendition it is panned across, so a tile and the lightbox can both show it whole.
+    panorama: p.panorama ? { projection: p.panoProjection, panoUrl: photoUrl(p, "pano") } : null,
     caption: p.caption,
     alt: p.caption ?? p.title ?? p.originalName,
     badge: badge ?? (p.gpsSource === "TRACK" ? "from track" : null),

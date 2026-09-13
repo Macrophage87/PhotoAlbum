@@ -2,10 +2,12 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { YouTubeEmbed } from "@/components/videos/YouTubeEmbed";
+import { PanoramaView, PanoramaHint } from "./PanoramaView";
+import { panoramaLabel } from "@/lib/images/panorama";
 import { PetTagger } from "@/components/people/PetTagger";
 import { LightboxInfo } from "./LightboxInfo";
 
-export type LightboxPhoto = { id: string; mediumUrl: string; width: number | null; height: number | null; caption: string | null; alt: string; /** Shown to members only; never set for anonymous viewers. */ uploadedBy?: string | null; /** Set for embedded videos: the lightbox shows the click-to-play facade instead of the image. */ youtubeId?: string | null; title?: string | null; /** Set for uploaded clips: plays inline with controls. */ videoUrl?: string | null; durationS?: number | null; /** Members can tag a pet from here. */ canTag?: boolean; /** Full-size file, opened by a second click on the picture. */ originalUrl?: string | null };
+export type LightboxPhoto = { id: string; mediumUrl: string; width: number | null; height: number | null; caption: string | null; alt: string; /** Shown to members only; never set for anonymous viewers. */ uploadedBy?: string | null; /** Set for embedded videos: the lightbox shows the click-to-play facade instead of the image. */ youtubeId?: string | null; title?: string | null; /** Set for uploaded clips: plays inline with controls. */ videoUrl?: string | null; durationS?: number | null; /** Members can tag a pet from here. */ canTag?: boolean; /** Full-size file, opened by a second click on the picture. */ originalUrl?: string | null; /** A panorama, shown filling the height and panned sideways rather than shrunk to fit. */ panorama?: { projection: string | null; panoUrl: string } | null };
 
 export function Lightbox({ photos, index, onClose, onNavigate, share = null }: { photos: LightboxPhoto[]; index: number; onClose: () => void; onNavigate: (i: number) => void; /** On a share page: the token that lets the info request through without a cookie. */ share?: { token: string; kind: string } | null }) {
   const photo = photos[index];
@@ -79,6 +81,18 @@ export function Lightbox({ photos, index, onClose, onNavigate, share = null }: {
             <div className="w-full max-w-5xl" onClick={(e) => e.stopPropagation()}>
               <YouTubeEmbed videoId={photo.youtubeId} posterUrl={photo.mediumUrl} title={photo.title ?? photo.alt} />
             </div>
+          ) : photo.panorama ? (
+            // A panorama fills the height and is dragged: fitting a 10:1 sweep to the width of a phone leaves a
+            // strip an inch tall, which is the one way of showing it that throws away why it was taken.
+            <PanoramaView
+              src={photo.panorama.panoUrl}
+              alt={photo.alt}
+              wrap={photo.panorama.projection === "EQUIRECTANGULAR_360"}
+              axis={(photo.width ?? 0) >= (photo.height ?? 0) ? "horizontal" : "vertical"}
+              className="h-[46vh] lg:h-[72vh] w-full max-w-full bg-black/40"
+            >
+              <PanoramaHint label={panoramaLabel(photo.panorama.projection)} />
+            </PanoramaView>
           ) : photo.originalUrl ? (
             // A second click on the picture opens the full-size file in its own tab.
             <a href={photo.originalUrl} target="_blank" rel="noreferrer" title="Open the full-size photo" className="max-h-full max-w-full" onClick={(e) => e.stopPropagation()}>

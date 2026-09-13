@@ -15,6 +15,34 @@ await base.clone().withExif({
 await base.clone().withExif({ IFD0: { Make: "Canon", Model: "EOS R6" }, IFD2: { DateTimeOriginal: "2025:08:12 09:20:00" } }).toFile(new URL("../tests/fixtures/photo-no-gps.jpg", import.meta.url).pathname);
 await sharp({ create: { width: 640, height: 480, channels: 3, background: { r: 200, g: 120, b: 60 } } }).jpeg().toFile(new URL("../tests/fixtures/photo-no-exif.jpg", import.meta.url).pathname);
 
+// A panorama, with Google's GPano tags in an XMP packet — the only thing that tells an album that a 2:1 photo is a
+// full sweep of the horizon rather than a wide crop. sharp cannot write XMP, so the APP1 segment goes in by hand,
+// straight after the SOI marker where every reader looks for it.
+function withXmp(jpeg, xmp) {
+  const header = Buffer.from("http://ns.adobe.com/xap/1.0/\0", "latin1");
+  const body = Buffer.concat([header, Buffer.from(xmp, "utf8")]);
+  const segment = Buffer.alloc(4 + body.length);
+  segment.writeUInt16BE(0xffe1, 0);
+  segment.writeUInt16BE(body.length + 2, 2);
+  body.copy(segment, 4);
+  return Buffer.concat([jpeg.subarray(0, 2), segment, jpeg.subarray(2)]);
+}
+
+const GPANO = `<?xpacket begin="\ufeff" id="W5M0MpCehiHzreSzNTczkc9d"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+<rdf:Description rdf:about="" xmlns:GPano="http://ns.google.com/photos/1.0/panorama/"
+  GPano:UsePanoramaViewer="True" GPano:ProjectionType="equirectangular"
+  GPano:FullPanoWidthPixels="2400" GPano:FullPanoHeightPixels="1200"
+  GPano:CroppedAreaImageWidthPixels="2400" GPano:CroppedAreaImageHeightPixels="1200"
+  GPano:CroppedAreaLeftPixels="0" GPano:CroppedAreaTopPixels="0"/>
+</rdf:RDF></x:xmpmeta><?xpacket end="r"?>`;
+
+const sweep = await sharp({ create: { width: 2400, height: 1200, channels: 3, background: { r: 90, g: 130, b: 200 } } })
+  .composite([{ input: await sharp({ create: { width: 240, height: 1200, channels: 3, background: { r: 230, g: 190, b: 90 } } }).png().toBuffer(), left: 1080, top: 0 }])
+  .jpeg({ quality: 80 })
+  .toBuffer();
+out("panorama.jpg", withXmp(sweep, GPANO));
+
 // ---------- a synthetic hike: 1 point / 5 s, ~3 km loop near Acadia with a climb ----------
 const T0 = Date.parse("2025-08-12T13:00:00Z");
 const N = 600; // 50 minutes
