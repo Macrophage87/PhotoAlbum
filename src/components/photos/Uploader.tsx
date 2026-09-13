@@ -228,9 +228,9 @@ export function Uploader({ tripId, activityId, onDone, maxClipSeconds = 90, anno
           offers everything the phone has, storage included. What the album will not take is turned away afterwards,
           by name, in the list below.
         */}
-        <input ref={inputRef} id="photo-file-input" type="file" multiple className="sr-only" tabIndex={-1} aria-label="Browse files" onChange={(e) => e.target.files && addFiles(e.target.files)} />
+        <input ref={inputRef} id="photo-file-input" type="file" multiple className="sr-only" tabIndex={-1} aria-label="Files on this device" onChange={(e) => e.target.files && addFiles(e.target.files)} />
         {/* And the short way round for the usual case, straight to the phone's camera roll. */}
-        <input ref={libraryRef} id="photo-library-input" type="file" multiple accept="image/*,video/*" className="sr-only" tabIndex={-1} aria-label="Choose photos and videos" onChange={(e) => e.target.files && addFiles(e.target.files)} />
+        <input ref={libraryRef} id="photo-library-input" type="file" multiple accept="image/*,video/*" className="sr-only" tabIndex={-1} aria-label="Photo library on this device" onChange={(e) => e.target.files && addFiles(e.target.files)} />
         <p className="font-medium">Drop photos, short clips or 3D scans here</p>
         <p className="text-sm text-muted mt-1">
           JPEG, PNG, HEIC and more; MP4, MOV or WebM clips up to {maxClipSeconds} seconds (longer videos go on YouTube);
