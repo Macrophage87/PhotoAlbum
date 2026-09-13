@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import sharp from "sharp";
-import { applyEdits, contrastTerms, editedSize, editsSchema, hasEdits, tidyEdits, warmthChannels } from "@/lib/images/edits";
+import { applyEdits, contrastTerms, editedSize, editsSchema, hasEdits, LEVELS_PERCENTILES, levelsStretch, tidyEdits, warmthChannels } from "@/lib/images/edits";
 import { makeRenditions } from "@/lib/images/renditions";
 
 /** A 200x100 image, left half red, right half blue, so a crop and a mirror are visible in the pixels. */
@@ -62,6 +62,22 @@ describe("the numbers the preview and the server share", () => {
   });
 });
 
+describe("the levels stretch the preview and the server share", () => {
+  it("maps the darkest kept tone to black and the brightest to white", () => {
+    const s = levelsStretch(40, 200)!;
+    expect(s.mul * 40 + s.off).toBeCloseTo(0, 5);
+    expect(s.mul * 200 + s.off).toBeCloseTo(255, 5);
+  });
+  it("leaves a picture that already fills the range alone, rather than amplifying noise", () => {
+    expect(levelsStretch(0, 255)!.mul).toBeCloseTo(1, 5);
+    expect(levelsStretch(100, 102)).toBeNull();
+    expect(levelsStretch(200, 40)).toBeNull();
+  });
+  it("asks the server for the same ends of the range the browser measures", () => {
+    expect(LEVELS_PERCENTILES).toEqual({ lower: 1, upper: 99 });
+  });
+});
+
 describe("applying the instructions to real pixels", () => {
   it("crops to the half that was asked for", async () => {
     const src = await twoTone();
@@ -84,6 +100,18 @@ describe("applying the instructions to real pixels", () => {
     const out = await applyEdits(sharp(src), { rotate: 90 }, { width: 200, height: 100 }).png().toBuffer();
     const meta = await sharp(out).metadata();
     expect([meta.width, meta.height]).toEqual([100, 200]);
+  });
+
+  it("auto levels opens out a flat picture", async () => {
+    // A picture that only uses the middle of the range: after auto levels it should reach much further.
+    const flat = await sharp({ create: { width: 40, height: 40, channels: 3, background: { r: 110, g: 110, b: 110 } } })
+      .composite([{ input: await sharp({ create: { width: 20, height: 40, channels: 3, background: { r: 150, g: 150, b: 150 } } }).png().toBuffer(), left: 20, top: 0 }])
+      .png()
+      .toBuffer();
+    const out = await applyEdits(sharp(flat), { auto: true }, { width: 40, height: 40 }).png().toBuffer();
+    const dark = await pixel(out, 5, 20);
+    const light = await pixel(out, 35, 20);
+    expect(light[0] - dark[0]).toBeGreaterThan(150); // was a gap of 40
   });
 
   it("warms and brightens without touching what is in the picture", async () => {
@@ -109,6 +137,9 @@ describe("rendering an edited item", () => {
     written.length = 0;
     const edited = await makeRenditions(src, "p/1", put, { crop: { x: 0, y: 0, w: 0.5, h: 1 }, saturation: 1.2 });
     expect(written).toContain("p/1/edited.webp");
+    // …and the picture without the edits, which is what the editor opens so it does not apply them twice.
+    expect(written).toContain("p/1/source.webp");
+    expect(edited.renditions.source).toBeTruthy();
     expect(edited.renditions.full).toBeTruthy();
     // The dimensions on the row describe the picture the album shows, not the file on disk.
     expect([edited.width, edited.height]).toEqual([100, 100]);

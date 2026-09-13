@@ -789,6 +789,20 @@ test("the uploader crops and colour-corrects a photo, and the original stays unt
   await expect(page.getByTestId("photo-editor")).toBeVisible();
   await page.getByLabel("Warmth").fill("40");
   await page.getByRole("button", { name: "Turn right" }).click();
+  // Auto levels is measured from the picture on screen rather than promised: this fixture is one flat colour, so
+  // the editor says plainly that there is nothing to stretch instead of claiming the toggle will do something.
+  // The preview really shows the picture: a broken load here would leave every slider working on nothing.
+  await expect.poll(async () => page.getByAltText("The photo as it will look").evaluate((el: HTMLImageElement) => el.naturalWidth)).toBeGreaterThan(0);
+  const matrix = page.locator("filter feColorMatrix").first();
+  const plain = await matrix.getAttribute("values");
+  await page.getByRole("button", { name: "Auto levels" }).click();
+  await expect(page.getByText(/nothing here for auto levels to stretch/)).toBeVisible();
+  expect(await matrix.getAttribute("values")).toBe(plain);
+  // The colour sliders do move the filter the picture is drawn through, which is the preview doing its job.
+  await page.getByLabel("Contrast").fill("1.4");
+  await expect.poll(async () => matrix.getAttribute("values")).not.toBe(plain);
+  await page.getByRole("button", { name: "Auto levels" }).click(); // leave it off for what follows
+  await page.getByLabel("Contrast").fill("1");
   await page.getByRole("button", { name: "Save edits" }).click();
 
   // The instructions are stored at once; the renditions are then made again from the original in the background,
@@ -801,6 +815,10 @@ test("the uploader crops and colour-corrects a photo, and the original stays unt
     .toMatchObject({ edits: { rotate: 90, warmth: 40 }, full: true });
   const after = (await withDb((c) => c.query('SELECT renditions, width, height FROM "Photo" WHERE id = $1', [id]))).rows[0];
   expect(after.renditions.medium.w).toBe(before.medium.h);
+
+  // Reopening the editor starts from the picture without its edits, so they are not applied a second time.
+  const sourceCopy = await page.request.get(`/api/photos/${id}/source`);
+  expect(sourceCopy.ok()).toBe(true);
 
   // The page says so and offers the file as it was uploaded, which still opens.
   await page.reload();

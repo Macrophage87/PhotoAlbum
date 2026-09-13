@@ -1,5 +1,5 @@
 /** "original" is the file as it was uploaded; "edited" is the full-size picture with any darkroom edits on it. */
-export type PhotoSize = "thumb" | "medium" | "original" | "edited" | "video" | "poster";
+export type PhotoSize = "thumb" | "medium" | "original" | "edited" | "source" | "video" | "poster";
 
 /** Versioned URL so caches drop stale copies after edits or visibility changes. */
 export function photoUrl(photo: { id: string; updatedAt: Date | string }, size: PhotoSize): string {

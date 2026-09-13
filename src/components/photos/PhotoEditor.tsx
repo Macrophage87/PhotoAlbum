@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useId, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Button, Label } from "@/components/ui";
-import { NEUTRAL, contrastTerms, hasEdits, warmthChannels, type PhotoEdits } from "@/lib/images/edits";
+import { LEVELS_PERCENTILES, NEUTRAL, contrastTerms, hasEdits, levelsStretch, warmthChannels, type PhotoEdits } from "@/lib/images/edits";
 import { savePhotoEdits } from "@/app/photos/[id]/actions";
 
 type Crop = { x: number; y: number; w: number; h: number };
@@ -26,18 +26,38 @@ export function PhotoEditor({ photoId, src, initial, onDone }: { photoId: string
   const [pending, start] = useTransition();
 
   const set = <K extends keyof PhotoEdits>(k: K, v: PhotoEdits[K]) => setEdits((e) => ({ ...e, [k]: v }));
+  // Measured from the picture on screen once it has loaded, so the auto-levels preview is the real stretch for this
+  // photograph rather than a guess. The server measures the full-size original, so the two can differ a shade.
+  const [levels, setLevels] = useState<{ mul: number; off: number } | null>(null);
+  const imgRef = useRef<HTMLImageElement>(null);
   const brightness = edits.brightness ?? NEUTRAL.brightness;
   const contrast = edits.contrast ?? NEUTRAL.contrast;
   const saturation = edits.saturation ?? NEUTRAL.saturation;
   const warmth = edits.warmth ?? NEUTRAL.warmth;
   const rotate = edits.rotate ?? 0;
 
-  // Warmth and contrast together, as the server does them: a per-channel multiply with a mid-grey offset.
+  // Auto levels, then warmth and contrast, in the order the server applies them. Two straight lines one after the
+  // other are one straight line, so both fold into a single colour matrix: multiply by (warmth · contrast · levels),
+  // then add the levels offset carried through the second multiply, plus contrast's own mid-grey offset.
   const [wr, wg, wb] = warmthChannels(warmth);
   const { mul, off } = contrastTerms(contrast);
-  const offset = off / 255;
-  const matrix = [wr * mul, 0, 0, 0, offset, 0, wg * mul, 0, 0, offset, 0, 0, wb * mul, 0, offset, 0, 0, 0, 1, 0].join(" ");
+  const auto = edits.auto ? levels : null;
+  const channel = (w: number) => w * mul * (auto?.mul ?? 1);
+  const offsetFor = (w: number) => (w * mul * (auto?.off ?? 0) + off) / 255;
+  const matrix = [
+    channel(wr), 0, 0, 0, offsetFor(wr),
+    0, channel(wg), 0, 0, offsetFor(wg),
+    0, 0, channel(wb), 0, offsetFor(wb),
+    0, 0, 0, 1, 0,
+  ].join(" ");
   const draft: PhotoEdits = { ...edits, crop: crop.w < 1 || crop.h < 1 || crop.x > 0 || crop.y > 0 ? crop : undefined };
+
+  // Re-read the levels whenever the picture, or the part of it being kept, changes.
+  const remeasure = useCallback(() => {
+    const img = imgRef.current;
+    setLevels(img?.complete ? measureLevels(img, crop) : null);
+  }, [crop]);
+  useEffect(() => { remeasure(); }, [remeasure, src]);
 
   const save = () => start(async () => {
     setMessage(null);
@@ -72,6 +92,8 @@ export function PhotoEditor({ photoId, src, initial, onDone }: { photoId: string
             alt="The photo as it will look"
             className="max-h-[50vh] max-w-full object-contain block"
             style={{ filter: `url(#${filterId}) brightness(${brightness}) saturate(${saturation})` }}
+            ref={imgRef}
+            onLoad={() => remeasure()}
           />
         </div>
         {cropping && <CropOverlay crop={crop} onChange={setCrop} />}
@@ -86,7 +108,12 @@ export function PhotoEditor({ photoId, src, initial, onDone }: { photoId: string
         <Button size="sm" variant={edits.auto ? "primary" : "secondary"} onClick={() => set("auto", !edits.auto)}>Auto levels</Button>
         <Button size="sm" variant={edits.sharpen ? "primary" : "secondary"} onClick={() => set("sharpen", !edits.sharpen)}>Sharpen</Button>
       </div>
-      {edits.auto && <p className="text-xs text-muted">Auto levels and sharpening are applied when you save; the preview does not show them.</p>}
+      {(edits.auto && !levels) || edits.sharpen ? (
+        <p className="text-xs text-muted">
+          {edits.sharpen ? "Sharpening is applied when you save; it is too fine to show at this size. " : ""}
+          {edits.auto && !levels ? "There is nothing here for auto levels to stretch, so it will leave this photo as it is." : ""}
+        </p>
+      ) : null}
 
       <div className="grid sm:grid-cols-2 gap-x-6 gap-y-3">
         <Slider label="Brightness" value={brightness} min={0.4} max={1.8} step={0.02} neutral={1} onChange={(v) => set("brightness", v)} />
@@ -104,6 +131,49 @@ export function PhotoEditor({ photoId, src, initial, onDone }: { photoId: string
       {message && <p role="alert" className="text-sm text-red-800">{message}</p>}
     </div>
   );
+}
+
+/**
+ * Read the picture's own levels: the brightness at the first and ninety-ninth percentile, which is where auto levels
+ * pulls to black and to white. Measured on a small copy, which is plenty for a straight line and costs nothing.
+ */
+function measureLevels(img: HTMLImageElement, crop: Crop): { mul: number; off: number } | null {
+  try {
+    const natural = { w: img.naturalWidth || 0, h: img.naturalHeight || 0 };
+    if (!natural.w || !natural.h) return null;
+    // Only the part the crop keeps: the server stretches the levels of the cropped picture, not of the whole frame.
+    const src = { x: crop.x * natural.w, y: crop.y * natural.h, w: Math.max(1, crop.w * natural.w), h: Math.max(1, crop.h * natural.h) };
+    const width = Math.max(1, Math.round(Math.min(200, src.w)));
+    const height = Math.max(1, Math.round((src.h / src.w) * width));
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    if (!ctx) return null;
+    ctx.drawImage(img, src.x, src.y, src.w, src.h, 0, 0, width, height);
+    const { data } = ctx.getImageData(0, 0, width, height);
+    const histogram = new Array<number>(256).fill(0);
+    let counted = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      if (data[i + 3] < 8) continue; // ignore what is transparent
+      histogram[Math.round(0.2126 * data[i] + 0.7152 * data[i + 1] + 0.0722 * data[i + 2])] += 1;
+      counted += 1;
+    }
+    if (!counted) return null;
+    const at = (percent: number) => {
+      let seen = 0;
+      const target = (counted * percent) / 100;
+      for (let v = 0; v < 256; v += 1) {
+        seen += histogram[v];
+        if (seen >= target) return v;
+      }
+      return 255;
+    };
+    return levelsStretch(at(LEVELS_PERCENTILES.lower), at(LEVELS_PERCENTILES.upper));
+  } catch {
+    // A canvas the browser will not let us read (it should be same-origin, but never break the editor over it).
+    return null;
+  }
 }
 
 function Slider({ label, value, min, max, step, neutral, onChange }: { label: string; value: number; min: number; max: number; step: number; neutral: number; onChange: (v: number) => void }) {

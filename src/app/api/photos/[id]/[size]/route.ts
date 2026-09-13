@@ -33,7 +33,7 @@ export function parseRange(header: string | null, size: number): { start: number
  */
 export async function GET(request: Request, { params }: { params: Promise<{ id: string; size: string }> }) {
   const { id, size } = await params;
-  if (!["thumb", "medium", "original", "edited", "video", "poster"].includes(size)) return new Response("Not found", { status: 404 });
+  if (!["thumb", "medium", "original", "edited", "source", "video", "poster"].includes(size)) return new Response("Not found", { status: 404 });
 
   const photo = await db.photo.findUnique({
     where: { id },
@@ -62,6 +62,14 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     if (!video?.poster) return new Response("Not ready", { status: 404 });
     key = video.poster.key;
     contentType = "image/jpeg";
+  } else if (size === "source") {
+    // The picture without any darkroom edits, at medium size, for the editor. An unedited item has no such file
+    // because its medium copy already is one.
+    const r = (photo.renditions as Renditions | null);
+    const chosen = r?.source ?? r?.medium;
+    if (!chosen) return new Response("Not ready", { status: 404 });
+    key = chosen.key;
+    contentType = MIME[key.split(".").pop() ?? ""] ?? "image/webp";
   } else if (size === "edited") {
     // The whole picture as it is now. An item with no edits has no such file, so the original is the right answer.
     const full = (photo.renditions as Renditions | null)?.full;

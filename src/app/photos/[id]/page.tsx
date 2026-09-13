@@ -140,7 +140,8 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
             ) : null}
             {canEditPixels && photo.kind === "PHOTO" && photo.status === "READY" && (
               <div className="mt-3">
-                <PhotoEditorPanel photoId={photo.id} src={photoUrl(photo, "medium")} initial={editsOf(photo.edits)} edited={Boolean(photo.edits)} />
+                {/* The editor starts from the picture without its edits, so reopening it does not apply them a second time. */}
+                <PhotoEditorPanel photoId={photo.id} src={photoUrl(photo, photo.edits ? "source" : "medium")} initial={editsOf(photo.edits)} edited={Boolean(photo.edits)} />
               </div>
             )}
             {photo.title && <h1 className="mt-3 text-xl font-semibold font-display">{photo.title}</h1>}

@@ -61,6 +61,23 @@ export function warmthChannels(warmth: number): [number, number, number] {
   return [1 + 0.18 * w, 1 + 0.02 * w, 1 - 0.18 * w];
 }
 
+/**
+ * Where auto levels starts and stops: the same percentiles sharp's `normalise` uses, so the browser measuring the
+ * picture and the server stretching it are working to the same ends of the range.
+ */
+export const LEVELS_PERCENTILES = { lower: 1, upper: 99 } as const;
+
+/**
+ * The straight line that stretches a picture's levels to fill the range: everything at or below `low` goes to black,
+ * everything at or above `high` to white. Returns null when there is nothing worth stretching, which is what keeps
+ * auto levels from wrecking a photograph that is deliberately soft or low contrast.
+ */
+export function levelsStretch(low: number, high: number): { mul: number; off: number } | null {
+  if (!(high > low) || high - low < 4) return null;
+  const mul = 255 / (high - low);
+  return { mul, off: -low * mul };
+}
+
 /** Contrast around mid grey, as a multiplier and an offset in 0-255 terms. */
 export function contrastTerms(contrast: number): { mul: number; off: number } {
   return { mul: contrast, off: 128 * (1 - contrast) };
@@ -81,7 +98,7 @@ export function applyEdits(img: Sharp, edits: PhotoEdits, size: { width: number;
   }
   if (edits.flip) out = out.flop();
   if (edits.rotate) out = out.rotate(edits.rotate);
-  if (edits.auto) out = out.normalise();
+  if (edits.auto) out = out.normalise({ lower: LEVELS_PERCENTILES.lower, upper: LEVELS_PERCENTILES.upper });
   const warmth = edits.warmth ?? 0;
   const contrast = edits.contrast ?? 1;
   if (warmth !== 0 || contrast !== 1) {
