@@ -77,7 +77,7 @@ export function LightboxInfo({ photoId, share }: { photoId: string; share?: { to
         )}
         {info.editable && editingDate && (
           <form className="mt-2 space-y-2" onSubmit={(e) => { e.preventDefault(); const fd = new FormData(e.currentTarget); apply(() => setPhotoDate(info.id, fd)); }}>
-            <input type="datetime-local" name="takenAt" aria-label="Date taken" defaultValue={info.takenAt ? wallInputValue(info.takenAt, info.tzOffsetMin) : ""} required className="h-8 rounded px-2 text-black text-sm w-full" />
+            <input type="datetime-local" name="takenAt" aria-label="Date taken" defaultValue={info.takenAt ? wallInputValue(info.takenAt, info.tzOffsetMin) : ""} required className="h-8 rounded px-2 bg-white text-black [color-scheme:light] text-sm w-full" />
             <div className="flex flex-wrap gap-2">
               <button type="submit" disabled={pending} className="px-2 py-1 rounded bg-white text-black text-xs font-medium disabled:opacity-60">Save date</button>
               <button type="button" disabled={pending} onClick={() => apply(() => resetPhotoDateToCamera(info.id))} className="px-2 py-1 rounded border border-white/40 text-xs hover:bg-white/10 disabled:opacity-60">Use camera date</button>

@@ -14,6 +14,7 @@ export const photoCardSelect = {
   lat: true,
   lng: true,
   gpsSource: true,
+  placeName: true,
   caption: true,
   originalName: true,
   updatedAt: true,

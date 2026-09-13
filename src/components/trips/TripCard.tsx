@@ -5,10 +5,12 @@ import { formatDayRange } from "@/lib/time/format";
 import { dateColumnToDay } from "@/lib/time/local-day";
 import { getTheme, themeToCssVars } from "@/themes";
 import { Badge } from "@/components/ui";
+import { FavouriteButton } from "@/components/favourites/FavouriteButton";
+import type { FavouriteState } from "@/lib/favourites/queries";
 
 const visibilityLabel = { PRIVATE: null, LINK: "Link", PUBLIC: "Public" } as const;
 
-export function TripCard({ trip, cover, showVisibility }: { trip: TripCardData; cover: { id: string; updatedAt: Date } | null; showVisibility: boolean }) {
+export function TripCard({ trip, cover, showVisibility, favourite }: { trip: TripCardData; cover: { id: string; updatedAt: Date } | null; showVisibility: boolean; /** Members only: this member\u2019s mark and the family\u2019s total, which is also the order these are listed in. */ favourite?: FavouriteState | null }) {
   const theme = getTheme(trip.themeKey);
   const vis = visibilityLabel[trip.visibility];
   return (
@@ -19,6 +21,11 @@ export function TripCard({ trip, cover, showVisibility }: { trip: TripCardData; 
           <img src={photoUrl(cover, "medium")} alt="" className="w-full h-full object-cover transition-transform group-hover:scale-[1.02]" />
         ) : (
           <div className="w-full h-full" style={{ background: `linear-gradient(135deg, ${theme.palette.primary}, ${theme.palette.accent})` }} />
+        )}
+        {favourite && (
+          <span className="absolute top-2 left-2 rounded-full bg-black/45 backdrop-blur-sm">
+            <FavouriteButton kind="trip" id={trip.id} initial={favourite} dark size="sm" />
+          </span>
         )}
         {showVisibility && vis && (
           <Badge tone={trip.visibility === "PUBLIC" ? "success" : "warning"} className="absolute top-2 right-2 shadow">

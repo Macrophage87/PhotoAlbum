@@ -1,4 +1,5 @@
 import type { PhotoCard } from "@/lib/photos/queries";
+import type { FavouriteState } from "@/lib/favourites/queries";
 import { photoUrl } from "@/lib/photos/urls";
 import type { GridPhoto } from "./PhotoGrid";
 
@@ -10,7 +11,7 @@ export function uploaderLabel(name: string | null | undefined, email?: string | 
   return name?.trim() || email?.split("@")[0]?.trim() || "a family member";
 }
 
-export function toGridPhoto(p: PhotoCard, badge?: string | null, member = false): GridPhoto {
+export function toGridPhoto(p: PhotoCard, badge?: string | null, member = false, favourite?: FavouriteState | null): GridPhoto {
   return {
     uploadedBy: member ? uploaderLabel(p.uploader?.name, p.uploader?.email) : null,
     canTag: member && p.status === "READY",
@@ -31,5 +32,9 @@ export function toGridPhoto(p: PhotoCard, badge?: string | null, member = false)
     caption: p.caption,
     alt: p.caption ?? p.title ?? p.originalName,
     badge: badge ?? (p.gpsSource === "TRACK" ? "from track" : null),
+    takenAt: p.takenAt?.toISOString() ?? null,
+    tzOffsetMin: p.tzOffsetMin,
+    placeName: p.placeName,
+    favourite: member ? favourite ?? null : null,
   };
 }

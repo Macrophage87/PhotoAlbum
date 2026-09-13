@@ -35,6 +35,15 @@ export function CollectionGallery({ collectionId, slug, photos, editable, emptyM
       setMode("view");
     });
 
+  /** Move one item one place, for touch and for the keyboard. */
+  const swap = (from: number, to: number) =>
+    setOrder((prev) => {
+      if (to < 0 || to >= prev.length) return prev;
+      const next = [...prev];
+      const [item] = next.splice(from, 1);
+      next.splice(to, 0, item);
+      return next;
+    });
   const moveTo = (targetId: string) => {
     if (!dragging || dragging === targetId) return;
     setOrder((prev) => {
@@ -102,14 +111,22 @@ export function CollectionGallery({ collectionId, slug, photos, editable, emptyM
             <li
               key={p.id}
               draggable
-              onDragStart={() => setDragging(p.id)}
-              onDragOver={(e) => { e.preventDefault(); moveTo(p.id); }}
+              // Firefox refuses to start a drag unless something is put on the dataTransfer, which is why dragging
+              // these never worked. Dropping is handled too, rather than relying on dragover alone.
+              onDragStart={(e) => { e.dataTransfer.setData("text/plain", p.id); e.dataTransfer.effectAllowed = "move"; setDragging(p.id); }}
+              onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; moveTo(p.id); }}
+              onDrop={(e) => { e.preventDefault(); moveTo(p.id); setDragging(null); }}
               onDragEnd={() => setDragging(null)}
-              className={`relative aspect-square rounded-theme overflow-hidden border cursor-grab ${dragging === p.id ? "opacity-50 border-primary" : "border-border"}`}
+              className={`relative aspect-square rounded-theme overflow-hidden border ${dragging === p.id ? "opacity-50 border-primary" : "border-border"}`}
             >
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src={p.thumbUrl} alt="" className="w-full h-full object-cover pointer-events-none" />
               <span className="absolute top-1 left-1 text-[10px] bg-black/60 text-white rounded px-1.5 py-0.5">{i + 1}</span>
+              {/* Dragging does not exist on a phone and is awkward with a keyboard, so the same move is a button. */}
+              <span className="absolute inset-x-1 bottom-1 flex justify-between">
+                <button type="button" aria-label={`Move ${p.caption ?? p.alt} earlier`} disabled={i === 0} className="rounded bg-black/60 text-white px-1.5 text-xs disabled:opacity-30" onClick={() => swap(i, i - 1)}>‹</button>
+                <button type="button" aria-label={`Move ${p.caption ?? p.alt} later`} disabled={i === order.length - 1} className="rounded bg-black/60 text-white px-1.5 text-xs disabled:opacity-30" onClick={() => swap(i, i + 1)}>›</button>
+              </span>
             </li>
           ))}
         </ul>

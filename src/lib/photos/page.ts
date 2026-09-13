@@ -1,5 +1,6 @@
 import { db } from "@/lib/db";
-import type { Prisma } from "@/generated/prisma/client";
+import { Prisma } from "@/generated/prisma/client";
+import { favouriteOrderSql } from "@/lib/favourites/queries";
 import { photoCardSelect, type PhotoCard } from "./queries";
 import { NOT_TRASHED } from "@/lib/photos/trash";
 
@@ -8,10 +9,35 @@ export const GALLERY_PAGE = 240;
 
 export type PhotoPage = { photos: PhotoCard[]; nextCursor: string | null; total: number };
 
+/** How a gallery is ordered: favourites first (the default), or straight through in the order the photos were taken. */
+export type PhotoOrder = "favourites" | "taken";
+
 /** One page of a trip's gallery in capture order, with a cursor (the last item's id) for the next page. */
-export async function tripPhotoPage(tripId: string, opts: { uploaderId?: string; cursor?: string | null; take?: number } = {}): Promise<PhotoPage> {
+export async function tripPhotoPage(tripId: string, opts: { uploaderId?: string; cursor?: string | null; take?: number; viewerId?: string | null; order?: PhotoOrder } = {}): Promise<PhotoPage> {
   const take = opts.take ?? GALLERY_PAGE;
   const where: Prisma.PhotoWhereInput = { tripId, ...NOT_TRASHED, ...(opts.uploaderId ? { uploaderId: opts.uploaderId } : {}), status: { in: ["READY", "PENDING", "PROCESSING", "FAILED"] } };
+  const order = opts.order ?? "favourites";
+  if (order === "favourites") {
+    // Favourites lead, then the family's, then the order the day happened in. The cursor is how far down the list
+    // we are: the sort key is computed, so there is nothing stable to key from, and a page is 240 rows.
+    const skip = Number(opts.cursor ?? 0) || 0;
+    const [ids, total] = await Promise.all([
+      db.$queryRaw<{ id: string }[]>`
+        SELECT p.id FROM "Photo" p
+        WHERE p."tripId" = ${tripId} AND p."trashedAt" IS NULL
+          AND p.status IN ('READY', 'PENDING', 'PROCESSING', 'FAILED')
+          AND ${opts.uploaderId ? Prisma.sql`p."uploaderId" = ${opts.uploaderId}` : Prisma.sql`TRUE`}
+        ${favouriteOrderSql("photo", "p", opts.viewerId ?? null, Prisma.sql`p."takenAt" ASC NULLS LAST, p."createdAt" ASC, p.id ASC`)}
+        LIMIT ${take + 1} OFFSET ${skip}`,
+      db.photo.count({ where }),
+    ]);
+    const more = ids.length > take;
+    const wanted = (more ? ids.slice(0, take) : ids).map((i) => i.id);
+    const rows = await db.photo.findMany({ where: { id: { in: wanted } }, select: photoCardSelect });
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    const photos = wanted.map((id) => byId.get(id)).filter((p): p is PhotoCard => Boolean(p));
+    return { photos, nextCursor: more ? String(skip + take) : null, total };
+  }
   const [photos, total] = await Promise.all([
     db.photo.findMany({
       where,

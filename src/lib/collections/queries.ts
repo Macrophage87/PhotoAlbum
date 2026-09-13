@@ -1,5 +1,6 @@
 import { db } from "@/lib/db";
-import type { Prisma } from "@/generated/prisma/client";
+import { favouriteOrderSql } from "@/lib/favourites/queries";
+import { Prisma } from "@/generated/prisma/client";
 import type { Viewer } from "@/lib/auth/viewer";
 import { visibleContainersWhere } from "@/lib/auth/access";
 import { photoCardSelect, type PhotoCard } from "@/lib/photos/queries";
@@ -22,13 +23,17 @@ export type CollectionCardData = Prisma.CollectionGetPayload<{ select: typeof co
 /** Collections listed on global surfaces: everything for members, PUBLIC only for anonymous visitors. */
 /** Collections for the front page, most recently touched first, optionally narrowed by name, and paged. */
 export async function listVisibleCollections(viewer: Viewer, opts: { q?: string | null; take?: number; skip?: number } = {}): Promise<CollectionCardData[]> {
-  return db.collection.findMany({
-    where: { ...visibleContainersWhere(viewer), ...(opts.q ? { title: { contains: opts.q, mode: "insensitive" as const } } : {}) },
-    orderBy: { updatedAt: "desc" },
-    select: collectionCardSelect,
-    ...(opts.take ? { take: opts.take } : {}),
-    ...(opts.skip ? { skip: opts.skip } : {}),
-  });
+  const where = { ...visibleContainersWhere(viewer), ...(opts.q ? { title: { contains: opts.q, mode: "insensitive" as const } } : {}) };
+  // Same order as the trips: mine, then the family's, then most recently touched.
+  const ids = await db.$queryRaw<{ id: string }[]>`
+    SELECT c.id FROM "Collection" c
+    WHERE ${viewer.kind === "user" ? Prisma.sql`TRUE` : Prisma.sql`c.visibility = 'PUBLIC'`}
+      AND ${opts.q ? Prisma.sql`c.title ILIKE ${"%" + opts.q + "%"}` : Prisma.sql`TRUE`}
+    ${favouriteOrderSql("collection", "c", viewer.kind === "user" ? viewer.user.id : null, Prisma.sql`c."updatedAt" DESC, c.id DESC`)}
+    LIMIT ${opts.take ?? 1000} OFFSET ${opts.skip ?? 0}`;
+  const rows = await db.collection.findMany({ where: { ...where, id: { in: ids.map((i) => i.id) } }, select: collectionCardSelect });
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  return ids.map((i) => byId.get(i.id)).filter((r): r is CollectionCardData => Boolean(r));
 }
 
 export async function countVisibleCollections(viewer: Viewer, q?: string | null): Promise<number> {
@@ -58,13 +63,26 @@ export async function collectionCoverFor(collection: { id: string; coverPhoto: {
 export type CollectionItemCard = PhotoCard & { itemId: string; position: number };
 
 /** Items in display order. Every status is included so members see processing tiles. */
-export async function listCollectionItems(collectionId: string): Promise<CollectionItemCard[]> {
+export async function listCollectionItems(collectionId: string, opts: { viewerId?: string | null; order?: "favourites" | "arranged" } = {}): Promise<CollectionItemCard[]> {
   const items = await db.collectionItem.findMany({
-    where: { collectionId },
+    where: { collectionId, photo: NOT_TRASHED },
     orderBy: [{ position: "asc" }, { createdAt: "asc" }],
     select: { id: true, position: true, photo: { select: photoCardSelect } },
   });
-  return items.map((i) => ({ ...i.photo, itemId: i.id, position: i.position }));
+  const cards = items.map((i) => ({ ...i.photo, itemId: i.id, position: i.position }));
+  // An empty collection has nothing to order, and asking Postgres about an empty list is an error, not a no-op.
+  if (!cards.length || (opts.order ?? "favourites") !== "favourites") return cards;
+  // Favourites lead; the collection's own arrangement is the tie-break, so everything else stays where it was put.
+  const state = await db.$queryRaw<{ id: string; n: bigint; mine: boolean }[]>`
+    SELECT p.id,
+           (SELECT count(*) FROM "PhotoFavorite" f WHERE f."photoId" = p.id) AS n,
+           ${opts.viewerId ? Prisma.sql`EXISTS (SELECT 1 FROM "PhotoFavorite" m WHERE m."photoId" = p.id AND m."userId" = ${opts.viewerId})` : Prisma.sql`FALSE`} AS mine
+    FROM "Photo" p WHERE p.id IN (${Prisma.join(cards.map((c) => c.id))})`;
+  const by = new Map(state.map((s) => [s.id, { n: Number(s.n), mine: s.mine }]));
+  return cards
+    .map((c, i) => ({ c, i, f: by.get(c.id) ?? { n: 0, mine: false } }))
+    .sort((a, b) => Number(b.f.mine) - Number(a.f.mine) || b.f.n - a.f.n || a.i - b.i)
+    .map((x) => x.c);
 }
 
 /** Collections holding a photo, with membership for the picker on the photo page. */

@@ -341,7 +341,7 @@ test("a YouTube link becomes an embedded video with a stored poster and a click-
     }, { timeout: 30_000, intervals: [1000] })
     .toBe(1);
   await expect(page.getByRole("heading", { name: /3 photos/ })).toBeVisible();
-  await tile.locator("button").click();
+  await tile.locator("button:not([data-testid='favourite-photo'])").first().click();
   const dialog = page.getByRole("dialog");
   await expect(dialog.getByText("Playing sends your request to YouTube")).toBeVisible();
   await expect(dialog.locator("iframe")).toHaveCount(0);
@@ -380,7 +380,7 @@ test("a short clip is transcoded with a poster and streams with range requests; 
   expect(partial.headers()["content-range"]).toMatch(/^bytes 0-99\//);
   expect((await partial.body()).length).toBe(100);
   await page.goto("/trips/yosemite/photos");
-  await page.locator("li", { hasText: "0:02" }).first().locator("button").click();
+  await page.locator("li", { hasText: "0:02" }).first().locator("button:not([data-testid='favourite-photo'])").first().click();
   await expect(page.getByRole("dialog").locator("video")).toHaveAttribute("src", /\/video\?v=/);
 });
 
@@ -414,6 +414,9 @@ test("notes from the review screen and the item page are searchable, within what
 });
 
 test("the AI helper describes reviewed items once an admin opts in, and opted-out trips are never sent", async ({ context, page }) => {
+  // Two whole backfills, each waiting on a batch poll that runs on a thirty-second schedule: the default minute is
+  // not enough for the work this asks for, whatever the machine is doing.
+  test.setTimeout(240_000);
   await signIn(context, ADMIN);
   await page.goto("/admin");
   await expect(page.getByText("nothing is sent")).toBeVisible();
@@ -468,7 +471,7 @@ test("the AI helper describes reviewed items once an admin opts in, and opted-ou
   await page.getByRole("button", { name: "Send to the helper" }).click();
   await expect(page.getByText("Backfill submitted")).toBeVisible();
   await expect
-    .poll(async () => (await withDb((c) => c.query('SELECT status, succeeded FROM "AnnotationBatch" ORDER BY "createdAt" DESC LIMIT 1'))).rows[0], { timeout: 45_000, intervals: [1500] })
+    .poll(async () => (await withDb((c) => c.query('SELECT status, succeeded FROM "AnnotationBatch" ORDER BY "createdAt" DESC LIMIT 1'))).rows[0], { timeout: 120_000, intervals: [1500] })
     .toMatchObject({ status: "ENDED", succeeded: count });
   const described = await withDb((c) => c.query('SELECT count(*)::int AS n FROM "Photo" p JOIN "Trip" t ON t.id = p."tripId" WHERE t.slug = $1 AND p."annotatedAt" IS NOT NULL', ["yosemite"]));
   expect(described.rows[0].n).toBe(count);
@@ -500,7 +503,9 @@ test("the AI helper describes reviewed items once an admin opts in, and opted-ou
   await page.getByRole("button", { name: "Send to the helper" }).click();
   await expect(page.getByText("Backfill submitted")).toBeVisible();
   await expect
-    .poll(async () => (await withDb((c) => c.query('SELECT "placeEstimateName", "gpsSource" FROM "Photo" WHERE id = $1', [guessed.rows[0].id]))).rows[0], { timeout: 45_000, intervals: [1500] })
+    // The results are applied by a poll job on a thirty-second schedule, so allow for missing one and waiting out
+    // the next: forty-five seconds is one tick of slack, which is none at all.
+    .poll(async () => (await withDb((c) => c.query('SELECT "placeEstimateName", "gpsSource" FROM "Photo" WHERE id = $1', [guessed.rows[0].id]))).rows[0], { timeout: 120_000, intervals: [1500] })
     .toMatchObject({ placeEstimateName: "Washington Monument", gpsSource: "ESTIMATE" });
 });
 
@@ -883,6 +888,67 @@ test("the uploader crops and colour-corrects a photo, and the original stays unt
     .toEqual({ edits: null, width: before.medium.w });
   const reverted = (await withDb((c) => c.query('SELECT renditions FROM "Photo" WHERE id = $1', [id]))).rows[0];
   expect(reverted.renditions.full).toBeUndefined();
+});
+
+test("a favourite leads the list, and a tile says what it is on hover", async ({ context, page }) => {
+  await signIn(context, ADMIN);
+  await page.goto("/trips/acadia/photos");
+  const tiles = page.locator("ul li.tile-lazy");
+  await expect(tiles.first()).toBeVisible();
+  const before = await tiles.first().locator("img").getAttribute("src");
+  const count = await tiles.count();
+  expect(count).toBeGreaterThan(1);
+
+  // Mark the last one: it should move to the front, because a member's own favourites lead.
+  const last = tiles.nth(count - 1);
+  const lastSrc = await last.locator("img").getAttribute("src");
+  expect(lastSrc).not.toBe(before);
+  await last.getByTestId("favourite-photo").click();
+  await expect
+    .poll(async () => {
+      await page.reload();
+      return page.locator("ul li.tile-lazy").first().locator("img").getAttribute("src");
+    }, { timeout: 20_000, intervals: [1000] })
+    .toBe(lastSrc);
+  // The heart shows it is mine, and how many of us have marked it.
+  await expect(page.locator("ul li.tile-lazy").first().getByTestId("favourite-photo")).toHaveAttribute("aria-pressed", "true");
+
+  // What a tile says without opening it: the caption, and when and where.
+  const hover = page.locator("ul li.tile-lazy").first().getByTestId("tile-hover");
+  await expect(hover).toContainText(/Aug|Sep|\d{4}/);
+
+  // Trips are ordered the same way.
+  await page.goto("/");
+  // Not the "New trip" button, which is also a link starting /trips/.
+  const cards = page.locator("a[href^='/trips/']:not([href='/trips/new'])");
+  await expect(cards.first()).toBeVisible();
+  await page.getByTestId("favourite-trip").last().click();
+  const favourited = await page.getByTestId("favourite-trip").last().locator("xpath=ancestor::a").getAttribute("href");
+  await expect
+    .poll(async () => {
+      await page.reload();
+      return page.locator("a[href^='/trips/']:not([href='/trips/new'])").first().getAttribute("href");
+    }, { timeout: 20_000, intervals: [1000] })
+    .toBe(favourited);
+});
+
+test("the date troubleshooter shows every witness and lets one be taken", async ({ context, page }) => {
+  await signIn(context, ADMIN);
+  const scan = await withDb((c) => c.query(`SELECT id FROM "Photo" WHERE "takenAtSource" IN ('FILE_MTIME','UPLOAD_TIME') LIMIT 1`));
+  const row = scan.rows[0] ?? (await withDb((c) => c.query(`SELECT id FROM "Photo" WHERE kind = 'PHOTO' LIMIT 1`))).rows[0];
+  await page.goto(`/photos/${row.id}`);
+  await page.waitForLoadState("networkidle");
+  await page.getByRole("button", { name: "Where did this date come from?" }).click();
+  const report = page.getByTestId("date-report");
+  await expect(report).toBeVisible();
+  await expect(report).toContainText("The camera (EXIF DateTimeOriginal)");
+  await expect(report).toContainText("The file's modified time");
+  await expect(report).toContainText("When it was uploaded");
+  // Taking a reading records it as set by hand.
+  await report.getByRole("button", { name: "Use this" }).first().click();
+  await expect
+    .poll(async () => (await withDb((c) => c.query('SELECT "takenAtSource" FROM "Photo" WHERE id = $1', [row.id]))).rows[0].takenAtSource, { timeout: 20_000 })
+    .toBe("MANUAL");
 });
 
 test("a family member moves an item to the trash with a reason, and an admin restores it or deletes it for good", async ({ browser, context, page }) => {

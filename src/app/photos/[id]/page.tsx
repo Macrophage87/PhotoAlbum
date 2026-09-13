@@ -22,6 +22,7 @@ import { trashReasonLabel } from "@/lib/photos/trash";
 import { isWeakDate } from "@/lib/photos/date-from-neighbours";
 import { guessDateFromTrip } from "@/lib/photos/date-guess-query";
 import { NeighbourDate } from "@/components/photos/NeighbourDate";
+import { DateTroubleshooter } from "@/components/photos/DateTroubleshooter";
 import { CollectionsField, TripField } from "@/components/containers/PhotoContainerFields";
 import { mapThemeOf } from "@/lib/map/theme";
 import { getTheme } from "@/themes";
@@ -226,6 +227,7 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
             </Card>
 
             <AnnotationCard photoId={photo.id} annotation={photo.annotation as StoredAnnotation | null} source={photo.annotationSource} model={photo.annotationModel} error={photo.annotationError} optOut={photo.annotationOptOut} optOutReason={optOutWhy} active={gates.active} editable />
+            <div className="mb-2"><DateTroubleshooter photoId={photo.id} /></div>
             {neighbourGuess && <div className="mb-3"><NeighbourDate photoId={photo.id} guess={{ ...neighbourGuess, takenAt: neighbourGuess.takenAt.toISOString() }} /></div>}
             {isWeakDate(photo.takenAtSource, photo.takenAt) && (
               <EstimatedDate photoId={photo.id} estimatedDate={photo.estimatedDate} confidence={photo.estimatedDateConfidence} note={photo.estimatedDateNote} />
@@ -244,7 +246,7 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
                   <div className="text-xs font-medium">Date taken</div>
                   <p className="text-xs text-muted">Defaults to what the camera wrote in the file{photo.takenAtSource ? ` (currently ${photo.takenAtSource === "MANUAL" ? `set by ${photo.dateSetBy ? uploaderLabel(photo.dateSetBy.name, photo.dateSetBy.email) : "a family member"}` : SOURCE_LABEL[photo.takenAtSource] ?? photo.takenAtSource})` : ""}. Change it here when the camera was wrong or a scan has no date.</p>
                   <div className="flex flex-wrap gap-2">
-                    <input type="datetime-local" name="takenAt" aria-label="Date taken" defaultValue={photo.takenAt ? new Date(photo.takenAt.getTime() + (photo.tzOffsetMin ?? 0) * 60_000).toISOString().slice(0, 16) : ""} required className="h-8 rounded-theme border border-border px-2 text-sm" />
+                    <input type="datetime-local" name="takenAt" aria-label="Date taken" defaultValue={photo.takenAt ? new Date(photo.takenAt.getTime() + (photo.tzOffsetMin ?? 0) * 60_000).toISOString().slice(0, 16) : ""} required className="h-8 rounded-theme border border-border bg-surface text-text [color-scheme:light] px-2 text-sm" />
                     <Button type="submit" variant="secondary" size="sm">Save date</Button>
                     <Button type="submit" variant="secondary" size="sm" formAction={async () => { "use server"; await resetPhotoDateToCamera(photo.id); }}>Use camera date</Button>
                   </div>

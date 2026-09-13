@@ -182,6 +182,9 @@ model User {
   placesSet Photo[] @relation("PlaceSetBy")
   trashed   Photo[] @relation("TrashedBy")
   edited    Photo[] @relation("EditedBy")
+  favouritePhotos      PhotoFavorite[]
+  favouriteTrips       TripFavorite[]
+  favouriteCollections CollectionFavorite[]
   datesSet  Photo[] @relation("DateSetBy")
   tracks   Track[]
   collections     Collection[]
@@ -244,6 +247,7 @@ model Trip {
 
   activities Activity[]
   photos     Photo[]
+  favourites TripFavorite[]
   tracks     Track[]
 
   @@index([startDate])
@@ -390,6 +394,7 @@ model Photo {
   annotationRaw     MediaAnnotationRaw[]
   faces             Face[]
   animals           AnimalDetection[]
+  favourites        PhotoFavorite[]
   similarA          MediaSimilarity[] @relation("SimA")
   similarB          MediaSimilarity[] @relation("SimB")
 
@@ -424,8 +429,44 @@ model Collection {
   updatedAt    DateTime       @updatedAt
 
   items CollectionItem[]
+  favourites CollectionFavorite[]
 
   @@index([visibility])
+}
+
+/// A member marking something as one of theirs. Kept per person and per thing rather than as a count on the row, so
+/// "mine first, then the ones most of us liked" is answerable and nobody's choice overwrites anybody else's.
+model PhotoFavorite {
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  photoId   String
+  photo     Photo    @relation(fields: [photoId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@id([userId, photoId])
+  @@index([photoId])
+}
+
+model TripFavorite {
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tripId    String
+  trip      Trip     @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@id([userId, tripId])
+  @@index([tripId])
+}
+
+model CollectionFavorite {
+  userId       String
+  user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  collectionId String
+  collection   Collection @relation(fields: [collectionId], references: [id], onDelete: Cascade)
+  createdAt    DateTime   @default(now())
+
+  @@id([userId, collectionId])
+  @@index([collectionId])
 }
 
 model CollectionItem {

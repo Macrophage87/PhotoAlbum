@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { getViewer } from "@/lib/auth/viewer";
 import { ContainerSearch } from "@/components/containers/ContainerSearch";
+import { favouritesFor } from "@/lib/favourites/queries";
 import { countVisibleTrips, coverFor, listVisibleTrips } from "@/lib/trips/queries";
 import { collectionCoverFor, countVisibleCollections, listVisibleCollections } from "@/lib/collections/queries";
 import { CollectionCard } from "@/components/collections/CollectionCard";
@@ -23,7 +24,12 @@ export default async function HomePage({ searchParams }: PageProps<"/">) {
     countVisibleTrips(viewer, q),
     countVisibleCollections(viewer, q),
   ]);
-  const [covers, collectionCovers] = await Promise.all([Promise.all(trips.map((t) => coverFor(t))), Promise.all(collections.map((c) => collectionCoverFor(c)))]);
+  const [covers, collectionCovers, tripFavourites, collectionFavourites] = await Promise.all([
+    Promise.all(trips.map((t) => coverFor(t))),
+    Promise.all(collections.map((c) => collectionCoverFor(c))),
+    favouritesFor("trip", trips.map((t) => t.id), viewer),
+    favouritesFor("collection", collections.map((c) => c.id), viewer),
+  ]);
   const member = viewer.kind === "user";
   const pages = Math.max(Math.ceil(tripCount / PAGE), Math.ceil(collectionCount / PAGE));
   const href = (n: number) => `/?${new URLSearchParams({ ...(q ? { q } : {}), ...(n > 1 ? { page: String(n) } : {}) }).toString()}`;
@@ -44,7 +50,7 @@ export default async function HomePage({ searchParams }: PageProps<"/">) {
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
             {trips.map((t, i) => (
-              <TripCard key={t.id} trip={t} cover={covers[i]} showVisibility={member} />
+              <TripCard key={t.id} trip={t} cover={covers[i]} showVisibility={member} favourite={member ? tripFavourites.get(t.id) : null} />
             ))}
           </div>
         )}
@@ -62,7 +68,7 @@ export default async function HomePage({ searchParams }: PageProps<"/">) {
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
                 {collections.map((c, i) => (
-                  <CollectionCard key={c.id} collection={c} cover={collectionCovers[i]} showVisibility={member} />
+                  <CollectionCard key={c.id} collection={c} cover={collectionCovers[i]} showVisibility={member} favourite={member ? collectionFavourites.get(c.id) : null} />
                 ))}
               </div>
             )}

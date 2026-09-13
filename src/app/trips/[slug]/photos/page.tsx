@@ -1,4 +1,6 @@
 import { loadViewableTrip } from "@/lib/trips/access";
+import { getViewer } from "@/lib/auth/viewer";
+import { photoFavourites } from "@/lib/favourites/queries";
 import { tripPhotoPage } from "@/lib/photos/page";
 import { TripGallery } from "@/components/photos/TripGallery";
 import { db } from "@/lib/db";
@@ -14,11 +16,12 @@ export default async function TripPhotosPage({ params, searchParams }: PageProps
   // The uploader filter is a members-only control; anonymous requests never see the member list.
   const uploaderId = editable && typeof sp.uploader === "string" && sp.uploader ? sp.uploader : undefined;
   const [page, activities, members] = await Promise.all([
-    tripPhotoPage(trip.id, { uploaderId }),
+    tripPhotoPage(trip.id, { uploaderId, viewerId: editable ? (await getViewer()).user?.id ?? null : null }),
     editable ? db.activity.findMany({ where: { tripId: trip.id }, orderBy: { startTime: "asc" }, select: { id: true, title: true } }) : Promise.resolve([]),
     editable ? db.user.findMany({ where: { photos: { some: { tripId: trip.id } } }, orderBy: { name: "asc" }, select: { id: true, name: true, email: true } }) : Promise.resolve([]),
   ]);
   const photos = page.photos;
+  const favourites = await photoFavourites(photos.map((p) => p.id), await getViewer());
   const moreUrl = `/api/trips/${trip.slug}/photos${uploaderId ? `?uploader=${encodeURIComponent(uploaderId)}` : ""}`;
   return (
     <div className="space-y-4">
@@ -43,7 +46,7 @@ export default async function TripPhotosPage({ params, searchParams }: PageProps
         </div>
       </div>
       {editable && <YouTubeAddForm tripId={trip.id} defaultDate={dateColumnToDay(trip.startDate)} />}
-      <TripGallery key={`${moreUrl}:${page.total}:${photos[0]?.id ?? ""}:${photos[photos.length - 1]?.id ?? ""}`} photos={photos.map((p) => toGridPhoto(p, null, editable))} more={{ url: moreUrl, nextCursor: page.nextCursor, total: page.total }} activities={activities} editable={editable} emptyMessage={editable ? "No photos yet. Upload some to get started." : "No photos yet."} />
+      <TripGallery key={`${moreUrl}:${page.total}:${photos[0]?.id ?? ""}:${photos[photos.length - 1]?.id ?? ""}`} photos={photos.map((p) => toGridPhoto(p, null, editable, favourites.get(p.id)))} more={{ url: moreUrl, nextCursor: page.nextCursor, total: page.total }} activities={activities} editable={editable} emptyMessage={editable ? "No photos yet. Upload some to get started." : "No photos yet."} />
     </div>
   );
 }

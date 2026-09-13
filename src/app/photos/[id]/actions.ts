@@ -9,6 +9,7 @@ import { editsSchema, tidyEdits } from "@/lib/images/edits";
 import { requireUserOrThrow } from "@/lib/auth/viewer";
 import { trashSchema } from "@/lib/photos/trash";
 import { guessDateFromTrip, guessDatesForTrip } from "@/lib/photos/date-guess-query";
+import { dateReport, type DateReport } from "@/lib/photos/date-report";
 import { enqueue } from "@/lib/jobs/boss";
 import { QUEUES } from "@/lib/jobs/queues";
 import { pickActivityByTime, pickTripByDay } from "@/lib/photos/assign";
@@ -296,4 +297,22 @@ export async function setTripDatesFromNeighbours(tripId: string): Promise<number
   }
   revalidatePath("/trips", "layout");
   return n;
+}
+
+/** Where this item's date came from and what else disagrees, for the troubleshooting panel. */
+export async function loadDateReport(id: string): Promise<DateReport | null> {
+  await requireUserOrThrow();
+  return dateReport(id);
+}
+
+/** Take one of the readings the report lists, recorded as set by the member who agreed with it. */
+export async function applyReportedDate(id: string, iso: string): Promise<DateGuessResult> {
+  const user = await requireUserOrThrow();
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return { ok: false, message: "That is not a date" };
+  const photo = await db.photo.findUnique({ where: { id }, select: { id: true, tripId: true, gpsSource: true, tzOffsetMin: true, trip: { select: { timezone: true } } } });
+  if (!photo) return { ok: false, message: "Photo not found" };
+  const offset = photo.trip ? offsetMinutesInZone(at, photo.trip.timezone) : photo.tzOffsetMin ?? 0;
+  await applyInstant(photo, at, offset, "MANUAL", user.id);
+  return { ok: true, takenAt: at.toISOString(), tzOffsetMin: offset, source: "MANUAL", setBy: uploaderLabel(user.name, user.email) };
 }
