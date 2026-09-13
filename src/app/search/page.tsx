@@ -6,9 +6,9 @@ import { formatLocalTime } from "@/lib/time/format";
 import { uploaderLabel } from "@/components/photos/toGrid";
 import { AppShell, Container } from "@/components/layout/AppShell";
 import { SearchBox } from "@/components/search/SearchBox";
+import { CollectionFacetField, TripFacetField } from "@/components/containers/FacetFields";
 import { SearchResults, type SearchResult } from "@/components/search/SearchResults";
 import { Button } from "@/components/ui";
-import { db } from "@/lib/db";
 import { SelectionProvider } from "@/components/photos/selection";
 
 export const metadata = { title: "Search" };
@@ -31,12 +31,13 @@ export default async function SearchPage({ searchParams }: PageProps<"/search">)
   const kind: MediaKind | undefined = kindRaw === "PHOTO" || kindRaw === "VIDEO" || kindRaw === "EXTERNAL_VIDEO" ? (kindRaw as MediaKind) : undefined;
   const year = Number(str(sp.year));
   const params = { q, tripId: str(sp.trip), collectionId: str(sp.collection), uploaderId: member ? str(sp.uploader) : undefined, personId: member ? str(sp.person) : undefined, year: Number.isInteger(year) && year > 0 ? year : undefined, kind };
-  const [facets, hits, tripOptions, collectionOptions] = await Promise.all([
+  const [facets, hits] = await Promise.all([
     searchFacets(viewer),
     q ? searchMedia(viewer, params) : Promise.resolve([]),
-    member ? db.trip.findMany({ orderBy: { startDate: "desc" }, select: { id: true, title: true } }) : Promise.resolve([]),
-    member ? db.collection.findMany({ orderBy: { title: "asc" }, select: { id: true, title: true } }) : Promise.resolve([]),
   ]);
+  // Only the ones the query already names: the boxes search for the rest.
+  const currentTrip = facets.trips.find((t) => t.id === params.tripId) ?? null;
+  const currentCollection = facets.collections.find((c) => c.id === params.collectionId) ?? null;
   const results: SearchResult[] = hits.map((h) => ({
     id: h.id,
     thumbUrl: photoUrl(h, "thumb"),
@@ -66,18 +67,8 @@ export default async function SearchPage({ searchParams }: PageProps<"/search">)
             <SearchBox initial={q} />
           </div>
           <div className="flex flex-wrap gap-2 text-sm">
-            <select name="trip" defaultValue={params.tripId ?? ""} className={select} aria-label="Trip">
-              <option value="">Any trip</option>
-              {facets.trips.map((t) => (
-                <option key={t.id} value={t.id}>{t.title}</option>
-              ))}
-            </select>
-            <select name="collection" defaultValue={params.collectionId ?? ""} className={select} aria-label="Collection">
-              <option value="">Any collection</option>
-              {facets.collections.map((c) => (
-                <option key={c.id} value={c.id}>{c.title}</option>
-              ))}
-            </select>
+            <div className="w-52"><TripFacetField initial={currentTrip} /></div>
+            <div className="w-52"><CollectionFacetField initial={currentCollection} /></div>
             {member && facets.uploaders.length > 0 && (
               <select name="uploader" defaultValue={params.uploaderId ?? ""} className={select} aria-label="Uploaded by">
                 <option value="">Uploaded by anyone</option>
@@ -114,7 +105,7 @@ export default async function SearchPage({ searchParams }: PageProps<"/search">)
           </p>
         )}
         {results.length > 0 && (member ? (
-          <SelectionProvider trips={tripOptions} collections={collectionOptions}>
+          <SelectionProvider>
             <SearchResults results={results} member={member} />
           </SelectionProvider>
         ) : (

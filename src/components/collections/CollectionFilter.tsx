@@ -1,20 +1,32 @@
 "use client";
 
+import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { ContainerPicker, type Container } from "@/components/containers/ContainerPicker";
 
-/** A select that narrows a global page (timeline, map) to one collection via `?collection=<slug>`. */
-export function CollectionFilter({ collections, current, basePath }: { collections: { slug: string; title: string }[]; current: string; basePath: string }) {
+/**
+ * Narrows a global page (timeline, map) to one collection via `?collection=<slug>`. A search rather than a list of
+ * every collection, for the same reason as everywhere else: the list grows without limit and the box does not.
+ */
+export function CollectionFilter({ current, basePath }: { current: { slug: string; title: string } | null; basePath: string }) {
   const router = useRouter();
-  if (collections.length === 0) return null;
+  const [chosen, setChosen] = useState<Container | null>(current ? { id: current.slug, title: current.title, slug: current.slug } : null);
   return (
-    <label className="flex items-center gap-2 text-sm text-muted">
-      Show
-      <select value={current} onChange={(e) => router.push(e.target.value ? `${basePath}?collection=${encodeURIComponent(e.target.value)}` : basePath)} className="h-9 rounded-theme border border-border bg-surface px-2 text-sm text-text" aria-label="Collection filter">
-        <option value="">All trips</option>
-        {collections.map((c) => (
-          <option key={c.slug} value={c.slug}>Collection: {c.title}</option>
-        ))}
-      </select>
-    </label>
+    <div className="flex items-center gap-2 text-sm text-muted">
+      <span className="shrink-0">Show</span>
+      <div className="w-56">
+        <ContainerPicker
+          kind="collection"
+          value={chosen}
+          onChange={(v) => {
+            setChosen(v);
+            router.push(v?.slug ? `${basePath}?collection=${encodeURIComponent(v.slug)}` : basePath);
+          }}
+          allowNone
+          noneLabel="Everything"
+          placeholder="One collection…"
+        />
+      </div>
+    </div>
   );
 }

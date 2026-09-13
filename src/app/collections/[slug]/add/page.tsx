@@ -20,14 +20,16 @@ export default async function AddPhotosPage({ params, searchParams }: PageProps<
   const q = typeof sp.q === "string" && sp.q.trim() ? sp.q.trim().slice(0, 100) : null;
   const day = (v: unknown) => (typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null);
   const from = day(sp.from), to = day(sp.to);
-  const [page, trips] = await Promise.all([
+  // Only the trip the filter already names, so the page does not carry a list of every trip there has ever been.
+  const [page, named] = await Promise.all([
     candidatePhotoPage({ excludeCollectionId: collection.id, trip, q, from, to }),
-    db.trip.findMany({ orderBy: { startDate: "desc" }, select: { id: true, title: true } }),
+    trip && trip !== "none" ? db.trip.findUnique({ where: { id: trip }, select: { id: true, title: true } }) : Promise.resolve(null),
   ]);
+  const initialTrip = trip === "none" ? { id: "none", title: "Without a trip" } : named;
   return (
     <AddPhotosPicker
       collection={{ id: collection.id, slug, title: collection.title }}
-      trips={trips}
+      initialTrip={initialTrip}
       filter={{ trip, q, from, to }}
       initial={{ photos: page.photos.map((p) => toGridPhoto(p, null, true)), nextCursor: page.nextCursor, total: page.total }}
     />

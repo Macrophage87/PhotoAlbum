@@ -2,16 +2,16 @@
 
 import { createContext, useContext, useState, useTransition, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
-import { Button, Select } from "@/components/ui";
+import { Button } from "@/components/ui";
 import { bulkMoveToTrip } from "@/app/photos/bulk-actions";
 import { addToCollection } from "@/app/collections/actions";
 import { bulkSetPlace } from "@/app/photos/bulk-actions";
 import { PlacePicker, type PlaceValue } from "./PlacePicker";
+import { ContainerPicker, type Container } from "@/components/containers/ContainerPicker";
 import { mapThemeOf } from "@/lib/map/theme";
 import { getTheme } from "@/themes";
 import { previewAddToCollection, previewMoveToTrip } from "@/app/photos/exposure-actions";
 
-type Option = { id: string; title: string };
 type Ctx = { active: boolean; selected: Set<string>; toggle: (id: string) => void };
 const SelectionContext = createContext<Ctx | null>(null);
 
@@ -24,11 +24,12 @@ export function useSelectionContext(): Ctx | null {
  * Wraps any page of photo grids with a selection mode and a bar of bulk actions (add to trip, add to collection).
  * Both actions preview the exposure change and ask for confirmation when photos would become more visible.
  */
-export function SelectionProvider({ trips, collections, children }: { trips: Option[]; collections: Option[]; children: ReactNode }) {
+export function SelectionProvider({ children }: { children: ReactNode }) {
   const [active, setActive] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [tripId, setTripId] = useState("");
-  const [collectionId, setCollectionId] = useState("");
+  const [trip, setTrip] = useState<Container | null>(null);
+  const [moving, setMoving] = useState(false);
+  const [collection, setCollection] = useState<Container | null>(null);
   const [pending, start] = useTransition();
   const [notice, setNotice] = useState<string | null>(null);
   const [placing, setPlacing] = useState(false);
@@ -50,7 +51,7 @@ export function SelectionProvider({ trips, collections, children }: { trips: Opt
   };
   const moveToTrip = () =>
     start(async () => {
-      const target = tripId === "__none" ? null : tripId;
+      const target = trip?.id ?? null;
       const warnings = await previewMoveToTrip(ids, target);
       if (warnings.length && !window.confirm(`${warnings.join("\n")}\n\nContinue?`)) return;
       await bulkMoveToTrip(ids, target);
@@ -65,9 +66,10 @@ export function SelectionProvider({ trips, collections, children }: { trips: Opt
     });
   const addToCol = () =>
     start(async () => {
-      const warnings = await previewAddToCollection(ids, collectionId);
+      if (!collection) return;
+      const warnings = await previewAddToCollection(ids, collection.id);
       if (warnings.length && !window.confirm(`${warnings.join("\n")}\n\nContinue?`)) return;
-      const n = await addToCollection(collectionId, ids);
+      const n = await addToCollection(collection.id, ids);
       finish(`${n} photo${n === 1 ? "" : "s"} added to the collection.`);
     });
 
@@ -85,24 +87,13 @@ export function SelectionProvider({ trips, collections, children }: { trips: Opt
             <Button variant="ghost" size="sm" onClick={() => setSelected(new Set())}>None</Button>
             <span className="mx-1 text-border">|</span>
             <div className="w-44">
-              <Select aria-label="Trip to move to" value={tripId} onChange={(e) => setTripId(e.target.value)} className="h-8 text-sm">
-                <option value="">Add to trip…</option>
-                <option value="__none">No trip</option>
-                {trips.map((t) => (
-                  <option key={t.id} value={t.id}>{t.title}</option>
-                ))}
-              </Select>
+              <ContainerPicker kind="trip" value={trip} onChange={(v) => { setTrip(v); setMoving(true); }} allowNone noneLabel="No trip" placeholder="Add to trip…" />
             </div>
-            <Button size="sm" variant="secondary" disabled={!ids.length || !tripId || pending} onClick={moveToTrip}>Move</Button>
+            <Button size="sm" variant="secondary" disabled={!ids.length || !moving || pending} onClick={moveToTrip}>Move</Button>
             <div className="w-44">
-              <Select aria-label="Collection to add to" value={collectionId} onChange={(e) => setCollectionId(e.target.value)} className="h-8 text-sm">
-                <option value="">Add to collection…</option>
-                {collections.map((c) => (
-                  <option key={c.id} value={c.id}>{c.title}</option>
-                ))}
-              </Select>
+              <ContainerPicker kind="collection" value={collection} onChange={setCollection} placeholder="Add to collection…" />
             </div>
-            <Button size="sm" variant="secondary" disabled={!ids.length || !collectionId || pending} onClick={addToCol}>Add</Button>
+            <Button size="sm" variant="secondary" disabled={!ids.length || !collection || pending} onClick={addToCol}>Add</Button>
             <Button size="sm" variant="secondary" disabled={!ids.length || pending} onClick={() => setPlacing((v) => !v)}>Set a place…</Button>
             <Button variant="ghost" size="sm" onClick={() => { setActive(false); setSelected(new Set()); setPlacing(false); }}>Done</Button>
           </>

@@ -22,6 +22,7 @@ import { trashReasonLabel } from "@/lib/photos/trash";
 import { isWeakDate } from "@/lib/photos/date-from-neighbours";
 import { guessDateFromTrip } from "@/lib/photos/date-guess-query";
 import { NeighbourDate } from "@/components/photos/NeighbourDate";
+import { CollectionsField, TripField } from "@/components/containers/PhotoContainerFields";
 import { mapThemeOf } from "@/lib/map/theme";
 import { getTheme } from "@/themes";
 import { linkedPhotos } from "@/lib/photos/links";
@@ -65,8 +66,9 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
 
   const tripTheme = photo.trip ? (await db.trip.findUnique({ where: { id: photo.trip.id }, select: { themeKey: true } }))?.themeKey ?? null : null;
   const [gates, optOutWhy, faces, proposals, similar, people] = await Promise.all([annotationGates(), optOutReason(photo.id), peopleOnPhoto(photo.id), proposalsFor([photo.id]), similarTo(viewer, photo.id), db.person.findMany({ where: { kind: "HUMAN", optedOutAt: null }, orderBy: { name: "asc" }, select: { id: true, name: true } })]);
-  const [trips, activities, links, candidates, collections] = await Promise.all([
-    db.trip.findMany({ orderBy: { startDate: "desc" }, select: { id: true, title: true } }),
+  // No list of every trip and every collection any more: the pickers search for them, so this page loads the same
+  // whether the album holds five of each or five hundred.
+  const [activities, links, candidates, collections] = await Promise.all([
     photo.tripId ? db.activity.findMany({ where: { tripId: photo.tripId }, orderBy: { startTime: "asc" }, select: { id: true, title: true, startTime: true } }) : Promise.resolve([]),
     linkedPhotos(photo.id),
     photo.tripId
@@ -198,31 +200,15 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
                 </div>
                 <div>
                   <Label htmlFor="tripId">Trip</Label>
-                  <Select id="tripId" name="tripId" defaultValue={photo.tripId ?? ""}>
-                    <option value="">Not on a trip</option>
-                    {trips.map((t) => (
-                      <option key={t.id} value={t.id}>{t.title}</option>
-                    ))}
-                  </Select>
+                  <TripField initial={photo.trip ? { id: photo.trip.id, title: photo.trip.title } : null} />
                 </div>
                 <fieldset>
                   <input type="hidden" name="collectionsPresent" value="1" />
                   <legend className="text-sm font-medium mb-1">Collections</legend>
-                  {collections.length === 0 ? (
-                    <p className="text-sm text-muted">No collections yet. <Link href="/collections/new" className="text-primary hover:underline">Create one</Link>.</p>
-                  ) : (
-                    <div className="rounded-theme border border-border divide-y divide-border max-h-48 overflow-y-auto" data-testid="collection-picker">
-                      {collections.map((c) => (
-                        <label key={c.id} className="flex items-center gap-2 px-3 py-1.5 text-sm cursor-pointer hover:bg-surface-alt">
-                          <input type="checkbox" name="collectionIds" value={c.id} defaultChecked={c.member} />
-                          <span className="flex-1">{c.title}</span>
-                          {c.visibility !== "PRIVATE" && <span className="text-xs text-muted">{c.visibility === "PUBLIC" ? "public" : "shared by link"}</span>}
-                          {c.member && <Link href={`/collections/${c.slug}`} className="text-xs text-primary hover:underline">Open</Link>}
-                        </label>
-                      ))}
-                    </div>
-                  )}
-                  <p className="text-xs text-muted mt-1">Tick every collection this photo belongs in. A public or link-shared collection shows the photo to everyone who can open that collection.</p>
+                  <CollectionsField
+                    initial={collections.map((c) => ({ id: c.id, title: c.title, slug: c.slug, visibility: c.visibility }))}
+                    hint="Search for a collection to add this photo to, or take one off. A public or link-shared collection shows the photo to everyone who can open that collection."
+                  />
                 </fieldset>
                 {photo.tripId && (
                   <div>

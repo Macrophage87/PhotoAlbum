@@ -35,11 +35,15 @@ export default async function AdminPage() {
   const pg = petGates();
   const animalCounts = { sightings: await db.animalDetection.count(), confirmed: await db.animalDetection.count({ where: { status: "CONFIRMED" } }) };
   const [counts, decisions] = await Promise.all([faceCounts(fg.retentionDays), needsDecision()]);
-  const [gates, batches, tripOptions, collectionOptions] = await Promise.all([
+  const [gates, batches] = await Promise.all([
     annotationGates(),
     db.annotationBatch.findMany({ where: { parentId: null }, orderBy: { createdAt: "desc" }, take: 8 }),
-    db.trip.findMany({ orderBy: { startDate: "desc" }, select: { id: true, title: true } }),
-    db.collection.findMany({ orderBy: { title: "asc" }, select: { id: true, title: true } }),
+  ]);
+  // Names for the handful of scopes the run history actually mentions, rather than a list of everything there is.
+  const scopes = batches.map((b) => b.scope as { kind?: string; tripId?: string; collectionId?: string });
+  const [tripOptions, collectionOptions] = await Promise.all([
+    db.trip.findMany({ where: { id: { in: scopes.map((s) => s.tripId).filter((v): v is string => Boolean(v)) } }, select: { id: true, title: true } }),
+    db.collection.findMany({ where: { id: { in: scopes.map((s) => s.collectionId).filter((v): v is string => Boolean(v)) } }, select: { id: true, title: true } }),
   ]);
   const usageRows = await db.photo.findMany({ where: { annotationInputTokens: { not: null } }, select: { annotationModel: true, annotationInputTokens: true, annotationCacheReadTokens: true, annotationCacheWriteTokens: true, annotationOutputTokens: true, annotationBatched: true } });
   const spend = actualSpend(env().ANNOTATION_MODEL, usageRows.map((r) => ({ model: r.annotationModel, input: r.annotationInputTokens ?? 0, cacheRead: r.annotationCacheReadTokens ?? 0, cacheWrite: r.annotationCacheWriteTokens ?? 0, output: r.annotationOutputTokens ?? 0, batched: r.annotationBatched ?? false })));
@@ -98,8 +102,6 @@ export default async function AdminPage() {
           <AnnotationAdmin
             gates={{ envEnabled: gates.envEnabled, hasKey: gates.hasKey, optedInAt: gates.optedInAt?.toISOString() ?? null, active: gates.active }}
             model={gates.model}
-            trips={tripOptions}
-            collections={collectionOptions}
             spend={spend} rawRetentionDays={env().ANNOTATION_RAW_RETENTION_DAYS} batches={orderedBatches.map((b) => ({ id: b.id, parentId: b.parentId, running: !b.parentId && !b.runEndedAt && !b.cancelRequestedAt && b.status !== "FAILED", marker: b.parentId && (b.anthropicBatchId.startsWith("failed-") || (b.status === "FAILED" && b.requested === 0)) ? (b.anthropicBatchId.endsWith("-retry") ? "restart" : "error") : null, canceled: b.canceled, skippedReasons: (b.skippedReasons as Record<string, number> | null) ?? null, status: b.status, requested: b.requested, succeeded: b.succeeded, errored: b.errored, skipped: b.skipped, createdAt: b.createdAt.toISOString(), endedAt: b.endedAt?.toISOString() ?? null, scope: describeScope(b.scope) }))}
           />
         </section>

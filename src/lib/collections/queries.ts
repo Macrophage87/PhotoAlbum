@@ -20,8 +20,19 @@ export const collectionCardSelect = {
 export type CollectionCardData = Prisma.CollectionGetPayload<{ select: typeof collectionCardSelect }>;
 
 /** Collections listed on global surfaces: everything for members, PUBLIC only for anonymous visitors. */
-export async function listVisibleCollections(viewer: Viewer): Promise<CollectionCardData[]> {
-  return db.collection.findMany({ where: visibleContainersWhere(viewer), orderBy: { updatedAt: "desc" }, select: collectionCardSelect });
+/** Collections for the front page, most recently touched first, optionally narrowed by name, and paged. */
+export async function listVisibleCollections(viewer: Viewer, opts: { q?: string | null; take?: number; skip?: number } = {}): Promise<CollectionCardData[]> {
+  return db.collection.findMany({
+    where: { ...visibleContainersWhere(viewer), ...(opts.q ? { title: { contains: opts.q, mode: "insensitive" as const } } : {}) },
+    orderBy: { updatedAt: "desc" },
+    select: collectionCardSelect,
+    ...(opts.take ? { take: opts.take } : {}),
+    ...(opts.skip ? { skip: opts.skip } : {}),
+  });
+}
+
+export async function countVisibleCollections(viewer: Viewer, q?: string | null): Promise<number> {
+  return db.collection.count({ where: { ...visibleContainersWhere(viewer), ...(q ? { title: { contains: q, mode: "insensitive" as const } } : {}) } });
 }
 
 export async function getCollectionBySlug(slug: string) {
@@ -57,11 +68,15 @@ export async function listCollectionItems(collectionId: string): Promise<Collect
 }
 
 /** Collections holding a photo, with membership for the picker on the photo page. */
+/**
+ * The collections an item is in. Deliberately not every collection there is: the edit form searches for the others,
+ * because a family that has been at this a while has far more of them than a list on a form should ever hold.
+ */
 export async function collectionsForPhoto(photoId: string) {
-  const [all, mine] = await Promise.all([
-    db.collection.findMany({ orderBy: { title: "asc" }, select: { id: true, slug: true, title: true, visibility: true } }),
-    db.collectionItem.findMany({ where: { photoId }, select: { collectionId: true } }),
-  ]);
-  const held = new Set(mine.map((m) => m.collectionId));
-  return all.map((c) => ({ ...c, member: held.has(c.id) }));
+  const mine = await db.collectionItem.findMany({
+    where: { photoId },
+    orderBy: { collection: { title: "asc" } },
+    select: { collection: { select: { id: true, slug: true, title: true, visibility: true } } },
+  });
+  return mine.map((m) => m.collection);
 }

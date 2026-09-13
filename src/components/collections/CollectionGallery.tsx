@@ -2,7 +2,8 @@
 
 import { useState, useTransition } from "react";
 import { PhotoGrid, type GridPhoto } from "@/components/photos/PhotoGrid";
-import { Button, Select } from "@/components/ui";
+import { Button } from "@/components/ui";
+import { ContainerPicker, type Container } from "@/components/containers/ContainerPicker";
 import { addToCollection, removeFromCollection, reorderCollection, setCollectionCover, sortCollectionByDate } from "@/app/collections/actions";
 import { bulkMoveToTrip, bulkTrash } from "@/app/photos/bulk-actions";
 import { BulkTrashControl } from "@/components/photos/TrashButton";
@@ -14,15 +15,15 @@ export type CollectionGridPhoto = GridPhoto & { itemId: string };
  * A collection's items for members: select to remove or set the cover, arrange by drag, or sort by date.
  * Read-only viewers get the plain grid.
  */
-type Option = { id: string; title: string };
 
-export function CollectionGallery({ collectionId, slug, photos, editable, emptyMessage, trips = [], collections = [] }: { collectionId: string; slug: string; photos: CollectionGridPhoto[]; editable: boolean; emptyMessage: string; trips?: Option[]; collections?: Option[] }) {
+export function CollectionGallery({ collectionId, slug, photos, editable, emptyMessage }: { collectionId: string; slug: string; photos: CollectionGridPhoto[]; editable: boolean; emptyMessage: string }) {
   const [mode, setMode] = useState<"view" | "select" | "arrange">("view");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [order, setOrder] = useState<CollectionGridPhoto[]>(photos);
   const [dragging, setDragging] = useState<string | null>(null);
-  const [tripId, setTripId] = useState("");
-  const [otherId, setOtherId] = useState("");
+  const [trip, setTrip] = useState<Container | null>(null);
+  const [moving, setMoving] = useState(false);
+  const [other, setOther] = useState<Container | null>(null);
   const confirmExposure = async (warnings: string[]) => warnings.length === 0 || window.confirm(`${warnings.join("\n")}\n\nContinue?`);
   const [pending, start] = useTransition();
   const ids = [...selected];
@@ -66,31 +67,20 @@ export function CollectionGallery({ collectionId, slug, photos, editable, emptyM
               <span className="mx-1 text-border">|</span>
               <Button size="sm" variant="secondary" disabled={ids.length !== 1 || pending} onClick={() => finish(() => setCollectionCover(slug, ids[0]))}>Set as cover</Button>
               <Button size="sm" variant="danger" disabled={!ids.length || pending} onClick={() => finish(() => removeFromCollection(collectionId, ids))}>Remove from collection</Button>
-              {trips.length > 0 && (
+              {(
                 <>
                   <div className="w-44">
-                    <Select aria-label="Trip to move to" value={tripId} onChange={(e) => setTripId(e.target.value)} className="h-8 text-sm">
-                      <option value="">Add to trip…</option>
-                      <option value="__none">No trip</option>
-                      {trips.map((t) => (
-                        <option key={t.id} value={t.id}>{t.title}</option>
-                      ))}
-                    </Select>
+                    <ContainerPicker kind="trip" value={trip} onChange={(v) => { setTrip(v); setMoving(true); }} allowNone noneLabel="No trip" placeholder="Add to trip…" />
                   </div>
-                  <Button size="sm" variant="secondary" disabled={!ids.length || !tripId || pending} onClick={() => finish(async () => { const target = tripId === "__none" ? null : tripId; if (await confirmExposure(await previewMoveToTrip(ids, target))) await bulkMoveToTrip(ids, target); })}>Move</Button>
+                  <Button size="sm" variant="secondary" disabled={!ids.length || !moving || pending} onClick={() => finish(async () => { const target = trip?.id ?? null; if (await confirmExposure(await previewMoveToTrip(ids, target))) await bulkMoveToTrip(ids, target); })}>Move</Button>
                 </>
               )}
-              {collections.length > 0 && (
+              {(
                 <>
                   <div className="w-44">
-                    <Select aria-label="Collection to add to" value={otherId} onChange={(e) => setOtherId(e.target.value)} className="h-8 text-sm">
-                      <option value="">Add to collection…</option>
-                      {collections.map((c) => (
-                        <option key={c.id} value={c.id}>{c.title}</option>
-                      ))}
-                    </Select>
+                    <ContainerPicker kind="collection" value={other} onChange={setOther} placeholder="Add to collection…" />
                   </div>
-                  <Button size="sm" variant="secondary" disabled={!ids.length || !otherId || pending} onClick={() => finish(async () => { if (await confirmExposure(await previewAddToCollection(ids, otherId))) await addToCollection(otherId, ids); })}>Add</Button>
+                  <Button size="sm" variant="secondary" disabled={!ids.length || !other || pending} onClick={() => finish(async () => { if (!other) return; if (await confirmExposure(await previewAddToCollection(ids, other.id))) await addToCollection(other.id, ids); })}>Add</Button>
                 </>
               )}
               <BulkTrashControl count={ids.length} disabled={!ids.length || pending} onTrash={async (reason, note) => { await bulkTrash(ids, reason, note); setSelected(new Set()); }} />

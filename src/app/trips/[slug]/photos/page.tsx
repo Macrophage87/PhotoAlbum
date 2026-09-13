@@ -13,11 +13,9 @@ export default async function TripPhotosPage({ params, searchParams }: PageProps
   const { trip, editable } = await loadViewableTrip(slug, `/trips/${slug}/photos`);
   // The uploader filter is a members-only control; anonymous requests never see the member list.
   const uploaderId = editable && typeof sp.uploader === "string" && sp.uploader ? sp.uploader : undefined;
-  const [page, activities, trips, collections, members] = await Promise.all([
+  const [page, activities, members] = await Promise.all([
     tripPhotoPage(trip.id, { uploaderId }),
     editable ? db.activity.findMany({ where: { tripId: trip.id }, orderBy: { startTime: "asc" }, select: { id: true, title: true } }) : Promise.resolve([]),
-    editable ? db.trip.findMany({ where: { id: { not: trip.id } }, orderBy: { startDate: "desc" }, select: { id: true, title: true } }) : Promise.resolve([]),
-    editable ? db.collection.findMany({ orderBy: { title: "asc" }, select: { id: true, title: true } }) : Promise.resolve([]),
     editable ? db.user.findMany({ where: { photos: { some: { tripId: trip.id } } }, orderBy: { name: "asc" }, select: { id: true, name: true, email: true } }) : Promise.resolve([]),
   ]);
   const photos = page.photos;
@@ -45,7 +43,7 @@ export default async function TripPhotosPage({ params, searchParams }: PageProps
         </div>
       </div>
       {editable && <YouTubeAddForm tripId={trip.id} defaultDate={dateColumnToDay(trip.startDate)} />}
-      <TripGallery key={`${moreUrl}:${page.total}:${photos[0]?.id ?? ""}:${photos[photos.length - 1]?.id ?? ""}`} photos={photos.map((p) => toGridPhoto(p, null, editable))} more={{ url: moreUrl, nextCursor: page.nextCursor, total: page.total }} activities={activities} trips={trips} collections={collections} editable={editable} emptyMessage={editable ? "No photos yet. Upload some to get started." : "No photos yet."} />
+      <TripGallery key={`${moreUrl}:${page.total}:${photos[0]?.id ?? ""}:${photos[photos.length - 1]?.id ?? ""}`} photos={photos.map((p) => toGridPhoto(p, null, editable))} more={{ url: moreUrl, nextCursor: page.nextCursor, total: page.total }} activities={activities} editable={editable} emptyMessage={editable ? "No photos yet. Upload some to get started." : "No photos yet."} />
     </div>
   );
 }

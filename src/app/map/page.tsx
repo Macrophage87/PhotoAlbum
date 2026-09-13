@@ -18,7 +18,7 @@ export default async function GlobalMapPage({ searchParams }: PageProps<"/map">)
       <Container className="py-8 space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h1 className="font-display text-3xl font-semibold">Map</h1>
-          <CollectionFilter collections={collections.map((c) => ({ slug: c.slug, title: c.title }))} current={filter?.slug ?? ""} basePath="/map" />
+          <CollectionFilter current={filter ? { slug: filter.slug, title: filter.title } : null} basePath="/map" />
         </div>
         <TripMap key={filter?.slug ?? "all"} src={filter ? `/api/collections/${filter.slug}/geojson` : "/api/map/geojson"} theme={mapThemeOf(getTheme(filter?.themeKey ?? "default"))} showTripList={!filter} />
       </Container>

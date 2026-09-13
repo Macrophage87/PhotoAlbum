@@ -7,19 +7,22 @@ import { Button, Select } from "@/components/ui";
 import { bulkAssignActivity, bulkMoveToTrip, bulkTrash } from "@/app/photos/bulk-actions";
 import { BulkTrashControl } from "./TrashButton";
 import { addToCollection } from "@/app/collections/actions";
+import { ContainerPicker, type Container } from "@/components/containers/ContainerPicker";
 import { previewAddToCollection, previewMoveToTrip } from "@/app/photos/exposure-actions";
 
 type Option = { id: string; title: string };
 
 /** Gallery with an optional selection mode for members: assign to an activity, move trips, or delete. */
-export function TripGallery({ photos: initialPhotos, activities, trips, collections = [], editable, emptyMessage, more }: { photos: GridPhoto[]; activities: Option[]; trips: Option[]; collections?: Option[]; editable: boolean; emptyMessage: string; /** Cursor pagination: where to fetch the next page and how many items there are in all. */ more?: { url: string; nextCursor: string | null; total: number } }) {
+export function TripGallery({ photos: initialPhotos, activities, editable, emptyMessage, more }: { photos: GridPhoto[]; activities: Option[]; editable: boolean; emptyMessage: string; /** Cursor pagination: where to fetch the next page and how many items there are in all. */ more?: { url: string; nextCursor: string | null; total: number } }) {
   const paged = useLoadMore(more?.url ?? "", more?.nextCursor ?? null, initialPhotos);
   const photos = paged.photos;
   const [selecting, setSelecting] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [activityId, setActivityId] = useState("");
-  const [tripId, setTripId] = useState("");
-  const [collectionId, setCollectionId] = useState("");
+  // The trip and collection are searched for rather than chosen from a list of everything: see ContainerPicker.
+  const [trip, setTrip] = useState<Container | null>(null);
+  const [moving, setMoving] = useState(false); // "no trip" is a real choice, so a null trip is not the same as nothing chosen
+  const [collection, setCollection] = useState<Container | null>(null);
   const [pending, start] = useTransition();
   const ids = [...selected];
 
@@ -65,48 +68,34 @@ export function TripGallery({ photos: initialPhotos, activities, trips, collecti
                 Assign
               </Button>
               <div className="w-48">
-                <Select aria-label="Trip to move to" value={tripId} onChange={(e) => setTripId(e.target.value)} className="h-8 text-sm">
-                  <option value="">Move to trip…</option>
-                  <option value="__none">No trip</option>
-                  {trips.map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {t.title}
-                    </option>
-                  ))}
-                </Select>
+                <ContainerPicker kind="trip" value={trip} onChange={(v) => { setTrip(v); setMoving(true); }} allowNone noneLabel="No trip" placeholder="Move to trip…" />
               </div>
               <Button
                 size="sm"
                 variant="secondary"
-                disabled={!ids.length || !tripId || pending}
+                disabled={!ids.length || !moving || pending}
                 onClick={() =>
                   run(async () => {
-                    const target = tripId === "__none" ? null : tripId;
+                    const target = trip?.id ?? null;
                     if (await confirmExposure(await previewMoveToTrip(ids, target))) await bulkMoveToTrip(ids, target);
                   })
                 }
               >
                 Move
               </Button>
-              {collections.length > 0 && (
+              {(
                 <>
                   <div className="w-48">
-                    <Select aria-label="Collection to add to" value={collectionId} onChange={(e) => setCollectionId(e.target.value)} className="h-8 text-sm">
-                      <option value="">Add to collection…</option>
-                      {collections.map((c) => (
-                        <option key={c.id} value={c.id}>
-                          {c.title}
-                        </option>
-                      ))}
-                    </Select>
+                    <ContainerPicker kind="collection" value={collection} onChange={setCollection} placeholder="Add to collection…" />
                   </div>
                   <Button
                     size="sm"
                     variant="secondary"
-                    disabled={!ids.length || !collectionId || pending}
+                    disabled={!ids.length || !collection || pending}
                     onClick={() =>
                       run(async () => {
-                        if (await confirmExposure(await previewAddToCollection(ids, collectionId))) await addToCollection(collectionId, ids);
+                        if (!collection) return;
+                        if (await confirmExposure(await previewAddToCollection(ids, collection.id))) await addToCollection(collection.id, ids);
                       })
                     }
                   >

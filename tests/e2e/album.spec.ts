@@ -80,6 +80,33 @@ test("uploading a photo processes it and assigns it to the trip by date", async 
   expect(Number(row.rows[0].lat)).toBeCloseTo(44.35, 3);
 });
 
+test("the pickers search rather than listing every trip and collection", async ({ browser, context, page }) => {
+  await signIn(context, ADMIN);
+  // The lookup answers a shortlist, by name, and only for members.
+  const all = await page.request.get("/api/containers?kind=trip");
+  expect(all.ok()).toBe(true);
+  const { hits } = (await all.json()) as { hits: { title: string; slug: string }[] };
+  expect(hits.length).toBeGreaterThan(0);
+  expect(hits.length).toBeLessThanOrEqual(20);
+  const narrowed = await page.request.get("/api/containers?kind=trip&q=acad");
+  expect(((await narrowed.json()) as { hits: { slug: string }[] }).hits.map((h) => h.slug)).toEqual(["acadia"]);
+  const nothing = await page.request.get("/api/containers?kind=trip&q=zzzznotatrip");
+  expect(((await nothing.json()) as { hits: unknown[] }).hits).toHaveLength(0);
+
+  const anon = await browser.newContext();
+  const anonPage = await anon.newPage();
+  expect((await anonPage.request.get("/api/containers?kind=trip")).status()).toBe(401);
+  await anon.close();
+
+  // The front page finds a trip by name rather than asking anyone to scroll for it.
+  await page.goto("/");
+  await page.getByLabel("Find a trip or collection by name").fill("Acadia");
+  await page.getByRole("button", { name: "Find" }).click();
+  await expect(page.getByRole("link", { name: /Acadia/ }).first()).toBeVisible();
+  await expect(page.getByText(/1 trip matching/)).toBeVisible();
+  await expect(page.getByRole("link", { name: /Yosemite/ })).toHaveCount(0);
+});
+
 test("the map across everything shows a photo that is on no trip", async ({ context, page }) => {
   await signIn(context, ADMIN);
   // A placed photo filed under no trip: it used to be missing from the map across everything, while a trip's own map
@@ -180,14 +207,24 @@ test("a collection gathers photos from two trips and can be shared by link", asy
 
   const photos = await withDb((c) => c.query('SELECT p.id, t.slug FROM "Photo" p JOIN "Trip" t ON t.id = p."tripId" WHERE t.slug IN (\'acadia\', \'yosemite\') ORDER BY t.slug'));
   expect(photos.rows).toHaveLength(2);
-  // One photo through the per-photo checkbox, the other through the collection's own "Add existing photos" picker.
+  // One photo through the item's own collections field, the other through the collection's "Add existing photos".
   await page.goto(`/photos/${photos.rows[0].id}`);
   await page.waitForLoadState("networkidle");
-  await page.getByLabel("Best of 2025").check();
+  // The field searches rather than listing every collection there is: type, then take the hit.
+  const collectionField = page.getByTestId("collection-multi-picker");
+  await collectionField.getByRole("combobox").fill("Best of");
+  await collectionField.getByRole("option", { name: /Best of 2025/ }).click();
+  await expect(collectionField.getByRole("listitem").filter({ hasText: "Best of 2025" })).toBeVisible();
   await page.getByRole("button", { name: "Save", exact: true }).click();
-  await expect(page.getByRole("link", { name: "Open", exact: true })).toBeVisible();
+  // Wait for the save to land before reloading, or the reload cancels the form post that is still in flight.
+  await expect
+    .poll(async () => (await withDb((c) => c.query('SELECT count(*)::int AS n FROM "CollectionItem" WHERE "photoId" = $1', [photos.rows[0].id]))).rows[0].n, { timeout: 20_000 })
+    .toBe(1);
+  // What the photo is in comes back as a chip that is also the way into the collection, without the rest of the
+  // library alongside it.
   await page.reload();
-  await expect(page.getByLabel("Best of 2025")).toBeChecked();
+  await expect(page.getByTestId("collection-multi-picker").getByRole("link", { name: "Best of 2025" })).toHaveAttribute("href", "/collections/best-of-2025");
+  await expect(page.getByTestId("collection-multi-picker").getByRole("listitem").filter({ hasText: "Best of 2025" })).toBeVisible();
   await page.goto("/collections/best-of-2025");
   await page.getByRole("link", { name: "Add existing photos" }).first().click();
   await expect(page).toHaveURL(/\/collections\/best-of-2025\/add$/);
@@ -256,7 +293,9 @@ test("exposure warnings fire when widening and when lowering, and bulk actions a
   await expect(page.getByRole("heading", { name: "Photos without a trip" })).toBeVisible();
   await page.getByRole("button", { name: "Select photos" }).click();
   await page.locator("li button").first().click();
-  await page.getByLabel("Collection to add to").selectOption({ label: "Best of 2025" });
+  // The picker searches instead of listing everything; typing a couple of letters is enough.
+  await page.getByLabel("Add to collection…").fill("Best of");
+  await page.getByRole("option", { name: /Best of 2025/ }).click();
   dialogText = "";
   page.once("dialog", (d) => { dialogText = d.message(); void d.accept(); });
   await page.getByRole("button", { name: "Add", exact: true }).click();
@@ -264,7 +303,8 @@ test("exposure warnings fire when widening and when lowering, and bulk actions a
   expect(dialogText).toContain("only family members could see");
   await page.getByRole("button", { name: "Select photos" }).click();
   await page.locator("li button").first().click();
-  await page.getByLabel("Trip to move to").selectOption({ label: "Yosemite" });
+  await page.getByLabel("Add to trip…").fill("Yosem");
+  await page.getByRole("option", { name: /Yosemite/ }).click();
   await page.getByRole("button", { name: "Move", exact: true }).click();
   await expect(page.getByRole("status")).toContainText("moved");
   await page.goto("/trips/yosemite/photos");

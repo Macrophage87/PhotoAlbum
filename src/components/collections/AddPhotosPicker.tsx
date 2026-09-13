@@ -2,15 +2,16 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Button, Input, Label, Select } from "@/components/ui";
+import { Button, Input, Label } from "@/components/ui";
 import { PhotoGrid, type GridPhoto } from "@/components/photos/PhotoGrid";
+import { TripFilterField } from "@/components/containers/TripFilterField";
 import { addToCollection, moreCandidates } from "@/app/collections/actions";
 import { previewAddToCollection } from "@/app/photos/exposure-actions";
 
 type Filter = { trip: string | null; q: string | null; from: string | null; to: string | null };
 
 /** Tick photos from anywhere in the album and add them to one collection; warns first when that would expose them. */
-export function AddPhotosPicker({ collection, trips, filter, initial }: { collection: { id: string; slug: string; title: string }; trips: { id: string; title: string }[]; filter: Filter; initial: { photos: GridPhoto[]; nextCursor: string | null; total: number } }) {
+export function AddPhotosPicker({ collection, initialTrip, filter, initial }: { collection: { id: string; slug: string; title: string }; /** The trip the filter is already narrowed to, so the box shows its name. */ initialTrip: { id: string; title: string } | null; filter: Filter; initial: { photos: GridPhoto[]; nextCursor: string | null; total: number } }) {
   const router = useRouter();
   const [photos, setPhotos] = useState(initial.photos);
   const [nextCursor, setNextCursor] = useState(initial.nextCursor);
@@ -50,11 +51,7 @@ export function AddPhotosPicker({ collection, trips, filter, initial }: { collec
         <form method="get" className="flex flex-wrap items-end gap-2">
           <div>
             <Label htmlFor="trip">Trip</Label>
-            <Select id="trip" name="trip" defaultValue={filter.trip ?? ""} className="h-9">
-              <option value="">Any trip</option>
-              <option value="none">Without a trip</option>
-              {trips.map((t) => <option key={t.id} value={t.id}>{t.title}</option>)}
-            </Select>
+            <TripFilterField initial={initialTrip} />
           </div>
           <div>
             <Label htmlFor="from">From</Label>

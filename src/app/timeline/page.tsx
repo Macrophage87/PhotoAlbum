@@ -8,7 +8,6 @@ import { dateColumnToDay } from "@/lib/time/local-day";
 import { AppShell, Container } from "@/components/layout/AppShell";
 import { Timeline } from "@/components/timeline/Timeline";
 import { TripTheme } from "@/themes/TripTheme";
-import { db } from "@/lib/db";
 import { listVisibleCollections } from "@/lib/collections/queries";
 import { collectionTimeline } from "@/lib/collections/timeline";
 import { SelectionProvider } from "@/components/photos/selection";
@@ -23,12 +22,10 @@ export default async function GlobalTimelinePage({ searchParams }: PageProps<"/t
   const collections = await listVisibleCollections(viewer);
   const filter = typeof sp.collection === "string" ? collections.find((c) => c.slug === sp.collection) : undefined;
   const trips = filter ? [] : await listVisibleTrips(viewer);
-  const [groups, collectionGroups, tripOptions, collectionOptions] = await Promise.all([
+  const [groups, collectionGroups] = await Promise.all([
     // The global view shows the first page of each trip; the trip timeline pages through the rest.
     Promise.all(trips.map((t) => tripTimeline(t.id, t.timezone))),
     filter ? collectionTimeline(filter.id) : Promise.resolve(null),
-    editable ? db.trip.findMany({ orderBy: { startDate: "desc" }, select: { id: true, title: true } }) : Promise.resolve([]),
-    editable ? db.collection.findMany({ orderBy: { title: "asc" }, select: { id: true, title: true } }) : Promise.resolve([]),
   ]);
   const body = (
     <>
@@ -68,9 +65,9 @@ export default async function GlobalTimelinePage({ searchParams }: PageProps<"/t
       <Container className="py-10">
         <div className="flex flex-wrap items-center justify-between gap-3 mb-8">
           <h1 className="font-display text-3xl font-semibold">Timeline</h1>
-          <CollectionFilter collections={collections.map((c) => ({ slug: c.slug, title: c.title }))} current={filter?.slug ?? ""} basePath="/timeline" />
+          <CollectionFilter current={filter ? { slug: filter.slug, title: filter.title } : null} basePath="/timeline" />
         </div>
-        {editable ? <SelectionProvider trips={tripOptions} collections={collectionOptions}>{body}</SelectionProvider> : body}
+        {editable ? <SelectionProvider>{body}</SelectionProvider> : body}
       </Container>
     </AppShell>
   );

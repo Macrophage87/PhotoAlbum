@@ -1,4 +1,3 @@
-import { db } from "@/lib/db";
 import { getViewer, requireUser } from "@/lib/auth/viewer";
 import { listUnassignedPhotos } from "@/lib/photos/queries";
 import { AppShell, Container } from "@/components/layout/AppShell";
@@ -13,11 +12,7 @@ export const metadata = { title: "Photos without a trip" };
 export default async function UnassignedPhotosPage() {
   await requireUser("/photos");
   const viewer = await getViewer();
-  const [photos, trips, collections] = await Promise.all([
-    listUnassignedPhotos(),
-    db.trip.findMany({ orderBy: { startDate: "desc" }, select: { id: true, title: true } }),
-    db.collection.findMany({ orderBy: { title: "asc" }, select: { id: true, title: true } }),
-  ]);
+  const photos = await listUnassignedPhotos();
   return (
     <AppShell viewer={viewer}>
       <Container className="py-10 space-y-4">
@@ -28,7 +23,7 @@ export default async function UnassignedPhotosPage() {
           </div>
           <ButtonLink href="/upload" size="sm">Upload</ButtonLink>
         </div>
-        <SelectionProvider trips={trips} collections={collections}>
+        <SelectionProvider>
           <PhotoGrid photos={photos.map((p) => toGridPhoto(p, null, true))} emptyMessage="Every photo is on a trip." />
         </SelectionProvider>
       </Container>

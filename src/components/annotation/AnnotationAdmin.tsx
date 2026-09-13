@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { Button, Input, Label } from "@/components/ui";
+import { ContainerPicker, type Container } from "@/components/containers/ContainerPicker";
 import { cancelBackfill, previewBackfill, setAnnotationOptIn, startBackfill, type BackfillPreview } from "@/app/annotation/actions";
 import type { BackfillScope, BackfillTask } from "@/lib/jobs/handlers/annotation-batch";
 
@@ -46,14 +47,13 @@ function describeSkips(reasons: Record<string, number>): string {
 }
 
 type Batch = { id: string; parentId: string | null; skippedReasons: Record<string, number> | null; running: boolean; /** A marker row: the rest of the run was not sent, because of an error or a worker restart. */ marker: "error" | "restart" | null; canceled: number; status: string; requested: number; succeeded: number; errored: number; skipped: number; createdAt: string; endedAt: string | null; scope: string };
-type Option = { id: string; title: string };
 
-export function AnnotationAdmin({ gates, model, trips, collections, batches, spend, rawRetentionDays }: { gates: { envEnabled: boolean; hasKey: boolean; optedInAt: string | null; active: boolean }; model: string; trips: Option[]; collections: Option[]; batches: Batch[]; /** Real spend from recorded token usage, each item at the price of the model that answered it. */ spend: { items: number; inputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; outputTokens: number; usd: number; pricesAsOf: string }; rawRetentionDays: number }) {
+export function AnnotationAdmin({ gates, model, batches, spend, rawRetentionDays }: { gates: { envEnabled: boolean; hasKey: boolean; optedInAt: string | null; active: boolean }; model: string; batches: Batch[]; /** Real spend from recorded token usage, each item at the price of the model that answered it. */ spend: { items: number; inputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; outputTokens: number; usd: number; pricesAsOf: string }; rawRetentionDays: number }) {
   const [pending, start] = useTransition();
   const [task, setTask] = useState<BackfillTask>("describe");
   const [scopeKind, setScopeKind] = useState<BackfillScope["kind"]>("all");
-  const [tripId, setTripId] = useState(trips[0]?.id ?? "");
-  const [collectionId, setCollectionId] = useState(collections[0]?.id ?? "");
+  const [trip, setTrip] = useState<Container | null>(null);
+  const [collection, setCollection] = useState<Container | null>(null);
   const [from, setFrom] = useState("2000-01-01");
   const [to, setTo] = useState(new Date().toISOString().slice(0, 10));
   const [preview, setPreview] = useState<BackfillPreview | null>(null);
@@ -61,7 +61,7 @@ export function AnnotationAdmin({ gates, model, trips, collections, batches, spe
   const [message, setMessage] = useState<string | null>(null);
   const scope = (): BackfillScope => ({
     task,
-    ...(scopeKind === "trip" ? { kind: "trip" as const, tripId } : scopeKind === "collection" ? { kind: "collection" as const, collectionId } : scopeKind === "range" ? { kind: "range" as const, from, to } : { kind: "all" as const }),
+    ...(scopeKind === "trip" && trip ? { kind: "trip" as const, tripId: trip.id } : scopeKind === "collection" && collection ? { kind: "collection" as const, collectionId: collection.id } : scopeKind === "range" ? { kind: "range" as const, from, to } : { kind: "all" as const }),
   });
   const select = "h-9 rounded-theme border border-border bg-surface px-2 text-sm";
 
@@ -106,14 +106,10 @@ export function AnnotationAdmin({ gates, model, trips, collections, batches, spe
             <option value="range">A date range</option>
           </select>
           {scopeKind === "trip" && (
-            <select value={tripId} onChange={(e) => setTripId(e.target.value)} className={select} aria-label="Trip">
-              {trips.map((t) => <option key={t.id} value={t.id}>{t.title}</option>)}
-            </select>
+            <div className="w-56"><ContainerPicker kind="trip" value={trip} onChange={(v) => { setTrip(v); setPreview(null); }} placeholder="Which trip?" /></div>
           )}
           {scopeKind === "collection" && (
-            <select value={collectionId} onChange={(e) => setCollectionId(e.target.value)} className={select} aria-label="Collection">
-              {collections.map((c) => <option key={c.id} value={c.id}>{c.title}</option>)}
-            </select>
+            <div className="w-56"><ContainerPicker kind="collection" value={collection} onChange={(v) => { setCollection(v); setPreview(null); }} placeholder="Which collection?" /></div>
           )}
           {scopeKind === "range" && (
             <>

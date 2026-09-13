@@ -31,7 +31,7 @@ export default async function UploadPage({ searchParams }: PageProps<"/upload">)
             Photos are matched to a trip by the date they were taken unless you pick one; the rest wait under <Link href="/photos" className="text-primary underline-offset-2 hover:underline">photos without a trip</Link>. {selected && <>Uploading to <Link href={`/trips/${selected.slug}`} className="text-primary underline-offset-2 hover:underline">{selected.title}</Link>.</>}
           </p>
         </div>
-        <UploadPanel trips={trips} initialTripId={selected?.id} maxClipSeconds={env().MAX_CLIP_SECONDS} annotationActive={gates.active} />
+        <UploadPanel initialTrip={selected ? { id: selected.id, title: selected.title } : null} maxClipSeconds={env().MAX_CLIP_SECONDS} annotationActive={gates.active} />
         {google && (
           <>
             {googleNotice && googleNotice !== "connected" && <p role="alert" className="text-sm rounded-theme bg-amber-50 border border-amber-200 text-amber-900 p-3">{googleNotice === "denied" ? "Google Photos was not connected: permission was declined." : googleNotice === "scope" ? "Google Photos was not connected: the photo-picking permission was not granted." : googleNotice === "state" ? "That sign-in link had expired; try connecting again." : "Google Photos could not be connected; try again in a moment."}</p>}

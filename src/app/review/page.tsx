@@ -36,10 +36,8 @@ export default async function ReviewPage({ searchParams }: PageProps<"/review">)
   const ids = typeof sp.ids === "string" ? sp.ids.split(",").filter(Boolean).slice(0, 500) : [];
   const batch = ids.length > 0;
   const gates = await annotationGates();
-  const [photos, trips, collections, unreviewedCount] = await Promise.all([
+  const [photos, unreviewedCount] = await Promise.all([
     db.photo.findMany({ where: batch ? { id: { in: ids }, ...NOT_TRASHED } : { reviewedAt: null, ...NOT_TRASHED }, orderBy: { createdAt: "desc" }, select: { ...photoCardSelect, context: true, reviewedAt: true, annotation: true, annotationOptOut: true, annotatedAt: true, estimatedDate: true, estimatedDateConfidence: true, estimatedDateNote: true, takenAtSource: true, trip: { select: { annotationOptOut: true } }, collections: { select: { collection: { select: { slug: true, title: true, annotationOptOut: true } } } } } }),
-    db.trip.findMany({ orderBy: { startDate: "desc" }, select: { id: true, title: true } }),
-    db.collection.findMany({ orderBy: { title: "asc" }, select: { id: true, title: true } }),
     db.photo.count({ where: { reviewedAt: null, ...NOT_TRASHED } }),
   ]);
   const allIds = photos.map((p) => p.id);
@@ -69,7 +67,7 @@ export default async function ReviewPage({ searchParams }: PageProps<"/review">)
             {google && <GooglePickerButton status={google} configured next="/review" />}
           </div>
         ) : (
-          <SelectionProvider trips={trips} collections={collections}>
+          <SelectionProvider>
             <ReviewPanel allIds={allIds} annotation={gates.active ? { quietMinutes: env().ANNOTATION_QUIET_MINUTES, pending: photos.filter((p) => !p.annotatedAt && !optedOut(p)).length } : null} />
             {editable && <YouTubeAddForm defaultDate={new Date().toISOString().slice(0, 10)} />}
             {google && <GooglePickerButton status={google} configured next="/review" />}
