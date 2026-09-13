@@ -295,6 +295,8 @@ Copy the `backups` folder off the server regularly (rclone to any cloud storage,
 
 To restore on a new server: bring the stack up once so the volumes exist, stop it, extract the photo archive into the photos volume with the same `docker run ... alpine tar` pattern in reverse, and pipe the SQL dump into `docker compose exec -T db psql -U photoalbum photoalbum`.
 
+If the photographs have been moved onto their own drive, the volume in that script is no longer what the album reads: see [MOVE-MEDIA.md](MOVE-MEDIA.md), which says what to change here.
+
 ## 10. Updating
 
 ```bash
@@ -328,6 +330,8 @@ The map uses OpenStreetMap's public tile server, which is fine for family use. F
 ## 13. Staging alongside production
 
 To run a staging copy on the same server, clone the `staging` branch into a second folder such as `~/photoalbum-staging`, give it its own `.env` with a different `APP_URL` (for example `staging.album.example.com`), a different `APP_PORT` (say `3100`), and add a second site block in the Caddyfile pointing at that port. Compose names the volumes after the folder, so the two installs keep separate databases and photos.
+
+To have the two work from one set of photographs instead, see [MOVE-MEDIA.md](MOVE-MEDIA.md) — sharing the media folder without also sharing the database does more harm than good, and there is a migration rule that comes with sharing both.
 
 ## Troubleshooting
 
