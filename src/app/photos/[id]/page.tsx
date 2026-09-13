@@ -10,7 +10,7 @@ import { Button, Card, Label, Select, Textarea } from "@/components/ui";
 import { formatDateTime } from "@/lib/time/format";
 import { reprocessPhoto, resetPhotoDateToCamera, setAsCover, setPhotoDate, shiftPhotoTimezone, trashPhoto, updatePhoto } from "./actions";
 
-const SOURCE_LABEL: Record<string, string> = { EXIF_OFFSET: "from the camera", EXIF_TZLOOKUP: "from the camera", TRIP_TZ: "from the camera, in the trip's zone", SIDECAR: "from Google Photos", FILE_MTIME: "from the file's modified time", UPLOAD_TIME: "the upload time" };
+const SOURCE_LABEL: Record<string, string> = { EXIF_OFFSET: "from the camera", EXIF_TZLOOKUP: "from the camera", TRIP_TZ: "from the camera, in the trip's zone", SIDECAR: "from Google Photos", FILE_NAME: "from the file name", FILE_MTIME: "from the file's modified time", UPLOAD_TIME: "the upload time" };
 import { TimezoneShift } from "@/components/photos/TimezoneShift";
 import { PhotoLinkEditor } from "@/components/photos/PhotoLinkEditor";
 import { LinkedPhotos } from "@/components/photos/LinkedPhotos";

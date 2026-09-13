@@ -61,15 +61,20 @@ export function Lightbox({ photos, index, onClose, onNavigate, share = null }: {
           </button>
         </div>
       </div>
-      <div className="flex-1 min-h-0 flex flex-col lg:flex-row overflow-y-auto lg:overflow-hidden">
-        <div className="relative flex flex-col items-center justify-center min-h-[45vh] lg:min-h-0 lg:flex-1 px-12 py-2 gap-3">
+      {/*
+        On a phone the two panes share the screen rather than the picture pushing the details off the bottom: the
+        media takes the top half and the details scroll in what is left, so the title and date are there without
+        anyone having to guess that the page scrolls. On a wide screen the details are a column beside the picture.
+      */}
+      <div className="flex-1 min-h-0 flex flex-col lg:flex-row lg:overflow-hidden">
+        <div className="relative shrink-0 lg:shrink lg:flex-1 flex flex-col items-center justify-center lg:min-h-0 px-12 py-2 gap-2 lg:gap-3">
           {photos.length > 1 && (
             <button onClick={(e) => { e.stopPropagation(); prev(); }} className="absolute left-2 top-1/2 -translate-y-1/2 text-white/80 hover:text-white text-3xl p-3" aria-label="Previous">
               ‹
             </button>
           )}
           {photo.videoUrl ? (
-            <video key={photo.id} src={photo.videoUrl} poster={photo.mediumUrl} controls autoPlay playsInline className="max-h-[80vh] max-w-full" onClick={(e) => e.stopPropagation()} />
+            <video key={photo.id} src={photo.videoUrl} poster={photo.mediumUrl} controls autoPlay playsInline className="max-h-[46vh] lg:max-h-[80vh] max-w-full" onClick={(e) => e.stopPropagation()} />
           ) : photo.youtubeId ? (
             <div className="w-full max-w-5xl" onClick={(e) => e.stopPropagation()}>
               <YouTubeEmbed videoId={photo.youtubeId} posterUrl={photo.mediumUrl} title={photo.title ?? photo.alt} />
@@ -78,11 +83,11 @@ export function Lightbox({ photos, index, onClose, onNavigate, share = null }: {
             // A second click on the picture opens the full-size file in its own tab.
             <a href={photo.originalUrl} target="_blank" rel="noreferrer" title="Open the full-size photo" className="max-h-full max-w-full" onClick={(e) => e.stopPropagation()}>
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={photo.mediumUrl} alt={photo.alt} className="max-h-[72vh] max-w-full object-contain select-none" />
+              <img src={photo.mediumUrl} alt={photo.alt} className="max-h-[46vh] lg:max-h-[72vh] max-w-full object-contain select-none" />
             </a>
           ) : (
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={photo.mediumUrl} alt={photo.alt} className="max-h-[72vh] max-w-full object-contain select-none" onClick={(e) => e.stopPropagation()} />
+            <img src={photo.mediumUrl} alt={photo.alt} className="max-h-[46vh] lg:max-h-[72vh] max-w-full object-contain select-none" onClick={(e) => e.stopPropagation()} />
           )}
           {photos.length > 1 && (
             <button onClick={(e) => { e.stopPropagation(); next(); }} className="absolute right-2 top-1/2 -translate-y-1/2 text-white/80 hover:text-white text-3xl p-3" aria-label="Next">
@@ -90,10 +95,10 @@ export function Lightbox({ photos, index, onClose, onNavigate, share = null }: {
             </button>
           )}
           {photo.caption && (
-            <p className="max-w-3xl text-center text-white text-lg sm:text-xl font-medium leading-snug drop-shadow" data-testid="lightbox-caption" onClick={(e) => e.stopPropagation()}>{photo.caption}</p>
+            <p className="max-w-3xl text-center text-white text-base sm:text-xl font-medium leading-snug drop-shadow" data-testid="lightbox-caption" onClick={(e) => e.stopPropagation()}>{photo.caption}</p>
           )}
         </div>
-        <aside className="lg:w-80 xl:w-96 shrink-0 lg:overflow-y-auto bg-black/40 border-t lg:border-t-0 lg:border-l border-white/10" onClick={(e) => e.stopPropagation()}>
+        <aside className="flex-1 min-h-0 overflow-y-auto lg:flex-none lg:w-80 xl:w-96 bg-black/40 border-t lg:border-t-0 lg:border-l border-white/10" onClick={(e) => e.stopPropagation()}>
           <LightboxInfo key={photo.id} photoId={photo.id} share={share} />
           {photo.canTag && <div className="px-4 pb-4 text-sm text-white/90"><PetTagger photoId={photo.id} dark /></div>}
         </aside>

@@ -27,6 +27,8 @@ export type ExifSummary = {
 
 const PICK = [
   "DateTimeOriginal",
+  "CreateDate",
+  "DateTimeDigitized",
   "SubSecTimeOriginal",
   "OffsetTimeOriginal",
   "GPSLatitude",
@@ -73,7 +75,9 @@ export async function readExif(input: string | Buffer): Promise<ExifSummary> {
   const lat = num(r.latitude);
   const lng = num(r.longitude);
   return {
-    dateTimeOriginal: str(r.DateTimeOriginal),
+    // DateTimeOriginal is when the shutter fired; CreateDate (DateTimeDigitized) is the same moment on a camera and
+    // survives some of the re-encoding that strips the first, so it stands in rather than falling through to the file.
+    dateTimeOriginal: str(r.DateTimeOriginal) ?? str(r.CreateDate) ?? str(r.DateTimeDigitized),
     subSec: str(r.SubSecTimeOriginal),
     offsetTimeOriginal: str(r.OffsetTimeOriginal),
     lat: lat !== null && lng !== null && (lat !== 0 || lng !== 0) ? lat : null,

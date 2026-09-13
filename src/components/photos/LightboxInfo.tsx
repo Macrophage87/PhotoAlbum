@@ -9,7 +9,7 @@ import { getTheme } from "@/themes";
 import { resetPhotoDateToCamera, setPhotoDate } from "@/app/photos/[id]/actions";
 import type { PhotoInfo } from "@/app/api/photos/[id]/info/route";
 
-const SOURCE_LABEL: Record<string, string> = { EXIF_OFFSET: "from the camera", EXIF_TZLOOKUP: "from the camera", TRIP_TZ: "from the camera, in the trip's zone", SIDECAR: "from Google Photos", FILE_MTIME: "from the file's modified time", UPLOAD_TIME: "the upload time" };
+const SOURCE_LABEL: Record<string, string> = { EXIF_OFFSET: "from the camera", EXIF_TZLOOKUP: "from the camera", TRIP_TZ: "from the camera, in the trip's zone", SIDECAR: "from Google Photos", FILE_NAME: "from the file name", FILE_MTIME: "from the file's modified time", UPLOAD_TIME: "the upload time" };
 
 /** "set by Grandma Jo" where the album knows whose choice it was, "set by a family member" where it does not. */
 function dateSourceLabel(source: string, setBy: string | null): string {

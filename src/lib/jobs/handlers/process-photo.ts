@@ -2,6 +2,7 @@ import { stat } from "node:fs/promises";
 import { db } from "@/lib/db";
 import { storage } from "@/lib/storage";
 import { cameraLabel, readExif, resolveTakenAt, type TakenAtResolution } from "@/lib/images/exif";
+import { resolveFilenameTakenAt } from "@/lib/images/filename-date";
 import { timezoneForCoords } from "@/lib/geo/tz";
 import { sha256File } from "@/lib/media/hash";
 import { heicToJpegBuffer, isHeic } from "@/lib/images/heic";
@@ -52,7 +53,9 @@ export async function processPhoto(job: ProcessPhotoJob): Promise<void> {
     // 3. Trip candidates: explicit trip wins, otherwise match by the photo's wall-clock day
     const explicitTrip = job.tripId ? await db.trip.findUnique({ where: { id: job.tripId } }) : photo.tripId ? await db.trip.findUnique({ where: { id: photo.tripId } }) : null;
     let trip = explicitTrip;
-    let resolved = resolveTakenAt(exif, trip?.timezone ?? null);
+    // The name is read only when the file itself says nothing: a phone's IMG_20250812_143015 is the capture time,
+    // where the file's modified time is usually just when it was copied onto something.
+    let resolved = resolveTakenAt(exif, trip?.timezone ?? null) ?? resolveFilenameTakenAt(photo.originalName, trip?.timezone ?? null);
     // A Takeout sidecar's date is authoritative (Google's own record of the capture time); EXIF supplies the zone.
     if (photo.takenAtSource === "SIDECAR" && photo.takenAt) resolved = sidecarResolution(photo.takenAt, resolved, exif, trip?.timezone ?? null, photo.gpsSource === "SIDECAR" ? { lat: photo.lat, lng: photo.lng } : null);
     if (!trip && resolved) {
@@ -62,6 +65,7 @@ export async function processPhoto(job: ProcessPhotoJob): Promise<void> {
         trip = await db.trip.findUnique({ where: { id: match.id } });
         // Re-resolve now that we know the trip's zone (matters when EXIF has no offset and no GPS).
         if (resolved.source === "TRIP_TZ") resolved = resolveTakenAt(exif, trip?.timezone ?? null);
+        else if (resolved.source === "FILE_NAME") resolved = resolveFilenameTakenAt(photo.originalName, trip?.timezone ?? null);
         else if (resolved.source === "SIDECAR" && photo.takenAt) resolved = sidecarResolution(photo.takenAt, resolveTakenAt(exif, trip?.timezone ?? null), exif, trip?.timezone ?? null, photo.gpsSource === "SIDECAR" ? { lat: photo.lat, lng: photo.lng } : null);
       }
     }

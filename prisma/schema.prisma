@@ -74,6 +74,9 @@ enum TakenAtSource {
   EXIF_OFFSET
   EXIF_TZLOOKUP
   TRIP_TZ
+  /// The capture time phones write into the file name (IMG_20250812_143015, PXL_…, Screenshot_…). Worth far more
+  /// than the file's modified time, which is usually when the file was copied rather than when the photo was taken.
+  FILE_NAME
   FILE_MTIME
   UPLOAD_TIME
   MANUAL
