@@ -5,6 +5,7 @@ import { useSelectionContext } from "./selection";
 import { ClipTile } from "./ClipTile";
 import { FavouriteButton } from "@/components/favourites/FavouriteButton";
 import type { FavouriteState } from "@/lib/favourites/queries";
+import { PHOTO_DRAG_TYPE } from "@/components/timeline/TimelineDrop";
 
 export type GridPhoto = LightboxPhoto & {
   thumbUrl: string;
@@ -36,7 +37,7 @@ export function tileDate(takenAt?: string | null, tzOffsetMin?: number | null): 
   return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" }).format(new Date(at.getTime() + (tzOffsetMin ?? 0) * 60_000));
 }
 
-export function PhotoGrid({ photos, emptyMessage = "No photos yet.", selectable: selectableProp, selected: selectedProp, onToggle: onToggleProp }: { photos: GridPhoto[]; emptyMessage?: string; selectable?: boolean; selected?: Set<string>; onToggle?: (id: string) => void }) {
+export function PhotoGrid({ photos, emptyMessage = "No photos yet.", selectable: selectableProp, selected: selectedProp, onToggle: onToggleProp, draggable = false }: { photos: GridPhoto[]; emptyMessage?: string; selectable?: boolean; selected?: Set<string>; onToggle?: (id: string) => void; /** On the timeline: a tile can be picked up and dropped on an activity or another day. */ draggable?: boolean }) {
   const lb = useLightbox();
   // A grid inside a SelectionProvider (global timeline, unassigned photos) takes its selection from context.
   const ctx = useSelectionContext();
@@ -54,7 +55,17 @@ export function PhotoGrid({ photos, emptyMessage = "No photos yet.", selectable:
           return (
             // A panorama in a square tile is a crop of its middle, which is the one part that says least about it:
             // it takes two columns and its own shape, and the whole sweep is shown rather than cut to fit.
-            <li key={p.id} className={`tile-lazy relative rounded-theme overflow-hidden bg-surface-alt border border-border group ${wideTile(p) ? "col-span-2 aspect-[2/1]" : "aspect-square"}`}>
+            <li
+              key={p.id}
+              className={`tile-lazy relative rounded-theme overflow-hidden bg-surface-alt border border-border group ${wideTile(p) ? "col-span-2 aspect-[2/1]" : "aspect-square"} ${draggable && p.status === "READY" ? "cursor-grab active:cursor-grabbing" : ""}`}
+              draggable={draggable && p.status === "READY"}
+              onDragStart={(e) => {
+                // Firefox refuses to start a drag unless something is written to the transfer.
+                e.dataTransfer.setData(PHOTO_DRAG_TYPE, p.id);
+                e.dataTransfer.setData("text/plain", p.id);
+                e.dataTransfer.effectAllowed = "move";
+              }}
+            >
               {p.status === "READY" ? (
                 <button onClick={() => (selectable ? onToggle?.(p.id) : lb.open(readyIndex))} className={`block w-full h-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring ${selectable && selected?.has(p.id) ? "ring-4 ring-primary ring-inset" : ""}`} aria-pressed={selectable ? selected?.has(p.id) : undefined}>
                   {p.videoUrl ? (

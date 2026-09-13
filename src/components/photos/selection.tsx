@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useState, useTransition, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useState, useTransition, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui";
 import { bulkMoveToTrip } from "@/app/photos/bulk-actions";
@@ -12,6 +12,7 @@ import { mapThemeOf } from "@/lib/map/theme";
 import { getTheme } from "@/themes";
 import { previewAddToCollection, previewMoveToTrip } from "@/app/photos/exposure-actions";
 import { BulkDate } from "./BulkDate";
+import { bulkPutInActivity, tripOfSelection } from "@/app/photos/activity-actions";
 
 type Ctx = { active: boolean; selected: Set<string>; toggle: (id: string) => void; /** Take a whole run at once — a timeline day whose dates are all wrong. */ add: (ids: string[]) => void };
 const SelectionContext = createContext<Ctx | null>(null);
@@ -31,6 +32,9 @@ export function SelectionProvider({ children }: { children: ReactNode }) {
   const [trip, setTrip] = useState<Container | null>(null);
   const [moving, setMoving] = useState(false);
   const [collection, setCollection] = useState<Container | null>(null);
+  const [activity, setActivity] = useState<Container | null>(null);
+  // Activities belong to one trip, so the picker can only be offered when the selection sits on a single trip.
+  const [selectionTrip, setSelectionTrip] = useState<{ key: string; trip: { id: string; title: string } | null } | null>(null);
   const [pending, start] = useTransition();
   const [notice, setNotice] = useState<string | null>(null);
   const [placing, setPlacing] = useState(false);
@@ -54,14 +58,33 @@ export function SelectionProvider({ children }: { children: ReactNode }) {
       return next;
     });
   };
+  const key = ids.join(",");
+  useEffect(() => {
+    if (!active || !key) return;
+    let live = true;
+    tripOfSelection(key.split(","))
+      .then((trip) => { if (live) setSelectionTrip({ key, trip }); })
+      .catch(() => {});
+    return () => { live = false; };
+  }, [active, key]);
+  const onOneTrip = selectionTrip && selectionTrip.key === key ? selectionTrip.trip : null;
+
   const finish = (message: string) => {
     setSelected(new Set());
     setActive(false);
     setPlacing(false);
     setDating(false);
+    setActivity(null);
     setNotice(message);
     router.refresh();
   };
+  const putInActivity = () =>
+    start(async () => {
+      if (!activity) return;
+      const r = await bulkPutInActivity(ids, activity.id);
+      finish(`${r.n} item${r.n === 1 ? "" : "s"} put in ${activity.title}${r.notYours ? `, ${r.notYours} not yours to change` : ""}.`);
+    });
+
   const moveToTrip = () =>
     start(async () => {
       const target = trip?.id ?? null;
@@ -109,6 +132,15 @@ export function SelectionProvider({ children }: { children: ReactNode }) {
             <Button size="sm" variant="secondary" disabled={!ids.length || !collection || pending} onClick={addToCol}>Add</Button>
             <Button size="sm" variant="secondary" disabled={!ids.length || pending} onClick={() => setPlacing((v) => !v)}>Set a place…</Button>
             <Button size="sm" variant="secondary" disabled={!ids.length || pending} onClick={() => setDating((v) => !v)}>Fix dates…</Button>
+            {/* The way to file a batch on an activity without dragging one tile at a time. */}
+            {onOneTrip && (
+              <>
+                <div className="w-44">
+                  <ContainerPicker kind="activity" tripId={onOneTrip.id} value={activity} onChange={setActivity} placeholder={`Activity on ${onOneTrip.title}…`} />
+                </div>
+                <Button size="sm" variant="secondary" disabled={!ids.length || !activity || pending} onClick={putInActivity}>Put in</Button>
+              </>
+            )}
             <Button variant="ghost" size="sm" onClick={() => { setActive(false); setSelected(new Set()); setPlacing(false); setDating(false); }}>Done</Button>
           </>
         )}

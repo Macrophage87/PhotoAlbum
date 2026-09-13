@@ -1183,3 +1183,39 @@ test("a member edits their own photos and reads everyone else's, and a trip is a
   await page.goto("/trips/acadia");
   await expect(page.getByRole("link", { name: "Settings" })).toBeVisible();
 });
+
+test("a photo is dragged onto an activity on the timeline, and a selection can be put there without dragging", async ({ context, page }) => {
+  await signIn(context, ADMIN);
+  const act = await withDb((c) => c.query(`SELECT id, title FROM "Activity" WHERE title = 'Ocean Path loop' LIMIT 1`));
+  const activityId = act.rows[0].id as string;
+  // A photo of the admin's on the trip but on no activity: the one the timeline shows loose under its day.
+  const loose = await withDb((c) => c.query(`SELECT p.id FROM "Photo" p JOIN "User" u ON u.id = p."uploaderId" WHERE p."tripId" = (SELECT id FROM "Trip" WHERE slug = 'acadia') AND p."activityId" IS NULL AND p.status = 'READY' AND p."trashedAt" IS NULL AND u.email = $1 ORDER BY p."createdAt" LIMIT 1`, [ADMIN]));
+  test.skip(loose.rows.length === 0, "no loose photo on the trip to drag");
+  const photoId = loose.rows[0].id as string;
+
+  await page.goto("/trips/acadia/timeline");
+  await page.waitForLoadState("networkidle");
+  const tile = page.locator(`li.tile-lazy:has(img[src*='/api/photos/${photoId}/'])`).first();
+  await expect(tile).toBeVisible();
+  await tile.dragTo(page.getByTestId("drop-activity").filter({ hasText: "Ocean Path loop" }).first());
+
+  await expect
+    .poll(async () => (await withDb((c) => c.query('SELECT "activityId", "activitySetById" FROM "Photo" WHERE id = $1', [photoId]))).rows[0], { timeout: 20_000, intervals: [1000] })
+    .toMatchObject({ activityId });
+  const row = (await withDb((c) => c.query('SELECT "activitySetById" FROM "Photo" WHERE id = $1', [photoId]))).rows[0];
+  expect(row.activitySetById).not.toBeNull();
+
+  // The same thing without a drag, which is the only way on a phone: select, pick the activity, put them in.
+  await withDb((c) => c.query('UPDATE "Photo" SET "activityId" = NULL, "activitySetById" = NULL WHERE id = $1', [photoId]));
+  await page.goto("/trips/acadia/timeline");
+  await page.getByRole("button", { name: "Select photos" }).click();
+  await page.getByTestId("day-select").first().click();
+  const picker = page.getByTestId("activity-picker");
+  await expect(picker).toBeVisible();
+  await picker.getByRole("combobox").click();
+  await picker.getByRole("option", { name: /Ocean Path loop/ }).click();
+  await page.getByRole("button", { name: "Put in", exact: true }).click();
+  await expect
+    .poll(async () => (await withDb((c) => c.query('SELECT "activityId" FROM "Photo" WHERE id = $1', [photoId]))).rows[0].activityId, { timeout: 20_000, intervals: [1000] })
+    .toBe(activityId);
+});
