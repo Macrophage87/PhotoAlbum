@@ -1,6 +1,6 @@
 import { db } from "@/lib/db";
 import { getViewer } from "@/lib/auth/viewer";
-import { canEdit } from "@/lib/auth/access";
+import { canEditMedia } from "@/lib/auth/ownership";
 import { mediaAccessInclude, mediaBytesAllowed, toMediaAccess } from "@/lib/photos/access";
 import { photoUrl } from "@/lib/photos/urls";
 import { uploaderLabel } from "@/components/photos/toGrid";
@@ -45,7 +45,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   const { id } = await params;
   const photo = await db.photo.findUnique({
     where: { id },
-    select: { id: true, status: true, kind: true, title: true, caption: true, context: true, annotation: true, takenAt: true, tzOffsetMin: true, takenAtSource: true, lat: true, lng: true, gpsSource: true, edits: true, placeName: true, placeEstimateName: true, placeEstimateConfidence: true, placeEstimateRadiusM: true, placeEstimatePrecision: true, placeEstimateNote: true, updatedAt: true, renditions: true, originalPath: true, uploader: { select: { name: true, email: true } }, placeSetBy: { select: { name: true, email: true } }, dateSetBy: { select: { name: true, email: true } }, ...mediaAccessInclude, trip: { select: { id: true, slug: true, title: true, timezone: true, themeKey: true, visibility: true, shareToken: true } } },
+    select: { id: true, status: true, uploaderId: true, kind: true, title: true, caption: true, context: true, annotation: true, takenAt: true, tzOffsetMin: true, takenAtSource: true, lat: true, lng: true, gpsSource: true, edits: true, placeName: true, placeEstimateName: true, placeEstimateConfidence: true, placeEstimateRadiusM: true, placeEstimatePrecision: true, placeEstimateNote: true, updatedAt: true, renditions: true, originalPath: true, uploader: { select: { name: true, email: true } }, placeSetBy: { select: { name: true, email: true } }, dateSetBy: { select: { name: true, email: true } }, ...mediaAccessInclude, trip: { select: { id: true, slug: true, title: true, timezone: true, themeKey: true, visibility: true, shareToken: true } } },
   });
   if (!photo || photo.status !== "READY") return Response.json({ error: "Not found" }, { status: 404 });
   const url = new URL(request.url);
@@ -77,7 +77,8 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     placeEstimate: photo.gpsSource === "ESTIMATE" ? { name: photo.placeEstimateName, confidence: photo.placeEstimateConfidence, radiusM: photo.placeEstimateRadiusM, note: photo.placeEstimateNote, precision: photo.placeEstimatePrecision } : null,
     themeKey: photo.trip?.themeKey ?? null,
     originalUrl: photo.kind === "PHOTO" ? photoUrl(photo, photo.edits ? "edited" : "original") : null,
-    editable: canEdit(viewer),
+    // Editing is the uploader's and an admin's; everyone else in the family gets the same panel, read-only.
+    editable: canEditMedia(viewer.user, photo),
     uploadedBy: member ? uploaderLabel(photo.uploader?.name, photo.uploader?.email) : null,
     trip: photo.trip ? { slug: photo.trip.slug, title: photo.trip.title } : null,
   };

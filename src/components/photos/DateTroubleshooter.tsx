@@ -23,7 +23,7 @@ type Wire = Omit<DateReport, "current" | "witnesses"> & {
  * so a print scanned last week that claims to be from last week can be understood and corrected rather than argued
  * with. Nothing here changes anything until a member takes one of the readings.
  */
-export function DateTroubleshooter({ photoId, dark = false, onApplied }: { photoId: string; /** On a lightbox panel, where the surface behind it is the photo. */ dark?: boolean; /** Let a panel that holds the date itself take the new one, instead of reloading the page under it. */ onApplied?: (next: { takenAt: string; tzOffsetMin: number; source: string; setBy: string | null }) => void }) {
+export function DateTroubleshooter({ photoId, dark = false, readOnly = false, onApplied }: { photoId: string; /** Show the readings without offering to take one: someone else's photograph. */ readOnly?: boolean; /** On a lightbox panel, where the surface behind it is the photo. */ dark?: boolean; /** Let a panel that holds the date itself take the new one, instead of reloading the page under it. */ onApplied?: (next: { takenAt: string; tzOffsetMin: number; source: string; setBy: string | null }) => void }) {
   const router = useRouter();
   const [report, setReport] = useState<Wire | null>(null);
   const [open, setOpen] = useState(false);
@@ -87,7 +87,7 @@ export function DateTroubleshooter({ photoId, dark = false, onApplied }: { photo
             {w.current && <span className={`text-xs rounded-full px-2 py-0.5 ${dark ? "bg-white/15" : "bg-surface-alt"}`}>this is the one in use</span>}
             <span className={`w-full text-xs ${dark ? "text-white/60" : "text-muted"}`}>{w.note}</span>
             <span className="flex-1">{when(w.at, report.current.tzOffsetMin) ?? <span className={dark ? "text-white/60" : "text-muted"}>nothing</span>}</span>
-            {w.usable && w.at && !w.current && (
+            {!readOnly && w.usable && w.at && !w.current && (
               dark ? (
                 <button type="button" disabled={pending} onClick={() => use(w.at!)} className="px-2 py-1 rounded bg-white text-black text-xs font-medium disabled:opacity-60">Use this</button>
               ) : (

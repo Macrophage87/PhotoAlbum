@@ -7,7 +7,8 @@ import { shareableTripUrl } from "@/lib/share/social";
 import { formatDayRange } from "@/lib/time/format";
 import { dateColumnToDay } from "@/lib/time/local-day";
 import { getViewer } from "@/lib/auth/viewer";
-import { canViewTrip, canEditTrip } from "@/lib/auth/access";
+import { canViewTrip } from "@/lib/auth/access";
+import { canEditContainer } from "@/lib/auth/ownership";
 import { getTripBySlug } from "@/lib/trips/queries";
 import { TripTheme } from "@/themes/TripTheme";
 import { Nav } from "@/components/layout/Nav";
@@ -43,7 +44,8 @@ export default async function TripLayout({ params, children }: LayoutProps<"/tri
   const [viewer, trip] = await Promise.all([getViewer(), getTripBySlug(slug)]);
   if (!trip) notFound();
   if (!canViewTrip(viewer, trip)) redirect(`/auth/signin?next=${encodeURIComponent(`/trips/${slug}`)}`);
-  const editable = canEditTrip(viewer);
+  // Importing tracks and changing a trip's settings shape the trip itself, so they belong to whoever made it.
+  const owns = viewer.kind === "user" && canEditContainer(viewer.user, trip);
   const base = `/trips/${slug}`;
   const tabs = [
     { href: base, label: "Overview", exact: true },
@@ -51,7 +53,7 @@ export default async function TripLayout({ params, children }: LayoutProps<"/tri
     { href: `${base}/timeline`, label: "Timeline" },
     { href: `${base}/map`, label: "Map" },
     { href: `${base}/activities`, label: "Activities" },
-    ...(editable ? [{ href: `${base}/import`, label: "Import tracks" }, { href: `${base}/settings`, label: "Settings" }] : []),
+    ...(owns ? [{ href: `${base}/import`, label: "Import tracks" }, { href: `${base}/settings`, label: "Settings" }] : []),
   ];
 
   return (

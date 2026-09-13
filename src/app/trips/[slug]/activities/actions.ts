@@ -4,16 +4,19 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { db } from "@/lib/db";
 import { requireUserOrThrow } from "@/lib/auth/viewer";
+import { canEditContainer, NOT_YOUR_CONTAINER } from "@/lib/auth/ownership";
 import { activityInputFromForm, localInputToInstant } from "@/lib/activities/validation";
 import { reassignPhotosForActivity } from "@/lib/activities/reassign";
 import { fieldErrors } from "@/lib/trips/validation";
 import type { ActivityType } from "@/generated/prisma/enums";
 import type { ActivityFormState } from "@/components/activities/ActivityForm";
 
+/** An activity is part of the shape of a trip, so it is the trip's maker (and admins) who arrange them. */
 async function loadTrip(slug: string) {
-  await requireUserOrThrow();
-  const trip = await db.trip.findUnique({ where: { slug }, select: { id: true, slug: true, timezone: true } });
+  const user = await requireUserOrThrow();
+  const trip = await db.trip.findUnique({ where: { slug }, select: { id: true, slug: true, timezone: true, createdById: true } });
   if (!trip) throw new Error("Trip not found");
+  if (!canEditContainer(user, trip)) throw new Error(NOT_YOUR_CONTAINER);
   return trip;
 }
 

@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { requireUserOrThrow } from "@/lib/auth/viewer";
+import { canEditMedia, NOT_YOURS } from "@/lib/auth/ownership";
 import { storage } from "@/lib/storage";
 import { enqueue } from "@/lib/jobs/boss";
 import { QUEUES } from "@/lib/jobs/queues";
@@ -96,9 +97,10 @@ const updateSchema = z.object({
 
 /** Retitle, change the date, or point the item at a different YouTube video (which refreshes the poster). */
 export async function updateExternalVideo(photoId: string, fd: FormData): Promise<void> {
-  await requireUserOrThrow();
+  const user = await requireUserOrThrow();
   const photo = await db.photo.findUnique({ where: { id: photoId }, include: { trip: { select: { timezone: true } } } });
   if (!photo || photo.kind !== "EXTERNAL_VIDEO") throw new Error("Not an embedded video");
+  if (!canEditMedia(user, photo)) throw new Error(NOT_YOURS);
   const v = updateSchema.parse({ title: fd.get("title"), url: fd.get("url"), date: fd.get("date") });
   const id = parseYouTubeUrl(v.url);
   if (!id) throw new Error("That does not look like a YouTube link.");

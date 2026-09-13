@@ -1,14 +1,10 @@
-import { notFound } from "next/navigation";
-import { requireUser } from "@/lib/auth/viewer";
-import { getTripBySlug } from "@/lib/trips/queries";
+import { requireTripOwnerPage } from "@/lib/trips/access";
 import { TrackImporter } from "@/components/tracks/TrackImporter";
 import { Card } from "@/components/ui";
 
 export default async function ImportPage({ params }: PageProps<"/trips/[slug]/import">) {
   const { slug } = await params;
-  await requireUser(`/trips/${slug}/import`);
-  const trip = await getTripBySlug(slug);
-  if (!trip) notFound();
+  const { trip } = await requireTripOwnerPage(slug, `/trips/${slug}/import`);
   return (
     <div className="max-w-3xl space-y-8">
       <div>

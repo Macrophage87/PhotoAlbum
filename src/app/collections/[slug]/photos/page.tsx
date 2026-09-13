@@ -11,7 +11,7 @@ export default async function CollectionPhotosPage({ params, searchParams }: Pag
   const { slug } = await params;
   const sp = await searchParams;
   const added = typeof sp.added === "string" ? Number(sp.added) : NaN;
-  const { collection, editable } = await loadViewableCollection(slug, `/collections/${slug}/photos`);
+  const { collection, editable, owns } = await loadViewableCollection(slug, `/collections/${slug}/photos`);
   const viewer = await getViewer();
   const items = await listCollectionItems(collection.id, { viewerId: viewer.kind === "user" ? viewer.user.id : null });
   const shown = editable ? items : items.filter((i) => i.status === "READY");
@@ -26,7 +26,7 @@ export default async function CollectionPhotosPage({ params, searchParams }: Pag
       </div>
       {Number.isFinite(added) && <p role="status" className="text-sm rounded-theme bg-emerald-50 border border-emerald-200 text-emerald-900 p-3">Added {added} photo{added === 1 ? "" : "s"} to this collection.</p>}
       {editable && <YouTubeAddForm collectionId={collection.id} defaultDate={new Date().toISOString().slice(0, 10)} />}
-      <CollectionGallery collectionId={collection.id} slug={slug} photos={shown.map((p) => ({ ...toGridPhoto(p, null, editable, favourites.get(p.id)), itemId: p.itemId }))} editable={editable} emptyMessage={editable ? "Nothing here yet. Use Add existing photos, open a photo and tick this collection, or select photos in any gallery." : "Nothing here yet."} />
+      <CollectionGallery collectionId={collection.id} slug={slug} photos={shown.map((p) => ({ ...toGridPhoto(p, null, editable, favourites.get(p.id)), itemId: p.itemId }))} editable={owns} emptyMessage={editable ? "Nothing here yet. Use Add existing photos, open a photo and tick this collection, or select photos in any gallery." : "Nothing here yet."} />
     </div>
   );
 }

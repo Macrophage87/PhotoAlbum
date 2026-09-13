@@ -13,14 +13,17 @@ import { generateToken } from "@/lib/auth/tokens";
 import { uniqueSlug } from "@/lib/trips/slug";
 import { fieldErrors } from "@/lib/trips/validation";
 import { collectionInputFromForm } from "@/lib/collections/validation";
+import { canEditContainer, editableMediaIds, NOT_YOUR_CONTAINER } from "@/lib/auth/ownership";
 import type { TripFormState } from "@/app/trips/new/actions";
 
 export type CollectionFormState = TripFormState;
 
+/** The collection, where this member may change it: whoever gathered it, and admins. */
 async function loadEditableCollection(slug: string) {
-  await requireUserOrThrow();
+  const user = await requireUserOrThrow();
   const collection = await db.collection.findUnique({ where: { slug } });
   if (!collection) throw new Error("Collection not found");
+  if (!canEditContainer(user, collection)) throw new Error(NOT_YOUR_CONTAINER);
   return collection;
 }
 
@@ -99,10 +102,17 @@ export async function deleteCollection(slug: string): Promise<void> {
 
 const ids = z.array(z.string().min(1)).min(1).max(500);
 
-/** Add photos to a collection (existing members are skipped). Returns how many were added. */
+/**
+ * Add photos to a collection (existing members are skipped). Returns how many were added.
+ *
+ * What this asks of a member is rights over the photographs, not over the collection: filing your own pictures
+ * under "Christmas mornings" is the ordinary use of a family collection, and putting somebody else's there —
+ * which can widen who sees it — is not yours to do.
+ */
 export async function addToCollection(collectionId: string, photoIds: string[]): Promise<number> {
   const user = await requireUserOrThrow();
-  const list = ids.parse(photoIds);
+  const list = await editableMediaIds(user, ids.parse(photoIds));
+  if (!list.length) return 0;
   const collection = await db.collection.findUnique({ where: { id: collectionId }, select: { id: true, slug: true } });
   if (!collection) throw new Error("Collection not found");
   const [existing, photos, last] = await Promise.all([
@@ -124,8 +134,11 @@ export async function addToCollection(collectionId: string, photoIds: string[]):
 }
 
 export async function removeFromCollection(collectionId: string, photoIds: string[]): Promise<void> {
-  await requireUserOrThrow();
-  const list = ids.parse(photoIds);
+  const user = await requireUserOrThrow();
+  // Taking a photo out is the same decision as putting it in — unless the collection is yours, when tidying it is.
+  const collectionOwner = await db.collection.findUnique({ where: { id: collectionId }, select: { createdById: true } });
+  const list = collectionOwner && canEditContainer(user, collectionOwner) ? ids.parse(photoIds) : await editableMediaIds(user, ids.parse(photoIds));
+  if (!list.length) return;
   const collection = await db.collection.findUnique({ where: { id: collectionId }, select: { slug: true, coverPhotoId: true } });
   if (!collection) return;
   await db.collectionItem.deleteMany({ where: { collectionId, photoId: { in: list } } });

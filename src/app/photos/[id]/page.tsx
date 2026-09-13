@@ -23,6 +23,7 @@ import { isWeakDate } from "@/lib/photos/date-from-neighbours";
 import { guessDateFromTrip } from "@/lib/photos/date-guess-query";
 import { NeighbourDate } from "@/components/photos/NeighbourDate";
 import { DateTroubleshooter } from "@/components/photos/DateTroubleshooter";
+import { canEditMedia, NOT_YOURS } from "@/lib/auth/ownership";
 import { PanoramaView, PanoramaHint } from "@/components/photos/PanoramaView";
 import { panoramaLabel } from "@/lib/images/panorama";
 import { CollectionsField, TripField } from "@/components/containers/PhotoContainerFields";
@@ -86,8 +87,9 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
   const cover = setAsCover.bind(null, id);
   const shift = shiftPhotoTimezone.bind(null, id);
   const isCover = photo.trip?.coverPhotoId === photo.id;
-  // Cropping and colour are the uploader's call, or an admin's: an edit changes what the whole family sees.
-  const canEditPixels = me.role === "ADMIN" || photo.uploaderId === me.id;
+  // The standing rule: an item is changed by whoever uploaded it, and by admins. Everyone else in the family reads
+  // the same page without the controls — the details are shared, the account of them belongs to the person who gave it.
+  const mine = canEditMedia(me, photo);
   // What the rest of the trip says about an item whose own date was lost; null when its date is trustworthy.
   const neighbourGuess = await guessDateFromTrip(photo.id);
   const isVideo = photo.kind === "EXTERNAL_VIDEO";
@@ -165,7 +167,7 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
                 <a href={photoUrl(photo, "original")} target="_blank" rel="noreferrer" className="underline underline-offset-2">see the original</a>.
               </p>
             ) : null}
-            {canEditPixels && photo.kind === "PHOTO" && photo.status === "READY" && (
+            {mine && photo.kind === "PHOTO" && photo.status === "READY" && (
               <div className="mt-3">
                 {/* The editor starts from the picture without its edits, so reopening it does not apply them a second time. */}
                 <PhotoEditorPanel photoId={photo.id} src={photoUrl(photo, photo.edits ? "source" : "medium")} initial={editsOf(photo.edits)} edited={Boolean(photo.edits)} />
@@ -180,7 +182,7 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
           </div>
 
           <div className="space-y-6">
-            {isVideo && (
+            {isVideo && mine && (
               <Card className="p-4">
                 <form action={updateVideo} className="space-y-4">
                   <div>
@@ -200,6 +202,13 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
                 </form>
               </Card>
             )}
+            {!mine && (
+              <Card className="p-4 text-sm text-muted" data-testid="not-yours">
+                {NOT_YOURS} Anything you notice about it is worth saying to them — and anyone can move an item to the
+                trash, with a reason, if it should not be up.
+              </Card>
+            )}
+            {mine && (
             <Card className="p-4">
               <form action={update} className="space-y-4">
                 {!isVideo && (
@@ -249,23 +258,25 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
                 <Button type="submit">Save</Button>
               </form>
             </Card>
+            )}
 
-            <AnnotationCard photoId={photo.id} annotation={photo.annotation as StoredAnnotation | null} source={photo.annotationSource} model={photo.annotationModel} error={photo.annotationError} optOut={photo.annotationOptOut} optOutReason={optOutWhy} active={gates.active} editable />
-            <div className="mb-2"><DateTroubleshooter photoId={photo.id} /></div>
-            {neighbourGuess && <div className="mb-3"><NeighbourDate photoId={photo.id} guess={{ ...neighbourGuess, takenAt: neighbourGuess.takenAt.toISOString() }} /></div>}
-            {isWeakDate(photo.takenAtSource, photo.takenAt) && (
+            <AnnotationCard photoId={photo.id} annotation={photo.annotation as StoredAnnotation | null} source={photo.annotationSource} model={photo.annotationModel} error={photo.annotationError} optOut={photo.annotationOptOut} optOutReason={optOutWhy} active={gates.active} editable={mine} />
+            {/* Where a date came from is worth reading whoever you are; taking one of the readings is not. */}
+            <div className="mb-2"><DateTroubleshooter photoId={photo.id} readOnly={!mine} /></div>
+            {mine && neighbourGuess && <div className="mb-3"><NeighbourDate photoId={photo.id} guess={{ ...neighbourGuess, takenAt: neighbourGuess.takenAt.toISOString() }} /></div>}
+            {mine && isWeakDate(photo.takenAtSource, photo.takenAt) && (
               <EstimatedDate photoId={photo.id} estimatedDate={photo.estimatedDate} confidence={photo.estimatedDateConfidence} note={photo.estimatedDateNote} />
             )}
 
             <Card className="p-4">
               <h2 className="font-medium mb-2">Place</h2>
-              <PlaceEditor photoId={photo.id} initial={photo.lat !== null && photo.lng !== null ? { lat: photo.lat, lng: photo.lng } : null} gpsSource={photo.gpsSource} setBy={photo.placeSetBy ? uploaderLabel(photo.placeSetBy.name, photo.placeSetBy.email) : null} placeName={photo.placeName} estimate={{ name: photo.placeEstimateName, confidence: photo.placeEstimateConfidence, radiusM: photo.placeEstimateRadiusM, note: photo.placeEstimateNote, precision: photo.placeEstimatePrecision }} theme={mapThemeOf(getTheme(tripTheme))} />
+              <PlaceEditor photoId={photo.id} initial={photo.lat !== null && photo.lng !== null ? { lat: photo.lat, lng: photo.lng } : null} gpsSource={photo.gpsSource} setBy={photo.placeSetBy ? uploaderLabel(photo.placeSetBy.name, photo.placeSetBy.email) : null} placeName={photo.placeName} estimate={{ name: photo.placeEstimateName, confidence: photo.placeEstimateConfidence, radiusM: photo.placeEstimateRadiusM, note: photo.placeEstimateNote, precision: photo.placeEstimatePrecision }} theme={mapThemeOf(getTheme(tripTheme))} readOnly={!mine} />
             </Card>
             <Card className="p-4">
               <h2 className="font-medium mb-2">Details</h2>
               <ExifPanel photo={photo} tripTimezone={photo.trip?.timezone} />
               <p className="text-xs text-muted mt-2">Uploaded by {uploaderLabel(photo.uploader.name, photo.uploader.email)}</p>
-              {!isVideo && (
+              {!isVideo && mine && (
                 <form action={async (fd) => { "use server"; await setPhotoDate(photo.id, fd); }} className="mt-3 pt-3 border-t border-border space-y-2">
                   <div className="text-xs font-medium">Date taken</div>
                   <p className="text-xs text-muted">Defaults to what the camera wrote in the file{photo.takenAtSource ? ` (currently ${photo.takenAtSource === "MANUAL" ? `set by ${photo.dateSetBy ? uploaderLabel(photo.dateSetBy.name, photo.dateSetBy.email) : "a family member"}` : SOURCE_LABEL[photo.takenAtSource] ?? photo.takenAtSource})` : ""}. Change it here when the camera was wrong or a scan has no date.</p>
@@ -276,7 +287,7 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
                   </div>
                 </form>
               )}
-              {photo.takenAt && <TimezoneShift action={shift} currentOffsetMin={photo.tzOffsetMin} hasTrip={Boolean(photo.trip)} tripTimezone={photo.trip?.timezone} />}
+              {mine && photo.takenAt && <TimezoneShift action={shift} currentOffsetMin={photo.tzOffsetMin} hasTrip={Boolean(photo.trip)} tripTimezone={photo.trip?.timezone} />}
             </Card>
 
             {similar.length > 0 && (
@@ -287,19 +298,21 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
 
             <Card className="p-4 space-y-3">
               <h2 className="font-medium">Linked photos</h2>
-              <LinkedPhotos links={links} unlink={unlinkPhotos} />
-              <PhotoLinkEditor action={link} candidates={candidates.map((c) => ({ id: c.id, thumbUrl: photoUrl(c, "thumb"), caption: c.caption, originalName: c.originalName, takenAt: c.takenAt?.toISOString() ?? null }))} />
+              <LinkedPhotos links={links} unlink={mine ? unlinkPhotos : undefined} />
+              {mine && <PhotoLinkEditor action={link} candidates={candidates.map((c) => ({ id: c.id, thumbUrl: photoUrl(c, "thumb"), caption: c.caption, originalName: c.originalName, takenAt: c.takenAt?.toISOString() ?? null }))} />}
             </Card>
 
             <div className="flex flex-wrap gap-2">
-              {photo.tripId && (
+              {mine && photo.tripId && (
                 <form action={cover}>
                   <Button type="submit" variant="secondary" size="sm" disabled={isCover}>{isCover ? "Trip cover" : "Set as trip cover"}</Button>
                 </form>
               )}
-              <form action={reprocess}>
-                <Button type="submit" variant="secondary" size="sm">Re-process</Button>
-              </form>
+              {mine && (
+                <form action={reprocess}>
+                  <Button type="submit" variant="secondary" size="sm">Re-process</Button>
+                </form>
+              )}
               <TrashButton action={remove} />
             </div>
           </div>

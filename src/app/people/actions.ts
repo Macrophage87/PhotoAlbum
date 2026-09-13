@@ -7,6 +7,7 @@ import { db } from "@/lib/db";
 import { claimAnimalsForPet, confirmAnimalAs, rejectAnimal, releaseAnimalsForPet } from "@/lib/pets/proposals";
 import { enqueueAnimalMatchAllOpen } from "@/lib/jobs/handlers/detect-animals";
 import { requireUserOrThrow } from "@/lib/auth/viewer";
+import { canEditMedia, NOT_YOURS } from "@/lib/auth/ownership";
 import { namingOutcome } from "@/lib/people/consent";
 import { enqueueEmbedding } from "@/lib/jobs/handlers/embed-photo";
 import { enqueueFaceDetection } from "@/lib/jobs/handlers/detect-faces";
@@ -280,7 +281,11 @@ export async function updatePet(personId: string, fd: FormData): Promise<void> {
  * whole-image record: a Face row with a full box, no confidence and no template.
  */
 export async function tagPet(photoId: string, personId: string): Promise<void> {
-  await requireUserOrThrow();
+  const user = await requireUserOrThrow();
+  // Tagging is done on an item's own page, so it follows the item: its uploader, and admins.
+  const owner = await db.photo.findUnique({ where: { id: photoId }, select: { uploaderId: true } });
+  if (!owner) return;
+  if (!canEditMedia(user, owner)) throw new Error(NOT_YOURS);
   const pet = await db.person.findUniqueOrThrow({ where: { id: personId }, select: { kind: true } });
   if (pet.kind !== "PET") throw new Error("Not a pet");
   const existing = await db.face.findFirst({ where: { photoId, personId, status: "CONFIRMED" }, select: { id: true } });
@@ -292,7 +297,11 @@ export async function tagPet(photoId: string, personId: string): Promise<void> {
 }
 
 export async function untagPerson(photoId: string, personId: string): Promise<void> {
-  await requireUserOrThrow();
+  const user = await requireUserOrThrow();
+  // Tagging is done on an item's own page, so it follows the item: its uploader, and admins.
+  const owner = await db.photo.findUnique({ where: { id: photoId }, select: { uploaderId: true } });
+  if (!owner) return;
+  if (!canEditMedia(user, owner)) throw new Error(NOT_YOURS);
   await db.face.deleteMany({ where: { photoId, personId, confidence: 0 } });
   await db.face.updateMany({ where: { photoId, personId, confidence: { gt: 0 } }, data: { personId: null, status: "REJECTED", proposedPersonId: personId, clusterId: null } });
   await releaseAnimalsForPet(photoId, personId);

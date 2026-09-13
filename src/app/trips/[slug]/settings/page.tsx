@@ -1,7 +1,5 @@
-import { notFound } from "next/navigation";
-import { requireUser } from "@/lib/auth/viewer";
 import { env } from "@/lib/env";
-import { getTripBySlug } from "@/lib/trips/queries";
+import { requireTripOwnerPage } from "@/lib/trips/access";
 import { dateColumnToDay } from "@/lib/time/local-day";
 import { TripForm } from "@/components/trips/TripForm";
 import { ShareButtons } from "@/components/trips/ShareButtons";
@@ -24,9 +22,7 @@ const VISIBILITY = [
 export default async function TripSettingsPage({ params, searchParams }: PageProps<"/trips/[slug]/settings">) {
   const { slug } = await params;
   const sp = await searchParams;
-  const me = await requireUser(`/trips/${slug}/settings`);
-  const trip = await getTripBySlug(slug);
-  if (!trip) notFound();
+  const { user: me, trip } = await requireTripOwnerPage(slug, `/trips/${slug}/settings`);
   const update = updateTrip.bind(null, slug);
   const rotate = rotateShareToken.bind(null, slug);
   const remove = deleteTrip.bind(null, slug);

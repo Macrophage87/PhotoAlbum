@@ -12,11 +12,14 @@ import { enqueue } from "@/lib/jobs/boss";
 import { QUEUES } from "@/lib/jobs/queues";
 import type { TripFormState } from "@/app/trips/new/actions";
 import { levelOf } from "@/lib/visibility/exposure";
+import { canEditContainer, NOT_YOUR_CONTAINER } from "@/lib/auth/ownership";
 
+/** The trip, where this member may change it: whoever made it, and admins. */
 async function loadEditableTrip(slug: string) {
-  await requireUserOrThrow();
+  const user = await requireUserOrThrow();
   const trip = await db.trip.findUnique({ where: { slug } });
   if (!trip) throw new Error("Trip not found");
+  if (!canEditContainer(user, trip)) throw new Error(NOT_YOUR_CONTAINER);
   return trip;
 }
 

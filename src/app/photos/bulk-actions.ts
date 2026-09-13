@@ -10,12 +10,15 @@ import { QUEUES } from "@/lib/jobs/queues";
 import { applyPhotoInstant, requestGeotag } from "@/lib/photos/apply-date";
 import { datePlanSchema, isEmptyPlan, planDate } from "@/lib/photos/bulk-date";
 import { offsetMinutesInZone } from "@/lib/time/local-day";
+import { editableMediaIds } from "@/lib/auth/ownership";
 
 const ids = z.array(z.string().min(1)).min(1).max(500);
 
 export async function bulkAssignActivity(photoIds: string[], activityId: string | null): Promise<void> {
-  await requireUserOrThrow();
-  const list = ids.parse(photoIds);
+  const user = await requireUserOrThrow();
+  // A selection reaches across the family's photos; a bulk change touches only the part of it this member may change.
+  const list = await editableMediaIds(user, ids.parse(photoIds));
+  if (!list.length) return;
   if (activityId) {
     const activity = await db.activity.findUnique({ where: { id: activityId }, select: { tripId: true } });
     if (!activity) return;
@@ -27,8 +30,9 @@ export async function bulkAssignActivity(photoIds: string[], activityId: string 
 }
 
 export async function bulkMoveToTrip(photoIds: string[], tripId: string | null): Promise<void> {
-  await requireUserOrThrow();
-  const list = ids.parse(photoIds);
+  const user = await requireUserOrThrow();
+  const list = await editableMediaIds(user, ids.parse(photoIds));
+  if (!list.length) return;
   if (tripId && !(await db.trip.findUnique({ where: { id: tripId }, select: { id: true } }))) return;
   await db.photo.updateMany({ where: { id: { in: list } }, data: { tripId, activityId: null } });
   if (tripId) await enqueue(QUEUES.geotagPhotos, { tripId }, { singletonKey: `geotag:${tripId}`, singletonSeconds: 10, singletonNextSlot: true });
@@ -48,7 +52,8 @@ export async function bulkTrash(photoIds: string[], reason: string, note: string
 /** Pin every selected item to one spot (a group of prints from the same place). */
 export async function bulkSetPlace(photoIds: string[], lat: number, lng: number, name?: string | null): Promise<number> {
   const user = await requireUserOrThrow();
-  const list = ids.parse(photoIds);
+  const list = await editableMediaIds(user, ids.parse(photoIds));
+  if (!list.length) return 0;
   if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) throw new Error("That is not a place on the map");
   const r = await db.photo.updateMany({ where: { id: { in: list } }, data: { lat, lng, altitude: null, gpsSource: "MANUAL", placeSetById: user.id, placeName: typeof name === "string" && name.trim() ? name.trim().slice(0, 200) : null } });
   revalidatePath("/", "layout");
@@ -60,8 +65,10 @@ const dateOrder = [{ takenAt: "asc" as const }, { originalName: "asc" as const }
 type PlannedRow = { id: string; label: string; before: { at: string; tzOffsetMin: number } | null; after: { at: string; tzOffsetMin: number } };
 
 /** Read the selection, work out what the plan does to each item, and hand back both the rows and what was skipped. */
-async function planSelection(photoIds: string[], plan: unknown) {
-  const list = ids.parse(photoIds);
+async function planSelection(user: { id: string; role: "ADMIN" | "MEMBER" }, photoIds: string[], plan: unknown) {
+  const asked = ids.parse(photoIds);
+  const list = await editableMediaIds(user, asked);
+  const notYours = asked.length - list.length;
   const p = datePlanSchema.parse(plan);
   const photos = await db.photo.findMany({
     where: { id: { in: list }, trashedAt: null },
@@ -82,7 +89,7 @@ async function planSelection(photoIds: string[], plan: unknown) {
       after: { at: next.takenAt.toISOString(), tzOffsetMin: next.tzOffsetMin },
     });
   });
-  return { rows, skipped };
+  return { rows, skipped, notYours };
 }
 
 /**
@@ -90,16 +97,16 @@ async function planSelection(photoIds: string[], plan: unknown) {
  * the thing a member wants to check is that the corrected dates land where they remember being — so they read the
  * before and after of a few of them rather than the arithmetic.
  */
-export async function previewBulkDate(photoIds: string[], plan: unknown): Promise<{ rows: PlannedRow[]; count: number; skipped: number }> {
-  await requireUserOrThrow();
-  const { rows, skipped } = await planSelection(photoIds, plan);
-  return { rows: rows.slice(0, 6).map((row) => ({ id: row.id, label: row.label, before: row.before, after: row.after })), count: rows.length, skipped };
+export async function previewBulkDate(photoIds: string[], plan: unknown): Promise<{ rows: PlannedRow[]; count: number; skipped: number; notYours: number }> {
+  const user = await requireUserOrThrow();
+  const { rows, skipped, notYours } = await planSelection(user, photoIds, plan);
+  return { rows: rows.slice(0, 6).map((row) => ({ id: row.id, label: row.label, before: row.before, after: row.after })), count: rows.length, skipped, notYours };
 }
 
 /** Apply that correction. Items the plan cannot touch (a shift needs a date to shift) are left exactly as they were. */
-export async function bulkSetDate(photoIds: string[], plan: unknown): Promise<{ n: number; skipped: number }> {
+export async function bulkSetDate(photoIds: string[], plan: unknown): Promise<{ n: number; skipped: number; notYours: number }> {
   const user = await requireUserOrThrow();
-  const { rows, skipped } = await planSelection(photoIds, plan);
+  const { rows, skipped, notYours } = await planSelection(user, photoIds, plan);
   const trips = new Set<string>();
   for (const row of rows) {
     const tripId = await applyPhotoInstant(row.photo, new Date(row.after.at), row.after.tzOffsetMin, "MANUAL", user.id, { geotag: false });
@@ -108,5 +115,5 @@ export async function bulkSetDate(photoIds: string[], plan: unknown): Promise<{ 
   // One re-geotag per trip rather than one per photo: the job walks the whole trip anyway.
   for (const tripId of trips) await requestGeotag(tripId);
   revalidatePath("/", "layout");
-  return { n: rows.length, skipped };
+  return { n: rows.length, skipped, notYours };
 }

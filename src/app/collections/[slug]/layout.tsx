@@ -2,7 +2,8 @@ import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
 import { env } from "@/lib/env";
 import { getViewer } from "@/lib/auth/viewer";
-import { canEdit, canViewCollection } from "@/lib/auth/access";
+import { canEditContainer } from "@/lib/auth/ownership";
+import { canViewCollection } from "@/lib/auth/access";
 import { collectionCoverFor, getCollectionBySlug, type CollectionWithCounts } from "@/lib/collections/queries";
 import { photoUrl } from "@/lib/photos/urls";
 import { shareableCollectionUrl } from "@/lib/share/social";
@@ -35,14 +36,15 @@ export default async function CollectionLayout({ params, children }: LayoutProps
   const [viewer, collection] = await Promise.all([getViewer(), getCollectionBySlug(slug)]);
   if (!collection) notFound();
   if (!canViewCollection(viewer, collection)) redirect(`/auth/signin?next=${encodeURIComponent(`/collections/${slug}`)}`);
-  const editable = canEdit(viewer);
+  // Settings shape the collection itself: whoever gathered it, and admins.
+  const owns = viewer.kind === "user" && canEditContainer(viewer.user, collection);
   const base = `/collections/${slug}`;
   const tabs = [
     { href: base, label: "Overview", exact: true },
     { href: `${base}/photos`, label: "Photos" },
     { href: `${base}/timeline`, label: "Timeline" },
     { href: `${base}/map`, label: "Map" },
-    ...(editable ? [{ href: `${base}/settings`, label: "Settings" }] : []),
+    ...(owns ? [{ href: `${base}/settings`, label: "Settings" }] : []),
   ];
   return (
     <TripTheme themeKey={collection.themeKey}>

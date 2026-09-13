@@ -7,6 +7,7 @@ import { previewBulkDate, bulkSetDate } from "@/app/photos/bulk-actions";
 import { formatTaken } from "./LightboxInfo";
 
 type Row = { id: string; label: string; before: { at: string; tzOffsetMin: number } | null; after: { at: string; tzOffsetMin: number } };
+type Preview = { rows: Row[]; count: number; skipped: number; notYours: number };
 
 const num = (v: string) => {
   const n = Number(v);
@@ -29,7 +30,7 @@ export function BulkDate({ ids, onDone }: { ids: string[]; onDone: (message: str
   const [days, setDays] = useState(0);
   const [hours, setHours] = useState(0);
   const [minutes, setMinutes] = useState(0);
-  const [cached, setCached] = useState<{ key: string; data: { rows: Row[]; count: number; skipped: number } } | null>(null);
+  const [cached, setCached] = useState<{ key: string; data: Preview } | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [pending, start] = useTransition();
 
@@ -59,8 +60,8 @@ export function BulkDate({ ids, onDone }: { ids: string[]; onDone: (message: str
       if (!plan) return;
       setMessage(null);
       const r = await bulkSetDate(ids, plan);
-      if (r.n === 0) { setMessage("Nothing was changed — none of the selected items could take that date."); return; }
-      onDone(`${r.n} date${r.n === 1 ? "" : "s"} corrected${r.skipped ? `, ${r.skipped} left alone` : ""}.`);
+      if (r.n === 0) { setMessage(r.notYours ? "None of those are yours to change; only the member who uploaded an item, or an admin, can date it." : "Nothing was changed — none of the selected items could take that date."); return; }
+      onDone(`${r.n} date${r.n === 1 ? "" : "s"} corrected${r.skipped ? `, ${r.skipped} left alone` : ""}${r.notYours ? `, ${r.notYours} not yours to change` : ""}.`);
     });
 
   const field = (label: string, value: number, set: (n: number) => void) => (
@@ -116,7 +117,8 @@ export function BulkDate({ ids, onDone }: { ids: string[]; onDone: (message: str
           ))}
           <p className="text-muted">
             {preview.count} item{preview.count === 1 ? "" : "s"} would change
-            {preview.skipped > 0 && `, ${preview.skipped} left alone (a shift needs a date to shift)`}.
+            {preview.skipped > 0 && `, ${preview.skipped} left alone (a shift needs a date to shift)`}
+            {preview.notYours > 0 && `, ${preview.notYours} not yours to change`}.
           </p>
         </div>
       )}

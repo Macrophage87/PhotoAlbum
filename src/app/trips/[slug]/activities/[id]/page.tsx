@@ -11,19 +11,20 @@ import { annotationGates } from "@/lib/annotation/eligibility";
 export default async function ActivityPage({ params, searchParams }: PageProps<"/trips/[slug]/activities/[id]">) {
   const { slug, id } = await params;
   const sp = await searchParams;
-  const { trip, editable } = await loadViewableTrip(slug, `/trips/${slug}/activities/${id}`);
+  const { trip, editable, owns } = await loadViewableTrip(slug, `/trips/${slug}/activities/${id}`);
   const activity = await db.activity.findFirst({ where: { id, tripId: trip.id }, include: { track: { select: { id: true, simplified: true, stats: true } } } });
   if (!activity) notFound();
   const photos = await db.photo.findMany({ where: { activityId: activity.id, ...NOT_TRASHED }, orderBy: [{ takenAt: "asc" }], select: photoCardSelect });
 
-  if (!editable) return <ActivityDetail trip={trip} activity={activity} photos={photos} editable={false} />;
-  const gates = await annotationGates();
+  // Any member may add their own photos to an activity; rearranging the activity itself belongs to the trip's maker.
+  const upload = editable ? { maxClipSeconds: env().MAX_CLIP_SECONDS, annotationActive: (await annotationGates()).active } : undefined;
+  if (!owns) return <ActivityDetail trip={trip} activity={activity} photos={photos} upload={upload} editable={false} />;
   return (
     <ActivityDetail
       trip={trip}
       activity={activity}
       photos={photos}
-      upload={{ maxClipSeconds: env().MAX_CLIP_SECONDS, annotationActive: gates.active }}
+      upload={upload}
       editable
       editing={sp.edit === "1"}
       updateAction={updateActivity.bind(null, slug, activity.id) as never}

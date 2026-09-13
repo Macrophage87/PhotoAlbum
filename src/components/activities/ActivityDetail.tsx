@@ -93,9 +93,9 @@ export function ActivityDetail({ trip, activity, photos, upload, ...mode }: { tr
           <h3 className="font-display text-lg font-semibold">
             {photos.length} photo{photos.length === 1 ? "" : "s"}
           </h3>
-          {mode.editable && upload && <ActivityUploader activityId={activity.id} maxClipSeconds={upload.maxClipSeconds} annotationActive={upload.annotationActive} />}
+          {upload && <ActivityUploader activityId={activity.id} maxClipSeconds={upload.maxClipSeconds} annotationActive={upload.annotationActive} />}
         </div>
-        <PhotoGrid photos={photos.map((p) => toGridPhoto(p))} emptyMessage={mode.editable ? "Nothing here yet. Photos taken during these hours arrive on their own; anything else can be added above." : "No photos on this activity yet."} />
+        <PhotoGrid photos={photos.map((p) => toGridPhoto(p))} emptyMessage={upload ? "Nothing here yet. Photos taken during these hours arrive on their own; anything else can be added above." : "No photos on this activity yet."} />
       </section>
     </div>
   );

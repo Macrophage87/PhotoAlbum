@@ -6,6 +6,7 @@ import { db } from "@/lib/db";
 import { enqueueMatch } from "@/lib/jobs/handlers/match-photo";
 import { env } from "@/lib/env";
 import { requireAdminOrThrow, requireUserOrThrow } from "@/lib/auth/viewer";
+import { canEditContainer, canEditMedia, editableMediaIds, NOT_YOURS, NOT_YOUR_CONTAINER } from "@/lib/auth/ownership";
 import { enqueue } from "@/lib/jobs/boss";
 import { QUEUES } from "@/lib/jobs/queues";
 import { annotationGates } from "@/lib/annotation/eligibility";
@@ -30,22 +31,33 @@ const ids = z.array(z.string().min(1)).min(1).max(500);
 
 /** Keep these items away from the helper (or allow them again). Setting it cancels any queued job by way of the gate in the handler. */
 export async function setAnnotationOptOut(photoIds: string[], optOut: boolean): Promise<number> {
-  await requireUserOrThrow();
-  const res = await db.photo.updateMany({ where: { id: { in: ids.parse(photoIds) } }, data: { annotationOptOut: optOut } });
+  const user = await requireUserOrThrow();
+  // Whether a picture is sent to the helper is the uploader's call, and an admin's.
+  const mine = await editableMediaIds(user, ids.parse(photoIds));
+  if (!mine.length) return 0;
+  const res = await db.photo.updateMany({ where: { id: { in: mine } }, data: { annotationOptOut: optOut } });
   revalidatePath("/", "layout");
   return res.count;
 }
 
 /** A whole trip or collection can be marked as never leaving the server; its items inherit it. */
 export async function setContainerAnnotationOptOut(kind: "trip" | "collection", id: string, optOut: boolean): Promise<void> {
-  await requireUserOrThrow();
+  const user = await requireUserOrThrow();
+  const container = kind === "trip"
+    ? await db.trip.findUnique({ where: { id }, select: { createdById: true } })
+    : await db.collection.findUnique({ where: { id }, select: { createdById: true } });
+  if (!container) return;
+  if (!canEditContainer(user, container)) throw new Error(NOT_YOUR_CONTAINER);
   if (kind === "trip") await db.trip.update({ where: { id }, data: { annotationOptOut: optOut } });
   else await db.collection.update({ where: { id }, data: { annotationOptOut: optOut } });
   revalidatePath("/", "layout");
 }
 
 export async function reannotate(photoId: string): Promise<void> {
-  await requireUserOrThrow();
+  const user = await requireUserOrThrow();
+  const owner = await db.photo.findUnique({ where: { id: photoId }, select: { uploaderId: true } });
+  if (!owner) return;
+  if (!canEditMedia(user, owner)) throw new Error(NOT_YOURS);
   const gates = await annotationGates();
   if (!gates.active) throw new Error("Annotation is off");
   await db.photo.update({ where: { id: photoId }, data: { annotatedAt: null, annotationError: null } });
@@ -57,7 +69,10 @@ const editSchema = annotationSchema.omit({ estimatedYear: true }).partial();
 
 /** A member's edit of the helper's text; from then on re-annotation never overwrites it. */
 export async function updateAnnotation(photoId: string, fd: FormData): Promise<void> {
-  await requireUserOrThrow();
+  const user = await requireUserOrThrow();
+  const owner = await db.photo.findUnique({ where: { id: photoId }, select: { uploaderId: true } });
+  if (!owner) return;
+  if (!canEditMedia(user, owner)) throw new Error(NOT_YOURS);
   const photo = await db.photo.findUnique({ where: { id: photoId }, select: { annotation: true } });
   if (!photo) return;
   const current = (photo.annotation ?? {}) as Partial<StoredAnnotation>;
@@ -94,7 +109,10 @@ export async function updateAnnotation(photoId: string, fd: FormData): Promise<v
 
 /** Turn the helper's estimate (or the member's own) into the item's real date. */
 export async function confirmEstimatedDate(photoId: string, fd: FormData): Promise<void> {
-  await requireUserOrThrow();
+  const user = await requireUserOrThrow();
+  const owner = await db.photo.findUnique({ where: { id: photoId }, select: { uploaderId: true } });
+  if (!owner) return;
+  if (!canEditMedia(user, owner)) throw new Error(NOT_YOURS);
   const day = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).parse(fd.get("date"));
   await db.photo.update({ where: { id: photoId }, data: { takenAt: new Date(`${day}T12:00:00Z`), takenAtSource: "MANUAL", tzOffsetMin: 0, estimatedDateSource: "MEMBER", estimatedDateNote: null, estimatedDateConfidence: null } });
   await enqueueMatch([photoId]);

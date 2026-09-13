@@ -1,7 +1,5 @@
-import { notFound } from "next/navigation";
-import { requireUser } from "@/lib/auth/viewer";
 import { env } from "@/lib/env";
-import { getCollectionBySlug } from "@/lib/collections/queries";
+import { requireCollectionOwnerPage } from "@/lib/collections/access";
 import { shareableCollectionUrl } from "@/lib/share/social";
 import { CollectionForm } from "@/components/collections/CollectionForm";
 import { ShareButtons } from "@/components/trips/ShareButtons";
@@ -20,9 +18,7 @@ const VISIBILITY = [
 export default async function CollectionSettingsPage({ params, searchParams }: PageProps<"/collections/[slug]/settings">) {
   const { slug } = await params;
   const sp = await searchParams;
-  const me = await requireUser(`/collections/${slug}/settings`);
-  const collection = await getCollectionBySlug(slug);
-  if (!collection) notFound();
+  const { user: me, collection } = await requireCollectionOwnerPage(slug, `/collections/${slug}/settings`);
   const update = updateCollection.bind(null, slug);
   const rotate = rotateCollectionShareToken.bind(null, slug);
   const remove = deleteCollection.bind(null, slug);

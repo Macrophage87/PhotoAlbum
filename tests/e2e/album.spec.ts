@@ -1141,3 +1141,45 @@ test("a panorama is recognised, kept long, and shown as a panorama rather than a
   await expect(tile).toHaveClass(/col-span-2/);
   await expect(tile.getByText("360°")).toBeVisible();
 });
+
+test("a member edits their own photos and reads everyone else's, and a trip is arranged by whoever made it", async ({ browser, context, page }) => {
+  await signIn(context, ADMIN);
+  const memberEmail = "e2e-member@example.com";
+  const memberContext = await browser.newContext();
+  await signIn(memberContext, memberEmail);
+  const memberPage = await memberContext.newPage();
+
+  // One of the member's own, uploaded here so the test does not depend on what earlier tests left behind.
+  await memberPage.goto("/upload");
+  await chooseFile(memberPage, "photo-no-gps.jpg");
+  await expect(memberPage.getByText("1 of 1 uploaded.")).toBeVisible({ timeout: 30_000 });
+  const mine = await withDb((c) => c.query(`SELECT p.id FROM "Photo" p JOIN "User" u ON u.id = p."uploaderId" WHERE u.email = $1 AND p.kind = 'PHOTO' AND p."trashedAt" IS NULL ORDER BY p."createdAt" DESC LIMIT 1`, [memberEmail]));
+  const theirs = await withDb((c) => c.query(`SELECT p.id FROM "Photo" p JOIN "User" u ON u.id = p."uploaderId" WHERE u.email = $1 AND p.kind = 'PHOTO' AND p."trashedAt" IS NULL ORDER BY p."createdAt" LIMIT 1`, [ADMIN]));
+
+  // Their own: the details form is there to write in.
+  await memberPage.goto(`/photos/${mine.rows[0].id}`);
+  await memberPage.waitForLoadState("networkidle");
+  await expect(memberPage.getByLabel("Caption")).toBeVisible();
+  await expect(memberPage.getByTestId("not-yours")).toHaveCount(0);
+
+  // Somebody else's: the same page, read-only, with the rule said plainly — and the trash still open to them.
+  await memberPage.goto(`/photos/${theirs.rows[0].id}`);
+  await memberPage.waitForLoadState("networkidle");
+  await expect(memberPage.getByTestId("not-yours")).toBeVisible();
+  await expect(memberPage.getByLabel("Caption")).toHaveCount(0);
+  await expect(memberPage.getByRole("button", { name: /Move to trash/ })).toBeVisible();
+
+  // The server says the same thing to the viewer panel, which is what the lightbox reads.
+  const own = await memberPage.request.get(`/api/photos/${mine.rows[0].id}/info`);
+  expect((await own.json()).editable).toBe(true);
+  const other = await memberPage.request.get(`/api/photos/${theirs.rows[0].id}/info`);
+  expect((await other.json()).editable).toBe(false);
+
+  // A trip the admin made is arranged by the admin: no Settings tab for the member, and the page itself says no.
+  await memberPage.goto("/trips/acadia");
+  await expect(memberPage.getByRole("link", { name: "Settings" })).toHaveCount(0);
+  await memberPage.goto("/trips/acadia/settings");
+  await expect(memberPage).toHaveURL(/\/trips\/acadia$/);
+  await page.goto("/trips/acadia");
+  await expect(page.getByRole("link", { name: "Settings" })).toBeVisible();
+});

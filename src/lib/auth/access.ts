@@ -56,11 +56,12 @@ export function isPubliclyViewable(media: MediaAccessFields): boolean {
   return media.trip?.visibility === "PUBLIC" || media.collections.some((c) => c.visibility === "PUBLIC");
 }
 
-export function canEditTrip(viewer: Viewer): boolean {
-  return viewer.kind === "user";
-}
-
-export function canEdit(viewer: Viewer): boolean {
+/**
+ * A signed-in member. Everyone in the family may add to the album — upload, gather their own things, favourite,
+ * trash something that should not be up — which is a different question from whether a particular photograph or
+ * container is theirs to change. That question is `canEditMedia` / `canEditContainer` in `auth/ownership`.
+ */
+export function canContribute(viewer: Viewer): boolean {
   return viewer.kind === "user";
 }
 
@@ -85,5 +86,5 @@ export function visibleMediaWhere(viewer: Viewer): Prisma.PhotoWhereInput {
 
 /** Is this viewer in read-only mode? (i.e. can view but not edit) */
 export function isReadOnly(viewer: Viewer): boolean {
-  return !canEdit(viewer);
+  return !canContribute(viewer);
 }

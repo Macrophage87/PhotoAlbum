@@ -6,7 +6,8 @@ import { z } from "zod";
 import { db } from "@/lib/db";
 import { Prisma } from "@/generated/prisma/client";
 import { editsSchema, tidyEdits } from "@/lib/images/edits";
-import { requireUserOrThrow } from "@/lib/auth/viewer";
+import { requireUserOrThrow, type ViewerUser } from "@/lib/auth/viewer";
+import { canEditMedia, editableMediaIds, NOT_YOURS } from "@/lib/auth/ownership";
 import { trashSchema } from "@/lib/photos/trash";
 import { guessDateFromTrip, guessDatesForTrip } from "@/lib/photos/date-guess-query";
 import { dateReport, type DateReport } from "@/lib/photos/date-report";
@@ -20,6 +21,24 @@ import { readExif, resolveTakenAt } from "@/lib/images/exif";
 import { parseLatLng, placeNameOf } from "@/lib/geo/parse";
 import { uploaderLabel } from "@/components/photos/toGrid";
 import { addToCollection, removeFromCollection } from "@/app/collections/actions";
+
+/**
+ * The member making this change, where the item is theirs to change. Someone else's photograph carries their
+ * account of it, so only they and an admin may rewrite it; every action below goes through here first.
+ */
+async function editor(id: string): Promise<ViewerUser> {
+  const user = await editorOrNull(id);
+  if (!user) throw new Error(NOT_YOURS);
+  return user;
+}
+
+/** The same, for the actions that answer with a message rather than throwing at a form. */
+async function editorOrNull(id: string): Promise<ViewerUser | null> {
+  const user = await requireUserOrThrow();
+  const photo = await db.photo.findUnique({ where: { id }, select: { uploaderId: true } });
+  if (!photo) return null;
+  return canEditMedia(user, photo) ? user : null;
+}
 
 const updateSchema = z.object({
   title: z.string().trim().max(120).optional().transform((v) => v || null),
@@ -37,7 +56,7 @@ function activitySetter(activityId: string | null, chosenByHand: boolean, userId
 }
 
 export async function updatePhoto(id: string, fd: FormData): Promise<void> {
-  const user = await requireUserOrThrow();
+  const user = await editor(id);
   const photo = await db.photo.findUnique({ where: { id } });
   if (!photo) throw new Error("Photo not found");
   const v = updateSchema.parse({ title: fd.get("title") ?? undefined, caption: fd.get("caption") ?? "", context: fd.get("context") ?? "", tripId: fd.get("tripId") ?? "", activityId: fd.get("activityId") ?? undefined });
@@ -92,7 +111,7 @@ export async function trashPhoto(id: string, fd: FormData): Promise<void> {
 }
 
 export async function reprocessPhoto(id: string): Promise<void> {
-  await requireUserOrThrow();
+  await editor(id);
   const photo = await db.photo.findUnique({ where: { id }, select: { id: true, tripId: true } });
   if (!photo) return;
   await db.photo.update({ where: { id }, data: { status: "PENDING", error: null } });
@@ -101,7 +120,7 @@ export async function reprocessPhoto(id: string): Promise<void> {
 }
 
 export async function setAsCover(id: string): Promise<void> {
-  await requireUserOrThrow();
+  await editor(id);
   const photo = await db.photo.findUnique({ where: { id }, select: { tripId: true, trip: { select: { slug: true } } } });
   if (!photo?.tripId) return;
   await db.trip.update({ where: { id: photo.tripId }, data: { coverPhotoId: id } });
@@ -115,7 +134,7 @@ export async function setAsCover(id: string): Promise<void> {
  * the same; the UTC instant moves. Then trip/activity assignment and track geotagging are redone.
  */
 export async function shiftPhotoTimezone(id: string, fd: FormData): Promise<void> {
-  const user = await requireUserOrThrow();
+  const user = await editor(id);
   const photo = await db.photo.findUnique({ where: { id }, include: { trip: { select: { timezone: true } } } });
   if (!photo?.takenAt) return;
   const raw = String(fd.get("offset") ?? "");
@@ -142,7 +161,8 @@ export type DateResult = { ok: true; takenAt: string; tzOffsetMin: number; sourc
  * re-placed for the new time.
  */
 export async function setPhotoDate(id: string, fd: FormData): Promise<DateResult> {
-  const user = await requireUserOrThrow();
+  const user = await editorOrNull(id);
+  if (!user) return { ok: false, message: NOT_YOURS };
   const photo = await db.photo.findUnique({ where: { id }, include: { trip: { select: { timezone: true } } } });
   if (!photo) return { ok: false, message: "Photo not found" };
   const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(String(fd.get("takenAt") ?? "").trim());
@@ -159,7 +179,7 @@ export async function setPhotoDate(id: string, fd: FormData): Promise<DateResult
 
 /** Go back to what the camera wrote in the file: the EXIF date, resolved the same way processing does. */
 export async function resetPhotoDateToCamera(id: string): Promise<DateResult> {
-  await requireUserOrThrow();
+  if (!(await editorOrNull(id))) return { ok: false, message: NOT_YOURS };
   const photo = await db.photo.findUnique({ where: { id }, include: { trip: { select: { timezone: true } } } });
   if (!photo) return { ok: false, message: "Photo not found" };
   const local = storage().localPath?.(photo.originalPath);
@@ -178,7 +198,8 @@ export type PlaceResult = { ok: true; lat: number | null; lng: number | null; gp
 
 /** Pin an item to a spot a member chose (a click on the map or a looked-up address). Never touched by later geotagging. */
 export async function setPhotoPlace(id: string, fd: FormData): Promise<PlaceResult> {
-  const user = await requireUserOrThrow();
+  const user = await editorOrNull(id);
+  if (!user) return { ok: false, message: NOT_YOURS };
   const pos = parseLatLng(fd.get("lat"), fd.get("lng"));
   if (!pos) return { ok: false, message: "Enter a latitude between -90 and 90 and a longitude between -180 and 180" };
   const name = placeNameOf(fd.get("name"));
@@ -194,7 +215,8 @@ export async function setPhotoPlace(id: string, fd: FormData): Promise<PlaceResu
  * track imported later no longer replaces it, and the album records who agreed to it.
  */
 export async function confirmPlaceEstimate(id: string): Promise<PlaceResult> {
-  const user = await requireUserOrThrow();
+  const user = await editorOrNull(id);
+  if (!user) return { ok: false, message: NOT_YOURS };
   const photo = await db.photo.findUnique({ where: { id }, select: { lat: true, lng: true, gpsSource: true, placeName: true, placeEstimateName: true } });
   if (!photo) return { ok: false, message: "Photo not found" };
   if (photo.gpsSource !== "ESTIMATE" || photo.lat === null || photo.lng === null) return { ok: false, message: "There is no estimated place to accept" };
@@ -212,7 +234,7 @@ export async function confirmPlaceEstimate(id: string): Promise<PlaceResult> {
  * same guess back after a member has rejected it.
  */
 export async function clearPhotoPlace(id: string): Promise<PlaceResult> {
-  await requireUserOrThrow();
+  if (!(await editorOrNull(id))) return { ok: false, message: NOT_YOURS };
   const photo = await db.photo.findUnique({ where: { id }, select: { tripId: true } });
   if (!photo) return { ok: false, message: "Photo not found" };
   await db.photo.update({ where: { id }, data: { lat: null, lng: null, altitude: null, gpsSource: null, placeSetById: null, placeName: null, placeEstimateName: null, placeEstimateConfidence: null, placeEstimateRadiusM: null, placeEstimatePrecision: null, placeEstimateNote: null } });
@@ -230,11 +252,11 @@ export type EditResult = { ok: true; edited: boolean } | { ok: false; message: s
  * edit changes what everyone else sees, and the uploader is who the album holds responsible for the picture.
  */
 export async function savePhotoEdits(id: string, raw: unknown): Promise<EditResult> {
-  const user = await requireUserOrThrow();
-  const photo = await db.photo.findUnique({ where: { id }, select: { uploaderId: true, kind: true, status: true } });
+  const user = await editorOrNull(id);
+  if (!user) return { ok: false, message: NOT_YOURS };
+  const photo = await db.photo.findUnique({ where: { id }, select: { kind: true, status: true } });
   if (!photo) return { ok: false, message: "Photo not found" };
   if (photo.kind !== "PHOTO") return { ok: false, message: "Only photos can be edited here" };
-  if (user.role !== "ADMIN" && photo.uploaderId !== user.id) return { ok: false, message: "Only the person who uploaded this, or an admin, can edit it" };
   const parsed = editsSchema.safeParse(raw);
   if (!parsed.success) return { ok: false, message: "Those edits do not make sense" };
   const edits = tidyEdits(parsed.data);
@@ -260,7 +282,8 @@ export type DateGuessResult = { ok: true; takenAt: string; tzOffsetMin: number; 
  * that is what happened: the album offered a reading of the neighbours and a person agreed with it.
  */
 export async function setDateFromNeighbours(id: string): Promise<DateGuessResult> {
-  const user = await requireUserOrThrow();
+  const user = await editorOrNull(id);
+  if (!user) return { ok: false, message: NOT_YOURS };
   const guess = await guessDateFromTrip(id);
   if (!guess) return { ok: false, message: "The other photos on this trip do not say anything about this one" };
   const photo = await db.photo.findUnique({ where: { id }, select: { id: true, tripId: true, gpsSource: true, activityId: true, activitySetById: true } });
@@ -273,8 +296,11 @@ export async function setDateFromNeighbours(id: string): Promise<DateGuessResult
 export async function setTripDatesFromNeighbours(tripId: string): Promise<number> {
   const user = await requireUserOrThrow();
   const guesses = await guessDatesForTrip(tripId);
+  // A sweep over a whole trip only touches the items this member may change.
+  const mine = new Set(await editableMediaIds(user, guesses.map((g) => g.id)));
   let n = 0;
   for (const g of guesses) {
+    if (!mine.has(g.id)) continue;
     const photo = await db.photo.findUnique({ where: { id: g.id }, select: { id: true, tripId: true, gpsSource: true, activityId: true, activitySetById: true } });
     if (!photo) continue;
     await applyPhotoInstant(photo, g.guess.takenAt, g.guess.tzOffsetMin, "MANUAL", user.id);
@@ -292,7 +318,8 @@ export async function loadDateReport(id: string): Promise<DateReport | null> {
 
 /** Take one of the readings the report lists, recorded as set by the member who agreed with it. */
 export async function applyReportedDate(id: string, iso: string): Promise<DateGuessResult> {
-  const user = await requireUserOrThrow();
+  const user = await editorOrNull(id);
+  if (!user) return { ok: false, message: NOT_YOURS };
   const at = new Date(iso);
   if (Number.isNaN(at.getTime())) return { ok: false, message: "That is not a date" };
   const photo = await db.photo.findUnique({ where: { id }, select: { id: true, tripId: true, gpsSource: true, activityId: true, activitySetById: true, tzOffsetMin: true, trip: { select: { timezone: true } } } });

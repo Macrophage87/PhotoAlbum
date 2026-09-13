@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { getViewer } from "@/lib/auth/viewer";
-import { canEditTrip } from "@/lib/auth/access";
+import { canContribute } from "@/lib/auth/access";
 import { listVisibleTrips } from "@/lib/trips/queries";
 import { encodeCursor, tripTimeline } from "@/lib/timeline/queries";
 import { formatDayRange } from "@/lib/time/format";
@@ -18,7 +18,7 @@ export const metadata = { title: "Timeline" };
 export default async function GlobalTimelinePage({ searchParams }: PageProps<"/timeline">) {
   const viewer = await getViewer();
   const sp = await searchParams;
-  const editable = canEditTrip(viewer);
+  const editable = canContribute(viewer);
   const collections = await listVisibleCollections(viewer);
   const filter = typeof sp.collection === "string" ? collections.find((c) => c.slug === sp.collection) : undefined;
   const trips = filter ? [] : await listVisibleTrips(viewer);
