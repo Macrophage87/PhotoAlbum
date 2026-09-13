@@ -9,8 +9,9 @@ const fixture = (n: string) => path.join(__dirname, "../fixtures", n);
 /** Pick a file only once the page has hydrated, otherwise React's change handler is not attached yet and nothing uploads. */
 async function chooseFile(page: Page, name: string) {
   await page.waitForLoadState("networkidle");
-  // The uploader offers two ways in — the photo library and the phone's own storage — so name the one under test.
-  await page.setInputFiles("#photo-file-input", fixture(name));
+  // The photo uploader offers two ways in — the phone's own storage first, then the photo library — so take the
+  // first input rather than insisting there is only one. The track importer's page has just the one.
+  await page.locator('input[type="file"]').first().setInputFiles(fixture(name));
 }
 
 test.describe.configure({ mode: "serial" });
@@ -1389,5 +1390,5 @@ test("the uploader reaches the phone's own storage, and names what it will not t
 
   // Because nothing narrows the chooser, a member can now pick anything — so anything unwanted is said out loud.
   await page.setInputFiles("#photo-file-input", { name: "tickets.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.4\n") });
-  await expect(page.getByText(/doesn't take \.pdf files/i)).toBeVisible();
+  await expect(page.getByRole("alert").getByText(/doesn't take \.pdf files/i)).toBeVisible();
 });

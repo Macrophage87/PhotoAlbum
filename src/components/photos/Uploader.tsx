@@ -95,6 +95,8 @@ export function Uploader({ tripId, activityId, onDone, maxClipSeconds = 90, anno
   const [optOut, setOptOut] = useState(false);
   const optOutRef = useRef(false);
   const [items, setItems] = useState<Item[]>([]);
+  /** Files turned away before a byte was sent. They never become tiles: nothing of them ever left the device. */
+  const [refusals, setRefusals] = useState<{ key: string; name: string; why: string }[]>([]);
   const [dragging, setDragging] = useState(false);
   // Two ways in, because one chooser cannot serve both. See the inputs below.
   const inputRef = useRef<HTMLInputElement>(null);
@@ -135,25 +137,26 @@ export function Uploader({ tripId, activityId, onDone, maxClipSeconds = 90, anno
   const addFiles = useCallback(
     async (files: FileList | File[]) => {
       const fresh: Item[] = [];
-      const refused: Item[] = [];
+      const refused: { key: string; name: string; why: string }[] = [];
       for (const file of Array.from(files)) {
-        const item: Item = { localId: `${file.name}-${file.size}-${file.lastModified}-${Math.random().toString(36).slice(2)}`, file, progress: 0, status: "queued" };
+        const key = `${file.name}-${file.size}-${file.lastModified}-${Math.random().toString(36).slice(2)}`;
         // Nothing narrows the chooser any more, so say plainly what was left behind rather than dropping it in silence.
         if (!albumTakes(file)) {
-          refused.push({ ...item, status: "failed", error: refusalFor(file) });
+          refused.push({ key, name: file.name, why: refusalFor(file) });
           continue;
         }
         if (isVideoPick(file) && !isScanPick(file)) {
           const d = await readDuration(file);
           if (d !== null && d > maxClipSeconds) {
-            refused.push({ ...item, status: "failed", error: tooLongMessage(d, maxClipSeconds) });
+            refused.push({ key, name: file.name, why: tooLongMessage(d, maxClipSeconds) });
             continue;
           }
         }
-        fresh.push(item);
+        fresh.push({ localId: key, file, progress: 0, status: "queued" });
       }
       if (!fresh.length && !refused.length) return;
-      setItems((prev) => [...prev, ...refused, ...fresh]);
+      if (refused.length) setRefusals((prev) => [...prev, ...refused]);
+      setItems((prev) => [...prev, ...fresh]);
       queue.current.push(...fresh);
       pumpRef.current();
     },
@@ -187,6 +190,15 @@ export function Uploader({ tripId, activityId, onDone, maxClipSeconds = 90, anno
     return () => clearTimeout(t);
   }, [items]);
 
+  /**
+   * Everything the album would not keep, in one place a member will actually read. Some of it never left the
+   * device; an over-long clip whose length the browser could not read is only found out about by the server,
+   * so that one arrives back as a failed upload and belongs in the same list.
+   */
+  const turnedAway = [
+    ...refusals,
+    ...items.filter((i) => i.status === "failed" && i.error?.startsWith("This video is")).map((i) => ({ key: i.localId, name: i.file.name, why: i.error! })),
+  ];
   const doneIds = items.filter((i) => i.status === "ready").map((i) => i.photoId!);
   const allSettled = items.length > 0 && items.every((i) => i.status === "ready" || i.status === "failed");
   useEffect(() => {
@@ -241,10 +253,10 @@ export function Uploader({ tripId, activityId, onDone, maxClipSeconds = 90, anno
           Don&apos;t send these to the AI helper (no description will be generated; they stay on the server)
         </label>
       )}
-      {items.some((i) => i.status === "failed" && i.error?.startsWith("This video is")) && (
+      {turnedAway.length > 0 && (
         <ul className="text-sm text-red-700 space-y-1" role="alert">
-          {items.filter((i) => i.status === "failed" && i.error?.startsWith("This video is")).map((i) => (
-            <li key={i.localId}><b>{i.file.name}</b>: {i.error}</li>
+          {turnedAway.map((r) => (
+            <li key={r.key}><b>{r.name}</b>: {r.why}</li>
           ))}
         </ul>
       )}
