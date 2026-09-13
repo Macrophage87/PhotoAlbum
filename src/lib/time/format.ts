@@ -2,14 +2,21 @@ import { TZDate } from "@date-fns/tz";
 import { format } from "date-fns";
 import type { LocalDay } from "./local-day";
 
-export function formatDay(day: LocalDay, style: "long" | "short" | "weekday" = "long"): string {
+/**
+ * A day as people read it. Every style carries the year except "short", which is for a narrow rail of days that are
+ * all in the same year; a family album spans decades, so a heading that says only "Wednesday, August 12" is a date
+ * nobody can place.
+ */
+export function formatDay(day: LocalDay, style: "long" | "short" | "shortYear" | "weekday" = "long"): string {
   const d = new Date(`${day}T12:00:00Z`);
   const opts: Intl.DateTimeFormatOptions =
     style === "long"
       ? { year: "numeric", month: "long", day: "numeric", timeZone: "UTC" }
       : style === "weekday"
-        ? { weekday: "long", month: "long", day: "numeric", timeZone: "UTC" }
-        : { month: "short", day: "numeric", timeZone: "UTC" };
+        ? { weekday: "long", month: "long", day: "numeric", year: "numeric", timeZone: "UTC" }
+        : style === "shortYear"
+          ? { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" }
+          : { month: "short", day: "numeric", timeZone: "UTC" };
   return d.toLocaleDateString("en-US", opts);
 }
 

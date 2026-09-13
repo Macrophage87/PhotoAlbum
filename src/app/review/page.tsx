@@ -6,6 +6,7 @@ import { AppShell, Container } from "@/components/layout/AppShell";
 import { PhotoGrid } from "@/components/photos/PhotoGrid";
 import { toGridPhoto } from "@/components/photos/toGrid";
 import { SelectionProvider } from "@/components/photos/selection";
+import { DateTroubleshooter } from "@/components/photos/DateTroubleshooter";
 import { ReviewPanel } from "@/components/review/ReviewPanel";
 import { annotationGates } from "@/lib/annotation/eligibility";
 import { env } from "@/lib/env";
@@ -111,6 +112,8 @@ export default async function ReviewPage({ searchParams }: PageProps<"/review">)
                   <div key={p.id} className="rounded-theme border border-amber-200 bg-amber-50 p-3 text-amber-900">
                     <Link href={`/photos/${p.id}`} className="text-sm font-medium hover:underline">{p.caption ?? p.title ?? p.originalName}</Link>
                     <EstimatedDate photoId={p.id} estimatedDate={p.estimatedDate} confidence={p.estimatedDateConfidence} note={p.estimatedDateNote} compact />
+                    {/* Before agreeing with the helper, a member can see what the file itself claims and why. */}
+                    <DateTroubleshooter photoId={p.id} />
                   </div>
                 ))}
               </section>

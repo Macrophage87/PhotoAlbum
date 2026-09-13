@@ -11,8 +11,9 @@ import { ContainerPicker, type Container } from "@/components/containers/Contain
 import { mapThemeOf } from "@/lib/map/theme";
 import { getTheme } from "@/themes";
 import { previewAddToCollection, previewMoveToTrip } from "@/app/photos/exposure-actions";
+import { BulkDate } from "./BulkDate";
 
-type Ctx = { active: boolean; selected: Set<string>; toggle: (id: string) => void };
+type Ctx = { active: boolean; selected: Set<string>; toggle: (id: string) => void; /** Take a whole run at once — a timeline day whose dates are all wrong. */ add: (ids: string[]) => void };
 const SelectionContext = createContext<Ctx | null>(null);
 
 /** Grids inside a provider read the selection from context when they are not given explicit selection props. */
@@ -33,6 +34,7 @@ export function SelectionProvider({ children }: { children: ReactNode }) {
   const [pending, start] = useTransition();
   const [notice, setNotice] = useState<string | null>(null);
   const [placing, setPlacing] = useState(false);
+  const [dating, setDating] = useState(false);
   const [place, setPlace] = useState<PlaceValue | null>(null);
   const router = useRouter();
   const ids = [...selected];
@@ -43,9 +45,20 @@ export function SelectionProvider({ children }: { children: ReactNode }) {
       else next.add(id);
       return next;
     });
+  const add = (list: string[]) => {
+    setActive(true);
+    setNotice(null);
+    setSelected((prev) => {
+      const next = new Set(prev);
+      for (const id of list) next.add(id);
+      return next;
+    });
+  };
   const finish = (message: string) => {
     setSelected(new Set());
     setActive(false);
+    setPlacing(false);
+    setDating(false);
     setNotice(message);
     router.refresh();
   };
@@ -74,7 +87,7 @@ export function SelectionProvider({ children }: { children: ReactNode }) {
     });
 
   return (
-    <SelectionContext.Provider value={{ active, selected, toggle }}>
+    <SelectionContext.Provider value={{ active, selected, toggle, add }}>
       <div className="flex flex-wrap items-center gap-2 text-sm mb-4">
         {!active ? (
           <>
@@ -95,7 +108,8 @@ export function SelectionProvider({ children }: { children: ReactNode }) {
             </div>
             <Button size="sm" variant="secondary" disabled={!ids.length || !collection || pending} onClick={addToCol}>Add</Button>
             <Button size="sm" variant="secondary" disabled={!ids.length || pending} onClick={() => setPlacing((v) => !v)}>Set a place…</Button>
-            <Button variant="ghost" size="sm" onClick={() => { setActive(false); setSelected(new Set()); setPlacing(false); }}>Done</Button>
+            <Button size="sm" variant="secondary" disabled={!ids.length || pending} onClick={() => setDating((v) => !v)}>Fix dates…</Button>
+            <Button variant="ghost" size="sm" onClick={() => { setActive(false); setSelected(new Set()); setPlacing(false); setDating(false); }}>Done</Button>
           </>
         )}
       </div>
@@ -108,6 +122,9 @@ export function SelectionProvider({ children }: { children: ReactNode }) {
             <Button size="sm" variant="ghost" onClick={() => setPlacing(false)}>Cancel</Button>
           </div>
         </div>
+      )}
+      {active && dating && ids.length > 0 && (
+        <BulkDate ids={ids} onDone={(message) => (message ? finish(message) : setDating(false))} />
       )}
       {children}
     </SelectionContext.Provider>

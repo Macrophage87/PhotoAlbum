@@ -19,13 +19,17 @@ export function DayJumpNav({ days }: { days: { key: string; id: string; count: n
     return () => io.disconnect();
   }, [days]);
   if (days.length < 2) return null;
+  // The rail repeats the year only where it changes something: a trip that runs over New Year, or a collection
+  // gathering the same week across years.
+  const years = new Set(days.filter((d) => d.key !== "undated").map((d) => d.key.slice(0, 4)));
+  const style = years.size > 1 ? "shortYear" : "short";
   return (
     <nav className="hidden lg:block sticky top-20 self-start w-44 shrink-0">
       <ul className="space-y-1 text-sm border-l border-border">
         {days.map((d) => (
           <li key={d.id}>
             <a href={`#${d.id}`} className={`block pl-3 py-1 -ml-px border-l-2 transition-colors ${active === d.id ? "border-primary text-primary font-medium" : "border-transparent text-muted hover:text-text"}`}>
-              {d.key === "undated" ? "Undated" : formatDay(d.key, "short")}
+              {d.key === "undated" ? "Undated" : formatDay(d.key, style)}
               <span className="ml-1 text-xs text-muted">{d.count}</span>
             </a>
           </li>

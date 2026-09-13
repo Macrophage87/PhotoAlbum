@@ -951,6 +951,50 @@ test("the date troubleshooter shows every witness and lets one be taken", async 
     .toBe("MANUAL");
 });
 
+test("a day of wrong dates is corrected in one go from the timeline, which says which year it is", async ({ context, page }) => {
+  await signIn(context, ADMIN);
+  await page.goto("/trips/acadia/timeline");
+  // A family album spans decades: the day heading names the year, not just the weekday and month.
+  await expect(page.locator("h2").first()).toContainText(/\d{4}/);
+
+  const tripPhotos = async () =>
+    (await withDb((c) => c.query(`SELECT id, "takenAt" FROM "Photo" WHERE "tripId" = (SELECT id FROM "Trip" WHERE slug = 'acadia') AND "takenAt" IS NOT NULL ORDER BY id`))).rows as { id: string; takenAt: Date }[];
+  const before = await tripPhotos();
+  expect(before.length).toBeGreaterThan(0);
+
+  const shiftDay = async (minutes: number) => {
+    await page.getByTestId("day-select").first().click();
+    await page.getByRole("button", { name: "Fix dates…" }).click();
+    await page.getByLabel("Shift them by the same amount").check();
+    await page.getByLabel("Minutes").fill(String(minutes));
+    const preview = page.getByTestId("bulk-date-preview");
+    await expect(preview).toContainText("→");
+    await page.getByRole("button", { name: "Correct these dates" }).click();
+  };
+
+  await shiftDay(2);
+  // At least the photos under that heading moved by exactly two minutes, and are now dated by hand.
+  await expect
+    .poll(async () => {
+      const now = await tripPhotos();
+      return now.filter((p, i) => new Date(p.takenAt).getTime() - new Date(before[i].takenAt).getTime() === 120_000).length;
+    }, { timeout: 20_000, intervals: [1000] })
+    .toBeGreaterThan(0);
+  const moved = (await tripPhotos()).filter((p, i) => new Date(p.takenAt).getTime() !== new Date(before[i].takenAt).getTime()).map((p) => p.id);
+  const sources = await withDb((c) => c.query('SELECT DISTINCT "takenAtSource" FROM "Photo" WHERE id = ANY($1)', [moved]));
+  expect(sources.rows.map((r: { takenAtSource: string }) => r.takenAtSource)).toEqual(["MANUAL"]);
+
+  // And the same correction the other way puts them back.
+  await page.goto("/trips/acadia/timeline");
+  await shiftDay(-2);
+  await expect
+    .poll(async () => {
+      const now = await tripPhotos();
+      return now.every((p, i) => new Date(p.takenAt).getTime() === new Date(before[i].takenAt).getTime());
+    }, { timeout: 20_000, intervals: [1000] })
+    .toBe(true);
+});
+
 test("a family member moves an item to the trash with a reason, and an admin restores it or deletes it for good", async ({ browser, context, page }) => {
   await signIn(context, ADMIN);
   // A plain member, not an admin: trashing is something anyone in the family may do.

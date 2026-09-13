@@ -7,6 +7,7 @@ import { PlaceEditor, PlaceProvenance } from "./PlaceEditor";
 import { mapThemeOf } from "@/lib/map/theme";
 import { getTheme } from "@/themes";
 import { resetPhotoDateToCamera, setPhotoDate } from "@/app/photos/[id]/actions";
+import { DateTroubleshooter } from "./DateTroubleshooter";
 import type { PhotoInfo } from "@/app/api/photos/[id]/info/route";
 
 const SOURCE_LABEL: Record<string, string> = { EXIF_OFFSET: "from the camera", EXIF_TZLOOKUP: "from the camera", TRIP_TZ: "from the camera, in the trip's zone", SIDECAR: "from Google Photos", FILE_NAME: "from the file name", EXIF_CREATED: "from the file\u2019s created-date tag, which may be when it was edited", FILE_MTIME: "from the file's modified time", UPLOAD_TIME: "the upload time" };
@@ -73,7 +74,11 @@ export function LightboxInfo({ photoId, share }: { photoId: string; share?: { to
           <p className="text-white/60">Unknown</p>
         )}
         {info.editable && !editingDate && (
-          <button type="button" className="text-xs underline underline-offset-2 text-white/70 hover:text-white mt-1" onClick={() => setEditingDate(true)}>Change date</button>
+          <div className="flex flex-wrap items-center gap-x-3 mt-1">
+            <button type="button" className="text-xs underline underline-offset-2 text-white/70 hover:text-white" onClick={() => setEditingDate(true)}>Change date</button>
+            {/* The same reckoning as the details page: every witness to the date, and a way to take one of them. */}
+            <DateTroubleshooter photoId={info.id} dark onApplied={(next) => setInfo((prev) => (prev ? { ...prev, takenAt: next.takenAt, tzOffsetMin: next.tzOffsetMin, takenAtSource: next.source, dateSetBy: next.setBy } : prev))} />
+          </div>
         )}
         {info.editable && editingDate && (
           <form className="mt-2 space-y-2" onSubmit={(e) => { e.preventDefault(); const fd = new FormData(e.currentTarget); apply(() => setPhotoDate(info.id, fd)); }}>
@@ -84,6 +89,7 @@ export function LightboxInfo({ photoId, share }: { photoId: string; share?: { to
               <button type="button" onClick={() => { setEditingDate(false); setMessage(null); }} className="px-2 py-1 text-xs text-white/70 hover:text-white">Cancel</button>
             </div>
             <p className="text-white/50 text-xs">The time is read in the photo&apos;s own zone. The camera date is what the file itself says.</p>
+            <DateTroubleshooter photoId={info.id} dark onApplied={(next) => { setEditingDate(false); setInfo((prev) => (prev ? { ...prev, takenAt: next.takenAt, tzOffsetMin: next.tzOffsetMin, takenAtSource: next.source, dateSetBy: next.setBy } : prev)); }} />
           </form>
         )}
         {message && <p role="alert" className="text-xs text-amber-300 mt-1">{message}</p>}

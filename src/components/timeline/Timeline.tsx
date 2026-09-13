@@ -6,6 +6,7 @@ import { toGridPhoto } from "@/components/photos/toGrid";
 import { PhotoGrid } from "@/components/photos/PhotoGrid";
 import { ActivityCard, type ActivityCardData } from "@/components/activities/ActivityCard";
 import { DayJumpNav } from "./DayJumpNav";
+import { DaySelect } from "./DaySelect";
 
 export type TimelineGroups = DayGroup<PhotoCard, ActivityCardData>[];
 
@@ -20,7 +21,10 @@ export function Timeline({ groups, tripSlug, timezone, member, idPrefix = "day",
       <div className="flex-1 min-w-0 space-y-10">
         {groups.map((g, gi) => (
           <section key={days[gi].id} id={days[gi].id} className="scroll-mt-24">
-            <h2 className="font-display text-xl font-semibold sticky top-14 bg-bg/90 backdrop-blur py-2 z-10">{g.dayKey ? formatDay(g.dayKey, "weekday") : "Undated"}</h2>
+            <h2 className="font-display text-xl font-semibold sticky top-14 bg-bg/90 backdrop-blur py-2 z-10 flex flex-wrap items-baseline gap-x-3">
+              <span>{g.dayKey ? formatDay(g.dayKey, "weekday") : "Undated"}</span>
+              {member && <DaySelect ids={g.items.flatMap((i) => i.photos.map((p) => p.id))} label={g.dayKey ? "this day" : "these"} />}
+            </h2>
             <ol className="relative border-l border-border ml-2 pl-6 space-y-6 mt-2">
               {g.items.map((item, ii) => (
                 <li key={ii} className="relative">
