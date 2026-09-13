@@ -14,6 +14,7 @@ import { previewAddToCollection, previewMoveToTrip } from "@/app/photos/exposure
 import { BulkDate } from "./BulkDate";
 import { bulkPutInActivity, tripOfSelection } from "@/app/photos/activity-actions";
 import { bulkAutoColour, undoAutoColour } from "@/app/photos/bulk-actions";
+import { describeAutoColour, describeUndoColour } from "@/lib/photos/auto-colour";
 
 type Ctx = { active: boolean; selected: Set<string>; toggle: (id: string) => void; /** Take a whole run at once — a timeline day whose dates are all wrong. */ add: (ids: string[]) => void };
 const SelectionContext = createContext<Ctx | null>(null);
@@ -75,19 +76,15 @@ export function SelectionProvider({ children }: { children: ReactNode }) {
   const autoColour = () =>
     start(async () => {
       const r = await bulkAutoColour(ids);
-      const parts = [`${r.changed.length} corrected`];
-      if (r.already) parts.push(`${r.already} already were`);
-      if (r.notPhotos) parts.push(`${r.notPhotos} are not photographs`);
-      if (r.notYours) parts.push(`${r.notYours} not yours to change`);
       setUndoable(r.changed);
-      finish(`Auto colour: ${parts.join(", ")}. The originals are untouched.`);
+      finish(describeAutoColour(r));
     });
 
   const undoColour = (which: string[]) =>
     start(async () => {
       const n = await undoAutoColour(which);
       setUndoable([]);
-      setNotice(`${n} put back as ${n === 1 ? "it was" : "they were"}.`);
+      setNotice(describeUndoColour(n));
       router.refresh();
     });
 

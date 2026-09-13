@@ -9,7 +9,8 @@ const fixture = (n: string) => path.join(__dirname, "../fixtures", n);
 /** Pick a file only once the page has hydrated, otherwise React's change handler is not attached yet and nothing uploads. */
 async function chooseFile(page: Page, name: string) {
   await page.waitForLoadState("networkidle");
-  await page.setInputFiles('input[type="file"]', fixture(name));
+  // The uploader offers two ways in — the photo library and the phone's own storage — so name the one under test.
+  await page.setInputFiles("#photo-file-input", fixture(name));
 }
 
 test.describe.configure({ mode: "serial" });
@@ -1369,4 +1370,24 @@ test("a whole selection is auto-coloured in one go, and handed back in one press
   await expect
     .poll(async () => (await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "Photo" WHERE id = ANY($1) AND edits IS NOT NULL`, [picked]))).rows[0].n, { timeout: 20_000, intervals: [1000] })
     .toBe(0);
+});
+
+test("the uploader reaches the phone's own storage, and names what it will not take", async ({ context, page }) => {
+  await signIn(context, ADMIN);
+  await page.goto("/upload");
+  await page.waitForLoadState("networkidle");
+
+  // The way in that a phone must not read as "open the photo app": narrowing this at all is what sent Android
+  // members to Google Photos with no route to their downloads or a folder copied off a camera.
+  const browse = page.locator("#photo-file-input");
+  await expect(browse).toHaveCount(1);
+  expect(await browse.getAttribute("accept")).toBeNull();
+  await expect(page.getByRole("button", { name: "Browse files" })).toBeVisible();
+  // And the short way round is still there for the usual case.
+  await expect(page.locator("#photo-library-input")).toHaveAttribute("accept", "image/*,video/*");
+  await expect(page.getByRole("button", { name: "Photos and videos" })).toBeVisible();
+
+  // Because nothing narrows the chooser, a member can now pick anything — so anything unwanted is said out loud.
+  await page.setInputFiles("#photo-file-input", { name: "tickets.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.4\n") });
+  await expect(page.getByText(/doesn't take \.pdf files/i)).toBeVisible();
 });

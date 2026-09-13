@@ -1,10 +1,12 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import { PhotoGrid, type GridPhoto } from "./PhotoGrid";
 import { LoadMoreSentinel, useLoadMore } from "./LoadMore";
 import { Button, Select } from "@/components/ui";
-import { bulkAssignActivity, bulkMoveToTrip, bulkTrash } from "@/app/photos/bulk-actions";
+import { bulkAssignActivity, bulkAutoColour, bulkMoveToTrip, bulkTrash, undoAutoColour } from "@/app/photos/bulk-actions";
+import { describeAutoColour, describeUndoColour } from "@/lib/photos/auto-colour";
 import { BulkTrashControl } from "./TrashButton";
 import { addToCollection } from "@/app/collections/actions";
 import { ContainerPicker, type Container } from "@/components/containers/ContainerPicker";
@@ -24,6 +26,10 @@ export function TripGallery({ photos: initialPhotos, activities, editable, empty
   const [moving, setMoving] = useState(false); // "no trip" is a real choice, so a null trip is not the same as nothing chosen
   const [collection, setCollection] = useState<Container | null>(null);
   const [pending, start] = useTransition();
+  const [notice, setNotice] = useState<string | null>(null);
+  /** What the last auto-colour run touched, so the whole batch can be handed back in one press. */
+  const [undoable, setUndoable] = useState<string[]>([]);
+  const router = useRouter();
   const ids = [...selected];
 
   const run = (fn: () => Promise<unknown>) =>
@@ -32,6 +38,24 @@ export function TripGallery({ photos: initialPhotos, activities, editable, empty
       setSelected(new Set());
       setSelecting(false);
     });
+  const autoColour = () =>
+    start(async () => {
+      const r = await bulkAutoColour(ids);
+      setUndoable(r.changed);
+      setSelected(new Set());
+      setSelecting(false);
+      setNotice(describeAutoColour(r));
+      router.refresh();
+    });
+
+  const undoColour = (which: string[]) =>
+    start(async () => {
+      const n = await undoAutoColour(which);
+      setUndoable([]);
+      setNotice(describeUndoColour(n));
+      router.refresh();
+    });
+
   /** Ask before a change that makes photos visible to more people. */
   const confirmExposure = async (warnings: string[]) => warnings.length === 0 || window.confirm(`${warnings.join("\n")}\n\nContinue?`);
 
@@ -40,9 +64,17 @@ export function TripGallery({ photos: initialPhotos, activities, editable, empty
       {editable && photos.length > 0 && (
         <div className="flex flex-wrap items-center gap-2 text-sm">
           {!selecting ? (
-            <Button variant="secondary" size="sm" onClick={() => setSelecting(true)}>
-              Select photos
-            </Button>
+            <>
+              <Button variant="secondary" size="sm" onClick={() => { setSelecting(true); setNotice(null); }}>
+                Select photos
+              </Button>
+              {notice && <span className="text-muted" role="status">{notice}</span>}
+              {undoable.length > 0 && (
+                <Button variant="ghost" size="sm" disabled={pending} onClick={() => undoColour(undoable)} data-testid="undo-auto-colour">
+                  Undo auto colour
+                </Button>
+              )}
+            </>
           ) : (
             <>
               <span className="text-muted">{ids.length} selected</span>
@@ -103,6 +135,9 @@ export function TripGallery({ photos: initialPhotos, activities, editable, empty
                   </Button>
                 </>
               )}
+              <Button size="sm" variant="secondary" disabled={!ids.length || pending} onClick={autoColour} data-testid="auto-colour">
+                {pending ? "Working…" : "Auto colour"}
+              </Button>
               <BulkTrashControl count={ids.length} disabled={!ids.length || pending} onTrash={async (reason, note) => { await bulkTrash(ids, reason, note); setSelected(new Set()); }} />
               <Button variant="ghost" size="sm" onClick={() => { setSelecting(false); setSelected(new Set()); }}>
                 Done

@@ -5,7 +5,7 @@ A self-hosted photo album for family trips. Photos are grouped into **trips** an
 ## Features
 
 - **Trips → activities → photos.** Photos land on the right trip by the date they were taken and on the right activity by time.
-- **Upload from any device.** Drag-and-drop or pick files; JPEG, PNG, WebP, HEIC. Originals are kept, web-sized WebP renditions are generated.
+- **Upload from any device.** Drag-and-drop or pick files; JPEG, PNG, WebP, HEIC. Originals are kept, web-sized WebP renditions are generated. On a phone there are two ways in: **Photos and videos** goes straight to the camera roll, and **Browse files** opens the phone's own storage — downloads, a folder copied off a camera, a scanner's export — which the photo app never shows. Anything the album does not keep is named and set aside rather than quietly dropped.
 - **Correct times, everywhere.** Camera times are resolved with the EXIF offset, the GPS position, or the trip's time zone. A one-click fix handles cameras left in the wrong zone.
 - **Timeline** grouped by local day, with activities holding their photos, plus a global timeline across trips.
 - **Map** with clustered photo markers and colour-coded tracks, per trip and across all trips.

@@ -13,6 +13,7 @@ import { offsetMinutesInZone } from "@/lib/time/local-day";
 import { editableMediaIds } from "@/lib/auth/ownership";
 import { Prisma } from "@/generated/prisma/client";
 import { editsSchema, tidyEdits, type PhotoEdits } from "@/lib/images/edits";
+import type { AutoColourResult } from "@/lib/photos/auto-colour";
 
 const ids = z.array(z.string().min(1)).min(1).max(500);
 
@@ -125,8 +126,6 @@ export async function bulkSetDate(photoIds: string[], plan: unknown): Promise<{ 
   revalidatePath("/", "layout");
   return { n: rows.length, skipped, notYours };
 }
-
-export type AutoColourResult = { changed: string[]; already: number; notPhotos: number; notYours: number };
 
 /**
  * Run the darkroom's auto levels over a whole selection.

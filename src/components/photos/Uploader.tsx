@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Button, buttonClasses } from "@/components/ui";
+import { albumTakes, isScanPick, isVideoPick, refusalFor } from "@/lib/media/picker";
 
 type Item = {
   localId: string;
@@ -43,11 +44,6 @@ function uploadOne(file: File, target: { tripId?: string; activityId?: string },
   });
 }
 
-const VIDEO_EXT = /\.(mp4|m4v|mov|webm)$/i;
-const isVideoFile = (f: File) => f.type.startsWith("video/") || VIDEO_EXT.test(f.name);
-/** What a phone scanner exports: a mesh the album can show, or a splat it keeps whole. */
-const SCAN_EXT = /\.(glb|usdz|ply|spz)$/i;
-const isScanFile = (f: File) => SCAN_EXT.test(f.name);
 
 /**
  * Read a clip's duration in the browser so an over-long file is refused before any bytes are sent.
@@ -100,7 +96,9 @@ export function Uploader({ tripId, activityId, onDone, maxClipSeconds = 90, anno
   const optOutRef = useRef(false);
   const [items, setItems] = useState<Item[]>([]);
   const [dragging, setDragging] = useState(false);
+  // Two ways in, because one chooser cannot serve both. See the inputs below.
   const inputRef = useRef<HTMLInputElement>(null);
+  const libraryRef = useRef<HTMLInputElement>(null);
   const active = useRef(0);
   const queue = useRef<Item[]>([]);
 
@@ -136,12 +134,16 @@ export function Uploader({ tripId, activityId, onDone, maxClipSeconds = 90, anno
 
   const addFiles = useCallback(
     async (files: FileList | File[]) => {
-      const accepted = Array.from(files).filter((f) => f.type.startsWith("image/") || /\.(heic|heif)$/i.test(f.name) || isVideoFile(f) || isScanFile(f));
       const fresh: Item[] = [];
       const refused: Item[] = [];
-      for (const file of accepted) {
+      for (const file of Array.from(files)) {
         const item: Item = { localId: `${file.name}-${file.size}-${file.lastModified}-${Math.random().toString(36).slice(2)}`, file, progress: 0, status: "queued" };
-        if (isVideoFile(file) && !isScanFile(file)) {
+        // Nothing narrows the chooser any more, so say plainly what was left behind rather than dropping it in silence.
+        if (!albumTakes(file)) {
+          refused.push({ ...item, status: "failed", error: refusalFor(file) });
+          continue;
+        }
+        if (isVideoPick(file) && !isScanPick(file)) {
           const d = await readDuration(file);
           if (d !== null && d > maxClipSeconds) {
             refused.push({ ...item, status: "failed", error: tooLongMessage(d, maxClipSeconds) });
@@ -207,15 +209,30 @@ export function Uploader({ tripId, activityId, onDone, maxClipSeconds = 90, anno
         }}
         className={`rounded-theme border-2 border-dashed p-10 text-center transition-colors ${dragging ? "border-primary bg-primary/5" : "border-border hover:bg-surface-alt"}`}
       >
-        <input ref={inputRef} id="photo-file-input" type="file" multiple accept="image/*,.heic,.heif,video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm,.glb,.usdz,.ply,.spz" className="sr-only" tabIndex={-1} aria-label="Choose files" onChange={(e) => e.target.files && addFiles(e.target.files)} />
+        {/*
+          Deliberately no `accept` here. A phone reads `accept="image/*"` as "the member wants the photo app", and
+          Android then opens Google Photos with no way through to the phone's own storage — which is where a file
+          copied off a camera, a scanner's .glb, or anything downloaded actually lives. Left unnarrowed, the chooser
+          offers everything the phone has, storage included. What the album will not take is turned away afterwards,
+          by name, in the list below.
+        */}
+        <input ref={inputRef} id="photo-file-input" type="file" multiple className="sr-only" tabIndex={-1} aria-label="Browse files" onChange={(e) => e.target.files && addFiles(e.target.files)} />
+        {/* And the short way round for the usual case, straight to the phone's camera roll. */}
+        <input ref={libraryRef} id="photo-library-input" type="file" multiple accept="image/*,video/*" className="sr-only" tabIndex={-1} aria-label="Choose photos and videos" onChange={(e) => e.target.files && addFiles(e.target.files)} />
         <p className="font-medium">Drop photos, short clips or 3D scans here</p>
         <p className="text-sm text-muted mt-1">
           JPEG, PNG, HEIC and more; MP4, MOV or WebM clips up to {maxClipSeconds} seconds (longer videos go on YouTube);
           3D scans from Scaniverse and the like as GLB, USDZ, PLY or SPZ. Several at a time is fine.
         </p>
-        <Button type="button" variant="secondary" className="mt-4" onClick={() => inputRef.current?.click()}>
-          Choose files
-        </Button>
+        <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+          <Button type="button" variant="secondary" onClick={() => libraryRef.current?.click()}>
+            Photos and videos
+          </Button>
+          <Button type="button" variant="secondary" onClick={() => inputRef.current?.click()}>
+            Browse files
+          </Button>
+        </div>
+        <p className="text-xs text-muted mt-2">On a phone, &ldquo;Browse files&rdquo; reaches your downloads and storage as well as the photo app.</p>
       </div>
 
       {annotationActive && (
