@@ -156,17 +156,25 @@ export async function candidatePhotoPage(target: PickerTarget, filter: PickerFil
 
   const from = filter.from ? new Date(`${filter.from}T00:00:00Z`) : null;
   const to = filter.to ? new Date(`${filter.to}T23:59:59.999Z`) : null;
-  const where: Prisma.PhotoWhereInput = {
-    status: "READY",
-    ...NOT_TRASHED,
-    ...(target.kind === "collection" ? { collections: { none: { collectionId: target.id } } } : { tripId: { not: target.id } }),
-    // Nothing has claimed these: no trip, and in no collection. The pile that most wants tidying away.
-    ...(filter.loose ? { tripId: null, collections: { none: {} } } : filter.trip === "none" ? { tripId: null } : filter.trip ? { tripId: filter.trip } : {}),
-    ...(filter.kind ? { kind: filter.kind } : {}),
-    ...(filter.uploaderId ? { uploaderId: filter.uploaderId } : {}),
-    ...(from || to ? { takenAt: { ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) } } : {}),
-    ...(restrict ? { id: { in: restrict } } : {}),
-  };
+  // Gathered as a list rather than as one object: two of these ask about the trip, and a second `tripId` key in an
+  // object literal would quietly replace the first — which is how the picker came to hide what it was built to
+  // offer. `not` is spelled out with the null case beside it because SQL's `<>` is not true of a null, so asking
+  // for "not this trip" on its own leaves out everything on no trip at all.
+  const and: Prisma.PhotoWhereInput[] = [
+    target.kind === "collection"
+      ? { collections: { none: { collectionId: target.id } } }
+      : { OR: [{ tripId: null }, { tripId: { not: target.id } }] },
+  ];
+  // Nothing has claimed these: no trip, and in no collection. The pile that most wants tidying away.
+  if (filter.loose) and.push({ tripId: null, collections: { none: {} } });
+  else if (filter.trip === "none") and.push({ tripId: null });
+  else if (filter.trip) and.push({ tripId: filter.trip });
+  if (filter.kind) and.push({ kind: filter.kind });
+  if (filter.uploaderId) and.push({ uploaderId: filter.uploaderId });
+  if (from || to) and.push({ takenAt: { ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) } });
+  if (restrict) and.push({ id: { in: restrict } });
+
+  const where: Prisma.PhotoWhereInput = { status: "READY", ...NOT_TRASHED, AND: and };
   const [photos, total] = await Promise.all([
     db.photo.findMany({
       where,

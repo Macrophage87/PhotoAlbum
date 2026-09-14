@@ -130,10 +130,20 @@ describe("picking photographs to put somewhere", () => {
     expect(await ids({ q: "Bass Harbor", ...near(1) })).toEqual([lighthouse.id]);
     expect(await ids({ q: "Bass Harbor", near: { lat: 37.8651, lng: -119.5383, miles: 1, label: null } })).toEqual([]);
 
-    // Putting things on a trip offers everything not already on it, including what other trips hold.
+    // Putting things on a trip offers everything not already on it — above all the ones on no trip at all, which
+    // are the whole point of the page. "Not this trip" in SQL is not true of a photograph with no trip, so asking
+    // that way alone would hide exactly what the picker exists to find.
     const onto = { kind: "trip" as const, id: trip.id };
-    const forTrip = (await candidatePhotoPage(onto, { ...NO_PICKER_FILTER, loose: true })).photos.map((p) => p.id).sort();
-    expect(forTrip).toEqual([barHarbor.id, lighthouse.id].sort());
-    expect(forTrip).not.toContain(faraway.id);
+    const tripIds = async (f: Partial<typeof NO_PICKER_FILTER>) => (await candidatePhotoPage(onto, { ...NO_PICKER_FILTER, ...f })).photos.map((p) => p.id).sort();
+    expect(await tripIds({})).toEqual([barHarbor.id, held.id, lighthouse.id].sort());
+    expect(await tripIds({ q: "Bass Harbor" })).toEqual([lighthouse.id]);
+    expect(await tripIds({ loose: true })).toEqual([barHarbor.id, lighthouse.id].sort());
+
+    // And whatever is already on the trip is never offered, whichever other question is being asked at the same
+    // time — two conditions about the trip must both hold rather than the second quietly replacing the first.
+    for (const f of [{}, { loose: true }, { trip: "none" }, { q: "Bass Harbor" }] as Partial<typeof NO_PICKER_FILTER>[]) {
+      expect(await tripIds(f)).not.toContain(faraway.id);
+    }
+    expect(await tripIds({ trip: trip.id })).toEqual([]);
   });
 });
