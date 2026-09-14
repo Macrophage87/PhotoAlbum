@@ -1518,3 +1518,43 @@ test("a trip's photos can be searched and filtered, and paging keeps the narrowi
   await expect(page).toHaveURL(/\/trips\/acadia\/photos$/);
   await expect(page.locator("li.tile-lazy").first()).toBeVisible();
 });
+
+test("a photo in the trash stops being a cover, and stops looking out of the People page", async ({ context, page }) => {
+  await signIn(context, ADMIN);
+  const row = (await withDb((c) => c.query(`
+    SELECT p.id, t.slug FROM "Photo" p JOIN "Trip" t ON t.id = p."tripId"
+    WHERE p.status = 'READY' AND p."trashedAt" IS NULL ORDER BY p."createdAt" LIMIT 1`))).rows[0];
+  const coll = (await withDb((c) => c.query(`SELECT id, slug FROM "Collection" ORDER BY "createdAt" LIMIT 1`))).rows[0];
+
+  // Chosen by hand as the cover of both, which is how a photograph goes on being the album's face after it is gone.
+  await withDb((c) => c.query(`UPDATE "Trip" SET "coverPhotoId" = $1 WHERE slug = $2`, [row.id, row.slug]));
+  if (coll) await withDb((c) => c.query(`UPDATE "Collection" SET "coverPhotoId" = $1 WHERE id = $2`, [row.id, coll.id]));
+
+  await page.goto("/");
+  await expect(page.locator(`img[src*='/api/photos/${row.id}/']`).first()).toBeVisible();
+
+  await withDb((c) => c.query(`UPDATE "Photo" SET "trashedAt" = now(), "trashedById" = (SELECT id FROM "User" WHERE email = $1), "trashReason" = 'ACCIDENT' WHERE id = $2`, [ADMIN, row.id]));
+
+  // Gone from the front page, and from the picture a link preview would draw — the album picks another itself.
+  await page.goto("/");
+  await expect(page.locator(`img[src*='/api/photos/${row.id}/']`)).toHaveCount(0);
+  if (coll) {
+    await page.goto(`/collections/${coll.slug}`);
+    expect(await page.content()).not.toContain(row.id);
+  }
+  // And nowhere among the faces, where a trashed photograph used to go on looking out of the People page.
+  await page.goto("/people");
+  await expect(page.locator(`img[src*='/api/photos/${row.id}/']`)).toHaveCount(0);
+
+  // Its own page still opens for whoever holds the link, and says plainly what happened to it.
+  await page.goto(`/photos/${row.id}`);
+  await expect(page.getByText("In the trash.")).toBeVisible();
+
+  // Restoring puts the chosen cover back: nothing was thrown away to make it stop counting.
+  await withDb((c) => c.query(`UPDATE "Photo" SET "trashedAt" = NULL, "trashedById" = NULL, "trashReason" = NULL WHERE id = $1`, [row.id]));
+  await page.goto("/");
+  await expect(page.locator(`img[src*='/api/photos/${row.id}/']`).first()).toBeVisible();
+
+  await withDb((c) => c.query(`UPDATE "Trip" SET "coverPhotoId" = NULL WHERE slug = $1`, [row.slug]));
+  if (coll) await withDb((c) => c.query(`UPDATE "Collection" SET "coverPhotoId" = NULL WHERE id = $1`, [coll.id]));
+});

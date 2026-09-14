@@ -5,6 +5,7 @@ import type { Viewer } from "@/lib/auth/viewer";
 import { visibleContainersWhere } from "@/lib/auth/access";
 import { photoCardSelect, type PhotoCard } from "@/lib/photos/queries";
 import { NOT_TRASHED } from "@/lib/photos/trash";
+import { coverUnlessTrashed } from "@/lib/photos/cover";
 
 export const collectionCardSelect = {
   id: true,
@@ -14,7 +15,7 @@ export const collectionCardSelect = {
   themeKey: true,
   visibility: true,
   shareToken: true,
-  coverPhoto: { select: { id: true, updatedAt: true, width: true, height: true } },
+  coverPhoto: { select: { id: true, updatedAt: true, width: true, height: true, trashedAt: true } },
   _count: { select: { items: { where: { photo: NOT_TRASHED } } } },
 } satisfies Prisma.CollectionSelect;
 
@@ -43,17 +44,18 @@ export async function countVisibleCollections(viewer: Viewer, q?: string | null)
 export async function getCollectionBySlug(slug: string) {
   return db.collection.findUnique({
     where: { slug },
-    include: { coverPhoto: { select: { id: true, updatedAt: true, width: true, height: true } }, _count: { select: { items: { where: { photo: NOT_TRASHED } } } } },
+    include: { coverPhoto: { select: { id: true, updatedAt: true, width: true, height: true, trashedAt: true } }, _count: { select: { items: { where: { photo: NOT_TRASHED } } } } },
   });
 }
 
 export type CollectionWithCounts = NonNullable<Awaited<ReturnType<typeof getCollectionBySlug>>>;
 
 /** Cover photo, or the first ready item when no cover is set. */
-export async function collectionCoverFor(collection: { id: string; coverPhoto: { id: string; updatedAt: Date; width?: number | null; height?: number | null } | null }) {
-  if (collection.coverPhoto) return collection.coverPhoto;
+export async function collectionCoverFor(collection: { id: string; coverPhoto: { id: string; updatedAt: Date; width?: number | null; height?: number | null; trashedAt?: Date | null } | null }) {
+  const chosen = coverUnlessTrashed(collection.coverPhoto);
+  if (chosen) return chosen;
   const item = await db.collectionItem.findFirst({
-    where: { collectionId: collection.id, photo: { status: "READY" } },
+    where: { collectionId: collection.id, photo: { status: "READY", ...NOT_TRASHED } },
     orderBy: [{ position: "asc" }, { createdAt: "asc" }],
     select: { photo: { select: { id: true, updatedAt: true, width: true, height: true } } },
   });

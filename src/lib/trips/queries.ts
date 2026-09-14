@@ -4,6 +4,7 @@ import { Prisma } from "@/generated/prisma/client";
 import type { Viewer } from "@/lib/auth/viewer";
 import { visibleTripsWhere } from "@/lib/auth/access";
 import { NOT_TRASHED } from "@/lib/photos/trash";
+import { coverUnlessTrashed } from "@/lib/photos/cover";
 
 export const tripCardSelect = {
   id: true,
@@ -16,7 +17,7 @@ export const tripCardSelect = {
   themeKey: true,
   visibility: true,
   shareToken: true,
-  coverPhoto: { select: { id: true, updatedAt: true, width: true, height: true } },
+  coverPhoto: { select: { id: true, updatedAt: true, width: true, height: true, trashedAt: true } },
   _count: { select: { photos: { where: NOT_TRASHED }, activities: true } },
 } satisfies Prisma.TripSelect;
 
@@ -49,15 +50,16 @@ export async function countVisibleTrips(viewer: Viewer, q?: string | null): Prom
 export async function getTripBySlug(slug: string) {
   return db.trip.findUnique({
     where: { slug },
-    include: { coverPhoto: { select: { id: true, updatedAt: true, width: true, height: true } }, _count: { select: { photos: { where: NOT_TRASHED }, activities: true, tracks: true } } },
+    include: { coverPhoto: { select: { id: true, updatedAt: true, width: true, height: true, trashedAt: true } }, _count: { select: { photos: { where: NOT_TRASHED }, activities: true, tracks: true } } },
   });
 }
 
 export type TripWithCounts = NonNullable<Awaited<ReturnType<typeof getTripBySlug>>>;
 
 /** Cover photo, or the newest ready photo when no cover is set. */
-export async function coverFor(trip: { id: string; coverPhoto: { id: string; updatedAt: Date; width?: number | null; height?: number | null } | null }) {
-  if (trip.coverPhoto) return trip.coverPhoto;
+export async function coverFor(trip: { id: string; coverPhoto: { id: string; updatedAt: Date; width?: number | null; height?: number | null; trashedAt?: Date | null } | null }) {
+  const chosen = coverUnlessTrashed(trip.coverPhoto);
+  if (chosen) return chosen;
   return db.photo.findFirst({
     where: { tripId: trip.id, ...NOT_TRASHED, status: "READY" },
     orderBy: [{ takenAt: "asc" }],

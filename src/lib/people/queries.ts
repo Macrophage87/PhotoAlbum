@@ -1,4 +1,5 @@
 import { db } from "@/lib/db";
+import { NOT_TRASHED } from "@/lib/photos/trash";
 import type { Viewer } from "@/lib/auth/viewer";
 import { visibleMediaWhere } from "@/lib/auth/access";
 import { photoCardSelect } from "@/lib/photos/queries";
@@ -7,7 +8,9 @@ import { isMinor, minorsCheckPasses } from "./consent";
 export type PersonCard = { id: string; name: string; kind: "HUMAN" | "PET"; species: string | null; isFlock: boolean; relationship: string | null; faceIndexing: boolean; pendingDecision: boolean; optedOut: boolean; basis: "birthday" | "attestation" | "none"; minor: boolean; photoCount: number; sample: { id: string; updatedAt: Date } | null };
 
 export async function listPeople(): Promise<PersonCard[]> {
-  const people = await db.person.findMany({ orderBy: { name: "asc" }, include: { faces: { where: { status: "CONFIRMED" }, select: { photoId: true, photo: { select: { id: true, updatedAt: true, status: true } } } } } });
+  // A face on a photograph in the trash is not a face the album still has: it counts for nothing and is never the
+  // picture shown for somebody, which is how a trashed photograph used to go on looking out of the People page.
+  const people = await db.person.findMany({ orderBy: { name: "asc" }, include: { faces: { where: { status: "CONFIRMED", photo: NOT_TRASHED }, select: { photoId: true, photo: { select: { id: true, updatedAt: true, status: true } } } } } });
   return people.map((p) => {
     const photoIds = new Set(p.faces.map((f) => f.photoId));
     const sample = p.faces.find((f) => f.photo.status === "READY")?.photo ?? null;
@@ -19,7 +22,7 @@ export type UnnamedCluster = { id: string; faceCount: number; samples: { faceId:
 
 /** Unnamed clusters with a few sample faces, largest first. */
 export async function listUnnamedClusters(): Promise<UnnamedCluster[]> {
-  const clusters = await db.faceCluster.findMany({ where: { personId: null }, orderBy: { faceCount: "desc" }, include: { faces: { where: { status: { in: ["DETECTED", "REJECTED"] } }, take: 4, orderBy: { confidence: "desc" }, select: { id: true, photoId: true, box: true, createdAt: true, photo: { select: { updatedAt: true, status: true } } } } } });
+  const clusters = await db.faceCluster.findMany({ where: { personId: null }, orderBy: { faceCount: "desc" }, include: { faces: { where: { status: { in: ["DETECTED", "REJECTED"] }, photo: NOT_TRASHED }, take: 4, orderBy: { confidence: "desc" }, select: { id: true, photoId: true, box: true, createdAt: true, photo: { select: { updatedAt: true, status: true } } } } } });
   return clusters
     .filter((c) => c.faces.length)
     .map((c) => ({ id: c.id, faceCount: c.faceCount, oldest: c.faces.reduce((m, f) => (f.createdAt < m ? f.createdAt : m), c.faces[0].createdAt), samples: c.faces.filter((f) => f.photo.status === "READY").map((f) => ({ faceId: f.id, photoId: f.photoId, updatedAt: f.photo.updatedAt, box: f.box as [number, number, number, number] })) }));
@@ -58,7 +61,7 @@ export type ProposalRow = { faceId: string; photo: { id: string; updatedAt: Date
 /** Open proposals for some photos (or all), oldest first. */
 export async function proposalsFor(photoIds?: string[]): Promise<ProposalRow[]> {
   const faces = await db.face.findMany({
-    where: { status: "PROPOSED", proposedPersonId: { not: null }, ...(photoIds ? { photoId: { in: photoIds } } : {}) },
+    where: { status: "PROPOSED", proposedPersonId: { not: null }, photo: NOT_TRASHED, ...(photoIds ? { photoId: { in: photoIds } } : {}) },
     orderBy: { createdAt: "asc" },
     take: 200,
     select: { id: true, box: true, confidence: true, ageAtCaptureYears: true, photo: { select: { id: true, updatedAt: true, caption: true, title: true, originalName: true, takenAt: true, estimatedDate: true } }, proposedPerson: { select: { id: true, name: true, kind: true, birthday: true } } },
@@ -72,7 +75,7 @@ export async function proposalsFor(photoIds?: string[]): Promise<ProposalRow[]> 
   });
   // Animal proposals ride in the same list under an `animal:` id; the actions tell the two apart by the prefix.
   const animals = await db.animalDetection.findMany({
-    where: { status: "PROPOSED", proposedPersonId: { not: null }, ...(photoIds ? { photoId: { in: photoIds } } : {}) },
+    where: { status: "PROPOSED", proposedPersonId: { not: null }, photo: NOT_TRASHED, ...(photoIds ? { photoId: { in: photoIds } } : {}) },
     orderBy: { createdAt: "asc" },
     take: 200,
     select: { id: true, box: true, species: true, createdAt: true, photo: { select: { id: true, updatedAt: true, caption: true, title: true, originalName: true } }, proposedPerson: { select: { id: true, name: true, kind: true } } },
