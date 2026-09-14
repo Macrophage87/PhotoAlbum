@@ -7,6 +7,7 @@ import { LoadMoreSentinel, useLoadMore } from "./LoadMore";
 import { Button, Select } from "@/components/ui";
 import { bulkAssignActivity, bulkAutoColour, bulkMoveToTrip, bulkTrash, undoAutoColour } from "@/app/photos/bulk-actions";
 import { describeAutoColour, describeUndoColour } from "@/lib/photos/auto-colour";
+import { removeFromTrip } from "@/app/trips/[slug]/actions";
 import { BulkTrashControl } from "./TrashButton";
 import { addToCollection } from "@/app/collections/actions";
 import { ContainerPicker, type Container } from "@/components/containers/ContainerPicker";
@@ -15,7 +16,7 @@ import { previewAddToCollection, previewMoveToTrip } from "@/app/photos/exposure
 type Option = { id: string; title: string };
 
 /** Gallery with an optional selection mode for members: assign to an activity, move trips, or delete. */
-export function TripGallery({ photos: initialPhotos, activities, editable, emptyMessage, more }: { photos: GridPhoto[]; activities: Option[]; editable: boolean; emptyMessage: string; /** Cursor pagination: where to fetch the next page and how many items there are in all. */ more?: { url: string; nextCursor: string | null; total: number } }) {
+export function TripGallery({ photos: initialPhotos, activities, editable, emptyMessage, more, tripSlug }: { photos: GridPhoto[]; activities: Option[]; editable: boolean; emptyMessage: string; /** Cursor pagination: where to fetch the next page and how many items there are in all. */ more?: { url: string; nextCursor: string | null; total: number }; /** The trip these are on, so a selection can be taken off it. */ tripSlug?: string }) {
   const paged = useLoadMore(more?.url ?? "", more?.nextCursor ?? null, initialPhotos);
   const photos = paged.photos;
   const [selecting, setSelecting] = useState(false);
@@ -138,6 +139,25 @@ export function TripGallery({ photos: initialPhotos, activities, editable, empty
               <Button size="sm" variant="secondary" disabled={!ids.length || pending} onClick={autoColour} data-testid="auto-colour">
                 {pending ? "Working…" : "Auto colour"}
               </Button>
+              {tripSlug && (
+                <Button
+                  size="sm"
+                  variant="danger"
+                  disabled={!ids.length || pending}
+                  data-testid="remove-from-trip"
+                  onClick={() =>
+                    start(async () => {
+                      const r = await removeFromTrip(tripSlug, ids);
+                      setSelected(new Set());
+                      setSelecting(false);
+                      setNotice(`${r.removed} taken off this trip${r.notYours ? `, ${r.notYours} not yours to change` : ""}. ${r.removed === 1 ? "It is" : "They are"} still in the album, under photos without a trip.`);
+                      router.refresh();
+                    })
+                  }
+                >
+                  Take off this trip
+                </Button>
+              )}
               <BulkTrashControl count={ids.length} disabled={!ids.length || pending} onTrash={async (reason, note) => { await bulkTrash(ids, reason, note); setSelected(new Set()); }} />
               <Button variant="ghost" size="sm" onClick={() => { setSelecting(false); setSelected(new Set()); }}>
                 Done

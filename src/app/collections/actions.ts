@@ -134,19 +134,22 @@ export async function addToCollection(collectionId: string, photoIds: string[]):
   return fresh.length;
 }
 
-export async function removeFromCollection(collectionId: string, photoIds: string[]): Promise<void> {
+export async function removeFromCollection(collectionId: string, photoIds: string[]): Promise<{ removed: number; notYours: number }> {
   const user = await requireUserOrThrow();
   // Taking a photo out is the same decision as putting it in — unless the collection is yours, when tidying it is.
   const collectionOwner = await db.collection.findUnique({ where: { id: collectionId }, select: { createdById: true } });
-  const list = collectionOwner && canEditContainer(user, collectionOwner) ? ids.parse(photoIds) : await editableMediaIds(user, ids.parse(photoIds));
-  if (!list.length) return;
+  const asked = ids.parse(photoIds);
+  const list = collectionOwner && canEditContainer(user, collectionOwner) ? asked : await editableMediaIds(user, asked);
+  const notYours = asked.length - list.length;
+  if (!list.length) return { removed: 0, notYours };
   const collection = await db.collection.findUnique({ where: { id: collectionId }, select: { slug: true, coverPhotoId: true } });
-  if (!collection) return;
+  if (!collection) return { removed: 0, notYours };
   await db.collectionItem.deleteMany({ where: { collectionId, photoId: { in: list } } });
   if (collection.coverPhotoId && list.includes(collection.coverPhotoId)) await db.collection.update({ where: { id: collectionId }, data: { coverPhotoId: null } });
   await db.photo.updateMany({ where: { id: { in: list } }, data: { updatedAt: new Date() } });
   revalidatePath(`/collections/${collection.slug}`, "layout");
   revalidatePath("/", "layout");
+  return { removed: list.length, notYours };
 }
 
 /** Toggle a single photo's membership from the photo page. */

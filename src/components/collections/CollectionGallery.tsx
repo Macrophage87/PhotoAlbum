@@ -18,6 +18,8 @@ export type CollectionGridPhoto = GridPhoto & { itemId: string };
 
 export function CollectionGallery({ collectionId, slug, photos, editable, emptyMessage }: { collectionId: string; slug: string; photos: CollectionGridPhoto[]; editable: boolean; emptyMessage: string }) {
   const [mode, setMode] = useState<"view" | "select" | "arrange">("view");
+  /** What the last tidy-up did, said out loud rather than left to be inferred from a shorter grid. */
+  const [notice, setNotice] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [order, setOrder] = useState<CollectionGridPhoto[]>(photos);
   const [dragging, setDragging] = useState<string | null>(null);
@@ -33,6 +35,14 @@ export function CollectionGallery({ collectionId, slug, photos, editable, emptyM
       await fn();
       setSelected(new Set());
       setMode("view");
+    });
+
+  const remove = () =>
+    start(async () => {
+      const r = await removeFromCollection(collectionId, ids);
+      setSelected(new Set());
+      setMode("view");
+      setNotice(`${r.removed} taken out of this collection${r.notYours ? `, ${r.notYours} not yours to change` : ""}. ${r.removed === 1 ? "It is" : "They are"} still in the album.`);
     });
 
   /** Move one item one place, for touch and for the keyboard. */
@@ -63,7 +73,8 @@ export function CollectionGallery({ collectionId, slug, photos, editable, emptyM
         <div className="flex flex-wrap items-center gap-2 text-sm">
           {mode === "view" && (
             <>
-              <Button variant="secondary" size="sm" onClick={() => setMode("select")}>Select photos</Button>
+              <Button variant="secondary" size="sm" onClick={() => { setMode("select"); setNotice(null); }}>Select photos</Button>
+              {notice && <span className="text-muted" role="status">{notice}</span>}
               <Button variant="secondary" size="sm" onClick={() => { setOrder(photos); setMode("arrange"); }}>Arrange</Button>
               <Button variant="ghost" size="sm" disabled={pending} onClick={() => start(() => sortCollectionByDate(slug))}>Sort by date</Button>
             </>
@@ -75,7 +86,7 @@ export function CollectionGallery({ collectionId, slug, photos, editable, emptyM
               <Button variant="ghost" size="sm" onClick={() => setSelected(new Set())}>None</Button>
               <span className="mx-1 text-border">|</span>
               <Button size="sm" variant="secondary" disabled={ids.length !== 1 || pending} onClick={() => finish(() => setCollectionCover(slug, ids[0]))}>Set as cover</Button>
-              <Button size="sm" variant="danger" disabled={!ids.length || pending} onClick={() => finish(() => removeFromCollection(collectionId, ids))}>Remove from collection</Button>
+              <Button size="sm" variant="danger" disabled={!ids.length || pending} onClick={remove} data-testid="remove-from-collection">Remove from collection</Button>
               {(
                 <>
                   <div className="w-44">

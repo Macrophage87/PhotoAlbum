@@ -12,7 +12,7 @@ import { enqueue } from "@/lib/jobs/boss";
 import { QUEUES } from "@/lib/jobs/queues";
 import type { TripFormState } from "@/app/trips/new/actions";
 import { levelOf } from "@/lib/visibility/exposure";
-import { canEditContainer, NOT_YOUR_CONTAINER } from "@/lib/auth/ownership";
+import { canEditContainer, editableMediaIds, NOT_YOUR_CONTAINER } from "@/lib/auth/ownership";
 
 /** The trip, where this member may change it: whoever made it, and admins. */
 async function loadEditableTrip(slug: string) {
@@ -115,4 +115,27 @@ export async function detachExposedFromCollections(slug: string): Promise<void> 
   revalidatePath(`/trips/${slug}`, "layout");
   revalidatePath("/", "layout");
   redirect(`/trips/${slug}/settings?saved=1`);
+}
+
+/**
+ * Take photographs off this trip. They stay in the album, with nothing claiming them, exactly as if they had never
+ * been filed onto it — which is the point: a trip is an arrangement of the album, not a container things are
+ * locked inside, and deleting a whole trip already leaves every photograph behind.
+ *
+ * Who may do it follows the same rule as taking something out of a collection. Whoever made the trip may tidy it,
+ * whatever anyone else put on it; everybody else may take off the photographs they uploaded themselves.
+ */
+export async function removeFromTrip(slug: string, photoIds: string[]): Promise<{ removed: number; notYours: number }> {
+  const user = await requireUserOrThrow();
+  const trip = await db.trip.findUnique({ where: { slug }, select: { id: true, createdById: true, coverPhotoId: true } });
+  if (!trip) throw new Error("Trip not found");
+  const asked = z.array(z.string().min(1)).min(1).max(500).parse(photoIds);
+  const list = canEditContainer(user, trip) ? asked : await editableMediaIds(user, asked);
+  if (!list.length) return { removed: 0, notYours: asked.length };
+  const r = await db.photo.updateMany({ where: { id: { in: list }, tripId: trip.id }, data: { tripId: null, activityId: null, activitySetById: null } });
+  // A cover that is no longer on the trip is no cover at all; the album picks one for itself again.
+  if (trip.coverPhotoId && list.includes(trip.coverPhotoId)) await db.trip.update({ where: { id: trip.id }, data: { coverPhotoId: null } });
+  revalidatePath(`/trips/${slug}`, "layout");
+  revalidatePath("/", "layout");
+  return { removed: r.count, notYours: asked.length - list.length };
 }

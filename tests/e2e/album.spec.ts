@@ -1602,3 +1602,41 @@ test("existing photographs are put on a trip by searching for them, by place and
     .poll(async () => (await withDb((c) => c.query(`SELECT "tripId" FROM "Photo" WHERE id = $1`, [loose.id]))).rows[0].tripId, { timeout: 20_000, intervals: [500] })
     .not.toBeNull();
 });
+
+test("photographs are taken off a trip and out of a collection, and stay in the album", async ({ context, page }) => {
+  await signIn(context, ADMIN);
+  const onTrip = (await withDb((c) => c.query(`
+    SELECT p.id FROM "Photo" p WHERE p."tripId" = (SELECT id FROM "Trip" WHERE slug = 'acadia')
+      AND p.status = 'READY' AND p."trashedAt" IS NULL ORDER BY p."createdAt" DESC LIMIT 1`))).rows[0];
+
+  // Taking something off a trip is one press, as taking it out of a collection already was.
+  await page.goto("/trips/acadia/photos");
+  await page.getByRole("button", { name: "Select photos" }).click();
+  await page.locator(`li.tile-lazy:has(img[src*='/api/photos/${onTrip.id}/']) button[aria-pressed]`).first().click();
+  await page.getByTestId("remove-from-trip").click();
+
+  // It is off the trip but still in the album — nothing anyone uploaded is lost by tidying an arrangement of it.
+  await expect
+    .poll(async () => (await withDb((c) => c.query(`SELECT "tripId", "trashedAt" FROM "Photo" WHERE id = $1`, [onTrip.id]))).rows[0], { timeout: 20_000, intervals: [500] })
+    .toEqual({ tripId: null, trashedAt: null });
+  await expect(page.getByRole("status")).toContainText("taken off this trip");
+  await page.goto("/photos");
+  await expect(page.locator(`li.tile-lazy img[src*='/api/photos/${onTrip.id}/']`)).toBeVisible();
+
+  // And the same out of a collection, which now says what it did rather than leaving a shorter grid to explain it.
+  const inCollection = (await withDb((c) => c.query(`
+    SELECT ci."photoId" AS id, c.slug FROM "CollectionItem" ci JOIN "Collection" c ON c.id = ci."collectionId"
+    JOIN "Photo" p ON p.id = ci."photoId" WHERE p."trashedAt" IS NULL AND p.status = 'READY' LIMIT 1`))).rows[0];
+  test.skip(!inCollection, "no collection has anything in it");
+  await page.goto(`/collections/${inCollection.slug}/photos`);
+  await page.getByRole("button", { name: "Select photos" }).click();
+  await page.locator(`li.tile-lazy:has(img[src*='/api/photos/${inCollection.id}/']) button[aria-pressed]`).first().click();
+  await page.getByTestId("remove-from-collection").click();
+  await expect(page.getByRole("status")).toContainText("taken out of this collection");
+  await expect
+    .poll(async () => (await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "CollectionItem" WHERE "photoId" = $1 AND "collectionId" = (SELECT id FROM "Collection" WHERE slug = $2)`, [inCollection.id, inCollection.slug]))).rows[0].n, { timeout: 20_000, intervals: [500] })
+    .toBe(0);
+  await expect
+    .poll(async () => (await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "Photo" WHERE id = $1 AND "trashedAt" IS NULL`, [inCollection.id]))).rows[0].n)
+    .toBe(1);
+});
