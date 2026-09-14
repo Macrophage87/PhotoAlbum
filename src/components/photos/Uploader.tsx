@@ -4,6 +4,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Button, buttonClasses } from "@/components/ui";
 import { albumTakes, isScanPick, isVideoPick, refusalFor } from "@/lib/media/picker";
+import { backoffMs, isRetryable, MAX_ATTEMPTS, progressLine } from "@/lib/media/upload-retry";
+import { AttemptError, attemptUpload } from "@/lib/media/upload-one";
 
 type Item = {
   localId: string;
@@ -12,38 +14,17 @@ type Item = {
   photoId?: string;
   status: "queued" | "uploading" | "processing" | "ready" | "failed";
   error?: string;
+  /** How many goes this file has had, so the queue knows when to stop trying and the tile can say it is retrying. */
+  attempts?: number;
+  /** Set while waiting out a dropped connection before the next go. */
+  retrying?: boolean;
   thumbUrl?: string | null;
   trip?: { slug: string; title: string } | null;
 };
 
 const CONCURRENCY = 3;
 
-function uploadOne(file: File, target: { tripId?: string; activityId?: string }, optOut: boolean, onProgress: (p: number) => void): Promise<{ photoId: string }> {
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    xhr.open("POST", "/api/upload");
-    xhr.setRequestHeader("x-file-name", encodeURIComponent(file.name));
-    xhr.setRequestHeader("content-type", file.type || "application/octet-stream");
-    xhr.setRequestHeader("x-last-modified", String(file.lastModified));
-    if (target.tripId) xhr.setRequestHeader("x-trip-id", target.tripId);
-    // An activity also settles the trip, whatever the file's own date says.
-    if (target.activityId) xhr.setRequestHeader("x-activity-id", target.activityId);
-    if (optOut) xhr.setRequestHeader("x-annotation-opt-out", "1");
-    xhr.upload.onprogress = (e) => e.lengthComputable && onProgress(e.loaded / e.total);
-    xhr.onload = () => {
-      try {
-        const body = JSON.parse(xhr.responseText);
-        if (xhr.status >= 200 && xhr.status < 300) resolve(body);
-        else reject(new Error(body.error ?? `Upload failed (${xhr.status})`));
-      } catch {
-        reject(new Error(`Upload failed (${xhr.status})`));
-      }
-    };
-    xhr.onerror = () => reject(new Error("Network error"));
-    xhr.send(file);
-  });
-}
-
+const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 /**
  * Read a clip's duration in the browser so an over-long file is refused before any bytes are sent.
@@ -103,6 +84,8 @@ export function Uploader({ tripId, activityId, onDone, maxClipSeconds = 90, anno
   const libraryRef = useRef<HTMLInputElement>(null);
   const active = useRef(0);
   const queue = useRef<Item[]>([]);
+  /** How to stop each upload that is in the air, so leaving the page does not leave requests running. */
+  const inFlight = useRef(new Map<string, () => void>());
 
   const update = useCallback((localId: string, patch: Partial<Item>) => {
     setItems((prev) => prev.map((it) => (it.localId === localId ? { ...it, ...patch } : it)));
@@ -118,18 +101,48 @@ export function Uploader({ tripId, activityId, onDone, maxClipSeconds = 90, anno
   }, [optOut]);
   // The queue runner lives in a ref so async completions can re-enter it without stale closures.
   useEffect(() => {
+    /**
+     * Send one file, waiting out anything that was the connection's fault rather than the album's. Whatever
+     * happens, this returns — the slot it holds is given back in the caller's `finally`, and a slot that is never
+     * given back is what used to stop a long batch in its tracks.
+     */
+    const send = async (item: Item) => {
+      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
+        update(item.localId, { status: "uploading", attempts: attempt, retrying: false, error: undefined });
+        try {
+          const { photoId } = await attemptUpload(
+            item.file,
+            targetRef.current,
+            optOutRef.current,
+            (p) => update(item.localId, { progress: p }),
+            (abort) => inFlight.current.set(item.localId, abort),
+          );
+          update(item.localId, { photoId, status: "processing", progress: 1, retrying: false });
+          return;
+        } catch (err) {
+          const failure = err instanceof AttemptError ? err.failure : { kind: "network" as const, message: err instanceof Error ? err.message : "Upload failed" };
+          const last = attempt >= MAX_ATTEMPTS;
+          if (!isRetryable(failure) || last) {
+            const message = isRetryable(failure) ? `${failure.message} Tried ${MAX_ATTEMPTS} times.` : failure.message;
+            update(item.localId, { status: "failed", error: message, retrying: false, progress: 0 });
+            return;
+          }
+          update(item.localId, { status: "queued", retrying: true, progress: 0, error: failure.message });
+          await wait(backoffMs(attempt));
+        } finally {
+          inFlight.current.delete(item.localId);
+        }
+      }
+    };
+
     pumpRef.current = () => {
       while (active.current < CONCURRENCY && queue.current.length) {
         const item = queue.current.shift()!;
         active.current += 1;
-        update(item.localId, { status: "uploading" });
-        uploadOne(item.file, targetRef.current, optOutRef.current, (p) => update(item.localId, { progress: p }))
-          .then(({ photoId }) => update(item.localId, { photoId, status: "processing", progress: 1 }))
-          .catch((err: Error) => update(item.localId, { status: "failed", error: err.message }))
-          .finally(() => {
-            active.current -= 1;
-            pumpRef.current();
-          });
+        void send(item).finally(() => {
+          active.current -= 1;
+          pumpRef.current();
+        });
       }
     };
   }, [update]);
@@ -201,6 +214,33 @@ export function Uploader({ tripId, activityId, onDone, maxClipSeconds = 90, anno
   ];
   const doneIds = items.filter((i) => i.status === "ready").map((i) => i.photoId!);
   const allSettled = items.length > 0 && items.every((i) => i.status === "ready" || i.status === "failed");
+  const failed = items.filter((i) => i.status === "failed");
+  const counts = {
+    done: items.filter((i) => i.status === "ready" || i.status === "processing").length,
+    failed: failed.length,
+    waiting: items.filter((i) => i.retrying).length,
+    inFlight: items.filter((i) => i.status === "uploading").length,
+    total: items.length,
+  };
+  /** Anything a member would want to know before closing the tab, said in one line rather than in a hundred tiles. */
+  const busy = items.some((i) => i.status === "queued" || i.status === "uploading");
+
+  // Closing the tab part-way through a long batch loses whatever has not gone up yet, and a phone is quick to do it.
+  useEffect(() => {
+    if (!busy) return;
+    const warn = (e: BeforeUnloadEvent) => e.preventDefault();
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [busy]);
+
+  /** Put the ones that did not make it back on the queue, from the top, with their attempts forgotten. */
+  const retryFailed = () => {
+    const again = failed.map((i) => ({ ...i, status: "queued" as const, error: undefined, attempts: 0, retrying: false, progress: 0 }));
+    if (!again.length) return;
+    setItems((prev) => prev.map((it) => again.find((a) => a.localId === it.localId) ?? it));
+    queue.current.push(...again);
+    pumpRef.current();
+  };
   useEffect(() => {
     if (allSettled && onDone) onDone(doneIds);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -260,6 +300,34 @@ export function Uploader({ tripId, activityId, onDone, maxClipSeconds = 90, anno
           ))}
         </ul>
       )}
+      {/*
+        How the batch is going, in one line. A hundred photographs is a hundred small squares, and a red word inside
+        one of them is not something anybody sees — which is how a batch that had stopped could look like a batch
+        that was still going.
+      */}
+      {items.length > 0 && (
+        <div className="flex flex-wrap items-center gap-3 text-sm" data-testid="upload-progress">
+          <span aria-live="polite" className={counts.failed ? "font-medium text-red-700" : "text-muted"}>{progressLine(counts)}</span>
+          {counts.waiting > 0 && <span className="text-amber-700">The connection dropped; trying again.</span>}
+        </div>
+      )}
+
+      {allSettled && failed.length > 0 && (
+        <div className="rounded-theme border border-red-300 bg-red-50 p-3 space-y-2 text-sm" role="alert" data-testid="upload-failures">
+          <p className="font-medium text-red-800">
+            {failed.length} {failed.length === 1 ? "file" : "files"} did not go up.
+          </p>
+          <ul className="text-red-700 space-y-0.5 max-h-40 overflow-y-auto">
+            {failed.map((i) => (
+              <li key={i.localId}><b>{i.file.name}</b>: {i.error}</li>
+            ))}
+          </ul>
+          <Button type="button" variant="secondary" size="sm" onClick={retryFailed} data-testid="retry-failed">
+            Try {failed.length === 1 ? "it" : "those"} again
+          </Button>
+        </div>
+      )}
+
       {items.length > 0 && (
         <ul className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-3">
           {items.map((it) => (
@@ -276,7 +344,7 @@ export function Uploader({ tripId, activityId, onDone, maxClipSeconds = 90, anno
                     </div>
                   )}
                   {it.status === "processing" && <span className="text-xs text-muted mt-2 animate-pulse">Processing…</span>}
-                  {it.status === "queued" && <span className="text-xs text-muted mt-2">Waiting…</span>}
+                  {it.status === "queued" && <span className="text-xs text-muted mt-2">{it.retrying ? "Trying again…" : "Waiting…"}</span>}
                   {it.status === "failed" && <span className="text-xs text-red-600 mt-2">{it.error}</span>}
                 </div>
               )}

@@ -1415,3 +1415,52 @@ test("the uploader reaches the phone's own storage, and names what it will not t
   await page.setInputFiles("#photo-file-input", { name: "tickets.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.4\n") });
   await expect(page.getByRole("alert").getByText(/doesn't take \.pdf files/i)).toBeVisible();
 });
+
+test("a batch survives a dropped connection, and says out loud what did not go up", async ({ context, page }) => {
+  await signIn(context, ADMIN);
+  await page.goto("/upload");
+  await page.waitForLoadState("networkidle");
+
+  // The phone locks its screen, or wifi hands over to the mobile network, and whatever was in the air is abandoned.
+  // The browser fires neither load nor error for that, so an upload that does not handle it never finishes — and
+  // the slot it holds is never given back. Three of those used to stop a long batch dead with no message anywhere.
+  let dropped = 0;
+  await page.route("**/api/upload", async (route) => {
+    if (dropped < 2) {
+      dropped += 1;
+      return route.abort("connectionreset");
+    }
+    return route.fallback();
+  });
+
+  const six = ["photo-with-gps.jpg", "photo-no-gps.jpg", "photo-no-exif.jpg", "photo-with-gps.jpg", "photo-no-gps.jpg", "photo-no-exif.jpg"];
+  await page.locator("#photo-file-input").first().setInputFiles(six.map((n) => fixture(n)));
+
+  // Every one of them arrives, the two that were dropped having been tried again rather than abandoned.
+  await expect(page.getByTestId("upload-progress")).toContainText("All 6 uploaded.", { timeout: 45_000 });
+  expect(dropped).toBe(2);
+  await expect(page.getByTestId("upload-failures")).toHaveCount(0);
+});
+
+test("a file the album will not take is named in the summary, with a way to try the rest again", async ({ context, page }) => {
+  await signIn(context, ADMIN);
+  await page.goto("/upload");
+  await page.waitForLoadState("networkidle");
+
+  // A refusal is final — sending it again would get the same answer — so it is said plainly rather than retried.
+  await page.route("**/api/upload", (route) =>
+    route.fulfill({ status: 415, contentType: "application/json", body: JSON.stringify({ error: "Unsupported file type: photo-no-exif.jpg" }) }),
+  );
+  await page.locator("#photo-file-input").first().setInputFiles(fixture("photo-no-exif.jpg"));
+
+  const failures = page.getByTestId("upload-failures");
+  await expect(failures).toBeVisible({ timeout: 60_000 });
+  await expect(failures).toContainText("1 file did not go up");
+  await expect(failures).toContainText("Unsupported file type");
+  await expect(page.getByTestId("retry-failed")).toBeVisible();
+
+  // And the way back: with the album taking them again, one press puts the failed ones back on the queue.
+  await page.unroute("**/api/upload");
+  await page.getByTestId("retry-failed").click();
+  await expect(page.getByTestId("upload-progress")).toContainText("All 1 uploaded.", { timeout: 60_000 });
+});
