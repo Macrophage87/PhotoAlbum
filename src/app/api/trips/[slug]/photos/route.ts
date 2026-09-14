@@ -4,6 +4,7 @@ import { getViewer } from "@/lib/auth/viewer";
 import { canViewTrip } from "@/lib/auth/access";
 import { tripPhotoPage } from "@/lib/photos/page";
 import { toGridPhoto } from "@/components/photos/toGrid";
+import { parseGalleryFilter } from "@/lib/photos/filters";
 
 /** The next page of a trip gallery, under the same visibility rule as the page itself; uploader names for members only. */
 export async function GET(request: NextRequest, { params }: RouteContext<"/api/trips/[slug]/photos">) {
@@ -13,6 +14,8 @@ export async function GET(request: NextRequest, { params }: RouteContext<"/api/t
   if (!trip || !canViewTrip(viewer, trip)) return NextResponse.json({ error: "Not found" }, { status: 404 });
   const member = viewer.kind === "user";
   const sp = request.nextUrl.searchParams;
-  const page = await tripPhotoPage(trip.id, { cursor: sp.get("cursor"), uploaderId: member ? sp.get("uploader") || undefined : undefined });
+  // The next page of a narrowed gallery is the next page of that same narrowing, read the same way the page reads it.
+  const filter = parseGalleryFilter(Object.fromEntries(sp.entries()), { member });
+  const page = await tripPhotoPage(trip.id, { cursor: sp.get("cursor"), filter });
   return NextResponse.json({ photos: page.photos.map((p) => toGridPhoto(p, null, member)), nextCursor: page.nextCursor, total: page.total }, { headers: { "Cache-Control": "private, no-store" } });
 }

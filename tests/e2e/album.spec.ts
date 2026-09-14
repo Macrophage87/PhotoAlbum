@@ -1464,3 +1464,57 @@ test("a file the album will not take is named in the summary, with a way to try 
   await page.getByTestId("retry-failed").click();
   await expect(page.getByTestId("upload-progress")).toContainText("All 1 uploaded.", { timeout: 60_000 });
 });
+
+test("the overview shows a handful of the trip at random, and picks again when asked", async ({ context, page }) => {
+  await signIn(context, ADMIN);
+  // Enough photographs on the trip that the same ten twice running would be a coincidence worth failing on.
+  const count = (await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "Photo" WHERE "tripId" = (SELECT id FROM "Trip" WHERE slug = 'acadia') AND status = 'READY' AND "trashedAt" IS NULL`))).rows[0].n;
+  test.skip(count < 12, "not enough photographs on the trip for a shuffle to show");
+
+  const shown = async () => page.locator("li.tile-lazy img").evaluateAll((imgs) => imgs.map((i) => (i as HTMLImageElement).src.match(/\/api\/photos\/([^/]+)\//)?.[1] ?? "").join(","));
+  await page.goto("/trips/acadia");
+  await expect(page.getByRole("heading", { name: "A few from this trip" })).toBeVisible();
+  const first = await shown();
+  expect(first.split(",").filter(Boolean).length).toBeLessThanOrEqual(10);
+
+  // Asking again gives a different handful; a shuffle that never moves is not a shuffle.
+  await expect
+    .poll(async () => {
+      await page.getByTestId("show-another").click();
+      await page.waitForTimeout(600);
+      return (await shown()) !== first;
+    }, { timeout: 30_000, intervals: [500] })
+    .toBe(true);
+});
+
+test("a trip's photos can be searched and filtered, and paging keeps the narrowing", async ({ context, page }) => {
+  await signIn(context, ADMIN);
+  // A caption nothing else has, so what comes back is unambiguous.
+  const row = (await withDb((c) => c.query(`SELECT id FROM "Photo" WHERE "tripId" = (SELECT id FROM "Trip" WHERE slug = 'acadia') AND kind = 'PHOTO' AND status = 'READY' AND "trashedAt" IS NULL ORDER BY "createdAt" LIMIT 1`))).rows[0];
+  await withDb((c) => c.query(`UPDATE "Photo" SET caption = $1 WHERE id = $2`, ["a puffin on the rocks", row.id]));
+
+  await page.goto("/trips/acadia/photos");
+  await page.getByPlaceholder("Search this trip").fill("puffin");
+  await page.getByRole("button", { name: "Search" }).click();
+
+  // The narrowed gallery is an ordinary address, so it can be kept or sent to somebody.
+  await expect(page).toHaveURL(/q=puffin/);
+  await expect(page.locator("li.tile-lazy")).toHaveCount(1);
+  await expect(page.locator(`li.tile-lazy img[src*='/api/photos/${row.id}/']`)).toBeVisible();
+  await expect(page.getByRole("heading", { level: 2 })).toContainText("of");
+
+  // A search with nothing behind it says so rather than looking like an empty album.
+  await page.goto("/trips/acadia/photos?q=zzzznothing");
+  await expect(page.getByTestId("no-matches")).toBeVisible();
+
+  // Filtering by kind is the same mechanism; 3D scans are not photographs and drop out.
+  await page.goto("/trips/acadia/photos?kind=SCAN");
+  const scans = (await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "Photo" WHERE "tripId" = (SELECT id FROM "Trip" WHERE slug = 'acadia') AND kind = 'SCAN' AND "trashedAt" IS NULL`))).rows[0].n;
+  await expect(page.locator("li.tile-lazy")).toHaveCount(scans);
+
+  // And clearing puts the whole trip back.
+  await page.goto("/trips/acadia/photos?q=puffin");
+  await page.getByTestId("clear-filters").click();
+  await expect(page).toHaveURL(/\/trips\/acadia\/photos$/);
+  await expect(page.locator("li.tile-lazy").first()).toBeVisible();
+});

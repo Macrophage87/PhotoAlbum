@@ -1,19 +1,19 @@
 import Link from "next/link";
 import { db } from "@/lib/db";
 import { loadViewableTrip } from "@/lib/trips/access";
-import { photoCardSelect } from "@/lib/photos/queries";
+import { randomTripPhotos, OVERVIEW_SAMPLE } from "@/lib/photos/page";
 import { PhotoGrid } from "@/components/photos/PhotoGrid";
 import { toGridPhoto } from "@/components/photos/toGrid";
 import { ButtonLink, Card } from "@/components/ui";
 import { dateColumnToDay } from "@/lib/time/local-day";
-import { NOT_TRASHED } from "@/lib/photos/trash";
+import { ShowAnother } from "@/components/photos/ShowAnother";
 
 export default async function TripOverviewPage({ params }: PageProps<"/trips/[slug]">) {
   const { slug } = await params;
   const { trip, editable } = await loadViewableTrip(slug);
 
-  const [latest, trackAgg] = await Promise.all([
-    db.photo.findMany({ where: { tripId: trip.id, ...NOT_TRASHED, status: "READY" }, orderBy: [{ takenAt: "desc" }], take: 10, select: photoCardSelect }),
+  const [sample, trackAgg] = await Promise.all([
+    randomTripPhotos(trip.id, OVERVIEW_SAMPLE),
     db.trackStats.aggregate({ where: { track: { tripId: trip.id, activity: { isNot: null } } }, _sum: { distanceM: true, elevGainM: true } }),
   ]);
   const days = Math.round((Date.parse(dateColumnToDay(trip.endDate)) - Date.parse(dateColumnToDay(trip.startDate))) / 86_400_000) + 1;
@@ -39,16 +39,17 @@ export default async function TripOverviewPage({ params }: PageProps<"/trips/[sl
       </div>
 
       <section>
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="font-display text-xl font-semibold">Latest photos</h2>
-          <div className="flex gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+          <h2 className="font-display text-xl font-semibold">A few from this trip</h2>
+          <div className="flex flex-wrap gap-2 items-center">
+            {sample.length > 0 && <ShowAnother />}
             {editable && <ButtonLink href={`/upload?trip=${trip.slug}`} size="sm">Upload</ButtonLink>}
             <Link href={`/trips/${trip.slug}/photos`} className="text-sm text-primary underline-offset-2 hover:underline self-center">
               All photos →
             </Link>
           </div>
         </div>
-        <PhotoGrid photos={latest.map((p) => toGridPhoto(p, null, editable))} emptyMessage={editable ? "No photos yet. Upload some to get started." : "No photos yet."} />
+        <PhotoGrid photos={sample.map((p) => toGridPhoto(p, null, editable))} emptyMessage={editable ? "No photos yet. Upload some to get started." : "No photos yet."} />
       </section>
     </div>
   );

@@ -1,6 +1,8 @@
 import { db } from "@/lib/db";
 import type { Prisma } from "@/generated/prisma/client";
 import { NOT_TRASHED } from "@/lib/photos/trash";
+import { idsInLocalYear, idsMatching, intersectIds } from "./page";
+import { NO_FILTER, type GalleryFilter } from "./filters";
 
 export const photoCardSelect = {
   id: true,
@@ -44,10 +46,21 @@ export async function listTripPhotos(tripId: string, uploaderId?: string): Promi
   });
 }
 
-export async function listUnassignedPhotos(): Promise<PhotoCard[]> {
-  return db.photo.findMany({
-    where: { tripId: null, ...NOT_TRASHED },
-    orderBy: [{ createdAt: "desc" }],
-    select: photoCardSelect,
-  });
+export async function listUnassignedPhotos(filter: GalleryFilter = NO_FILTER): Promise<{ photos: PhotoCard[]; total: number }> {
+  const lists: string[][] = [];
+  if (filter.q) lists.push(await idsMatching(filter.q));
+  if (filter.year) lists.push(await idsInLocalYear(null, filter.year));
+  const restrict = lists.length ? intersectIds(lists) : null;
+  const where = {
+    tripId: null,
+    ...NOT_TRASHED,
+    ...(filter.uploaderId ? { uploaderId: filter.uploaderId } : {}),
+    ...(filter.kind ? { kind: filter.kind } : {}),
+    ...(restrict ? { id: { in: restrict } } : {}),
+  };
+  const [photos, total] = await Promise.all([
+    restrict && restrict.length === 0 ? Promise.resolve([]) : db.photo.findMany({ where, orderBy: [{ createdAt: "desc" }], select: photoCardSelect }),
+    db.photo.count({ where: { tripId: null, ...NOT_TRASHED } }),
+  ]);
+  return { photos, total };
 }
