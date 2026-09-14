@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { PhotoGrid, type GridPhoto } from "./PhotoGrid";
 import { LoadMoreSentinel, useLoadMore } from "./LoadMore";
 import { Button, Select } from "@/components/ui";
@@ -31,6 +31,7 @@ export function TripGallery({ photos: initialPhotos, activities, editable, empty
   /** What the last auto-colour run touched, so the whole batch can be handed back in one press. */
   const [undoable, setUndoable] = useState<string[]>([]);
   const router = useRouter();
+  const search = useSearchParams();
   const ids = [...selected];
 
   const run = (fn: () => Promise<unknown>) =>
@@ -150,8 +151,13 @@ export function TripGallery({ photos: initialPhotos, activities, editable, empty
                       const r = await removeFromTrip(tripSlug, ids);
                       setSelected(new Set());
                       setSelecting(false);
-                      setNotice(`${r.removed} taken off this trip${r.notYours ? `, ${r.notYours} not yours to change` : ""}. ${r.removed === 1 ? "It is" : "They are"} still in the album, under photos without a trip.`);
-                      router.refresh();
+                      // Said by the page rather than kept here: the gallery is rebuilt from scratch whenever the
+                      // number of photographs changes, which is exactly what this button does, and anything held
+                      // in the gallery itself goes with it. Whatever the gallery was narrowed to is kept.
+                      const next = new URLSearchParams(search.toString());
+                      next.set("removed", String(r.removed));
+                      if (r.notYours) next.set("notyours", String(r.notYours));
+                      router.push(`/trips/${tripSlug}/photos?${next.toString()}`);
                     })
                   }
                 >

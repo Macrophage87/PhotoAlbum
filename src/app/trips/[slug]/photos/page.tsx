@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { loadViewableTrip } from "@/lib/trips/access";
 import { getViewer } from "@/lib/auth/viewer";
 import { photoFavourites } from "@/lib/favourites/queries";
@@ -28,6 +29,9 @@ export default async function TripPhotosPage({ params, searchParams }: PageProps
   // Paging keeps the narrowing: the next page of a search is the next page of that same search.
   const moreUrl = `/api/trips/${trip.slug}/photos${query ? `?${query}` : ""}`;
   const active = filterIsActive(filter);
+  // What the last tidy-up did, carried in the address so it survives the page being rebuilt around a shorter grid.
+  const removed = typeof sp.removed === "string" ? Number(sp.removed) : NaN;
+  const notYours = typeof sp.notyours === "string" ? Number(sp.notyours) : 0;
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -40,6 +44,12 @@ export default async function TripPhotosPage({ params, searchParams }: PageProps
           {editable && <ButtonLink href={`/upload?trip=${trip.slug}`} size="sm">Upload photos</ButtonLink>}
         </div>
       </div>
+      {Number.isFinite(removed) && (
+        <p role="status" className="text-sm rounded-theme bg-emerald-50 border border-emerald-200 text-emerald-900 p-3">
+          {removed} taken off this trip{notYours ? `, ${notYours} not yours to change` : ""}. {removed === 1 ? "It is" : "They are"} still in the album, under{" "}
+          <Link href="/photos" className="underline underline-offset-2">photos without a trip</Link>.
+        </p>
+      )}
       <GalleryFilters
         filter={filter}
         action={`/trips/${slug}/photos`}
