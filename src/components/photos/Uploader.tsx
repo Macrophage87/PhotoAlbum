@@ -210,13 +210,16 @@ export function Uploader({ tripId, activityId, onDone, maxClipSeconds = 90, anno
    */
   const turnedAway = [
     ...refusals,
-    ...items.filter((i) => i.status === "failed" && i.error?.startsWith("This video is")).map((i) => ({ key: i.localId, name: i.file.name, why: i.error! })),
+    // These did go up; the album could not make anything of them afterwards — an over-long clip, a file that is not
+    // the picture its name claims. They belong here rather than among the ones that never arrived.
+    ...items.filter((i) => i.status === "failed" && i.photoId).map((i) => ({ key: i.localId, name: i.file.name, why: i.error ?? "The album could not make sense of it." })),
   ];
   const doneIds = items.filter((i) => i.status === "ready").map((i) => i.photoId!);
   const allSettled = items.length > 0 && items.every((i) => i.status === "ready" || i.status === "failed");
-  const failed = items.filter((i) => i.status === "failed");
+  /** The ones that never reached the album at all. Everything else arrived, whatever became of it afterwards. */
+  const failed = items.filter((i) => i.status === "failed" && !i.photoId);
   const counts = {
-    done: items.filter((i) => i.status === "ready" || i.status === "processing").length,
+    done: items.filter((i) => Boolean(i.photoId)).length,
     failed: failed.length,
     waiting: items.filter((i) => i.retrying).length,
     inFlight: items.filter((i) => i.status === "uploading").length,
