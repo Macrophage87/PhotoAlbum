@@ -22,7 +22,8 @@ export function DuplicatesPanel({ rows, total }: { rows: DuplicateRow[]; total: 
     return (
       <Card className="p-5">
         <h2 className="font-display text-xl font-semibold">Identical copies</h2>
-        <p className="text-muted mt-1 text-sm">{done ?? "No photograph is in the album twice."}</p>
+        {/* Folding empties this panel, so what it did has to be said here too — and said out loud, not merely shown. */}
+        <p role="status" className="text-muted mt-1 text-sm">{done ?? "No photograph is in the album twice."}</p>
       </Card>
     );
   }
