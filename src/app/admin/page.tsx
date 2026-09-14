@@ -1,5 +1,8 @@
 import Link from "next/link";
 import { db } from "@/lib/db";
+import { duplicateGroups } from "@/lib/photos/duplicates";
+import { photoUrl } from "@/lib/photos/urls";
+import { DuplicatesPanel } from "@/components/admin/DuplicatesPanel";
 import { env } from "@/lib/env";
 import { getViewer, requireAdmin } from "@/lib/auth/viewer";
 import { AppShell, Container } from "@/components/layout/AppShell";
@@ -59,6 +62,14 @@ export default async function AdminPage() {
   };
   await closeDeadImports();
   const [archives, takeoutImports] = await Promise.all([listArchives(), db.takeoutImport.findMany({ orderBy: { startedAt: "desc" }, take: 10 })]);
+  // The same file in the album more than once, with one tile each to recognise them by.
+  const dupeGroups = await duplicateGroups(60);
+  const dupeLeaders = await db.photo.findMany({ where: { id: { in: dupeGroups.map((g) => g.ids[0]) } }, select: { id: true, originalName: true, status: true, updatedAt: true, renditions: true } });
+  const byId = new Map(dupeLeaders.map((p) => [p.id, p]));
+  const duplicateRows = dupeGroups.slice(0, 24).map((g) => {
+    const lead = byId.get(g.ids[0]);
+    return { contentHash: g.contentHash, ids: g.ids, name: lead?.originalName ?? "", thumbUrl: lead && lead.renditions ? photoUrl(lead, "thumb") : null };
+  });
   const unavailable = await db.photo.findMany({ where: { kind: "EXTERNAL_VIDEO", externalStatus: "UNAVAILABLE" }, orderBy: { externalCheckedAt: "desc" }, select: { id: true, title: true, externalUrl: true, externalCheckedAt: true } });
 
   return (
@@ -144,6 +155,10 @@ export default async function AdminPage() {
               : `${trashed} item${trashed === 1 ? "" : "s"} taken out of the album by family members, hidden everywhere but still on disk. Restore or delete for good.`}
           </p>
           <Link href="/admin/trash" className="text-primary hover:underline text-sm">Open the trash</Link>
+        </section>
+
+        <section>
+          <DuplicatesPanel rows={duplicateRows} total={dupeGroups.length} />
         </section>
 
         <section>

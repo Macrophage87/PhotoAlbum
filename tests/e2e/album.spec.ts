@@ -1640,3 +1640,35 @@ test("photographs are taken off a trip and out of a collection, and stay in the 
     .poll(async () => (await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "Photo" WHERE id = $1 AND "trashedAt" IS NULL`, [inCollection.id]))).rows[0].n)
     .toBe(1);
 });
+
+test("the same file twice is one photograph, and the copies already in the album fold together", async ({ context, page }) => {
+  await signIn(context, ADMIN);
+  const before = (await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "Photo" WHERE "originalName" = $1`, ["photo-with-gps.jpg"]))).rows[0].n;
+
+  // Sending a file the album already holds adds nothing, and says which one it has rather than looking ignored.
+  await page.goto("/upload");
+  await chooseFile(page, "photo-with-gps.jpg");
+  await expect(page.getByTestId("already-here")).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByTestId("already-here")).toContainText("already in the album");
+  expect((await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "Photo" WHERE "originalName" = $1`, ["photo-with-gps.jpg"]))).rows[0].n).toBe(before);
+
+  // For the copies already there, the admin page folds each set into one and trashes the rest as duplicates.
+  const keeper = (await withDb((c) => c.query(`SELECT id, "contentHash" FROM "Photo" WHERE "contentHash" IS NOT NULL AND "trashedAt" IS NULL ORDER BY "createdAt" LIMIT 1`))).rows[0];
+  test.skip(!keeper, "nothing processed far enough to have a hash");
+  // A second row with the same bytes, as an older album would have ended up with.
+  const copy = (await withDb((c) => c.query(
+    `INSERT INTO "Photo" (id, "uploaderId", "originalName", "mimeType", "storageKey", "originalPath", "sizeBytes", status, "contentHash", caption, "createdAt", "updatedAt")
+     SELECT 'dupe-' || substr(md5(random()::text), 1, 12), "uploaderId", 'copy.jpg', "mimeType", "storageKey", "originalPath", "sizeBytes", 'READY', "contentHash", 'A caption only the copy had', now(), now()
+     FROM "Photo" WHERE id = $1 RETURNING id`, [keeper.id]))).rows[0];
+
+  await page.goto("/admin");
+  await expect(page.getByTestId("fold-duplicates")).toBeVisible();
+  await page.getByTestId("fold-duplicates").click();
+  await expect(page.getByRole("status")).toContainText("folded into", { timeout: 30_000 });
+
+  // The copy is in the trash as a duplicate, and what only it knew is now on the one that was kept.
+  await expect
+    .poll(async () => (await withDb((c) => c.query(`SELECT "trashedAt" IS NOT NULL AS gone, "trashReason" FROM "Photo" WHERE id = $1`, [copy.id]))).rows[0], { timeout: 20_000, intervals: [500] })
+    .toEqual({ gone: true, trashReason: "DUPLICATE" });
+  expect((await withDb((c) => c.query(`SELECT caption FROM "Photo" WHERE id = $1`, [keeper.id]))).rows[0].caption).toBe("A caption only the copy had");
+});

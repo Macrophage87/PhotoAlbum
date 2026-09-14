@@ -16,7 +16,7 @@ export class AttemptError extends Error {
  * using would never come back, and after three of them the whole batch would stop dead with no error anywhere.
  * That is what made a hundred photographs look as though nothing had happened.
  */
-export function attemptUpload(file: File, target: { tripId?: string; activityId?: string }, optOut: boolean, onProgress: (p: number) => void, register: (abort: () => void) => void): Promise<{ photoId: string }> {
+export function attemptUpload(file: File, target: { tripId?: string; activityId?: string }, optOut: boolean, onProgress: (p: number) => void, register: (abort: () => void) => void): Promise<{ photoId: string; duplicate?: boolean }> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     let settled = false;
@@ -47,13 +47,13 @@ export function attemptUpload(file: File, target: { tripId?: string; activityId?
     };
     xhr.onload = () =>
       finish(() => {
-        let body: { photoId?: string; error?: string } = {};
+        let body: { photoId?: string; error?: string; duplicate?: boolean } = {};
         try {
           body = JSON.parse(xhr.responseText);
         } catch {
           // An answer that is not JSON is usually something in front of the album, not the album itself.
         }
-        if (xhr.status >= 200 && xhr.status < 300 && body.photoId) return resolve({ photoId: body.photoId });
+        if (xhr.status >= 200 && xhr.status < 300 && body.photoId) return resolve({ photoId: body.photoId, duplicate: body.duplicate });
         reject(new AttemptError(failureForStatus(xhr.status, body.error)));
       });
     xhr.onerror = () => finish(() => reject(new AttemptError({ kind: "network", message: "The connection dropped." })));

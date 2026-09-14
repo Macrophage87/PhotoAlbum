@@ -1,4 +1,5 @@
-import { Readable } from "node:stream";
+import { createHash } from "node:crypto";
+import { Readable, Transform } from "node:stream";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { env } from "@/lib/env";
@@ -78,9 +79,26 @@ export async function POST(request: Request) {
   const storageKey = `photos/${photo.id}`;
   const originalPath = `${storageKey}/original.${EXT_BY_MIME[mime]}`;
 
+  // The bytes are counted as they go past anyway, so they are weighed for sameness at the same time: an upload of a
+  // file the album already holds is the same file, not another copy of it, however it came to be sent twice.
+  const digest = createHash("sha256");
+  const weigh = new Transform({ transform(chunk, _enc, cb) { digest.update(chunk); cb(null, chunk); } });
+  let contentHash = "";
   try {
-    const { bytes } = await storage().putStream(originalPath, Readable.fromWeb(request.body as never), { maxBytes: isVideo ? env().MAX_VIDEO_UPLOAD_BYTES : env().MAX_UPLOAD_BYTES });
-    await db.photo.update({ where: { id: photo.id }, data: { storageKey, originalPath, sizeBytes: bytes } });
+    const { bytes } = await storage().putStream(originalPath, Readable.fromWeb(request.body as never).pipe(weigh), { maxBytes: isVideo ? env().MAX_VIDEO_UPLOAD_BYTES : env().MAX_UPLOAD_BYTES });
+    contentHash = digest.digest("hex");
+    const already = await db.photo.findFirst({
+      where: { contentHash, trashedAt: null, id: { not: photo.id } },
+      select: { id: true, originalName: true, trip: { select: { slug: true, title: true } } },
+    });
+    if (already) {
+      // Nothing is kept: neither the bytes just written nor the row that was waiting for them. The member is told
+      // which one the album already has, so "it did not appear" is never the impression left behind.
+      await storage().deletePrefix(storageKey).catch(() => undefined);
+      await db.photo.delete({ where: { id: photo.id } }).catch(() => {});
+      return Response.json({ photoId: already.id, duplicate: true, originalName: already.originalName, trip: already.trip ?? null });
+    }
+    await db.photo.update({ where: { id: photo.id }, data: { storageKey, originalPath, sizeBytes: bytes, contentHash } });
   } catch (err) {
     await db.photo.delete({ where: { id: photo.id } }).catch(() => {});
     if (err instanceof StorageLimitError) return Response.json({ error: `File is larger than ${Math.round(err.maxBytes / 1048576)} MB` }, { status: 413 });

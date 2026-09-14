@@ -14,6 +14,7 @@ import { deleteArchive, safeArchivePath } from "@/lib/takeout/inbox";
 import { closeDeadImports } from "@/lib/takeout/import";
 import { stat } from "node:fs/promises";
 import { disconnectGoogleAccount } from "@/lib/google/account";
+import { foldDuplicates } from "@/lib/photos/duplicates";
 
 async function requireAdminOrThrow() {
   const user = await requireUserOrThrow();
@@ -84,4 +85,17 @@ export async function deleteTakeoutArchive(archiveName: string): Promise<void> {
   await requireAdminOrThrow();
   await deleteArchive(archiveName);
   revalidatePath("/admin");
+}
+
+/**
+ * Fold every set of byte-identical photographs into one. See lib/photos/duplicates: the oldest is kept, whatever
+ * it was missing is taken from its copies, and the copies go to the trash marked as duplicates — so this is
+ * reversible until somebody empties the trash.
+ */
+export async function foldDuplicatePhotos(): Promise<{ groups: number; folded: number }> {
+  const admin = await requireAdminOrThrow();
+  const report = await foldDuplicates(admin.id);
+  revalidatePath("/admin");
+  revalidatePath("/", "layout");
+  return { groups: report.groups, folded: report.folded };
 }

@@ -18,6 +18,8 @@ type Item = {
   attempts?: number;
   /** Set while waiting out a dropped connection before the next go. */
   retrying?: boolean;
+  /** The album already had this exact file, so nothing was added and the tile points at the one it has. */
+  duplicate?: boolean;
   thumbUrl?: string | null;
   trip?: { slug: string; title: string } | null;
 };
@@ -110,14 +112,16 @@ export function Uploader({ tripId, activityId, onDone, maxClipSeconds = 90, anno
       for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
         update(item.localId, { status: "uploading", attempts: attempt, retrying: false, error: undefined });
         try {
-          const { photoId } = await attemptUpload(
+          const { photoId, duplicate } = await attemptUpload(
             item.file,
             targetRef.current,
             optOutRef.current,
             (p) => update(item.localId, { progress: p }),
             (abort) => inFlight.current.set(item.localId, abort),
           );
-          update(item.localId, { photoId, status: "processing", progress: 1, retrying: false });
+          // The album already holds these bytes: nothing was added, and the tile points at the one it has rather
+          // than pretending a second copy went up.
+          update(item.localId, { photoId, status: duplicate ? "ready" : "processing", progress: 1, retrying: false, duplicate });
           return;
         } catch (err) {
           const failure = err instanceof AttemptError ? err.failure : { kind: "network" as const, message: err instanceof Error ? err.message : "Upload failed" };
@@ -218,6 +222,7 @@ export function Uploader({ tripId, activityId, onDone, maxClipSeconds = 90, anno
   const allSettled = items.length > 0 && items.every((i) => i.status === "ready" || i.status === "failed");
   /** The ones that never reached the album at all. Everything else arrived, whatever became of it afterwards. */
   const failed = items.filter((i) => i.status === "failed" && !i.photoId);
+  const alreadyHere = items.filter((i) => i.duplicate);
   const counts = {
     done: items.filter((i) => Boolean(i.photoId)).length,
     failed: failed.length,
@@ -312,6 +317,21 @@ export function Uploader({ tripId, activityId, onDone, maxClipSeconds = 90, anno
         <div className="flex flex-wrap items-center gap-3 text-sm" data-testid="upload-progress">
           <span aria-live="polite" className={counts.failed ? "font-medium text-red-700" : "text-muted"}>{progressLine(counts)}</span>
           {counts.waiting > 0 && <span className="text-amber-700">The connection dropped; trying again.</span>}
+        </div>
+      )}
+
+      {allSettled && alreadyHere.length > 0 && (
+        <div className="rounded-theme border border-border bg-surface-alt p-3 space-y-1 text-sm" data-testid="already-here">
+          <p className="font-medium">
+            {alreadyHere.length} {alreadyHere.length === 1 ? "was" : "were"} already in the album — the same file, so nothing was added.
+          </p>
+          <ul className="text-muted space-y-0.5 max-h-40 overflow-y-auto">
+            {alreadyHere.map((i) => (
+              <li key={i.localId}>
+                <b>{i.file.name}</b>: <Link href={`/photos/${i.photoId}`} className="text-primary underline underline-offset-2">the copy the album has</Link>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
 
