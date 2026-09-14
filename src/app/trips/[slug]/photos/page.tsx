@@ -36,6 +36,7 @@ export default async function TripPhotosPage({ params, searchParams }: PageProps
         </h2>
         <div className="flex items-center gap-2">
           {owns && <ButtonLink href={`/trips/${slug}/cover`} size="sm" variant="secondary">Cover photo</ButtonLink>}
+          {editable && <ButtonLink href={`/trips/${slug}/add`} size="sm" variant="secondary">Add existing photos</ButtonLink>}
           {editable && <ButtonLink href={`/upload?trip=${trip.slug}`} size="sm">Upload photos</ButtonLink>}
         </div>
       </div>

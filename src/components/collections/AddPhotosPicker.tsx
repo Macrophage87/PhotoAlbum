@@ -2,16 +2,27 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Button, Input, Label } from "@/components/ui";
+import { Button } from "@/components/ui";
 import { PhotoGrid, type GridPhoto } from "@/components/photos/PhotoGrid";
-import { TripFilterField } from "@/components/containers/TripFilterField";
+import { PickerFilters, type PickerOption } from "@/components/photos/PickerFilters";
 import { addToCollection, moreCandidates } from "@/app/collections/actions";
-import { previewAddToCollection } from "@/app/photos/exposure-actions";
+import { moreTripCandidates } from "@/app/trips/[slug]/add-actions";
+import { bulkMoveToTrip } from "@/app/photos/bulk-actions";
+import { previewAddToCollection, previewMoveToTrip } from "@/app/photos/exposure-actions";
+import { describePickerFilter, pickerFilterIsActive, pickerFilterQuery, type PickerFilter } from "@/lib/photos/picker-filter";
 
-type Filter = { trip: string | null; q: string | null; from: string | null; to: string | null };
+/** Where the ticked photographs are going. A collection gathers them; a trip takes them over. */
+export type PickerDestination = { kind: "collection"; id: string; slug: string; title: string } | { kind: "trip"; id: string; slug: string; title: string };
 
-/** Tick photos from anywhere in the album and add them to one collection; warns first when that would expose them. */
-export function AddPhotosPicker({ collection, initialTrip, filter, initial }: { collection: { id: string; slug: string; title: string }; /** The trip the filter is already narrowed to, so the box shows its name. */ initialTrip: { id: string; title: string } | null; filter: Filter; initial: { photos: GridPhoto[]; nextCursor: string | null; total: number } }) {
+/** Tick photos from anywhere in the album and put them somewhere; warns first when that would show them to more people. */
+export function AddPhotosPicker({ destination, initialTrip, filter, members, initial }: {
+  destination: PickerDestination;
+  /** The trip the filter is already narrowed to, so the box shows its name. */
+  initialTrip: { id: string; title: string } | null;
+  filter: PickerFilter;
+  members?: PickerOption[];
+  initial: { photos: GridPhoto[]; nextCursor: string | null; total: number };
+}) {
   const router = useRouter();
   const [photos, setPhotos] = useState(initial.photos);
   const [nextCursor, setNextCursor] = useState(initial.nextCursor);
@@ -21,9 +32,12 @@ export function AddPhotosPicker({ collection, initialTrip, filter, initial }: { 
 
   const toggle = (id: string) => setSelected((prev) => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next; });
   const selectShown = () => setSelected(new Set(photos.map((p) => p.id)));
+  const query = pickerFilterQuery(filter);
   const loadMore = () => start(async () => {
     if (!nextCursor) return;
-    const more = await moreCandidates(collection.slug, filter, nextCursor);
+    const more = destination.kind === "collection"
+      ? await moreCandidates(destination.slug, query, nextCursor)
+      : await moreTripCandidates(destination.slug, query, nextCursor);
     setPhotos((prev) => [...prev, ...more.photos]);
     setNextCursor(more.nextCursor);
   });
@@ -32,10 +46,15 @@ export function AddPhotosPicker({ collection, initialTrip, filter, initial }: { 
     if (ids.length === 0) return;
     setMessage(null);
     try {
-      const warnings = await previewAddToCollection(ids, collection.id);
+      const warnings = destination.kind === "collection" ? await previewAddToCollection(ids, destination.id) : await previewMoveToTrip(ids, destination.id);
       if (warnings.length && !window.confirm(`${warnings.join("\n")}\n\nContinue?`)) return;
-      const n = await addToCollection(collection.id, ids);
-      router.push(`/collections/${collection.slug}/photos?added=${n}`);
+      if (destination.kind === "collection") {
+        const n = await addToCollection(destination.id, ids);
+        router.push(`/collections/${destination.slug}/photos?added=${n}`);
+      } else {
+        await bulkMoveToTrip(ids, destination.id);
+        router.push(`/trips/${destination.slug}/photos?added=${ids.length}`);
+      }
     } catch (e) {
       setMessage(e instanceof Error ? e.message : "Something went wrong");
     }
@@ -43,33 +62,27 @@ export function AddPhotosPicker({ collection, initialTrip, filter, initial }: { 
 
   return (
     <div className="space-y-4" data-testid="add-photos">
-      <div className="flex flex-wrap items-end justify-between gap-3">
+      <div className="space-y-3">
         <div>
-          <h2 className="font-display text-xl font-semibold">Add existing photos to {collection.title}</h2>
-          <p className="text-sm text-muted mt-1">Tick the photos that belong here. {initial.total} item{initial.total === 1 ? "" : "s"} to choose from{filter.trip || filter.q || filter.from || filter.to ? " with this filter" : ""}; photos already in the collection are not shown.</p>
+          <h2 className="font-display text-xl font-semibold">
+            {destination.kind === "collection" ? `Add existing photos to ${destination.title}` : `Put existing photos on ${destination.title}`}
+          </h2>
+          <p className="text-sm text-muted mt-1">
+            Tick the ones that belong here. {initial.total} item{initial.total === 1 ? "" : "s"} to choose from
+            {pickerFilterIsActive(filter) ? ` — ${describePickerFilter(filter).join("; ") || "with this filter"}` : ""}; anything already
+            {destination.kind === "collection" ? " in the collection" : " on the trip"} is not shown.
+          </p>
         </div>
-        <form method="get" className="flex flex-wrap items-end gap-2">
-          <div>
-            <Label htmlFor="trip">Trip</Label>
-            <TripFilterField initial={initialTrip} />
-          </div>
-          <div>
-            <Label htmlFor="from">From</Label>
-            <Input id="from" name="from" type="date" defaultValue={filter.from ?? ""} className="h-9" />
-          </div>
-          <div>
-            <Label htmlFor="to">To</Label>
-            <Input id="to" name="to" type="date" defaultValue={filter.to ?? ""} className="h-9" />
-          </div>
-          <div>
-            <Label htmlFor="q">Words in caption, notes or description</Label>
-            <Input id="q" name="q" defaultValue={filter.q ?? ""} placeholder="lake, birthday, Biscuit…" className="h-9" />
-          </div>
-          <Button type="submit" variant="secondary" size="sm">Filter</Button>
-        </form>
+        <PickerFilters
+          filter={filter}
+          action={destination.kind === "collection" ? `/collections/${destination.slug}/add` : `/trips/${destination.slug}/add`}
+          initialTrip={initialTrip}
+          members={members}
+          showTrip={destination.kind === "collection"}
+        />
       </div>
       {message && <p role="alert" className="text-sm rounded-theme bg-red-50 border border-red-200 text-red-900 p-3">{message}</p>}
-      <PhotoGrid photos={photos} selectable selected={selected} onToggle={toggle} emptyMessage={filter.trip || filter.q || filter.from || filter.to ? "Nothing matches this filter." : "Every ready photo is already in this collection."} />
+      <PhotoGrid photos={photos} selectable selected={selected} onToggle={toggle} emptyMessage={pickerFilterIsActive(filter) ? "Nothing matches that. Try fewer words, a wider distance, or a longer stretch of days." : destination.kind === "collection" ? "Every ready photo is already in this collection." : "Every ready photo is already on this trip."} />
       {nextCursor && (
         <div className="text-center">
           <Button variant="secondary" size="sm" onClick={loadMore} disabled={pending}>Load more</Button>
@@ -82,8 +95,14 @@ export function AddPhotosPicker({ collection, initialTrip, filter, initial }: { 
           {selected.size > 0 && <button type="button" className="ml-3 text-muted hover:underline" onClick={() => setSelected(new Set())}>Clear</button>}
         </div>
         <div className="flex gap-2">
-          <Button variant="secondary" size="sm" onClick={() => router.push(`/collections/${collection.slug}/photos`)} disabled={pending}>Cancel</Button>
-          <Button size="sm" onClick={add} disabled={pending || selected.size === 0}>{pending ? "Adding…" : `Add ${selected.size || ""} to collection`.replace("  ", " ")}</Button>
+          <Button variant="secondary" size="sm" onClick={() => router.push(destination.kind === "collection" ? `/collections/${destination.slug}/photos` : `/trips/${destination.slug}/photos`)} disabled={pending}>Cancel</Button>
+          <Button size="sm" onClick={add} disabled={pending || selected.size === 0} data-testid="picker-add">
+            {pending
+              ? destination.kind === "collection" ? "Adding…" : "Moving…"
+              : destination.kind === "collection"
+                ? `Add ${selected.size} to collection`
+                : `Put ${selected.size} on the trip`}
+          </Button>
         </div>
       </div>
     </div>

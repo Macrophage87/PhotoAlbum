@@ -254,9 +254,10 @@ test("a collection gathers photos from two trips and can be shared by link", asy
   await expect(page).toHaveURL(/\/collections\/best-of-2025\/photos\?added=1$/);
   await expect(page.getByRole("status")).toContainText("Added 1 photo");
   await expect(page.getByRole("heading", { name: /2 items/ })).toBeVisible();
-  // The picker filters by date and searches descriptions as well as captions.
+  // The picker filters by date and searches descriptions as well as captions, and says in words what it is showing.
   await page.goto("/collections/best-of-2025/add?from=2001-01-01&to=2001-01-02");
-  await expect(page.getByTestId("add-photos").getByText("0 items to choose from with this filter")).toBeVisible();
+  await expect(page.getByTestId("add-photos").getByText(/0 items to choose from/)).toBeVisible();
+  await expect(page.getByTestId("add-photos").getByText(/2001-01-01 to 2001-01-02/)).toBeVisible();
 
   await page.goto("/collections/best-of-2025/settings");
   await page.getByLabel("Anyone with the link").check();
@@ -1559,4 +1560,45 @@ test("a photo in the trash stops being a cover, and stops looking out of the Peo
 
   await withDb((c) => c.query(`UPDATE "Trip" SET "coverPhotoId" = NULL WHERE slug = $1`, [row.slug]));
   if (coll) await withDb((c) => c.query(`UPDATE "Collection" SET "coverPhotoId" = NULL WHERE id = $1`, [coll.id]));
+});
+
+test("existing photographs are put on a trip by searching for them, by place and by nothing having claimed them", async ({ context, page }) => {
+  await signIn(context, ADMIN);
+  // A photograph nothing has claimed: on no trip and in no collection, with a place written on it.
+  const loose = (await withDb((c) => c.query(`
+    SELECT p.id FROM "Photo" p
+    WHERE p."tripId" IS NULL AND p.status = 'READY' AND p."trashedAt" IS NULL
+      AND NOT EXISTS (SELECT 1 FROM "CollectionItem" ci WHERE ci."photoId" = p.id)
+    ORDER BY p."createdAt" LIMIT 1`))).rows[0];
+  test.skip(!loose, "nothing unclaimed to gather up");
+  await withDb((c) => c.query(`UPDATE "Photo" SET "placeName" = $1, lat = 44.2223, lng = -68.3372 WHERE id = $2`, ["Bass Harbor Head Light", loose.id]));
+
+  // The trip's gallery now offers a way in; trips had none before, uploads reached them only by date.
+  await page.goto("/trips/acadia/photos");
+  await page.getByRole("link", { name: "Add existing photos" }).click();
+  await expect(page).toHaveURL(/\/trips\/acadia\/add$/);
+
+  // The place a member wrote is searchable, which it was not before.
+  await page.goto("/trips/acadia/add?q=Bass+Harbor");
+  await expect(page.locator(`li:has(img[src*='/api/photos/${loose.id}/'])`)).toBeVisible();
+
+  // So is a distance from a point: a mile of the lighthouse reaches it, a mile of Yosemite does not.
+  await page.goto("/trips/acadia/add?lat=44.2223&lng=-68.3372&miles=1&place=Bass+Harbor+Head+Light");
+  await expect(page.getByTestId("add-photos")).toContainText("within 1 mile of Bass Harbor Head Light");
+  await expect(page.locator(`li:has(img[src*='/api/photos/${loose.id}/'])`)).toBeVisible();
+  await page.goto("/trips/acadia/add?lat=37.8651&lng=-119.5383&miles=1");
+  await expect(page.locator(`li:has(img[src*='/api/photos/${loose.id}/'])`)).toHaveCount(0);
+
+  // And the check for the pile nothing has claimed, which is what the picker is mostly for.
+  await page.goto("/trips/acadia/add?loose=1");
+  await expect(page.getByTestId("add-photos")).toContainText("in no trip and no collection");
+  const tile = page.locator(`li:has(img[src*='/api/photos/${loose.id}/'])`);
+  await expect(tile).toBeVisible();
+  await tile.locator("button").first().click();
+  await page.getByTestId("picker-add").click();
+
+  await expect(page).toHaveURL(/\/trips\/acadia\/photos\?added=1$/);
+  await expect
+    .poll(async () => (await withDb((c) => c.query(`SELECT "tripId" FROM "Photo" WHERE id = $1`, [loose.id]))).rows[0].tripId, { timeout: 20_000, intervals: [500] })
+    .not.toBeNull();
 });

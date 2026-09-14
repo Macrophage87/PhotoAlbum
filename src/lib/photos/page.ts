@@ -4,6 +4,7 @@ import { favouriteOrderSql } from "@/lib/favourites/queries";
 import { photoCardSelect, type PhotoCard } from "./queries";
 import { NOT_TRASHED } from "@/lib/photos/trash";
 import { NO_FILTER, type GalleryFilter } from "./filters";
+import { boundingBox, MILE_IN_METRES, NO_PICKER_FILTER, type PickerFilter } from "./picker-filter";
 
 /** Gallery pages load this many items at a time; the client asks for the next page by cursor. */
 export const GALLERY_PAGE = 240;
@@ -113,35 +114,58 @@ export async function tripPhotoPage(tripId: string, opts: { uploaderId?: string;
   return { photos: page, nextCursor: more ? page[page.length - 1].id : null, total };
 }
 
-export type CandidateFilter = { excludeCollectionId: string; trip?: string | null; q?: string | null; from?: string | null; to?: string | null };
-
-const DAY = /^\d{4}-\d{2}-\d{2}$/;
+/** Where the picked photographs are going, so the picker never offers what is already there. */
+export type PickerTarget = { kind: "collection"; id: string } | { kind: "trip"; id: string };
 
 /**
- * Ready items not yet in a collection, newest first, for the "add existing photos" picker. `trip` is a trip id or
- * "none" for items without a trip; `from`/`to` are inclusive days; `q` searches the same members' index as the
- * search page (captions, titles, notes, AI descriptions and tags, people's names) plus the file name.
+ * Which photographs are within a distance of a point.
+ *
+ * Answered as ids, like the search, so it composes with everything else the picker can ask. The box comes first so
+ * the index on the two columns does the coarse work; the real great-circle distance is then measured on what the
+ * box let through, because a box is not a circle and its corners are half again as far away as its sides.
  */
-export async function candidatePhotoPage(filter: CandidateFilter, opts: { cursor?: string | null; take?: number } = {}): Promise<PhotoPage> {
+export async function idsNear(near: { lat: number; lng: number; miles: number }): Promise<string[]> {
+  const box = boundingBox(near.lat, near.lng, near.miles);
+  const metres = near.miles * MILE_IN_METRES;
+  const rows = await db.$queryRaw<{ id: string }[]>`
+    SELECT p.id FROM "Photo" p
+    WHERE p."trashedAt" IS NULL AND p.lat IS NOT NULL AND p.lng IS NOT NULL
+      AND p.lat BETWEEN ${box.latMin} AND ${box.latMax}
+      AND p.lng BETWEEN ${box.lngMin} AND ${box.lngMax}
+      AND 2 * 6371008.8 * asin(sqrt(
+            power(sin((radians(p.lat) - radians(${near.lat})) / 2), 2)
+            + cos(radians(${near.lat})) * cos(radians(p.lat)) * power(sin((radians(p.lng) - radians(${near.lng})) / 2), 2)
+          )) <= ${metres}`;
+  return rows.map((r) => r.id);
+}
+
+/**
+ * Photographs that could be added to a trip or a collection, newest first.
+ *
+ * Whatever is already in the target is never offered. Everything else the filter asks is either a plain column or
+ * an id list — words, and a distance from a point — and where two are asked at once only what satisfies both is
+ * kept, so the count beside the grid always matches what is in it.
+ */
+export async function candidatePhotoPage(target: PickerTarget, filter: PickerFilter = NO_PICKER_FILTER, opts: { cursor?: string | null; take?: number } = {}): Promise<PhotoPage> {
   const take = opts.take ?? GALLERY_PAGE;
-  const q = filter.q?.trim();
-  const from = filter.from && DAY.test(filter.from) ? new Date(`${filter.from}T00:00:00Z`) : null;
-  const to = filter.to && DAY.test(filter.to) ? new Date(`${filter.to}T23:59:59.999Z`) : null;
-  let textIds: string[] | null = null;
-  if (q) {
-    const rows = await db.$queryRaw<{ id: string }[]>`
-      SELECT p.id FROM "Photo" p, LATERAL (SELECT websearch_to_tsquery('english', ${q}) || websearch_to_tsquery('simple', ${q}) AS query) qq
-      WHERE p."trashedAt" IS NULL AND (p."searchVectorMembers" @@ qq.query OR p."originalName" ILIKE ${"%" + q + "%"} OR p.caption ILIKE ${"%" + q + "%"} OR p.title ILIKE ${"%" + q + "%"})
-      LIMIT 5000`;
-    textIds = rows.map((r) => r.id);
-  }
+  const lists: string[][] = [];
+  if (filter.q) lists.push(await idsMatching(filter.q));
+  if (filter.near) lists.push(await idsNear(filter.near));
+  const restrict = lists.length ? intersectIds(lists) : null;
+  if (restrict && restrict.length === 0) return { photos: [], nextCursor: null, total: 0 };
+
+  const from = filter.from ? new Date(`${filter.from}T00:00:00Z`) : null;
+  const to = filter.to ? new Date(`${filter.to}T23:59:59.999Z`) : null;
   const where: Prisma.PhotoWhereInput = {
     status: "READY",
     ...NOT_TRASHED,
-    collections: { none: { collectionId: filter.excludeCollectionId } },
-    ...(filter.trip === "none" ? { tripId: null } : filter.trip ? { tripId: filter.trip } : {}),
+    ...(target.kind === "collection" ? { collections: { none: { collectionId: target.id } } } : { tripId: { not: target.id } }),
+    // Nothing has claimed these: no trip, and in no collection. The pile that most wants tidying away.
+    ...(filter.loose ? { tripId: null, collections: { none: {} } } : filter.trip === "none" ? { tripId: null } : filter.trip ? { tripId: filter.trip } : {}),
+    ...(filter.kind ? { kind: filter.kind } : {}),
+    ...(filter.uploaderId ? { uploaderId: filter.uploaderId } : {}),
     ...(from || to ? { takenAt: { ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) } } : {}),
-    ...(textIds ? { id: { in: textIds } } : {}),
+    ...(restrict ? { id: { in: restrict } } : {}),
   };
   const [photos, total] = await Promise.all([
     db.photo.findMany({

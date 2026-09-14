@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { candidatePhotoPage } from "@/lib/photos/page";
+import { parsePickerFilter } from "@/lib/photos/picker-filter";
 import { toGridPhoto } from "@/components/photos/toGrid";
 import type { GridPhoto } from "@/components/photos/PhotoGrid";
 import { redirect } from "next/navigation";
@@ -194,11 +195,15 @@ export async function detachExposedFromOtherCollections(slug: string): Promise<v
   redirect(`/collections/${slug}/settings?saved=1`);
 }
 
-/** The next page of the "add existing photos" picker, as grid items. */
-export async function moreCandidates(slug: string, filter: { trip?: string | null; q?: string | null; from?: string | null; to?: string | null }, cursor: string): Promise<{ photos: GridPhoto[]; nextCursor: string | null }> {
+/**
+ * The next page of the "add existing photos" picker, as grid items. The filter arrives as the query string the page
+ * itself is showing, so it is read back the same way the page read it and cannot mean something different here.
+ */
+export async function moreCandidates(slug: string, query: string, cursor: string): Promise<{ photos: GridPhoto[]; nextCursor: string | null }> {
   await requireUserOrThrow();
   const collection = await db.collection.findUnique({ where: { slug }, select: { id: true } });
   if (!collection) throw new Error("Collection not found");
-  const page = await candidatePhotoPage({ excludeCollectionId: collection.id, trip: filter.trip, q: filter.q, from: filter.from, to: filter.to }, { cursor });
+  const filter = parsePickerFilter(Object.fromEntries(new URLSearchParams(query).entries()));
+  const page = await candidatePhotoPage({ kind: "collection", id: collection.id }, filter, { cursor });
   return { photos: page.photos.map((p) => toGridPhoto(p, null, true)), nextCursor: page.nextCursor };
 }

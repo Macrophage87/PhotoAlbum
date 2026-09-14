@@ -1,3 +1,4 @@
+import { NO_PICKER_FILTER } from "@/lib/photos/picker-filter";
 import { beforeEach, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
 import { tripPhotoPage } from "@/lib/photos/page";
@@ -69,19 +70,70 @@ describe("candidate photos for a collection", () => {
     const held = await mk("held.jpg", { takenAt: new Date("2025-08-14T10:00:00Z") });
     await mk("pending.jpg", { status: "PENDING" });
     await db.collectionItem.create({ data: { collectionId: collection.id, photoId: held.id, position: 0, addedById: user.id } });
-    const all = await candidatePhotoPage({ excludeCollectionId: collection.id });
+    const all = await candidatePhotoPage({ kind: "collection", id: collection.id });
     expect(all.photos.map((p) => p.id)).toEqual([loose.id, inTrip.id]);
     expect(all.total).toBe(2);
-    expect((await candidatePhotoPage({ excludeCollectionId: collection.id, trip: trip.id })).photos.map((p) => p.id)).toEqual([inTrip.id]);
-    expect((await candidatePhotoPage({ excludeCollectionId: collection.id, trip: "none" })).photos.map((p) => p.id)).toEqual([loose.id]);
-    expect((await candidatePhotoPage({ excludeCollectionId: collection.id, q: "LAKE" })).photos.map((p) => p.id)).toEqual([inTrip.id]);
+    expect((await candidatePhotoPage({ kind: "collection", id: collection.id }, { ...NO_PICKER_FILTER, trip: trip.id })).photos.map((p) => p.id)).toEqual([inTrip.id]);
+    expect((await candidatePhotoPage({ kind: "collection", id: collection.id }, { ...NO_PICKER_FILTER, trip: "none" })).photos.map((p) => p.id)).toEqual([loose.id]);
+    expect((await candidatePhotoPage({ kind: "collection", id: collection.id }, { ...NO_PICKER_FILTER, q: "LAKE" })).photos.map((p) => p.id)).toEqual([inTrip.id]);
     // The AI description is searched too, through the members' index.
     await db.photo.update({ where: { id: loose.id }, data: { annotation: { caption: "x", description: "Two kayaks pulled up on the shingle", tags: ["kayak"], searchSummary: "kayaks on the beach" } } });
-    expect((await candidatePhotoPage({ excludeCollectionId: collection.id, q: "kayaks" })).photos.map((p) => p.id)).toEqual([loose.id]);
-    expect((await candidatePhotoPage({ excludeCollectionId: collection.id, from: "2025-08-13", to: "2025-08-13" })).photos.map((p) => p.id)).toEqual([loose.id]);
-    expect((await candidatePhotoPage({ excludeCollectionId: collection.id, to: "2025-08-12" })).photos.map((p) => p.id)).toEqual([inTrip.id]);
-    const first = await candidatePhotoPage({ excludeCollectionId: collection.id }, { take: 1 });
+    expect((await candidatePhotoPage({ kind: "collection", id: collection.id }, { ...NO_PICKER_FILTER, q: "kayaks" })).photos.map((p) => p.id)).toEqual([loose.id]);
+    expect((await candidatePhotoPage({ kind: "collection", id: collection.id }, { ...NO_PICKER_FILTER, from: "2025-08-13", to: "2025-08-13" })).photos.map((p) => p.id)).toEqual([loose.id]);
+    expect((await candidatePhotoPage({ kind: "collection", id: collection.id }, { ...NO_PICKER_FILTER, to: "2025-08-12" })).photos.map((p) => p.id)).toEqual([inTrip.id]);
+    const first = await candidatePhotoPage({ kind: "collection", id: collection.id }, NO_PICKER_FILTER, { take: 1 });
     expect(first.nextCursor).toBe(loose.id);
-    expect((await candidatePhotoPage({ excludeCollectionId: collection.id }, { take: 1, cursor: first.nextCursor })).photos.map((p) => p.id)).toEqual([inTrip.id]);
+    expect((await candidatePhotoPage({ kind: "collection", id: collection.id }, NO_PICKER_FILTER, { take: 1, cursor: first.nextCursor })).photos.map((p) => p.id)).toEqual([inTrip.id]);
+  });
+});
+
+/**
+ * The picker looks through everything the family has ever uploaded for the ones that belong somewhere new, so the
+ * questions it can be asked are about when and where a photograph was taken and whether anything has claimed it.
+ */
+describe("picking photographs to put somewhere", () => {
+  it("finds them by place, by distance from a point, and by nothing having claimed them", async () => {
+    const { candidatePhotoPage } = await import("@/lib/photos/page");
+    const { NO_PICKER_FILTER } = await import("@/lib/photos/picker-filter");
+    await resetTestDb();
+    const user = await db.user.create({ data: { email: "pick@example.com", role: "ADMIN" } });
+    const trip = await db.trip.create({ data: { slug: "p", title: "P", startDate: new Date("2025-08-10"), endDate: new Date("2025-08-16"), createdById: user.id } });
+    const collection = await db.collection.create({ data: { slug: "gather", title: "Gather", themeKey: "default", createdById: user.id } });
+    const mk = (name: string, extra: Record<string, unknown> = {}) => db.photo.create({ data: { uploaderId: user.id, originalName: name, mimeType: "image/jpeg", storageKey: name, originalPath: `${name}/o.jpg`, sizeBytes: 1, status: "READY", ...extra } });
+
+    // Bass Harbor Head Light, and a photograph about twelve miles away at Bar Harbor.
+    const lighthouse = await mk("light.jpg", { lat: 44.2223, lng: -68.3372, placeName: "Bass Harbor Head Light", takenAt: new Date("2025-08-12T10:00:00Z") });
+    const barHarbor = await mk("town.jpg", { lat: 44.3876, lng: -68.2039, takenAt: new Date("2025-08-13T10:00:00Z") });
+    // Far away, and claimed by a trip.
+    const faraway = await mk("far.jpg", { lat: 37.8651, lng: -119.5383, tripId: trip.id, takenAt: new Date("2025-08-14T10:00:00Z") });
+    // Claimed by the collection we are adding to, so it is never offered.
+    const held = await mk("held.jpg", { lat: 44.22, lng: -68.34 });
+    await db.collectionItem.create({ data: { collectionId: collection.id, photoId: held.id, position: 0, addedById: user.id } });
+
+    const into = { kind: "collection" as const, id: collection.id };
+    const ids = async (f: Partial<typeof NO_PICKER_FILTER>) => (await candidatePhotoPage(into, { ...NO_PICKER_FILTER, ...f })).photos.map((p) => p.id).sort();
+
+    // The place a member wrote on a photograph is searchable, which it was not before.
+    expect(await ids({ q: "Bass Harbor" })).toEqual([lighthouse.id]);
+
+    // Five miles of the lighthouse reaches the lighthouse and nothing else; thirty reaches the town as well.
+    const near = (miles: number) => ({ near: { lat: 44.2223, lng: -68.3372, miles, label: null } });
+    expect(await ids(near(1))).toEqual([lighthouse.id]);
+    expect(await ids(near(25))).toEqual([barHarbor.id, lighthouse.id].sort());
+    expect(await ids(near(500))).not.toContain(faraway.id);
+
+    // Nothing has claimed these two: no trip, and in no collection.
+    expect(await ids({ loose: true })).toEqual([barHarbor.id, lighthouse.id].sort());
+
+    // Asked two things at once, only what answers both comes back.
+    expect(await ids({ loose: true, ...near(1) })).toEqual([lighthouse.id]);
+    expect(await ids({ q: "Bass Harbor", ...near(1) })).toEqual([lighthouse.id]);
+    expect(await ids({ q: "Bass Harbor", near: { lat: 37.8651, lng: -119.5383, miles: 1, label: null } })).toEqual([]);
+
+    // Putting things on a trip offers everything not already on it, including what other trips hold.
+    const onto = { kind: "trip" as const, id: trip.id };
+    const forTrip = (await candidatePhotoPage(onto, { ...NO_PICKER_FILTER, loose: true })).photos.map((p) => p.id).sort();
+    expect(forTrip).toEqual([barHarbor.id, lighthouse.id].sort());
+    expect(forTrip).not.toContain(faraway.id);
   });
 });
