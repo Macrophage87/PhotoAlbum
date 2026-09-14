@@ -1,5 +1,7 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import path from "node:path";
+import fs from "node:fs";
+import { randomUUID } from "node:crypto";
 import sharp from "sharp";
 import { stillIsBlank } from "@/lib/images/poster";
 import { createTrip, resetDb, setVisibility, signIn, withDb } from "./helpers";
@@ -8,12 +10,31 @@ import { createTrip, resetDb, setVisibility, signIn, withDb } from "./helpers";
 const ADMIN = process.env.E2E_ADMIN_EMAIL ?? "e2e-admin@example.com";
 const fixture = (n: string) => path.join(__dirname, "../fixtures", n);
 
-/** Pick a file only once the page has hydrated, otherwise React's change handler is not attached yet and nothing uploads. */
+/**
+ * Pick a file only once the page has hydrated, otherwise React's change handler is not attached yet and nothing
+ * uploads. The photo uploader offers two ways in — the phone's own storage first, then the photo library — so take
+ * the first input rather than insisting there is only one. The track importer's page has just the one.
+ *
+ * Each pick sends bytes of its own. The album refuses a file it already holds, byte for byte, and these tests send
+ * the same handful of fixtures over and over while meaning a different photograph each time; a few bytes after a
+ * JPEG's end marker, which every decoder ignores, keep that pretence honest. Tests about duplicates send the same
+ * bytes deliberately — see `chooseSameFile`.
+ */
 async function chooseFile(page: Page, name: string) {
   await page.waitForLoadState("networkidle");
-  // The photo uploader offers two ways in — the phone's own storage first, then the photo library — so take the
-  // first input rather than insisting there is only one. The track importer's page has just the one.
-  await page.locator('input[type="file"]').first().setInputFiles(fixture(name));
+  const input = page.locator('input[type="file"]').first();
+  if (/\.(jpe?g|png)$/i.test(name)) {
+    const buffer = Buffer.concat([fs.readFileSync(fixture(name)), Buffer.from(`\n<!-- ${randomUUID()} -->`)]);
+    await input.setInputFiles({ name, mimeType: name.endsWith(".png") ? "image/png" : "image/jpeg", buffer });
+    return;
+  }
+  await input.setInputFiles(fixture(name));
+}
+
+/** The very same bytes every time, for the tests that are about the album noticing exactly that. */
+async function chooseSameFile(page: Page, name: string, buffer: Buffer) {
+  await page.waitForLoadState("networkidle");
+  await page.locator('input[type="file"]').first().setInputFiles({ name, mimeType: "image/jpeg", buffer });
 }
 
 test.describe.configure({ mode: "serial" });
@@ -1643,19 +1664,23 @@ test("photographs are taken off a trip and out of a collection, and stay in the 
 
 test("the same file twice is one photograph, and the copies already in the album fold together", async ({ context, page }) => {
   await signIn(context, ADMIN);
-  const before = (await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "Photo" WHERE "originalName" = $1`, ["photo-with-gps.jpg"]))).rows[0].n;
+  // One particular file, sent twice. The first goes up; the second is the same bytes and must add nothing.
+  const twice = Buffer.concat([fs.readFileSync(fixture("photo-with-gps.jpg")), Buffer.from("\n<!-- sent twice on purpose -->")]);
+  const rows = async () => (await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "Photo" WHERE "originalName" = $1`, ["twice.jpg"]))).rows[0].n;
 
-  // Sending a file the album already holds adds nothing, and says which one it has rather than looking ignored.
   await page.goto("/upload");
-  await chooseFile(page, "photo-with-gps.jpg");
+  await chooseSameFile(page, "twice.jpg", twice);
+  await expect.poll(rows, { timeout: 60_000, intervals: [500] }).toBe(1);
+
+  await page.goto("/upload");
+  await chooseSameFile(page, "twice.jpg", twice);
   await expect(page.getByTestId("already-here")).toBeVisible({ timeout: 60_000 });
   await expect(page.getByTestId("already-here")).toContainText("already in the album");
-  expect((await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "Photo" WHERE "originalName" = $1`, ["photo-with-gps.jpg"]))).rows[0].n).toBe(before);
+  expect(await rows()).toBe(1);
 
-  // For the copies already there, the admin page folds each set into one and trashes the rest as duplicates.
-  const keeper = (await withDb((c) => c.query(`SELECT id, "contentHash" FROM "Photo" WHERE "contentHash" IS NOT NULL AND "trashedAt" IS NULL ORDER BY "createdAt" LIMIT 1`))).rows[0];
-  test.skip(!keeper, "nothing processed far enough to have a hash");
-  // A second row with the same bytes, as an older album would have ended up with.
+  // For the copies an older album already collected, the admin page folds each set into one.
+  const keeper = (await withDb((c) => c.query(`SELECT id FROM "Photo" WHERE "originalName" = $1`, ["twice.jpg"]))).rows[0];
+  // A second row with the same bytes, as an album from before this would have ended up with.
   const copy = (await withDb((c) => c.query(
     `INSERT INTO "Photo" (id, "uploaderId", "originalName", "mimeType", "storageKey", "originalPath", "sizeBytes", status, "contentHash", caption, "createdAt", "updatedAt")
      SELECT 'dupe-' || substr(md5(random()::text), 1, 12), "uploaderId", 'copy.jpg', "mimeType", "storageKey", "originalPath", "sizeBytes", 'READY', "contentHash", 'A caption only the copy had', now(), now()
