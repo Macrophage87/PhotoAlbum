@@ -1467,9 +1467,11 @@ test("a file the album will not take is named in the summary, with a way to try 
 
 test("the overview shows a handful of the trip at random, and picks again when asked", async ({ context, page }) => {
   await signIn(context, ADMIN);
-  // Enough photographs on the trip that the same ten twice running would be a coincidence worth failing on.
-  const count = (await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "Photo" WHERE "tripId" = (SELECT id FROM "Trip" WHERE slug = 'acadia') AND status = 'READY' AND "trashedAt" IS NULL`))).rows[0].n;
-  test.skip(count < 12, "not enough photographs on the trip for a shuffle to show");
+  // Enough photographs on the trip that the same ten twice running would be a coincidence worth failing on. Earlier
+  // tests upload them and processing is a background job, so this waits for them rather than skipping itself when
+  // it happens to look early — a test that quietly stands down is a test that is not testing anything.
+  const readyCount = async () => (await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "Photo" WHERE "tripId" = (SELECT id FROM "Trip" WHERE slug = 'acadia') AND status = 'READY' AND "trashedAt" IS NULL`))).rows[0].n;
+  await expect.poll(readyCount, { timeout: 60_000, intervals: [1000] }).toBeGreaterThan(10);
 
   const shown = async () => page.locator("li.tile-lazy img").evaluateAll((imgs) => imgs.map((i) => (i as HTMLImageElement).src.match(/\/api\/photos\/([^/]+)\//)?.[1] ?? "").join(","));
   await page.goto("/trips/acadia");
