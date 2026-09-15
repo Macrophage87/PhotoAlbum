@@ -26,6 +26,11 @@ type Item = {
 
 const CONCURRENCY = 3;
 
+/** How often the album is asked what became of the items that are being processed. */
+const STATUS_POLL_MS = 1500;
+/** How many to ask about at once, so a long batch never builds an address longer than something in front will take. */
+const MAX_STATUS_IDS = 60;
+
 const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 /**
@@ -180,13 +185,25 @@ export function Uploader({ tripId, activityId, onDone, maxClipSeconds = 90, anno
     [maxClipSeconds],
   );
 
-  // Poll processing status
+  /**
+   * Ask the album how the processing is going.
+   *
+   * What this watches matters more than it looks. Watching the whole list meant every progress event — and a file
+   * being sent reports its progress many times a second — cancelled the wait and started it again, so while
+   * anything at all was still going up, the album was never once asked. Photographs finished minutes earlier sat
+   * saying "Processing…" until the last byte of the last file had gone, which is what a long upload felt like.
+   *
+   * So the wait is keyed to *which* items are outstanding, and nothing else: it restarts when one of them finishes,
+   * never because another file moved a few kilobytes.
+   */
+  const pendingIds = items.filter((i) => i.status === "processing" && i.photoId).map((i) => i.photoId!);
+  // A hundred ids is a long address bar; ask about the oldest and let the rest follow as these settle.
+  const asking = pendingIds.slice(0, MAX_STATUS_IDS);
+  const askingKey = asking.join(",");
   useEffect(() => {
-    const pending = items.filter((i) => i.status === "processing" && i.photoId);
-    if (!pending.length) return;
+    if (!askingKey) return;
     const t = setTimeout(async () => {
-      const ids = pending.map((i) => i.photoId).join(",");
-      const res = await fetch(`/api/photos/status?ids=${ids}`).catch(() => null);
+      const res = await fetch(`/api/photos/status?ids=${askingKey}`).catch(() => null);
       if (!res || !res.ok) {
         const message = res?.status === 401 ? "Signed out. Sign in again to see the result." : "Lost contact with the server. Reload the page to check.";
         // Give up on status polling rather than spinning forever; the photos themselves are already safe.
@@ -203,9 +220,9 @@ export function Uploader({ tripId, activityId, onDone, maxClipSeconds = 90, anno
           return it;
         }),
       );
-    }, 1500);
+    }, STATUS_POLL_MS);
     return () => clearTimeout(t);
-  }, [items]);
+  }, [askingKey]);
 
   /**
    * Everything the album would not keep, in one place a member will actually read. Some of it never left the
