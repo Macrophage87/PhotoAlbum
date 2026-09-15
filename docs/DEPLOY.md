@@ -221,6 +221,8 @@ The basics (`APP_URL`, `ADMIN_EMAIL`, `SMTP_*`, `POSTGRES_*`, `APP_PORT`, `MAX_U
 | `TOKEN_ENCRYPTION_KEY` | empty | 32 random bytes, base64; encrypts members' Google refresh tokens at rest. Required with the client id. |
 | `GEOCODER_ENABLED` | `true` | Address lookup in "Set a place"; the typed words go to `GEOCODER_URL` from the server. |
 | `GEOCODER_URL` | Nominatim's public search | A Nominatim-compatible endpoint; point it at your own for heavy use. |
+| `VISITOR_STATS_ENABLED` | `true` | Count pages opened, for the Admin page's "Who has been looking". Nothing leaves the server. |
+| `VISITOR_STATS_RETENTION_DAYS` | `90` | Days those counts are kept before a nightly job deletes them with the day's hashing salt. |
 | `CSP_REPORT_ONLY` | `false` | Report Content-Security-Policy violations instead of blocking. |
 
 ### Optional: Google Photos

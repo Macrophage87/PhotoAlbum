@@ -127,6 +127,18 @@ export default async function PrivacyPage() {
 
         <section className="space-y-2 text-sm">
           <h2 className="font-display text-xl font-semibold">What is kept</h2>
+          <p>
+            Visitor statistics are {e.VISITOR_STATS_ENABLED ? "on" : "off"}. Each page opened is written down as: which
+            kind of page it was, which trip, collection or item it was about, whether the reader was signed in, on a
+            secret link or looking at something public, the host of whatever site linked here, and a number standing
+            for the browser. That number is the day&apos;s random salt, the caller&apos;s address and the browser&apos;s
+            description of itself put through sha256 — the address itself is never stored, the salt is thrown away with
+            the day, so the same browser tomorrow is a different number and no record can be turned back into an
+            address. The address bar is not kept either: a section and the thing it was about answer everything the
+            Admin page shows without keeping a record of where each relative went. It is all deleted after{" "}
+            {e.VISITOR_STATS_RETENTION_DAYS} days, nothing is sent anywhere, and only admins can see it. Set
+            VISITOR_STATS_ENABLED=false to count nothing.
+          </p>
           <p>Originals are kept as uploaded, plus web-sized renditions. Deleting a photo removes its files. Sign-in sessions last about three months; magic links expire after fifteen minutes and work once. A member&apos;s Google connection is one encrypted refresh token, deleted when they disconnect or are removed. Photos brought over from Google keep the Google item id so a second import skips them.</p>
         </section>
       </Container>

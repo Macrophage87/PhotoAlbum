@@ -207,6 +207,8 @@ S += [P("4. Configuration reference (.env)", H1),
         ["GOOGLE_OAUTH_CLIENT_ID / _SECRET", "(empty)", "OAuth client for the Google Photos picker button. See the deployment guide for the Google Cloud steps."],
         ["TOKEN_ENCRYPTION_KEY", "(empty)", "32 random bytes in base64 (openssl rand -base64 32). Encrypts members' Google tokens; required with the client id."],
         ["ANTHROPIC_BASE_URL, YOUTUBE_*_URL", "(empty)", "Endpoints for test doubles; leave empty."],
+        ["VISITOR_STATS_ENABLED", "true", "Count how many pages are opened and by how many browsers, for the Admin page. Counted here, sent nowhere."],
+        ["VISITOR_STATS_RETENTION_DAYS", "90", "Days those counts are kept; a nightly job deletes older ones and the salt that hashed them."],
         ["CSP_REPORT_ONLY", "false", "Report Content-Security-Policy violations instead of blocking them, while trying a new map provider."],
         ["COMPOSE_PROFILES", "(empty)", "Read by Docker Compose: set to ml (and/or worker) so every 'up' includes those optional services."],
       ], [1.85*inch, 1.25*inch, W-3.1*inch], first=CELLV),
@@ -238,7 +240,16 @@ S += [P("5. Signing in and inviting family", H1),
         "The Admin page lists members and pending invites. From there you can change roles, revoke an invite, or remove a member.",
       ]),
       P("Members can create trips, upload photos, edit anything, and share trips. Admins can additionally manage members. "
-        "Every signed-in member sees every trip; the album is a shared family space, not per-user galleries.")]
+        "Every signed-in member sees every trip; the album is a shared family space, not per-user galleries."),
+      P("Who has been looking", H2),
+      P("The Admin page also counts pages opened, over the last week, month or three months: how many were family signed in, "
+        "how many came in on a secret link, and how many were anyone at all on something public — so you can tell whether the "
+        "link you sent was ever opened. Below that are the trips, collections and photographs people actually look at, the sites "
+        "that linked them here, and when each member last read anything. It is all counted on this server and sent nowhere. "
+        "What is written down for each page is the kind of page and the trip, collection or item it was about, never the address "
+        "bar, never a share link, and never anyone's network address: browsers are told apart by a number made with a salt that "
+        "is random for the day and deleted with it. Everything is deleted after VISITOR_STATS_RETENTION_DAYS (90 by default), "
+        "and VISITOR_STATS_ENABLED=false counts nothing at all.")]
 
 # ---------- 6 ----------
 S += [P("6. Using the album", H1),

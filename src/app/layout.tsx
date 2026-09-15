@@ -15,6 +15,8 @@ import {
 import { headers } from "next/headers";
 import "./globals.css";
 import { RegisterServiceWorker } from "@/components/pwa/RegisterServiceWorker";
+import { VisitBeacon } from "@/components/visits/VisitBeacon";
+import { env } from "@/lib/env";
 
 // Every theme's font pair is loaded once here and referenced by CSS variable.
 const inter = Inter({ variable: "--font-inter", subsets: ["latin"] });
@@ -61,6 +63,7 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
       <body className="min-h-full flex flex-col">
         {children}
         <RegisterServiceWorker />
+        {env().VISITOR_STATS_ENABLED && <VisitBeacon />}
       </body>
     </html>
   );

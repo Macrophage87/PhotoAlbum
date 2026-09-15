@@ -18,6 +18,14 @@ enum TripVisibility {
   PUBLIC
 }
 
+/// Who was looking, as far as the album can tell: a signed-in family member, somebody holding a secret link, or
+/// anyone at all looking at something marked public.
+enum VisitorKind {
+  MEMBER
+  SHARE
+  PUBLIC
+}
+
 enum ActivityType {
   HIKE
   BIKE
@@ -192,6 +200,7 @@ model User {
   tracks   Track[]
   collections     Collection[]
   collectionItems CollectionItem[]
+  visits   Visit[]
 }
 
 model Invite {
@@ -252,6 +261,7 @@ model Trip {
   photos     Photo[]
   favourites TripFavorite[]
   tracks     Track[]
+  visits     Visit[]
 
   @@index([startDate])
   @@index([visibility])
@@ -412,6 +422,7 @@ model Photo {
   favourites        PhotoFavorite[]
   similarA          MediaSimilarity[] @relation("SimA")
   similarB          MediaSimilarity[] @relation("SimB")
+  visits            Visit[]
 
   @@index([takenAt])
   @@index([tripId, takenAt])
@@ -445,6 +456,7 @@ model Collection {
 
   items CollectionItem[]
   favourites CollectionFavorite[]
+  visits Visit[]
 
   @@index([visibility])
 }
@@ -759,4 +771,48 @@ model TrackStats {
   maxPower        Int?
   normalizedPower Int?
   calories        Int?
+}
+
+/// One page opened by one browser, written by the page itself rather than read out of a web server's log: that way
+/// it counts people rather than crawlers, and it can tell somebody arriving on a secret link apart from the same
+/// trip being read by a member.
+///
+/// What is deliberately missing is the address bar. Which section, and which trip, collection or item it was about,
+/// answers every figure the admin page shows; the full path would additionally be a record of where each relative
+/// went, which is not a thing this album should hold.
+model Visit {
+  id           String      @id @default(cuid())
+  at           DateTime    @default(now())
+  kind         VisitorKind
+  /// sha256 of the day's salt, the caller's address and the browser's description of itself. The salt is random and
+  /// is thrown away with the day (see VisitSalt), so a browser cannot be followed from one day into the next and no
+  /// row can be turned back into an address.
+  visitorHash  String
+  userId       String?
+  user         User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
+  section      String
+  tripId       String?
+  trip         Trip?       @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  collectionId String?
+  collection   Collection? @relation(fields: [collectionId], references: [id], onDelete: Cascade)
+  photoId      String?
+  photo        Photo?      @relation(fields: [photoId], references: [id], onDelete: Cascade)
+  /// Host only of whatever linked here, so "someone came from Facebook" is answerable without keeping the address.
+  refHost      String?
+
+  @@index([at])
+  @@index([kind, at])
+  @@index([tripId, at])
+  @@index([collectionId, at])
+  @@index([photoId, at])
+  @@index([userId, at])
+}
+
+/// The random salt a single day's visitor hashes are made with. Kept in the database rather than in the process so
+/// that a restart does not start counting the same people twice, and deleted with the visits of that day, which is
+/// what makes the hashes unrepeatable afterwards.
+model VisitSalt {
+  day       String   @id
+  salt      String
+  createdAt DateTime @default(now())
 }

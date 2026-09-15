@@ -22,11 +22,16 @@ import { isMinor } from "@/lib/people/consent";
 import { TakeoutAdmin } from "@/components/admin/TakeoutAdmin";
 import { inboxDir, listArchives } from "@/lib/takeout/inbox";
 import { closeDeadImports } from "@/lib/takeout/import";
+import { visitorStats } from "@/lib/visits/stats";
+import { VisitorStats } from "@/components/admin/VisitorStats";
 
 export const metadata = { title: "Admin" };
 
-export default async function AdminPage() {
+export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
   const me = await requireAdmin("/admin");
+  // How far back the visitor panel looks. Anything else in the address bar means the usual month.
+  const askedDays = Number((await searchParams).days);
+  const visits = await visitorStats([7, 30, 90].includes(askedDays) ? askedDays : 30);
   const viewer = await getViewer();
   const trashed = await db.photo.count({ where: { trashedAt: { not: null } } });
   const [members, invites] = await Promise.all([
@@ -106,6 +111,10 @@ export default async function AdminPage() {
             </Card>
           </section>
         )}
+
+        <section id="visitors" className="scroll-mt-4">
+          <VisitorStats stats={visits} enabled={env().VISITOR_STATS_ENABLED} retentionDays={env().VISITOR_STATS_RETENTION_DAYS} />
+        </section>
 
         <section>
           <h2 className="font-display text-xl font-semibold mb-1">AI descriptions</h2>

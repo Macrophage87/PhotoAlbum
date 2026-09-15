@@ -458,7 +458,8 @@ test("the AI helper describes reviewed items once an admin opts in, and opted-ou
   test.setTimeout(240_000);
   await signIn(context, ADMIN);
   await page.goto("/admin");
-  await expect(page.getByText("nothing is sent")).toBeVisible();
+  // Exactly the badge on the annotation panel: the Admin page is long, and a loose match finds other prose.
+  await expect(page.getByText("nothing is sent", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Turn on annotation" }).click();
   await expect(page.getByText("sending new items after review")).toBeVisible();
 
@@ -1738,4 +1739,44 @@ test("a photograph says it is done as soon as it is done, while the rest are sti
   // And promptly — a couple of rounds of asking, not a couple of minutes.
   expect(lag, `tile lagged ${lag}ms behind the album finishing the photograph`).toBeLessThan(15_000);
   console.log(`[timing] ready at +${readyAt - started}ms, tile showed ${lag}ms later`);
+});
+
+test("the admin page says who has been looking, and tells a secret link from the family", async ({ browser, context, page }) => {
+  await signIn(context, ADMIN);
+  await createTrip({ slug: "visitors", title: "Counted Trip", start: "2025-07-01", end: "2025-07-05", visibility: "LINK", shareToken: "counted-secret-token", ownerEmail: ADMIN });
+
+  // A member reads the trip.
+  await page.goto("/trips/visitors");
+  await page.waitForLoadState("networkidle");
+
+  // And somebody the link was sent to opens it, in a browser that has never signed in. A different page of the
+  // trip on purpose: everything here comes from one address with one browser, so the same page within the minute
+  // would rightly be counted as the same person looking twice.
+  const stranger = await browser.newContext();
+  const theirPage = await stranger.newPage();
+  await theirPage.goto("/share/counted-secret-token/map");
+  await theirPage.waitForLoadState("networkidle");
+  await expect(theirPage.getByText("Shared with you")).toBeVisible();
+  await theirPage.waitForLoadState("networkidle");
+  await stranger.close();
+
+  const counted = async () =>
+    (await withDb((c) => c.query(`SELECT kind FROM "Visit" v JOIN "Trip" t ON t.id = v."tripId" WHERE t.slug = 'visitors'`))).rows.map((r) => r.kind).sort();
+  await expect.poll(counted, { timeout: 20_000 }).toEqual(["MEMBER", "SHARE"]);
+
+  await page.goto("/admin?days=7#visitors");
+  await expect(page.getByTestId("visitor-summary")).toContainText("by family signed in");
+  const trip = page.locator("li", { hasText: "Counted Trip" }).first();
+  await expect(trip).toContainText("1 on the secret link");
+  // Every member is listed, whether or not they have read anything lately.
+  await expect(page.getByTestId("visitor-members")).toContainText(ADMIN);
+
+  // The window is the admin's to choose, and the choice survives the page.
+  await page.getByRole("link", { name: "30 days" }).click();
+  await expect(page).toHaveURL(/days=30/);
+  await expect(page.getByTestId("visitor-summary")).toContainText("in the last 30 days");
+
+  // Reading the Admin page is administering the album, not looking at it, and is never counted.
+  const adminVisits = await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "Visit" WHERE section = 'other'`));
+  expect(adminVisits.rows[0].n).toBe(0);
 });
