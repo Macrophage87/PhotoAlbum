@@ -1697,3 +1697,45 @@ test("the same file twice is one photograph, and the copies already in the album
     .toEqual({ gone: true, trashReason: "DUPLICATE" });
   expect((await withDb((c) => c.query(`SELECT caption FROM "Photo" WHERE id = $1`, [keeper.id]))).rows[0].caption).toBe("A caption only the copy had");
 });
+
+test("a photograph says it is done as soon as it is done, while the rest are still going up", async ({ context, page }) => {
+  test.setTimeout(180_000);
+  await signIn(context, ADMIN);
+  await withDb((c) => c.query(`DELETE FROM "Photo" WHERE "originalName" LIKE 'slow-%'`));
+  await page.goto("/upload");
+  await page.waitForLoadState("networkidle");
+
+  // A phone on a slow connection, which is the only place this ever went wrong. Asking the album how the
+  // processing was going used to be put off every time anything in the list changed, and a file crawling upwards
+  // reports its progress continuously — so the question was never once asked until the whole batch had stopped
+  // moving, and photographs finished half a minute earlier still said "Processing…". On a fast connection the
+  // same fault costs half a second, which is why it never showed up here until it was measured throttled.
+  const cdp = await context.newCDPSession(page);
+  await cdp.send("Network.enable");
+  await cdp.send("Network.emulateNetworkConditions", { offline: false, latency: 40, downloadThroughput: 5_000_000, uploadThroughput: 300_000 });
+
+  const tag = randomUUID().slice(0, 8);
+  const files = Array.from({ length: 4 }, (_, i) => ({
+    name: `slow-${tag}-${i}.jpg`,
+    mimeType: "image/jpeg",
+    // Big enough that sending them all takes far longer than the wait between asking.
+    buffer: Buffer.concat([fs.readFileSync(fixture("photo-with-gps.jpg")), Buffer.alloc(700_000, i + 1), Buffer.from(`\n<!-- ${randomUUID()} -->`)]),
+  }));
+  const started = Date.now();
+  await page.locator("#photo-file-input").setInputFiles(files);
+
+  // Wait for the album itself to finish one of them, then for its tile to say so.
+  const firstDone = async () => (await withDb((c) => c.query(`SELECT id FROM "Photo" WHERE "originalName" LIKE 'slow-' || $1 || '%' AND status = 'READY' ORDER BY "updatedAt" LIMIT 1`, [tag]))).rows[0]?.id ?? null;
+  await expect.poll(firstDone, { timeout: 120_000, intervals: [200] }).not.toBeNull();
+  const readyAt = Date.now();
+  const id = await firstDone();
+
+  await expect(page.locator(`img[src*='/api/photos/${id}/']`)).toBeVisible({ timeout: 30_000 });
+  const lag = Date.now() - readyAt;
+
+  // The point of the whole thing: it said so while the others were still going up, not after they had all landed.
+  await expect(page.getByTestId("upload-progress")).not.toContainText("All 4 uploaded.");
+  // And promptly — a couple of rounds of asking, not a couple of minutes.
+  expect(lag, `tile lagged ${lag}ms behind the album finishing the photograph`).toBeLessThan(15_000);
+  console.log(`[timing] ready at +${readyAt - started}ms, tile showed ${lag}ms later`);
+});
