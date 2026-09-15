@@ -186,43 +186,58 @@ export function Uploader({ tripId, activityId, onDone, maxClipSeconds = 90, anno
   );
 
   /**
-   * Ask the album how the processing is going.
+   * Ask the album how the processing is going, over and over until there is nothing left to ask about.
    *
-   * What this watches matters more than it looks. Watching the whole list meant every progress event — and a file
-   * being sent reports its progress many times a second — cancelled the wait and started it again, so while
-   * anything at all was still going up, the album was never once asked. Photographs finished minutes earlier sat
-   * saying "Processing…" until the last byte of the last file had gone, which is what a long upload felt like.
+   * Two mistakes are easy here and both have been made. Waiting on the whole list means every progress event — and
+   * a file being sent reports its progress many times a second — cancels the wait and starts it again, so while
+   * anything is going up the question is never asked at all. Waiting on only *which* items are outstanding fixes
+   * that and introduces the opposite: an answer that changes nothing leaves that set the same, so no further wait
+   * is ever scheduled and the asking stops after one go.
    *
-   * So the wait is keyed to *which* items are outstanding, and nothing else: it restarts when one of them finishes,
-   * never because another file moved a few kilobytes.
+   * So the timer is neither: it is started once, when something is outstanding, and stopped when nothing is. What
+   * to ask about is read afresh on each tick from a ref, which no amount of re-rendering disturbs.
    */
-  const pendingIds = items.filter((i) => i.status === "processing" && i.photoId).map((i) => i.photoId!);
-  // A hundred ids is a long address bar; ask about the oldest and let the rest follow as these settle.
-  const asking = pendingIds.slice(0, MAX_STATUS_IDS);
-  const askingKey = asking.join(",");
+  const pending = items.filter((i) => i.status === "processing" && i.photoId).map((i) => i.photoId!);
+  const pendingRef = useRef<string[]>([]);
+  const pendingKey = pending.join(",");
+  // Kept in a ref so a tick always asks about what is outstanding now, without the timer itself depending on it.
   useEffect(() => {
-    if (!askingKey) return;
-    const t = setTimeout(async () => {
-      const res = await fetch(`/api/photos/status?ids=${askingKey}`).catch(() => null);
-      if (!res || !res.ok) {
-        const message = res?.status === 401 ? "Signed out. Sign in again to see the result." : "Lost contact with the server. Reload the page to check.";
-        // Give up on status polling rather than spinning forever; the photos themselves are already safe.
-        setItems((prev) => prev.map((it) => (it.status === "processing" ? { ...it, status: "failed", error: message } : it)));
-        return;
+    pendingRef.current = pendingKey ? pendingKey.split(",") : [];
+  }, [pendingKey]);
+  const anyPending = pending.length > 0;
+  useEffect(() => {
+    if (!anyPending) return;
+    let asking = false;
+    const tick = async () => {
+      // A hundred ids is a long address; ask about the oldest and let the rest follow as these settle.
+      const ids = pendingRef.current.slice(0, MAX_STATUS_IDS);
+      if (!ids.length || asking) return;
+      asking = true;
+      try {
+        const res = await fetch(`/api/photos/status?ids=${ids.join(",")}`).catch(() => null);
+        if (!res || !res.ok) {
+          const message = res?.status === 401 ? "Signed out. Sign in again to see the result." : "Lost contact with the server. Reload the page to check.";
+          // Give up on status polling rather than spinning forever; the photos themselves are already safe.
+          setItems((prev) => prev.map((it) => (it.status === "processing" ? { ...it, status: "failed", error: message } : it)));
+          return;
+        }
+        const { photos } = (await res.json()) as { photos: { id: string; status: string; error: string | null; thumbUrl: string | null; trip: Item["trip"] }[] };
+        setItems((prev) =>
+          prev.map((it) => {
+            const p = photos.find((x) => x.id === it.photoId);
+            if (!p) return it;
+            if (p.status === "READY") return { ...it, status: "ready", thumbUrl: p.thumbUrl, trip: p.trip };
+            if (p.status === "FAILED") return { ...it, status: "failed", error: p.error ?? "Processing failed" };
+            return it;
+          }),
+        );
+      } finally {
+        asking = false;
       }
-      const { photos } = (await res.json()) as { photos: { id: string; status: string; error: string | null; thumbUrl: string | null; trip: Item["trip"] }[] };
-      setItems((prev) =>
-        prev.map((it) => {
-          const p = photos.find((x) => x.id === it.photoId);
-          if (!p) return it;
-          if (p.status === "READY") return { ...it, status: "ready", thumbUrl: p.thumbUrl, trip: p.trip };
-          if (p.status === "FAILED") return { ...it, status: "failed", error: p.error ?? "Processing failed" };
-          return it;
-        }),
-      );
-    }, STATUS_POLL_MS);
-    return () => clearTimeout(t);
-  }, [askingKey]);
+    };
+    const timer = setInterval(tick, STATUS_POLL_MS);
+    return () => clearInterval(timer);
+  }, [anyPending]);
 
   /**
    * Everything the album would not keep, in one place a member will actually read. Some of it never left the
