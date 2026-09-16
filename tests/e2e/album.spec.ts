@@ -185,7 +185,15 @@ test("a share link opens the trip read-only, and stops working when rotated", as
   await expect(page.getByTestId("copy-link").getByRole("textbox")).toHaveValue(/\/share\/e2e-share-token/);
   await expect(page.getByTestId("share-facebook")).toHaveAttribute("href", /%2Fshare%2Fe2e-share-token/);
   // Link previews fetch the cover without a cookie, so the og:image URL must work on its own.
-  const ogImage = await page.locator('meta[property="og:image"]').getAttribute("content");
+  //
+  // Read from the HTML the server sends rather than from the page's own head. A crawler never runs the page, so
+  // that HTML is the thing under test; the head briefly holds two copies of each tag while React hydrates, which
+  // is invisible to a preview but enough to make a strict locator throw on a slow machine.
+  const served = await page.request.get("/share/e2e-share-token/photos");
+  const html = await served.text();
+  const ogImages = [...html.matchAll(/<meta property="og:image" content="([^"]*)"/g)].map((m) => m[1]);
+  expect(ogImages).toHaveLength(1);
+  const ogImage = ogImages[0]!.replace(/&amp;/g, "&");
   expect(ogImage).toContain("share=e2e-share-token");
   const crawler = await browser.newContext();
   const bare = await crawler.request.get(ogImage!);
@@ -199,7 +207,10 @@ test("a share link opens the trip read-only, and stops working when rotated", as
 
 test("public trips are browsable anonymously without edit controls", async ({ browser }) => {
   await setVisibility("acadia", "PUBLIC");
-  const anon = await browser.newContext();
+  // Copying needs the clipboard, and a browser hands that over only to a page it has given permission and that is
+  // in front. Neither is the album's business — it falls back to selecting the text — but the test is about the
+  // copy actually happening, so it asks for the conditions the copy needs.
+  const anon = await browser.newContext({ permissions: ["clipboard-write"] });
   const page = await anon.newPage();
   await page.goto("/");
   await expect(page.getByRole("link", { name: /Acadia/ })).toBeVisible();
@@ -209,6 +220,7 @@ test("public trips are browsable anonymously without edit controls", async ({ br
   await page.getByTestId("share-open").click();
   const shareField = page.getByTestId("copy-link").getByRole("textbox");
   await expect(shareField).toHaveValue(/\/trips\/acadia$/);
+  await page.bringToFront();
   await page.getByTestId("copy-link-button").click();
   await expect(page.getByTestId("copy-link-button")).toHaveText("Copied");
   await expect(page.getByTestId("share-facebook")).toHaveAttribute("href", /facebook\.com\/sharer\/sharer\.php\?u=.*%2Ftrips%2Facadia/);
@@ -1809,8 +1821,14 @@ test("an unnamed group shows the faces themselves, and each one can be disowned 
   await uploadOne(1);
   await uploadOne(2);
 
+  // Address this group by its id throughout: the sweep quietly scans whatever else earlier tests uploaded, so
+  // "the first group on the page" and "how many groups there are" are both somebody else's business.
+  const groupId = (await withDb((c) => c.query(`SELECT "clusterId" AS id FROM "Face" WHERE status = 'DETECTED' LIMIT 1`))).rows[0].id;
+  const mine = (await withDb((c) => c.query(`SELECT id FROM "Face" WHERE "clusterId" = $1 AND status = 'DETECTED'`, [groupId]))).rows.map((r) => r.id as string);
+  expect(mine).toHaveLength(2);
+
   await page.goto("/people");
-  const card = page.getByTestId("face-cluster").first();
+  const card = page.locator(`[data-cluster="${groupId}"]`);
   await expect(card.getByText("2 faces that look alike")).toBeVisible();
 
   // The faces are actually drawn. They used to be grey circles: the picture was positioned against its own width
@@ -1830,21 +1848,21 @@ test("an unnamed group shows the faces themselves, and each one can be disowned 
   expect(drawn.covers, "the picture does not cover the circle, so the circle is showing its own background").toBe(true);
 
   // "That one is not them": among relatives who look alike, the cousin leaves the group and waits on her own.
-  const groupId = (await withDb((c) => c.query(`SELECT "clusterId" AS id FROM "Face" WHERE status = 'DETECTED' LIMIT 1`))).rows[0].id;
   await card.getByRole("button", { name: "not them" }).nth(1).click();
   await expect
-    .poll(async () => (await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "FaceCluster" WHERE "personId" IS NULL`))).rows[0].n, { timeout: 15_000 })
-    .toBe(2);
-  const moved = await withDb((c) => c.query(`SELECT status, "clusterId" FROM "Face" WHERE "clusterId" <> $1 AND status = 'DETECTED'`, [groupId]));
+    .poll(async () => (await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "Face" WHERE "clusterId" = $1`, [groupId]))).rows[0].n, { timeout: 15_000 })
+    .toBe(1);
+  const moved = await withDb((c) => c.query(`SELECT id, status, "clusterId" FROM "Face" WHERE id = ANY($1) AND "clusterId" IS DISTINCT FROM $2`, [mine, groupId]));
   expect(moved.rows).toHaveLength(1);
-  // It is still a face waiting for a name, just not in that group.
+  // It is still a face waiting for a name, in a group of its own.
   expect(moved.rows[0].status).toBe("DETECTED");
+  expect(moved.rows[0].clusterId).not.toBeNull();
 
   // "That is not a face at all": a statue keeps its row, without a template, so a re-scan knows the spot.
   await page.goto("/people");
-  await page.getByTestId("face-cluster").first().getByRole("button", { name: "not a face" }).first().click();
+  await page.locator(`[data-cluster="${groupId}"]`).getByRole("button", { name: "not a face" }).first().click();
   await expect
-    .poll(async () => (await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "Face" WHERE status = 'NOT_A_FACE' AND embedding IS NULL AND "clusterId" IS NULL`))).rows[0].n, { timeout: 15_000 })
+    .poll(async () => (await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "Face" WHERE id = ANY($1) AND status = 'NOT_A_FACE' AND embedding IS NULL AND "clusterId" IS NULL`, [mine]))).rows[0].n, { timeout: 15_000 })
     .toBe(1);
 
   // A group that is really the family's dog is named as the dog.
@@ -1854,7 +1872,8 @@ test("an unnamed group shows the faces themselves, and each one can be disowned 
   await page.getByRole("button", { name: "Add pet" }).click();
   await expect(page.getByRole("link", { name: /Rufus/ })).toBeVisible();
 
-  const forPet = page.getByTestId("face-cluster").first();
+  const leftOver = (await withDb((c) => c.query(`SELECT "clusterId" AS id FROM "Face" WHERE id = ANY($1) AND status = 'DETECTED'`, [mine]))).rows[0].id;
+  const forPet = page.locator(`[data-cluster="${leftOver}"]`);
   await forPet.getByLabel("Someone already named?").selectOption({ label: "Rufus" });
   await expect(forPet.getByText(/spotted by the animal detector/)).toBeVisible();
   await forPet.getByRole("button", { name: "Name these faces" }).click();
