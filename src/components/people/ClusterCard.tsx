@@ -40,7 +40,7 @@ export function ClusterCard({ cluster, isAdmin, people, pets }: { cluster: Clust
 
   const shown = cluster.faces.length;
   return (
-    <Card className="p-4 space-y-3" data-testid="face-cluster">
+    <Card className="p-4 space-y-3" data-testid="face-cluster" data-cluster={cluster.id}>
       <div className="flex flex-wrap items-baseline gap-x-2">
         <span className="text-sm font-medium">{cluster.faceCount} face{cluster.faceCount === 1 ? "" : "s"} that look alike</span>
         {shown < cluster.faceCount && <span className="text-xs text-muted">showing {shown}</span>}

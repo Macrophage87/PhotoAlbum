@@ -13,21 +13,23 @@ import { Button } from "@/components/ui";
  */
 export function CopyLink({ url, label = "Copy link", note }: { url: string; label?: string; /** A line under the link, for what copying it means. */ note?: string }) {
   const field = useRef<HTMLInputElement>(null);
-  const [copied, setCopied] = useState(false);
+  const [state, setState] = useState<"idle" | "copied" | "selected">("idle");
 
   useEffect(() => {
-    if (!copied) return;
-    const t = setTimeout(() => setCopied(false), 2500);
+    if (state === "idle") return;
+    const t = setTimeout(() => setState("idle"), 2500);
     return () => clearTimeout(t);
-  }, [copied]);
+  }, [state]);
 
   const copy = async () => {
     field.current?.select();
     try {
       await navigator.clipboard.writeText(url);
-      setCopied(true);
+      setState("copied");
     } catch {
-      // Left selected: whatever this browser does for copying will now do it.
+      // Some browsers hand over the clipboard only to a page in front, or not at all. The link is selected either
+      // way, so say what is left to do rather than looking like nothing happened at all.
+      setState("selected");
     }
   };
 
@@ -42,9 +44,11 @@ export function CopyLink({ url, label = "Copy link", note }: { url: string; labe
           onFocus={(e) => e.currentTarget.select()}
           className="flex-1 min-w-0 h-9 rounded-theme border border-border bg-surface-alt px-2 text-xs font-mono"
         />
-        <Button type="button" size="sm" variant="secondary" onClick={copy} data-testid="copy-link-button">{copied ? "Copied" : label}</Button>
+        <Button type="button" size="sm" variant="secondary" onClick={copy} data-testid="copy-link-button">{state === "copied" ? "Copied" : label}</Button>
       </div>
-      <p role="status" aria-live="polite" className="sr-only">{copied ? "Link copied." : ""}</p>
+      <p role="status" aria-live="polite" className={state === "selected" ? "text-xs text-muted" : "sr-only"}>
+        {state === "copied" ? "Link copied." : state === "selected" ? "Selected — press Ctrl+C (⌘C on a Mac) to copy." : ""}
+      </p>
       {note && <p className="text-xs text-muted">{note}</p>}
     </div>
   );
