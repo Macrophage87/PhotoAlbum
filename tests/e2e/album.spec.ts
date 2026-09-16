@@ -1764,6 +1764,9 @@ test("the admin page says who has been looking, and tells a secret link from the
     (await withDb((c) => c.query(`SELECT kind FROM "Visit" v JOIN "Trip" t ON t.id = v."tripId" WHERE t.slug = 'visitors'`))).rows.map((r) => r.kind).sort();
   await expect.poll(counted, { timeout: 20_000 }).toEqual(["MEMBER", "SHARE"]);
 
+  // From here on nothing should be written down at all: reading the Admin page is administering the album,
+  // not looking at it. ("Nothing with section 'other'" would not say that — plenty of ordinary pages are 'other'.)
+  const before = (await withDb((c) => c.query("SELECT now() AS t"))).rows[0].t as Date;
   await page.goto("/admin?days=7#visitors");
   await expect(page.getByTestId("visitor-summary")).toContainText("by family signed in");
   const trip = page.locator("li", { hasText: "Counted Trip" }).first();
@@ -1776,7 +1779,6 @@ test("the admin page says who has been looking, and tells a secret link from the
   await expect(page).toHaveURL(/days=30/);
   await expect(page.getByTestId("visitor-summary")).toContainText("in the last 30 days");
 
-  // Reading the Admin page is administering the album, not looking at it, and is never counted.
-  const adminVisits = await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "Visit" WHERE section = 'other'`));
-  expect(adminVisits.rows[0].n).toBe(0);
+  const since = await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "Visit" WHERE at > $1`, [before]));
+  expect(since.rows[0].n).toBe(0);
 });
