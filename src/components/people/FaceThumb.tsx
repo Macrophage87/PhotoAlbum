@@ -1,20 +1,25 @@
 import { photoUrl } from "@/lib/photos/urls";
+import { faceCrop } from "@/lib/people/crop";
 
-/** A face crop drawn from the medium rendition with CSS, so no crop file ever exists. */
-export function FaceThumb({ photo, box, size = 72 }: { photo: { id: string; updatedAt: Date }; box: [number, number, number, number]; size?: number }) {
-  const [x, y, w, h] = box;
-  const pad = 0.35;
-  const cx = x + w / 2;
-  const cy = y + h / 2;
-  const side = Math.max(w, h) * (1 + pad);
-  const scale = 1 / side;
+export type ThumbPhoto = { id: string; updatedAt: Date; width?: number | null; height?: number | null };
+
+/**
+ * A face crop drawn from the medium rendition with CSS, so no crop file ever exists.
+ *
+ * The picture is laid out inside the circle with `left`/`top`, whose percentages are shares of the circle. Moving
+ * it with `transform: translate(%)` instead would measure against the picture, which is several times the circle,
+ * and land the face outside it — see `lib/people/crop`.
+ */
+export function FaceThumb({ photo, box, size = 72 }: { photo: ThumbPhoto; box: [number, number, number, number]; size?: number }) {
+  const crop = faceCrop(box, photo.width && photo.height ? photo.width / photo.height : 1);
   return (
-    <span className="inline-block overflow-hidden rounded-full border border-border bg-surface-alt" style={{ width: size, height: size }} aria-hidden="true">
+    <span className="relative inline-block overflow-hidden rounded-full border border-border bg-surface-alt align-middle" style={{ width: size, height: size }} aria-hidden="true">
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
         src={photoUrl(photo, "medium")}
         alt=""
-        style={{ width: `${scale * 100}%`, height: "auto", maxWidth: "none", transform: `translate(${-(cx - side / 2) * scale * 100}%, ${-(cy - side / 2) * scale * 100}%)`, transformOrigin: "top left" }}
+        className="absolute max-w-none"
+        style={{ width: `${crop.widthPct}%`, height: `${crop.heightPct}%`, left: `${crop.leftPct}%`, top: `${crop.topPct}%` }}
       />
     </span>
   );

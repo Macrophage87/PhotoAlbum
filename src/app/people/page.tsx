@@ -6,8 +6,7 @@ import { ProposalList } from "@/components/people/ProposalList";
 import { PetForm } from "@/components/people/PetForm";
 import { petGates } from "@/lib/pets/gates";
 import { AppShell, Container } from "@/components/layout/AppShell";
-import { FaceThumb } from "@/components/people/FaceThumb";
-import { NameClusterForm } from "@/components/people/NameClusterForm";
+import { ClusterCard } from "@/components/people/ClusterCard";
 import { Badge, Card } from "@/components/ui";
 
 export const metadata = { title: "People", robots: { index: false, follow: false } };
@@ -82,20 +81,30 @@ export default async function PeoplePage() {
 
         <section className="space-y-3">
           <h2 className="font-display text-xl font-semibold">Unnamed faces</h2>
+          <p className="text-sm text-muted">
+            Each group is the album&apos;s guess that these are one person. Name it, or join it to someone already
+            named — one person often turns up as several groups. Relatives look alike, so check the faces first:
+            <span className="font-medium"> not them</span> takes one out of the group, and
+            <span className="font-medium"> not a face</span> is for a statue or a portrait on the wall. A group of
+            dogs can be named as a pet.
+          </p>
           {clusters.length === 0 ? (
             <p className="text-sm text-muted">No unnamed faces{gates.active ? "" : " (detection is off)"}. Faces nobody names are deleted after {gates.retentionDays} days.</p>
           ) : (
             <div className="grid gap-4 md:grid-cols-2">
               {clusters.map((c) => (
-                <Card key={c.id} className="p-4 space-y-3">
-                  <div className="flex items-center gap-2">
-                    {c.samples.map((s) => (
-                      <FaceThumb key={s.faceId} photo={{ id: s.photoId, updatedAt: s.updatedAt }} box={s.box} />
-                    ))}
-                    <span className="text-sm text-muted ml-1">{c.faceCount} face{c.faceCount === 1 ? "" : "s"} that look alike</span>
-                  </div>
-                  <NameClusterForm clusterId={c.id} isAdmin={isAdmin} people={people.filter((p) => !p.optedOut).map((p) => ({ id: p.id, name: p.name }))} />
-                </Card>
+                <ClusterCard
+                  key={c.id}
+                  isAdmin={isAdmin}
+                  people={people.filter((p) => !p.optedOut).map((p) => ({ id: p.id, name: p.name }))}
+                  pets={pets.map((p) => ({ id: p.id, name: p.name }))}
+                  cluster={{
+                    id: c.id,
+                    faceCount: c.faceCount,
+                    looksLike: c.looksLike ? { id: c.looksLike.id, name: c.looksLike.name, kind: c.looksLike.kind } : null,
+                    faces: c.faces.map((f) => ({ ...f, updatedAt: f.updatedAt.toISOString() })),
+                  }}
+                />
               ))}
             </div>
           )}

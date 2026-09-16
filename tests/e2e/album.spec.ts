@@ -1782,3 +1782,86 @@ test("the admin page says who has been looking, and tells a secret link from the
   const since = await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "Visit" WHERE at > $1`, [before]));
   expect(since.rows[0].n).toBe(0);
 });
+
+test("an unnamed group shows the faces themselves, and each one can be disowned or called a pet", async ({ context, page }) => {
+  test.setTimeout(240_000);
+  await signIn(context, ADMIN);
+  await page.goto("/admin");
+  await page.waitForLoadState("networkidle");
+  const turnOn = page.getByRole("button", { name: "Turn on face detection" });
+  if (await turnOn.count()) await turnOn.click();
+  await expect(page.getByText("scanning new photos")).toBeVisible();
+
+  // Start from nothing, so the groups on the page are the ones this test made. The photograph matters: the album
+  // recognises whoever has been named already, and a fixture somebody else's test has named arrives proposed
+  // rather than unnamed — this one is nobody, so it lands in a group waiting for a name.
+  await withDb((c) => c.query('DELETE FROM "Face"'));
+  await withDb((c) => c.query('DELETE FROM "FaceCluster" WHERE "personId" IS NULL'));
+  const uploadOne = async (faces: number) => {
+    await page.goto("/upload");
+    await chooseFile(page, "photo-no-exif.jpg");
+    await expect(page.locator("img[src*='/api/photos/']")).toBeVisible({ timeout: 30_000 });
+    await expect
+      .poll(async () => (await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "Face" WHERE status = 'DETECTED'`))).rows[0].n, { timeout: 60_000, intervals: [1000] })
+      .toBe(faces);
+  };
+  // The same face twice: one group of two, which is what a family disowning one of them actually has.
+  await uploadOne(1);
+  await uploadOne(2);
+
+  await page.goto("/people");
+  const card = page.getByTestId("face-cluster").first();
+  await expect(card.getByText("2 faces that look alike")).toBeVisible();
+
+  // The faces are actually drawn. They used to be grey circles: the picture was positioned against its own width
+  // rather than the circle's, which threw the crop clean outside, so each circle showed its own empty background.
+  const thumb = card.locator("img").first();
+  await expect(thumb).toBeVisible();
+  const drawn = await thumb.evaluate((img: HTMLImageElement) => {
+    const circle = img.parentElement!.getBoundingClientRect();
+    const picture = img.getBoundingClientRect();
+    return {
+      loaded: img.naturalWidth > 0,
+      // The picture has to cover the circle on every side, or part of the circle is showing nothing.
+      covers: picture.left <= circle.left + 0.5 && picture.top <= circle.top + 0.5 && picture.right >= circle.right - 0.5 && picture.bottom >= circle.bottom - 0.5,
+    };
+  });
+  expect(drawn.loaded, "the face crop's picture never loaded").toBe(true);
+  expect(drawn.covers, "the picture does not cover the circle, so the circle is showing its own background").toBe(true);
+
+  // "That one is not them": among relatives who look alike, the cousin leaves the group and waits on her own.
+  const groupId = (await withDb((c) => c.query(`SELECT "clusterId" AS id FROM "Face" WHERE status = 'DETECTED' LIMIT 1`))).rows[0].id;
+  await card.getByRole("button", { name: "not them" }).nth(1).click();
+  await expect
+    .poll(async () => (await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "FaceCluster" WHERE "personId" IS NULL`))).rows[0].n, { timeout: 15_000 })
+    .toBe(2);
+  const moved = await withDb((c) => c.query(`SELECT status, "clusterId" FROM "Face" WHERE "clusterId" <> $1 AND status = 'DETECTED'`, [groupId]));
+  expect(moved.rows).toHaveLength(1);
+  // It is still a face waiting for a name, just not in that group.
+  expect(moved.rows[0].status).toBe("DETECTED");
+
+  // "That is not a face at all": a statue keeps its row, without a template, so a re-scan knows the spot.
+  await page.goto("/people");
+  await page.getByTestId("face-cluster").first().getByRole("button", { name: "not a face" }).first().click();
+  await expect
+    .poll(async () => (await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "Face" WHERE status = 'NOT_A_FACE' AND embedding IS NULL AND "clusterId" IS NULL`))).rows[0].n, { timeout: 15_000 })
+    .toBe(1);
+
+  // A group that is really the family's dog is named as the dog.
+  await page.goto("/people");
+  await page.locator("#pet-name").fill("Rufus");
+  await page.locator("#pet-species").selectOption("DOG");
+  await page.getByRole("button", { name: "Add pet" }).click();
+  await expect(page.getByRole("link", { name: /Rufus/ })).toBeVisible();
+
+  const forPet = page.getByTestId("face-cluster").first();
+  await forPet.getByLabel("Someone already named?").selectOption({ label: "Rufus" });
+  await expect(forPet.getByText(/spotted by the animal detector/)).toBeVisible();
+  await forPet.getByRole("button", { name: "Name these faces" }).click();
+  const rufus = await withDb((c) => c.query(`SELECT id FROM "Person" WHERE name = 'Rufus'`));
+  await expect
+    .poll(async () => (await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "Face" WHERE "personId" = $1 AND status = 'CONFIRMED'`, [rufus.rows[0].id]))).rows[0].n, { timeout: 15_000 })
+    .toBeGreaterThan(0);
+  // A dog is spotted by the animal detector, never by face, so no template is kept for it.
+  expect((await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "Face" WHERE "personId" = $1 AND embedding IS NOT NULL`, [rufus.rows[0].id]))).rows[0].n).toBe(0);
+});

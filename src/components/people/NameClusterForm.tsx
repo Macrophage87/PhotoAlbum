@@ -4,13 +4,13 @@ import { useState } from "react";
 import { Button, Input, Label, Select } from "@/components/ui";
 import { nameCluster } from "@/app/people/actions";
 
-type Known = { id: string; name: string };
+export type Known = { id: string; name: string };
 
 /**
  * Naming form for an unnamed cluster. An admin records the birthday (or an adult attestation) and the indexing
  * decision in the same step; a member only names, and can flag a child so the templates are dropped at once.
  */
-export function NameClusterForm({ clusterId, isAdmin, people }: { clusterId: string; isAdmin: boolean; people: Known[] }) {
+export function NameClusterForm({ clusterId, isAdmin, people, pets = [] }: { clusterId: string; isAdmin: boolean; people: Known[]; pets?: Known[] }) {
   const [existing, setExisting] = useState("");
   const [birthday, setBirthday] = useState("");
   const [attest, setAttest] = useState(false);
@@ -18,14 +18,26 @@ export function NameClusterForm({ clusterId, isAdmin, people }: { clusterId: str
   const minorByBirthday = birthday ? new Date().getTime() - Date.parse(birthday) < 18 * 365.25 * 86_400_000 : false;
   return (
     <form action={action} className="space-y-2 text-sm">
-      {people.length > 0 && (
+      {(people.length > 0 || pets.length > 0) && (
         <div>
           <Label htmlFor={`known-${clusterId}`}>Someone already named?</Label>
           <Select id={`known-${clusterId}`} name="personId" value={existing} onChange={(e) => setExisting(e.target.value)} className="h-9">
             <option value="">New person</option>
-            {people.map((p) => (
-              <option key={p.id} value={p.id}>{p.name}</option>
-            ))}
+            {people.length > 0 && (
+              <optgroup label="People">
+                {people.map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </optgroup>
+            )}
+            {/* The detector finds dogs often enough that a whole group can be one, and the family should be able to say so. */}
+            {pets.length > 0 && (
+              <optgroup label="Pets">
+                {pets.map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </optgroup>
+            )}
           </Select>
         </div>
       )}
@@ -78,7 +90,13 @@ export function NameClusterForm({ clusterId, isAdmin, people }: { clusterId: str
           )}
         </>
       )}
-      {existing && <p className="text-muted">These faces are added to that person and follow their recognition setting.</p>}
+      {existing && (
+        <p className="text-muted">
+          {pets.some((p) => p.id === existing)
+            ? "These faces are recorded as that pet, and their templates are dropped: a pet is spotted by the animal detector, never by face."
+            : "These faces are added to that person and follow their recognition setting."}
+        </p>
+      )}
       <Button type="submit" size="sm">Name these faces</Button>
     </form>
   );

@@ -28,12 +28,16 @@ async function nullTemplatesFor(personId: string) {
   await db.$executeRaw`UPDATE "FaceCluster" SET centroid = NULL WHERE "personId" = ${personId}`;
 }
 
-const nameSchema = z.object({
-  name: z.string().trim().min(1).max(80),
-  relationship: z.string().trim().max(80).optional().transform((v) => v || null),
-  birthday: day,
-  personId: z.string().optional().transform((v) => v || null),
-});
+const nameSchema = z
+  .object({
+    // Optional, because joining these faces to somebody already named needs no name typed in — and requiring one
+    // meant that choosing a known person threw instead of joining them, which is the whole of "link it to them".
+    name: z.string().trim().max(80).optional().transform((v) => v || null),
+    relationship: z.string().trim().max(80).optional().transform((v) => v || null),
+    birthday: day,
+    personId: z.string().optional().transform((v) => v || null),
+  })
+  .refine((v) => Boolean(v.personId || v.name), { message: "A name, or somebody already named", path: ["name"] });
 
 /**
  * Name an unnamed cluster. Admins record the birthday and the indexing decision in the same step; members create the
@@ -42,9 +46,27 @@ const nameSchema = z.object({
 export async function nameCluster(clusterId: string, fd: FormData): Promise<void> {
   const user = await requireUserOrThrow();
   const byAdmin = user.role === "ADMIN";
-  const v = nameSchema.parse({ name: fd.get("name"), relationship: fd.get("relationship") ?? undefined, birthday: fd.get("birthday") || undefined, personId: fd.get("personId") ?? undefined });
+  const v = nameSchema.parse({ name: fd.get("name") ?? undefined, relationship: fd.get("relationship") ?? undefined, birthday: fd.get("birthday") || undefined, personId: fd.get("personId") ?? undefined });
   const cluster = await db.faceCluster.findUnique({ where: { id: clusterId }, select: { id: true, personId: true } });
   if (!cluster || cluster.personId) throw new Error("Cluster not found or already named");
+  const existing = v.personId ? await db.person.findUniqueOrThrow({ where: { id: v.personId } }) : null;
+  if (existing?.optedOutAt) throw new Error("This person asked to be forgotten");
+
+  /**
+   * A group of dogs is a group the detector was wrong about in a gentler way: those are faces, and they are the
+   * family's dog, so the family should be able to say so. A pet has no consent to record and is never recognised by
+   * face template (spotting works from the animal detector), so the templates go and the boxes stay — which is what
+   * makes the chips on those photographs point at the pet.
+   */
+  if (existing?.kind === "PET") {
+    await db.faceCluster.update({ where: { id: clusterId }, data: { personId: existing.id, label: existing.name } });
+    await db.face.updateMany({ where: { clusterId }, data: { personId: existing.id, status: "CONFIRMED" } });
+    await nullTemplatesFor(existing.id);
+    revalidatePath("/people", "layout");
+    revalidatePath("/admin");
+    return;
+  }
+
   const outcome = namingOutcome({
     byAdmin,
     wantIndexing: byAdmin && fd.get("faceIndexing") === "on",
@@ -54,30 +76,83 @@ export async function nameCluster(clusterId: string, fd: FormData): Promise<void
     isChildFlag: !byAdmin && fd.get("isChild") === "on",
   });
   const now = new Date();
-  const person = v.personId
-    ? await db.person.findUniqueOrThrow({ where: { id: v.personId } })
-    : await db.person.create({
-        data: {
-          name: v.name,
-          relationship: v.relationship,
-          birthday: v.birthday,
-          faceIndexing: outcome.faceIndexing,
-          faceIndexingSetById: byAdmin ? user.id : null,
-          faceIndexingSetAt: byAdmin ? now : null,
-          adultAttestedById: outcome.attested ? user.id : null,
-          adultAttestedAt: outcome.attested ? now : null,
-          pendingDecision: outcome.pendingDecision,
-          createdById: user.id,
-        },
-      });
-  if (v.personId && person.optedOutAt) throw new Error("This person asked to be forgotten");
-  // Merging a cluster into an existing person (a childhood cluster named after a known adult) follows that person's setting.
-  const effective = v.personId ? { faceIndexing: person.faceIndexing, nullTemplates: !person.faceIndexing, pendingDecision: person.pendingDecision } : outcome;
-  await db.faceCluster.update({ where: { id: clusterId }, data: { personId: person.id, label: v.name } });
+  const person =
+    existing ??
+    (await db.person.create({
+      data: {
+        name: v.name!,
+        relationship: v.relationship,
+        birthday: v.birthday,
+        faceIndexing: outcome.faceIndexing,
+        faceIndexingSetById: byAdmin ? user.id : null,
+        faceIndexingSetAt: byAdmin ? now : null,
+        adultAttestedById: outcome.attested ? user.id : null,
+        adultAttestedAt: outcome.attested ? now : null,
+        pendingDecision: outcome.pendingDecision,
+        createdById: user.id,
+      },
+    }));
+  // Merging a group into somebody already named (another decade of the same face) follows that person's setting.
+  const effective = existing ? { faceIndexing: existing.faceIndexing, nullTemplates: !existing.faceIndexing, pendingDecision: existing.pendingDecision } : outcome;
+  await db.faceCluster.update({ where: { id: clusterId }, data: { personId: person.id, label: person.name } });
   await db.face.updateMany({ where: { clusterId }, data: { personId: person.id, status: "CONFIRMED" } });
   if (effective.nullTemplates) await nullTemplatesFor(person.id);
   revalidatePath("/people", "layout");
   revalidatePath("/admin");
+}
+
+/** The one-press version of naming: these faces are somebody already named, with nothing to fill in. */
+export async function nameClusterAs(clusterId: string, personId: string): Promise<void> {
+  const fd = new FormData();
+  fd.set("personId", personId);
+  await nameCluster(clusterId, fd);
+}
+
+/**
+ * "That one is not them." One face leaves the group and becomes a group of its own, so naming the rest no longer
+ * names it, and it can be named separately — or joined to whoever it really is.
+ *
+ * Relatives look alike, which is exactly when the album is most confident and most wrong, so this has to be one
+ * press beside the face rather than a page of its own.
+ */
+export async function splitFaceFromCluster(faceId: string): Promise<void> {
+  await requireUserOrThrow();
+  const face = await db.face.findUniqueOrThrow({ where: { id: faceId }, select: { id: true, clusterId: true, personId: true, photoId: true } });
+  if (face.personId) throw new Error("That face is already named");
+  if (!face.clusterId) return;
+  const alone = await db.faceCluster.create({ data: { faceCount: 1 }, select: { id: true } });
+  // The new group keeps this face's own template as its centre, so the matcher can still recognise it later.
+  await db.$executeRaw`UPDATE "FaceCluster" SET centroid = (SELECT embedding FROM "Face" WHERE id = ${faceId}) WHERE id = ${alone.id}`;
+  const from = face.clusterId;
+  await db.face.update({ where: { id: faceId }, data: { clusterId: alone.id } });
+  await recountCluster(from);
+  revalidatePath("/people", "layout");
+  revalidatePath(`/photos/${face.photoId}`);
+}
+
+/**
+ * "That is not a face at all." Statues, portraits on the wall, the face on a cereal box: the detector finds them
+ * and there is nobody there to name.
+ *
+ * The row stays, with its template dropped, because a re-scan of the photograph recognises the same spot and leaves
+ * it alone — delete it and the statue is found again on the next pass, forever.
+ */
+export async function markNotAFace(faceId: string): Promise<void> {
+  await requireUserOrThrow();
+  const face = await db.face.findUniqueOrThrow({ where: { id: faceId }, select: { id: true, clusterId: true, personId: true, photoId: true } });
+  if (face.personId) throw new Error("That face is named; remove the name first");
+  await db.face.update({ where: { id: faceId }, data: { status: "NOT_A_FACE", clusterId: null, proposedPersonId: null } });
+  await db.$executeRaw`UPDATE "Face" SET embedding = NULL WHERE id = ${faceId}`;
+  if (face.clusterId) await recountCluster(face.clusterId);
+  revalidatePath("/people", "layout");
+  revalidatePath(`/photos/${face.photoId}`);
+}
+
+/** Keep a group's count honest after a face leaves it, and clear away a group with nothing left in it. */
+async function recountCluster(clusterId: string): Promise<void> {
+  const left = await db.face.count({ where: { clusterId } });
+  if (left === 0) await db.faceCluster.deleteMany({ where: { id: clusterId, personId: null } });
+  else await db.faceCluster.update({ where: { id: clusterId }, data: { faceCount: left } });
 }
 
 /** An admin's decision on a member-named cluster, or a change of a person's indexing switch. */

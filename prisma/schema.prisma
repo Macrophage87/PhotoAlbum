@@ -167,6 +167,9 @@ enum FaceStatus {
   PROPOSED
   CONFIRMED
   REJECTED
+  /// The detector found a face where there is no person: a statue, a portrait on the wall, a face on a cereal box.
+  /// Kept as a row, with its template dropped, so a later re-scan recognises the spot and does not find it again.
+  NOT_A_FACE
 }
 
 enum PhotoRelation {
