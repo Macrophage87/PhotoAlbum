@@ -16,9 +16,11 @@ on:
     branches: [staging]
   workflow_dispatch:
 
+# One group for BOTH deploy workflows: staging and live share one server and
+# one small root disk, and two image builds at once ran it out of space.
 concurrency:
-  group: deploy-staging
-  cancel-in-progress: false # rapid pushes queue, never overlap
+  group: deploy-photoalbum
+  cancel-in-progress: false # deploys queue, never overlap
 
 jobs:
   deploy:
