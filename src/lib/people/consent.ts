@@ -5,7 +5,7 @@
  * only an admin can turn on, and which passes the minors check: a birthday showing 18 or older, or an adult
  * attestation. Anyone else ends up with their templates nulled.
  */
-export type ConsentFields = { birthday: Date | null; adultAttestedAt: Date | null; faceIndexing: boolean };
+export type ConsentFields = { birthday: Date | null; adultAttestedAt: Date | null; faceIndexing: boolean; nameInDescriptions?: boolean };
 
 export function ageOn(birthday: Date, on = new Date()): number {
   let age = on.getUTCFullYear() - birthday.getUTCFullYear();
@@ -45,7 +45,16 @@ export function namingOutcome(input: NamingInput, now = new Date()): NamingOutco
   return { faceIndexing: on, nullTemplates: !on, pendingDecision: false, attested };
 }
 
-/** Whether this person's name may be sent to the AI helper: indexing on and not a minor. */
+/**
+ * Whether this person's name may be sent to the AI helper.
+ *
+ * Two different agreements can allow it, and they are not the same agreement. Recognition means the album keeps a
+ * biometric template and looks for that face everywhere; being named in a description means the helper is told who
+ * is in a photograph it is already being shown. A relative who would rather be named than called "an older couple"
+ * can say so without being recognised, which is the narrower of the two.
+ *
+ * A minor is never named, under either.
+ */
 export function nameMayLeaveServer(p: ConsentFields, now = new Date()): boolean {
-  return p.faceIndexing && !isMinor(p, now);
+  return (p.faceIndexing || Boolean(p.nameInDescriptions)) && !isMinor(p, now);
 }

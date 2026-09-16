@@ -15,21 +15,63 @@ export type BackfillWhere = { kind: "all" } | { kind: "trip"; tripId: string } |
  * was taken, for items with no location. The place pass is deliberately a separate question rather than a second
  * description: most of the items it covers already have descriptions, some of them written by the family.
  */
-export type BackfillTask = "describe" | "place";
+export type BackfillTask = "describe" | "place" | "names";
 export type BackfillScope = BackfillWhere & { task?: BackfillTask };
 
 export function taskOf(scope: BackfillScope): BackfillTask {
-  return scope.task === "place" ? "place" : "describe";
+  return scope.task === "place" || scope.task === "names" ? scope.task : "describe";
 }
 
-/** What a run has left to do: never described, or (for the place pass) no location and never asked about one. */
+/** The names run asks the same question as a description; only which items it asks about is different. */
+export function promptFor(task: BackfillTask): "describe" | "place" {
+  return task === "place" ? "place" : "describe";
+}
+
+/**
+ * What a run has left to do: never described, or (for the place pass) no location and never asked about one, or
+ * (for the names run) described already — narrowed further by `describedBeforeTheirNames`, which is a comparison
+ * between two tables and so cannot be said here.
+ */
 export function pendingWhere(task: BackfillTask) {
-  return task === "place" ? { lat: null, placeEstimatedAt: null } : { annotatedAt: null };
+  if (task === "place") return { lat: null, placeEstimatedAt: null };
+  if (task === "names") return { annotatedAt: { not: null } };
+  return { annotatedAt: null };
+}
+
+/**
+ * Items described before the album knew who was in them.
+ *
+ * A description written when nobody was named says "an older couple"; once the family has tagged those two, the
+ * album can say their names instead, but only if it is asked again. An item qualifies when somebody nameable is
+ * confirmed in it and either the tag or their permission to be named is newer than the description — which makes
+ * the run self-clearing, since describing it again moves the description past both.
+ *
+ * A minor is never named and so never brings an item into this run; a pet always may be.
+ */
+export async function describedBeforeTheirNames(): Promise<string[]> {
+  const rows = await db.$queryRaw<{ id: string }[]>`
+    SELECT p.id FROM "Photo" p
+    WHERE p."annotatedAt" IS NOT NULL AND EXISTS (
+      SELECT 1 FROM "Face" f JOIN "Person" pe ON pe.id = f."personId"
+      WHERE f."photoId" = p.id AND f.status = 'CONFIRMED' AND pe."optedOutAt" IS NULL
+        AND (
+          pe.kind = 'PET'
+          OR ((pe."faceIndexing" OR pe."nameInDescriptions") AND (pe.birthday IS NULL OR pe.birthday <= (now() - interval '18 years')))
+        )
+        AND (
+          f."createdAt" > p."annotatedAt"
+          OR pe."nameInDescriptionsSetAt" > p."annotatedAt"
+          OR pe."faceIndexingSetAt" > p."annotatedAt"
+        )
+    )`;
+  return rows.map((r) => r.id);
 }
 
 /** Items a backfill would send: in scope, still pending its task, not opted out directly or by inheritance. */
 export async function backfillCandidates(scope: BackfillScope) {
+  const named = taskOf(scope) === "names" ? { id: { in: await describedBeforeTheirNames() } } : {};
   const base = {
+    ...named,
     status: "READY" as const,
     ...NOT_TRASHED,
     ...pendingWhere(taskOf(scope)),
@@ -56,9 +98,11 @@ export async function backfillExclusions(scope: BackfillScope): Promise<{ inScop
     : scope.kind === "range" ? { takenAt: { gte: new Date(`${scope.from}T00:00:00Z`), lte: new Date(`${scope.to}T23:59:59Z`) } }
     : {};
   const ready = { status: "READY" as const, ...NOT_TRASHED, ...scopeWhere };
-  const pending = pendingWhere(taskOf(scope));
-  // "described" is the run's done pile: items already described, or (for the place pass) already placed or asked about.
-  const done = taskOf(scope) === "place" ? { NOT: pending } : { annotatedAt: { not: null } };
+  const task = taskOf(scope);
+  const pending = task === "names" ? { ...pendingWhere(task), id: { in: await describedBeforeTheirNames() } } : pendingWhere(task);
+  // "described" is the run's done pile: items already described, or (for the place pass) already placed or asked
+  // about, or (for the names run) everything else, since what is left to do is exactly the candidate list.
+  const done = task === "place" ? { NOT: pending } : task === "names" ? { NOT: pending } : { annotatedAt: { not: null } };
   const [inScope, described, optedOutSelf, optedOutInherited] = await Promise.all([
     db.photo.count({ where: ready }),
     db.photo.count({ where: { ...ready, ...done } }),
@@ -167,7 +211,7 @@ export async function annotationBackfill(job: AnnotationBackfillJob): Promise<vo
         const item = await loadItem(c.id);
         if (!item) { skip("missing"); continue; }
         try {
-          const params = task === "place" ? await buildPlaceRequest(item, gates.model) : await buildRequest(item, gates.model, await permittedNames(item.id));
+          const params = promptFor(task) === "place" ? await buildPlaceRequest(item, gates.model) : await buildRequest(item, gates.model, await permittedNames(item.id));
           built.push({ custom_id: c.id, params, bytes: imageBytes(params) });
         } catch {
           skip("noRendition");
@@ -278,7 +322,7 @@ export async function annotationBatchPoll(): Promise<void> {
     for await (const result of await anthropic().messages.batches.results(b.anthropicBatchId)) {
       const photoId = result.custom_id;
       // A place run never writes annotation state: an item it could not place keeps whatever description it has.
-      const fail = (reason: string, opts?: { terminal?: boolean }) => (task === "place" ? recordPlaceFailure(photoId, opts ?? {}) : recordFailure(photoId, reason, opts ?? {}));
+      const fail = (reason: string, opts?: { terminal?: boolean }) => (promptFor(task) === "place" ? recordPlaceFailure(photoId, opts ?? {}) : recordFailure(photoId, reason, opts ?? {}));
       if (result.result.type !== "succeeded") {
         // Errored, expired or cancelled: the helper never saw the item, so leave it eligible for a later backfill.
         if (result.result.type === "canceled") canceled++;
@@ -297,7 +341,7 @@ export async function annotationBatchPoll(): Promise<void> {
         await fail("max_tokens");
         continue;
       }
-      if (task === "place") {
+      if (promptFor(task) === "place") {
         const place = parsePlaceContent(message.content as { type: string; text?: string }[]);
         if (place === undefined) {
           errored++;

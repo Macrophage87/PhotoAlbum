@@ -120,7 +120,7 @@ export async function confirmEstimatedDate(photoId: string, fd: FormData): Promi
   revalidatePath("/review");
 }
 
-const taskSchema = z.enum(["describe", "place"]).optional();
+const taskSchema = z.enum(["describe", "place", "names"]).optional();
 const scopeSchema = z.intersection(
   z.discriminatedUnion("kind", [
     z.object({ kind: z.literal("all") }),

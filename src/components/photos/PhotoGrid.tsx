@@ -59,6 +59,8 @@ export function PhotoGrid({ photos, emptyMessage = "No photos yet.", selectable:
             // it takes two columns and its own shape, and the whole sweep is shown rather than cut to fit.
             <li
               key={p.id}
+              // The tile carries its item's id so a tile can be found before its picture has been lazily loaded.
+              data-photo-id={p.id}
               className={`tile-lazy relative rounded-theme overflow-hidden bg-surface-alt border border-border group ${wideTile(p) ? "col-span-2 aspect-[2/1]" : "aspect-square"} ${draggable && p.status === "READY" ? "cursor-grab active:cursor-grabbing" : ""}`}
               draggable={draggable && p.status === "READY"}
               onDragStart={(e) => {

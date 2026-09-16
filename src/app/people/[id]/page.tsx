@@ -7,7 +7,7 @@ import { AppShell, Container } from "@/components/layout/AppShell";
 import { PhotoGrid } from "@/components/photos/PhotoGrid";
 import { toGridPhoto } from "@/components/photos/toGrid";
 import { Badge, Button, Card, ConfirmSubmitButton, Input, Label } from "@/components/ui";
-import { decideIndexing, deletePerson, optOutPerson, updatePerson } from "../actions";
+import { decideIndexing, deletePerson, optOutPerson, setNameInDescriptions, updatePerson } from "../actions";
 import { PetForm } from "@/components/people/PetForm";
 import { dateColumnToDay } from "@/lib/time/local-day";
 
@@ -24,6 +24,7 @@ export default async function PersonPage({ params }: PageProps<"/people/[id]">) 
   const isAdmin = user.role === "ADMIN";
   const update = updatePerson.bind(null, id);
   const decide = decideIndexing.bind(null, id);
+  const nameInDescriptions = setNameInDescriptions;
   const optOut = optOutPerson.bind(null, id);
   const minor = isMinor(person);
   return (
@@ -105,6 +106,29 @@ export default async function PersonPage({ params }: PageProps<"/people/[id]">) 
                 <p className="text-muted">{person.faceIndexing ? "An admin turned recognition on for this person." : "Recognition is off. An admin can turn it on with the person's agreement."}</p>
               )}
               {!minorsCheckPasses(person) && !minor && <p className="text-xs text-muted">No birthday and no attestation: treated as not consented.</p>}
+
+              {/* A narrower agreement than recognition, and a different one: being named in a description does not
+                  keep a template of anybody, and is what a relative usually means by "I would rather be tagged". */}
+              <div className="border-t border-border pt-3 space-y-2">
+                <p className="font-medium">Named in descriptions</p>
+                {minor ? (
+                  <p className="text-muted">A child is never named in a description, whatever else is set.</p>
+                ) : isAdmin ? (
+                  <form action={nameInDescriptions.bind(null, id, !person.nameInDescriptions)} className="space-y-2">
+                    <p className="text-muted">
+                      {person.nameInDescriptions
+                        ? `The helper is told ${person.name}'s name when it describes a photograph they have been confirmed in, instead of writing "an older couple".`
+                        : `The helper is not told ${person.name}'s name, so descriptions of photographs they are in say "a man", "an older couple" and the like.`}
+                      {" "}Nothing is recognised either way, and no template is kept for it{person.nameInDescriptionsSetAt ? ` (last set ${person.nameInDescriptionsSetAt.toLocaleDateString("en-US")})` : ""}.
+                    </p>
+                    <Button type="submit" size="sm" variant="secondary" data-testid="name-in-descriptions">
+                      {person.nameInDescriptions ? "Stop using their name" : "Use their name in descriptions"}
+                    </Button>
+                  </form>
+                ) : (
+                  <p className="text-muted">{person.nameInDescriptions ? `Descriptions may use ${person.name}'s name.` : "Descriptions do not use their name. An admin can change that with their agreement."}</p>
+                )}
+              </div>
 
               <form action={optOut} className="space-y-2 border-t border-border pt-3">
                 <p className="font-medium">Forget this person&apos;s face</p>

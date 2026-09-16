@@ -98,6 +98,7 @@ export function AnnotationAdmin({ gates, model, batches, spend, rawRetentionDays
           <select value={task} onChange={(e) => { setTask(e.target.value as BackfillTask); setPreview(null); setTyped(""); }} className={select} aria-label="What to ask for">
             <option value="describe">Describe items that have no description</option>
             <option value="place">Place items that have no location</option>
+            <option value="names">Describe again, now that people are named</option>
           </select>
           <select value={scopeKind} onChange={(e) => { setScopeKind(e.target.value as BackfillScope["kind"]); setPreview(null); }} className={select} aria-label="Scope">
             <option value="all">Everywhere</option>
@@ -125,6 +126,7 @@ export function AnnotationAdmin({ gates, model, batches, spend, rawRetentionDays
               <b>{preview.estimate.items}</b> item{preview.estimate.items === 1 ? "" : "s"} would be sent ({preview.photos} photo{preview.photos === 1 ? "" : "s"}, {preview.videos} clip{preview.videos === 1 ? "" : "s"}), about <b>{preview.estimate.inputTokens.toLocaleString()}</b> input tokens and <b>{preview.estimate.outputTokens.toLocaleString()}</b> output tokens, roughly <b>${preview.estimate.usd.toFixed(2)}</b> on {preview.estimate.model} (approximate; prices as of {preview.estimate.pricesAsOf}).
             </p>
             <p className="text-muted">Sent per item: {preview.sends.join("; ")}. Opted-out items are skipped, and so is anything this run has already been through.</p>
+            {preview.task === "names" && <p className="text-muted">Items described before the album knew who was in them: somebody nameable is confirmed in each, and either the tag or their agreement to be named is newer than the description. The helper is asked for a fresh description with those names in it, so &ldquo;an older couple&rdquo; becomes the couple. Anything a member wrote themselves — the caption, the title, the notes — is left exactly as it is.</p>}
             {preview.task === "place" && <p className="text-muted">The helper is asked only where each item was taken, and only answers for places anyone could name: landmarks, parks, waterfronts, plazas, a region with a look of its own. It is told to leave homes, gardens and residential streets alone. A guess never replaces a location from the camera, a track, Google or a family member, and a track imported later replaces the guess.</p>}
             <p className="text-muted">
               {preview.excluded.inScope} item{preview.excluded.inScope === 1 ? "" : "s"} in scope: {preview.excluded.described} {preview.task === "place" ? "already placed or asked about" : "already described"}, {preview.excluded.optedOutSelf} opted out, {preview.excluded.optedOutInherited} opted out through a trip or collection, {preview.estimate.items} would be sent{preview.cap ? ` (one run sends at most ${preview.cap.toLocaleString()}; run it again for the rest)` : ""}. Items whose files cannot be read are skipped at submission and counted below.

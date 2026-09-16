@@ -16,7 +16,7 @@ export async function faceGates(): Promise<FaceGates> {
 /** Names the AI helper may be given for an item: confirmed people whose indexing is on and who are not minors. */
 export async function permittedNames(photoId: string): Promise<string[]> {
   const { nameMayLeaveServer } = await import("./consent");
-  const faces = await db.face.findMany({ where: { photoId, status: "CONFIRMED", personId: { not: null } }, select: { person: { select: { name: true, birthday: true, adultAttestedAt: true, faceIndexing: true, kind: true, optedOutAt: true } } } });
+  const faces = await db.face.findMany({ where: { photoId, status: "CONFIRMED", personId: { not: null } }, select: { person: { select: { name: true, birthday: true, adultAttestedAt: true, faceIndexing: true, nameInDescriptions: true, kind: true, optedOutAt: true } } } });
   const names = new Set<string>();
   for (const f of faces) {
     const p = f.person;

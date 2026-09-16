@@ -327,6 +327,64 @@ export async function nameFace(faceId: string, personId: string): Promise<void> 
   revalidatePath("/people", "layout");
 }
 
+const boxSchema = z.tuple([z.number().min(0).max(1), z.number().min(0).max(1), z.number().min(0.01).max(1), z.number().min(0.01).max(1)]);
+
+/**
+ * Tag somebody on a photograph by hand, where they are in it.
+ *
+ * This is a note about who is in a picture, not a biometric record: the row carries the box the member drew, no
+ * template and no confidence, exactly as a pet tag does. The album's face detector misses people in profile, in
+ * the dark, at the back, and turns of the century before it existed at all; the family knows anyway.
+ *
+ * Naming somebody new this way creates them with nothing switched on — no recognition, no naming in descriptions —
+ * because those are an admin's decisions and this is a caption.
+ */
+export async function tagPersonAt(photoId: string, fd: FormData): Promise<void> {
+  const user = await requireUserOrThrow();
+  // Tagging is done on an item's own page, so it follows the item: its uploader, and admins.
+  const owner = await db.photo.findUnique({ where: { id: photoId }, select: { uploaderId: true } });
+  if (!owner) throw new Error("No such item");
+  if (!canEditMedia(user, owner)) throw new Error(NOT_YOURS);
+  const v = z
+    .object({ personId: z.string().optional().transform((x) => x || null), name: z.string().trim().max(80).optional().transform((x) => x || null), box: z.string() })
+    .refine((x) => Boolean(x.personId || x.name), { message: "Somebody to tag", path: ["name"] })
+    .parse({ personId: fd.get("personId") ?? undefined, name: fd.get("name") ?? undefined, box: fd.get("box") ?? "" });
+  const box = boxSchema.parse(JSON.parse(v.box));
+
+  const person = v.personId
+    ? await db.person.findUniqueOrThrow({ where: { id: v.personId } })
+    : await db.person.create({ data: { name: v.name!, kind: "HUMAN", createdById: user.id } });
+  if (person.optedOutAt) throw new Error("This person asked to be forgotten");
+  // One tag per person per photograph: tagging somebody twice moves their box rather than stacking another.
+  const already = await db.face.findFirst({ where: { photoId, personId: person.id, confidence: 0 }, select: { id: true } });
+  if (already) await db.face.update({ where: { id: already.id }, data: { box } });
+  else await db.face.create({ data: { photoId, personId: person.id, status: "CONFIRMED", box, confidence: 0 } });
+  if (person.kind === "PET" && (await claimAnimalsForPet(photoId, person.id)) > 0) await enqueueAnimalMatchAllOpen();
+  revalidatePath(`/photos/${photoId}`);
+  revalidatePath("/people", "layout");
+}
+
+/** Take a hand tag off a photograph, leaving anything the detector found alone. */
+export async function untagPersonAt(faceId: string): Promise<void> {
+  const user = await requireUserOrThrow();
+  const face = await db.face.findUniqueOrThrow({ where: { id: faceId }, select: { photoId: true, confidence: true, photo: { select: { uploaderId: true } } } });
+  if (!canEditMedia(user, face.photo)) throw new Error(NOT_YOURS);
+  if (face.confidence !== 0) throw new Error("That one was found by the album; remove the name from the chip instead");
+  await db.face.delete({ where: { id: faceId } });
+  revalidatePath(`/photos/${face.photoId}`);
+  revalidatePath("/people", "layout");
+}
+
+/** An admin records that this person is happy to be named in the descriptions the helper writes. */
+export async function setNameInDescriptions(personId: string, on: boolean): Promise<void> {
+  const admin = await requireAdmin();
+  const person = await db.person.findUniqueOrThrow({ where: { id: personId }, select: { optedOutAt: true } });
+  if (on && person.optedOutAt) throw new Error("This person asked to be forgotten");
+  await db.person.update({ where: { id: personId }, data: { nameInDescriptions: on, nameInDescriptionsSetById: admin.id, nameInDescriptionsSetAt: new Date() } });
+  revalidatePath("/people", "layout");
+  revalidatePath("/privacy");
+}
+
 const petSchema = z.object({
   name: z.string().trim().min(1).max(80),
   species: z.enum(["DOG", "CAT", "CHICKEN", "HORSE", "OTHER"]),

@@ -413,19 +413,23 @@ test("a short clip is transcoded with a poster and streams with range requests; 
   await signIn(context, ADMIN);
   await page.goto("/upload?trip=yosemite");
   await chooseFile(page, "long-clip.mp4");
-  // Headless Chromium cannot decode H.264, so the browser cannot read the length and the file goes up to be refused
-  // by the server: this message arrives once the upload has been processed, not the moment the file is chosen.
+  // Refused either way, and the member is told the same thing either way — which is the promise worth testing.
   await expect(page.getByRole("alert").getByText(/limited to 90 seconds/)).toBeVisible({ timeout: 90_000 });
   await chooseFile(page, "clip.mp4");
   await expect(page.locator("img[src*='/api/photos/']")).toBeVisible({ timeout: 90_000 });
-  // Headless Chromium cannot decode H.264, so the browser reports an unknown duration and the server is the authority:
-  // the long clip must end FAILED with the message naming the YouTube route, the short one READY.
+
   const rows = await withDb((c) => c.query('SELECT id, status, error, "durationS" FROM "Photo" WHERE kind = $1 ORDER BY "createdAt"', ["VIDEO"]));
-  expect(rows.rows.map((r) => r.status).sort()).toEqual(["FAILED", "READY"]);
-  expect(rows.rows.find((r) => r.status === "FAILED")?.error).toContain("limited to 90 seconds");
-  const row = { rows: rows.rows.filter((r) => r.status === "READY") };
-  expect(Number(row.rows[0].durationS)).toBeGreaterThan(1.5);
-  const videoUrl = `/api/photos/${row.rows[0].id}/video`;
+  const ready = rows.rows.filter((r) => r.status === "READY");
+  const refused = rows.rows.filter((r) => r.status === "FAILED");
+  // Which of the two refusals happens depends on whether the browser can decode H.264 and read the length: one
+  // build refuses before sending a byte, another sends it and the server refuses. So the guarantee is stated as
+  // the album keeps the short clip and nothing else — never as which of the two paths the refusal took.
+  expect(ready).toHaveLength(1);
+  expect(refused.length).toBeLessThanOrEqual(1);
+  if (refused.length) expect(refused[0].error).toContain("limited to 90 seconds");
+  expect(rows.rows).toHaveLength(ready.length + refused.length);
+  expect(Number(ready[0].durationS)).toBeGreaterThan(1.5);
+  const videoUrl = `/api/photos/${ready[0].id}/video`;
   const partial = await context.request.get(videoUrl, { headers: { range: "bytes=0-99" } });
   expect(partial.status()).toBe(206);
   expect(partial.headers()["content-range"]).toMatch(/^bytes 0-99\//);
@@ -1655,16 +1659,23 @@ test("photographs are taken off a trip and out of a collection, and stay in the 
     .toEqual({ tripId: null, trashedAt: null });
   await expect(page.getByRole("status")).toContainText("taken off this trip");
   await page.goto("/photos");
-  await expect(page.locator(`li.tile-lazy img[src*='/api/photos/${onTrip.id}/']`)).toBeVisible();
+  // The grid loads its pictures as they come into view, so find the tile by its id and bring it into view first.
+  const stillThere = page.locator(`li[data-photo-id="${onTrip.id}"]`);
+  await stillThere.scrollIntoViewIfNeeded();
+  await expect(stillThere.locator("img[src*='/api/photos/']")).toBeVisible();
 
   // And the same out of a collection, which now says what it did rather than leaving a shorter grid to explain it.
   const inCollection = (await withDb((c) => c.query(`
     SELECT ci."photoId" AS id, c.slug FROM "CollectionItem" ci JOIN "Collection" c ON c.id = ci."collectionId"
-    JOIN "Photo" p ON p.id = ci."photoId" WHERE p."trashedAt" IS NULL AND p.status = 'READY' LIMIT 1`))).rows[0];
-  test.skip(!inCollection, "no collection has anything in it");
+    JOIN "Photo" p ON p.id = ci."photoId" WHERE p."trashedAt" IS NULL AND p.status = 'READY'
+    ORDER BY c.slug, ci.position, ci."createdAt" LIMIT 1`))).rows[0];
+  // Earlier tests put photographs into collections; if none is there, that is a failure to report, not to skip past.
+  expect(inCollection, "no collection has anything in it").toBeTruthy();
   await page.goto(`/collections/${inCollection.slug}/photos`);
   await page.getByRole("button", { name: "Select photos" }).click();
-  await page.locator(`li.tile-lazy:has(img[src*='/api/photos/${inCollection.id}/']) button[aria-pressed]`).first().click();
+  const tile = page.locator(`li[data-photo-id="${inCollection.id}"]`);
+  await tile.scrollIntoViewIfNeeded();
+  await tile.locator("button[aria-pressed]").first().click();
   await page.getByTestId("remove-from-collection").click();
   await expect(page.getByRole("status")).toContainText("taken out of this collection");
   await expect
@@ -1883,4 +1894,57 @@ test("an unnamed group shows the faces themselves, and each one can be disowned 
     .toBeGreaterThan(0);
   // A dog is spotted by the animal detector, never by face, so no template is kept for it.
   expect((await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "Face" WHERE "personId" = $1 AND embedding IS NOT NULL`, [rufus.rows[0].id]))).rows[0].n).toBe(0);
+});
+
+test("somebody the album missed is tagged by pointing at them, and can agree to be named in descriptions", async ({ context, page }) => {
+  test.setTimeout(180_000);
+  await signIn(context, ADMIN);
+  const photo = await withDb((c) => c.query(`SELECT p.id FROM "Photo" p JOIN "Trip" t ON t.id = p."tripId" WHERE t.slug = 'acadia' AND p.kind = 'PHOTO' AND p.status = 'READY' ORDER BY p."createdAt" LIMIT 1`));
+  const photoId = photo.rows[0].id as string;
+  await page.goto(`/photos/${photoId}`);
+  await page.waitForLoadState("networkidle");
+
+  // Point at somebody in the picture and say who they are: the detector never found this one.
+  await page.getByTestId("tag-someone").click();
+  const surface = page.getByTestId("photo-tag-surface");
+  const box = (await surface.boundingBox())!;
+  await page.mouse.click(box.x + box.width * 0.4, box.y + box.height * 0.35);
+  await page.getByLabel("Their name").fill("Great-Aunt Vi");
+  await page.getByRole("button", { name: "Tag", exact: true }).click();
+  await expect(page.getByTestId("photo-tag").filter({ hasText: "Great-Aunt Vi" })).toBeVisible();
+
+  const tag = await withDb((c) => c.query(`SELECT f.id, f.box, f.confidence, f.status, f."clusterId", p.id AS "personId", p."nameInDescriptions" FROM "Face" f JOIN "Person" p ON p.id = f."personId" WHERE f."photoId" = $1 AND p.name = 'Great-Aunt Vi'`, [photoId]));
+  expect(tag.rows).toHaveLength(1);
+  // A tag is a caption with a position: no template, no group, nothing recognised from it.
+  expect(tag.rows[0]).toMatchObject({ status: "CONFIRMED", confidence: 0, clusterId: null, nameInDescriptions: false });
+  expect(Number(tag.rows[0].box[0])).toBeGreaterThan(0.2);
+  const templates = await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "Face" WHERE id = $1 AND embedding IS NOT NULL`, [tag.rows[0].id]));
+  expect(templates.rows[0].n).toBe(0);
+
+  // Being named in the descriptions is its own decision, and an admin records it on the person's page.
+  const personId = tag.rows[0].personId as string;
+  await withDb((c) => c.query(`UPDATE "Person" SET birthday = '1938-04-02' WHERE id = $1`, [personId]));
+  await page.goto(`/people/${personId}`);
+  await page.getByTestId("name-in-descriptions").click();
+  await expect
+    .poll(async () => (await withDb((c) => c.query(`SELECT "nameInDescriptions" FROM "Person" WHERE id = $1`, [personId]))).rows[0].nameInDescriptions, { timeout: 15_000 })
+    .toBe(true);
+
+  // Which is what puts the item in the "describe again, now that people are named" run.
+  await withDb((c) => c.query(`UPDATE "Photo" SET "annotatedAt" = now() - interval '1 day' WHERE id = $1`, [photoId]));
+  await page.goto("/admin");
+  await page.waitForLoadState("networkidle");
+  await page.getByLabel("What to ask for").selectOption("names");
+  await page.getByRole("button", { name: "Estimate" }).click();
+  const status = page.getByRole("status").first();
+  await expect(status).toContainText("would be sent");
+  expect(Number((await status.textContent())!.match(/(\d+) items? would be sent/)![1])).toBeGreaterThan(0);
+
+  // And the tag comes off again.
+  await page.goto(`/photos/${photoId}`);
+  await page.getByTestId("tag-someone").click();
+  await page.getByRole("button", { name: "Remove the tag for Great-Aunt Vi" }).click();
+  await expect
+    .poll(async () => (await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "Face" WHERE "photoId" = $1 AND "personId" = $2`, [photoId, personId]))).rows[0].n, { timeout: 15_000 })
+    .toBe(0);
 });

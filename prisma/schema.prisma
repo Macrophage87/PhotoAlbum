@@ -584,6 +584,12 @@ model Person {
   /// "I confirm this person is an adult and has agreed to face recognition", when no birthday is known.
   adultAttestedById   String?
   adultAttestedAt     DateTime?
+  /// This person may be named in the descriptions the AI helper writes. Deliberately its own decision: keeping a
+  /// biometric template of somebody and telling the helper their name are different things, and a relative who
+  /// would rather be named than called "an older couple" should not have to be recognised to get it.
+  nameInDescriptions        Boolean   @default(false)
+  nameInDescriptionsSetById String?
+  nameInDescriptionsSetAt   DateTime?
   /// Named by a member: waits for an admin's consent decision (embeddings kept until then, capped by retention).
   pendingDecision     Boolean    @default(false)
   /// The person asked to be forgotten by the recogniser but kept their name on confirmed photos.

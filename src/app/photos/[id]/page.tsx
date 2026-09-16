@@ -48,6 +48,7 @@ import { ProposalList } from "@/components/people/ProposalList";
 import { similarTo } from "@/lib/graph/query";
 import { SimilarStrip } from "@/components/graph/SimilarStrip";
 import { PersonChips } from "@/components/people/PersonChips";
+import { PhotoTagger } from "@/components/people/PhotoTagger";
 import { NOT_TRASHED } from "@/lib/photos/trash";
 
 /** The tab and link-preview title: the item's title, else its caption, else the file name. Members only, like the page. */
@@ -178,10 +179,18 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
                 </p>
               </div>
             ) : photo.status === "READY" ? (
-              <a href={photoUrl(photo, photo.edits ? "edited" : "original")} target="_blank" rel="noreferrer" title="Open the full-size photo">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={photoUrl(photo, "medium")} alt={photo.caption ?? photo.originalName} className="w-full rounded-theme bg-surface-alt" />
-              </a>
+              // The picture doubles as the place where people are tagged, so a member can point at whoever the
+              // detector missed rather than describing them in the notes and hoping.
+              <PhotoTagger
+                photoId={photo.id}
+                src={photoUrl(photo, "medium")}
+                alt={photo.caption ?? photo.originalName}
+                canEdit={mine}
+                people={people}
+                tags={faces
+                  .filter((f) => f.person && f.status === "CONFIRMED" && !(f.box[2] >= 1 && f.box[3] >= 1))
+                  .map((f) => ({ id: f.id, personId: f.person!.id, name: f.person!.name, box: f.box, hand: f.hand }))}
+              />
             ) : (
               <div className="aspect-[4/3] rounded-theme bg-surface-alt flex items-center justify-center text-muted">
                 {photo.status === "FAILED" ? `Processing failed: ${photo.error}` : "Processing…"}
