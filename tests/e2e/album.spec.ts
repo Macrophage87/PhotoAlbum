@@ -1832,12 +1832,17 @@ test("an unnamed group shows the faces themselves, and each one can be disowned 
   // rather than unnamed — this one is nobody, so it lands in a group waiting for a name.
   await withDb((c) => c.query('DELETE FROM "Face"'));
   await withDb((c) => c.query('DELETE FROM "FaceCluster" WHERE "personId" IS NULL'));
+  // Count faces on this test's own photographs only. The sweep is meanwhile working through whatever earlier tests
+  // uploaded, so however clean the table is made first, a count of the whole of it is somebody else's arithmetic.
+  const uploaded: string[] = [];
   const uploadOne = async (faces: number) => {
     await page.goto("/upload");
     await chooseFile(page, "photo-no-exif.jpg");
     await expect(page.locator("img[src*='/api/photos/']")).toBeVisible({ timeout: 30_000 });
+    const mineNow = (await withDb((c) => c.query(`SELECT id FROM "Photo" ORDER BY "createdAt" DESC LIMIT 1`))).rows[0].id as string;
+    if (!uploaded.includes(mineNow)) uploaded.push(mineNow);
     await expect
-      .poll(async () => (await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "Face" WHERE status = 'DETECTED'`))).rows[0].n, { timeout: 60_000, intervals: [1000] })
+      .poll(async () => (await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "Face" WHERE status = 'DETECTED' AND "photoId" = ANY($1)`, [uploaded]))).rows[0].n, { timeout: 60_000, intervals: [1000] })
       .toBe(faces);
   };
   // The same face twice: one group of two, which is what a family disowning one of them actually has.
@@ -1846,7 +1851,7 @@ test("an unnamed group shows the faces themselves, and each one can be disowned 
 
   // Address this group by its id throughout: the sweep quietly scans whatever else earlier tests uploaded, so
   // "the first group on the page" and "how many groups there are" are both somebody else's business.
-  const groupId = (await withDb((c) => c.query(`SELECT "clusterId" AS id FROM "Face" WHERE status = 'DETECTED' LIMIT 1`))).rows[0].id;
+  const groupId = (await withDb((c) => c.query(`SELECT "clusterId" AS id FROM "Face" WHERE status = 'DETECTED' AND "photoId" = ANY($1) LIMIT 1`, [uploaded]))).rows[0].id;
   const mine = (await withDb((c) => c.query(`SELECT id FROM "Face" WHERE "clusterId" = $1 AND status = 'DETECTED'`, [groupId]))).rows.map((r) => r.id as string);
   expect(mine).toHaveLength(2);
 
