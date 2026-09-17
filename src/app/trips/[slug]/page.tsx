@@ -1,56 +1,48 @@
-import Link from "next/link";
 import { db } from "@/lib/db";
 import { loadViewableTrip } from "@/lib/trips/access";
-import { randomTripPhotos, OVERVIEW_SAMPLE } from "@/lib/photos/page";
-import { PhotoGrid } from "@/components/photos/PhotoGrid";
-import { toGridPhoto } from "@/components/photos/toGrid";
-import { ButtonLink, Card } from "@/components/ui";
-import { dateColumnToDay } from "@/lib/time/local-day";
-import { ShowAnother } from "@/components/photos/ShowAnother";
+import { tripTimeline } from "@/lib/timeline/queries";
+import { uploaderLabel } from "@/components/photos/toGrid";
+import { describeCount, parseGalleryFilter } from "@/lib/photos/filters";
+import { GalleryFilters } from "@/components/photos/GalleryFilters";
+import { Timeline } from "@/components/timeline/Timeline";
+import { SelectionProvider } from "@/components/photos/selection";
 
-export default async function TripOverviewPage({ params }: PageProps<"/trips/[slug]">) {
+/**
+ * What a trip opens on: the days it was, in order.
+ *
+ * A family album is remembered as a sequence of days rather than as a grid of files, so the timeline is the trip
+ * itself and everything else is a way of looking at it differently. Asking it a question narrows it where it
+ * stands, which keeps each answer among the dates around it.
+ */
+export default async function TripTimelinePage({ params, searchParams }: PageProps<"/trips/[slug]">) {
   const { slug } = await params;
+  const sp = await searchParams;
   const { trip, editable } = await loadViewableTrip(slug);
-
-  const [sample, trackAgg] = await Promise.all([
-    randomTripPhotos(trip.id, OVERVIEW_SAMPLE),
-    db.trackStats.aggregate({ where: { track: { tripId: trip.id, activity: { isNot: null } } }, _sum: { distanceM: true, elevGainM: true } }),
+  // Who uploaded what is members-only, so an anonymous visitor never sees the member list nor narrows by it.
+  const filter = parseGalleryFilter(sp, { member: editable });
+  const [{ groups, matched, total, active }, activities, members] = await Promise.all([
+    tripTimeline(trip.id, trip.timezone, filter),
+    db.activity.findMany({ where: { tripId: trip.id }, orderBy: { startTime: "asc" }, select: { id: true, title: true } }),
+    editable ? db.user.findMany({ where: { photos: { some: { tripId: trip.id } } }, orderBy: { name: "asc" }, select: { id: true, name: true, email: true } }) : Promise.resolve([]),
   ]);
-  const days = Math.round((Date.parse(dateColumnToDay(trip.endDate)) - Date.parse(dateColumnToDay(trip.startDate))) / 86_400_000) + 1;
-  const meters = trackAgg._sum?.distanceM ?? 0;
-  const km = meters > 0 ? (meters / 1609.344).toFixed(0) : null;
-
-  const stats: [string, string][] = [
-    ["Days", String(days)],
-    ["Photos", String(trip._count.photos)],
-    ["Activities", String(trip._count.activities)],
-    ...(km ? ([["Miles tracked", km]] as [string, string][]) : []),
-  ];
-
-  return (
-    <div className="space-y-8">
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        {stats.map(([k, v]) => (
-          <Card key={k} className="p-4">
-            <div className="text-2xl font-semibold font-display">{v}</div>
-            <div className="text-sm text-muted">{k}</div>
-          </Card>
-        ))}
-      </div>
-
-      <section>
-        <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
-          <h2 className="font-display text-xl font-semibold">A few from this trip</h2>
-          <div className="flex flex-wrap gap-2 items-center">
-            {sample.length > 0 && <ShowAnother />}
-            {editable && <ButtonLink href={`/upload?trip=${trip.slug}`} size="sm">Upload</ButtonLink>}
-            <Link href={`/trips/${trip.slug}/photos`} className="text-sm text-primary underline-offset-2 hover:underline self-center">
-              All photos →
-            </Link>
-          </div>
-        </div>
-        <PhotoGrid photos={sample.map((p) => toGridPhoto(p, null, editable))} emptyMessage={editable ? "No photos yet. Upload some to get started." : "No photos yet."} />
-      </section>
+  const timeline = (
+    <div className="space-y-4">
+      <GalleryFilters
+        filter={filter}
+        action={`/trips/${slug}`}
+        members={editable ? members.map((m) => ({ id: m.id, label: uploaderLabel(m.name, m.email) })) : undefined}
+        activities={activities.map((a) => ({ id: a.id, label: a.title }))}
+        placeholder="Search this trip"
+      />
+      <p className="text-sm text-muted" data-testid="timeline-count">{active ? describeCount(matched, total, true) : `${total} photo${total === 1 ? "" : "s"}`}</p>
+      {active && matched === 0 ? (
+        <p className="text-muted text-sm" data-testid="no-matches">Nothing here matches that. Try fewer words, or clear the search.</p>
+      ) : (
+        <Timeline groups={groups} tripSlug={slug} timezone={trip.timezone} member={editable} />
+      )}
     </div>
   );
+  // Members get the selection bar here: a wrong date is usually spotted on the timeline, and this is where a whole
+  // day of them can be picked up and corrected at once.
+  return editable ? <SelectionProvider>{timeline}</SelectionProvider> : timeline;
 }

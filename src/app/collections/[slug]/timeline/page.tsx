@@ -1,10 +1,9 @@
-import { loadViewableCollection } from "@/lib/collections/access";
-import { collectionTimeline } from "@/lib/collections/timeline";
-import { Timeline } from "@/components/timeline/Timeline";
+import { redirect } from "next/navigation";
+import { filterQuery, parseGalleryFilter } from "@/lib/photos/filters";
 
-export default async function CollectionTimelinePage({ params }: PageProps<"/collections/[slug]/timeline">) {
+/** The timeline is the collection's own page now; this keeps the older address working. */
+export default async function CollectionTimelineRedirect({ params, searchParams }: PageProps<"/collections/[slug]/timeline">) {
   const { slug } = await params;
-  const { collection, editable } = await loadViewableCollection(slug, `/collections/${slug}/timeline`);
-  const groups = await collectionTimeline(collection.id);
-  return <Timeline groups={groups} tripSlug="" timezone="UTC" member={editable} />;
+  const query = filterQuery(parseGalleryFilter(await searchParams, { member: true }));
+  redirect(`/collections/${slug}${query ? `?${query}` : ""}`);
 }

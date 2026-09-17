@@ -33,7 +33,7 @@ describe("cursor pagination", () => {
     const user = await db.user.findFirstOrThrow();
     await db.photo.createMany({ data: Array.from({ length: 3 }, (_, i) => ({ tripId, uploaderId: user.id, originalName: `undated-${i}.jpg`, mimeType: "image/jpeg", storageKey: "k", originalPath: "k/o.jpg", sizeBytes: 1, status: "READY" as const })) });
     // Every day of the trip arrives at once: no cut at a day boundary, no cursor, nothing left for a second page.
-    const groups = await tripTimeline(tripId, "UTC");
+    const { groups } = await tripTimeline(tripId, "UTC");
     expect(groups.map((g) => g.dayKey)).toEqual(["2025-08-10", "2025-08-11", "2025-08-12", null]);
     expect(groups[3].items[0].photos).toHaveLength(3);
   });
@@ -42,7 +42,7 @@ describe("cursor pagination", () => {
     const user = await db.user.findFirstOrThrow();
     const t = new Date("2025-09-01T10:00:00Z");
     await db.photo.createMany({ data: Array.from({ length: 6 }, (_, i) => ({ tripId, uploaderId: user.id, originalName: `burst-${i}.jpg`, mimeType: "image/jpeg", storageKey: "k", originalPath: "k/o.jpg", sizeBytes: 1, status: "READY" as const, takenAt: t, takenAtSource: "EXIF_OFFSET" as const, tzOffsetMin: 0 })) });
-    const groups = await tripTimeline(tripId, "UTC");
+    const { groups } = await tripTimeline(tripId, "UTC");
     const seen: string[] = [];
     for (const g of groups) for (const it of g.items) seen.push(...it.photos.map((p) => p.originalName));
     expect(seen.filter((n) => n.startsWith("burst-"))).toHaveLength(6);

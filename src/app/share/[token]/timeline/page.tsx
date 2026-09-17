@@ -7,6 +7,6 @@ export default async function SharedTimelinePage({ params }: PageProps<"/share/[
   const { token } = await params;
   const trip = await getSharedTrip(token);
   if (!trip) notFound();
-  const groups = await tripTimeline(trip.id, trip.timezone);
+  const { groups } = await tripTimeline(trip.id, trip.timezone);
   return <Timeline groups={groups} tripSlug={trip.slug} timezone={trip.timezone} member={false} activityHrefBase={`/share/${token}/activities`} />;
 }

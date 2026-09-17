@@ -42,13 +42,14 @@ export default async function CollectionLayout({ params, children }: LayoutProps
   // Settings shape the collection itself: whoever gathered it, and admins.
   const owns = viewer.kind === "user" && canEditContainer(viewer.user, collection);
   const base = `/collections/${slug}`;
+  // As on a trip: the days first, the grid and the summary kept but at the back, and settings last.
   const tabs = [
-    { href: base, label: "Overview", exact: true },
-    { href: `${base}/photos`, label: "Photos" },
-    { href: `${base}/timeline`, label: "Timeline" },
+    { href: base, label: "Timeline", exact: true },
     { href: `${base}/map`, label: "Map" },
     // What the album thinks looks alike is for the family, not for whoever holds a share link.
     ...(viewer.kind === "user" && mlConfigured() ? [{ href: `${base}/graph`, label: "Graph" }] : []),
+    { href: `${base}/photos`, label: "Photos" },
+    { href: `${base}/overview`, label: "Overview" },
     ...(owns ? [{ href: `${base}/settings`, label: "Settings" }] : []),
   ];
   return (

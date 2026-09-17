@@ -47,14 +47,16 @@ export default async function TripLayout({ params, children }: LayoutProps<"/tri
   // Importing tracks and changing a trip's settings shape the trip itself, so they belong to whoever made it.
   const owns = viewer.kind === "user" && canEditContainer(viewer.user, trip);
   const base = `/trips/${slug}`;
+  // The days the trip was come first, because that is how a trip is remembered and it is what the trip now opens
+  // on. The grid and the summary are kept but sit at the back, and the two that shape the trip itself last of all.
   const tabs = [
-    { href: base, label: "Overview", exact: true },
-    { href: `${base}/photos`, label: "Photos" },
-    { href: `${base}/timeline`, label: "Timeline" },
+    { href: base, label: "Timeline", exact: true },
     { href: `${base}/map`, label: "Map" },
     { href: `${base}/activities`, label: "Activities" },
     // What the album thinks looks alike is for the family, not for whoever holds a share link.
     ...(viewer.kind === "user" && mlConfigured() ? [{ href: `${base}/graph`, label: "Graph" }] : []),
+    { href: `${base}/photos`, label: "Photos" },
+    { href: `${base}/overview`, label: "Overview" },
     ...(owns ? [{ href: `${base}/import`, label: "Import tracks" }, { href: `${base}/settings`, label: "Settings" }] : []),
   ];
 

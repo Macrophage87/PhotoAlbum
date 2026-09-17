@@ -755,8 +755,9 @@ test("the similarity graph and the similar-photos strip are members-only and sho
 test("a trip and a collection each draw their own photographs by what they look like", async ({ context, page, request }) => {
   // The album-wide graph is one page with a scope picker; a family looking for the four near-identical shots of the
   // same puddle is looking inside one trip, so each trip and collection draws its own.
-  const anon = await request.get("/trips/acadia/graph");
-  expect(anon.url()).toContain("/auth/signin");
+  const anon = await request.get("/trips/acadia/graph", { maxRedirects: 0 });
+  expect(anon.status()).toBe(307);
+  expect(anon.headers()["location"]).toContain("/auth/signin");
 
   await signIn(context, ADMIN);
   await expect.poll(async () => (await withDb((c) => c.query('SELECT count(*)::int AS n FROM "MediaSimilarity"'))).rows[0].n, { timeout: 30_000 }).toBeGreaterThan(0);
@@ -1059,7 +1060,7 @@ test("the date troubleshooter shows every witness and lets one be taken", async 
 
 test("a day of wrong dates is corrected in one go from the timeline, which says which year it is", async ({ context, page }) => {
   await signIn(context, ADMIN);
-  await page.goto("/trips/acadia/timeline");
+  await page.goto("/trips/acadia");
   // A family album spans decades: the day heading names the year, not just the weekday and month.
   await expect(page.locator("h2").first()).toContainText(/\d{4}/);
 
@@ -1091,7 +1092,7 @@ test("a day of wrong dates is corrected in one go from the timeline, which says 
   expect(sources.rows.map((r: { takenAtSource: string }) => r.takenAtSource)).toEqual(["MANUAL"]);
 
   // And the same correction the other way puts them back.
-  await page.goto("/trips/acadia/timeline");
+  await page.goto("/trips/acadia");
   await shiftDay(-2);
   await expect
     .poll(async () => {
@@ -1293,7 +1294,7 @@ test("a photo is dragged onto an activity on the timeline, and a selection can b
   test.skip(loose.rows.length === 0, "no loose photo on the trip to drag");
   const photoId = loose.rows[0].id as string;
 
-  await page.goto("/trips/acadia/timeline");
+  await page.goto("/trips/acadia");
   await page.waitForLoadState("networkidle");
   const tile = page.locator(`li.tile-lazy:has(img[src*='/api/photos/${photoId}/'])`).first();
   await expect(tile).toBeVisible();
@@ -1317,7 +1318,7 @@ test("a photo is dragged onto an activity on the timeline, and a selection can b
 
   // The same thing without a drag, which is the only way on a phone: select, pick the activity, put them in.
   await withDb((c) => c.query('UPDATE "Photo" SET "activityId" = NULL, "activitySetById" = NULL WHERE id = $1', [photoId]));
-  await page.goto("/trips/acadia/timeline");
+  await page.goto("/trips/acadia");
   await page.getByRole("button", { name: "Select photos" }).click();
   await page.getByTestId("day-select").first().click();
   const picker = page.getByTestId("activity-picker");
@@ -1555,7 +1556,7 @@ test("the overview shows a handful of the trip at random, and picks again when a
   await expect.poll(readyCount, { timeout: 60_000, intervals: [1000] }).toBeGreaterThan(10);
 
   const shown = async () => page.locator("li.tile-lazy img").evaluateAll((imgs) => imgs.map((i) => (i as HTMLImageElement).src.match(/\/api\/photos\/([^/]+)\//)?.[1] ?? "").join(","));
-  await page.goto("/trips/acadia");
+  await page.goto("/trips/acadia/overview");
   await expect(page.getByRole("heading", { name: "A few from this trip" })).toBeVisible();
   const first = await shown();
   expect(first.split(",").filter(Boolean).length).toBeLessThanOrEqual(10);
@@ -2011,7 +2012,7 @@ test("the timeline shows every day at once, with a panel down the side to reach 
     await withDb((c) => c.query(`UPDATE "Photo" SET "takenAt" = $2, "takenAtSource" = 'EXIF_OFFSET', "tzOffsetMin" = 0, "activityId" = NULL WHERE id = $1`, [row.id, new Date(Date.UTC(2025, 5 + i, 3 + i, 12))]));
   }
 
-  await page.goto("/trips/acadia/timeline");
+  await page.goto("/trips/acadia");
   await page.waitForLoadState("networkidle");
 
   // Every day the trip holds is on the page: no cursor in the address, and nothing offering a later page.
@@ -2040,11 +2041,54 @@ test("the timeline shows every day at once, with a panel down the side to reach 
   await expect.poll(async () => nav.locator("a[data-day]").count()).toBeLessThan(before);
 });
 
+test("a trip opens on its timeline, which can be asked for one photograph and still shows the day around it", async ({ context, page }) => {
+  await signIn(context, ADMIN);
+
+  // The trip's own address is the timeline now: the days, not a summary.
+  await page.goto("/trips/acadia");
+  await expect(page.getByTestId("timeline-nav")).toBeVisible();
+  await expect(page.locator("section[id^='day-']").first()).toBeVisible();
+  // The tab for it is the first one and is the one marked, and what shapes the trip is at the far end.
+  const tabs = page.locator("nav ul li a");
+  const labels = await tabs.allInnerTexts();
+  expect(labels[0]).toBe("Timeline");
+  expect(labels.indexOf("Photos")).toBeGreaterThan(labels.indexOf("Map"));
+  expect(labels.indexOf("Overview")).toBeGreaterThan(labels.indexOf("Photos"));
+  expect(labels[labels.length - 1]).toBe("Settings");
+
+  // The address it used to live at still works, so a link somebody kept goes on working.
+  await page.goto("/trips/acadia/timeline");
+  await expect(page).toHaveURL(/\/trips\/acadia$/);
+
+  // Give one photograph on the trip a word of its own to be found by.
+  const mine = await withDb((c) => c.query(`SELECT p.id, p."takenAt" FROM "Photo" p JOIN "Trip" t ON t.id = p."tripId" WHERE t.slug = 'acadia' AND p.status = 'READY' AND p."trashedAt" IS NULL AND p."takenAt" IS NOT NULL ORDER BY p."takenAt" LIMIT 1`));
+  const id = mine.rows[0].id as string;
+  await withDb((c) => c.query(`UPDATE "Photo" SET caption = 'thunderhole zzq' WHERE id = $1`, [id]));
+
+  await page.goto("/trips/acadia");
+  const before = await page.locator("section[id^='day-']").count();
+  await page.getByPlaceholder("Search this trip").fill("thunderhole zzq");
+  await page.getByRole("button", { name: "Search" }).click();
+  await expect(page).toHaveURL(/q=thunderhole/);
+  // Narrowed in place: the one that matches, still under the day it was taken.
+  await expect(page.getByTestId("timeline-count")).toContainText(/1 of \d+ items/);
+  await expect(page.locator("section[id^='day-']")).toHaveCount(1);
+  expect(before).toBeGreaterThan(1);
+  await expect(page.locator(`li.tile-lazy:has(img[src*='/api/photos/${id}/'])`)).toHaveCount(1);
+
+  // And a question with no answer says so rather than showing an empty timeline.
+  await page.goto("/trips/acadia?q=qqzzxnothing");
+  await expect(page.getByTestId("no-matches")).toBeVisible();
+  await page.getByTestId("clear-filters").click();
+  await expect(page).toHaveURL(/\/trips\/acadia$/);
+  await withDb((c) => c.query(`UPDATE "Photo" SET caption = NULL WHERE id = $1`, [id]));
+});
+
 test("on a phone the day heading itself opens the whole timeline to choose from", async ({ context, page }) => {
   await signIn(context, ADMIN);
   // A phone, where there is no room for the panel beside the path — and the heading is the only thing always on screen.
   await page.setViewportSize({ width: 390, height: 780 });
-  await page.goto("/trips/acadia/timeline");
+  await page.goto("/trips/acadia");
   await page.waitForLoadState("networkidle");
   await expect(page.getByTestId("timeline-nav")).toBeHidden();
 
