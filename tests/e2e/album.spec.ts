@@ -332,6 +332,18 @@ test("exposure warnings fire when widening and when lowering, and bulk actions a
   expect(dialogText).toContain("anyone on the internet");
 
   // Lowering: Acadia is private, but its photo sits in the now-public collection, so the trip settings say so.
+  //
+  // Wait for that to be true before asking the page about it. The collection was filled through the interface by
+  // the test before this one, and asserting on the page while the album was still catching up read as the warning
+  // being missing when it was the photograph that had not arrived.
+  await expect
+    .poll(async () => (await withDb((c) => c.query(`
+      SELECT count(*)::int AS n FROM "CollectionItem" ci
+      JOIN "Collection" c ON c.id = ci."collectionId"
+      JOIN "Photo" p ON p.id = ci."photoId"
+      JOIN "Trip" t ON t.id = p."tripId"
+      WHERE c.slug = 'best-of-2025' AND t.slug = 'acadia' AND p."trashedAt" IS NULL`))).rows[0].n, { timeout: 20_000, intervals: [500] })
+    .toBeGreaterThan(0);
   await page.goto("/trips/acadia/settings");
   await expect(page.getByText("Still visible elsewhere")).toBeVisible();
   await expect(page.getByText(/also in the public collection Best of 2025/)).toBeVisible();
