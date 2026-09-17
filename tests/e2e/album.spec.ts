@@ -760,12 +760,19 @@ test("the similarity graph and the similar-photos strip are members-only and sho
   expect(res.headers()["content-security-policy"]).toMatch(/script-src 'self' 'nonce-[A-Za-z0-9+/=]+' 'strict-dynamic'/);
 });
 
-test("a trip and a collection each draw their own photographs by what they look like", async ({ context, page, request }) => {
+test("a trip and a collection each draw their own photographs by what they look like", async ({ browser, context, page }) => {
   // The album-wide graph is one page with a scope picker; a family looking for the four near-identical shots of the
   // same puddle is looking inside one trip, so each trip and collection draws its own.
-  const anon = await request.get("/trips/acadia/graph", { maxRedirects: 0 });
-  expect(anon.status()).toBe(307);
-  expect(anon.headers()["location"]).toContain("/auth/signin");
+  //
+  // Asked for as a browser asks, because the trip's frame is already on its way out by the time the page decides
+  // there is nobody signed in: the response is a perfectly good 200 carrying a redirect the browser then makes,
+  // and the graph is never in it.
+  const anon = await browser.newContext();
+  const anonPage = await anon.newPage();
+  await anonPage.goto("/trips/acadia/graph");
+  await expect(anonPage).toHaveURL(/\/auth\/signin/);
+  await expect(anonPage.getByTestId("graph-canvas")).toHaveCount(0);
+  await anon.close();
 
   await signIn(context, ADMIN);
   await expect.poll(async () => (await withDb((c) => c.query('SELECT count(*)::int AS n FROM "MediaSimilarity"'))).rows[0].n, { timeout: 30_000 }).toBeGreaterThan(0);
