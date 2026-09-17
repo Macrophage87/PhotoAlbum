@@ -5,6 +5,7 @@ import { uploaderLabel } from "@/components/photos/toGrid";
 import { describeCount, parseGalleryFilter } from "@/lib/photos/filters";
 import { GalleryFilters } from "@/components/photos/GalleryFilters";
 import { Timeline } from "@/components/timeline/Timeline";
+import { ButtonLink } from "@/components/ui";
 import { SelectionProvider } from "@/components/photos/selection";
 
 /**
@@ -27,6 +28,12 @@ export default async function TripTimelinePage({ params, searchParams }: PagePro
   ]);
   const timeline = (
     <div className="space-y-4">
+      {editable && (
+        <div className="flex flex-wrap items-center gap-2">
+          <ButtonLink href={`/upload?trip=${trip.slug}`} size="sm">Upload photos</ButtonLink>
+          <ButtonLink href={`/trips/${slug}/add`} size="sm" variant="secondary">Add existing photos</ButtonLink>
+        </div>
+      )}
       <GalleryFilters
         filter={filter}
         action={`/trips/${slug}`}
