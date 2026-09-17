@@ -47,13 +47,16 @@ export function TimelineNav({ days, idPrefix }: { days: NavDay[]; idPrefix: stri
   const [active, setActive] = useState<string | null>(days[0]?.id ?? null);
   const [shut, setShut] = useState<Set<string>>(new Set());
   const panel = useRef<HTMLElement>(null);
+  // A day the reader has just asked for. It stays marked until they move the page themselves, so that going to
+  // the end of an album does not un-mark it the moment a picture finishes loading and shifts everything down.
+  const asked = useRef<string | null>(null);
 
   /**
-   * Which day is under the reader's eye: the last one to have passed a line a quarter of the way down the page.
+   * Which day is under the reader's eye: the last one to have passed the reading line.
    *
-   * The end of a page cannot be scrolled past, so the final day never reaches that line however far you scroll —
-   * which left the panel pointing at the middle of an album while you looked at the end of it. So once the page
-   * has run out, the last day still on screen is taken as the one being read.
+   * The line starts a quarter of the way down the page and sinks towards the foot of it as the page runs out of
+   * scroll, because the last day of an album can never be brought up to meet a line that stays put — the page
+   * stops scrolling first. Without that, reaching the end of a timeline left the panel pointing at the middle.
    */
   useEffect(() => {
     const els = days.map((d) => document.getElementById(d.id)).filter((e): e is HTMLElement => Boolean(e));
@@ -61,25 +64,33 @@ export function TimelineNav({ days, idPrefix }: { days: NavDay[]; idPrefix: stri
     let frame = 0;
     const pick = () => {
       frame = 0;
-      const atEnd = window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - 2;
-      const line = window.innerHeight * 0.25;
+      if (asked.current) return;
+      const room = Math.max(1, document.documentElement.scrollHeight - window.innerHeight);
+      const through = Math.min(1, Math.max(0, window.scrollY / room));
+      const line = window.innerHeight * (0.25 + 0.6 * through);
       let best = els[0];
-      if (atEnd) {
-        for (const e of els) if (e.getBoundingClientRect().top < window.innerHeight) best = e;
-      } else {
-        for (const e of els) if (e.getBoundingClientRect().top <= line) best = e;
-      }
+      for (const e of els) if (e.getBoundingClientRect().top <= line) best = e;
       setActive(best.id);
     };
     const onScroll = () => {
       if (!frame) frame = requestAnimationFrame(pick);
     };
+    const release = () => {
+      asked.current = null;
+      onScroll();
+    };
     pick();
     window.addEventListener("scroll", onScroll, { passive: true });
     window.addEventListener("resize", onScroll);
+    for (const move of ["wheel", "touchstart", "pointerdown", "keydown"] as const) {
+      window.addEventListener(move, release, { passive: true });
+    }
     return () => {
       window.removeEventListener("scroll", onScroll);
       window.removeEventListener("resize", onScroll);
+      for (const move of ["wheel", "touchstart", "pointerdown", "keydown"] as const) {
+        window.removeEventListener(move, release);
+      }
       if (frame) cancelAnimationFrame(frame);
     };
   }, [days]);
@@ -108,6 +119,7 @@ export function TimelineNav({ days, idPrefix }: { days: NavDay[]; idPrefix: stri
           className="mt-1 h-9 w-full rounded-theme border border-border bg-surface px-2 text-sm"
           value={active ?? ""}
           onChange={(e) => {
+            asked.current = e.target.value;
             setActive(e.target.value);
             document.getElementById(e.target.value)?.scrollIntoView({ behavior: "smooth", block: "start" });
           }}
@@ -151,7 +163,10 @@ export function TimelineNav({ days, idPrefix }: { days: NavDay[]; idPrefix: stri
                         <a
                           href={`#${d.id}`}
                           data-day={d.id}
-                          onClick={() => setActive(d.id)}
+                          onClick={() => {
+                            asked.current = d.id;
+                            setActive(d.id);
+                          }}
                           aria-current={active === d.id ? "true" : undefined}
                           className={`flex items-baseline gap-1.5 pl-3 py-1 -ml-px border-l-2 transition-colors ${active === d.id ? "border-primary text-primary font-medium" : "border-transparent text-muted hover:text-text"}`}
                         >
