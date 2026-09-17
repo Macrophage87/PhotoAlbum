@@ -49,30 +49,39 @@ export function TimelineNav({ days, idPrefix }: { days: NavDay[]; idPrefix: stri
   const panel = useRef<HTMLElement>(null);
 
   /**
-   * Which day is under the reader's eye. The observer watches a band a fifth of the way down the page, and the
-   * day nearest the top of it wins.
+   * Which day is under the reader's eye: the last one to have passed a line a quarter of the way down the page.
    *
-   * The last day of an album can never reach that band — the page stops scrolling before it gets there — so when
-   * nothing is in the band the nearest day above it is taken instead. Without that, going to the end of a timeline
-   * left the panel still pointing at the middle of it.
+   * The end of a page cannot be scrolled past, so the final day never reaches that line however far you scroll —
+   * which left the panel pointing at the middle of an album while you looked at the end of it. So once the page
+   * has run out, the last day still on screen is taken as the one being read.
    */
   useEffect(() => {
     const els = days.map((d) => document.getElementById(d.id)).filter((e): e is HTMLElement => Boolean(e));
     if (!els.length) return;
-    const where = new Map<string, { top: number; inBand: boolean }>();
-    const io = new IntersectionObserver(
-      (entries) => {
-        for (const e of entries) where.set(e.target.id, { top: e.boundingClientRect.top, inBand: e.isIntersecting });
-        const seen = [...where.entries()];
-        const inBand = seen.filter(([, v]) => v.inBand).sort((a, b) => a[1].top - b[1].top);
-        const above = seen.filter(([, v]) => !v.inBand && v.top < 0).sort((a, b) => b[1].top - a[1].top);
-        const best = inBand[0] ?? above[0];
-        if (best) setActive(best[0]);
-      },
-      { rootMargin: "-20% 0px -60% 0px" },
-    );
-    els.forEach((e) => io.observe(e));
-    return () => io.disconnect();
+    let frame = 0;
+    const pick = () => {
+      frame = 0;
+      const atEnd = window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - 2;
+      const line = window.innerHeight * 0.25;
+      let best = els[0];
+      if (atEnd) {
+        for (const e of els) if (e.getBoundingClientRect().top < window.innerHeight) best = e;
+      } else {
+        for (const e of els) if (e.getBoundingClientRect().top <= line) best = e;
+      }
+      setActive(best.id);
+    };
+    const onScroll = () => {
+      if (!frame) frame = requestAnimationFrame(pick);
+    };
+    pick();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("resize", onScroll);
+    return () => {
+      window.removeEventListener("scroll", onScroll);
+      window.removeEventListener("resize", onScroll);
+      if (frame) cancelAnimationFrame(frame);
+    };
   }, [days]);
 
   // Follow the reader down the panel, without dragging the page about: only the panel's own scroll moves.
