@@ -48,14 +48,26 @@ export function TimelineNav({ days, idPrefix }: { days: NavDay[]; idPrefix: stri
   const [shut, setShut] = useState<Set<string>>(new Set());
   const panel = useRef<HTMLElement>(null);
 
-  // Which day is under the reader's eye. The observer watches the day headings, and the one nearest the top wins.
+  /**
+   * Which day is under the reader's eye. The observer watches a band a fifth of the way down the page, and the
+   * day nearest the top of it wins.
+   *
+   * The last day of an album can never reach that band — the page stops scrolling before it gets there — so when
+   * nothing is in the band the nearest day above it is taken instead. Without that, going to the end of a timeline
+   * left the panel still pointing at the middle of it.
+   */
   useEffect(() => {
     const els = days.map((d) => document.getElementById(d.id)).filter((e): e is HTMLElement => Boolean(e));
     if (!els.length) return;
+    const where = new Map<string, { top: number; inBand: boolean }>();
     const io = new IntersectionObserver(
       (entries) => {
-        const visible = entries.filter((e) => e.isIntersecting).sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
-        if (visible[0]) setActive(visible[0].target.id);
+        for (const e of entries) where.set(e.target.id, { top: e.boundingClientRect.top, inBand: e.isIntersecting });
+        const seen = [...where.entries()];
+        const inBand = seen.filter(([, v]) => v.inBand).sort((a, b) => a[1].top - b[1].top);
+        const above = seen.filter(([, v]) => !v.inBand && v.top < 0).sort((a, b) => b[1].top - a[1].top);
+        const best = inBand[0] ?? above[0];
+        if (best) setActive(best[0]);
       },
       { rootMargin: "-20% 0px -60% 0px" },
     );
@@ -130,6 +142,7 @@ export function TimelineNav({ days, idPrefix }: { days: NavDay[]; idPrefix: stri
                         <a
                           href={`#${d.id}`}
                           data-day={d.id}
+                          onClick={() => setActive(d.id)}
                           aria-current={active === d.id ? "true" : undefined}
                           className={`flex items-baseline gap-1.5 pl-3 py-1 -ml-px border-l-2 transition-colors ${active === d.id ? "border-primary text-primary font-medium" : "border-transparent text-muted hover:text-text"}`}
                         >
