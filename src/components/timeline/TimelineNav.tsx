@@ -144,7 +144,7 @@ export function TimelineNav({ days }: { days: NavDay[] }) {
                         aria-current={active === d.id ? "true" : undefined}
                         className={`flex items-baseline gap-1.5 pl-3 py-1 -ml-px border-l-2 transition-colors ${active === d.id ? "border-primary text-primary font-medium" : "border-transparent text-muted hover:text-text"}`}
                       >
-                        <span className="flex-1 truncate">{d.key === "undated" ? "No date" : formatDay(d.key, "short")}</span>
+                        <span className="flex-1 truncate">{d.key === "undated" ? "No date" : formatDay(d.key, "shortDay")}</span>
                         <span className="text-xs text-muted">{d.count}</span>
                       </a>
                     </li>

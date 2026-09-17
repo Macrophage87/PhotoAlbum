@@ -3,11 +3,12 @@ import { format } from "date-fns";
 import type { LocalDay } from "./local-day";
 
 /**
- * A day as people read it. Every style carries the year except "short", which is for a narrow rail of days that are
- * all in the same year; a family album spans decades, so a heading that says only "Wednesday, August 12" is a date
- * nobody can place.
+ * A day as people read it. Every style carries the year except "short" and "shortDay", which are for a list of days
+ * gathered under the month they fall in, where the year is already overhead; a family album spans decades, so a
+ * heading that says only "Wednesday, August 12" is a date nobody can place. "shortDay" names the weekday as well,
+ * because which day of the week it was is often how a day is remembered.
  */
-export function formatDay(day: LocalDay, style: "long" | "short" | "shortYear" | "weekday" = "long"): string {
+export function formatDay(day: LocalDay, style: "long" | "short" | "shortDay" | "shortYear" | "weekday" = "long"): string {
   const d = new Date(`${day}T12:00:00Z`);
   const opts: Intl.DateTimeFormatOptions =
     style === "long"
@@ -16,7 +17,9 @@ export function formatDay(day: LocalDay, style: "long" | "short" | "shortYear" |
         ? { weekday: "long", month: "long", day: "numeric", year: "numeric", timeZone: "UTC" }
         : style === "shortYear"
           ? { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" }
-          : { month: "short", day: "numeric", timeZone: "UTC" };
+          : style === "shortDay"
+            ? { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" }
+            : { month: "short", day: "numeric", timeZone: "UTC" };
   return d.toLocaleDateString("en-US", opts);
 }
 

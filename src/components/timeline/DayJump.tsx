@@ -82,7 +82,7 @@ export function DayJump({ days, current, label }: { days: NavDay[]; current: str
                             aria-current={d.id === current ? "true" : undefined}
                             className={`flex w-full items-baseline gap-2 rounded-theme px-2 py-2.5 text-left ${d.id === current ? "bg-surface-alt text-primary font-medium" : "hover:bg-surface-alt"}`}
                           >
-                            <span className="flex-1 truncate">{d.key === "undated" ? "No date" : formatDay(d.key, "short")}</span>
+                            <span className="flex-1 truncate">{d.key === "undated" ? "No date" : formatDay(d.key, "shortDay")}</span>
                             <span className="text-sm text-muted">{d.count} photo{d.count === 1 ? "" : "s"}</span>
                           </button>
                         </li>

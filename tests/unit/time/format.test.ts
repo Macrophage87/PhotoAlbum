@@ -11,4 +11,9 @@ describe("how a day is written", () => {
     expect(formatDay("2025-08-12", "short")).toBe("Aug 12");
     expect(formatDay("2025-08-12", "shortYear")).toBe("Aug 12, 2025");
   });
+
+  it("names the weekday in a list of days to go to: a day is often remembered as the Saturday it was", () => {
+    expect(formatDay("2025-08-12", "shortDay")).toBe("Tue, Aug 12");
+    expect(formatDay("1978-08-12", "shortDay")).toBe("Sat, Aug 12");
+  });
 });
