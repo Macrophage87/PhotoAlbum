@@ -21,7 +21,20 @@ function colourFor(key: string | null, index: Map<string, number>): string {
 export function GraphView({ data, minScore }: { data: GraphPayload; minScore: number }) {
   const container = useRef<HTMLDivElement>(null);
   const [threshold, setThreshold] = useState(minScore);
-  const [colourBy, setColourBy] = useState<ColourBy>("trip");
+  /**
+   * How many different answers each way of colouring gives here. Inside one trip, colouring by trip paints every
+   * item the same, which says nothing — so start on the first thing that actually tells these items apart.
+   */
+  const spread = useMemo(
+    () => ({
+      trip: new Set(data.nodes.map((n) => n.tripId ?? "")).size,
+      collection: new Set(data.nodes.map((n) => n.collectionIds[0] ?? "")).size,
+      person: new Set(data.nodes.map((n) => n.personIds[0] ?? "")).size,
+      uploader: new Set(data.nodes.map((n) => n.uploader)).size,
+    }),
+    [data],
+  );
+  const [colourBy, setColourBy] = useState<ColourBy>(() => (["trip", "collection", "person", "uploader"] as const).find((d) => spread[d] > 1) ?? "trip");
   const [open, setOpen] = useState<number | null>(null);
   const sigmaRef = useRef<Sigma | null>(null);
 

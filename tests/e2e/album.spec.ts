@@ -752,6 +752,36 @@ test("the similarity graph and the similar-photos strip are members-only and sho
   expect(res.headers()["content-security-policy"]).toMatch(/script-src 'self' 'nonce-[A-Za-z0-9+/=]+' 'strict-dynamic'/);
 });
 
+test("a trip and a collection each draw their own photographs by what they look like", async ({ context, page, request }) => {
+  // The album-wide graph is one page with a scope picker; a family looking for the four near-identical shots of the
+  // same puddle is looking inside one trip, so each trip and collection draws its own.
+  const anon = await request.get("/trips/acadia/graph");
+  expect(anon.url()).toContain("/auth/signin");
+
+  await signIn(context, ADMIN);
+  await expect.poll(async () => (await withDb((c) => c.query('SELECT count(*)::int AS n FROM "MediaSimilarity"'))).rows[0].n, { timeout: 30_000 }).toBeGreaterThan(0);
+
+  await page.goto("/trips/acadia");
+  await page.getByRole("link", { name: "Graph", exact: true }).click();
+  await expect(page).toHaveURL(/\/trips\/acadia\/graph$/);
+  await expect(page.getByRole("status")).toContainText(/\d+ items/);
+  await expect(page.getByTestId("graph-canvas").locator("canvas").first()).toBeVisible();
+  // Only this trip's photographs: the album-wide graph is wider, and the point of this page is that it is not.
+  const here = Number((await page.getByRole("status").textContent())!.match(/(\d+) items/)![1]);
+  const onTrip = (await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "Photo" p JOIN "Trip" t ON t.id = p."tripId" WHERE t.slug = 'acadia' AND p."embeddedAt" IS NOT NULL AND p.status = 'READY' AND p."trashedAt" IS NULL`))).rows[0].n;
+  expect(here).toBe(onTrip);
+
+  // Wait for the collection to actually hold something the album has looked at, so a slow embedding reads as slow
+  // rather than as the page being wrong.
+  await expect
+    .poll(async () => (await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "CollectionItem" ci JOIN "Collection" c ON c.id = ci."collectionId" JOIN "Photo" p ON p.id = ci."photoId" WHERE c.slug = 'best-of-2025' AND p."embeddedAt" IS NOT NULL AND p.status = 'READY' AND p."trashedAt" IS NULL`))).rows[0].n, { timeout: 30_000, intervals: [500] })
+    .toBeGreaterThan(1);
+  await page.goto("/collections/best-of-2025");
+  await page.getByRole("link", { name: "Graph", exact: true }).click();
+  await expect(page).toHaveURL(/\/collections\/best-of-2025\/graph$/);
+  await expect(page.getByTestId("graph-canvas").locator("canvas").first()).toBeVisible();
+});
+
 test("a Google Takeout archive in the inbox imports with dates, places, notes and a private album, then can be deleted", async ({ context, page }) => {
   const inbox = process.env.E2E_INBOX_DIR ?? "/tmp/photoalbum-e2e-inbox";
   const { copyFileSync, existsSync } = await import("node:fs");

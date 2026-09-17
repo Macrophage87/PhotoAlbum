@@ -8,6 +8,7 @@ import { dateColumnToDay } from "@/lib/time/local-day";
 import { getViewer } from "@/lib/auth/viewer";
 import { canViewTrip } from "@/lib/auth/access";
 import { canEditContainer } from "@/lib/auth/ownership";
+import { mlConfigured } from "@/lib/ml/client";
 import { getTripBySlug } from "@/lib/trips/queries";
 import { TripTheme } from "@/themes/TripTheme";
 import { Nav } from "@/components/layout/Nav";
@@ -52,6 +53,8 @@ export default async function TripLayout({ params, children }: LayoutProps<"/tri
     { href: `${base}/timeline`, label: "Timeline" },
     { href: `${base}/map`, label: "Map" },
     { href: `${base}/activities`, label: "Activities" },
+    // What the album thinks looks alike is for the family, not for whoever holds a share link.
+    ...(viewer.kind === "user" && mlConfigured() ? [{ href: `${base}/graph`, label: "Graph" }] : []),
     ...(owns ? [{ href: `${base}/import`, label: "Import tracks" }, { href: `${base}/settings`, label: "Settings" }] : []),
   ];
 

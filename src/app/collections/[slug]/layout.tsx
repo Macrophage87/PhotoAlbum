@@ -3,6 +3,7 @@ import { notFound, redirect } from "next/navigation";
 import { env } from "@/lib/env";
 import { getViewer } from "@/lib/auth/viewer";
 import { canEditContainer } from "@/lib/auth/ownership";
+import { mlConfigured } from "@/lib/ml/client";
 import { canViewCollection } from "@/lib/auth/access";
 import { collectionCoverFor, getCollectionBySlug, type CollectionWithCounts } from "@/lib/collections/queries";
 import { shareableCollectionUrl } from "@/lib/share/social";
@@ -46,6 +47,8 @@ export default async function CollectionLayout({ params, children }: LayoutProps
     { href: `${base}/photos`, label: "Photos" },
     { href: `${base}/timeline`, label: "Timeline" },
     { href: `${base}/map`, label: "Map" },
+    // What the album thinks looks alike is for the family, not for whoever holds a share link.
+    ...(viewer.kind === "user" && mlConfigured() ? [{ href: `${base}/graph`, label: "Graph" }] : []),
     ...(owns ? [{ href: `${base}/settings`, label: "Settings" }] : []),
   ];
   return (
