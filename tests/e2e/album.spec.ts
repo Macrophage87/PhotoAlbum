@@ -778,7 +778,8 @@ test("a trip and a collection each draw their own photographs by what they look 
   await expect.poll(async () => (await withDb((c) => c.query('SELECT count(*)::int AS n FROM "MediaSimilarity"'))).rows[0].n, { timeout: 30_000 }).toBeGreaterThan(0);
 
   await page.goto("/trips/acadia");
-  await page.getByRole("link", { name: "Graph", exact: true }).click();
+  // Scoped to the trip's own tabs: "Graph" is also the album-wide one up in the site's nav.
+  await page.getByTestId("trip-tabs").getByRole("link", { name: "Graph", exact: true }).click();
   await expect(page).toHaveURL(/\/trips\/acadia\/graph$/);
   await expect(page.getByRole("status")).toContainText(/\d+ items/);
   await expect(page.getByTestId("graph-canvas").locator("canvas").first()).toBeVisible();
@@ -793,7 +794,7 @@ test("a trip and a collection each draw their own photographs by what they look 
     .poll(async () => (await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "CollectionItem" ci JOIN "Collection" c ON c.id = ci."collectionId" JOIN "Photo" p ON p.id = ci."photoId" WHERE c.slug = 'best-of-2025' AND p."embeddedAt" IS NOT NULL AND p.status = 'READY' AND p."trashedAt" IS NULL`))).rows[0].n, { timeout: 30_000, intervals: [500] })
     .toBeGreaterThan(1);
   await page.goto("/collections/best-of-2025");
-  await page.getByRole("link", { name: "Graph", exact: true }).click();
+  await page.getByTestId("trip-tabs").getByRole("link", { name: "Graph", exact: true }).click();
   await expect(page).toHaveURL(/\/collections\/best-of-2025\/graph$/);
   await expect(page.getByTestId("graph-canvas").locator("canvas").first()).toBeVisible();
 });
@@ -2064,7 +2065,7 @@ test("a trip opens on its timeline, which can be asked for one photograph and st
   await expect(page.getByTestId("timeline-nav")).toBeVisible();
   await expect(page.locator("section[id^='day-']").first()).toBeVisible();
   // The tab for it is the first one and is the one marked, and what shapes the trip is at the far end.
-  const tabs = page.locator("nav ul li a");
+  const tabs = page.getByTestId("trip-tabs").locator("li a");
   const labels = await tabs.allInnerTexts();
   expect(labels[0]).toBe("Timeline");
   expect(labels.indexOf("Photos")).toBeGreaterThan(labels.indexOf("Map"));
