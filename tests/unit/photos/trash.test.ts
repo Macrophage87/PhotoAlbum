@@ -47,7 +47,7 @@ describe("an item in the trash", () => {
     expect((await tripPhotoPage(tripId)).total).toBe(1);
     expect((await listTripPhotos(tripId)).map((p) => p.id)).toEqual([keptId]);
     const days = await tripTimeline(tripId, "UTC");
-    expect(days.groups.flatMap((g) => g.items.flatMap((i) => i.photos ?? [])).map((p) => p.id)).toEqual([keptId]);
+    expect(days.flatMap((g) => g.items.flatMap((i) => i.photos ?? [])).map((p) => p.id)).toEqual([keptId]);
     const map = await buildMapPayload(member, tripId);
     expect(map.photos.features.map((f) => f.properties.id)).toEqual([keptId]);
   });

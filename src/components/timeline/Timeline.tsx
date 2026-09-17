@@ -1,24 +1,21 @@
-import Link from "next/link";
 import type { DayGroup } from "@/lib/timeline/build";
 import type { PhotoCard } from "@/lib/photos/queries";
 import { formatDay, formatLocalTime } from "@/lib/time/format";
 import { toGridPhoto } from "@/components/photos/toGrid";
 import { PhotoGrid } from "@/components/photos/PhotoGrid";
 import { ActivityCard, type ActivityCardData } from "@/components/activities/ActivityCard";
-import { DayJumpNav } from "./DayJumpNav";
+import { TimelineNav } from "./TimelineNav";
 import { DaySelect } from "./DaySelect";
 import { TimelineDrop } from "./TimelineDrop";
 
 export type TimelineGroups = DayGroup<PhotoCard, ActivityCardData>[];
 
-export type TimelinePaging = { base: string; /** True on any page after the first. */ paged: boolean; /** Encoded cursor for the next page, or null on the last. */ next: string | null };
-
-export function Timeline({ groups, tripSlug, timezone, member, idPrefix = "day", activityHrefBase, paging }: { groups: TimelineGroups; tripSlug: string; timezone: string; member: boolean; idPrefix?: string; activityHrefBase?: string; /** Day-boundary paging for long trips. */ paging?: TimelinePaging }) {
-  if (groups.length === 0 && !paging?.paged) return <p className="text-muted text-sm">Nothing on the timeline yet. Upload photos or add an activity.</p>;
+export function Timeline({ groups, tripSlug, timezone, member, idPrefix = "day", activityHrefBase }: { groups: TimelineGroups; tripSlug: string; timezone: string; member: boolean; idPrefix?: string; activityHrefBase?: string }) {
+  if (groups.length === 0) return <p className="text-muted text-sm">Nothing on the timeline yet. Upload photos or add an activity.</p>;
   const days = groups.map((g) => ({ key: g.dayKey ?? "undated", id: `${idPrefix}-${g.dayKey ?? "undated"}`, count: g.items.reduce((n, i) => n + (i.kind === "activity" ? 1 : i.photos.length), 0) }));
   return (
-    <div className="flex gap-8">
-      <DayJumpNav days={days} />
+    <div className="flex flex-col lg:flex-row gap-8">
+      <TimelineNav days={days} idPrefix={idPrefix} />
       <div className="flex-1 min-w-0 space-y-10">
         {groups.map((g, gi) => (
           <section key={days[gi].id} id={days[gi].id} className="scroll-mt-24">
@@ -64,12 +61,6 @@ export function Timeline({ groups, tripSlug, timezone, member, idPrefix = "day",
             </ol>
           </section>
         ))}
-        {paging && (paging.paged || paging.next) && (
-          <nav className="flex items-center justify-between text-sm pt-2" aria-label="Timeline pages">
-            {paging.paged ? <Link href={paging.base} className="text-primary hover:underline">← Back to the first days</Link> : <span />}
-            {paging.next && <Link href={`${paging.base}?after=${encodeURIComponent(paging.next)}`} className="text-primary hover:underline">Later days →</Link>}
-          </nav>
-        )}
       </div>
     </div>
   );

@@ -1948,3 +1948,43 @@ test("somebody the album missed is tagged by pointing at them, and can agree to 
     .poll(async () => (await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "Face" WHERE "photoId" = $1 AND "personId" = $2`, [photoId, personId]))).rows[0].n, { timeout: 15_000 })
     .toBe(0);
 });
+
+test("the timeline shows every day at once, with a panel down the side to reach any of them", async ({ context, page }) => {
+  test.setTimeout(180_000);
+  await signIn(context, ADMIN);
+  // Spread the trip's photographs over months, so the timeline is long enough to need navigating.
+  const trip = await withDb((c) => c.query(`SELECT id FROM "Trip" WHERE slug = 'acadia'`));
+  const ids = await withDb((c) => c.query(`SELECT id FROM "Photo" WHERE "tripId" = $1 AND status = 'READY' AND "trashedAt" IS NULL ORDER BY "createdAt" LIMIT 6`, [trip.rows[0].id]));
+  expect(ids.rows.length).toBeGreaterThan(2);
+  for (const [i, row] of ids.rows.entries()) {
+    await withDb((c) => c.query(`UPDATE "Photo" SET "takenAt" = $2, "takenAtSource" = 'EXIF_OFFSET', "tzOffsetMin" = 0 WHERE id = $1`, [row.id, new Date(Date.UTC(2025, 5 + i, 3 + i, 12))]));
+  }
+
+  await page.goto("/trips/acadia/timeline");
+  await page.waitForLoadState("networkidle");
+
+  // Every day the trip holds is on the page: no cursor in the address, and nothing offering a later page.
+  const days = page.locator("section[id^='day-']");
+  await expect.poll(async () => days.count(), { timeout: 20_000 }).toBeGreaterThanOrEqual(ids.rows.length);
+  await expect(page.getByRole("link", { name: /Later days/ })).toHaveCount(0);
+  expect(page.url()).not.toContain("after=");
+
+  // The panel lists the same days, gathered by month, and says how much the whole thing holds.
+  const nav = page.getByTestId("timeline-nav");
+  await expect(nav).toBeVisible();
+  await expect(nav).toContainText(/\d+ photos over \d+ days/);
+  expect(await nav.locator("a[data-day]").count()).toBe(await days.count());
+
+  // Pressing a day in the panel goes to it, and the panel marks where you are.
+  const last = nav.locator("a[data-day]").last();
+  const target = (await last.getAttribute("data-day"))!;
+  await last.click();
+  await expect(page.locator(`#${target}`)).toBeInViewport({ timeout: 10_000 });
+  await expect.poll(async () => nav.locator(`a[data-day="${target}"][aria-current="true"]`).count(), { timeout: 10_000 }).toBe(1);
+
+  // A month folds away without taking its neighbours with it.
+  const months = nav.locator("button[aria-expanded]");
+  const before = await nav.locator("a[data-day]").count();
+  await months.first().click();
+  await expect.poll(async () => nav.locator("a[data-day]").count()).toBeLessThan(before);
+});
