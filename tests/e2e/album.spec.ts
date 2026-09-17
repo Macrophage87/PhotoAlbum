@@ -1957,7 +1957,9 @@ test("the timeline shows every day at once, with a panel down the side to reach 
   const ids = await withDb((c) => c.query(`SELECT id FROM "Photo" WHERE "tripId" = $1 AND status = 'READY' AND "trashedAt" IS NULL ORDER BY "createdAt" LIMIT 6`, [trip.rows[0].id]));
   expect(ids.rows.length).toBeGreaterThan(2);
   for (const [i, row] of ids.rows.entries()) {
-    await withDb((c) => c.query(`UPDATE "Photo" SET "takenAt" = $2, "takenAtSource" = 'EXIF_OFFSET', "tzOffsetMin" = 0 WHERE id = $1`, [row.id, new Date(Date.UTC(2025, 5 + i, 3 + i, 12))]));
+    // Off any activity as well: a photograph filed on one is shown inside that activity's card, under the
+    // activity's day rather than its own, so re-dating it alone would not give the timeline a new day.
+    await withDb((c) => c.query(`UPDATE "Photo" SET "takenAt" = $2, "takenAtSource" = 'EXIF_OFFSET', "tzOffsetMin" = 0, "activityId" = NULL WHERE id = $1`, [row.id, new Date(Date.UTC(2025, 5 + i, 3 + i, 12))]));
   }
 
   await page.goto("/trips/acadia/timeline");
