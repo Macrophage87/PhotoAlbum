@@ -13,7 +13,27 @@ export type GraphScope = { kind: "all" } | { kind: "trip"; slug: string } | { ki
 export type GraphNode = { id: string; thumb: string; medium: string; alt: string; caption: string | null; tripId: string | null; tripTitle: string | null; collectionIds: string[]; personIds: string[]; uploader: string; takenAt: string | null; kind: string };
 export type GraphPayload = { nodes: GraphNode[]; edges: { a: string; b: string; score: number }[]; capped: boolean; legend: { trips: { id: string; title: string }[]; collections: { id: string; title: string }[]; people: { id: string; name: string }[] } };
 
+/**
+ * What the graph is being asked to draw.
+ *
+ * Two spellings, because two things ask. A link says what it means outright — `?trip=acadia` — while the picker on
+ * the page is a single <select>, which can only ever send one name however many kinds of thing it offers, so it
+ * sends the kind along with the value as `?scope=trip=acadia`. Reading only the first spelling is what left the
+ * picker doing nothing at all: whatever was chosen, the page went on drawing what it had been drawing.
+ */
 export function parseScope(sp: URLSearchParams): GraphScope {
+  const picked = sp.get("scope");
+  if (picked) {
+    const at = picked.indexOf("=");
+    const kind = at < 0 ? picked : picked.slice(0, at);
+    const value = at < 0 ? "" : picked.slice(at + 1);
+    if (value) {
+      if (kind === "trip") return { kind: "trip", slug: value };
+      if (kind === "collection") return { kind: "collection", slug: value };
+      if (kind === "person") return { kind: "person", id: value };
+    }
+    return { kind: "all" };
+  }
   const trip = sp.get("trip");
   const collection = sp.get("collection");
   const person = sp.get("person");

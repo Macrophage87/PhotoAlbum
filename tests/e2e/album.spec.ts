@@ -747,6 +747,14 @@ test("the similarity graph and the similar-photos strip are members-only and sho
   await page.goto("/graph");
   await expect(page.getByRole("status")).toContainText(/\d+ items · [1-9]\d* links/);
   await expect(page.getByTestId("graph-canvas").locator("canvas").first()).toBeVisible();
+
+  // Choosing a scope actually narrows it. The picker is one <select>, so it sends the kind and the value together
+  // under one name, and the page used to read only the plain spelling — so whatever was chosen, nothing changed.
+  await page.getByLabel("Scope").selectOption("trip=acadia");
+  await page.getByRole("button", { name: "Show" }).click();
+  await expect(page.getByRole("status")).toContainText(/\d+ items/);
+  const onTrip = (await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "Photo" p JOIN "Trip" t ON t.id = p."tripId" WHERE t.slug = 'acadia' AND p."embeddedAt" IS NOT NULL AND p.status = 'READY' AND p."trashedAt" IS NULL`))).rows[0].n;
+  expect(Number((await page.getByRole("status").textContent())!.match(/(\d+) items/)![1])).toBe(onTrip);
   // Pages carry a per-request nonce policy; the API keeps the frame-only one.
   const res = await request.get("/graph");
   expect(res.headers()["content-security-policy"]).toMatch(/script-src 'self' 'nonce-[A-Za-z0-9+/=]+' 'strict-dynamic'/);
