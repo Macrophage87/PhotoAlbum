@@ -2002,3 +2002,26 @@ test("the timeline shows every day at once, with a panel down the side to reach 
   await months.first().click();
   await expect.poll(async () => nav.locator("a[data-day]").count()).toBeLessThan(before);
 });
+
+test("on a phone the day heading itself opens the whole timeline to choose from", async ({ context, page }) => {
+  await signIn(context, ADMIN);
+  // A phone, where there is no room for the panel beside the path — and the heading is the only thing always on screen.
+  await page.setViewportSize({ width: 390, height: 780 });
+  await page.goto("/trips/acadia/timeline");
+  await page.waitForLoadState("networkidle");
+  await expect(page.getByTestId("timeline-nav")).toBeHidden();
+
+  await page.getByTestId("day-jump").first().click();
+  const sheet = page.getByTestId("day-jump-sheet");
+  await expect(sheet).toBeVisible();
+  // Every day is offered, and the one being read is marked.
+  const days = page.locator("section[id^='day-']");
+  expect(await sheet.locator("[data-day-jump]").count()).toBe(await days.count());
+  await expect(sheet.locator('[data-day-jump][aria-current="true"]')).toHaveCount(1);
+
+  const last = sheet.locator("[data-day-jump]").last();
+  const target = (await last.getAttribute("data-day-jump"))!;
+  await last.click();
+  await expect(sheet).toBeHidden();
+  await expect(page.locator(`#${target}`)).toBeInViewport({ timeout: 10_000 });
+});

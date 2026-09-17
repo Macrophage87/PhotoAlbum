@@ -6,6 +6,7 @@ import { PhotoGrid } from "@/components/photos/PhotoGrid";
 import { ActivityCard, type ActivityCardData } from "@/components/activities/ActivityCard";
 import { TimelineNav } from "./TimelineNav";
 import { DaySelect } from "./DaySelect";
+import { DayJump } from "./DayJump";
 import { TimelineDrop } from "./TimelineDrop";
 
 export type TimelineGroups = DayGroup<PhotoCard, ActivityCardData>[];
@@ -15,14 +16,14 @@ export function Timeline({ groups, tripSlug, timezone, member, idPrefix = "day",
   const days = groups.map((g) => ({ key: g.dayKey ?? "undated", id: `${idPrefix}-${g.dayKey ?? "undated"}`, count: g.items.reduce((n, i) => n + (i.kind === "activity" ? 1 : i.photos.length), 0) }));
   return (
     <div className="flex flex-col lg:flex-row gap-8">
-      <TimelineNav days={days} idPrefix={idPrefix} />
+      <TimelineNav days={days} />
       <div className="flex-1 min-w-0 space-y-10">
         {groups.map((g, gi) => (
           <section key={days[gi].id} id={days[gi].id} className="scroll-mt-24">
             {/* The heading is a drop target too: a photograph under the wrong day is dragged to the right one. */}
             <TimelineDrop kind="day" target={g.dayKey} label={g.dayKey ? formatDay(g.dayKey, "weekday") : "Undated"} className="sticky top-14 bg-bg/90 backdrop-blur z-10">
               <h2 className="font-display text-xl font-semibold py-2 flex flex-wrap items-baseline gap-x-3">
-                <span>{g.dayKey ? formatDay(g.dayKey, "weekday") : "Undated"}</span>
+                <DayJump days={days} current={days[gi].id} label={g.dayKey ? formatDay(g.dayKey, "weekday") : "Undated"} />
                 {member && <DaySelect ids={g.items.flatMap((i) => i.photos.map((p) => p.id))} label={g.dayKey ? "this day" : "these"} />}
               </h2>
             </TimelineDrop>

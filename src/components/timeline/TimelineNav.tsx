@@ -42,7 +42,7 @@ function monthLabel(key: string, withYear: boolean): string {
  * each, and the day you are looking at marked as you scroll. Months fold away so a long album stays a list you can
  * run your eye down, and the month you are in unfolds itself.
  */
-export function TimelineNav({ days, idPrefix }: { days: NavDay[]; idPrefix: string }) {
+export function TimelineNav({ days }: { days: NavDay[] }) {
   const months = useMemo(() => monthsOf(days), [days]);
   const [active, setActive] = useState<string | null>(days[0]?.id ?? null);
   const [shut, setShut] = useState<Set<string>>(new Set());
@@ -110,78 +110,51 @@ export function TimelineNav({ days, idPrefix }: { days: NavDay[]; idPrefix: stri
   const activeMonth = months.find((m) => m.days.some((d) => d.id === active))?.key;
 
   return (
-    <>
-      {/* Narrow screens have no room beside the path, so the same list becomes one control above it. */}
-      <div className="lg:hidden mb-4">
-        <label className="text-xs text-muted" htmlFor={`${idPrefix}-jump`}>Jump to</label>
-        <select
-          id={`${idPrefix}-jump`}
-          className="mt-1 h-9 w-full rounded-theme border border-border bg-surface px-2 text-sm"
-          value={active ?? ""}
-          onChange={(e) => {
-            asked.current = e.target.value;
-            setActive(e.target.value);
-            document.getElementById(e.target.value)?.scrollIntoView({ behavior: "smooth", block: "start" });
-          }}
-        >
-          {months.map((m) => (
-            <optgroup key={m.key} label={m.label}>
-              {m.days.map((d) => (
-                <option key={d.id} value={d.id}>
-                  {d.key === "undated" ? "No date" : formatDay(d.key, "short")} · {d.count}
-                </option>
-              ))}
-            </optgroup>
-          ))}
-        </select>
-      </div>
-
-      <nav ref={panel} aria-label="The whole timeline" data-testid="timeline-nav" className="hidden lg:block sticky top-20 self-start w-56 shrink-0 max-h-[calc(100vh-7rem)] overflow-y-auto pr-1">
-        <p className="text-xs text-muted mb-2">
-          {total} photo{total === 1 ? "" : "s"} over {days.filter((d) => d.key !== "undated").length} day
-          {days.filter((d) => d.key !== "undated").length === 1 ? "" : "s"}
-        </p>
-        <ul className="space-y-2 text-sm">
-          {months.map((m) => {
-            const open = !shut.has(m.key) || m.key === activeMonth;
-            return (
-              <li key={m.key}>
-                <button
-                  type="button"
-                  aria-expanded={open}
-                  onClick={() => setShut((s) => { const next = new Set(s); if (next.has(m.key)) next.delete(m.key); else next.add(m.key); return next; })}
-                  className={`flex w-full items-baseline gap-1.5 text-left font-medium ${m.key === activeMonth ? "text-text" : "text-muted hover:text-text"}`}
-                >
-                  <span aria-hidden className={`text-[10px] transition-transform ${open ? "rotate-90" : ""}`}>▶</span>
-                  <span className="flex-1 truncate">{m.label}</span>
-                  <span className="text-xs text-muted">{m.count}</span>
-                </button>
-                {open && (
-                  <ul className="mt-1 border-l border-border">
-                    {m.days.map((d) => (
-                      <li key={d.id}>
-                        <a
-                          href={`#${d.id}`}
-                          data-day={d.id}
-                          onClick={() => {
-                            asked.current = d.id;
-                            setActive(d.id);
-                          }}
-                          aria-current={active === d.id ? "true" : undefined}
-                          className={`flex items-baseline gap-1.5 pl-3 py-1 -ml-px border-l-2 transition-colors ${active === d.id ? "border-primary text-primary font-medium" : "border-transparent text-muted hover:text-text"}`}
-                        >
-                          <span className="flex-1 truncate">{d.key === "undated" ? "No date" : formatDay(d.key, "short")}</span>
-                          <span className="text-xs text-muted">{d.count}</span>
-                        </a>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </li>
-            );
-          })}
-        </ul>
-      </nav>
-    </>
+    <nav ref={panel} aria-label="The whole timeline" data-testid="timeline-nav" className="hidden lg:block sticky top-20 self-start w-56 shrink-0 max-h-[calc(100vh-7rem)] overflow-y-auto pr-1">
+      <p className="text-xs text-muted mb-2">
+        {total} photo{total === 1 ? "" : "s"} over {days.filter((d) => d.key !== "undated").length} day
+        {days.filter((d) => d.key !== "undated").length === 1 ? "" : "s"}
+      </p>
+      <ul className="space-y-2 text-sm">
+        {months.map((m) => {
+          const open = !shut.has(m.key) || m.key === activeMonth;
+          return (
+            <li key={m.key}>
+              <button
+                type="button"
+                aria-expanded={open}
+                onClick={() => setShut((s) => { const next = new Set(s); if (next.has(m.key)) next.delete(m.key); else next.add(m.key); return next; })}
+                className={`flex w-full items-baseline gap-1.5 text-left font-medium ${m.key === activeMonth ? "text-text" : "text-muted hover:text-text"}`}
+              >
+                <span aria-hidden className={`text-[10px] transition-transform ${open ? "rotate-90" : ""}`}>▶</span>
+                <span className="flex-1 truncate">{m.label}</span>
+                <span className="text-xs text-muted">{m.count}</span>
+              </button>
+              {open && (
+                <ul className="mt-1 border-l border-border">
+                  {m.days.map((d) => (
+                    <li key={d.id}>
+                      <a
+                        href={`#${d.id}`}
+                        data-day={d.id}
+                        onClick={() => {
+                          asked.current = d.id;
+                          setActive(d.id);
+                        }}
+                        aria-current={active === d.id ? "true" : undefined}
+                        className={`flex items-baseline gap-1.5 pl-3 py-1 -ml-px border-l-2 transition-colors ${active === d.id ? "border-primary text-primary font-medium" : "border-transparent text-muted hover:text-text"}`}
+                      >
+                        <span className="flex-1 truncate">{d.key === "undated" ? "No date" : formatDay(d.key, "short")}</span>
+                        <span className="text-xs text-muted">{d.count}</span>
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+  </nav>
   );
 }
