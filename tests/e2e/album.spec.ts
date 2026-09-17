@@ -1754,8 +1754,10 @@ test("a photograph says it is done as soon as it is done, while the rest are sti
   const files = Array.from({ length: 4 }, (_, i) => ({
     name: `slow-${tag}-${i}.jpg`,
     mimeType: "image/jpeg",
-    // Big enough that sending them all takes far longer than the wait between asking.
-    buffer: Buffer.concat([fs.readFileSync(fixture("photo-with-gps.jpg")), Buffer.alloc(700_000, i + 1), Buffer.from(`\n<!-- ${randomUUID()} -->`)]),
+    // The first is small and the rest are large on purpose. Sending them all has to take far longer than the wait
+    // between asking, and the first one has to be finished and processed while the others are still climbing —
+    // four of a size leaves that to chance, and a machine that processes slowly enough finishes the batch first.
+    buffer: Buffer.concat([fs.readFileSync(fixture("photo-with-gps.jpg")), Buffer.alloc(i === 0 ? 150_000 : 3_000_000, i + 1), Buffer.from(`\n<!-- ${randomUUID()} -->`)]),
   }));
   const started = Date.now();
   await page.locator("#photo-file-input").setInputFiles(files);
