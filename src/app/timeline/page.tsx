@@ -69,7 +69,7 @@ export default async function GlobalTimelinePage({ searchParams }: PageProps<"/t
           <CollectionFilter current={filter ? { slug: filter.slug, title: filter.title } : null} basePath="/timeline" />
         </div>
         <div className="mb-6">
-          <GalleryFilters filter={narrow} action="/timeline" placeholder="Search the whole album" />
+          <GalleryFilters filter={narrow} action="/timeline" placeholder="Search the whole album" hidden={filter ? { collection: filter.slug } : undefined} />
         </div>
         {editable ? <SelectionProvider>{body}</SelectionProvider> : body}
       </Container>

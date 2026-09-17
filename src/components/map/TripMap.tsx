@@ -12,7 +12,7 @@ import type { ActivityType } from "@/generated/prisma/enums";
 import { ActivityTypeIcon } from "@/components/activities/ActivityTypeIcon";
 import { formatDistance } from "@/lib/time/format";
 
-export function TripMap({ src, theme, showTripList = false, activityHrefBase }: { src: string; theme: MapTheme; showTripList?: boolean; /** Override the activity link root, e.g. for share pages. */ activityHrefBase?: string }) {
+export function TripMap({ src, theme, showTripList = false, activityHrefBase, narrowed = false }: { src: string; theme: MapTheme; showTripList?: boolean; /** Override the activity link root, e.g. for share pages. */ activityHrefBase?: string; /** Something is being looked for, so an empty map means "no match" rather than "nothing placed yet". */ narrowed?: boolean }) {
   const activityHref = (tripSlug: string, activityId: string) => `${activityHrefBase ?? `/trips/${tripSlug}/activities`}/${activityId}`;
   const [data, setData] = useState<MapPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -63,8 +63,10 @@ export function TripMap({ src, theme, showTripList = false, activityHrefBase }: 
         />
         {empty && (
           <div className="absolute inset-x-0 top-3 px-3 text-center pointer-events-none">
-            <span className="inline-block max-w-md bg-surface/90 text-muted text-sm px-3 py-1.5 rounded-theme border border-border">
-              Nothing to put on the map here yet. A photo gets its place from the camera, from a track covering the moment it was taken, or from one a family member sets by hand.
+            <span className="inline-block max-w-md bg-surface/90 text-muted text-sm px-3 py-1.5 rounded-theme border border-border" data-testid={narrowed ? "map-no-matches" : "map-empty"}>
+              {narrowed
+                ? "Nothing with a place on it matches that. A photograph is only on the map once it has somewhere to be."
+                : "Nothing to put on the map here yet. A photo gets its place from the camera, from a track covering the moment it was taken, or from one a family member sets by hand."}
             </span>
           </div>
         )}
@@ -84,7 +86,7 @@ export function TripMap({ src, theme, showTripList = false, activityHrefBase }: 
           </div>
         )}
         <div>
-          <h3 className="text-sm font-medium text-muted mb-2">
+          <h3 className="text-sm font-medium text-muted mb-2" data-testid="map-count">
             {tracks.length} track{tracks.length === 1 ? "" : "s"} · {photos.length} photo{photos.length === 1 ? "" : "s"}
           </h3>
           <ul className="space-y-1">

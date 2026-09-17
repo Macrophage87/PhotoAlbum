@@ -7,6 +7,9 @@ import { spreadOverlapping } from "./jitter";
 import { getTheme } from "@/themes";
 import { ACTIVITY_COLOR } from "@/lib/activities/types";
 import { NOT_TRASHED } from "@/lib/photos/trash";
+import { Prisma } from "@/generated/prisma/client";
+import { filterIsActive, NO_FILTER, type GalleryFilter } from "@/lib/photos/filters";
+import { idsInLocalYear, idsMatching, intersectIds } from "@/lib/photos/page";
 
 export type PhotoFeatureProps = { id: string; thumbUrl: string; mediumUrl: string; caption: string | null; takenAt: string | null; tripSlug: string; tripTitle: string; activityId: string | null; gpsSource: string | null };
 export type TrackFeatureProps = { trackId: string; activityId: string | null; activityTitle: string | null; activityType: string | null; source: string; name: string; tripSlug: string; tripTitle: string; color: string; startTime: string; distanceM: number | null };
@@ -18,6 +21,31 @@ export type MapPayload = {
   trips: { slug: string; title: string; themeKey: string; bounds: [[number, number], [number, number]] | null }[];
 };
 
+
+/**
+ * The question narrowed down to a clause the photo query can take.
+ *
+ * Words and years are answered as id lists, exactly as the galleries and the timelines answer them, so the same
+ * search means the same thing on every surface: asking the map for "lighthouse" shows where the lighthouse
+ * photographs were taken, which is a thing a map can answer and a list cannot.
+ */
+async function narrowing(filter: GalleryFilter, tripId: string | null): Promise<{ where: Prisma.PhotoWhereInput; nothing: boolean }> {
+  const lists: string[][] = [];
+  if (filter.q) lists.push(await idsMatching(filter.q));
+  if (filter.year) lists.push(await idsInLocalYear(tripId, filter.year));
+  const restrict = lists.length ? intersectIds(lists) : null;
+  if (restrict && restrict.length === 0) return { where: {}, nothing: true };
+  return {
+    where: {
+      ...(filter.uploaderId ? { uploaderId: filter.uploaderId } : {}),
+      ...(filter.kind ? { kind: filter.kind } : {}),
+      ...(filter.activityId ? { activityId: filter.activityId } : {}),
+      ...(restrict ? { id: { in: restrict } } : {}),
+    },
+    nothing: false,
+  };
+}
+
 /**
  * Photos and tracks for one trip, or everything the viewer may see.
  *
@@ -25,30 +53,39 @@ export type MapPayload = {
  * a collection, and those used to be missing from this map while showing up perfectly well on a collection's own map.
  * The filter every other surface uses decides what is here, and a trip is only needed to name and colour what it holds.
  */
-export async function buildMapPayload(viewer: Viewer, tripId?: string): Promise<MapPayload> {
+export async function buildMapPayload(viewer: Viewer, tripId?: string, filter: GalleryFilter = NO_FILTER): Promise<MapPayload> {
+  const active = filterIsActive(filter);
+  const narrowed = await narrowing(filter, tripId ?? null);
   const tripWhere = tripId ? { id: tripId } : visibleTripsWhere(viewer);
   const trips = await db.trip.findMany({ where: tripWhere, select: { id: true, slug: true, title: true, themeKey: true }, orderBy: { startDate: "desc" } });
   const tripIds = trips.map((t) => t.id);
   const tripById = new Map(trips.map((t) => [t.id, t]));
 
-  const [found, tracks] = await Promise.all([
-    db.photo.findMany({
-      where: {
-        ...(tripId ? { tripId } : visibleMediaWhere(viewer)),
-        ...NOT_TRASHED,
-        status: "READY",
-        lat: { not: null },
-        lng: { not: null },
-      },
-      select: { id: true, lat: true, lng: true, caption: true, takenAt: true, updatedAt: true, tripId: true, activityId: true, gpsSource: true },
-      orderBy: { takenAt: "asc" },
-    }),
+  const [found, allTracks] = await Promise.all([
+    // Nothing can match: say so without asking the database a question whose answer is already known.
+    narrowed.nothing
+      ? []
+      : db.photo.findMany({
+          where: {
+            ...(tripId ? { tripId } : visibleMediaWhere(viewer)),
+            ...NOT_TRASHED,
+            status: "READY",
+            lat: { not: null },
+            lng: { not: null },
+            ...narrowed.where,
+          },
+          select: { id: true, lat: true, lng: true, caption: true, takenAt: true, updatedAt: true, tripId: true, activityId: true, gpsSource: true },
+          orderBy: { takenAt: "asc" },
+        }),
     db.track.findMany({
       where: { tripId: { in: tripIds } },
       select: { id: true, tripId: true, name: true, source: true, simplified: true, startTime: true, minLat: true, maxLat: true, minLng: true, maxLng: true, activity: { select: { id: true, title: true, type: true } }, stats: { select: { distanceM: true } } },
       orderBy: { startTime: "asc" },
     }),
   ]);
+  // Narrowed, a track stays only while a photograph inside its activity does, which is the rule the timeline keeps.
+  const withPhotos = new Set(found.map((p) => p.activityId).filter(Boolean) as string[]);
+  const tracks = active ? allTracks.filter((t) => t.activity && withPhotos.has(t.activity.id)) : allTracks;
 
   const tripBounds = new Map<string, Bounds | null>();
   const add = (id: string, b: Bounds) => tripBounds.set(id, mergeBounds(tripBounds.get(id) ?? null, b));
@@ -101,9 +138,10 @@ export async function buildMapPayload(viewer: Viewer, tripId?: string): Promise<
 }
 
 /** Photos in a collection (no tracks). The caller has already checked the viewer may open the collection; a photo's trip is named only when the viewer may open that trip too. */
-export async function buildCollectionMapPayload(viewer: Viewer, collectionId: string): Promise<MapPayload> {
-  const found = await db.photo.findMany({
-    where: { ...NOT_TRASHED, status: "READY", lat: { not: null }, lng: { not: null }, collections: { some: { collectionId } } },
+export async function buildCollectionMapPayload(viewer: Viewer, collectionId: string, filter: GalleryFilter = NO_FILTER): Promise<MapPayload> {
+  const narrowed = await narrowing(filter, null);
+  const found = narrowed.nothing ? [] : await db.photo.findMany({
+    where: { ...NOT_TRASHED, status: "READY", lat: { not: null }, lng: { not: null }, collections: { some: { collectionId } }, ...narrowed.where },
     select: { id: true, lat: true, lng: true, caption: true, takenAt: true, updatedAt: true, activityId: true, gpsSource: true, trip: { select: { id: true, slug: true, title: true, visibility: true, shareToken: true } } },
     orderBy: { takenAt: "asc" },
   });

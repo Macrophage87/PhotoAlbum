@@ -2057,6 +2057,36 @@ test("the timeline shows every day at once, with a panel down the side to reach 
   await expect.poll(async () => nav.locator("a[data-day]").count()).toBeLessThan(before);
 });
 
+test("the map can be asked where something was, and shows only those places", async ({ context, page }) => {
+  await signIn(context, ADMIN);
+  // A photograph of this trip that has a place on it, given a word of its own to be found by.
+  const placed = await withDb((c) => c.query(`SELECT p.id FROM "Photo" p JOIN "Trip" t ON t.id = p."tripId" WHERE t.slug = 'acadia' AND p.status = 'READY' AND p."trashedAt" IS NULL AND p.lat IS NOT NULL ORDER BY p.id LIMIT 1`));
+  expect(placed.rows.length).toBe(1);
+  const id = placed.rows[0].id as string;
+  await withDb((c) => c.query(`UPDATE "Photo" SET caption = 'thunderhole qqx' WHERE id = $1`, [id]));
+
+  await page.goto("/trips/acadia/map");
+  await expect(page.getByTestId("map-count")).toBeVisible();
+  const all = Number((await page.getByTestId("map-count").textContent())!.match(/(\d+) photo/)![1]);
+  expect(all).toBeGreaterThan(1);
+
+  await page.getByPlaceholder("Search this trip").fill("thunderhole qqx");
+  await page.getByRole("button", { name: "Search" }).click();
+  await expect(page).toHaveURL(/q=thunderhole/);
+  // Only where that one was taken, and the tracks go with it: a narrowed map is the matches and nothing else.
+  await expect(page.getByTestId("map-count")).toHaveText(/0 tracks · 1 photo$/);
+
+  // A question with no answer says it is a question with no answer, not that nothing has been placed.
+  await page.goto("/trips/acadia/map?q=qqzznothingatall");
+  await expect(page.getByTestId("map-no-matches")).toBeVisible();
+
+  // And the same question on the album-wide map, where it reaches every trip.
+  await page.goto("/map?q=thunderhole+qqx");
+  await expect(page.getByTestId("map-count")).toHaveText(/0 tracks · 1 photo$/);
+
+  await withDb((c) => c.query(`UPDATE "Photo" SET caption = NULL WHERE id = $1`, [id]));
+});
+
 test("a trip opens on its timeline, which can be asked for one photograph and still shows the day around it", async ({ context, page }) => {
   await signIn(context, ADMIN);
 

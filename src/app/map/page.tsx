@@ -6,6 +6,8 @@ import { TripMap } from "@/components/map/TripMap";
 import { listVisibleCollections } from "@/lib/collections/queries";
 import { CollectionFilter } from "@/components/collections/CollectionFilter";
 import { ButtonLink } from "@/components/ui";
+import { GalleryFilters } from "@/components/photos/GalleryFilters";
+import { filterIsActive, filterQuery, parseGalleryFilter } from "@/lib/photos/filters";
 
 export const metadata = { title: "Map" };
 
@@ -14,6 +16,8 @@ export default async function GlobalMapPage({ searchParams }: PageProps<"/map">)
   const sp = await searchParams;
   const collections = await listVisibleCollections(viewer);
   const filter = typeof sp.collection === "string" ? collections.find((c) => c.slug === sp.collection) : undefined;
+  const narrow = parseGalleryFilter(sp, { member: viewer.kind === "user" });
+  const query = filterQuery(narrow);
   return (
     <AppShell viewer={viewer}>
       <Container className="py-8 space-y-4">
@@ -24,7 +28,14 @@ export default async function GlobalMapPage({ searchParams }: PageProps<"/map">)
             <CollectionFilter current={filter ? { slug: filter.slug, title: filter.title } : null} basePath="/map" />
           </div>
         </div>
-        <TripMap key={filter?.slug ?? "all"} src={filter ? `/api/collections/${filter.slug}/geojson` : "/api/map/geojson"} theme={mapThemeOf(getTheme(filter?.themeKey ?? "default"))} showTripList={!filter} />
+        <GalleryFilters filter={narrow} action="/map" placeholder="Search the whole album" hidden={filter ? { collection: filter.slug } : undefined} />
+        <TripMap
+          key={`${filter?.slug ?? "all"}:${query}`}
+          src={`${filter ? `/api/collections/${filter.slug}/geojson` : "/api/map/geojson"}${query ? `?${query}` : ""}`}
+          theme={mapThemeOf(getTheme(filter?.themeKey ?? "default"))}
+          showTripList={!filter}
+          narrowed={filterIsActive(narrow)}
+        />
       </Container>
     </AppShell>
   );

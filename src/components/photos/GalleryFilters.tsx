@@ -12,7 +12,7 @@ const control = "h-9 rounded-theme border border-border bg-surface px-2 text-sm"
  * A plain form that submits to the page it is on, so the narrowed gallery is an ordinary address — one a member can
  * bookmark, send to a cousin, or reload without losing. No JavaScript is involved in any of it.
  */
-export function GalleryFilters({ filter, action, members, activities, years, placeholder = "Search these photos" }: {
+export function GalleryFilters({ filter, action, members, activities, years, placeholder = "Search these photos", hidden }: {
   filter: GalleryFilter;
   /** Where the form submits: the page's own path. */
   action: string;
@@ -21,10 +21,16 @@ export function GalleryFilters({ filter, action, members, activities, years, pla
   activities?: FilterOption[];
   years?: number[];
   placeholder?: string;
+  /** Anything else the address is already saying that this form must not drop, such as which collection is shown. */
+  hidden?: Record<string, string>;
 }) {
   const active = filterIsActive(filter);
+  const keep = new URLSearchParams(hidden ?? {}).toString();
   return (
     <form method="get" action={action} className="flex flex-wrap items-center gap-2" data-testid="gallery-filters">
+      {Object.entries(hidden ?? {}).map(([k, v]) => (
+        <input key={k} type="hidden" name={k} value={v} />
+      ))}
       <label htmlFor="gallery-q" className="sr-only">{placeholder}</label>
       <input
         id="gallery-q"
@@ -71,7 +77,7 @@ export function GalleryFilters({ filter, action, members, activities, years, pla
 
       <Button type="submit" variant="secondary" size="sm">Search</Button>
       {active && (
-        <Link href={action} className="text-sm text-primary underline-offset-2 hover:underline" data-testid="clear-filters">
+        <Link href={keep ? `${action}?${keep}` : action} className="text-sm text-primary underline-offset-2 hover:underline" data-testid="clear-filters">
           Clear
         </Link>
       )}
