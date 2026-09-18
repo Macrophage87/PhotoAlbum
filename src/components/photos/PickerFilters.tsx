@@ -77,8 +77,8 @@ export function PickerFilters({ filter, action, initialTrip, members, people, sh
       {people && people.length > 0 && (
         <div>
           <Label htmlFor="person">Who is in it</Label>
-          <Select id="person" name="person" defaultValue={filter.personId ?? ""} className="h-9 w-44 text-sm" data-testid="who-filter">
-            <option value="">Anybody</option>
+          {/* Several at once means all of them, as everywhere else the album asks this. */}
+          <Select id="person" name="person" multiple size={Math.min(6, people.length + 1)} defaultValue={filter.personIds} className="w-44 text-sm h-auto py-1" data-testid="who-filter">
             {people.some((p) => p.kind === "HUMAN") && (
               <optgroup label="People">
                 {people.filter((p) => p.kind === "HUMAN").map((p) => (
@@ -94,6 +94,7 @@ export function PickerFilters({ filter, action, initialTrip, members, people, sh
               </optgroup>
             )}
           </Select>
+          <span className="block text-xs text-muted">Choose several for the ones they are all in</span>
         </div>
       )}
 

@@ -2061,12 +2061,20 @@ test("a search can ask for a particular person or pet, and the rest of the quest
   await signIn(context, ADMIN);
   // Somebody on exactly one of this trip's photographs. A tag is a face with a box and no confidence, which is the
   // same thing to a search as a name the detector's find was confirmed with.
-  const one = await withDb((c) => c.query(`SELECT p.id FROM "Photo" p JOIN "Trip" t ON t.id = p."tripId" WHERE t.slug = 'acadia' AND p.status = 'READY' AND p."trashedAt" IS NULL ORDER BY p.id LIMIT 1`));
-  const photoId = one.rows[0].id as string;
+  const two = await withDb((c) => c.query(`SELECT p.id FROM "Photo" p JOIN "Trip" t ON t.id = p."tripId" WHERE t.slug = 'acadia' AND p.status = 'READY' AND p."trashedAt" IS NULL ORDER BY p.id LIMIT 2`));
+  expect(two.rows.length).toBe(2);
+  const [photoId, otherId] = two.rows.map((r) => r.id as string);
   const admin = await withDb((c) => c.query(`SELECT id FROM "User" WHERE email = $1`, [ADMIN]));
   const personId = randomUUID();
+  const alsoId = randomUUID();
+  const tag = async (person: string, photo: string) =>
+    withDb((c) => c.query(`INSERT INTO "Face" (id, "photoId", "personId", status, box, confidence, "createdAt") VALUES ($1, $2, $3, 'CONFIRMED', '{"x":0.1,"y":0.1,"w":0.2,"h":0.2}'::jsonb, 0, now())`, [randomUUID(), photo, person]));
   await withDb((c) => c.query(`INSERT INTO "Person" (id, kind, name, "createdById", "createdAt", "updatedAt") VALUES ($1, 'PET', $2, $3, now(), now())`, [personId, `Biscuit ${personId.slice(0, 4)}`, admin.rows[0].id]));
-  await withDb((c) => c.query(`INSERT INTO "Face" (id, "photoId", "personId", status, box, confidence, "createdAt") VALUES ($1, $2, $3, 'CONFIRMED', '{"x":0.1,"y":0.1,"w":0.2,"h":0.2}'::jsonb, 0, now())`, [randomUUID(), photoId, personId]));
+  await withDb((c) => c.query(`INSERT INTO "Person" (id, kind, name, "createdById", "createdAt", "updatedAt") VALUES ($1, 'HUMAN', $2, $3, now(), now())`, [alsoId, `Ada ${alsoId.slice(0, 4)}`, admin.rows[0].id]));
+  // The pet is on one photograph; the person is on that one and on a second, so "both" is narrower than "either".
+  await tag(personId, photoId);
+  await tag(alsoId, photoId);
+  await tag(alsoId, otherId);
 
   await page.goto("/trips/acadia");
   // The words are all the form shows to begin with; everything else waits behind the fold.
@@ -2087,6 +2095,19 @@ test("a search can ask for a particular person or pet, and the rest of the quest
   // Arriving at a narrowed link shows why it is narrowed rather than hiding the reason behind the fold.
   await expect(page.getByTestId("who-filter")).toBeVisible();
 
+  // The person alone is on two of them.
+  await page.goto(`/trips/acadia?person=${alsoId}`);
+  await expect(page.getByTestId("timeline-count")).toContainText(/2 of \d+ items/);
+
+  // Both at once means the ones they are both in, not either of them: back to the single photograph they share.
+  await page.getByTestId("who-filter").selectOption([personId, alsoId]);
+  await page.getByTestId("advanced-filters").getByRole("button", { name: "Search" }).click();
+  await expect(page).toHaveURL(new RegExp(`person=${personId}[^]*person=${alsoId}|person=${alsoId}[^]*person=${personId}`));
+  await expect(page.getByTestId("timeline-count")).toContainText(/1 of \d+ items/);
+  await expect(page.locator(`li.tile-lazy:has(img[src*='/api/photos/${photoId}/'])`)).toHaveCount(1);
+  // Both are still shown as chosen, so the page says what it was asked.
+  expect(await page.getByTestId("who-filter").evaluate((el) => [...(el as HTMLSelectElement).selectedOptions].length)).toBe(2);
+
   // The same question on the album-wide search, which reaches every trip.
   await page.goto(`/search?q=&person=${personId}`);
   await expect(page.getByTestId("who-filter")).toBeVisible();
@@ -2103,8 +2124,8 @@ test("a search can ask for a particular person or pet, and the rest of the quest
   await anon.close();
   await setVisibility("acadia", "PRIVATE");
 
-  await withDb((c) => c.query(`DELETE FROM "Face" WHERE "personId" = $1`, [personId]));
-  await withDb((c) => c.query(`DELETE FROM "Person" WHERE id = $1`, [personId]));
+  await withDb((c) => c.query(`DELETE FROM "Face" WHERE "personId" = ANY($1)`, [[personId, alsoId]]));
+  await withDb((c) => c.query(`DELETE FROM "Person" WHERE id = ANY($1)`, [[personId, alsoId]]));
 });
 
 test("the map can be asked where something was, and shows only those places", async ({ context, page }) => {

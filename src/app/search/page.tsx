@@ -21,6 +21,7 @@ const KINDS = [
 ] as const;
 
 const str = (v: unknown) => (typeof v === "string" && v ? v : undefined);
+const list = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && Boolean(x)) : str(v) ? [str(v)!] : []);
 
 export default async function SearchPage({ searchParams }: PageProps<"/search">) {
   const viewer = await getViewer();
@@ -30,7 +31,7 @@ export default async function SearchPage({ searchParams }: PageProps<"/search">)
   const kindRaw = str(sp.kind);
   const kind: MediaKind | undefined = kindRaw === "PHOTO" || kindRaw === "VIDEO" || kindRaw === "EXTERNAL_VIDEO" ? (kindRaw as MediaKind) : undefined;
   const year = Number(str(sp.year));
-  const params = { q, tripId: str(sp.trip), collectionId: str(sp.collection), uploaderId: member ? str(sp.uploader) : undefined, personId: member ? str(sp.person) : undefined, year: Number.isInteger(year) && year > 0 ? year : undefined, kind };
+  const params = { q, tripId: str(sp.trip), collectionId: str(sp.collection), uploaderId: member ? str(sp.uploader) : undefined, personIds: member ? list(sp.person) : [], year: Number.isInteger(year) && year > 0 ? year : undefined, kind };
   const [facets, hits] = await Promise.all([
     searchFacets(viewer),
     q ? searchMedia(viewer, params) : Promise.resolve([]),
@@ -62,7 +63,7 @@ export default async function SearchPage({ searchParams }: PageProps<"/search">)
   const humans = facets.people.filter((p) => p.kind === "HUMAN");
   const pets = facets.people.filter((p) => p.kind === "PET");
   // Anything beyond the words itself decides whether the extra questions arrive open.
-  const narrowing = Boolean(params.tripId || params.collectionId || params.uploaderId || params.personId || params.year || kind);
+  const narrowing = Boolean(params.tripId || params.collectionId || params.uploaderId || params.personIds.length || params.year || kind);
 
   return (
     <AppShell viewer={viewer}>
@@ -98,8 +99,8 @@ export default async function SearchPage({ searchParams }: PageProps<"/search">)
               {member && facets.people.length > 0 && (
                 <div className={field}>
                   <label className={fieldLabel} htmlFor="search-person">Who is in it</label>
-                  <select id="search-person" name="person" defaultValue={params.personId ?? ""} className={select} data-testid="who-filter">
-                    <option value="">Anybody</option>
+                  {/* Several at once means all of them, as on every other search in the album. */}
+                  <select id="search-person" name="person" multiple size={Math.min(6, facets.people.length + 1)} defaultValue={params.personIds} className={`${select} h-auto py-1`} data-testid="who-filter">
                     {humans.length > 0 && (
                       <optgroup label="People">
                         {humans.map((p) => (
@@ -115,6 +116,7 @@ export default async function SearchPage({ searchParams }: PageProps<"/search">)
                       </optgroup>
                     )}
                   </select>
+                  <span className={fieldLabel}>Choose several for the ones they are all in</span>
                 </div>
               )}
               <div className={field}>

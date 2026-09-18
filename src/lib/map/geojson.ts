@@ -34,7 +34,8 @@ async function narrowing(filter: GalleryFilter, tripId: string | null): Promise<
   const lists: string[][] = [];
   if (filter.q) lists.push(await idsMatching(filter.q));
   if (filter.year) lists.push(await idsInLocalYear(tripId, filter.year));
-  if (filter.personId) lists.push(await idsWithPerson(filter.personId));
+  // One list per name, so two names means the photographs they are both on rather than either.
+  for (const id of filter.personIds) lists.push(await idsWithPerson(id));
   const restrict = lists.length ? intersectIds(lists) : null;
   if (restrict && restrict.length === 0) return { where: {}, nothing: true };
   return {

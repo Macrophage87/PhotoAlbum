@@ -76,8 +76,9 @@ export function GalleryFilters({ filter, action, members, people, activities, ye
             {(humans.length > 0 || pets.length > 0) && (
               <div className={field}>
                 <label className={fieldLabel} htmlFor="gallery-person">Who is in it</label>
-                <select id="gallery-person" name="person" defaultValue={filter.personId ?? ""} className={control} data-testid="who-filter">
-                  <option value="">Anybody</option>
+                {/* Several at once means all of them: "Ada and Ben" is a photograph worth finding, and either of
+                    them on their own is just two searches. Held open at a few rows so it is obviously a list. */}
+                <select id="gallery-person" name="person" multiple size={Math.min(6, humans.length + pets.length + 1)} defaultValue={filter.personIds} className={`${control} h-auto py-1 min-w-40`} data-testid="who-filter">
                   {humans.length > 0 && (
                     <optgroup label="People">
                       {humans.map((p) => (
@@ -93,6 +94,7 @@ export function GalleryFilters({ filter, action, members, people, activities, ye
                     </optgroup>
                   )}
                 </select>
+                <span className="text-xs text-muted">Choose several for the ones they are all in</span>
               </div>
             )}
 

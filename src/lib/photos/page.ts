@@ -62,7 +62,8 @@ export async function tripPhotoPage(tripId: string, opts: { uploaderId?: string;
   const lists: string[][] = [];
   if (filter.q) lists.push(await idsMatching(filter.q));
   if (filter.year) lists.push(await idsInLocalYear(tripId, filter.year));
-  if (filter.personId) lists.push(await idsWithPerson(filter.personId));
+  // One list per name, so two names means the photographs they are both on rather than either.
+  for (const id of filter.personIds) lists.push(await idsWithPerson(id));
   const restrict = lists.length ? intersectIds(lists) : null;
   // Nothing matched: say so without asking the database a question whose answer is already known.
   if (restrict && restrict.length === 0) return { photos: [], nextCursor: null, total: 0 };
@@ -153,7 +154,8 @@ export async function candidatePhotoPage(target: PickerTarget, filter: PickerFil
   const lists: string[][] = [];
   if (filter.q) lists.push(await idsMatching(filter.q));
   if (filter.near) lists.push(await idsNear(filter.near));
-  if (filter.personId) lists.push(await idsWithPerson(filter.personId));
+  // One list per name, so two names means the photographs they are both on rather than either.
+  for (const id of filter.personIds) lists.push(await idsWithPerson(id));
   const restrict = lists.length ? intersectIds(lists) : null;
   if (restrict && restrict.length === 0) return { photos: [], nextCursor: null, total: 0 };
 

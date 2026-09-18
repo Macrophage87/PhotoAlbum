@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { advancedIsActive, describeCount, filterIsActive, filterQuery, NO_FILTER, parseGalleryFilter } from "@/lib/photos/filters";
+import { advancedIsActive, describeCount, filterIsActive, filterQuery, MAX_PEOPLE, NO_FILTER, parseGalleryFilter } from "@/lib/photos/filters";
 import { intersectIds } from "@/lib/photos/page";
 
 /**
@@ -12,13 +12,28 @@ describe("reading a gallery filter from the address bar", () => {
 
   it("takes words, who uploaded it, who is in it, what, when and where in the trip", () => {
     const f = parseGalleryFilter({ q: "  lighthouse  at   dusk ", uploader: "u1", person: "p1", kind: "SCAN", year: "2019", activity: "a1" }, member);
-    expect(f).toEqual({ q: "lighthouse at dusk", uploaderId: "u1", personId: "p1", kind: "SCAN", year: 2019, activityId: "a1" });
+    expect(f).toEqual({ q: "lighthouse at dusk", uploaderId: "u1", personIds: ["p1"], kind: "SCAN", year: 2019, activityId: "a1" });
     expect(filterIsActive(f)).toBe(true);
+  });
+
+  it("takes several names at once, meaning the ones they are all in", () => {
+    // A form with several rows chosen sends the same name over and over; two names is "Ada and Ben together".
+    expect(parseGalleryFilter({ person: ["p1", "p2"] }, member).personIds).toEqual(["p1", "p2"]);
+    // Asked for twice is asked for once, and a blank among them is not a name.
+    expect(parseGalleryFilter({ person: ["p1", "p1", " ", "p2"] }, member).personIds).toEqual(["p1", "p2"]);
+    // A hand-written address with a hundred names in it is not a family looking for a photograph.
+    expect(parseGalleryFilter({ person: Array.from({ length: 50 }, (_, i) => `p${i}`) }, member).personIds).toHaveLength(MAX_PEOPLE);
+  });
+
+  it("puts every name back into the address, so a narrowed page keeps all of them", () => {
+    const f = parseGalleryFilter({ person: ["p1", "p2"] }, member);
+    expect(new URLSearchParams(filterQuery(f)).getAll("person")).toEqual(["p1", "p2"]);
   });
 
   it("knows when something beyond the words is being asked, so the extra questions arrive open", () => {
     expect(advancedIsActive(parseGalleryFilter({ q: "boat" }, member))).toBe(false);
     expect(advancedIsActive(parseGalleryFilter({ person: "p1" }, member))).toBe(true);
+    expect(advancedIsActive(parseGalleryFilter({ person: ["p1", "p2"] }, member))).toBe(true);
     expect(advancedIsActive(parseGalleryFilter({ uploader: "u1" }, member))).toBe(true);
   });
 
@@ -33,7 +48,7 @@ describe("reading a gallery filter from the address bar", () => {
     // They are not shown the list of the family's names, and must not be able to ask by id either. Asking a public
     // trip for "the ones with Ada in them" would otherwise tell a stranger exactly which of them she is on.
     expect(parseGalleryFilter({ uploader: "u1" }, { member: false }).uploaderId).toBeNull();
-    expect(parseGalleryFilter({ person: "p1" }, { member: false }).personId).toBeNull();
+    expect(parseGalleryFilter({ person: "p1" }, { member: false }).personIds).toEqual([]);
     expect(filterIsActive(parseGalleryFilter({ person: "p1" }, { member: false }))).toBe(false);
   });
 
@@ -57,7 +72,7 @@ describe("reading a gallery filter from the address bar", () => {
     const round = new URLSearchParams(filterQuery(f));
     expect(round.get("q")).toBe("boat house");
     expect(round.get("uploader")).toBe("u1");
-    expect(round.get("person")).toBe("p1");
+    expect(round.getAll("person")).toEqual(["p1"]);
     expect(round.get("year")).toBe("2019");
     expect(filterQuery(NO_FILTER)).toBe("");
   });

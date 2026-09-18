@@ -51,7 +51,8 @@ export async function listUnassignedPhotos(filter: GalleryFilter = NO_FILTER): P
   const lists: string[][] = [];
   if (filter.q) lists.push(await idsMatching(filter.q));
   if (filter.year) lists.push(await idsInLocalYear(null, filter.year));
-  if (filter.personId) lists.push(await idsWithPerson(filter.personId));
+  // One list per name, so two names means the photographs they are both on rather than either.
+  for (const id of filter.personIds) lists.push(await idsWithPerson(id));
   const restrict = lists.length ? intersectIds(lists) : null;
   const where = {
     tripId: null,

@@ -6,7 +6,7 @@ import { visibleContainersWhere } from "@/lib/auth/access";
 import { embedText, mlConfigured, vectorLiteral } from "@/lib/ml/client";
 import { peopleInPhotos, type FilterPerson } from "@/lib/people/in-photos";
 
-export type SearchParams = { q: string; tripId?: string; collectionId?: string; uploaderId?: string; personId?: string; year?: number; kind?: MediaKind };
+export type SearchParams = { q: string; tripId?: string; collectionId?: string; uploaderId?: string; personIds?: string[]; year?: number; kind?: MediaKind };
 
 export type SearchHit = {
   id: string;
@@ -74,10 +74,12 @@ export async function searchMedia(viewer: Viewer, params: SearchParams, limit = 
   if (params.collectionId) filters.push(Prisma.sql`EXISTS (SELECT 1 FROM "CollectionItem" ci2 WHERE ci2."photoId" = p.id AND ci2."collectionId" = ${params.collectionId})`);
   if (member && params.uploaderId) filters.push(Prisma.sql`p."uploaderId" = ${params.uploaderId}`);
   // Somebody is on a photograph whether a member named the face or the animal matcher's guess about a pet was
-  // confirmed; asking for Biscuit has to find both, or half of Biscuit's photographs quietly go missing.
-  if (member && params.personId)
-    filters.push(Prisma.sql`(EXISTS (SELECT 1 FROM "Face" f2 WHERE f2."photoId" = p.id AND f2."personId" = ${params.personId} AND f2.status = 'CONFIRMED')
-      OR EXISTS (SELECT 1 FROM "AnimalDetection" a2 WHERE a2."photoId" = p.id AND a2."personId" = ${params.personId} AND a2.status = 'CONFIRMED'))`);
+  // confirmed; asking for Biscuit has to find both, or half of Biscuit's photographs quietly go missing. Several
+  // names is one of these each, so they all have to be in it rather than any one of them.
+  if (member)
+    for (const personId of params.personIds ?? [])
+      filters.push(Prisma.sql`(EXISTS (SELECT 1 FROM "Face" f2 WHERE f2."photoId" = p.id AND f2."personId" = ${personId} AND f2.status = 'CONFIRMED')
+        OR EXISTS (SELECT 1 FROM "AnimalDetection" a2 WHERE a2."photoId" = p.id AND a2."personId" = ${personId} AND a2.status = 'CONFIRMED'))`);
   if (params.year) filters.push(Prisma.sql`EXTRACT(YEAR FROM (p."takenAt" + make_interval(mins => COALESCE(p."tzOffsetMin", 0)))) = ${params.year}`);
   if (params.kind) filters.push(Prisma.sql`p.kind = ${params.kind}::"MediaKind"`);
   const where = filters.length ? Prisma.join(filters, " AND ") : Prisma.sql`TRUE`;
