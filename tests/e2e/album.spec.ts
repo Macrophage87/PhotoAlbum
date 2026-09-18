@@ -2066,7 +2066,7 @@ test("a search can ask for a particular person or pet, and the rest of the quest
   const admin = await withDb((c) => c.query(`SELECT id FROM "User" WHERE email = $1`, [ADMIN]));
   const personId = randomUUID();
   await withDb((c) => c.query(`INSERT INTO "Person" (id, kind, name, "createdById", "createdAt", "updatedAt") VALUES ($1, 'PET', $2, $3, now(), now())`, [personId, `Biscuit ${personId.slice(0, 4)}`, admin.rows[0].id]));
-  await withDb((c) => c.query(`INSERT INTO "Face" (id, "photoId", "personId", status, box, confidence, "createdAt", "updatedAt") VALUES ($1, $2, $3, 'CONFIRMED', '{"x":0.1,"y":0.1,"w":0.2,"h":0.2}'::jsonb, 0, now(), now())`, [randomUUID(), photoId, personId]));
+  await withDb((c) => c.query(`INSERT INTO "Face" (id, "photoId", "personId", status, box, confidence, "createdAt") VALUES ($1, $2, $3, 'CONFIRMED', '{"x":0.1,"y":0.1,"w":0.2,"h":0.2}'::jsonb, 0, now())`, [randomUUID(), photoId, personId]));
 
   await page.goto("/trips/acadia");
   // The words are all the form shows to begin with; everything else waits behind the fold.
