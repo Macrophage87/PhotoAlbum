@@ -10,6 +10,7 @@ import { NOT_TRASHED } from "@/lib/photos/trash";
 import { Prisma } from "@/generated/prisma/client";
 import { filterIsActive, NO_FILTER, type GalleryFilter } from "@/lib/photos/filters";
 import { idsInLocalYear, idsMatching, intersectIds } from "@/lib/photos/page";
+import { idsWithPerson } from "@/lib/people/in-photos";
 
 export type PhotoFeatureProps = { id: string; thumbUrl: string; mediumUrl: string; caption: string | null; takenAt: string | null; tripSlug: string; tripTitle: string; activityId: string | null; gpsSource: string | null };
 export type TrackFeatureProps = { trackId: string; activityId: string | null; activityTitle: string | null; activityType: string | null; source: string; name: string; tripSlug: string; tripTitle: string; color: string; startTime: string; distanceM: number | null };
@@ -33,6 +34,7 @@ async function narrowing(filter: GalleryFilter, tripId: string | null): Promise<
   const lists: string[][] = [];
   if (filter.q) lists.push(await idsMatching(filter.q));
   if (filter.year) lists.push(await idsInLocalYear(tripId, filter.year));
+  if (filter.personId) lists.push(await idsWithPerson(filter.personId));
   const restrict = lists.length ? intersectIds(lists) : null;
   if (restrict && restrict.length === 0) return { where: {}, nothing: true };
   return {

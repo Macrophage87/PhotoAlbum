@@ -14,6 +14,7 @@ import { SelectionProvider } from "@/components/photos/selection";
 import { CollectionFilter } from "@/components/collections/CollectionFilter";
 import { GalleryFilters } from "@/components/photos/GalleryFilters";
 import { filterIsActive, parseGalleryFilter } from "@/lib/photos/filters";
+import { peopleInPhotos } from "@/lib/people/in-photos";
 
 export const metadata = { title: "Timeline" };
 
@@ -25,6 +26,7 @@ export default async function GlobalTimelinePage({ searchParams }: PageProps<"/t
   const filter = typeof sp.collection === "string" ? collections.find((c) => c.slug === sp.collection) : undefined;
   const narrow = parseGalleryFilter(sp, { member: editable });
   const searching = filterIsActive(narrow);
+  const people = viewer.kind === "user" ? await peopleInPhotos() : [];
   const trips = filter ? [] : await listVisibleTrips(viewer);
   const [all, collectionGroups] = await Promise.all([
     Promise.all(trips.map((t) => tripTimeline(t.id, t.timezone, narrow))),
@@ -69,7 +71,7 @@ export default async function GlobalTimelinePage({ searchParams }: PageProps<"/t
           <CollectionFilter current={filter ? { slug: filter.slug, title: filter.title } : null} basePath="/timeline" />
         </div>
         <div className="mb-6">
-          <GalleryFilters filter={narrow} action="/timeline" placeholder="Search the whole album" hidden={filter ? { collection: filter.slug } : undefined} />
+          <GalleryFilters filter={narrow} action="/timeline" people={people} placeholder="Search the whole album" hidden={filter ? { collection: filter.slug } : undefined} />
         </div>
         {editable ? <SelectionProvider>{body}</SelectionProvider> : body}
       </Container>

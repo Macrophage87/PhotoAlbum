@@ -6,6 +6,7 @@ import type { TimelineResult } from "@/lib/timeline/queries";
 import { NOT_TRASHED } from "@/lib/photos/trash";
 import { filterIsActive, NO_FILTER, type GalleryFilter } from "@/lib/photos/filters";
 import { idsMatching, idsInLocalYear, intersectIds } from "@/lib/photos/page";
+import { idsWithPerson } from "@/lib/people/in-photos";
 
 /**
  * A collection's items grouped by the day each was taken (each photo carries its own offset; UTC otherwise),
@@ -20,6 +21,7 @@ export async function collectionTimeline(collectionId: string, filter: GalleryFi
   if (filter.q) lists.push(await idsMatching(filter.q));
   // A collection gathers photographs from any number of trips, so the year is asked of the whole album.
   if (filter.year) lists.push(await idsInLocalYear(null, filter.year));
+  if (filter.personId) lists.push(await idsWithPerson(filter.personId));
   const restrict = lists.length ? intersectIds(lists) : null;
   if (restrict && restrict.length === 0) return { groups: [], matched: 0, total, active };
 

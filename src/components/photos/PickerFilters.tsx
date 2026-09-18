@@ -3,6 +3,7 @@ import { TripFilterField } from "@/components/containers/TripFilterField";
 import { NearPlaceField } from "@/components/photos/NearPlaceField";
 import { KIND_LABELS } from "@/lib/photos/filters";
 import { type PickerFilter } from "@/lib/photos/picker-filter";
+import type { FilterPerson } from "@/lib/people/in-photos";
 
 export type PickerOption = { id: string; label: string };
 
@@ -12,12 +13,14 @@ export type PickerOption = { id: string; label: string };
  * A plain form that submits to the page it is on, so a narrowed picker is an ordinary address: a member can work
  * through a long list over several sittings, or send somebody else the same view.
  */
-export function PickerFilters({ filter, action, initialTrip, members, showTrip = true }: {
+export function PickerFilters({ filter, action, initialTrip, members, people, showTrip = true }: {
   filter: PickerFilter;
   action: string;
   /** The trip already named by the filter, so the box shows its title rather than an id. */
   initialTrip: { id: string; title: string } | null;
   members?: PickerOption[];
+  /** People and pets who are on something in the album, so a gathering can be made of one of them. */
+  people?: FilterPerson[];
   /** The trip picker is pointless when adding to a trip from its own page. */
   showTrip?: boolean;
 }) {
@@ -67,6 +70,29 @@ export function PickerFilters({ filter, action, initialTrip, members, showTrip =
             {members.map((m) => (
               <option key={m.id} value={m.id}>{m.label}</option>
             ))}
+          </Select>
+        </div>
+      )}
+
+      {people && people.length > 0 && (
+        <div>
+          <Label htmlFor="person">Who is in it</Label>
+          <Select id="person" name="person" defaultValue={filter.personId ?? ""} className="h-9 w-44 text-sm" data-testid="who-filter">
+            <option value="">Anybody</option>
+            {people.some((p) => p.kind === "HUMAN") && (
+              <optgroup label="People">
+                {people.filter((p) => p.kind === "HUMAN").map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </optgroup>
+            )}
+            {people.some((p) => p.kind === "PET") && (
+              <optgroup label="Pets">
+                {people.filter((p) => p.kind === "PET").map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </optgroup>
+            )}
           </Select>
         </div>
       )}

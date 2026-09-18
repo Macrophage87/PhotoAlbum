@@ -20,12 +20,14 @@ export type PickerFilter = {
   to: string | null;
   kind: MediaKind | null;
   uploaderId: string | null;
+  /** Somebody who is on the photograph — a person or a pet. */
+  personId: string | null;
   /** Only the ones nothing has claimed: on no trip, and in no collection. */
   loose: boolean;
   near: NearFilter | null;
 };
 
-export const NO_PICKER_FILTER: PickerFilter = { q: null, trip: null, from: null, to: null, kind: null, uploaderId: null, loose: false, near: null };
+export const NO_PICKER_FILTER: PickerFilter = { q: null, trip: null, from: null, to: null, kind: null, uploaderId: null, personId: null, loose: false, near: null };
 
 export const DAY = /^\d{4}-\d{2}-\d{2}$/;
 const KINDS: MediaKind[] = ["PHOTO", "VIDEO", "EXTERNAL_VIDEO", "SCAN"];
@@ -57,13 +59,14 @@ export function parsePickerFilter(sp: Params): PickerFilter {
     to: to && DAY.test(to) ? to : null,
     kind: kind && (KINDS as string[]).includes(kind) ? (kind as MediaKind) : null,
     uploaderId: one(sp.uploader),
+    personId: one(sp.person),
     loose: one(sp.loose) === "1",
     near: hasPoint ? { lat, lng, miles: RADIUS_CHOICES.includes(miles as (typeof RADIUS_CHOICES)[number]) ? miles : DEFAULT_RADIUS, label: one(sp.place) } : null,
   };
 }
 
 export function pickerFilterIsActive(f: PickerFilter): boolean {
-  return Boolean(f.q || f.trip || f.from || f.to || f.kind || f.uploaderId || f.loose || f.near);
+  return Boolean(f.q || f.trip || f.from || f.to || f.kind || f.uploaderId || f.personId || f.loose || f.near);
 }
 
 /** Back into a URL, so paging and the "load more" button keep the narrowing. */
@@ -75,6 +78,7 @@ export function pickerFilterQuery(f: PickerFilter): string {
   if (f.to) p.set("to", f.to);
   if (f.kind) p.set("kind", f.kind);
   if (f.uploaderId) p.set("uploader", f.uploaderId);
+  if (f.personId) p.set("person", f.personId);
   if (f.loose) p.set("loose", "1");
   if (f.near) {
     p.set("lat", String(f.near.lat));

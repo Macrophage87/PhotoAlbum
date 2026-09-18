@@ -2057,6 +2057,56 @@ test("the timeline shows every day at once, with a panel down the side to reach 
   await expect.poll(async () => nav.locator("a[data-day]").count()).toBeLessThan(before);
 });
 
+test("a search can ask for a particular person or pet, and the rest of the questions wait behind a fold", async ({ browser, context, page }) => {
+  await signIn(context, ADMIN);
+  // Somebody on exactly one of this trip's photographs. A tag is a face with a box and no confidence, which is the
+  // same thing to a search as a name the detector's find was confirmed with.
+  const one = await withDb((c) => c.query(`SELECT p.id FROM "Photo" p JOIN "Trip" t ON t.id = p."tripId" WHERE t.slug = 'acadia' AND p.status = 'READY' AND p."trashedAt" IS NULL ORDER BY p.id LIMIT 1`));
+  const photoId = one.rows[0].id as string;
+  const admin = await withDb((c) => c.query(`SELECT id FROM "User" WHERE email = $1`, [ADMIN]));
+  const personId = randomUUID();
+  await withDb((c) => c.query(`INSERT INTO "Person" (id, kind, name, "createdById", "createdAt", "updatedAt") VALUES ($1, 'PET', $2, $3, now(), now())`, [personId, `Biscuit ${personId.slice(0, 4)}`, admin.rows[0].id]));
+  await withDb((c) => c.query(`INSERT INTO "Face" (id, "photoId", "personId", status, box, confidence, "createdAt", "updatedAt") VALUES ($1, $2, $3, 'CONFIRMED', '{"x":0.1,"y":0.1,"w":0.2,"h":0.2}'::jsonb, 0, now(), now())`, [randomUUID(), photoId, personId]));
+
+  await page.goto("/trips/acadia");
+  // The words are all the form shows to begin with; everything else waits behind the fold.
+  const more = page.getByTestId("advanced-filters");
+  await expect(more).toBeVisible();
+  await expect(page.getByTestId("who-filter")).toBeHidden();
+  await more.getByText("More ways to narrow").click();
+  await expect(page.getByTestId("who-filter")).toBeVisible();
+  // And what the uploader box is choosing is said out loud rather than left as a bare "Anyone".
+  await expect(more.getByText("Uploaded by")).toBeVisible();
+
+  // The pet is offered under its own heading, and asking for it gives exactly the one photograph it is on.
+  await page.getByTestId("who-filter").selectOption(personId);
+  await page.getByTestId("advanced-filters").getByRole("button", { name: "Search" }).click();
+  await expect(page).toHaveURL(new RegExp(`person=${personId}`));
+  await expect(page.getByTestId("timeline-count")).toContainText(/1 of \d+ items/);
+  await expect(page.locator(`li.tile-lazy:has(img[src*='/api/photos/${photoId}/'])`)).toHaveCount(1);
+  // Arriving at a narrowed link shows why it is narrowed rather than hiding the reason behind the fold.
+  await expect(page.getByTestId("who-filter")).toBeVisible();
+
+  // The same question on the album-wide search, which reaches every trip.
+  await page.goto(`/search?q=&person=${personId}`);
+  await expect(page.getByTestId("who-filter")).toBeVisible();
+
+  // A visitor who is not family can neither see the question nor ask it by hand.
+  await setVisibility("acadia", "PUBLIC");
+  const anon = await browser.newContext();
+  const anonPage = await anon.newPage();
+  await anonPage.goto(`/trips/acadia?person=${personId}`);
+  await expect(anonPage.getByTestId("who-filter")).toHaveCount(0);
+  // Unnarrowed: the whole trip is there, not the one photograph the person is on.
+  await expect(anonPage.locator("section[id^='day-']").first()).toBeVisible();
+  expect(await anonPage.locator("li.tile-lazy").count()).toBeGreaterThan(1);
+  await anon.close();
+  await setVisibility("acadia", "PRIVATE");
+
+  await withDb((c) => c.query(`DELETE FROM "Face" WHERE "personId" = $1`, [personId]));
+  await withDb((c) => c.query(`DELETE FROM "Person" WHERE id = $1`, [personId]));
+});
+
 test("the map can be asked where something was, and shows only those places", async ({ context, page }) => {
   await signIn(context, ADMIN);
   // A photograph of this trip that has a place on it, given a word of its own to be found by.

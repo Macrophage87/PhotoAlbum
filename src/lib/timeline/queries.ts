@@ -6,6 +6,7 @@ import type { TimelineGroups } from "@/components/timeline/Timeline";
 import { NOT_TRASHED } from "@/lib/photos/trash";
 import { filterIsActive, NO_FILTER, type GalleryFilter } from "@/lib/photos/filters";
 import { idsInLocalYear, idsMatching, intersectIds } from "@/lib/photos/page";
+import { idsWithPerson } from "@/lib/people/in-photos";
 
 export type TimelineResult = { groups: TimelineGroups; matched: number; total: number; active: boolean };
 
@@ -40,6 +41,7 @@ export async function tripTimeline(tripId: string, timezone: string, filter: Gal
   const lists: string[][] = [];
   if (filter.q) lists.push(await idsMatching(filter.q));
   if (filter.year) lists.push(await idsInLocalYear(tripId, filter.year));
+  if (filter.personId) lists.push(await idsWithPerson(filter.personId));
   const restrict = lists.length ? intersectIds(lists) : null;
   if (restrict && restrict.length === 0) return { groups: [], matched: 0, total, active };
 

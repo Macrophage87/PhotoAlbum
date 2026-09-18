@@ -8,6 +8,7 @@ import { CollectionFilter } from "@/components/collections/CollectionFilter";
 import { ButtonLink } from "@/components/ui";
 import { GalleryFilters } from "@/components/photos/GalleryFilters";
 import { filterIsActive, filterQuery, parseGalleryFilter } from "@/lib/photos/filters";
+import { peopleInPhotos } from "@/lib/people/in-photos";
 
 export const metadata = { title: "Map" };
 
@@ -18,6 +19,7 @@ export default async function GlobalMapPage({ searchParams }: PageProps<"/map">)
   const filter = typeof sp.collection === "string" ? collections.find((c) => c.slug === sp.collection) : undefined;
   const narrow = parseGalleryFilter(sp, { member: viewer.kind === "user" });
   const query = filterQuery(narrow);
+  const people = viewer.kind === "user" ? await peopleInPhotos() : [];
   return (
     <AppShell viewer={viewer}>
       <Container className="py-8 space-y-4">
@@ -28,7 +30,7 @@ export default async function GlobalMapPage({ searchParams }: PageProps<"/map">)
             <CollectionFilter current={filter ? { slug: filter.slug, title: filter.title } : null} basePath="/map" />
           </div>
         </div>
-        <GalleryFilters filter={narrow} action="/map" placeholder="Search the whole album" hidden={filter ? { collection: filter.slug } : undefined} />
+        <GalleryFilters filter={narrow} action="/map" people={people} placeholder="Search the whole album" hidden={filter ? { collection: filter.slug } : undefined} />
         <TripMap
           key={`${filter?.slug ?? "all"}:${query}`}
           src={`${filter ? `/api/collections/${filter.slug}/geojson` : "/api/map/geojson"}${query ? `?${query}` : ""}`}

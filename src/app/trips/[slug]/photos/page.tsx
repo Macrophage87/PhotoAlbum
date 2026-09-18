@@ -11,6 +11,7 @@ import { GalleryFilters } from "@/components/photos/GalleryFilters";
 import { describeCount, filterIsActive, filterQuery, parseGalleryFilter } from "@/lib/photos/filters";
 import { YouTubeAddForm } from "@/components/videos/YouTubeAddForm";
 import { dateColumnToDay } from "@/lib/time/local-day";
+import { peopleInPhotos } from "@/lib/people/in-photos";
 
 export default async function TripPhotosPage({ params, searchParams }: PageProps<"/trips/[slug]/photos">) {
   const { slug } = await params;
@@ -18,10 +19,11 @@ export default async function TripPhotosPage({ params, searchParams }: PageProps
   const { trip, editable, owns } = await loadViewableTrip(slug, `/trips/${slug}/photos`);
   // Who uploaded what is members-only, so an anonymous visitor never sees the member list nor filters by it.
   const filter = parseGalleryFilter(sp, { member: editable });
-  const [page, activities, members] = await Promise.all([
+  const [page, activities, members, people] = await Promise.all([
     tripPhotoPage(trip.id, { filter, viewerId: editable ? (await getViewer()).user?.id ?? null : null }),
     db.activity.findMany({ where: { tripId: trip.id }, orderBy: { startTime: "asc" }, select: { id: true, title: true } }),
     editable ? db.user.findMany({ where: { photos: { some: { tripId: trip.id } } }, orderBy: { name: "asc" }, select: { id: true, name: true, email: true } }) : Promise.resolve([]),
+    editable ? peopleInPhotos({ tripId: trip.id }) : Promise.resolve([]),
   ]);
   const photos = page.photos;
   const favourites = await photoFavourites(photos.map((p) => p.id), await getViewer());
@@ -54,6 +56,7 @@ export default async function TripPhotosPage({ params, searchParams }: PageProps
         filter={filter}
         action={`/trips/${slug}/photos`}
         members={editable ? members.map((m) => ({ id: m.id, label: uploaderLabel(m.name, m.email) })) : undefined}
+        people={editable ? people : undefined}
         activities={activities.map((a) => ({ id: a.id, label: a.title }))}
         placeholder="Search this trip"
       />

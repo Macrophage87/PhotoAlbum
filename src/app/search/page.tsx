@@ -57,47 +57,86 @@ export default async function SearchPage({ searchParams }: PageProps<"/search">)
     durationS: h.durationS,
   }));
   const select = "h-9 rounded-theme border border-border bg-surface px-2 text-sm";
+  const field = "flex flex-col gap-1";
+  const fieldLabel = "text-xs text-muted";
+  const humans = facets.people.filter((p) => p.kind === "HUMAN");
+  const pets = facets.people.filter((p) => p.kind === "PET");
+  // Anything beyond the words itself decides whether the extra questions arrive open.
+  const narrowing = Boolean(params.tripId || params.collectionId || params.uploaderId || params.personId || params.year || kind);
 
   return (
     <AppShell viewer={viewer}>
       <Container className="py-10 space-y-6">
         <h1 className="font-display text-3xl font-semibold">Search</h1>
         <form action="/search" method="get" className="space-y-3">
-          <div className="max-w-xl">
-            <SearchBox initial={q} />
-          </div>
-          <div className="flex flex-wrap gap-2 text-sm">
-            <div className="w-52"><TripFacetField initial={currentTrip} /></div>
-            <div className="w-52"><CollectionFacetField initial={currentCollection} /></div>
-            {member && facets.uploaders.length > 0 && (
-              <select name="uploader" defaultValue={params.uploaderId ?? ""} className={select} aria-label="Uploaded by">
-                <option value="">Uploaded by anyone</option>
-                {facets.uploaders.map((u) => (
-                  <option key={u.id} value={u.id}>{uploaderLabel(u.name, u.email)}</option>
-                ))}
-              </select>
-            )}
-            {member && facets.people.length > 0 && (
-              <select name="person" defaultValue={params.personId ?? ""} className={select} aria-label="Person">
-                <option value="">Anyone in the picture</option>
-                {facets.people.map((p) => (
-                  <option key={p.id} value={p.id}>{p.name}</option>
-                ))}
-              </select>
-            )}
-            <select name="year" defaultValue={params.year ?? ""} className={select} aria-label="Year">
-              <option value="">Any year</option>
-              {facets.years.map((y) => (
-                <option key={y} value={y}>{y}</option>
-              ))}
-            </select>
-            <select name="kind" defaultValue={kind ?? ""} className={select} aria-label="Type">
-              {KINDS.map((k) => (
-                <option key={k.value} value={k.value}>{k.label}</option>
-              ))}
-            </select>
+          <div className="flex flex-wrap items-center gap-2 max-w-xl">
+            <div className="flex-1 min-w-52"><SearchBox initial={q} /></div>
             <Button type="submit" variant="secondary" size="sm">Search</Button>
           </div>
+          <details open={narrowing} data-testid="advanced-filters">
+            <summary className="text-sm text-muted cursor-pointer select-none w-fit">More ways to narrow</summary>
+            <div className="flex flex-wrap items-end gap-3 pt-3 text-sm">
+              <div className={`${field} w-52`}>
+                <span className={fieldLabel}>Trip</span>
+                <TripFacetField initial={currentTrip} />
+              </div>
+              <div className={`${field} w-52`}>
+                <span className={fieldLabel}>Collection</span>
+                <CollectionFacetField initial={currentCollection} />
+              </div>
+              {member && facets.uploaders.length > 0 && (
+                <div className={field}>
+                  <label className={fieldLabel} htmlFor="search-uploader">Uploaded by</label>
+                  <select id="search-uploader" name="uploader" defaultValue={params.uploaderId ?? ""} className={select}>
+                    <option value="">Anyone</option>
+                    {facets.uploaders.map((u) => (
+                      <option key={u.id} value={u.id}>{uploaderLabel(u.name, u.email)}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              {member && facets.people.length > 0 && (
+                <div className={field}>
+                  <label className={fieldLabel} htmlFor="search-person">Who is in it</label>
+                  <select id="search-person" name="person" defaultValue={params.personId ?? ""} className={select} data-testid="who-filter">
+                    <option value="">Anybody</option>
+                    {humans.length > 0 && (
+                      <optgroup label="People">
+                        {humans.map((p) => (
+                          <option key={p.id} value={p.id}>{p.name}</option>
+                        ))}
+                      </optgroup>
+                    )}
+                    {pets.length > 0 && (
+                      <optgroup label="Pets">
+                        {pets.map((p) => (
+                          <option key={p.id} value={p.id}>{p.name}</option>
+                        ))}
+                      </optgroup>
+                    )}
+                  </select>
+                </div>
+              )}
+              <div className={field}>
+                <label className={fieldLabel} htmlFor="search-year">Year</label>
+                <select id="search-year" name="year" defaultValue={params.year ?? ""} className={select}>
+                  <option value="">Any year</option>
+                  {facets.years.map((y) => (
+                    <option key={y} value={y}>{y}</option>
+                  ))}
+                </select>
+              </div>
+              <div className={field}>
+                <label className={fieldLabel} htmlFor="search-kind">Type</label>
+                <select id="search-kind" name="kind" defaultValue={kind ?? ""} className={select}>
+                  {KINDS.map((k) => (
+                    <option key={k.value} value={k.value}>{k.label}</option>
+                  ))}
+                </select>
+              </div>
+              <Button type="submit" variant="secondary" size="sm">Search</Button>
+            </div>
+          </details>
         </form>
         {q && (
           <p className="text-sm text-muted" role="status">

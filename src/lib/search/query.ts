@@ -4,6 +4,7 @@ import { db } from "@/lib/db";
 import type { Viewer } from "@/lib/auth/viewer";
 import { visibleContainersWhere } from "@/lib/auth/access";
 import { embedText, mlConfigured, vectorLiteral } from "@/lib/ml/client";
+import { peopleInPhotos, type FilterPerson } from "@/lib/people/in-photos";
 
 export type SearchParams = { q: string; tripId?: string; collectionId?: string; uploaderId?: string; personId?: string; year?: number; kind?: MediaKind };
 
@@ -72,7 +73,11 @@ export async function searchMedia(viewer: Viewer, params: SearchParams, limit = 
   if (params.tripId) filters.push(Prisma.sql`p."tripId" = ${params.tripId}`);
   if (params.collectionId) filters.push(Prisma.sql`EXISTS (SELECT 1 FROM "CollectionItem" ci2 WHERE ci2."photoId" = p.id AND ci2."collectionId" = ${params.collectionId})`);
   if (member && params.uploaderId) filters.push(Prisma.sql`p."uploaderId" = ${params.uploaderId}`);
-  if (member && params.personId) filters.push(Prisma.sql`EXISTS (SELECT 1 FROM "Face" f2 WHERE f2."photoId" = p.id AND f2."personId" = ${params.personId} AND f2.status = 'CONFIRMED')`);
+  // Somebody is on a photograph whether a member named the face or the animal matcher's guess about a pet was
+  // confirmed; asking for Biscuit has to find both, or half of Biscuit's photographs quietly go missing.
+  if (member && params.personId)
+    filters.push(Prisma.sql`(EXISTS (SELECT 1 FROM "Face" f2 WHERE f2."photoId" = p.id AND f2."personId" = ${params.personId} AND f2.status = 'CONFIRMED')
+      OR EXISTS (SELECT 1 FROM "AnimalDetection" a2 WHERE a2."photoId" = p.id AND a2."personId" = ${params.personId} AND a2.status = 'CONFIRMED'))`);
   if (params.year) filters.push(Prisma.sql`EXTRACT(YEAR FROM (p."takenAt" + make_interval(mins => COALESCE(p."tzOffsetMin", 0)))) = ${params.year}`);
   if (params.kind) filters.push(Prisma.sql`p.kind = ${params.kind}::"MediaKind"`);
   const where = filters.length ? Prisma.join(filters, " AND ") : Prisma.sql`TRUE`;
@@ -122,7 +127,7 @@ export type SearchFacets = {
   /** Empty for anonymous viewers: the member list is never served to them. */
   uploaders: { id: string; name: string | null; email: string }[];
   /** Members only: every confirmed person and pet who has not opted out. */
-  people: { id: string; name: string }[];
+  people: FilterPerson[];
   years: number[];
 };
 
@@ -133,7 +138,7 @@ export async function searchFacets(viewer: Viewer): Promise<SearchFacets> {
     db.trip.findMany({ where: visibleContainersWhere(viewer), orderBy: { startDate: "desc" }, select: { id: true, title: true } }),
     db.collection.findMany({ where: visibleContainersWhere(viewer), orderBy: { title: "asc" }, select: { id: true, title: true } }),
     member ? db.user.findMany({ where: { photos: { some: {} } }, orderBy: { name: "asc" }, select: { id: true, name: true, email: true } }) : Promise.resolve([]),
-    member ? db.person.findMany({ where: { optedOutAt: null, faces: { some: { status: "CONFIRMED" } } }, orderBy: { name: "asc" }, select: { id: true, name: true } }) : Promise.resolve([]),
+    member ? peopleInPhotos() : Promise.resolve([]),
     db.$queryRaw<{ year: number }[]>`
       SELECT DISTINCT EXTRACT(YEAR FROM (p."takenAt" + make_interval(mins => COALESCE(p."tzOffsetMin", 0))))::int AS year
       FROM "Photo" p LEFT JOIN "Trip" t ON t.id = p."tripId"

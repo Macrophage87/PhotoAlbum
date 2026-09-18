@@ -5,6 +5,7 @@ import { candidatePhotoPage } from "@/lib/photos/page";
 import { parsePickerFilter } from "@/lib/photos/picker-filter";
 import { toGridPhoto, uploaderLabel } from "@/components/photos/toGrid";
 import { AddPhotosPicker } from "@/components/collections/AddPhotosPicker";
+import { peopleInPhotos } from "@/lib/people/in-photos";
 
 export const metadata = { title: "Put photos on this trip" };
 
@@ -21,9 +22,10 @@ export default async function AddToTripPage({ params, searchParams }: PageProps<
   const { trip, editable } = await loadViewableTrip(slug, `/trips/${slug}/add`);
   if (!editable) redirect(`/trips/${slug}`);
   const filter = parsePickerFilter(await searchParams);
-  const [page, members] = await Promise.all([
+  const [page, members, people] = await Promise.all([
     candidatePhotoPage({ kind: "trip", id: trip.id }, filter),
     db.user.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true, email: true } }),
+    peopleInPhotos(),
   ]);
   return (
     <AddPhotosPicker
@@ -31,6 +33,7 @@ export default async function AddToTripPage({ params, searchParams }: PageProps<
       initialTrip={null}
       filter={filter}
       members={members.map((m) => ({ id: m.id, label: uploaderLabel(m.name, m.email) }))}
+      people={people}
       initial={{ photos: page.photos.map((p) => toGridPhoto(p, null, true)), nextCursor: page.nextCursor, total: page.total }}
     />
   );

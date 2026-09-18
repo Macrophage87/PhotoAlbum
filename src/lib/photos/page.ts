@@ -5,6 +5,7 @@ import { photoCardSelect, type PhotoCard } from "./queries";
 import { NOT_TRASHED } from "@/lib/photos/trash";
 import { NO_FILTER, type GalleryFilter } from "./filters";
 import { boundingBox, MILE_IN_METRES, NO_PICKER_FILTER, type PickerFilter } from "./picker-filter";
+import { idsWithPerson } from "@/lib/people/in-photos";
 
 /** Gallery pages load this many items at a time; the client asks for the next page by cursor. */
 export const GALLERY_PAGE = 240;
@@ -61,6 +62,7 @@ export async function tripPhotoPage(tripId: string, opts: { uploaderId?: string;
   const lists: string[][] = [];
   if (filter.q) lists.push(await idsMatching(filter.q));
   if (filter.year) lists.push(await idsInLocalYear(tripId, filter.year));
+  if (filter.personId) lists.push(await idsWithPerson(filter.personId));
   const restrict = lists.length ? intersectIds(lists) : null;
   // Nothing matched: say so without asking the database a question whose answer is already known.
   if (restrict && restrict.length === 0) return { photos: [], nextCursor: null, total: 0 };
@@ -151,6 +153,7 @@ export async function candidatePhotoPage(target: PickerTarget, filter: PickerFil
   const lists: string[][] = [];
   if (filter.q) lists.push(await idsMatching(filter.q));
   if (filter.near) lists.push(await idsNear(filter.near));
+  if (filter.personId) lists.push(await idsWithPerson(filter.personId));
   const restrict = lists.length ? intersectIds(lists) : null;
   if (restrict && restrict.length === 0) return { photos: [], nextCursor: null, total: 0 };
 

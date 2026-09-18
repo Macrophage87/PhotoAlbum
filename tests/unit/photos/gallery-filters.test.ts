@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { describeCount, filterIsActive, filterQuery, NO_FILTER, parseGalleryFilter } from "@/lib/photos/filters";
+import { advancedIsActive, describeCount, filterIsActive, filterQuery, NO_FILTER, parseGalleryFilter } from "@/lib/photos/filters";
 import { intersectIds } from "@/lib/photos/page";
 
 /**
@@ -10,10 +10,16 @@ import { intersectIds } from "@/lib/photos/page";
 describe("reading a gallery filter from the address bar", () => {
   const member = { member: true };
 
-  it("takes words, who, what, when and where in the trip", () => {
-    const f = parseGalleryFilter({ q: "  lighthouse  at   dusk ", uploader: "u1", kind: "SCAN", year: "2019", activity: "a1" }, member);
-    expect(f).toEqual({ q: "lighthouse at dusk", uploaderId: "u1", kind: "SCAN", year: 2019, activityId: "a1" });
+  it("takes words, who uploaded it, who is in it, what, when and where in the trip", () => {
+    const f = parseGalleryFilter({ q: "  lighthouse  at   dusk ", uploader: "u1", person: "p1", kind: "SCAN", year: "2019", activity: "a1" }, member);
+    expect(f).toEqual({ q: "lighthouse at dusk", uploaderId: "u1", personId: "p1", kind: "SCAN", year: 2019, activityId: "a1" });
     expect(filterIsActive(f)).toBe(true);
+  });
+
+  it("knows when something beyond the words is being asked, so the extra questions arrive open", () => {
+    expect(advancedIsActive(parseGalleryFilter({ q: "boat" }, member))).toBe(false);
+    expect(advancedIsActive(parseGalleryFilter({ person: "p1" }, member))).toBe(true);
+    expect(advancedIsActive(parseGalleryFilter({ uploader: "u1" }, member))).toBe(true);
   });
 
   it("is no filter at all when nothing was asked for", () => {
@@ -23,9 +29,12 @@ describe("reading a gallery filter from the address bar", () => {
     expect(filterIsActive(parseGalleryFilter({ q: "   ", uploader: "" }, member))).toBe(false);
   });
 
-  it("never lets an anonymous visitor filter by who uploaded something", () => {
-    // They are not shown the list of the family's names, and must not be able to ask by id either.
+  it("never lets an anonymous visitor filter by who uploaded something, nor by who is in it", () => {
+    // They are not shown the list of the family's names, and must not be able to ask by id either. Asking a public
+    // trip for "the ones with Ada in them" would otherwise tell a stranger exactly which of them she is on.
     expect(parseGalleryFilter({ uploader: "u1" }, { member: false }).uploaderId).toBeNull();
+    expect(parseGalleryFilter({ person: "p1" }, { member: false }).personId).toBeNull();
+    expect(filterIsActive(parseGalleryFilter({ person: "p1" }, { member: false }))).toBe(false);
   });
 
   it("throws away a kind the album does not have, and a year that could not be one", () => {
@@ -44,10 +53,11 @@ describe("reading a gallery filter from the address bar", () => {
   });
 
   it("goes back into a URL so that paging keeps the narrowing", () => {
-    const f = parseGalleryFilter({ q: "boat house", uploader: "u1", year: "2019" }, member);
+    const f = parseGalleryFilter({ q: "boat house", uploader: "u1", person: "p1", year: "2019" }, member);
     const round = new URLSearchParams(filterQuery(f));
     expect(round.get("q")).toBe("boat house");
     expect(round.get("uploader")).toBe("u1");
+    expect(round.get("person")).toBe("p1");
     expect(round.get("year")).toBe("2019");
     expect(filterQuery(NO_FILTER)).toBe("");
   });

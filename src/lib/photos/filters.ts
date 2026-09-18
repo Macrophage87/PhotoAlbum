@@ -12,12 +12,14 @@ export type GalleryFilter = {
   /** Words to look for: the same index the search page uses, plus the file's own name. */
   q: string | null;
   uploaderId: string | null;
+  /** Somebody who is on the photograph — a person or a pet. Members only; see `parseGalleryFilter`. */
+  personId: string | null;
   kind: MediaKind | null;
   year: number | null;
   activityId: string | null;
 };
 
-export const NO_FILTER: GalleryFilter = { q: null, uploaderId: null, kind: null, year: null, activityId: null };
+export const NO_FILTER: GalleryFilter = { q: null, uploaderId: null, personId: null, kind: null, year: null, activityId: null };
 
 const KINDS: MediaKind[] = ["PHOTO", "VIDEO", "EXTERNAL_VIDEO", "SCAN"];
 
@@ -42,8 +44,10 @@ const one = (v: string | string[] | undefined): string | null => {
 };
 
 /**
- * Read a filter off the address bar. `member` is false for anonymous visitors, who never see the list of who
- * uploaded what and must not be able to filter by it either.
+ * Read a filter off the address bar. `member` is false for anonymous visitors, who see neither who uploaded what
+ * nor who is in the picture, and must not be able to narrow by either: a stranger who could ask a public trip for
+ * "photographs with Ada in them" would be told which of them she is on, which is the whole of what the album keeps
+ * from them.
  */
 export function parseGalleryFilter(sp: Params, opts: { member: boolean }): GalleryFilter {
   const rawQ = one(sp.q);
@@ -52,6 +56,7 @@ export function parseGalleryFilter(sp: Params, opts: { member: boolean }): Galle
   return {
     q: rawQ ? rawQ.replace(/\s+/g, " ").slice(0, MAX_GALLERY_QUERY) : null,
     uploaderId: opts.member ? one(sp.uploader) : null,
+    personId: opts.member ? one(sp.person) : null,
     kind: kind && (KINDS as string[]).includes(kind) ? (kind as MediaKind) : null,
     year: Number.isInteger(year) && year >= FIRST_PHOTOGRAPH && year <= 2200 ? year : null,
     activityId: one(sp.activity),
@@ -59,7 +64,12 @@ export function parseGalleryFilter(sp: Params, opts: { member: boolean }): Galle
 }
 
 export function filterIsActive(f: GalleryFilter): boolean {
-  return Boolean(f.q || f.uploaderId || f.kind || f.year || f.activityId);
+  return Boolean(f.q || f.uploaderId || f.personId || f.kind || f.year || f.activityId);
+}
+
+/** Whether anything beyond the words is being asked, which is what decides if the extra questions start open. */
+export function advancedIsActive(f: GalleryFilter): boolean {
+  return Boolean(f.uploaderId || f.personId || f.kind || f.year || f.activityId);
 }
 
 /** The filter as it goes back into a URL, so paging through a narrowed gallery keeps the narrowing. */
@@ -67,6 +77,7 @@ export function filterQuery(f: GalleryFilter): string {
   const p = new URLSearchParams();
   if (f.q) p.set("q", f.q);
   if (f.uploaderId) p.set("uploader", f.uploaderId);
+  if (f.personId) p.set("person", f.personId);
   if (f.kind) p.set("kind", f.kind);
   if (f.year) p.set("year", String(f.year));
   if (f.activityId) p.set("activity", f.activityId);

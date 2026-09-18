@@ -3,6 +3,7 @@ import type { Prisma } from "@/generated/prisma/client";
 import { NOT_TRASHED } from "@/lib/photos/trash";
 import { idsInLocalYear, idsMatching, intersectIds } from "./page";
 import { NO_FILTER, type GalleryFilter } from "./filters";
+import { idsWithPerson } from "@/lib/people/in-photos";
 
 export const photoCardSelect = {
   id: true,
@@ -50,6 +51,7 @@ export async function listUnassignedPhotos(filter: GalleryFilter = NO_FILTER): P
   const lists: string[][] = [];
   if (filter.q) lists.push(await idsMatching(filter.q));
   if (filter.year) lists.push(await idsInLocalYear(null, filter.year));
+  if (filter.personId) lists.push(await idsWithPerson(filter.personId));
   const restrict = lists.length ? intersectIds(lists) : null;
   const where = {
     tripId: null,

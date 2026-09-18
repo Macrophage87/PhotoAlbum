@@ -9,6 +9,7 @@ import { GalleryFilters } from "@/components/photos/GalleryFilters";
 import { db } from "@/lib/db";
 import { uploaderLabel } from "@/components/photos/toGrid";
 import { filterIsActive, filterQuery, parseGalleryFilter } from "@/lib/photos/filters";
+import { peopleInPhotos } from "@/lib/people/in-photos";
 
 export default async function TripMapPage({ params, searchParams }: PageProps<"/trips/[slug]/map">) {
   const { slug } = await params;
@@ -19,9 +20,10 @@ export default async function TripMapPage({ params, searchParams }: PageProps<"/
   // The same question the timeline and the gallery take, asked of where things happened instead of when.
   const filter = parseGalleryFilter(sp, { member: editable });
   const query = filterQuery(filter);
-  const [activities, members] = await Promise.all([
+  const [activities, members, people] = await Promise.all([
     db.activity.findMany({ where: { tripId: trip.id }, orderBy: { startTime: "asc" }, select: { id: true, title: true } }),
     editable ? db.user.findMany({ where: { photos: { some: { tripId: trip.id } } }, orderBy: { name: "asc" }, select: { id: true, name: true, email: true } }) : Promise.resolve([]),
+    editable ? peopleInPhotos({ tripId: trip.id }) : Promise.resolve([]),
   ]);
   return (
     <div className="space-y-3">
@@ -29,6 +31,7 @@ export default async function TripMapPage({ params, searchParams }: PageProps<"/
         filter={filter}
         action={`/trips/${slug}/map`}
         members={editable ? members.map((m) => ({ id: m.id, label: uploaderLabel(m.name, m.email) })) : undefined}
+        people={editable ? people : undefined}
         activities={activities.map((a) => ({ id: a.id, label: a.title }))}
         placeholder="Search this trip"
       />

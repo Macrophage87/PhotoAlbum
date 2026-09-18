@@ -7,6 +7,7 @@ import { GalleryFilters } from "@/components/photos/GalleryFilters";
 import { Timeline } from "@/components/timeline/Timeline";
 import { ButtonLink } from "@/components/ui";
 import { SelectionProvider } from "@/components/photos/selection";
+import { peopleInPhotos } from "@/lib/people/in-photos";
 
 /**
  * What a trip opens on: the days it was, in order.
@@ -21,10 +22,11 @@ export default async function TripTimelinePage({ params, searchParams }: PagePro
   const { trip, editable } = await loadViewableTrip(slug);
   // Who uploaded what is members-only, so an anonymous visitor never sees the member list nor narrows by it.
   const filter = parseGalleryFilter(sp, { member: editable });
-  const [{ groups, matched, total, active }, activities, members] = await Promise.all([
+  const [{ groups, matched, total, active }, activities, members, people] = await Promise.all([
     tripTimeline(trip.id, trip.timezone, filter),
     db.activity.findMany({ where: { tripId: trip.id }, orderBy: { startTime: "asc" }, select: { id: true, title: true } }),
     editable ? db.user.findMany({ where: { photos: { some: { tripId: trip.id } } }, orderBy: { name: "asc" }, select: { id: true, name: true, email: true } }) : Promise.resolve([]),
+    editable ? peopleInPhotos({ tripId: trip.id }) : Promise.resolve([]),
   ]);
   const timeline = (
     <div className="space-y-4">
@@ -38,6 +40,7 @@ export default async function TripTimelinePage({ params, searchParams }: PagePro
         filter={filter}
         action={`/trips/${slug}`}
         members={editable ? members.map((m) => ({ id: m.id, label: uploaderLabel(m.name, m.email) })) : undefined}
+        people={editable ? people : undefined}
         activities={activities.map((a) => ({ id: a.id, label: a.title }))}
         placeholder="Search this trip"
       />

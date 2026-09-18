@@ -9,6 +9,7 @@ import { describeCount, filterIsActive, parseGalleryFilter } from "@/lib/photos/
 import { ButtonLink } from "@/components/ui";
 import { db } from "@/lib/db";
 import { NOT_TRASHED } from "@/lib/photos/trash";
+import { peopleInPhotos } from "@/lib/people/in-photos";
 
 export const metadata = { title: "Photos without a trip" };
 
@@ -18,9 +19,10 @@ export default async function UnassignedPhotosPage({ searchParams }: PageProps<"
   const viewer = await getViewer();
   const sp = await searchParams;
   const filter = parseGalleryFilter(sp, { member: true });
-  const [{ photos, total }, members, years] = await Promise.all([
+  const [{ photos, total }, members, people, years] = await Promise.all([
     listUnassignedPhotos(filter),
     db.user.findMany({ where: { photos: { some: { tripId: null, ...NOT_TRASHED } } }, orderBy: { name: "asc" }, select: { id: true, name: true, email: true } }),
+    peopleInPhotos(),
     // The years these actually cover, so the list offers nothing that would come back empty.
     db.$queryRaw<{ year: number }[]>`
       SELECT DISTINCT EXTRACT(YEAR FROM (p."takenAt" + make_interval(mins => COALESCE(p."tzOffsetMin", 0))))::int AS year
@@ -42,6 +44,7 @@ export default async function UnassignedPhotosPage({ searchParams }: PageProps<"
             filter={filter}
             action="/photos"
             members={members.map((m) => ({ id: m.id, label: uploaderLabel(m.name, m.email) }))}
+            people={people}
             years={years.map((y) => y.year)}
             placeholder="Search these photos"
           />

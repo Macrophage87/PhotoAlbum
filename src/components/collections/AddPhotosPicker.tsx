@@ -10,17 +10,19 @@ import { moreTripCandidates } from "@/app/trips/[slug]/add-actions";
 import { bulkMoveToTrip } from "@/app/photos/bulk-actions";
 import { previewAddToCollection, previewMoveToTrip } from "@/app/photos/exposure-actions";
 import { describePickerFilter, pickerFilterIsActive, pickerFilterQuery, type PickerFilter } from "@/lib/photos/picker-filter";
+import type { FilterPerson } from "@/lib/people/in-photos";
 
 /** Where the ticked photographs are going. A collection gathers them; a trip takes them over. */
 export type PickerDestination = { kind: "collection"; id: string; slug: string; title: string } | { kind: "trip"; id: string; slug: string; title: string };
 
 /** Tick photos from anywhere in the album and put them somewhere; warns first when that would show them to more people. */
-export function AddPhotosPicker({ destination, initialTrip, filter, members, initial }: {
+export function AddPhotosPicker({ destination, initialTrip, filter, members, people, initial }: {
   destination: PickerDestination;
   /** The trip the filter is already narrowed to, so the box shows its name. */
   initialTrip: { id: string; title: string } | null;
   filter: PickerFilter;
   members?: PickerOption[];
+  people?: FilterPerson[];
   initial: { photos: GridPhoto[]; nextCursor: string | null; total: number };
 }) {
   const router = useRouter();
@@ -78,6 +80,7 @@ export function AddPhotosPicker({ destination, initialTrip, filter, members, ini
           action={destination.kind === "collection" ? `/collections/${destination.slug}/add` : `/trips/${destination.slug}/add`}
           initialTrip={initialTrip}
           members={members}
+          people={people}
           showTrip={destination.kind === "collection"}
         />
       </div>
