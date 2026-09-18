@@ -41,7 +41,10 @@ export function GraphView({ data, minScore }: { data: GraphPayload; minScore: nu
   const graph = useMemo(() => {
     const g = new Graph({ type: "undirected" });
     // Deterministic starting positions on a spiral: the layout only needs them spread out, not random.
-    data.nodes.forEach((n, i) => g.addNode(n.id, { x: Math.cos(i * 2.4) * Math.sqrt(i + 1), y: Math.sin(i * 2.4) * Math.sqrt(i + 1), size: 12, type: "image", image: n.thumb, label: n.alt }));
+    // No label on a node: the picture is the label. Written text over a thumbnail obscures the very thing it names,
+    // and once the camera is zoomed in far enough the captions were what the graph mostly showed. Pressing a node
+    // opens it, caption and all.
+    data.nodes.forEach((n, i) => g.addNode(n.id, { x: Math.cos(i * 2.4) * Math.sqrt(i + 1), y: Math.sin(i * 2.4) * Math.sqrt(i + 1), size: 12, type: "image", image: n.thumb }));
     for (const e of data.edges) if (!g.hasEdge(e.a, e.b)) g.addEdge(e.a, e.b, { score: e.score, size: 1 + (e.score - 0.75) * 12 });
     forceAtlas2.assign(g, { iterations: Math.min(400, 60 + data.nodes.length), settings: { ...forceAtlas2.inferSettings(g), gravity: 1, scalingRatio: 4 } });
     return g;
@@ -55,8 +58,8 @@ export function GraphView({ data, minScore }: { data: GraphPayload; minScore: nu
     const sigma = new Sigma(graph, container.current, {
       nodeProgramClasses: { image: createNodeImageProgram({ size: { mode: "force", value: 256 }, objectFit: "cover" }) },
       defaultNodeType: "image",
+      renderLabels: false,
       renderEdgeLabels: false,
-      labelRenderedSizeThreshold: 30,
       allowInvalidContainer: true,
     });
     sigma.on("clickNode", ({ node }) => setOpen(data.nodes.findIndex((n) => n.id === node)));
