@@ -245,6 +245,11 @@ test("one activity can be sent on its own link, which opens it and nothing else 
   await signIn(context, ADMIN);
   const act = await withDb((c) => c.query(`SELECT id, title FROM "Activity" WHERE title = 'Ocean Path loop' LIMIT 1`));
   const activityId = act.rows[0].id as string;
+  // Put a photograph on the walk, since the point of the link is that its own photographs come with it. Nothing
+  // else in the suite has filed one here yet, and it is taken off again below so the trip is left as it was found.
+  const mine = await withDb((c) => c.query(`SELECT p.id FROM "Photo" p JOIN "Trip" t ON t.id = p."tripId" WHERE t.slug = 'acadia' AND p.status = 'READY' AND p."trashedAt" IS NULL AND p."activityId" IS NULL ORDER BY p.id LIMIT 1`));
+  const photoId = mine.rows[0].id as string;
+  await withDb((c) => c.query(`UPDATE "Photo" SET "activityId" = $2 WHERE id = $1`, [photoId, activityId]));
 
   // Make the link from the activity's own page.
   await page.goto(`/trips/acadia/activities/${activityId}`);
@@ -264,6 +269,8 @@ test("one activity can be sent on its own link, which opens it and nothing else 
   const img = guest.locator("img[src*='/api/photos/']").first();
   await expect(img).toBeVisible();
   await expect.poll(async () => img.evaluate((el: HTMLImageElement) => el.naturalWidth)).toBeGreaterThan(0);
+
+  await withDb((c) => c.query(`UPDATE "Photo" SET "activityId" = NULL WHERE id = $1`, [photoId]));
 
   // And nothing else of the trip: the trip is private and stays private to them.
   await guest.goto("/trips/acadia");
@@ -1354,6 +1361,11 @@ test("a photo is dragged onto an activity on the timeline, and a selection can b
   await signIn(context, ADMIN);
   const act = await withDb((c) => c.query(`SELECT id, title FROM "Activity" WHERE title = 'Ocean Path loop' LIMIT 1`));
   const activityId = act.rows[0].id as string;
+  // Put a photograph on the walk, since the point of the link is that its own photographs come with it. Nothing
+  // else in the suite has filed one here yet, and it is taken off again below so the trip is left as it was found.
+  const mine = await withDb((c) => c.query(`SELECT p.id FROM "Photo" p JOIN "Trip" t ON t.id = p."tripId" WHERE t.slug = 'acadia' AND p.status = 'READY' AND p."trashedAt" IS NULL AND p."activityId" IS NULL ORDER BY p.id LIMIT 1`));
+  const photoId = mine.rows[0].id as string;
+  await withDb((c) => c.query(`UPDATE "Photo" SET "activityId" = $2 WHERE id = $1`, [photoId, activityId]));
   // A photo of the admin's on the trip but on no activity: the one the timeline shows loose under its day.
   const loose = await withDb((c) => c.query(`SELECT p.id FROM "Photo" p JOIN "User" u ON u.id = p."uploaderId" WHERE p."tripId" = (SELECT id FROM "Trip" WHERE slug = 'acadia') AND p."activityId" IS NULL AND p.status = 'READY' AND p."trashedAt" IS NULL AND u.email = $1 ORDER BY p."createdAt" LIMIT 1`, [ADMIN]));
   test.skip(loose.rows.length === 0, "no loose photo on the trip to drag");
