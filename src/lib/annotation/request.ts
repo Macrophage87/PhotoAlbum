@@ -67,7 +67,13 @@ export function describeItem(item: ItemForAnnotation, permittedNames: string[], 
   if (item.camera) lines.push(`Camera: ${item.camera}`);
   if (item.trip) lines.push(`Trip: ${item.trip.title}`);
   if (item.collections.length) lines.push(`Collections: ${item.collections.map((c) => c.collection.title).join(", ")}`);
-  lines.push(permittedNames.length ? `People confirmed in this item, whose names you may use: ${permittedNames.join(", ")}` : "No people have been confirmed in this item; do not name anyone unless the notes do.");
+  // Not "names you may use": permission alone got descriptions of the family's parents that still read "an older
+  // couple", because a rule that allows a name does not ask for one.
+  lines.push(
+    permittedNames.length
+      ? `People confirmed in this item — call them by these names rather than by age or role: ${permittedNames.join(", ")}`
+      : "No people have been confirmed in this item; do not name anyone unless the notes do.",
+  );
   if (askForDate) lines.push("This item has no reliable date. Please estimate a year range in estimatedYear using the notes and visible cues.");
   if (askForPlace) lines.push("This item has no location recorded. If it shows a public place you recognise, please estimate it; if it shows somewhere private, or nowhere you can name, leave it null.");
   return lines.join("\n");

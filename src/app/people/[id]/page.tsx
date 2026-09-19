@@ -10,6 +10,7 @@ import { Badge, Button, Card, ConfirmSubmitButton, Input, Label } from "@/compon
 import { decideIndexing, deletePerson, optOutPerson, setNameInDescriptions, updatePerson } from "../actions";
 import { PetForm } from "@/components/people/PetForm";
 import { dateColumnToDay } from "@/lib/time/local-day";
+import { namesWaitingFor, refreshNamesFor } from "@/app/annotation/actions";
 
 export const metadata = { robots: { index: false, follow: false } };
 
@@ -27,6 +28,12 @@ export default async function PersonPage({ params }: PageProps<"/people/[id]">) 
   const nameInDescriptions = setNameInDescriptions;
   const optOut = optOutPerson.bind(null, id);
   const minor = isMinor(person);
+  // Descriptions of this person written before the album could name them, and the one press that redoes them.
+  const waiting = await namesWaitingFor(id);
+  const refresh = async () => {
+    "use server";
+    await refreshNamesFor(id);
+  };
   return (
     <AppShell viewer={viewer}>
       <Container className="py-10 space-y-8">
@@ -39,6 +46,24 @@ export default async function PersonPage({ params }: PageProps<"/people/[id]">) 
         </div>
 
         <PhotoGrid photos={photos.map((p) => toGridPhoto(p, null, true))} emptyMessage="No photos you can see." />
+
+        {/* Naming somebody does nothing to the descriptions already written, and hunting down the run that fixes
+            them on the Admin page was the step everybody got stuck on. It is offered here, where the naming is. */}
+        {waiting > 0 && (
+          <form action={refresh} className="rounded-theme border border-border bg-surface-alt p-4 space-y-2 text-sm" data-testid="names-waiting">
+            <p className="font-medium">
+              {waiting} description{waiting === 1 ? " was" : "s were"} written before the album could use {person.name}&apos;s name.
+            </p>
+            <p className="text-muted">They still describe {person.name} by age or by role. Describing them again lets the helper use the name instead; whatever a member wrote by hand is left alone.</p>
+            {isAdmin ? (
+              <ConfirmSubmitButton size="sm" variant="secondary" confirmMessage={`Describe ${waiting} item${waiting === 1 ? "" : "s"} again so they can use ${person.name}'s name? This sends them to the AI helper.`} data-testid="refresh-names">
+                Describe {waiting === 1 ? "it" : "them"} again
+              </ConfirmSubmitButton>
+            ) : (
+              <p className="text-muted">An admin can have them described again.</p>
+            )}
+          </form>
+        )}
 
         <div className="grid md:grid-cols-2 gap-6">
           {person.kind === "PET" ? (

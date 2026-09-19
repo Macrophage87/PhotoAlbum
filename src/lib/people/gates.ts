@@ -13,12 +13,23 @@ export async function faceGates(): Promise<FaceGates> {
   return { sidecar, envEnabled: e.FACE_INDEXING_ENABLED, optedInAt, active: sidecar && e.FACE_INDEXING_ENABLED && Boolean(optedInAt), retentionDays: e.FACE_UNNAMED_RETENTION_DAYS };
 }
 
-/** Names the AI helper may be given for an item: confirmed people whose indexing is on and who are not minors. */
+/**
+ * Names the AI helper may be given for an item: confirmed people whose naming is on and who are not minors, and
+ * confirmed pets.
+ *
+ * A pet arrives at a photograph by two routes — a member's tag, which is a face row, or the animal matcher's guess
+ * once somebody agrees with it, which is not. Only the first was looked at here, so a dog the album had correctly
+ * recognised was still described as "a dog".
+ */
 export async function permittedNames(photoId: string): Promise<string[]> {
   const { nameMayLeaveServer } = await import("./consent");
-  const faces = await db.face.findMany({ where: { photoId, status: "CONFIRMED", personId: { not: null } }, select: { person: { select: { name: true, birthday: true, adultAttestedAt: true, faceIndexing: true, nameInDescriptions: true, kind: true, optedOutAt: true } } } });
+  const personSelect = { name: true, birthday: true, adultAttestedAt: true, faceIndexing: true, nameInDescriptions: true, kind: true, optedOutAt: true } as const;
+  const [faces, animals] = await Promise.all([
+    db.face.findMany({ where: { photoId, status: "CONFIRMED", personId: { not: null } }, select: { person: { select: personSelect } } }),
+    db.animalDetection.findMany({ where: { photoId, status: "CONFIRMED", personId: { not: null } }, select: { person: { select: personSelect } } }),
+  ]);
   const names = new Set<string>();
-  for (const f of faces) {
+  for (const f of [...faces, ...animals]) {
     const p = f.person;
     if (!p || p.optedOutAt) continue;
     if (p.kind === "PET" || nameMayLeaveServer(p)) names.add(p.name);

@@ -71,7 +71,8 @@ describe("the text block", () => {
     expect(text).toContain("Notes from the person who uploaded it: lobster rolls");
     expect(text).toContain("Trip: Acadia");
     expect(text).toContain("Collections: Summer");
-    expect(text).toContain("whose names you may use: Sam");
+    // Asked for, not merely permitted: "names you may use" left the family's parents called "an older couple".
+    expect(text).toContain("call them by these names rather than by age or role: Sam");
     expect(text).not.toContain("estimate a year");
     expect(describeItem(base, [], true)).toContain("do not name anyone");
     expect(describeItem(base, [], true)).toContain("Please estimate a year range");

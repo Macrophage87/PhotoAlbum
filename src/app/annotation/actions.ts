@@ -127,6 +127,7 @@ const scopeSchema = z.intersection(
     z.object({ kind: z.literal("trip"), tripId: z.string().min(1) }),
     z.object({ kind: z.literal("collection"), collectionId: z.string().min(1) }),
     z.object({ kind: z.literal("range"), from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }),
+    z.object({ kind: z.literal("person"), personId: z.string().min(1) }),
   ]),
   z.object({ task: taskSchema }),
 );
@@ -175,6 +176,39 @@ export async function startBackfill(scope: BackfillScope, typedConfirmation: str
   // A full run can take hours of building and uploading; the job must not expire meanwhile. One late retry lets a
   // run cut short by a crash be closed by the handler as well as by the poll.
   await enqueue(QUEUES.annotationBackfill, { batchId: batch.id }, { expireInSeconds: 12 * 3600, retryLimit: 1, retryDelay: 3600, retryBackoff: false });
+  revalidatePath("/admin");
+  return batch.id;
+}
+
+/** How many descriptions of this person were written before the album could use their name. */
+export async function namesWaitingFor(personId: string): Promise<number> {
+  await requireUserOrThrow();
+  const gates = await annotationGates();
+  if (!gates.active) return 0;
+  return (await backfillCandidates({ kind: "person", personId, task: "names" })).length;
+}
+
+/**
+ * Describe this one person's photographs again, now that their name may be used.
+ *
+ * The same run the Admin page offers, aimed at one person and started from the page where their name was allowed
+ * in the first place — which is where somebody actually is when the question arises. It is its own scope rather
+ * than the whole library so that agreeing on behalf of one relative does not quietly re-describe everybody's
+ * photographs, and it needs no typed confirmation because the count is the person's own and bounded.
+ */
+export async function refreshNamesFor(personId: string): Promise<string | null> {
+  const admin = await requireAdminOrThrow();
+  const open = await db.annotationBatch.count({ where: { OR: [{ status: "SUBMITTED" }, { parentId: null, runEndedAt: null, startedAt: { not: null } }] } });
+  if (open > 0) throw new Error("A backfill is still in progress; wait until it has ended before starting another.");
+  const gates = await annotationGates();
+  if (!gates.active) throw new Error("Annotation is off");
+  const scope = scopeSchema.parse({ kind: "person", personId, task: "names" });
+  const items = await backfillCandidates(scope);
+  if (!items.length) return null;
+  const id = `b${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+  const batch = await db.annotationBatch.create({ data: { id, anthropicBatchId: `pending-${id}`, scope, requested: items.length, createdById: admin.id } });
+  await enqueue(QUEUES.annotationBackfill, { batchId: batch.id }, { expireInSeconds: 12 * 3600, retryLimit: 1, retryDelay: 3600, retryBackoff: false });
+  revalidatePath(`/people/${personId}`);
   revalidatePath("/admin");
   return batch.id;
 }

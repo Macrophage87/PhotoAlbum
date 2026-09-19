@@ -8,8 +8,9 @@ import { enqueue } from "../boss";
 import { QUEUES, type AnnotationBackfillJob } from "../queues";
 import { permittedNames } from "@/lib/people/gates";
 import { NOT_TRASHED } from "@/lib/photos/trash";
+import { Prisma } from "@/generated/prisma/client";
 
-export type BackfillWhere = { kind: "all" } | { kind: "trip"; tripId: string } | { kind: "collection"; collectionId: string } | { kind: "range"; from: string; to: string };
+export type BackfillWhere = { kind: "all" } | { kind: "trip"; tripId: string } | { kind: "collection"; collectionId: string } | { kind: "range"; from: string; to: string } | { kind: "person"; personId: string };
 /**
  * What a run asks for. "describe" writes the full record for items that have none; "place" asks only where an item
  * was taken, for items with no location. The place pass is deliberately a separate question rather than a second
@@ -48,12 +49,15 @@ export function pendingWhere(task: BackfillTask) {
  *
  * A minor is never named and so never brings an item into this run; a pet always may be.
  */
-export async function describedBeforeTheirNames(): Promise<string[]> {
+export async function describedBeforeTheirNames(personId?: string): Promise<string[]> {
+  const only = personId ? Prisma.sql`AND pe.id = ${personId}` : Prisma.empty;
+  const onlyAnimal = personId ? Prisma.sql`AND ape.id = ${personId}` : Prisma.empty;
   const rows = await db.$queryRaw<{ id: string }[]>`
     SELECT p.id FROM "Photo" p
-    WHERE p."annotatedAt" IS NOT NULL AND EXISTS (
+    WHERE p."annotatedAt" IS NOT NULL AND (EXISTS (
       SELECT 1 FROM "Face" f JOIN "Person" pe ON pe.id = f."personId"
       WHERE f."photoId" = p.id AND f.status = 'CONFIRMED' AND pe."optedOutAt" IS NULL
+        ${only}
         AND (
           pe.kind = 'PET'
           OR ((pe."faceIndexing" OR pe."nameInDescriptions") AND (pe.birthday IS NULL OR pe.birthday <= (now() - interval '18 years')))
@@ -63,13 +67,19 @@ export async function describedBeforeTheirNames(): Promise<string[]> {
           OR pe."nameInDescriptionsSetAt" > p."annotatedAt"
           OR pe."faceIndexingSetAt" > p."annotatedAt"
         )
-    )`;
+    ) OR EXISTS (
+      -- A pet the matcher found and somebody agreed with is on the photograph just as surely as a tagged one.
+      SELECT 1 FROM "AnimalDetection" a JOIN "Person" ape ON ape.id = a."personId"
+      WHERE a."photoId" = p.id AND a.status = 'CONFIRMED' AND ape."optedOutAt" IS NULL AND ape.kind = 'PET'
+        ${onlyAnimal}
+        AND a."createdAt" > p."annotatedAt"
+    ))`;
   return rows.map((r) => r.id);
 }
 
 /** Items a backfill would send: in scope, still pending its task, not opted out directly or by inheritance. */
 export async function backfillCandidates(scope: BackfillScope) {
-  const named = taskOf(scope) === "names" ? { id: { in: await describedBeforeTheirNames() } } : {};
+  const named = taskOf(scope) === "names" ? { id: { in: await describedBeforeTheirNames(scope.kind === "person" ? scope.personId : undefined) } } : {};
   const base = {
     ...named,
     status: "READY" as const,
@@ -83,6 +93,7 @@ export async function backfillCandidates(scope: BackfillScope) {
     scope.kind === "trip" ? { ...base, tripId: scope.tripId }
     : scope.kind === "collection" ? { ...base, collections: { ...base.collections, some: { collectionId: scope.collectionId } } }
     : scope.kind === "range" ? { ...base, takenAt: { gte: new Date(`${scope.from}T00:00:00Z`), lte: new Date(`${scope.to}T23:59:59Z`) } }
+    // A person's own scope is already the whole of what the names run would do for them, so nothing further is added.
     : base;
   return db.photo.findMany({ where, select: { id: true, kind: true }, orderBy: { createdAt: "asc" }, take: BACKFILL_CAP });
 }
@@ -96,10 +107,11 @@ export async function backfillExclusions(scope: BackfillScope): Promise<{ inScop
     scope.kind === "trip" ? { tripId: scope.tripId }
     : scope.kind === "collection" ? { collections: { some: { collectionId: scope.collectionId } } }
     : scope.kind === "range" ? { takenAt: { gte: new Date(`${scope.from}T00:00:00Z`), lte: new Date(`${scope.to}T23:59:59Z`) } }
+    : scope.kind === "person" ? { id: { in: await describedBeforeTheirNames(scope.personId) } }
     : {};
   const ready = { status: "READY" as const, ...NOT_TRASHED, ...scopeWhere };
   const task = taskOf(scope);
-  const pending = task === "names" ? { ...pendingWhere(task), id: { in: await describedBeforeTheirNames() } } : pendingWhere(task);
+  const pending = task === "names" ? { ...pendingWhere(task), id: { in: await describedBeforeTheirNames(scope.kind === "person" ? scope.personId : undefined) } } : pendingWhere(task);
   // "described" is the run's done pile: items already described, or (for the place pass) already placed or asked
   // about, or (for the names run) everything else, since what is left to do is exactly the candidate list.
   const done = task === "place" ? { NOT: pending } : task === "names" ? { NOT: pending } : { annotatedAt: { not: null } };

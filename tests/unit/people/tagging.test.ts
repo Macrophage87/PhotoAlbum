@@ -108,6 +108,14 @@ describe("tagging somebody on a photograph", () => {
     expect(await permittedNames(photoId)).toEqual([]);
   });
 
+  it("hands over a pet the animal matcher found and somebody agreed with, not only a tagged one", async () => {
+    // A pet reaches a photograph two ways. Only the tag was looked at, so a dog the album had correctly recognised
+    // was still described as "a dog".
+    const biscuit = await db.person.create({ data: { name: "Biscuit", kind: "PET", createdById: me } });
+    await db.animalDetection.create({ data: { photoId, personId: biscuit.id, species: "DOG", status: "CONFIRMED", box: { x: 0.1, y: 0.1, w: 0.2, h: 0.2 }, confidence: 0.9 } });
+    expect(await permittedNames(photoId)).toEqual(["Biscuit"]);
+  });
+
   it("will not record an agreement for somebody who asked to be forgotten", async () => {
     const gone = await db.person.create({ data: { name: "Gone", optedOutAt: new Date(), createdById: me } });
     await expect(setNameInDescriptions(gone.id, true)).rejects.toThrow(/forgotten/);
@@ -156,6 +164,27 @@ describe("which items were described before the album knew who was in them", () 
     expect(await describedBeforeTheirNames()).toEqual([]);
     await setNameInDescriptions(dan.id, true);
     expect(await describedBeforeTheirNames()).toEqual([item]);
+  });
+
+  it("narrows to one person when asked, so agreeing for a relative does not redo everybody's photographs", async () => {
+    const long = new Date("2026-01-01T00:00:00Z");
+    const hers = await photo("hers.jpg", long);
+    const his = await photo("his.jpg", long);
+    const jo = await db.person.create({ data: { name: "Jo", birthday: new Date("1946-03-02"), nameInDescriptions: true, nameInDescriptionsSetById: me, nameInDescriptionsSetAt: long, createdById: me } });
+    const al = await db.person.create({ data: { name: "Al", birthday: new Date("1944-05-06"), nameInDescriptions: true, nameInDescriptionsSetById: me, nameInDescriptionsSetAt: long, createdById: me } });
+    await db.face.create({ data: { photoId: hers, personId: jo.id, status: "CONFIRMED", box: [0.1, 0.1, 0.2, 0.2], confidence: 0 } });
+    await db.face.create({ data: { photoId: his, personId: al.id, status: "CONFIRMED", box: [0.1, 0.1, 0.2, 0.2], confidence: 0 } });
+    expect((await describedBeforeTheirNames()).sort()).toEqual([hers, his].sort());
+    expect(await describedBeforeTheirNames(jo.id)).toEqual([hers]);
+    expect(await describedBeforeTheirNames(al.id)).toEqual([his]);
+  });
+
+  it("re-asks for a pet the matcher found, not only one somebody tagged", async () => {
+    const item = await photo("described.jpg", new Date("2026-01-01T00:00:00Z"));
+    const biscuit = await db.person.create({ data: { name: "Biscuit", kind: "PET", species: "DOG", createdById: me } });
+    await db.animalDetection.create({ data: { photoId: item, personId: biscuit.id, species: "DOG", status: "CONFIRMED", box: { x: 0, y: 0, w: 1, h: 1 }, confidence: 0.9 } });
+    expect(await describedBeforeTheirNames()).toEqual([item]);
+    expect(await describedBeforeTheirNames(biscuit.id)).toEqual([item]);
   });
 
   it("leaves a child out of it", async () => {
