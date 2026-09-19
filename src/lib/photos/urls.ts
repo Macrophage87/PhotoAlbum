@@ -1,5 +1,8 @@
-/** "original" is the file as it was uploaded; "edited" is the full-size picture with any darkroom edits on it. */
-export type PhotoSize = "thumb" | "medium" | "pano" | "original" | "edited" | "source" | "video" | "poster" | "model";
+/**
+ * "original" is the file as it was uploaded; "edited" is the full-size picture with any darkroom edits on it;
+ * "preview" is the medium copy as JPEG, which only link previews ask for.
+ */
+export type PhotoSize = "thumb" | "medium" | "pano" | "preview" | "original" | "edited" | "source" | "video" | "poster" | "model";
 
 /** Versioned URL so caches drop stale copies after edits or visibility changes. */
 export function photoUrl(photo: { id: string; updatedAt: Date | string }, size: PhotoSize): string {

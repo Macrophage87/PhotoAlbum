@@ -9,8 +9,17 @@ describe("the card a shared link carries", () => {
     const { openGraph } = previewCard({ ...base, cover });
     expect(openGraph).toMatchObject({ type: "website", siteName: "Family Album", title: "Acadia, Maine", description: "Aug 10 – 16, 2025", url: base.pageUrl });
     const image = (openGraph as { images: { url: string; width: number; height: number; alt: string }[] }).images[0];
-    expect(image.url.startsWith("https://album.example/api/photos/photo1/medium?v=")).toBe(true);
+    expect(image.url.startsWith("https://album.example/api/photos/photo1/preview?v=")).toBe(true);
     expect(image.alt).toBe("Acadia, Maine");
+  });
+
+  it("asks for the picture as JPEG, and says so, because the things that draw cards will not draw WebP", () => {
+    // Everything the album stores is WebP. Facebook, Messenger and WhatsApp show nothing at all for a WebP card
+    // picture, which reads to whoever was sent the link as an album with no photographs in it.
+    const image = (previewCard({ ...base, cover }).openGraph as { images: { url: string; type: string }[] }).images[0];
+    expect(image.url).toContain("/preview?");
+    expect(image.url).not.toContain("/medium?");
+    expect(image.type).toBe("image/jpeg");
   });
 
   it("says how big the picture is, which is what decides whether the card is drawn large", () => {

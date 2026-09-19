@@ -5,6 +5,7 @@ import { storage } from "@/lib/storage";
 import type { Renditions } from "@/lib/images/renditions";
 import type { VideoRenditions } from "@/lib/jobs/handlers/transcode-video";
 import { mediaAccessInclude, mediaBytesAllowed, mediaCacheControl, toMediaAccess } from "@/lib/photos/access";
+import { jpegPreview } from "@/lib/images/preview";
 
 const MIME: Record<string, string> = { webp: "image/webp", jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", heic: "image/heic", heif: "image/heif", tif: "image/tiff", avif: "image/avif", gif: "image/gif", mp4: "video/mp4" };
 
@@ -33,7 +34,7 @@ export function parseRange(header: string | null, size: number): { start: number
  */
 export async function GET(request: Request, { params }: { params: Promise<{ id: string; size: string }> }) {
   const { id, size } = await params;
-  if (!["thumb", "medium", "pano", "original", "edited", "source", "video", "poster", "model"].includes(size)) return new Response("Not found", { status: 404 });
+  if (!["thumb", "medium", "pano", "preview", "original", "edited", "source", "video", "poster", "model"].includes(size)) return new Response("Not found", { status: 404 });
 
   const photo = await db.photo.findUnique({
     where: { id },
@@ -48,9 +49,26 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     return new Response("Forbidden", { status: viewer.kind === "user" ? 403 : 401 });
   }
 
+  const video = photo.videoRenditions as VideoRenditions | null;
+  if (size === "preview") {
+    // The picture on a link's card, as JPEG. Nothing on the site asks for this: it exists because the things that
+    // draw link previews will not draw WebP, and a card with no picture is the thing nobody clicks.
+    const medium = (photo.renditions as Renditions | null)?.medium;
+    const poster = video?.poster;
+    if (!medium && !poster) return new Response("Not ready", { status: 404 });
+    const jpeg = await jpegPreview((medium ?? poster!).key).catch(() => null);
+    if (!jpeg) return new Response("Not found", { status: 404 });
+    return new Response(new Uint8Array(jpeg), {
+      headers: {
+        "Content-Type": "image/jpeg",
+        "Content-Length": String(jpeg.byteLength),
+        "Cache-Control": mediaCacheControl(media, url.searchParams.has("v")),
+      },
+    });
+  }
+
   let key: string;
   let contentType: string;
-  const video = photo.videoRenditions as VideoRenditions | null;
   if (size === "original") {
     key = photo.originalPath;
     contentType = photo.mimeType;

@@ -12,6 +12,10 @@ import { RENDITION_SIZES } from "@/lib/images/renditions";
  *
  * A secret link carries its token on the picture's URL too, because a crawler has no cookie. That hands the token
  * to whatever is drawing the preview — which is the same thing as posting the link there in the first place.
+ *
+ * The picture is asked for as JPEG. Everything the album stores is WebP, and Facebook, Messenger and WhatsApp
+ * draw nothing at all for a WebP card picture, which reads to whoever sent the link as the album having no
+ * photograph in it.
  */
 
 export type PreviewCover = { id: string; updatedAt: Date | string; width?: number | null; height?: number | null } | null;
@@ -37,11 +41,12 @@ export function previewCard(opts: {
 
 function coverImage(cover: NonNullable<PreviewCover>, alt: string, appUrl: string, shareToken?: string, shareKind?: "trip" | "collection" | "activity") {
   const share = shareToken ? `&share=${encodeURIComponent(shareToken)}&kind=${shareKind ?? "trip"}` : "";
-  const url = new URL(`${photoUrl({ id: cover.id, updatedAt: cover.updatedAt }, "medium")}${share}`, appUrl).toString();
+  const url = new URL(`${photoUrl({ id: cover.id, updatedAt: cover.updatedAt }, "preview")}${share}`, appUrl).toString();
   // The rendition is scaled to fit a square of this side, so the long edge is known and the short one follows the
   // original's shape. Where the album never learned the shape, the long edge alone is still better than nothing.
   const long = RENDITION_SIZES.medium;
   const ratio = cover.width && cover.height ? cover.width / cover.height : null;
   const [width, height] = ratio === null ? [long, long] : ratio >= 1 ? [long, Math.round(long / ratio)] : [Math.round(long * ratio), long];
-  return { url, width, height, alt };
+  // Saying the type as well as the size: some crawlers decide whether to fetch the picture at all from the tags.
+  return { url, width, height, alt, type: "image/jpeg" };
 }

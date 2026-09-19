@@ -198,6 +198,10 @@ test("a share link opens the trip read-only, and stops working when rotated", as
   const crawler = await browser.newContext();
   const bare = await crawler.request.get(ogImage!);
   expect(bare.ok()).toBe(true);
+  // And it arrives as JPEG. Everything the album stores is WebP, which Facebook, Messenger and WhatsApp draw as
+  // nothing at all — a card with no picture, which is what the family reads as the link being broken.
+  expect(ogImage).toContain("/preview?");
+  expect(bare.headers()["content-type"]).toBe("image/jpeg");
   await crawler.close();
   await setVisibility("acadia", "LINK", "rotated-token");
   await page.goto("/share/e2e-share-token");
