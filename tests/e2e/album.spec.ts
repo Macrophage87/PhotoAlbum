@@ -540,6 +540,41 @@ test("exposure warnings fire when widening and when lowering, and bulk actions a
   await anon.close();
 });
 
+test("a trip and a collection are described in the same box, by hand or by the helper", async ({ context, page }) => {
+  await signIn(context, ADMIN);
+  const before = (await withDb((c) => c.query(`SELECT description FROM "Trip" WHERE slug = 'acadia'`))).rows[0].description as string | null;
+  // The same switch the activity's description needs, set here and put back, so the order of this file does not
+  // decide whether the helper is on offer.
+  await withDb((c) => c.query(`INSERT INTO "AppSetting" (id, "annotationOptInAt", "updatedAt") VALUES ('app', now(), now()) ON CONFLICT (id) DO UPDATE SET "annotationOptInAt" = now()`));
+
+  // A trip: written by hand, in the header where it is read, rather than on the settings form.
+  await page.goto("/trips/acadia");
+  await page.getByTestId("trip-description-edit").click();
+  await page.getByTestId("trip-description-text").fill("Two weeks of fog and lobster rolls.");
+  await page.getByTestId("trip-description-save").click();
+  await expect(page.getByTestId("trip-description")).toContainText("fog and lobster rolls");
+  // It is the trip's own record, and it is what a link to the trip now says about it.
+  expect((await withDb((c) => c.query(`SELECT description FROM "Trip" WHERE slug = 'acadia'`))).rows[0].description).toContain("lobster rolls");
+
+  // A collection: the helper writes it, around what the family typed first.
+  await page.goto("/collections/best-of-2025");
+  await page.getByTestId("collection-description-edit").click();
+  await page.getByTestId("collection-description-text").fill("The ones we would show anybody.");
+  page.once("dialog", (d) => d.accept());
+  await page.getByTestId("collection-describe").click();
+  await expect(page.getByTestId("collection-description-text")).toHaveValue(/year worth keeping/);
+  await page.getByTestId("collection-description-save").click();
+  await expect(page.getByTestId("collection-description")).toContainText(/year worth keeping/);
+
+  // Saving closes the box, and with it the button that spends money; what is left is the paragraph.
+  await expect(page.getByTestId("collection-description-text")).toHaveCount(0);
+  await expect(page.getByTestId("collection-describe")).toHaveCount(0);
+
+  await withDb((c) => c.query(`UPDATE "Trip" SET description = $1 WHERE slug = 'acadia'`, [before]));
+  await withDb((c) => c.query(`UPDATE "Collection" SET description = NULL WHERE slug = 'best-of-2025'`));
+  await withDb((c) => c.query(`UPDATE "AppSetting" SET "annotationOptInAt" = NULL WHERE id = 'app'`));
+});
+
 test("a YouTube link becomes an embedded video with a stored poster and a click-to-play facade", async ({ context, page }) => {
   await signIn(context, ADMIN);
   await page.goto("/trips/yosemite/photos");

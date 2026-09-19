@@ -15,6 +15,7 @@ import { uniqueSlug } from "@/lib/trips/slug";
 import { fieldErrors } from "@/lib/trips/validation";
 import { collectionInputFromForm } from "@/lib/collections/validation";
 import { canEditContainer, editableMediaIds, NOT_YOUR_CONTAINER } from "@/lib/auth/ownership";
+import { writeContainerDescription } from "@/lib/annotation/container";
 import type { TripFormState } from "@/app/trips/new/actions";
 
 export type CollectionFormState = TripFormState;
@@ -209,4 +210,26 @@ export async function moreCandidates(slug: string, query: string, cursor: string
   const filter = parsePickerFilter(Object.fromEntries(new URLSearchParams(query).entries()));
   const page = await candidatePhotoPage({ kind: "collection", id: collection.id }, filter, { cursor });
   return { photos: page.photos.map((p) => toGridPhoto(p, null, true)), nextCursor: page.nextCursor };
+}
+
+/** Long enough to be either: a description somebody writes out, or a note for the helper to build one around. */
+const DESCRIPTION_TEXT = z.string().max(4000);
+
+/** Write the collection's description by hand, from the header where it is read. An empty box clears it. */
+export async function setCollectionDescription(slug: string, text: string): Promise<void> {
+  const collection = await loadEditableCollection(slug);
+  const description = DESCRIPTION_TEXT.parse(text).trim();
+  await db.collection.update({ where: { id: collection.id }, data: { description: description || null } });
+  revalidatePath(`/collections/${slug}`, "layout");
+}
+
+/**
+ * Ask the helper what ties this gathering together, from a dozen of its photographs and whatever the person
+ * pressing the button typed first. Returned as well as saved, so it can be edited before it is kept.
+ */
+export async function describeCollectionWithAi(slug: string, note?: string): Promise<string> {
+  const collection = await loadEditableCollection(slug);
+  const written = await writeContainerDescription("collection", collection.id, DESCRIPTION_TEXT.parse(note ?? ""));
+  revalidatePath(`/collections/${slug}`, "layout");
+  return written;
 }

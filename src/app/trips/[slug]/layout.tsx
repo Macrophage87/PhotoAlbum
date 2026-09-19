@@ -15,6 +15,8 @@ import { Nav } from "@/components/layout/Nav";
 import { TripHeader } from "@/components/trips/TripHeader";
 import { TripTabs } from "@/components/trips/TripTabs";
 import { previewCard } from "@/lib/share/preview";
+import { annotationGates } from "@/lib/annotation/eligibility";
+import { describeTripWithAi, setTripDescription } from "./actions";
 
 export async function generateMetadata({ params }: LayoutProps<"/trips/[slug]">): Promise<Metadata> {
   const { slug } = await params;
@@ -63,7 +65,11 @@ export default async function TripLayout({ params, children }: LayoutProps<"/tri
   return (
     <TripTheme themeKey={trip.themeKey}>
       <Nav viewer={viewer} />
-      <TripHeader trip={trip} shareUrl={shareableTripUrl(trip, env().APP_URL)} />
+      <TripHeader
+        trip={trip}
+        shareUrl={shareableTripUrl(trip, env().APP_URL)}
+        {...(owns ? { save: setTripDescription.bind(null, slug), ...((await annotationGates()).active ? { describe: describeTripWithAi.bind(null, slug) } : {}) } : {})}
+      />
       <TripTabs tabs={tabs} />
       <main className="mx-auto max-w-6xl px-4 sm:px-6 py-8">{children}</main>
     </TripTheme>

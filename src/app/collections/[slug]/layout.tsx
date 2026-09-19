@@ -12,6 +12,8 @@ import { Nav } from "@/components/layout/Nav";
 import { CollectionHeader } from "@/components/collections/CollectionHeader";
 import { TripTabs } from "@/components/trips/TripTabs";
 import { previewCard } from "@/lib/share/preview";
+import { annotationGates } from "@/lib/annotation/eligibility";
+import { describeCollectionWithAi, setCollectionDescription } from "@/app/collections/actions";
 
 export async function generateMetadata({ params }: LayoutProps<"/collections/[slug]">): Promise<Metadata> {
   const { slug } = await params;
@@ -55,7 +57,11 @@ export default async function CollectionLayout({ params, children }: LayoutProps
   return (
     <TripTheme themeKey={collection.themeKey}>
       <Nav viewer={viewer} />
-      <CollectionHeader collection={collection} shareUrl={shareableCollectionUrl(collection, env().APP_URL)} />
+      <CollectionHeader
+        collection={collection}
+        shareUrl={shareableCollectionUrl(collection, env().APP_URL)}
+        {...(owns ? { save: setCollectionDescription.bind(null, slug), ...((await annotationGates()).active ? { describe: describeCollectionWithAi.bind(null, slug) } : {}) } : {})}
+      />
       <TripTabs tabs={tabs} />
       <main className="mx-auto max-w-6xl px-4 sm:px-6 py-8">{children}</main>
     </TripTheme>

@@ -3,8 +3,9 @@ import { formatDayRange } from "@/lib/time/format";
 import { dateColumnToDay } from "@/lib/time/local-day";
 import { Badge } from "@/components/ui";
 import { ShareBar } from "@/components/share/ShareBar";
+import { DescriptionEditor } from "@/components/descriptions/DescriptionEditor";
 
-export function TripHeader({ trip, shareUrl }: { trip: { title: string; description: string | null; startDate: Date; endDate: Date; themeKey: string; visibility: "PRIVATE" | "LINK" | "PUBLIC" }; shareUrl?: string | null }) {
+export function TripHeader({ trip, shareUrl, save, describe }: { trip: { title: string; description: string | null; startDate: Date; endDate: Date; themeKey: string; visibility: "PRIVATE" | "LINK" | "PUBLIC" }; shareUrl?: string | null; /** Write the description here rather than on the settings page. Absent for anyone who may not arrange the trip. */ save?: (text: string) => Promise<void>; /** Ask the helper for one, with whatever is in the box as the note. */ describe?: (note: string) => Promise<string>; }) {
   const theme = getTheme(trip.themeKey);
   const Art = theme.headerArt;
   return (
@@ -26,7 +27,13 @@ export function TripHeader({ trip, shareUrl }: { trip: { title: string; descript
               </div>
             )}
           </div>
-          {trip.description && <p className="mt-3 max-w-3xl text-text/90">{trip.description}</p>}
+          {/* The description is read here, under the title, so this is where it is written. Nothing at all for a
+              reader when there is none to read: an empty box belongs to whoever may fill it. */}
+          {(save || trip.description) && (
+            <div className="mt-3">
+              <DescriptionEditor what="trip" description={trip.description} save={save} describe={describe} className="text-text/90" />
+            </div>
+          )}
         </div>
         {theme.motif && <div className="h-3 mt-3 rounded" style={{ backgroundImage: `url("${theme.motif.pattern}")`, backgroundRepeat: "repeat-x", backgroundPosition: "center", opacity: theme.motif.opacity }} />}
       </div>

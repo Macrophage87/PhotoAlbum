@@ -12,7 +12,7 @@ import { StatsGrid, type StatsLike } from "./StatsGrid";
 import { ActivityMapSection } from "./ActivityMapSection";
 import { PhotoGrid } from "@/components/photos/PhotoGrid";
 import { ActivityGallery } from "./ActivityGallery";
-import { ActivityDescription } from "./ActivityDescription";
+import { DescriptionEditor } from "@/components/descriptions/DescriptionEditor";
 import { toGridPhoto } from "@/components/photos/toGrid";
 import { Button, Card, ConfirmSubmitButton } from "@/components/ui";
 import { ActivityUploader } from "./ActivityUploader";
@@ -107,7 +107,7 @@ export function ActivityDetail({ trip, activity, photos, upload, share, save, de
         </Card>
       ) : (
         /* Written by hand or by the helper, in the same box either way, and editable afterwards whichever it was. */
-        <ActivityDescription description={activity.description} save={save} describe={describe} />
+        <DescriptionEditor what="activity" description={activity.description} save={save} describe={describe} />
       )}
 
       {activity.track?.stats && (

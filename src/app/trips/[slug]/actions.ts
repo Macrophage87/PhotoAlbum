@@ -13,6 +13,7 @@ import { QUEUES } from "@/lib/jobs/queues";
 import type { TripFormState } from "@/app/trips/new/actions";
 import { levelOf } from "@/lib/visibility/exposure";
 import { canEditContainer, editableMediaIds, NOT_YOUR_CONTAINER } from "@/lib/auth/ownership";
+import { writeContainerDescription } from "@/lib/annotation/container";
 
 /** The trip, where this member may change it: whoever made it, and admins. */
 async function loadEditableTrip(slug: string) {
@@ -138,4 +139,33 @@ export async function removeFromTrip(slug: string, photoIds: string[]): Promise<
   revalidatePath(`/trips/${slug}`, "layout");
   revalidatePath("/", "layout");
   return { removed: r.count, notYours: asked.length - list.length };
+}
+
+/** Long enough to be either: a description somebody writes out, or a note for the helper to build one around. */
+const DESCRIPTION_TEXT = z.string().max(4000);
+
+/**
+ * Write the trip's description by hand, from the header where it is read.
+ *
+ * It is still on the settings form, with everything else that shapes a trip. This is the quick path, and the one
+ * that sits beside the button that asks the helper. An empty box clears it rather than storing a blank line.
+ */
+export async function setTripDescription(slug: string, text: string): Promise<void> {
+  const trip = await loadEditableTrip(slug);
+  const description = DESCRIPTION_TEXT.parse(text).trim();
+  await db.trip.update({ where: { id: trip.id }, data: { description: description || null } });
+  revalidatePath(`/trips/${slug}`, "layout");
+}
+
+/**
+ * Ask the helper to write the trip's description, from a dozen of its photographs spread across the whole of it
+ * and whatever the person pressing the button typed into the box first.
+ *
+ * Returned as well as saved, so what comes back can be edited before it is kept.
+ */
+export async function describeTripWithAi(slug: string, note?: string): Promise<string> {
+  const trip = await loadEditableTrip(slug);
+  const written = await writeContainerDescription("trip", trip.id, DESCRIPTION_TEXT.parse(note ?? ""));
+  revalidatePath(`/trips/${slug}`, "layout");
+  return written;
 }

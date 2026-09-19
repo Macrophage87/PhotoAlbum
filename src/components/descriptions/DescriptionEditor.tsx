@@ -3,8 +3,13 @@
 import { useState, useTransition } from "react";
 import { Button, Textarea } from "@/components/ui";
 
+/** What is being described, which decides the wording and the test hooks. */
+export type DescribedKind = "activity" | "trip" | "collection";
+
+const WORD: Record<DescribedKind, string> = { activity: "activity", trip: "trip", collection: "collection" };
+
 /**
- * The activity's description, and — for whoever arranges the trip — the box it is written in.
+ * A trip's, a collection's or an activity's description, and — for whoever arranges it — the box it is written in.
  *
  * Two ways to end up with a paragraph under the title, and they are the same box. Type it yourself and save it, or
  * type what only you know and let the helper build the description around it: that it was somebody's birthday,
@@ -13,25 +18,31 @@ import { Button, Textarea } from "@/components/ui";
  *
  * What comes back lands in the same box rather than on the page, because the helper's paragraph is a draft: the
  * name it did not know and the hill it called a mountain are a sentence away from fixed, and the fixing happens
- * here rather than three pages away in the activity's edit form.
+ * here rather than on a settings page somewhere else.
  */
-export function ActivityDescription({
+export function DescriptionEditor({
+  what,
   description,
   save,
   describe,
+  className = "",
 }: {
+  what: DescribedKind;
   description: string | null;
   /** Store what is in the box. Absent for anyone who may not arrange this trip — they only read. */
   save?: (text: string) => Promise<void>;
   /** Ask the helper, with whatever is in the box as the note. Absent when the helper is off or there is nothing to look at. */
   describe?: (note: string) => Promise<string>;
+  /** The paragraph is read in a themed header on a trip and a collection, and on a plain page on an activity. */
+  className?: string;
 }) {
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState(description ?? "");
   const [error, setError] = useState<string | null>(null);
   const [pending, start] = useTransition();
 
-  if (!save) return description ? <p className="max-w-3xl whitespace-pre-line" data-testid="activity-description">{description}</p> : null;
+  const read = <p className={`max-w-3xl whitespace-pre-line ${className}`} data-testid={`${what}-description`}>{description}</p>;
+  if (!save) return description ? read : null;
 
   const run = (work: () => Promise<void>) =>
     start(async () => {
@@ -46,11 +57,11 @@ export function ActivityDescription({
   if (!editing) {
     return (
       <div className="space-y-2">
-        {description && <p className="max-w-3xl whitespace-pre-line" data-testid="activity-description">{description}</p>}
+        {description && read}
         <Button
           size="sm"
           variant="secondary"
-          data-testid="activity-description-edit"
+          data-testid={`${what}-description-edit`}
           onClick={() => {
             setText(description ?? "");
             setError(null);
@@ -69,7 +80,7 @@ export function ActivityDescription({
         rows={5}
         value={text}
         aria-label="Description"
-        data-testid="activity-description-text"
+        data-testid={`${what}-description-text`}
         placeholder={
           describe
             ? "Write the description here — or note what only you know (whose birthday it was, why you turned back), and the AI helper will use it as context when it writes one."
@@ -78,7 +89,7 @@ export function ActivityDescription({
         onChange={(e) => setText(e.target.value)}
       />
       <div className="flex flex-wrap items-center gap-2">
-        <Button size="sm" disabled={pending} data-testid="activity-description-save" onClick={() => run(async () => { await save(text); setEditing(false); })}>
+        <Button size="sm" disabled={pending} data-testid={`${what}-description-save`} onClick={() => run(async () => { await save(text); setEditing(false); })}>
           {pending ? "Working…" : "Save"}
         </Button>
         {/* The helper costs something and is being handed the family's photographs, so it is asked for by name and
@@ -88,13 +99,13 @@ export function ActivityDescription({
             size="sm"
             variant="secondary"
             disabled={pending}
-            data-testid="activity-describe"
+            data-testid={`${what}-describe`}
             onClick={() =>
               run(async () => {
                 const note = text.trim();
                 const warning = note
-                  ? "Ask the helper to write this description? The photographs on this activity, and what you have typed, go to the AI helper, and what is in the box is replaced by what it writes."
-                  : "Ask the helper to write this description? The photographs on this activity go to the AI helper.";
+                  ? `Ask the helper to write this description? Some of the photographs in this ${WORD[what]}, and what you have typed, go to the AI helper, and what is in the box is replaced by what it writes.`
+                  : `Ask the helper to write this description? Some of the photographs in this ${WORD[what]} go to the AI helper.`;
                 if (!window.confirm(warning)) return;
                 setText(await describe(note));
               })
