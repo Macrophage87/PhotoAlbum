@@ -20,6 +20,8 @@ const PLACE_ONLY = { name: "Washington Monument", precision: "exact", lat: 38.88
 function answerFor(params) {
   const system = JSON.stringify(params.system ?? "");
   if (system.includes("placing photos and short video clips")) return JSON.stringify({ place: PLACE_ONLY });
+  // The outing pass asks a different question and gets a different record back: one paragraph, no item fields.
+  if (system.includes("description of one outing")) return JSON.stringify({ description: "A steady walk along the shore path, out past the cliffs and back the same way." });
   const text = JSON.stringify(params.messages ?? []);
   const record = JSON.parse(annotation);
   if (text.includes("Please estimate a year range")) record.estimatedYear = { from: 1990, to: 1994, confidence: 0.55, evidence: "print border and the notes" };

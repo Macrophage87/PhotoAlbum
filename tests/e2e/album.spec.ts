@@ -296,6 +296,39 @@ test("one activity can be sent on its own link, which opens it and nothing else 
   await anon.close();
 });
 
+test("the helper writes an activity's description from its own photographs, and it travels with the link", async ({ browser, context, page }) => {
+  await signIn(context, ADMIN);
+  const act = await withDb((c) => c.query(`SELECT id FROM "Activity" WHERE title = 'Ocean Path loop' LIMIT 1`));
+  const activityId = act.rows[0].id as string;
+  const mine = await withDb((c) => c.query(`SELECT p.id FROM "Photo" p JOIN "Trip" t ON t.id = p."tripId" WHERE t.slug = 'acadia' AND p.status = 'READY' AND p."trashedAt" IS NULL AND p."activityId" IS NULL ORDER BY p.id LIMIT 1`));
+  const onIt = mine.rows[0].id as string;
+  await withDb((c) => c.query(`UPDATE "Photo" SET "activityId" = $2 WHERE id = $1`, [onIt, activityId]));
+  await withDb((c) => c.query(`UPDATE "Activity" SET description = NULL WHERE id = $1`, [activityId]));
+
+  await page.goto(`/trips/acadia/activities/${activityId}`);
+  page.once("dialog", (d) => d.accept());
+  await page.getByTestId("activity-describe").click();
+  await expect(page.getByTestId("activity-description")).toContainText(/shore path/);
+  // It is the activity's own record, not a photograph's.
+  await expect
+    .poll(async () => (await withDb((c) => c.query(`SELECT description FROM "Activity" WHERE id = $1`, [activityId]))).rows[0].description, { timeout: 15_000 })
+    .toMatch(/shore path/);
+
+  // Whoever holds the activity's link reads it too.
+  await page.getByTestId("activity-share-on").click();
+  const token = (await withDb((c) => c.query(`SELECT "shareToken" FROM "Activity" WHERE id = $1`, [activityId]))).rows[0].shareToken as string;
+  const anon = await browser.newContext();
+  const guest = await anon.newPage();
+  await guest.goto(`/share/a/${token}`);
+  await expect(guest.getByTestId("activity-description")).toContainText(/shore path/);
+  // And a stranger is never offered the button that spends money.
+  await expect(guest.getByTestId("activity-describe")).toHaveCount(0);
+  await anon.close();
+
+  await withDb((c) => c.query(`UPDATE "Photo" SET "activityId" = NULL WHERE id = $1`, [onIt]));
+  await withDb((c) => c.query(`UPDATE "Activity" SET "shareToken" = NULL WHERE id = $1`, [activityId]));
+});
+
 test("a collection gathers photos from two trips and can be shared by link", async ({ browser, context, page }) => {
   await signIn(context, ADMIN);
   await createTrip({ slug: "yosemite", title: "Yosemite", start: "2025-09-01", end: "2025-09-05", ownerEmail: ADMIN });
@@ -1361,11 +1394,6 @@ test("a photo is dragged onto an activity on the timeline, and a selection can b
   await signIn(context, ADMIN);
   const act = await withDb((c) => c.query(`SELECT id, title FROM "Activity" WHERE title = 'Ocean Path loop' LIMIT 1`));
   const activityId = act.rows[0].id as string;
-  // Put a photograph on the walk, since the point of the link is that its own photographs come with it. Nothing
-  // else in the suite has filed one here yet, and it is taken off again below so the trip is left as it was found.
-  const mine = await withDb((c) => c.query(`SELECT p.id FROM "Photo" p JOIN "Trip" t ON t.id = p."tripId" WHERE t.slug = 'acadia' AND p.status = 'READY' AND p."trashedAt" IS NULL AND p."activityId" IS NULL ORDER BY p.id LIMIT 1`));
-  const photoId = mine.rows[0].id as string;
-  await withDb((c) => c.query(`UPDATE "Photo" SET "activityId" = $2 WHERE id = $1`, [photoId, activityId]));
   // A photo of the admin's on the trip but on no activity: the one the timeline shows loose under its day.
   const loose = await withDb((c) => c.query(`SELECT p.id FROM "Photo" p JOIN "User" u ON u.id = p."uploaderId" WHERE p."tripId" = (SELECT id FROM "Trip" WHERE slug = 'acadia') AND p."activityId" IS NULL AND p.status = 'READY' AND p."trashedAt" IS NULL AND u.email = $1 ORDER BY p."createdAt" LIMIT 1`, [ADMIN]));
   test.skip(loose.rows.length === 0, "no loose photo on the trip to drag");

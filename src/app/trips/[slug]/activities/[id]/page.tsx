@@ -3,7 +3,7 @@ import { db } from "@/lib/db";
 import { loadViewableTrip } from "@/lib/trips/access";
 import { photoCardSelect } from "@/lib/photos/queries";
 import { ActivityDetail } from "@/components/activities/ActivityDetail";
-import { deleteActivity, setActivityShare, updateActivity } from "../actions";
+import { deleteActivity, describeActivityWithAi, setActivityShare, updateActivity } from "../actions";
 import { shareableActivityUrl } from "@/lib/share/social";
 import { NOT_TRASHED } from "@/lib/photos/trash";
 import { env } from "@/lib/env";
@@ -26,6 +26,9 @@ export default async function ActivityPage({ params, searchParams }: PageProps<"
     enable: setActivityShare.bind(null, slug, activity.id, true),
     disable: setActivityShare.bind(null, slug, activity.id, false),
   };
+  // Offered only where there is a helper to ask and something for it to look at.
+  const gates = await annotationGates();
+  const describe = gates.active && photos.length > 0 ? describeActivityWithAi.bind(null, slug, activity.id) : undefined;
   return (
     <ActivityDetail
       trip={trip}
@@ -33,6 +36,7 @@ export default async function ActivityPage({ params, searchParams }: PageProps<"
       photos={photos}
       upload={upload}
       share={share}
+      describe={describe}
       editable
       editing={sp.edit === "1"}
       updateAction={updateActivity.bind(null, slug, activity.id) as never}

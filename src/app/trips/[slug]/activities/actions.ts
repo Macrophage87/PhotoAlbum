@@ -5,6 +5,10 @@ import { redirect } from "next/navigation";
 import { db } from "@/lib/db";
 import { requireUserOrThrow } from "@/lib/auth/viewer";
 import { generateToken } from "@/lib/auth/tokens";
+import { anthropic } from "@/lib/annotation/client";
+import { annotationGates } from "@/lib/annotation/eligibility";
+import { buildActivityRequest, loadActivityForDescription, parseActivityDescription } from "@/lib/annotation/activity";
+import { permittedNames } from "@/lib/people/gates";
 import { canEditContainer, NOT_YOUR_CONTAINER } from "@/lib/auth/ownership";
 import { activityInputFromForm, localInputToInstant } from "@/lib/activities/validation";
 import { reassignPhotosForActivity } from "@/lib/activities/reassign";
@@ -86,5 +90,34 @@ export async function setActivityShare(slug: string, id: string, on: boolean): P
   if (!activity) throw new Error("Activity not found");
   await db.activity.update({ where: { id }, data: { shareToken: on ? generateToken() : null } });
   await db.photo.updateMany({ where: { activityId: id }, data: { updatedAt: new Date() } });
+  revalidatePath(`/trips/${slug}/activities/${id}`);
+}
+
+/**
+ * Ask the helper to write this activity's description, from a handful of its photographs and what the track
+ * measured.
+ *
+ * A single call, made when somebody presses for it, rather than a batch: describing an outing is a thing you do
+ * once and read, and the cost belongs to the press. Every rule the album already keeps applies — nothing goes if
+ * the helper is switched off, an opted-out trip is refused outright, opted-out photographs are left behind, and
+ * only names the family has agreed to are sent.
+ */
+export async function describeActivityWithAi(slug: string, id: string): Promise<void> {
+  const trip = await loadTrip(slug);
+  const gates = await annotationGates();
+  if (!gates.active) throw new Error("The AI helper is off");
+  const activity = await loadActivityForDescription(id);
+  if (!activity || activity.trip.id !== trip.id) throw new Error("Activity not found");
+  if (activity.trip.annotationOptOut) throw new Error(`The trip ${activity.trip.title} is opted out of the AI helper`);
+  if (!activity.photos.length) throw new Error("There are no photographs on this activity to describe it from");
+
+  const names = [...new Set((await Promise.all(activity.photos.map((p) => permittedNames(p.id)))).flat())];
+  const request = await buildActivityRequest(activity, gates.model, names);
+  const response = await anthropic().messages.create(request);
+  console.log(`[annotate-activity] ${activity.id} model=${response.model} stop=${response.stop_reason} in=${response.usage.input_tokens} out=${response.usage.output_tokens}`);
+  if (response.stop_reason === "refusal") throw new Error("The helper declined to describe this one");
+  const parsed = parseActivityDescription(response.content as { type: string; text?: string }[]);
+  if (!parsed) throw new Error("The helper's answer could not be read; try again");
+  await db.activity.update({ where: { id }, data: { description: parsed.description } });
   revalidatePath(`/trips/${slug}/activities/${id}`);
 }
