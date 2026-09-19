@@ -3,14 +3,14 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { setShareCookie } from "./actions";
-import type { ContainerKind } from "@/lib/auth/access";
+import type { ShareKind } from "@/lib/auth/access";
 
 /**
  * Cookies can't be set while rendering, so the first visit sets it via an action and refreshes.
  * This component stays mounted across the refresh; if it is still showing a few seconds later the
  * cookie was not accepted (blocked cookies, private mode), so say so rather than spin forever.
  */
-export function ShareCookie({ kind = "trip", id, token }: { kind?: ContainerKind; id: string; token: string }) {
+export function ShareCookie({ kind = "trip", id, token }: { kind?: ShareKind; id: string; token: string }) {
   const router = useRouter();
   const [stuck, setStuck] = useState(false);
   useEffect(() => {

@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { db } from "@/lib/db";
 import { requireUserOrThrow } from "@/lib/auth/viewer";
+import { generateToken } from "@/lib/auth/tokens";
 import { canEditContainer, NOT_YOUR_CONTAINER } from "@/lib/auth/ownership";
 import { activityInputFromForm, localInputToInstant } from "@/lib/activities/validation";
 import { reassignPhotosForActivity } from "@/lib/activities/reassign";
@@ -65,4 +66,25 @@ export async function deleteActivity(slug: string, id: string, fd: FormData): Pr
   if (deleteTrack && activity.trackId) await db.track.delete({ where: { id: activity.trackId } }).catch(() => {});
   revalidatePath(`/trips/${slug}`, "layout");
   redirect(`/trips/${slug}/activities`);
+}
+
+/**
+ * Make, replace or withdraw the secret link to one activity.
+ *
+ * An afternoon's walk is the piece of a trip somebody actually wants to send — the track, its stats and the
+ * photographs taken on it — without handing over the fortnight around it. So an activity carries its own link,
+ * quite apart from the trip's visibility: making one here opens nothing else of the trip, and a private trip stays
+ * private to everyone who has not been sent this.
+ *
+ * Whoever arranges the trip's activities arranges this too. Replacing the link retires the old one at once, and
+ * touching the photographs behind it changes their rendition URLs so that a private cache keyed on the old link
+ * stops matching.
+ */
+export async function setActivityShare(slug: string, id: string, on: boolean): Promise<void> {
+  const trip = await loadTrip(slug);
+  const activity = await db.activity.findFirst({ where: { id, tripId: trip.id }, select: { id: true } });
+  if (!activity) throw new Error("Activity not found");
+  await db.activity.update({ where: { id }, data: { shareToken: on ? generateToken() : null } });
+  await db.photo.updateMany({ where: { activityId: id }, data: { updatedAt: new Date() } });
+  revalidatePath(`/trips/${slug}/activities/${id}`);
 }

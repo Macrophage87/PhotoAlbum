@@ -4,13 +4,15 @@ import type { Prisma } from "@/generated/prisma/client";
 import type { Viewer } from "./viewer";
 
 export type ContainerKind = "trip" | "collection";
+/** What a share cookie can be held for. An activity is shared by link or not at all, so it is not a container. */
+export type ShareKind = ContainerKind | "activity";
 
 /** The fields any container (trip or collection) needs for a visibility decision. */
 export type ContainerAccessFields = { id: string; visibility: TripVisibility; shareToken: string | null };
 export type TripAccessFields = ContainerAccessFields;
 
 /** Key under which a share cookie for this container is held in `Viewer.shareTokens`. */
-export function shareKey(kind: ContainerKind, id: string): string {
+export function shareKey(kind: ShareKind, id: string): string {
   return `${kind}_${id}`;
 }
 
@@ -33,8 +35,21 @@ export function canViewCollection(viewer: Viewer, collection: ContainerAccessFie
   return canView(viewer, "collection", collection);
 }
 
-/** Everything a media item's visibility depends on: its trip (if any) and the collections holding it. */
-export type MediaAccessFields = { trip: ContainerAccessFields | null; collections: ContainerAccessFields[]; /** Set while the item is in the trash: out of the album for everyone but a signed-in member. */ trashedAt?: Date | null };
+/** What an activity's visibility turns on: a secret link, or nothing. There is no public activity. */
+export type ActivityAccessFields = { id: string; shareToken: string | null };
+
+/**
+ * An activity is members-only until somebody makes a link to it, and then it is open to whoever holds that link —
+ * the same bargain a trip's link makes, over a smaller thing. It is never public and never listed.
+ */
+export function canViewActivity(viewer: Viewer, activity: ActivityAccessFields): boolean {
+  if (viewer.kind === "user") return true;
+  if (!activity.shareToken) return false;
+  return viewer.shareTokens.get(shareKey("activity", activity.id)) === activity.shareToken;
+}
+
+/** Everything a media item's visibility depends on: its trip (if any), the collections holding it, and its activity. */
+export type MediaAccessFields = { trip: ContainerAccessFields | null; collections: ContainerAccessFields[]; /** The activity it was filed on, when one is known to the caller. */ activity?: ActivityAccessFields | null; /** Set while the item is in the trash: out of the album for everyone but a signed-in member. */ trashedAt?: Date | null };
 
 /**
  * Media visibility is computed, never stored, and is the union of its containers: a viewer who may open the
@@ -47,6 +62,8 @@ export function canViewMedia(viewer: Viewer, media: MediaAccessFields): boolean 
   if (viewer.kind === "user") return true;
   if (media.trashedAt) return false;
   if (media.trip && canView(viewer, "trip", media.trip)) return true;
+  // A photograph filed on a shared activity is part of what that link promised, whatever the trip around it says.
+  if (media.activity && canViewActivity(viewer, media.activity)) return true;
   return media.collections.some((c) => canView(viewer, "collection", c));
 }
 

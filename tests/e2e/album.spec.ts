@@ -240,6 +240,55 @@ test("public trips are browsable anonymously without edit controls", async ({ br
   await anon.close();
 });
 
+test("one activity can be sent on its own link, which opens it and nothing else of the trip", async ({ browser, context, page }) => {
+  await setVisibility("acadia", "PRIVATE");
+  await signIn(context, ADMIN);
+  const act = await withDb((c) => c.query(`SELECT id, title FROM "Activity" WHERE title = 'Ocean Path loop' LIMIT 1`));
+  const activityId = act.rows[0].id as string;
+
+  // Make the link from the activity's own page.
+  await page.goto(`/trips/acadia/activities/${activityId}`);
+  await page.getByTestId("activity-share-on").click();
+  await expect(page.getByTestId("activity-shared")).toBeVisible();
+  await page.getByTestId("share-open").click();
+  const link = await page.getByTestId("copy-link").getByRole("textbox").inputValue();
+  expect(link).toMatch(/\/share\/a\/[A-Za-z0-9_-]+$/);
+  const token = link.split("/share/a/")[1];
+
+  // A stranger with the link sees the walk, its photographs and its stats.
+  const anon = await browser.newContext();
+  const guest = await anon.newPage();
+  await guest.goto(`/share/a/${token}`);
+  await expect(guest.getByText("Shared with you")).toBeVisible();
+  await expect(guest.getByRole("heading", { name: "Ocean Path loop" })).toBeVisible();
+  const img = guest.locator("img[src*='/api/photos/']").first();
+  await expect(img).toBeVisible();
+  await expect.poll(async () => img.evaluate((el: HTMLImageElement) => el.naturalWidth)).toBeGreaterThan(0);
+
+  // And nothing else of the trip: the trip is private and stays private to them.
+  await guest.goto("/trips/acadia");
+  await expect(guest).toHaveURL(/\/auth\/signin/);
+  await guest.goto("/trips/acadia/photos");
+  await expect(guest).toHaveURL(/\/auth\/signin/);
+
+  // A new link retires the old one.
+  await page.goto(`/trips/acadia/activities/${activityId}`);
+  await page.getByTestId("activity-share-rotate").click();
+  await expect(page.getByTestId("activity-shared")).toBeVisible();
+  const stale = await anon.newPage();
+  await stale.goto(`/share/a/${token}`);
+  await expect(stale.getByRole("heading", { name: "Ocean Path loop" })).toHaveCount(0);
+
+  // And stopping sharing closes it altogether.
+  const fresh = (await withDb((c) => c.query(`SELECT "shareToken" FROM "Activity" WHERE id = $1`, [activityId]))).rows[0].shareToken as string;
+  await page.getByTestId("activity-share-off").click();
+  await expect(page.getByTestId("activity-share-on")).toBeVisible();
+  const gone = await anon.newPage();
+  await gone.goto(`/share/a/${fresh}`);
+  await expect(gone.getByRole("heading", { name: "Ocean Path loop" })).toHaveCount(0);
+  await anon.close();
+});
+
 test("a collection gathers photos from two trips and can be shared by link", async ({ browser, context, page }) => {
   await signIn(context, ADMIN);
   await createTrip({ slug: "yosemite", title: "Yosemite", start: "2025-09-01", end: "2025-09-05", ownerEmail: ADMIN });

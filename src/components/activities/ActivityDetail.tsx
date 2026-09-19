@@ -12,8 +12,9 @@ import { StatsGrid, type StatsLike } from "./StatsGrid";
 import { ActivityMapSection } from "./ActivityMapSection";
 import { PhotoGrid } from "@/components/photos/PhotoGrid";
 import { toGridPhoto } from "@/components/photos/toGrid";
-import { Card, ConfirmSubmitButton } from "@/components/ui";
+import { Button, Card, ConfirmSubmitButton } from "@/components/ui";
 import { ActivityUploader } from "./ActivityUploader";
+import { ShareBar } from "@/components/share/ShareBar";
 
 export type ActivityDetailData = {
   id: string;
@@ -33,8 +34,14 @@ type EditProps = {
 };
 type ReadOnlyProps = { editable: false };
 
+/**
+ * The link to this one activity, for whoever arranges the trip. Making a link again replaces it, which is how an
+ * old one is retired.
+ */
+export type ActivityShare = { url: string | null; enable: () => Promise<void>; disable: () => Promise<void> };
+
 /** Shared body of the activity page for members (editable) and shared/public viewers. */
-export function ActivityDetail({ trip, activity, photos, upload, ...mode }: { trip: { slug: string; timezone: string; themeKey: string }; activity: ActivityDetailData; photos: PhotoCard[]; /** Members only: what the uploader needs to offer adding photos straight to this activity. */ upload?: { maxClipSeconds: number; annotationActive: boolean }; } & (EditProps | ReadOnlyProps)) {
+export function ActivityDetail({ trip, activity, photos, upload, share, ...mode }: { trip: { slug: string; timezone: string; themeKey: string }; activity: ActivityDetailData; photos: PhotoCard[]; /** Members only: what the uploader needs to offer adding photos straight to this activity. */ upload?: { maxClipSeconds: number; annotationActive: boolean }; /** Whoever arranges the trip: the link to this activity, and the means to make or withdraw it. */ share?: ActivityShare; } & (EditProps | ReadOnlyProps)) {
   const toLocalInput = (d: Date) => format(new TZDate(d, trip.timezone), "yyyy-MM-dd'T'HH:mm");
   const editing = mode.editable && mode.editing;
   return (
@@ -50,11 +57,31 @@ export function ActivityDetail({ trip, activity, photos, upload, ...mode }: { tr
             {formatDateTime(activity.startTime, trip.timezone)} – {formatLocalTime(activity.endTime, { timezone: trip.timezone })}
           </p>
         </div>
-        {mode.editable && !editing && (
-          <a href="?edit=1" className="text-sm text-primary underline-offset-2 hover:underline">
-            Edit
-          </a>
-        )}
+        <div className="flex items-center gap-3">
+          {/* An afternoon's walk is the piece of a trip worth sending on its own: its own link, which opens this
+              and nothing else of the trip, whatever the trip's own visibility is. */}
+          {share &&
+            (share.url ? (
+              <div className="flex items-center gap-2" data-testid="activity-shared">
+                <ShareBar url={share.url} what="activity" />
+                <form action={share.enable}>
+                  <button type="submit" className="text-sm text-muted underline-offset-2 hover:underline" data-testid="activity-share-rotate">New link</button>
+                </form>
+                <form action={share.disable}>
+                  <button type="submit" className="text-sm text-muted underline-offset-2 hover:underline" data-testid="activity-share-off">Stop sharing</button>
+                </form>
+              </div>
+            ) : (
+              <form action={share.enable}>
+                <Button type="submit" variant="secondary" size="sm" data-testid="activity-share-on">Share this activity</Button>
+              </form>
+            ))}
+          {mode.editable && !editing && (
+            <a href="?edit=1" className="text-sm text-primary underline-offset-2 hover:underline">
+              Edit
+            </a>
+          )}
+        </div>
       </div>
 
       {mode.editable && editing ? (

@@ -282,6 +282,9 @@ model Activity {
   trackId     String?      @unique
   track       Track?       @relation("ActivityTrack", fields: [trackId], references: [id], onDelete: SetNull)
   photos      Photo[]
+  /// A secret link to this one activity: its track, its stats and its own photographs, and nothing else of the
+  /// trip. Null means it is not shared; the trip's own visibility is a separate question and never widened by it.
+  shareToken  String?      @unique
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
 

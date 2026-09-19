@@ -18,6 +18,11 @@ export function shareableCollectionUrl(collection: ShareableContainer, appUrl: s
   return null;
 }
 
+/** Absolute URL for a shared activity, or null while it is not shared. An activity is never public, only linked. */
+export function shareableActivityUrl(activity: { shareToken: string | null }, appUrl: string): string | null {
+  return activity.shareToken ? new URL(`/share/a/${activity.shareToken}`, appUrl).toString() : null;
+}
+
 /** Facebook's share dialog. Needs no app id or SDK; the preview comes from the page's Open Graph tags. */
 export function facebookShareUrl(url: string): string {
   return `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(url)}`;

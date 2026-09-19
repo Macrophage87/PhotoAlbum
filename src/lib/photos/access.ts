@@ -6,13 +6,14 @@ import { canViewMedia, isPubliclyViewable, type ContainerKind, type MediaAccessF
 export const mediaAccessInclude = {
   trashedAt: true,
   trip: { select: { id: true, visibility: true, shareToken: true } },
+  activity: { select: { id: true, shareToken: true } },
   collections: { select: { collection: { select: { id: true, visibility: true, shareToken: true } } } },
 } as const;
 
-type Loaded = { trashedAt?: Date | null; trip: { id: string; visibility: "PRIVATE" | "LINK" | "PUBLIC"; shareToken: string | null } | null; collections: { collection: { id: string; visibility: "PRIVATE" | "LINK" | "PUBLIC"; shareToken: string | null } }[] };
+type Loaded = { trashedAt?: Date | null; trip: { id: string; visibility: "PRIVATE" | "LINK" | "PUBLIC"; shareToken: string | null } | null; activity?: { id: string; shareToken: string | null } | null; collections: { collection: { id: string; visibility: "PRIVATE" | "LINK" | "PUBLIC"; shareToken: string | null } }[] };
 
 export function toMediaAccess(photo: Loaded): MediaAccessFields {
-  return { trashedAt: photo.trashedAt ?? null, trip: photo.trip, collections: photo.collections.map((c) => c.collection) };
+  return { trashedAt: photo.trashedAt ?? null, trip: photo.trip, activity: photo.activity ?? null, collections: photo.collections.map((c) => c.collection) };
 }
 
 /**
@@ -23,6 +24,9 @@ export function toMediaAccess(photo: Loaded): MediaAccessFields {
 export function mediaBytesAllowed(viewer: Viewer, media: MediaAccessFields, share?: { token: string | null; kind: string | null }): boolean {
   if (canViewMedia(viewer, media)) return true;
   if (!share?.token) return false;
+  // A link preview fetches the cover with no cookie at all, so the token stands in for one — for an activity too,
+  // whose link is the only thing that makes its photographs fetchable.
+  if (share.kind === "activity") return Boolean(media.activity?.shareToken) && media.activity!.shareToken === share.token;
   const kind: ContainerKind = share.kind === "collection" ? "collection" : "trip";
   const candidates = kind === "trip" ? (media.trip ? [media.trip] : []) : media.collections;
   return candidates.some((c) => c.visibility === "LINK" && c.shareToken === share.token);

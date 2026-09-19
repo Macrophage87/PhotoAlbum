@@ -25,7 +25,7 @@ export function previewCard(opts: {
   appUrl: string;
   /** A LINK share's token, so the crawler can fetch the cover without a cookie. */
   shareToken?: string;
-  shareKind?: "trip" | "collection";
+  shareKind?: "trip" | "collection" | "activity";
 }): { openGraph: Metadata["openGraph"]; twitter: Metadata["twitter"] } {
   const images = opts.cover ? [coverImage(opts.cover, opts.title, opts.appUrl, opts.shareToken, opts.shareKind)] : [];
   return {
@@ -35,7 +35,7 @@ export function previewCard(opts: {
   };
 }
 
-function coverImage(cover: NonNullable<PreviewCover>, alt: string, appUrl: string, shareToken?: string, shareKind?: "trip" | "collection") {
+function coverImage(cover: NonNullable<PreviewCover>, alt: string, appUrl: string, shareToken?: string, shareKind?: "trip" | "collection" | "activity") {
   const share = shareToken ? `&share=${encodeURIComponent(shareToken)}&kind=${shareKind ?? "trip"}` : "";
   const url = new URL(`${photoUrl({ id: cover.id, updatedAt: cover.updatedAt }, "medium")}${share}`, appUrl).toString();
   // The rendition is scaled to fit a square of this side, so the long edge is known and the short one follows the

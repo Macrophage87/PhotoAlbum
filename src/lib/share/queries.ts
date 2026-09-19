@@ -13,6 +13,18 @@ export async function getSharedTrip(token: string) {
   return trip;
 }
 
+/**
+ * Activity behind a share token. There is no mode to check: a token exists only while the activity is shared, and
+ * stopping the sharing clears it, so holding an old link finds nothing.
+ */
+export async function getSharedActivity(token: string) {
+  if (!token || token.length > 128) return null;
+  return db.activity.findUnique({
+    where: { shareToken: token },
+    include: { track: { select: { id: true, simplified: true, stats: true } }, trip: { select: { id: true, slug: true, title: true, themeKey: true, timezone: true } } },
+  });
+}
+
 /** Collection behind a share token, only while it is in LINK mode. */
 export async function getSharedCollection(token: string) {
   if (!token || token.length > 128) return null;
