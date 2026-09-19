@@ -3,6 +3,7 @@ import { collectionTimeline } from "@/lib/collections/timeline";
 import { describeCount, parseGalleryFilter } from "@/lib/photos/filters";
 import { GalleryFilters } from "@/components/photos/GalleryFilters";
 import { Timeline } from "@/components/timeline/Timeline";
+import { SelectionProvider } from "@/components/photos/selection";
 import { ButtonLink } from "@/components/ui";
 import { peopleInPhotos } from "@/lib/people/in-photos";
 
@@ -16,7 +17,7 @@ export default async function CollectionTimelinePage({ params, searchParams }: P
     collectionTimeline(collection.id, filter),
     editable ? peopleInPhotos({ collectionId: collection.id }) : Promise.resolve([]),
   ]);
-  return (
+  const timeline = (
     <div className="space-y-4">
       {editable && (
         <div className="flex flex-wrap items-center gap-2">
@@ -33,4 +34,8 @@ export default async function CollectionTimelinePage({ params, searchParams }: P
       )}
     </div>
   );
+  // Members get the selection bar here, as on a trip. Without it every "Select this day" beside a heading renders
+  // nothing at all — the control asks the selection for its state and quietly gives up when there is none — so a
+  // gathering was the one timeline in the album where a whole day could not be picked up.
+  return editable ? <SelectionProvider>{timeline}</SelectionProvider> : timeline;
 }

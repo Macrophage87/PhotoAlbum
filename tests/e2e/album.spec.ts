@@ -2193,6 +2193,20 @@ test("a trip opens on its timeline, which can be asked for one photograph and st
   expect(before).toBeGreaterThan(1);
   await expect(page.locator(`li.tile-lazy:has(img[src*='/api/photos/${id}/'])`)).toHaveCount(1);
 
+  // A whole day can be picked up from a heading, on a gathering as well as on a trip. This is a control that asks
+  // the selection for its state and renders nothing at all when there is none, so a page that forgot to offer one
+  // lost every "Select this day" on it without a word.
+  for (const where of ["/trips/acadia", "/collections/best-of-2025"]) {
+    await page.goto(where);
+    await page.waitForLoadState("networkidle");
+    await page.getByRole("button", { name: "Select photos" }).click();
+    const day = page.getByTestId("day-select").first();
+    await expect(day).toHaveText("Select this day");
+    await day.click();
+    await expect(day).toHaveText("Clear");
+    await expect(page.getByText(/\d+ selected/).first()).toBeVisible();
+  }
+
   // And a question with no answer says so rather than showing an empty timeline.
   await page.goto("/trips/acadia?q=qqzzxnothing");
   await expect(page.getByTestId("no-matches")).toBeVisible();
