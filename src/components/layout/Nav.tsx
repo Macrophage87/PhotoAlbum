@@ -21,9 +21,9 @@ export function Nav({ viewer }: { viewer: Viewer }) {
     { href: "/search", label: "Search" },
     ...(signedIn && viewer.user.role === "ADMIN" ? [{ href: "/admin", label: "Admin" }] : []),
     ...(signedIn ? [{ href: "/privacy", label: "Privacy" }] : []),
-    // The family's own guide to the album, written for whoever is least sure about computers. A file, not a page:
-    // it is meant to be opened, printed and left by the kettle.
-    { href: "/guide.pdf", label: "Help", file: true },
+    // The family's own guide to the album, written for whoever is least sure about computers. Open to anyone who
+    // reaches the site: its first section is how to sign in, and whoever needs that is not signed in.
+    { href: "/guide", label: "Help" },
   ];
   return (
     <header className="border-b border-border bg-surface/80 backdrop-blur sticky top-0 z-40">
@@ -33,17 +33,11 @@ export function Nav({ viewer }: { viewer: Viewer }) {
         </Link>
         <nav className="hidden sm:flex items-center gap-1 text-sm">
           <SearchBox className="hidden md:block w-44 lg:w-56 mr-1" />
-          {links.filter((l) => l.href !== "/search").map((l) =>
-            l.file ? (
-              <a key={l.href} href={l.href} target="_blank" rel="noreferrer" className="px-3 py-1.5 rounded-theme hover:bg-surface-alt">
-                {l.label}
-              </a>
-            ) : (
-              <Link key={l.href} href={l.href} className="px-3 py-1.5 rounded-theme hover:bg-surface-alt">
-                {l.label}
-              </Link>
-            ),
-          )}
+          {links.filter((l) => l.href !== "/search").map((l) => (
+            <Link key={l.href} href={l.href} className="px-3 py-1.5 rounded-theme hover:bg-surface-alt">
+              {l.label}
+            </Link>
+          ))}
           <UserMenu viewer={viewer} />
         </nav>
         <MobileNav links={links} signedIn={signedIn} name={signedIn ? (viewer.user.name ?? viewer.user.email) : null} />

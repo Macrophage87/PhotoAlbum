@@ -86,9 +86,9 @@ It launches full-screen with the Family Album icon. Uploads and sign-in work exa
 
 ### The guide for the family
 
-`public/guide.pdf` is a plain-words guide to using the album — signing in, finding a photograph, what a trip and a collection and an activity are, sharing, and putting mistakes right. The **Help** link in the menu opens it, so it is reachable from any phone in the family, and it prints to eleven pages if somebody would rather have it on paper. It is written for whoever is least sure about computers and says nothing about installing anything; that is `docs/SETUP.pdf`.
+`/guide` is a plain-words guide to using the album — signing in, finding a photograph, what a trip and a collection and an activity are, sharing, and putting mistakes right. The **Help** link in the menu opens it, it is readable without signing in (its first section is how to sign in), and a link at the top downloads the same thing as `public/guide.pdf` for anyone who would rather print it. It is written for whoever is least sure about computers and says nothing about installing anything; that is `docs/SETUP.pdf`.
 
-Edit `scripts/make-guide-pdf.py` and regenerate with `pip install reportlab && python3 scripts/make-guide-pdf.py`, committing the PDF with the change.
+The words live in `src/lib/guide/content.json` and nowhere else: the page renders it and `scripts/make-guide-pdf.py` lays the same blocks out on paper, so the two cannot drift. Edit the JSON, regenerate with `pip install reportlab && python3 scripts/make-guide-pdf.py`, and commit the PDF with the change.
 
 ### Security headers
 

@@ -4,8 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-/** `file` marks something served from `public/` rather than a route — a plain anchor, so it is fetched, not routed. */
-export type NavLink = { href: string; label: string; file?: boolean };
+export type NavLink = { href: string; label: string };
 
 /**
  * Collapsed navigation for narrow screens: a menu button that opens a panel of links.
@@ -38,17 +37,11 @@ export function MobileNav({ links, signedIn, name }: { links: NavLink[]; signedI
       {open && (
         <div id="mobile-nav-panel" className="absolute left-0 right-0 top-14 border-b border-border bg-surface shadow-lg">
           <nav className="mx-auto max-w-6xl px-4 py-2 flex flex-col text-base">
-            {links.map((l) =>
-              l.file ? (
-                <a key={l.href} href={l.href} target="_blank" rel="noreferrer" onClick={close} className="px-3 py-2.5 rounded-theme hover:bg-surface-alt">
-                  {l.label}
-                </a>
-              ) : (
-                <Link key={l.href} href={l.href} onClick={close} className={`px-3 py-2.5 rounded-theme hover:bg-surface-alt ${pathname === l.href ? "font-medium text-primary" : ""}`}>
-                  {l.label}
-                </Link>
-              ),
-            )}
+            {links.map((l) => (
+              <Link key={l.href} href={l.href} onClick={close} className={`px-3 py-2.5 rounded-theme hover:bg-surface-alt ${pathname === l.href ? "font-medium text-primary" : ""}`}>
+                {l.label}
+              </Link>
+            ))}
             <div className="my-2 border-t border-border" />
             {signedIn ? (
               <form action="/auth/signout" method="post" className="flex items-center justify-between gap-3 px-3 py-2">

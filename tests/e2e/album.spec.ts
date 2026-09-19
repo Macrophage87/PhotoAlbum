@@ -359,15 +359,22 @@ test("a photograph can be taken off an activity and stays on the trip", async ({
   expect(after.rows[0].tripId).not.toBeNull();
 });
 
-test("the guide the menu offers is a PDF that actually arrives", async ({ page }) => {
-  // A guide nobody can reach is no guide. It is a file in public/, linked from the menu, and open to anyone who
-  // gets as far as the site — somebody who cannot sign in is exactly who needs to read how signing in works.
+test("the guide is a page anyone can read, with the same words available as a PDF", async ({ page }) => {
+  // A guide nobody can reach is no guide. It is a page, linked from the menu, and open to anyone who gets as far
+  // as the site — somebody who cannot sign in is exactly who needs to read how signing in works.
   await page.goto("/");
-  const help = page.getByRole("link", { name: "Help" }).first();
-  await expect(help).toHaveAttribute("href", "/guide.pdf");
-  const guide = await page.request.get("/guide.pdf");
-  expect(guide.status()).toBe(200);
-  expect(guide.headers()["content-type"]).toContain("pdf");
+  await expect(page.getByRole("link", { name: "Help" }).first()).toHaveAttribute("href", "/guide");
+  await page.goto("/guide");
+  await expect(page.getByRole("heading", { name: "Family Album", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /Getting in/ })).toBeVisible();
+  // The contents jump within the page rather than to another one.
+  await page.getByRole("link", { name: "Fixing something that is wrong" }).click();
+  await expect(page).toHaveURL(/#fixing$/);
+  // And the printable copy is the same guide, one link away.
+  await expect(page.getByTestId("guide-pdf")).toHaveAttribute("href", "/guide.pdf");
+  const pdf = await page.request.get("/guide.pdf");
+  expect(pdf.status()).toBe(200);
+  expect(pdf.headers()["content-type"]).toContain("pdf");
 });
 
 test("a collection gathers photos from two trips and can be shared by link", async ({ browser, context, page }) => {

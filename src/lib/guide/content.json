@@ -1,0 +1,190 @@
+{
+  "title": "Family Album",
+  "subtitle": "How to use it. In very plain words.",
+  "intro": [
+    { "kind": "p", "text": "This is our family's photo album. It lives on our own computer, not on anybody else's. Nothing in it is for sale, and nobody sees it unless we send it to them." },
+    { "kind": "note", "text": "**The one thing to remember:** you cannot break it. Nothing you press deletes a photograph for good. If something looks wrong, say so — it can be put back." }
+  ],
+  "sections": [
+    {
+      "id": "getting-in",
+      "heading": "Getting in",
+      "blocks": [
+        { "kind": "p", "text": "There is no password to remember. That is on purpose — passwords get forgotten, written on paper, and reused." },
+        { "kind": "steps", "items": [
+          "Go to the album's web address. Somebody in the family will have sent it to you.",
+          "Type your email address and press the button.",
+          "Look in your email. There will be a message with a link in it.",
+          "Press that link. You are in."
+        ] },
+        { "kind": "p", "text": "The link only works once, and only for about fifteen minutes. That is what keeps it safe. If you take too long, just ask for another one." },
+        { "kind": "note", "text": "**No email arrived?** Only people the family has invited can get in, so the album will not send a link to an address it does not know. Ask whoever runs the album to invite you. Also look in your junk folder." },
+        { "kind": "p", "text": "Once you are in, it remembers you on that phone or computer for a few months. You will not have to do this often." }
+      ]
+    },
+    {
+      "id": "looking",
+      "heading": "Looking at photographs",
+      "blocks": [
+        { "kind": "p", "text": "Open a trip and you land on its **timeline**: the days it happened, in order, top to bottom. That is how people remember a holiday — the day we got there, the day of the boat, the last morning — so that is what the album shows first." },
+        { "kind": "h3", "text": "On a computer" },
+        { "kind": "p", "text": "Down the left there is a list of every day. Press one to jump to it. The day you are looking at is marked as you scroll." },
+        { "kind": "h3", "text": "On a phone" },
+        { "kind": "p", "text": "There is no room for the list, so the date at the top of the screen does the job. Press the date and every day appears; press one to go there." },
+        { "kind": "p", "text": "Press any photograph to see it big. Press it again to see it at full size. The arrow keys, or a swipe, move to the next one." },
+        { "kind": "h3", "text": "Other ways to look" },
+        { "kind": "table", "columns": ["Where", "What it shows you"], "rows": [
+          ["Timeline", "The days, in order. This is the usual way."],
+          ["Map", "Where photographs were taken. Useful for “where was that beach?”"],
+          ["Activities", "The walks, rides and outings, with how far and how long."],
+          ["Photos", "All of them in a plain grid, newest first."],
+          ["Overview", "A few numbers and a handful of photographs picked at random."]
+        ] }
+      ]
+    },
+    {
+      "id": "finding",
+      "heading": "Finding one particular photograph",
+      "blocks": [
+        { "kind": "p", "text": "Every timeline, every map and every grid has a search box. Type a word or two and press **Search**." },
+        { "kind": "p", "text": "The good part: it does not send you to a separate list of results. It narrows the page you are already on. So the photograph you were after comes back still sitting under the day it was taken, with that day around it." },
+        { "kind": "h3", "text": "What to type" },
+        { "kind": "bullets", "items": [
+          "What is in it: _lobster_, _cake_, _lighthouse_, _snow_",
+          "What was happening: _birthday_, _hiking_, _christmas_",
+          "Something written in the picture: a banner, a sign, writing on the back of an old print",
+          "A name somebody typed in the notes"
+        ] },
+        { "kind": "h3", "text": "More ways to narrow" },
+        { "kind": "p", "text": "Under the search box there is **More ways to narrow**. Press it and you can also ask for:" },
+        { "kind": "table", "columns": ["Question", "What it means"], "rows": [
+          ["Uploaded by", "Who put it into the album. Usually, but not always, who took it."],
+          ["Who is in it", "A person or a pet. Choose two names and you get the ones they are _both_ in."],
+          ["Part of the trip", "Only photographs from one walk or outing."],
+          ["Year", "Only that year."],
+          ["Type", "Photographs, video clips, YouTube links, or 3D scans."]
+        ] },
+        { "kind": "note", "text": "A narrowed page has its own web address. You can save it, or send it to somebody else in the family, and they see the same thing." }
+      ]
+    },
+    {
+      "id": "adding",
+      "heading": "Adding your own photographs",
+      "blocks": [
+        { "kind": "steps", "items": [
+          "Press **Upload** in the menu at the top.",
+          "Choose the photographs, or drag them onto the page.",
+          "Wait. Each one says when it is done."
+        ] },
+        { "kind": "p", "text": "Big ones take a few seconds each. You can keep using the album while they go up." },
+        { "kind": "h3", "text": "Where do they end up?" },
+        { "kind": "p", "text": "The album reads the date the camera wrote and puts each photograph on the trip that was happening then. If no trip matches, it waits in **Photos without a trip** until somebody files it." },
+        { "kind": "note", "text": "**Photographs from an Android phone often arrive with no place on them.** That is the phone, not the album: it removes the location from the copy it hands over. The map can still be filled in afterwards — see “Fixing something that is wrong”." }
+      ]
+    },
+    {
+      "id": "trips",
+      "heading": "Trips, collections and outings",
+      "blocks": [
+        { "kind": "p", "text": "Three words the album uses. They are simpler than they sound." },
+        { "kind": "table", "columns": ["Word", "What it is", "Think of it as"], "rows": [
+          ["Trip", "A stretch of days in one place. A photograph is on one trip, or none.", "A holiday"],
+          ["Collection", "A gathering of photographs from anywhere, for any reason. A photograph can be in many.", "A scrapbook"],
+          ["Activity", "One outing inside a trip: a walk, a ride, a paddle, an afternoon.", "A day out"]
+        ] },
+        { "kind": "h3", "text": "Activities: why the distances are there" },
+        { "kind": "p", "text": "If somebody imported a trace from a watch or a phone, the outing knows how far it went, how long it took and how much climbing there was. The photographs taken during those hours are gathered onto it by themselves." },
+        { "kind": "p", "text": "Sometimes the album gets that wrong — two people did two different things that afternoon, and a clock cannot tell which. To fix it, open the outing, press **Select photos**, tick the ones that do not belong, and press **Take off this activity**. They stay on the trip, back under their own day. Nothing is deleted." },
+        { "kind": "h3", "text": "Writing what the outing was" },
+        { "kind": "p", "text": "An outing can carry a few sentences about how the day went. Open it and press **Add a description**, and write them. If the AI helper is switched on there is a second button beside Save: type what only you know — whose birthday it was, why you turned back — and press **Write it around this**, and the helper writes the paragraph using what you said and a few of the photographs. What comes back lands in the same box, so you can change any of it before you save." }
+      ]
+    },
+    {
+      "id": "people",
+      "heading": "People and pets",
+      "blocks": [
+        { "kind": "p", "text": "The album can keep track of who is in a photograph, so you can ask for “the ones with Mum in them”." },
+        { "kind": "h3", "text": "Two separate things, on purpose" },
+        { "kind": "table", "columns": ["This", "Means"], "rows": [
+          ["Tagging somebody", "You point at a face and say who it is. Anyone who can edit the photograph can do this. It does not switch anything on."],
+          ["Recognising somebody", "The album learns a face and looks for it in new photographs. This needs that person's agreement, and only an admin can turn it on."],
+          ["Using a name in descriptions", "The album may use the name when it writes about a photograph. Also their choice, also separate. Children are never named."]
+        ] },
+        { "kind": "p", "text": "This is fussier than it needs to be for a family album, and that is deliberate: a face is not the same kind of thing as a caption, and somebody may be happy to be named without wanting to be recognised." },
+        { "kind": "p", "text": "Pets work the same way, without the agreement — a dog cannot consent, and does not need to." }
+      ]
+    },
+    {
+      "id": "sharing",
+      "heading": "Sending a photograph to somebody",
+      "blocks": [
+        { "kind": "p", "text": "Everything in the album is private until you decide otherwise. There are three ways to let somebody outside the family see something." },
+        { "kind": "table", "columns": ["Way", "Who can see it"], "rows": [
+          ["Private", "Only the family. This is how everything starts."],
+          ["A secret link", "Anyone you send the link to. They do not need to sign in. Nobody else can find it."],
+          ["Public", "Anybody at all, including strangers who find it by chance."]
+        ] },
+        { "kind": "p", "text": "You can share a whole trip, a collection, or just one outing. Press **Share**, and the link is there ready to copy. Paste it into a message and it carries the title and a picture with it." },
+        { "kind": "note", "text": "**A link shows everything in that thing.** A shared trip shows all its photographs — and, if there are traces from a watch or phone, the paths they recorded. That is a record of where people were and when. Share an outing on its own if that is all you meant to send." },
+        { "kind": "p", "text": "Changed your mind? Press **New link** and the old one stops working straight away, or **Stop sharing** to close it altogether." }
+      ]
+    },
+    {
+      "id": "fixing",
+      "heading": "Fixing something that is wrong",
+      "blocks": [
+        { "kind": "table", "columns": ["What is wrong", "What to do"], "rows": [
+          ["Wrong date, so it is under the wrong day", "Open the photograph and change the date. On the timeline you can pick up a whole day at once — press **Select photos**, then **Select this day** — which is the usual fix for a box of old scans that all landed on the day somebody scanned them."],
+          ["No place on the map", "Open the photograph and use **Set a place**: press the map, or type an address. You can do a whole selection at once. Or drag photographs straight onto the map."],
+          ["On the wrong outing", "Open the outing, **Select photos**, **Take off this activity**. It stays on the trip."],
+          ["On the wrong trip, or no trip", "Select it in any grid and use the bulk actions to put it on the right one."],
+          ["A photograph that should not be there", "Press **Trash** and say why. It leaves the album at once but is not gone: an admin can put it back. Anyone in the family can do this."],
+          ["The same photograph twice", "If they are the very same file, the album already folded them into one. If they are two similar shots, trash the one you do not want."],
+          ["A description that is wrong or unkind", "Just edit it. What you write is yours and the album will not overwrite it."]
+        ] }
+      ]
+    },
+    {
+      "id": "ai",
+      "heading": "What the computer writes by itself",
+      "blocks": [
+        { "kind": "p", "text": "The album can ask an AI helper to describe photographs, so they can be found by searching for what is in them. This is off unless somebody turned it on, and it is worth knowing what it does." },
+        { "kind": "bullets", "items": [
+          "It writes a title, a caption, a description and a list of search words.",
+          "It is told the names of people the family has agreed to name. It is never told a child's name.",
+          "It never sees faces as faces: no face data of any kind is sent to it.",
+          "Anything you write yourself is left alone. It only replaces its own words.",
+          "A trip, a collection or a single photograph can be kept out of it entirely."
+        ] },
+        { "kind": "p", "text": "If a description says something you do not like, change it. Your words win." },
+        { "kind": "p", "text": "The **Graph** page is a different trick: it draws photographs that look alike near each other. It is a good way to find the four nearly identical shots of the same puddle." }
+      ]
+    },
+    {
+      "id": "words",
+      "heading": "Words this album uses",
+      "blocks": [
+        { "kind": "table", "columns": ["Word", "What it means here"], "rows": [
+          ["Timeline", "Photographs laid out by the day they were taken."],
+          ["Trip", "A stretch of days in one place."],
+          ["Collection", "A gathering of photographs chosen by hand."],
+          ["Activity", "One outing inside a trip."],
+          ["Track", "A path recorded by a watch or a phone."],
+          ["Tag", "Pointing at somebody in a photograph and saying who they are."],
+          ["Trash", "Out of the album, but not gone. An admin can put it back."],
+          ["Member", "Somebody in the family who can sign in."],
+          ["Admin", "A member who can also invite people and change the settings."],
+          ["Share link", "A secret web address that lets somebody see one thing without signing in."]
+        ] }
+      ]
+    },
+    {
+      "id": "stuck",
+      "heading": "Still stuck?",
+      "blocks": [
+        { "kind": "p", "text": "Ask whoever set the album up. It is one of the family, not a company, and there is no support queue. Tell them what you pressed and what happened — that is usually enough to find it." },
+        { "kind": "small", "text": "This guide covers using the album. Installing and running it is a different document, SETUP.pdf, and nobody needs it to look at photographs." }
+      ]
+    }
+  ]
+}
