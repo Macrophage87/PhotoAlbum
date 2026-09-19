@@ -11,6 +11,7 @@ import { ActivityForm } from "./ActivityForm";
 import { StatsGrid, type StatsLike } from "./StatsGrid";
 import { ActivityMapSection } from "./ActivityMapSection";
 import { PhotoGrid } from "@/components/photos/PhotoGrid";
+import { ActivityGallery } from "./ActivityGallery";
 import { toGridPhoto } from "@/components/photos/toGrid";
 import { Button, Card, ConfirmSubmitButton } from "@/components/ui";
 import { ActivityUploader } from "./ActivityUploader";
@@ -142,7 +143,11 @@ export function ActivityDetail({ trip, activity, photos, upload, share, describe
           </h3>
           {upload && <ActivityUploader activityId={activity.id} maxClipSeconds={upload.maxClipSeconds} annotationActive={upload.annotationActive} />}
         </div>
-        <PhotoGrid photos={photos.map((p) => toGridPhoto(p))} emptyMessage={upload ? "Nothing here yet. Photos taken during these hours arrive on their own; anything else can be added above." : "No photos on this activity yet."} />
+        {mode.editable ? (
+          <ActivityGallery photos={photos.map((p) => toGridPhoto(p))} emptyMessage={upload ? "Nothing here yet. Photos taken during these hours arrive on their own; anything else can be added above." : "No photos on this activity yet."} />
+        ) : (
+          <PhotoGrid photos={photos.map((p) => toGridPhoto(p))} emptyMessage="No photos on this activity yet." />
+        )}
       </section>
     </div>
   );

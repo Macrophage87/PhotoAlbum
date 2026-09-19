@@ -85,6 +85,25 @@ export async function bulkPutInActivity(photoIds: string[], activityId: string):
   return { n: r.count, notYours: asked.length - list.length };
 }
 
+/**
+ * Take a selection off the activity it is filed on, leaving it on the trip.
+ *
+ * A photograph filed on the wrong walk is not a photograph in the wrong place: it still belongs to the fortnight,
+ * it just did not happen on that walk. So this clears the filing and nothing else — the trip, the date and
+ * everything written on it stay exactly as they were, and the photograph goes back to sitting loose under its own
+ * day on the timeline. Dragging it out was already possible, which is no use on a phone.
+ */
+export async function bulkTakeOffActivity(photoIds: string[]): Promise<{ n: number; notYours: number }> {
+  const user = await requireUserOrThrow();
+  const asked = z.array(z.string().min(1)).min(1).max(500).parse(photoIds);
+  const list = await editableMediaIds(user, asked);
+  if (!list.length) return { n: 0, notYours: asked.length - list.length };
+  const r = await db.photo.updateMany({ where: { id: { in: list }, activityId: { not: null } }, data: { activityId: null, activitySetById: null } });
+  revalidatePath("/trips", "layout");
+  revalidatePath("/timeline");
+  return { n: r.count, notYours: asked.length - list.length };
+}
+
 /** The one trip a selection is on, when it is on one: what the activity picker needs to offer the right activities. */
 export async function tripOfSelection(photoIds: string[]): Promise<{ id: string; title: string } | null> {
   await requireUserOrThrow();

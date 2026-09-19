@@ -304,6 +304,10 @@ test("the helper writes an activity's description from its own photographs, and 
   const onIt = mine.rows[0].id as string;
   await withDb((c) => c.query(`UPDATE "Photo" SET "activityId" = $2 WHERE id = $1`, [onIt, activityId]));
   await withDb((c) => c.query(`UPDATE "Activity" SET description = NULL WHERE id = $1`, [activityId]));
+  // The helper is offered only once an admin has opted in on the disclosure screen. That opt-in has its own test,
+  // further down this file; here it is switched on directly and put back before leaving, so the order of the file
+  // does not decide whether this button exists.
+  await withDb((c) => c.query(`INSERT INTO "AppSetting" (id, "annotationOptInAt", "updatedAt") VALUES ('app', now(), now()) ON CONFLICT (id) DO UPDATE SET "annotationOptInAt" = now()`));
 
   await page.goto(`/trips/acadia/activities/${activityId}`);
   page.once("dialog", (d) => d.accept());
@@ -327,6 +331,32 @@ test("the helper writes an activity's description from its own photographs, and 
 
   await withDb((c) => c.query(`UPDATE "Photo" SET "activityId" = NULL WHERE id = $1`, [onIt]));
   await withDb((c) => c.query(`UPDATE "Activity" SET "shareToken" = NULL WHERE id = $1`, [activityId]));
+  await withDb((c) => c.query(`UPDATE "AppSetting" SET "annotationOptInAt" = NULL WHERE id = 'app'`));
+});
+
+test("a photograph can be taken off an activity and stays on the trip", async ({ context, page }) => {
+  await signIn(context, ADMIN);
+  const act = await withDb((c) => c.query(`SELECT id FROM "Activity" WHERE title = 'Ocean Path loop' LIMIT 1`));
+  const activityId = act.rows[0].id as string;
+  const mine = await withDb((c) => c.query(`SELECT p.id FROM "Photo" p JOIN "Trip" t ON t.id = p."tripId" WHERE t.slug = 'acadia' AND p.status = 'READY' AND p."trashedAt" IS NULL AND p."activityId" IS NULL ORDER BY p.id LIMIT 1`));
+  const onIt = mine.rows[0].id as string;
+  // The album files a photograph onto whichever outing was happening at the time. Two people on one afternoon do two
+  // different things, so that guess has to be correctable from the activity's own page — not only by dragging on the
+  // timeline, which a phone cannot do.
+  await withDb((c) => c.query(`UPDATE "Photo" SET "activityId" = $2 WHERE id = $1`, [onIt, activityId]));
+
+  await page.goto(`/trips/acadia/activities/${activityId}`);
+  await page.getByTestId("activity-select").click();
+  await page.locator(`li.tile-lazy:has(img[src*='/api/photos/${onIt}/']) button[aria-pressed]`).first().click();
+  await page.getByTestId("take-off-activity").click();
+  await expect(page.getByRole("status")).toContainText("still on the trip");
+  await expect(page.locator(`li.tile-lazy:has(img[src*='/api/photos/${onIt}/'])`)).toHaveCount(0);
+
+  // Off the outing, still in the album: the trip keeps it, under its own day.
+  const after = await withDb((c) => c.query(`SELECT "activityId", "tripId", "trashedAt" FROM "Photo" WHERE id = $1`, [onIt]));
+  expect(after.rows[0].activityId).toBeNull();
+  expect(after.rows[0].trashedAt).toBeNull();
+  expect(after.rows[0].tripId).not.toBeNull();
 });
 
 test("a collection gathers photos from two trips and can be shared by link", async ({ browser, context, page }) => {
