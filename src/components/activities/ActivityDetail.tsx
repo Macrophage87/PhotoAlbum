@@ -12,6 +12,7 @@ import { StatsGrid, type StatsLike } from "./StatsGrid";
 import { ActivityMapSection } from "./ActivityMapSection";
 import { PhotoGrid } from "@/components/photos/PhotoGrid";
 import { ActivityGallery } from "./ActivityGallery";
+import { ActivityDescription } from "./ActivityDescription";
 import { toGridPhoto } from "@/components/photos/toGrid";
 import { Button, Card, ConfirmSubmitButton } from "@/components/ui";
 import { ActivityUploader } from "./ActivityUploader";
@@ -42,7 +43,7 @@ type ReadOnlyProps = { editable: false };
 export type ActivityShare = { url: string | null; enable: () => Promise<void>; disable: () => Promise<void> };
 
 /** Shared body of the activity page for members (editable) and shared/public viewers. */
-export function ActivityDetail({ trip, activity, photos, upload, share, describe, ...mode }: { trip: { slug: string; timezone: string; themeKey: string }; activity: ActivityDetailData; photos: PhotoCard[]; /** Members only: what the uploader needs to offer adding photos straight to this activity. */ upload?: { maxClipSeconds: number; annotationActive: boolean }; /** Whoever arranges the trip: the link to this activity, and the means to make or withdraw it. */ share?: ActivityShare; /** Ask the helper to write the description. Absent when the helper is off, or for anyone who may not arrange the trip. */ describe?: () => Promise<void>; } & (EditProps | ReadOnlyProps)) {
+export function ActivityDetail({ trip, activity, photos, upload, share, save, describe, ...mode }: { trip: { slug: string; timezone: string; themeKey: string }; activity: ActivityDetailData; photos: PhotoCard[]; /** Members only: what the uploader needs to offer adding photos straight to this activity. */ upload?: { maxClipSeconds: number; annotationActive: boolean }; /** Whoever arranges the trip: the link to this activity, and the means to make or withdraw it. */ share?: ActivityShare; /** Write the description by hand. Absent for anyone who may not arrange the trip; they read what is there. */ save?: (text: string) => Promise<void>; /** Ask the helper to write it, with whatever is in the box as a note. Absent when the helper is off, or for anyone who may not arrange the trip. */ describe?: (note: string) => Promise<string>; } & (EditProps | ReadOnlyProps)) {
   const toLocalInput = (d: Date) => format(new TZDate(d, trip.timezone), "yyyy-MM-dd'T'HH:mm");
   const editing = mode.editable && mode.editing;
   return (
@@ -105,27 +106,8 @@ export function ActivityDetail({ trip, activity, photos, upload, share, describe
           </form>
         </Card>
       ) : (
-        <div className="space-y-2">
-          {activity.description && <p className="max-w-3xl whitespace-pre-line" data-testid="activity-description">{activity.description}</p>}
-          {/* The helper writes about the outing, from its own photographs and what the track measured. Asked for
-              rather than automatic: it costs something and it is the family's own words it would be replacing. */}
-          {describe && (
-            <form action={describe}>
-              <ConfirmSubmitButton
-                variant="secondary"
-                size="sm"
-                data-testid="activity-describe"
-                confirmMessage={
-                  activity.description
-                    ? "Write this description again? The photographs on this activity go to the AI helper, and what is there now is replaced."
-                    : "Write a description of this activity? The photographs on it go to the AI helper."
-                }
-              >
-                {activity.description ? "Write it again" : "Write a description"}
-              </ConfirmSubmitButton>
-            </form>
-          )}
-        </div>
+        /* Written by hand or by the helper, in the same box either way, and editable afterwards whichever it was. */
+        <ActivityDescription description={activity.description} save={save} describe={describe} />
       )}
 
       {activity.track?.stats && (

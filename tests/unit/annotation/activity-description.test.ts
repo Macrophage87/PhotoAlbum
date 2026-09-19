@@ -36,6 +36,21 @@ describe("what the helper is told about an outing", () => {
     expect(describeActivityItem(walk as never, [])).toContain("do not name anyone unless the captions do");
   });
 
+  it("carries the note the family typed, marked as coming from somebody who was there", () => {
+    const text = describeActivityItem(walk as never, [], "  It was Dad's birthday and we turned back at the fog.  ");
+    expect(text).toContain("A note from the family, written by somebody who was there");
+    expect(text).toContain("It was Dad's birthday and we turned back at the fog.");
+    // The note is the last thing said, so it is read against everything before it.
+    expect(text.trimEnd().endsWith("we turned back at the fog.")).toBe(true);
+    // And the instructions tell it what to do with one, rather than leaving it as loose text in the prompt.
+    expect(ACTIVITY_INSTRUCTIONS).toContain("note from the family");
+  });
+
+  it("says nothing about a note when there is none, including one that is only spaces", () => {
+    expect(describeActivityItem(walk as never, [])).not.toContain("A note from the family");
+    expect(describeActivityItem(walk as never, [], "   ")).not.toContain("A note from the family");
+  });
+
   it("says outright that an existing description is being replaced, rather than leaving it to be guessed at", () => {
     expect(describeActivityItem({ ...walk, description: "An old one" } as never, [])).toContain("already a description");
   });

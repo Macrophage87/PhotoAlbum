@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { z } from "zod";
 import { redirect } from "next/navigation";
 import { db } from "@/lib/db";
 import { requireUserOrThrow } from "@/lib/auth/viewer";
@@ -93,16 +94,39 @@ export async function setActivityShare(slug: string, id: string, on: boolean): P
   revalidatePath(`/trips/${slug}/activities/${id}`);
 }
 
+/** What somebody may type into the box: a note for the helper, or the description itself. Long enough for either. */
+const DESCRIPTION_TEXT = z.string().max(4000);
+
 /**
- * Ask the helper to write this activity's description, from a handful of its photographs and what the track
- * measured.
+ * Write this activity's description by hand.
+ *
+ * Whoever arranges the trip writes it, and what they write stands: nothing the album does later overwrites it
+ * unless they ask for that themselves. An empty box clears the description rather than storing a blank one, so
+ * the page goes back to offering to write one.
+ */
+export async function setActivityDescription(slug: string, id: string, text: string): Promise<void> {
+  const trip = await loadTrip(slug);
+  const description = DESCRIPTION_TEXT.parse(text).trim();
+  const activity = await db.activity.findFirst({ where: { id, tripId: trip.id }, select: { id: true } });
+  if (!activity) throw new Error("Activity not found");
+  await db.activity.update({ where: { id }, data: { description: description || null } });
+  revalidatePath(`/trips/${slug}/activities/${id}`);
+}
+
+/**
+ * Ask the helper to write this activity's description, from a handful of its photographs, what the track
+ * measured, and whatever the person pressing the button typed into the box first.
  *
  * A single call, made when somebody presses for it, rather than a batch: describing an outing is a thing you do
  * once and read, and the cost belongs to the press. Every rule the album already keeps applies — nothing goes if
  * the helper is switched off, an opted-out trip is refused outright, opted-out photographs are left behind, and
  * only names the family has agreed to are sent.
+ *
+ * The note goes with it. A photograph cannot say that it was somebody's birthday or that the point of the walk
+ * was the ice cream at the end, and the person pressing the button knows both; the written answer is saved and
+ * handed back so they can go on editing it by hand.
  */
-export async function describeActivityWithAi(slug: string, id: string): Promise<void> {
+export async function describeActivityWithAi(slug: string, id: string, note?: string): Promise<string> {
   const trip = await loadTrip(slug);
   const gates = await annotationGates();
   if (!gates.active) throw new Error("The AI helper is off");
@@ -112,7 +136,7 @@ export async function describeActivityWithAi(slug: string, id: string): Promise<
   if (!activity.photos.length) throw new Error("There are no photographs on this activity to describe it from");
 
   const names = [...new Set((await Promise.all(activity.photos.map((p) => permittedNames(p.id)))).flat())];
-  const request = await buildActivityRequest(activity, gates.model, names);
+  const request = await buildActivityRequest(activity, gates.model, names, DESCRIPTION_TEXT.parse(note ?? "").trim() || undefined);
   const response = await anthropic().messages.create(request);
   console.log(`[annotate-activity] ${activity.id} model=${response.model} stop=${response.stop_reason} in=${response.usage.input_tokens} out=${response.usage.output_tokens}`);
   if (response.stop_reason === "refusal") throw new Error("The helper declined to describe this one");
@@ -120,4 +144,5 @@ export async function describeActivityWithAi(slug: string, id: string): Promise<
   if (!parsed) throw new Error("The helper's answer could not be read; try again");
   await db.activity.update({ where: { id }, data: { description: parsed.description } });
   revalidatePath(`/trips/${slug}/activities/${id}`);
+  return parsed.description;
 }

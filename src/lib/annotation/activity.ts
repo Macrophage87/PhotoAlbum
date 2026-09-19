@@ -37,6 +37,7 @@ Rules:
 - Use the numbers from the track when they are given and say something a person would say — "four and a half miles along the shore" rather than "distance: 7.2 km" — and only when they add to the description. Never invent a distance, a climb or a duration that you were not given.
 - Use a person's name only when it is given to you in the text block, and when names are given, use them rather than age or role words. Somebody with no name given is "a child", "a family member", and so on.
 - Trust the existing captions over your own reading of the pictures; they come from people who were there.
+- When a note from the family is included, it outranks your own reading of the photographs: they were there and you were not. Use what it tells you — where it went, who was there, what happened, what it was for — and fill in around it. Keep its facts; you need not keep its words.
 - Do not describe anyone's body, health or ethnicity, or anything a family would find unkind to read under their own photographs.
 - Never invent a place or an occasion that is neither visible nor in what you were given. Anything you cannot determine, leave out rather than guessing.
 - Plain, warm, specific. No stock-photo language, and do not start with "This photo" or "This activity".
@@ -72,8 +73,15 @@ export async function loadActivityForDescription(activityId: string) {
   return { ...activity, photos };
 }
 
-/** The text block: the title, the clock, the track's figures, and what the family already wrote on the pictures. */
-export function describeActivityItem(activity: ActivityForDescription, permittedNames: string[]): string {
+/**
+ * The text block: the title, the clock, the track's figures, what the family already wrote on the pictures, and
+ * whatever the person pressing the button typed into the box before they pressed it.
+ *
+ * That last part is the one thing photographs cannot supply — that it was somebody's birthday, that the wind was
+ * the whole story, that the point of the walk was the ice cream at the end. It goes in late and marked as coming
+ * from someone who was there, so the helper builds around it rather than arguing with it.
+ */
+export function describeActivityItem(activity: ActivityForDescription, permittedNames: string[], note?: string): string {
   const tz = activity.trip.timezone;
   const lines: string[] = [];
   lines.push(`Outing: ${ACTIVITY_LABEL[activity.type] ?? "outing"} titled "${activity.title}"`);
@@ -96,6 +104,8 @@ export function describeActivityItem(activity: ActivityForDescription, permitted
       : "No people have been confirmed in these photographs; do not name anyone unless the captions do.",
   );
   if (activity.description) lines.push(`There is already a description, which you are being asked to replace:\n${activity.description}`);
+  const said = note?.trim();
+  if (said) lines.push(`A note from the family, written by somebody who was there. Treat what it says as true:\n${said}`);
   return lines.join("\n");
 }
 
@@ -111,7 +121,7 @@ export function parseActivityDescription(content: { type: string; text?: string 
 }
 
 /** Build the request. Images come from the local renditions of the activity's own photographs; nothing is fetched. */
-export async function buildActivityRequest(activity: ActivityForDescription, model: string, permittedNames: string[]): Promise<Anthropic.MessageCreateParamsNonStreaming> {
+export async function buildActivityRequest(activity: ActivityForDescription, model: string, permittedNames: string[], note?: string): Promise<Anthropic.MessageCreateParamsNonStreaming> {
   const store = storage();
   const images: Anthropic.ImageBlockParam[] = [];
   for (const p of activity.photos) {
@@ -125,7 +135,7 @@ export async function buildActivityRequest(activity: ActivityForDescription, mod
     max_tokens: 2000,
     ...thinkingParams(model),
     system: [{ type: "text", text: ACTIVITY_INSTRUCTIONS, cache_control: { type: "ephemeral" } }],
-    messages: [{ role: "user", content: [...images, { type: "text", text: describeActivityItem(activity, permittedNames) }] }],
+    messages: [{ role: "user", content: [...images, { type: "text", text: describeActivityItem(activity, permittedNames, note) }] }],
     output_config: { ...thinkingParams(model).output_config, format: zodOutputFormat(activityDescriptionSchema) },
   };
 }

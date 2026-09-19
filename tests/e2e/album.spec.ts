@@ -314,13 +314,25 @@ test("the helper writes an activity's description from its own photographs, and 
   await withDb((c) => c.query(`INSERT INTO "AppSetting" (id, "annotationOptInAt", "updatedAt") VALUES ('app', now(), now()) ON CONFLICT (id) DO UPDATE SET "annotationOptInAt" = now()`));
 
   await page.goto(`/trips/acadia/activities/${activityId}`);
+  await page.getByTestId("activity-description-edit").click();
+  // What the family types is a note for the helper, not a description to keep: it goes with the photographs.
+  await page.getByTestId("activity-description-text").fill("It was Dad's birthday and we turned back at the fog.");
   page.once("dialog", (d) => d.accept());
   await page.getByTestId("activity-describe").click();
+  // What comes back lands in the box, so it can be edited before it is kept.
+  await expect(page.getByTestId("activity-description-text")).toHaveValue(/shore path/);
+  await page.getByTestId("activity-description-save").click();
   await expect(page.getByTestId("activity-description")).toContainText(/shore path/);
   // It is the activity's own record, not a photograph's.
   await expect
     .poll(async () => (await withDb((c) => c.query(`SELECT description FROM "Activity" WHERE id = $1`, [activityId]))).rows[0].description, { timeout: 15_000 })
     .toMatch(/shore path/);
+
+  // What the helper wrote is a draft, not a verdict: it can be edited afterwards and the edit stands.
+  await page.getByTestId("activity-description-edit").click();
+  await page.getByTestId("activity-description-text").fill("We walked the shore path, and then we had chips.");
+  await page.getByTestId("activity-description-save").click();
+  await expect(page.getByTestId("activity-description")).toContainText("and then we had chips");
 
   // Whoever holds the activity's link reads it too.
   await page.getByTestId("activity-share-on").click();
