@@ -359,6 +359,17 @@ test("a photograph can be taken off an activity and stays on the trip", async ({
   expect(after.rows[0].tripId).not.toBeNull();
 });
 
+test("the guide the menu offers is a PDF that actually arrives", async ({ page }) => {
+  // A guide nobody can reach is no guide. It is a file in public/, linked from the menu, and open to anyone who
+  // gets as far as the site — somebody who cannot sign in is exactly who needs to read how signing in works.
+  await page.goto("/");
+  const help = page.getByRole("link", { name: "Help" }).first();
+  await expect(help).toHaveAttribute("href", "/guide.pdf");
+  const guide = await page.request.get("/guide.pdf");
+  expect(guide.status()).toBe(200);
+  expect(guide.headers()["content-type"]).toContain("pdf");
+});
+
 test("a collection gathers photos from two trips and can be shared by link", async ({ browser, context, page }) => {
   await signIn(context, ADMIN);
   await createTrip({ slug: "yosemite", title: "Yosemite", start: "2025-09-01", end: "2025-09-05", ownerEmail: ADMIN });

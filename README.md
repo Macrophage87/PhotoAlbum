@@ -84,6 +84,12 @@ The album is a progressive web app, so once it is reachable over HTTPS it can be
 
 It launches full-screen with the Family Album icon. Uploads and sign-in work exactly as in the browser; when the network is unavailable an offline notice is shown instead of a browser error.
 
+### The guide for the family
+
+`public/guide.pdf` is a plain-words guide to using the album — signing in, finding a photograph, what a trip and a collection and an activity are, sharing, and putting mistakes right. The **Help** link in the menu opens it, so it is reachable from any phone in the family, and it prints to eleven pages if somebody would rather have it on paper. It is written for whoever is least sure about computers and says nothing about installing anything; that is `docs/SETUP.pdf`.
+
+Edit `scripts/make-guide-pdf.py` and regenerate with `pip install reportlab && python3 scripts/make-guide-pdf.py`, committing the PDF with the change.
+
 ### Security headers
 
 Every page is served with a nonce-based Content-Security-Policy: scripts only from this site with a per-request nonce, inline styles allowed (themes set style attributes), images and data only from this site and the configured map hosts (`NEXT_PUBLIC_TILE_URL`, `NEXT_PUBLIC_MAP_STYLE_URL`, `NEXT_PUBLIC_MAP_GLYPHS_URL`), frames only for the privacy-enhanced YouTube host, and no framing of this site by anyone. If a new map provider's assets are blocked, set `CSP_REPORT_ONLY=true` to see the violations in the browser console without blocking, then fix the host variables and turn enforcement back on.
