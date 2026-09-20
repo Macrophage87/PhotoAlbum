@@ -13,7 +13,7 @@
 #      override are untracked and survive the reset),
 #   3. `docker compose up --build -d` (the container applies migrations at
 #      start; in-flight photo processing gets 45 s to finish),
-#   4. wait for /api/health, then prune dangling images.
+#   4. wait for /api/health, then prune dangling images and day-old build cache.
 #
 # Runs as a user with sudo (the deploy login) or as root.
 set -euo pipefail
@@ -51,6 +51,9 @@ as_root docker compose up --build -d
 for ((i = 0; i < HEALTH_TIMEOUT; i += 5)); do
   if curl -fs "http://127.0.0.1:$APP_PORT/api/health" >/dev/null 2>&1; then
     as_root docker image prune -f >/dev/null
+    # Build cache is never reclaimed by `image prune`; every deploy adds a few GB, and on 2026-09-19 forty GB of
+    # it filled the data disk and took Postgres down. Keep only what the last day of builds can reuse.
+    as_root docker builder prune -a -f --filter until=24h >/dev/null
     echo "== healthy on port $APP_PORT at $(date -Is) =="
     exit 0
   fi
