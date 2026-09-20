@@ -8,12 +8,13 @@ import { shareableActivityUrl } from "@/lib/share/social";
 import { NOT_TRASHED } from "@/lib/photos/trash";
 import { env } from "@/lib/env";
 import { annotationGates } from "@/lib/annotation/eligibility";
+import { familyMembers } from "@/lib/people/members";
 
 export default async function ActivityPage({ params, searchParams }: PageProps<"/trips/[slug]/activities/[id]">) {
   const { slug, id } = await params;
   const sp = await searchParams;
   const { trip, editable, owns } = await loadViewableTrip(slug, `/trips/${slug}/activities/${id}`);
-  const activity = await db.activity.findFirst({ where: { id, tripId: trip.id }, include: { track: { select: { id: true, simplified: true, stats: true } } } });
+  const activity = await db.activity.findFirst({ where: { id, tripId: trip.id }, include: { track: { select: { id: true, simplified: true, stats: true } }, participants: { select: { id: true } } } });
   if (!activity) notFound();
   const photos = await db.photo.findMany({ where: { activityId: activity.id, ...NOT_TRASHED }, orderBy: [{ takenAt: "asc" }], select: photoCardSelect });
 
@@ -42,6 +43,7 @@ export default async function ActivityPage({ params, searchParams }: PageProps<"
       describe={describe}
       editable
       editing={sp.edit === "1"}
+      members={await familyMembers()}
       updateAction={updateActivity.bind(null, slug, activity.id) as never}
       deleteAction={deleteActivity.bind(null, slug, activity.id)}
     />

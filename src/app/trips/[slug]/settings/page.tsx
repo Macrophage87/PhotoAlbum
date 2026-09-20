@@ -8,6 +8,7 @@ import { shareableTripUrl } from "@/lib/share/social";
 import { Button, ButtonLink, Card, ConfirmSubmitButton } from "@/components/ui";
 import { photoUrl } from "@/lib/photos/urls";
 import { coverFor } from "@/lib/trips/queries";
+import { familyMembers } from "@/lib/people/members";
 import { deleteTrip, detachExposedFromCollections, regeotagPhotos, rotateShareToken, updateTrip } from "../actions";
 import { OptOutToggle } from "@/components/annotation/OptOutToggle";
 import { visibilityWarnings } from "@/lib/visibility/settings";
@@ -15,6 +16,7 @@ import Link from "next/link";
 import { guessDatesForTrip } from "@/lib/photos/date-guess-query";
 import { DateUndated } from "@/components/trips/DateUndated";
 import { formatDateTime } from "@/lib/time/format";
+import { db } from "@/lib/db";
 
 const VISIBILITY = [
   { value: "PRIVATE", label: "Private", help: "Only signed-in family members can see this trip." },
@@ -32,6 +34,8 @@ export default async function TripSettingsPage({ params, searchParams }: PagePro
   const regeotag = regeotagPhotos.bind(null, slug);
   const shareUrl = shareableTripUrl(trip, env().APP_URL);
   const cover = await coverFor(trip);
+  const there = await db.trip.findUnique({ where: { id: trip.id }, select: { participants: { select: { id: true } } } });
+  const participants = there?.participants ?? [];
   const warnings = await visibilityWarnings("trip", trip.id, trip.visibility, "this trip");
   const detach = detachExposedFromCollections.bind(null, slug);
   // What the trip's own photos say about the ones that arrived without a date.
@@ -47,7 +51,8 @@ export default async function TripSettingsPage({ params, searchParams }: PagePro
         <TripForm
           action={update}
           submitLabel="Save changes"
-          initial={{ title: trip.title, description: trip.description ?? "", startDate: dateColumnToDay(trip.startDate), endDate: dateColumnToDay(trip.endDate), timezone: trip.timezone, themeKey: trip.themeKey }}
+          initial={{ title: trip.title, description: trip.description ?? "", startDate: dateColumnToDay(trip.startDate), endDate: dateColumnToDay(trip.endDate), timezone: trip.timezone, themeKey: trip.themeKey, participants: participants.map((p) => p.id) }}
+          members={await familyMembers()}
           visibility={{ current: trip.visibility, legend: "Who can see this trip", options: VISIBILITY.map((v) => ({ ...v, warnings: warnings.byTarget[v.value] })) }}
         />
       </section>

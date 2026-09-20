@@ -350,6 +350,60 @@ test("the helper writes an activity's description from its own photographs, and 
   await withDb((c) => c.query(`UPDATE "AppSetting" SET "annotationOptInAt" = NULL WHERE id = 'app'`));
 });
 
+test("a trip can say who was on it, and stops collecting everybody else's photographs", async ({ browser, context, page }) => {
+  await signIn(context, ADMIN);
+  const other = "e2e-outsider@example.com";
+
+  // Nobody named yet: the album files by date alone, so somebody who was never in Maine collects the trip anyway.
+  const outside = await browser.newContext();
+  await signIn(outside, other);
+  const theirs = await outside.newPage();
+  await theirs.goto("/upload");
+  await chooseFile(theirs, "photo-with-gps.jpg");
+  await expect(theirs.getByText("1 of 1 uploaded.")).toBeVisible({ timeout: 30_000 });
+  const swept = await withDb((c) => c.query(`SELECT p.id, t.slug FROM "Photo" p LEFT JOIN "Trip" t ON t.id = p."tripId" JOIN "User" u ON u.id = p."uploaderId" WHERE u.email = $1 ORDER BY p."createdAt" DESC LIMIT 1`, [other]));
+  expect(swept.rows[0].slug).toBe("acadia");
+  await withDb((c) => c.query(`UPDATE "Photo" SET "trashedAt" = now() WHERE id = $1`, [swept.rows[0].id]));
+
+  // Say who was on the trip: the admin, and not them.
+  await page.goto("/trips/acadia/settings");
+  await page.getByTestId("trip-who-open").click();
+  await page.getByTestId("trip-who").getByLabel("e2e-admin@example.com").check();
+  await page.getByRole("button", { name: "Save changes" }).click();
+  await expect(page).toHaveURL(/saved=1/);
+  const named = await withDb((c) => c.query(`SELECT u.email FROM "_TripParticipants" tp JOIN "User" u ON u.id = tp."B" JOIN "Trip" t ON t.id = tp."A" WHERE t.slug = 'acadia'`));
+  expect(named.rows.map((r) => r.email)).toEqual([ADMIN]);
+
+  // The same photograph, uploaded again by the same outsider, is no longer swept onto the trip.
+  await theirs.goto("/upload");
+  await chooseFile(theirs, "photo-with-gps.jpg");
+  await expect(theirs.getByText("1 of 1 uploaded.")).toBeVisible({ timeout: 30_000 });
+  await expect
+    .poll(async () => (await withDb((c) => c.query(`SELECT p.status, p."tripId" FROM "Photo" p JOIN "User" u ON u.id = p."uploaderId" WHERE u.email = $1 AND p."trashedAt" IS NULL ORDER BY p."createdAt" DESC LIMIT 1`, [other]))).rows[0], { timeout: 30_000 })
+    .toMatchObject({ status: "READY", tripId: null });
+
+  // And the admin's own photographs still land on it, because they are named.
+  await page.goto("/upload");
+  await chooseFile(page, "photo-with-gps.jpg");
+  await expect(page.getByText("1 of 1 uploaded.")).toBeVisible({ timeout: 30_000 });
+  const minePicked = await withDb((c) => c.query(`SELECT p.id FROM "Photo" p JOIN "User" u ON u.id = p."uploaderId" WHERE u.email = $1 ORDER BY p."createdAt" DESC LIMIT 1`, [ADMIN]));
+  await expect
+    .poll(async () => (await withDb((c) => c.query(`SELECT t.slug FROM "Photo" p LEFT JOIN "Trip" t ON t.id = p."tripId" WHERE p.id = $1`, [minePicked.rows[0].id]))).rows[0].slug, { timeout: 30_000 })
+    .toBe("acadia");
+
+  // Put it back to everybody, so the rest of the file sees the trip it expects.
+  await page.goto("/trips/acadia/settings");
+  await page.getByTestId("trip-who").getByLabel("e2e-admin@example.com").uncheck();
+  await page.getByRole("button", { name: "Save changes" }).click();
+  await expect(page).toHaveURL(/saved=1/);
+  const cleared = await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "_TripParticipants"`));
+  expect(cleared.rows[0].n).toBe(0);
+  // Everything this test uploaded goes away again: later tests count what is on this trip.
+  await withDb((c) => c.query(`DELETE FROM "Photo" p USING "User" u WHERE u.id = p."uploaderId" AND u.email = $1`, [other]));
+  await withDb((c) => c.query(`DELETE FROM "Photo" WHERE id = $1`, [minePicked.rows[0].id]));
+  await outside.close();
+});
+
 test("a photograph can be taken off an activity and stays on the trip", async ({ context, page }) => {
   await signIn(context, ADMIN);
   const act = await withDb((c) => c.query(`SELECT id FROM "Activity" WHERE title = 'Ocean Path loop' LIMIT 1`));

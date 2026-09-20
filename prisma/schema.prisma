@@ -204,6 +204,8 @@ model User {
   collections     Collection[]
   collectionItems CollectionItem[]
   visits   Visit[]
+  tripsOn      Trip[]     @relation("TripParticipants")
+  activitiesOn Activity[] @relation("ActivityParticipants")
 }
 
 model Invite {
@@ -265,6 +267,10 @@ model Trip {
   favourites TripFavorite[]
   tracks     Track[]
   visits     Visit[]
+  /// Who was on this trip. Empty means everybody: a photograph is filed here by its date whoever uploaded it.
+  /// Naming people narrows that to their uploads, so two families on the same fortnight do not collect each
+  /// other's photographs.
+  participants User[]      @relation("TripParticipants")
 
   @@index([startDate])
   @@index([visibility])
@@ -285,6 +291,8 @@ model Activity {
   /// A secret link to this one activity: its track, its stats and its own photographs, and nothing else of the
   /// trip. Null means it is not shared; the trip's own visibility is a separate question and never widened by it.
   shareToken  String?      @unique
+  /// Who was on this outing. Empty means everybody on the trip; naming people narrows the hours to their uploads.
+  participants User[]      @relation("ActivityParticipants")
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
 

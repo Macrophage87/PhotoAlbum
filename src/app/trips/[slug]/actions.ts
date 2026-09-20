@@ -5,7 +5,7 @@ import { redirect } from "next/navigation";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { requireUserOrThrow } from "@/lib/auth/viewer";
-import { fieldErrors, tripInputFromForm } from "@/lib/trips/validation";
+import { fieldErrors, participantsFromForm, tripInputFromForm } from "@/lib/trips/validation";
 import { dayToDateColumn } from "@/lib/time/local-day";
 import { generateToken } from "@/lib/auth/tokens";
 import { enqueue } from "@/lib/jobs/boss";
@@ -36,6 +36,7 @@ export async function updateTrip(slug: string, _prev: TripFormState, fd: FormDat
   if (chosen && !chosen.success) return { status: "error", message: "Pick who can see this trip." };
   const visibility = chosen?.data;
   const changed = visibility !== undefined && visibility !== trip.visibility;
+  const there = participantsFromForm(fd);
   await db.trip.update({
     where: { id: trip.id },
     data: {
@@ -47,6 +48,8 @@ export async function updateTrip(slug: string, _prev: TripFormState, fd: FormDat
       themeKey: v.themeKey,
       // A link is minted the first time this trip is shared that way, and dropped whenever it stops being.
       ...(changed ? { visibility, shareToken: visibility === "LINK" ? (trip.shareToken ?? generateToken()) : null } : {}),
+      // `set` reconciles to exactly what was ticked; a form that never carried the control leaves the list alone.
+      ...(there ? { participants: { set: there.map((id) => ({ id })) } } : {}),
     },
   });
   if (changed) {

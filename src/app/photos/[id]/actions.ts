@@ -13,7 +13,7 @@ import { guessDateFromTrip, guessDatesForTrip } from "@/lib/photos/date-guess-qu
 import { dateReport, type DateReport } from "@/lib/photos/date-report";
 import { enqueue } from "@/lib/jobs/boss";
 import { QUEUES } from "@/lib/jobs/queues";
-import { pickActivityByTime } from "@/lib/photos/assign";
+import { pickActivityByTime, whoWasThere } from "@/lib/photos/assign";
 import { applyPhotoInstant } from "@/lib/photos/apply-date";
 import { offsetMinutesInZone, wallTimeWithOffsetToInstant } from "@/lib/time/local-day";
 import { storage } from "@/lib/storage";
@@ -72,7 +72,7 @@ export async function updatePhoto(id: string, fd: FormData): Promise<void> {
     activityId = null;
     chosenByHand = false;
     if (v.tripId && photo.takenAt) {
-      const acts = await db.activity.findMany({ where: { tripId: v.tripId }, select: { id: true, startTime: true, endTime: true } });
+      const acts = await db.activity.findMany({ where: { tripId: v.tripId, ...whoWasThere(photo.uploaderId) }, select: { id: true, startTime: true, endTime: true } });
       activityId = pickActivityByTime(acts, photo.takenAt)?.id ?? null;
     }
   } else if (activityId) {

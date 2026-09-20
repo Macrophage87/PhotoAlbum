@@ -34,3 +34,14 @@ export function fieldErrors(err: z.ZodError): Record<string, string> {
   }
   return out;
 }
+
+/**
+ * Who a form says was there, or null when it does not carry the control at all.
+ *
+ * The distinction matters: a form with the control and nothing ticked means "everybody", which has to clear an
+ * existing list, while a form without it (an older page, or one that never asks) must leave the list alone.
+ */
+export function participantsFromForm(fd: FormData): string[] | null {
+  if (!fd.has("participantsPresent")) return null;
+  return [...new Set(fd.getAll("participants").map(String).filter(Boolean))];
+}

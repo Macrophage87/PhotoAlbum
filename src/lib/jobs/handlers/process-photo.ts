@@ -11,7 +11,7 @@ import { makeRenditions } from "@/lib/images/renditions";
 import { applyPhotoInstant } from "@/lib/photos/apply-date";
 import { readGPano } from "@/lib/images/panorama-read";
 import { editsSchema, hasEdits, type PhotoEdits } from "@/lib/images/edits";
-import { pickActivityByTime, pickTripByDay } from "@/lib/photos/assign";
+import { pickActivityByTime, pickTripByDay, whoWasThere } from "@/lib/photos/assign";
 import { localDayFromOffset, offsetMinutesInZone } from "@/lib/time/local-day";
 import { enqueue } from "../boss";
 import { QUEUES, type ProcessPhotoJob } from "../queues";
@@ -99,7 +99,8 @@ export async function processPhoto(job: ProcessPhotoJob): Promise<void> {
     // A Takeout sidecar's date is authoritative (Google's own record of the capture time); EXIF supplies the zone.
     if (photo.takenAtSource === "SIDECAR" && photo.takenAt) resolved = sidecarResolution(photo.takenAt, resolved, exif, trip?.timezone ?? null, photo.gpsSource === "SIDECAR" ? { lat: photo.lat, lng: photo.lng } : null);
     if (!trip && resolved) {
-      const candidates = await db.trip.findMany({ select: { id: true, startDate: true, endDate: true, timezone: true } });
+      // Only trips this member was on, where anybody said who was on them; a clock cannot tell two families apart.
+      const candidates = await db.trip.findMany({ where: whoWasThere(photo.uploaderId), select: { id: true, startDate: true, endDate: true, timezone: true } });
       const match = pickTripByDay(candidates, resolved.wallDay);
       if (match) {
         trip = await db.trip.findUnique({ where: { id: match.id } });
@@ -127,7 +128,7 @@ export async function processPhoto(job: ProcessPhotoJob): Promise<void> {
       }
       // No camera zone to go on: interpret the instant in the trip zone when we know it, else in UTC.
       if (!trip) {
-        const candidates = await db.trip.findMany({ select: { id: true, startDate: true, endDate: true, timezone: true } });
+        const candidates = await db.trip.findMany({ where: whoWasThere(photo.uploaderId), select: { id: true, startDate: true, endDate: true, timezone: true } });
         // Each trip judges the instant in its own zone; still require exactly one match.
         const matches = candidates.filter((c) => pickTripByDay([c], localDayFromOffset(takenAt!, offsetMinutesInZone(takenAt!, c.timezone))));
         if (matches.length === 1) trip = await db.trip.findUnique({ where: { id: matches[0].id } });
@@ -146,7 +147,7 @@ export async function processPhoto(job: ProcessPhotoJob): Promise<void> {
     const chosen = photo.activitySetById ? await db.activity.findFirst({ where: { id: photo.activityId ?? "", tripId: trip?.id ?? "" }, select: { id: true } }) : null;
     if (chosen) activityId = chosen.id;
     else if (trip && takenAt) {
-      const activities = await db.activity.findMany({ where: { tripId: trip.id }, select: { id: true, startTime: true, endTime: true } });
+      const activities = await db.activity.findMany({ where: { tripId: trip.id, ...whoWasThere(photo.uploaderId) }, select: { id: true, startTime: true, endTime: true } });
       activityId = pickActivityByTime(activities, takenAt)?.id ?? null;
     }
 

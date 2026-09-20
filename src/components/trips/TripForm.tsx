@@ -5,8 +5,9 @@ import { Button, FieldError, Input, Label, Select, Textarea } from "@/components
 import { ThemePicker } from "./ThemePicker";
 import { confirmExposure, VisibilityChoice, type VisibilitySection } from "./VisibilityChoice";
 import type { TripFormState } from "@/app/trips/new/actions";
+import { WhoWasThere, type Member } from "@/components/people/WhoWasThere";
 
-export type TripFormValues = { title: string; description: string; startDate: string; endDate: string; timezone: string; themeKey: string };
+export type TripFormValues = { title: string; description: string; startDate: string; endDate: string; timezone: string; themeKey: string; participants: string[] };
 
 const COMMON_ZONES = [
   "UTC",
@@ -49,7 +50,7 @@ const COMMON_ZONES = [
   "America/Santiago",
 ];
 
-export function TripForm({ action, initial, submitLabel, visibility }: { action: (prev: TripFormState, fd: FormData) => Promise<TripFormState>; initial: TripFormValues; submitLabel: string; visibility?: VisibilitySection }) {
+export function TripForm({ action, initial, submitLabel, visibility, members }: { action: (prev: TripFormState, fd: FormData) => Promise<TripFormState>; initial: TripFormValues; submitLabel: string; visibility?: VisibilitySection; /** The family, so the trip can say who was on it. */ members: Member[] }) {
   const [state, formAction, pending] = useActionState<TripFormState, FormData>(action, { status: "idle" });
   const err = (k: keyof TripFormValues) => (state.status === "error" ? state.fieldErrors?.[k] : undefined);
   const zones = COMMON_ZONES.includes(initial.timezone) ? COMMON_ZONES : [initial.timezone, ...COMMON_ZONES];
@@ -88,6 +89,7 @@ export function TripForm({ action, initial, submitLabel, visibility }: { action:
         <p className="text-xs text-muted mt-1">Used to group photos by day and to interpret camera times that lack a time zone.</p>
         <FieldError>{err("timezone")}</FieldError>
       </div>
+      <WhoWasThere members={members} selected={initial.participants} what="trip" />
       <div>
         <Label>Theme</Label>
         <ThemePicker value={initial.themeKey} />

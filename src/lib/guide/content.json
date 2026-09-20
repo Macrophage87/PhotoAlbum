@@ -251,6 +251,18 @@
         },
         {
           "kind": "h3",
+          "text": "Who was on it"
+        },
+        {
+          "kind": "p",
+          "text": "The album files a photograph by the date the camera wrote, and a date cannot tell two families apart: if a cousin uploads their own holiday from the same fortnight, it lands on your trip. Open the trip's **Settings**, or an outing's **Edit**, and tick who was there. From then on only their uploads are filed there by date. Ticking nobody means everyone, which is how every trip starts."
+        },
+        {
+          "kind": "note",
+          "text": "This only changes the album's own guesswork. Anything anybody puts on a trip or an outing by hand stays exactly where they put it, and what is already filed is left alone."
+        },
+        {
+          "kind": "h3",
           "text": "Saying what it was"
         },
         {

@@ -21,7 +21,7 @@ export async function getSharedActivity(token: string) {
   if (!token || token.length > 128) return null;
   return db.activity.findUnique({
     where: { shareToken: token },
-    include: { track: { select: { id: true, simplified: true, stats: true } }, trip: { select: { id: true, slug: true, title: true, themeKey: true, timezone: true } } },
+    include: { track: { select: { id: true, simplified: true, stats: true } }, participants: { select: { id: true } }, trip: { select: { id: true, slug: true, title: true, themeKey: true, timezone: true } } },
   });
 }
 

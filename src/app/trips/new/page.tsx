@@ -3,6 +3,7 @@ import { AppShell, Container } from "@/components/layout/AppShell";
 import { TripForm } from "@/components/trips/TripForm";
 import { createTrip } from "./actions";
 import { localDayInZone } from "@/lib/time/local-day";
+import { familyMembers } from "@/lib/people/members";
 
 export const metadata = { title: "New trip" };
 
@@ -15,7 +16,7 @@ export default async function NewTripPage() {
     <AppShell viewer={viewer}>
       <Container className="py-10 max-w-2xl">
         <h1 className="font-display text-3xl font-semibold mb-6">New trip</h1>
-        <TripForm action={createTrip} submitLabel="Create trip" initial={{ title: "", description: "", startDate: today, endDate: today, timezone: defaultTimezone, themeKey: "default" }} />
+        <TripForm action={createTrip} submitLabel="Create trip" initial={{ title: "", description: "", startDate: today, endDate: today, timezone: defaultTimezone, themeKey: "default", participants: [] }} members={await familyMembers()} />
       </Container>
     </AppShell>
   );

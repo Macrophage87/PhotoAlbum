@@ -15,7 +15,7 @@ import { safeArchivePath } from "./inbox";
 import { albumFolderOf, captionFromTitle, isMediaName, isVideoName, pairSidecars, parseSidecar, type SidecarData } from "./sidecar";
 import { readStreamToString, walkZip } from "./zip";
 import { describeRepair, planSidecarRepair } from "./repair";
-import { pickActivityByTime, pickTripByDay } from "@/lib/photos/assign";
+import { pickActivityByTime, pickTripByDay, whoWasThere } from "@/lib/photos/assign";
 import { localDayFromOffset, offsetMinutesInZone } from "@/lib/time/local-day";
 import { timezoneForCoords } from "@/lib/geo/tz";
 
@@ -192,18 +192,18 @@ export async function closeDeadImports(now = new Date()): Promise<number> {
  * the zone the way processing does (the position if there is one, else the trip's, else UTC) and re-file it.
  */
 async function refileByDate(photoId: string): Promise<void> {
-  const photo = await db.photo.findUnique({ where: { id: photoId }, select: { id: true, takenAt: true, tripId: true, lat: true, lng: true, trip: { select: { timezone: true } } } });
+  const photo = await db.photo.findUnique({ where: { id: photoId }, select: { id: true, takenAt: true, tripId: true, uploaderId: true, lat: true, lng: true, trip: { select: { timezone: true } } } });
   if (!photo?.takenAt) return;
   const zone = (photo.lat !== null && photo.lng !== null ? timezoneForCoords(photo.lat, photo.lng) : null) ?? photo.trip?.timezone ?? "UTC";
   const tzOffsetMin = offsetMinutesInZone(photo.takenAt, zone);
   let tripId = photo.tripId;
   if (!tripId) {
-    const trips = await db.trip.findMany({ select: { id: true, startDate: true, endDate: true } });
+    const trips = await db.trip.findMany({ where: whoWasThere(photo.uploaderId), select: { id: true, startDate: true, endDate: true } });
     tripId = pickTripByDay(trips, localDayFromOffset(photo.takenAt, tzOffsetMin))?.id ?? null;
   }
   let activityId: string | null = null;
   if (tripId) {
-    const acts = await db.activity.findMany({ where: { tripId }, select: { id: true, startTime: true, endTime: true } });
+    const acts = await db.activity.findMany({ where: { tripId, ...whoWasThere(photo.uploaderId) }, select: { id: true, startTime: true, endTime: true } });
     activityId = pickActivityByTime(acts, photo.takenAt)?.id ?? null;
   }
   await db.photo.update({ where: { id: photoId }, data: { tzOffsetMin, tripId, activityId } });

@@ -26,11 +26,14 @@ export type ActivityDetailData = {
   endTime: Date;
   description: string | null;
   track: { id: string; simplified: unknown; stats: StatsLike | null } | null;
+  participants: { id: string }[];
 };
 
 type EditProps = {
   editable: true;
   editing: boolean;
+  /** The family, so the edit form can say who was on this outing. */
+  members: { id: string; label: string }[];
   updateAction: (prev: never, fd: FormData) => Promise<never>;
   deleteAction: (fd: FormData) => Promise<void>;
 };
@@ -92,7 +95,8 @@ export function ActivityDetail({ trip, activity, photos, upload, share, save, de
             action={mode.updateAction as never}
             submitLabel="Save"
             timezone={trip.timezone}
-            initial={{ title: activity.title, type: activity.type, start: toLocalInput(activity.startTime), end: toLocalInput(activity.endTime), description: activity.description ?? "" }}
+            initial={{ title: activity.title, type: activity.type, start: toLocalInput(activity.startTime), end: toLocalInput(activity.endTime), description: activity.description ?? "", participants: activity.participants.map((p) => p.id) }}
+            members={mode.members}
           />
           <form action={mode.deleteAction} className="border-t border-border pt-4 space-y-2">
             {activity.track && (

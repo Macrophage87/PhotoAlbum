@@ -4,11 +4,12 @@ import { useActionState } from "react";
 import type { ActivityType } from "@/generated/prisma/enums";
 import { ACTIVITY_LABEL, ACTIVITY_TYPES } from "@/lib/activities/types";
 import { Button, FieldError, Input, Label, Select, Textarea } from "@/components/ui";
+import { WhoWasThere, type Member } from "@/components/people/WhoWasThere";
 
 export type ActivityFormState = { status: "idle" } | { status: "error"; message?: string; fieldErrors?: Record<string, string> };
-export type ActivityFormValues = { title: string; type: ActivityType; start: string; end: string; description: string };
+export type ActivityFormValues = { title: string; type: ActivityType; start: string; end: string; description: string; participants: string[] };
 
-export function ActivityForm({ action, initial, submitLabel, timezone }: { action: (prev: ActivityFormState, fd: FormData) => Promise<ActivityFormState>; initial: ActivityFormValues; submitLabel: string; timezone: string }) {
+export function ActivityForm({ action, initial, submitLabel, timezone, members }: { action: (prev: ActivityFormState, fd: FormData) => Promise<ActivityFormState>; initial: ActivityFormValues; submitLabel: string; timezone: string; /** The family, so the outing can say who was on it. */ members: Member[] }) {
   const [state, formAction, pending] = useActionState<ActivityFormState, FormData>(action, { status: "idle" });
   const err = (k: keyof ActivityFormValues) => (state.status === "error" ? state.fieldErrors?.[k] : undefined);
   return (
@@ -41,6 +42,7 @@ export function ActivityForm({ action, initial, submitLabel, timezone }: { actio
         </div>
       </div>
       <p className="text-xs text-muted -mt-2">Times are in the trip&apos;s zone ({timezone}). Photos taken in this window are attached automatically.</p>
+      <WhoWasThere members={members} selected={initial.participants} what="activity" />
       <div>
         <Label htmlFor="description">Notes</Label>
         <Textarea id="description" name="description" rows={4} defaultValue={initial.description} />

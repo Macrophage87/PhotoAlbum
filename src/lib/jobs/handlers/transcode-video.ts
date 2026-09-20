@@ -7,7 +7,7 @@ import { env } from "@/lib/env";
 import { storage } from "@/lib/storage";
 import { makeRenditions } from "@/lib/images/renditions";
 import { ffmpeg, posterArgs, probe, transcodeArgs } from "@/lib/video/ffmpeg";
-import { pickActivityByTime, pickTripByDay } from "@/lib/photos/assign";
+import { pickActivityByTime, pickTripByDay, whoWasThere } from "@/lib/photos/assign";
 import { localDayFromOffset, offsetMinutesInZone } from "@/lib/time/local-day";
 import { withHeavyLock } from "../heavy-lock";
 import type { TranscodeVideoJob } from "../queues";
@@ -63,14 +63,14 @@ export async function transcodeVideo(job: TranscodeVideoJob): Promise<void> {
       }
       let trip = job.tripId ? await db.trip.findUnique({ where: { id: job.tripId } }) : photo.tripId ? await db.trip.findUnique({ where: { id: photo.tripId } }) : null;
       if (!trip) {
-        const candidates = await db.trip.findMany({ select: { id: true, startDate: true, endDate: true, timezone: true } });
+        const candidates = await db.trip.findMany({ where: whoWasThere(photo.uploaderId), select: { id: true, startDate: true, endDate: true, timezone: true } });
         const matches = candidates.filter((c) => pickTripByDay([c], localDayFromOffset(instant, offsetMinutesInZone(instant, c.timezone))));
         if (matches.length === 1) trip = await db.trip.findUnique({ where: { id: matches[0].id } });
       }
       const tzOffsetMin = trip ? offsetMinutesInZone(instant, trip.timezone) : 0;
       let activityId: string | null = null;
       if (trip) {
-        const activities = await db.activity.findMany({ where: { tripId: trip.id }, select: { id: true, startTime: true, endTime: true } });
+        const activities = await db.activity.findMany({ where: { tripId: trip.id, ...whoWasThere(photo.uploaderId) }, select: { id: true, startTime: true, endTime: true } });
         activityId = pickActivityByTime(activities, instant)?.id ?? null;
       }
       const videoRenditions: VideoRenditions = { mp4: { key: mp4Key, w: out.width ?? 0, h: out.height ?? 0, bytes }, poster: { key: posterKey } };

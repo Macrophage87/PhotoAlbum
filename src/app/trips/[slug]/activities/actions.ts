@@ -13,7 +13,7 @@ import { permittedNames } from "@/lib/people/gates";
 import { canEditContainer, NOT_YOUR_CONTAINER } from "@/lib/auth/ownership";
 import { activityInputFromForm, localInputToInstant } from "@/lib/activities/validation";
 import { reassignPhotosForActivity } from "@/lib/activities/reassign";
-import { fieldErrors } from "@/lib/trips/validation";
+import { fieldErrors, participantsFromForm } from "@/lib/trips/validation";
 import type { ActivityType } from "@/generated/prisma/enums";
 import type { ActivityFormState } from "@/components/activities/ActivityForm";
 
@@ -31,6 +31,7 @@ export async function createActivity(slug: string, _prev: ActivityFormState, fd:
   const parsed = activityInputFromForm(fd);
   if (!parsed.success) return { status: "error", fieldErrors: fieldErrors(parsed.error) };
   const v = parsed.data;
+  const there = participantsFromForm(fd);
   const activity = await db.activity.create({
     data: {
       tripId: trip.id,
@@ -39,6 +40,8 @@ export async function createActivity(slug: string, _prev: ActivityFormState, fd:
       startTime: localInputToInstant(v.start, trip.timezone),
       endTime: localInputToInstant(v.end, trip.timezone),
       description: v.description,
+      // Nobody named means everybody, which is what an empty list already says.
+      ...(there?.length ? { participants: { connect: there.map((id) => ({ id })) } } : {}),
     },
   });
   await reassignPhotosForActivity(activity.id);
@@ -53,9 +56,19 @@ export async function updateActivity(slug: string, id: string, _prev: ActivityFo
   const v = parsed.data;
   const existing = await db.activity.findFirst({ where: { id, tripId: trip.id }, select: { id: true } });
   if (!existing) return { status: "error", message: "Activity not found" };
+  // `set` reconciles to exactly what was ticked, so unticking somebody removes them; a form that never carried the
+  // control at all leaves the list as it was.
+  const there = participantsFromForm(fd);
   await db.activity.update({
     where: { id },
-    data: { title: v.title, type: v.type as ActivityType, startTime: localInputToInstant(v.start, trip.timezone), endTime: localInputToInstant(v.end, trip.timezone), description: v.description },
+    data: {
+      title: v.title,
+      type: v.type as ActivityType,
+      startTime: localInputToInstant(v.start, trip.timezone),
+      endTime: localInputToInstant(v.end, trip.timezone),
+      description: v.description,
+      ...(there ? { participants: { set: there.map((pid) => ({ id: pid })) } } : {}),
+    },
   });
   await reassignPhotosForActivity(id);
   revalidatePath(`/trips/${slug}`, "layout");
