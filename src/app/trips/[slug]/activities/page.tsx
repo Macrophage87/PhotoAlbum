@@ -2,6 +2,7 @@ import { db } from "@/lib/db";
 import { loadViewableTrip } from "@/lib/trips/access";
 import { ActivityCard } from "@/components/activities/ActivityCard";
 import { ButtonLink } from "@/components/ui";
+import { NOT_TRASHED } from "@/lib/photos/trash";
 
 export default async function ActivitiesPage({ params }: PageProps<"/trips/[slug]/activities">) {
   const { slug } = await params;
@@ -9,7 +10,7 @@ export default async function ActivitiesPage({ params }: PageProps<"/trips/[slug
   const activities = await db.activity.findMany({
     where: { tripId: trip.id },
     orderBy: { startTime: "asc" },
-    include: { track: { select: { simplified: true, stats: true } } },
+    include: { track: { select: { simplified: true, stats: true } }, _count: { select: { photos: { where: NOT_TRASHED } } } },
   });
   return (
     <div className="space-y-4">
@@ -29,7 +30,7 @@ export default async function ActivitiesPage({ params }: PageProps<"/trips/[slug
       ) : (
         <div className="space-y-4">
           {activities.map((a) => (
-            <ActivityCard key={a.id} activity={a} tripSlug={slug} timezone={trip.timezone} />
+            <ActivityCard key={a.id} activity={{ ...a, photoCount: a._count.photos }} tripSlug={slug} timezone={trip.timezone} />
           ))}
         </div>
       )}

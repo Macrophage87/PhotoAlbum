@@ -404,6 +404,23 @@ test("a trip can say who was on it, and stops collecting everybody else's photog
   await outside.close();
 });
 
+test("an activity on the list opens by pressing the card, not only its title", async ({ context, page }) => {
+  await signIn(context, ADMIN);
+  // A phone, which is where this was reported: the little map beside the title is hidden at this width, so before
+  // the whole head of the card became a link there was nothing to press but the words themselves.
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/trips/acadia/activities");
+  const card = page.locator("article").first();
+  // The card says what is inside it, which is the other half of "I do not see the photos".
+  await expect(card).toContainText(/\d+ photos?/);
+  // Press the middle of the card, well away from the title.
+  await card.click({ position: { x: 200, y: 120 } });
+  await expect(page).toHaveURL(/\/trips\/acadia\/activities\/[a-z0-9]+$/);
+  await expect(page.getByRole("heading", { name: "Ocean Path loop" })).toBeVisible();
+  await expect(page.locator("li.tile-lazy").first()).toBeVisible();
+  await page.setViewportSize({ width: 1280, height: 720 });
+});
+
 test("a photograph can be taken off an activity and stays on the trip", async ({ context, page }) => {
   await signIn(context, ADMIN);
   const act = await withDb((c) => c.query(`SELECT id FROM "Activity" WHERE title = 'Ocean Path loop' LIMIT 1`));

@@ -13,7 +13,7 @@ export default async function SharedOverviewPage({ params }: PageProps<"/share/[
   if (!trip) notFound();
   const [latest, activities] = await Promise.all([
     db.photo.findMany({ where: { tripId: trip.id, ...NOT_TRASHED, status: "READY" }, orderBy: [{ takenAt: "desc" }], take: 10, select: photoCardSelect }),
-    db.activity.findMany({ where: { tripId: trip.id }, orderBy: { startTime: "asc" }, include: { track: { select: { simplified: true, stats: true } } } }),
+    db.activity.findMany({ where: { tripId: trip.id }, orderBy: { startTime: "asc" }, include: { track: { select: { simplified: true, stats: true } }, _count: { select: { photos: { where: NOT_TRASHED } } } } }),
   ]);
   return (
     <div className="space-y-8">
@@ -26,7 +26,7 @@ export default async function SharedOverviewPage({ params }: PageProps<"/share/[
           <h2 className="font-display text-xl font-semibold mb-3">Activities</h2>
           <div className="space-y-4">
             {activities.map((a) => (
-              <ActivityCard key={a.id} activity={a} tripSlug={trip.slug} timezone={trip.timezone} hrefBase={`/share/${token}/activities`} />
+              <ActivityCard key={a.id} activity={{ ...a, photoCount: a._count.photos }} tripSlug={trip.slug} timezone={trip.timezone} hrefBase={`/share/${token}/activities`} />
             ))}
           </div>
         </section>
