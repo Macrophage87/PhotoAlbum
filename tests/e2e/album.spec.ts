@@ -1323,6 +1323,66 @@ test("a favourite leads the list, and a tile says what it is on hover", async ({
     .toBe(favourited);
 });
 
+test("a photograph is favourited while looking at it, and turns up under Favourites for the album, the trip and the collection", async ({ browser, context, page }) => {
+  await signIn(context, ADMIN);
+  // One the admin has not marked yet, so the test proves its own heart rather than finding an earlier one.
+  const pick = await withDb((c) => c.query(`SELECT p.id FROM "Photo" p JOIN "Trip" t ON t.id = p."tripId" JOIN "User" u ON u.email = $1 WHERE t.slug = 'acadia' AND p.kind = 'PHOTO' AND p.status = 'READY' AND p."trashedAt" IS NULL AND NOT EXISTS (SELECT 1 FROM "PhotoFavorite" f WHERE f."photoId" = p.id AND f."userId" = u.id) ORDER BY p.id LIMIT 1`, [ADMIN]));
+  const id = pick.rows[0].id as string;
+  const tileOf = (pg: Page) => pg.locator(`li.tile-lazy:has(img[src*='/api/photos/${id}/'])`);
+
+  // Open it big, and mark it from there — the heart is the first thing in the panel beside the picture.
+  await page.goto("/trips/acadia/photos");
+  await tileOf(page).locator("img").first().click();
+  const heart = page.getByTestId("lightbox-info").getByTestId("favourite-photo");
+  await expect(heart).toHaveAttribute("aria-pressed", "false");
+  await expect(heart).toContainText("Add to favourites");
+  await heart.click();
+  await expect(heart).toHaveAttribute("aria-pressed", "true");
+  await expect(heart).toContainText("Favourite");
+  await expect
+    .poll(async () => (await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "PhotoFavorite" f JOIN "User" u ON u.id = f."userId" WHERE f."photoId" = $1 AND u.email = $2`, [id, ADMIN]))).rows[0].n)
+    .toBe(1);
+  await page.keyboard.press("Escape");
+
+  // The trip's own Favourites tab, mine and everyone's.
+  await page.goto("/trips/acadia");
+  await page.getByTestId("trip-tabs").getByRole("link", { name: "Favourites" }).click();
+  await expect(page).toHaveURL(/\/trips\/acadia\/favourites$/);
+  await expect(tileOf(page)).toBeVisible();
+  await page.getByTestId("favourites-family").click();
+  await expect(page).toHaveURL(/who=family/);
+  await expect(tileOf(page)).toBeVisible();
+
+  // The whole album's, from the menu.
+  await page.goto("/");
+  await page.getByRole("link", { name: "Favourites" }).first().click();
+  await expect(page).toHaveURL(/\/favourites$/);
+  await expect(tileOf(page)).toBeVisible();
+
+  // A collection's, which only shows what is in it: put the photograph in one, and it is there too.
+  const col = await withDb((c) => c.query(`SELECT id, slug FROM "Collection" ORDER BY "createdAt" LIMIT 1`));
+  // Already in it is fine too; only a row this test added is taken out again at the end.
+  await withDb((c) => c.query(`INSERT INTO "CollectionItem" (id, "collectionId", "photoId", "position", "addedById", "createdAt") VALUES (md5(random()::text), $1, $2, 9999, (SELECT id FROM "User" WHERE email = $3), now()) ON CONFLICT DO NOTHING`, [col.rows[0].id, id, ADMIN]));
+  await page.goto(`/collections/${col.rows[0].slug}/favourites`);
+  await expect(tileOf(page)).toBeVisible();
+
+  // Somebody without an account has no favourites, and is not shown anybody else's.
+  const anon = await browser.newContext();
+  const stranger = await anon.newPage();
+  const res = await stranger.goto("/trips/acadia/favourites");
+  expect([200, 404]).toContain(res?.status());
+  await expect(tileOf(stranger)).toHaveCount(0);
+  await anon.close();
+
+  // Let it go again from the favourites page itself, and leave the album as it was found.
+  await page.goto("/trips/acadia/favourites");
+  await tileOf(page).getByTestId("favourite-photo").click();
+  await expect
+    .poll(async () => (await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "PhotoFavorite" f JOIN "User" u ON u.id = f."userId" WHERE f."photoId" = $1 AND u.email = $2`, [id, ADMIN]))).rows[0].n)
+    .toBe(0);
+  await withDb((c) => c.query(`DELETE FROM "CollectionItem" WHERE "collectionId" = $1 AND "photoId" = $2 AND "position" = 9999`, [col.rows[0].id, id]));
+});
+
 test("the date troubleshooter shows every witness and lets one be taken", async ({ context, page }) => {
   await signIn(context, ADMIN);
   // An uploaded photo with a file of its own: one imported through Google's picker has no file to read a modified

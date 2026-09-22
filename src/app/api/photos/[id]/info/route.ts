@@ -5,6 +5,7 @@ import { mediaAccessInclude, mediaBytesAllowed, toMediaAccess } from "@/lib/phot
 import { photoUrl } from "@/lib/photos/urls";
 import { uploaderLabel } from "@/components/photos/toGrid";
 import type { PlaceEstimate } from "@/components/photos/PlaceEditor";
+import { favouritesFor, type FavouriteState } from "@/lib/favourites/queries";
 
 export const dynamic = "force-dynamic";
 
@@ -35,6 +36,8 @@ export type PhotoInfo = {
   editable: boolean;
   uploadedBy: string | null;
   trip: { slug: string; title: string } | null;
+  /** This member's heart and the family's count. Null for anyone not signed in: a favourite belongs to a person. */
+  favourite: FavouriteState | null;
 };
 
 /**
@@ -81,6 +84,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     editable: canEditMedia(viewer.user, photo),
     uploadedBy: member ? uploaderLabel(photo.uploader?.name, photo.uploader?.email) : null,
     trip: photo.trip ? { slug: photo.trip.slug, title: photo.trip.title } : null,
+    favourite: member ? (await favouritesFor("photo", [photo.id], viewer)).get(photo.id) ?? { mine: false, count: 0 } : null,
   };
   return Response.json(info, { headers: { "Cache-Control": "private, max-age=0, must-revalidate" } });
 }

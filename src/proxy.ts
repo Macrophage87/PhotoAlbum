@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { buildCsp, CSP_HEADER, CSP_REPORT_ONLY_HEADER } from "@/lib/security/csp";
 
 /** Paths that always need a member: anonymous requests are bounced to sign-in. Real authorization happens per page/action/route. */
-const PROTECTED = [/^\/upload$/, /^\/admin(\/|$)/, /^\/trips\/new$/, /^\/trips\/[^/]+\/(settings|import)$/, /^\/photos(\/|$)/, /^\/collections\/new$/, /^\/collections\/[^/]+\/settings$/, /^\/privacy$/, /^\/review$/, /^\/people(\/|$)/, /^\/graph$/];
+const PROTECTED = [/^\/upload$/, /^\/admin(\/|$)/, /^\/trips\/new$/, /^\/trips\/[^/]+\/(settings|import)$/, /^\/photos(\/|$)/, /^\/collections\/new$/, /^\/collections\/[^/]+\/settings$/, /^\/privacy$/, /^\/review$/, /^\/people(\/|$)/, /^\/graph$/, /^\/favourites$/];
 
 /**
  * Two jobs on every page request: the optimistic sign-in redirect for member-only paths, and a per-request nonce

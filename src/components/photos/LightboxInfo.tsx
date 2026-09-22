@@ -9,6 +9,7 @@ import { getTheme } from "@/themes";
 import { resetPhotoDateToCamera, setPhotoDate } from "@/app/photos/[id]/actions";
 import { DateTroubleshooter } from "./DateTroubleshooter";
 import type { PhotoInfo } from "@/app/api/photos/[id]/info/route";
+import { FavouriteButton } from "@/components/favourites/FavouriteButton";
 
 const SOURCE_LABEL: Record<string, string> = { EXIF_OFFSET: "from the camera", EXIF_TZLOOKUP: "from the camera", TRIP_TZ: "from the camera, in the trip's zone", SIDECAR: "from Google Photos", FILE_NAME: "from the file name", EXIF_CREATED: "from the file\u2019s created-date tag, which may be when it was edited", FILE_MTIME: "from the file's modified time", UPLOAD_TIME: "the upload time" };
 
@@ -62,6 +63,13 @@ export function LightboxInfo({ photoId, share }: { photoId: string; share?: { to
 
   return (
     <div className="text-sm text-white/90 space-y-3 p-4" data-testid="lightbox-info">
+      {/* First in the panel, so on a phone — where the panel is the lower half of the screen — it is in view without
+          scrolling, beside the picture it is about. Members only: a favourite belongs to a person. */}
+      {info.favourite && (
+        <div className="-ml-1.5">
+          <FavouriteButton kind="photo" id={info.id} initial={info.favourite} dark withLabel />
+        </div>
+      )}
       {info.title && <h2 className="text-lg font-semibold leading-snug">{info.title}</h2>}
       <div>
         <div className="text-white/60 text-xs uppercase tracking-wide">Date</div>

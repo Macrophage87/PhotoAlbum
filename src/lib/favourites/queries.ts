@@ -1,6 +1,7 @@
 import { db } from "@/lib/db";
 import { Prisma } from "@/generated/prisma/client";
 import type { Viewer } from "@/lib/auth/viewer";
+import { photoCardSelect } from "@/lib/photos/queries";
 
 /**
  * Favourites, and the order they put things in.
@@ -68,4 +69,41 @@ export function favouriteOrderSql(kind: FavouriteKind, alias: string, viewerId: 
 /** Favourite state for a page of photo cards, ready to hand to `toGridPhoto`. */
 export async function photoFavourites(ids: string[], viewer: Viewer): Promise<FavouriteMap> {
   return viewer.kind === "user" ? favouritesFor("photo", ids, viewer) : new Map();
+}
+
+/** Whose favourites a Favourites page shows: this member's own, or anything anybody in the family has marked. */
+export type FavouriteWho = "mine" | "family";
+
+/** How many a Favourites page draws at once. Tiles load as they scroll into view, so this is a ceiling, not a cost. */
+export const FAVOURITES_LIMIT = 600;
+
+/**
+ * The photographs somebody has marked, within a trip, a collection, or the whole album.
+ *
+ * Mine come newest-marked first, which is what a list of favourites is for: finding the one you hearted last
+ * week. The family's come most-loved first, then newest — the ones three of us marked lead the one only
+ * Grandma did, and she can still find hers on her own list.
+ */
+export async function favouritePhotos(scope: { tripId?: string; collectionId?: string }, who: FavouriteWho, viewerId: string) {
+  const within: Prisma.PhotoWhereInput = {
+    trashedAt: null,
+    status: "READY",
+    ...(scope.tripId ? { tripId: scope.tripId } : {}),
+    ...(scope.collectionId ? { collections: { some: { collectionId: scope.collectionId } } } : {}),
+  };
+  if (who === "mine") {
+    const rows = await db.photoFavorite.findMany({
+      where: { userId: viewerId, photo: within },
+      orderBy: { createdAt: "desc" },
+      take: FAVOURITES_LIMIT,
+      select: { photo: { select: photoCardSelect } },
+    });
+    return rows.map((r) => r.photo);
+  }
+  return db.photo.findMany({
+    where: { ...within, favourites: { some: {} } },
+    orderBy: [{ favourites: { _count: "desc" } }, { takenAt: "desc" }, { id: "asc" }],
+    take: FAVOURITES_LIMIT,
+    select: photoCardSelect,
+  });
 }

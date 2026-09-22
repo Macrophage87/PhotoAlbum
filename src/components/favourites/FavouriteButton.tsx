@@ -10,7 +10,7 @@ const NOUN = { photo: "photo", trip: "trip", collection: "collection" } as const
  * The heart. Filled when this member has marked it, with the family's total beside it once anyone has — which is
  * also the order these things are listed in, so pressing it visibly moves something up the page.
  */
-export function FavouriteButton({ kind, id, initial, dark = false, size = "md" }: { kind: FavouriteKind; id: string; initial: FavouriteState; dark?: boolean; size?: "sm" | "md" }) {
+export function FavouriteButton({ kind, id, initial, dark = false, size = "md", withLabel = false }: { kind: FavouriteKind; id: string; initial: FavouriteState; dark?: boolean; size?: "sm" | "md"; /** Say "Favourite" beside the heart, where there is room: a bare ♡ is easy to miss on a big picture. */ withLabel?: boolean }) {
   const [state, setState] = useState(initial);
   const [pending, start] = useTransition();
   const label = state.mine ? `Remove this ${NOUN[kind]} from your favourites` : `Make this one of your favourite ${NOUN[kind]}s`;
@@ -35,7 +35,8 @@ export function FavouriteButton({ kind, id, initial, dark = false, size = "md" }
       }}
     >
       <span aria-hidden>{state.mine ? "♥" : "♡"}</span>
-      {state.count > 0 && <span className={state.mine ? "" : tone}>{state.count}</span>}
+      {withLabel && <span>{state.mine ? "Favourite" : "Add to favourites"}</span>}
+      {state.count > 0 && <span className={state.mine ? "" : tone}>{withLabel ? `· ${state.count}` : state.count}</span>}
     </button>
   );
 }

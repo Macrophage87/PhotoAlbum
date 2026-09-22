@@ -55,6 +55,8 @@ export default async function TripLayout({ params, children }: LayoutProps<"/tri
     { href: base, label: "Timeline", exact: true },
     { href: `${base}/map`, label: "Map" },
     { href: `${base}/activities`, label: "Activities" },
+    // A member's own, and the family's shortlist: nothing for somebody holding a share link.
+    ...(viewer.kind === "user" ? [{ href: `${base}/favourites`, label: "Favourites" }] : []),
     // What the album thinks looks alike is for the family, not for whoever holds a share link.
     ...(viewer.kind === "user" && mlConfigured() ? [{ href: `${base}/graph`, label: "Graph" }] : []),
     { href: `${base}/photos`, label: "Photos" },

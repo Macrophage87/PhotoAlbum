@@ -3,6 +3,8 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { db } from "@/lib/db";
 import { getViewer, requireUser } from "@/lib/auth/viewer";
+import { FavouriteButton } from "@/components/favourites/FavouriteButton";
+import { favouritesFor } from "@/lib/favourites/queries";
 import { photoUrl } from "@/lib/photos/urls";
 import { AppShell, Container } from "@/components/layout/AppShell";
 import { ExifPanel } from "@/components/photos/ExifPanel";
@@ -208,6 +210,9 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
                 <PhotoEditorPanel photoId={photo.id} src={photoUrl(photo, photo.edits ? "source" : "medium")} initial={editsOf(photo.edits)} edited={Boolean(photo.edits)} />
               </div>
             )}
+            <div className="mt-3">
+              <FavouriteButton kind="photo" id={photo.id} initial={(await favouritesFor("photo", [photo.id], viewer)).get(photo.id) ?? { mine: false, count: 0 }} withLabel />
+            </div>
             {photo.title && <h1 className="mt-3 text-xl font-semibold font-display">{photo.title}</h1>}
             {isClip && photo.durationS && <p className="mt-2 text-sm text-muted">{Math.round(photo.durationS)} second clip{photo.status === "READY" ? " · original kept" : ""}</p>}
             {isVideo && photo.externalStatus === "UNAVAILABLE" && <p className="mt-1 text-sm text-amber-800">This video is no longer available on YouTube (deleted or made private). Replace the link below or delete the item.</p>}
