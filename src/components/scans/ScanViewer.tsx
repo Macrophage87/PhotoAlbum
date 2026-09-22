@@ -135,7 +135,7 @@ export function ScanViewer({ photoId, modelUrl, format, posterUrl, canPoster, al
         <p className="text-muted">
           {format === "USDZ"
             ? "An iPhone, iPad or Mac opens it by itself, and will stand it up in the room in front of you."
-            : "A splat is a cloud of coloured points rather than a shape with a skin; it opens in Scaniverse, or in any splat viewer. Export the same scan as GLB and the album will show it here."}
+            : "A splat is a cloud of colored points rather than a shape with a skin; it opens in Scaniverse, or in any splat viewer. Export the same scan as GLB and the album will show it here."}
         </p>
         <a href={modelUrl} className="text-primary underline underline-offset-2" download>
           Download the scan

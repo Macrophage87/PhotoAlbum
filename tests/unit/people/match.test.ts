@@ -68,7 +68,7 @@ describe("era clusters and merging", () => {
     expect(widenedBand(eras[0], { years: 11.4, basis: "known" })).toEqual({ ageBandMin: 3, ageBandMax: 11 });
     expect(widenedBand({ ageBandMin: null, ageBandMax: null }, { years: 40, basis: "model" })).toEqual({ ageBandMin: 40, ageBandMax: 40 });
   });
-  it("recognises the same box on a re-scan", () => {
+  it("recognizes the same box on a re-scan", () => {
     expect(boxIou([0.1, 0.1, 0.2, 0.2], [0.11, 0.1, 0.2, 0.2])).toBeGreaterThan(0.8);
     expect(boxIou([0.1, 0.1, 0.2, 0.2], [0.6, 0.6, 0.2, 0.2])).toBe(0);
   });

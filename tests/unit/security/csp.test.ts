@@ -34,7 +34,7 @@ describe("content security policy", () => {
 describe("what the 3D viewer needs of the policy", () => {
   const csp = buildCsp({ nonce: "abc", dev: false });
 
-  it("lets the page fetch its own blobs, so a scan keeps its colours", () => {
+  it("lets the page fetch its own blobs, so a scan keeps its colors", () => {
     expect(csp).toMatch(/connect-src [^;]*\bblob:/);
   });
 

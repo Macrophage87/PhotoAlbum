@@ -105,10 +105,10 @@ export async function dateReport(photoId: string): Promise<DateReport | null> {
       usable: Boolean(mtime),
     },
     {
-      key: "neighbours",
+      key: "neighbors",
       label: "The other photos on this trip",
       at: guess?.takenAt ?? null,
-      note: guess ? `Worked out from ${guess.evidence}.` : photo.trip ? "Nothing else on this trip says anything about this one." : "This item is on no trip, so there are no neighbours to ask.",
+      note: guess ? `Worked out from ${guess.evidence}.` : photo.trip ? "Nothing else on this trip says anything about this one." : "This item is on no trip, so there are no neighbors to ask.",
       current: false,
       usable: Boolean(guess),
     },

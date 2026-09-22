@@ -11,7 +11,7 @@ export function PhotoEditorPanel({ photoId, src, initial, edited }: { photoId: s
   if (!open) {
     return (
       <Button size="sm" variant="secondary" onClick={() => setOpen(true)}>
-        {edited ? "Edit again" : "Crop and colour"}
+        {edited ? "Edit again" : "Crop and color"}
       </Button>
     );
   }

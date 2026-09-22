@@ -23,7 +23,7 @@ export const annotationSchema = z.object({
     })
     .nullable()
     .describe("Only when asked to estimate a date: a year range with the evidence used; otherwise null"),
-  estimatedPlace: placeEstimateSchema.describe("Only when asked to estimate a place: a recognisable public place with the evidence used; otherwise null"),
+  estimatedPlace: placeEstimateSchema.describe("Only when asked to estimate a place: a recognizable public place with the evidence used; otherwise null"),
 });
 
 export type Annotation = z.infer<typeof annotationSchema>;

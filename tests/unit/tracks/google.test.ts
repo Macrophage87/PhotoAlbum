@@ -8,7 +8,7 @@ const fx = (n: string) => path.join(__dirname, "../../fixtures", n);
 const window = { startMs: Date.parse("2025-08-10T04:00:00Z"), endMs: Date.parse("2025-08-17T03:59:59Z") };
 
 describe("google detect", () => {
-  it("recognises every export shape", () => {
+  it("recognizes every export shape", () => {
     expect(detectGoogleFormat(readFileSync(fx("google-records.json"), "utf8"))).toBe("records");
     expect(detectGoogleFormat(readFileSync(fx("google-timeline-android.json"), "utf8"))).toBe("timeline-android");
     expect(detectGoogleFormat(readFileSync(fx("google-timeline-ios.json"), "utf8"))).toBe("timeline-ios");

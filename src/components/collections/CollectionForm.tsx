@@ -15,7 +15,7 @@ export function CollectionForm({ action, initial, submitLabel, visibility }: { a
     <form action={formAction} className="space-y-6" onSubmit={(e) => { if (!confirmExposure(e.currentTarget, visibility)) e.preventDefault(); }}>
       <div>
         <Label htmlFor="title">Title</Label>
-        <Input id="title" name="title" required defaultValue={initial.title} placeholder="Summer favourites" />
+        <Input id="title" name="title" required defaultValue={initial.title} placeholder="Summer favorites" />
         <FieldError>{err("title")}</FieldError>
       </div>
       <div>

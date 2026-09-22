@@ -15,7 +15,7 @@ export function describeAutoColour(r: AutoColourResult): string {
   if (r.already) parts.push(`${r.already} already were`);
   if (r.notPhotos) parts.push(`${r.notPhotos} are not photographs`);
   if (r.notYours) parts.push(`${r.notYours} not yours to change`);
-  return `Auto colour: ${parts.join(", ")}. The originals are untouched.`;
+  return `Auto color: ${parts.join(", ")}. The originals are untouched.`;
 }
 
 export function describeUndoColour(n: number): string {

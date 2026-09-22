@@ -50,7 +50,7 @@ describe("computeStats", () => {
     expect(s.avgPower).toBe(200);
     expect(s.normalizedPower).toBe(200);
   });
-  it("elevation gain ignores metre-level noise but keeps real climbs", () => {
+  it("elevation gain ignores meter-level noise but keeps real climbs", () => {
     const ele: number[] = [];
     for (let i = 0; i < 300; i++) ele.push(100 + (i < 150 ? i : 300 - i) * 0.5 + ((i * 7) % 3) - 1);
     const { gain, loss } = elevationGainLoss(ele);

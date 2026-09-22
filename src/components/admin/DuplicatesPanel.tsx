@@ -36,7 +36,7 @@ export function DuplicatesPanel({ rows, total }: { rows: DuplicateRow[]; total: 
           <p className="text-muted mt-1 text-sm">
             {total} {total === 1 ? "photograph is" : "photographs are"} in the album more than once — the same file,
             byte for byte. Folding them keeps the one that has been here longest, takes from the copies anything it
-            was missing (a caption, a date, a place, a trip, a collection, a favourite), and puts the copies in the
+            was missing (a caption, a date, a place, a trip, a collection, a favorite), and puts the copies in the
             trash marked as duplicates, where they can still be got back.
           </p>
         </div>

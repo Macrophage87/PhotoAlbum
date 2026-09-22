@@ -49,7 +49,7 @@ export default async function CollectionLayout({ params, children }: LayoutProps
     { href: base, label: "Timeline", exact: true },
     { href: `${base}/map`, label: "Map" },
     // A member's own, and the family's shortlist: nothing for somebody holding a share link.
-    ...(viewer.kind === "user" ? [{ href: `${base}/favourites`, label: "Favourites" }] : []),
+    ...(viewer.kind === "user" ? [{ href: `${base}/favorites`, label: "Favorites" }] : []),
     // What the album thinks looks alike is for the family, not for whoever holds a share link.
     ...(viewer.kind === "user" && mlConfigured() ? [{ href: `${base}/graph`, label: "Graph" }] : []),
     { href: `${base}/photos`, label: "Photos" },

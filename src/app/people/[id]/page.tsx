@@ -42,7 +42,7 @@ export default async function PersonPage({ params }: PageProps<"/people/[id]">) 
             <h1 className="font-display text-3xl font-semibold">{person.name}</h1>
             <p className="text-muted mt-1">{[person.relationship, person.kind === "PET" ? `${person.isFlock ? "flock of " : ""}${person.species?.toLowerCase() ?? "pet"}` : null, person.kind === "PET" && person.livedFrom ? `${person.livedFrom.getUTCFullYear()}–${person.livedTo ? person.livedTo.getUTCFullYear() : ""}` : null, person.kind === "PET" ? person.descriptors : null, `${photos.length} photo${photos.length === 1 ? "" : "s"}`].filter(Boolean).join(" · ")}</p>
           </div>
-          {person.kind === "HUMAN" && (person.faceIndexing ? <Badge tone="success">recognised in new photos · {person.adultAttestedAt ? "attested adult" : "by birthday"}</Badge> : person.optedOutAt ? <Badge tone="warning">asked to be forgotten on {person.optedOutAt.toLocaleDateString("en-US")}</Badge> : <Badge tone="neutral">{person.pendingDecision ? "awaiting an admin's decision" : "not recognised"}</Badge>)}
+          {person.kind === "HUMAN" && (person.faceIndexing ? <Badge tone="success">recognized in new photos · {person.adultAttestedAt ? "attested adult" : "by birthday"}</Badge> : person.optedOutAt ? <Badge tone="warning">asked to be forgotten on {person.optedOutAt.toLocaleDateString("en-US")}</Badge> : <Badge tone="neutral">{person.pendingDecision ? "awaiting an admin's decision" : "not recognized"}</Badge>)}
         </div>
 
         <PhotoGrid photos={photos.map((p) => toGridPhoto(p, null, true))} emptyMessage="No photos you can see." />
@@ -109,7 +109,7 @@ export default async function PersonPage({ params }: PageProps<"/people/[id]">) 
                   {minor && (
                     <label className="flex items-start gap-2">
                       <input type="checkbox" name="parentInstruction" className="mt-1" />
-                      <span>A parent has asked for this child to be recognised</span>
+                      <span>A parent has asked for this child to be recognized</span>
                     </label>
                   )}
                   {person.optedOutAt && (
@@ -121,8 +121,8 @@ export default async function PersonPage({ params }: PageProps<"/people/[id]">) 
                   <label className="flex items-start gap-2">
                     <input type="checkbox" name="faceIndexing" defaultChecked={person.faceIndexing} className="mt-1" />
                     <span>
-                      <span className="font-medium">Recognise this person in new photos</span>
-                      <span className="block text-muted">Turning it off drops the face templates now. Without a birthday showing an adult or the attestation the templates are dropped as well{minor ? ", and a minor is never recognised unless a parent has asked" : ""}. Only admins change this; the decision is recorded{person.faceIndexingSetAt ? ` (last set ${person.faceIndexingSetAt.toLocaleDateString("en-US")})` : ""}.</span>
+                      <span className="font-medium">Recognize this person in new photos</span>
+                      <span className="block text-muted">Turning it off drops the face templates now. Without a birthday showing an adult or the attestation the templates are dropped as well{minor ? ", and a minor is never recognized unless a parent has asked" : ""}. Only admins change this; the decision is recorded{person.faceIndexingSetAt ? ` (last set ${person.faceIndexingSetAt.toLocaleDateString("en-US")})` : ""}.</span>
                     </span>
                   </label>
                   <Button type="submit" size="sm" variant="secondary">Save recognition setting</Button>
@@ -144,7 +144,7 @@ export default async function PersonPage({ params }: PageProps<"/people/[id]">) 
                       {person.nameInDescriptions
                         ? `The helper is told ${person.name}'s name when it describes a photograph they have been confirmed in, instead of writing "an older couple".`
                         : `The helper is not told ${person.name}'s name, so descriptions of photographs they are in say "a man", "an older couple" and the like.`}
-                      {" "}Nothing is recognised either way, and no template is kept for it{person.nameInDescriptionsSetAt ? ` (last set ${person.nameInDescriptionsSetAt.toLocaleDateString("en-US")})` : ""}.
+                      {" "}Nothing is recognized either way, and no template is kept for it{person.nameInDescriptionsSetAt ? ` (last set ${person.nameInDescriptionsSetAt.toLocaleDateString("en-US")})` : ""}.
                     </p>
                     <Button type="submit" size="sm" variant="secondary" data-testid="name-in-descriptions">
                       {person.nameInDescriptions ? "Stop using their name" : "Use their name in descriptions"}

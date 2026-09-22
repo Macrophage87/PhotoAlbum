@@ -55,7 +55,7 @@ describe("the numbers the preview and the server share", () => {
     expect(cr).toBeLessThan(1);
     expect(cb).toBeGreaterThan(1);
   });
-  it("pivots contrast around mid grey, so a neutral photo does not get darker", () => {
+  it("pivots contrast around mid gray, so a neutral photo does not get darker", () => {
     const { mul, off } = contrastTerms(1.5);
     expect(mul * 128 + off).toBeCloseTo(128, 5);
     expect(contrastTerms(1)).toEqual({ mul: 1, off: 0 });

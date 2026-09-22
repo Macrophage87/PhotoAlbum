@@ -25,7 +25,7 @@ describe("the camera's frame number", () => {
   });
 });
 
-describe("reading a date off the neighbours", () => {
+describe("reading a date off the neighbors", () => {
   const roll = [shot("IMG_2104.jpg", "2025-08-12T18:31:00Z"), shot("IMG_2106.jpg", "2025-08-12T18:37:00Z"), shot("IMG_2200.jpg", "2025-08-14T15:00:00Z")];
 
   it("puts a frame between the two the camera numbered either side of it", () => {

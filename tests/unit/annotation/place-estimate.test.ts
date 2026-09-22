@@ -101,7 +101,7 @@ describe("recording a guess", () => {
     photoId = (await db.photo.create({ data: { uploaderId: user.id, originalName: "x.jpg", mimeType: "image/jpeg", storageKey: "k", originalPath: "k/o.jpg", sizeBytes: 1, status: "READY" } })).id;
   });
 
-  it("places an item that has no position, and says what it recognised", async () => {
+  it("places an item that has no position, and says what it recognized", async () => {
     expect(await applyPlaceEstimate(photoId, vatican)).toBe("placed");
     const p = await photo();
     expect([p.lat, p.lng]).toEqual([vatican.lat, vatican.lng]);

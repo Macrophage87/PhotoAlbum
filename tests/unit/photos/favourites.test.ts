@@ -12,7 +12,7 @@ import { resetTestDb } from "../helpers/reset";
 const viewerFor = (id: string, email: string): Viewer => ({ kind: "user", user: { id, email, name: null, role: "MEMBER" }, shareTokens: new Map() });
 const anon: Viewer = { kind: "anonymous", user: null, shareTokens: new Map() };
 
-describe("favourites", () => {
+describe("favorites", () => {
   let me: string, you: string, tripA: string, tripB: string, colA: string, colB: string;
   let p1: string, p2: string, p3: string;
 
@@ -68,7 +68,7 @@ describe("favourites", () => {
     expect((await listVisibleCollections(viewerFor(me, "me@example.com"))).map((c) => c.id)).toEqual([colA, colB]);
   });
 
-  it("leads a collection with favourites, keeping the arranged order underneath", async () => {
+  it("leads a collection with favorites, keeping the arranged order underneath", async () => {
     for (const [i, id] of [p1, p2, p3].entries()) await db.collectionItem.create({ data: { collectionId: colB, photoId: id, addedById: me, position: i } });
     await setFavourite("photo", p3, me, true);
     expect((await listCollectionItems(colB, { viewerId: me })).map((p) => p.id)).toEqual([p3, p1, p2]);

@@ -15,7 +15,7 @@ export function encryptSecret(plain: string, key: Buffer = keyFromEnv()): string
 
 export function decryptSecret(sealed: string, key: Buffer = keyFromEnv()): string {
   const [v, iv, tag, ct] = sealed.split(".");
-  if (v !== "v1" || !iv || !tag || !ct) throw new Error("Unrecognised sealed token");
+  if (v !== "v1" || !iv || !tag || !ct) throw new Error("Unrecognized sealed token");
   const decipher = createDecipheriv("aes-256-gcm", key, Buffer.from(iv, "base64url"));
   decipher.setAuthTag(Buffer.from(tag, "base64url"));
   return Buffer.concat([decipher.update(Buffer.from(ct, "base64url")), decipher.final()]).toString("utf8");

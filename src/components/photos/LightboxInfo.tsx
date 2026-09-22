@@ -130,7 +130,7 @@ export function LightboxInfo({ photoId, share }: { photoId: string; share?: { to
       )}
       {info.uneditedUrl && (
         <p className="text-white/60 text-xs">
-          Cropped or colour-corrected here.{" "}
+          Cropped or color-corrected here.{" "}
           <a href={info.uneditedUrl} target="_blank" rel="noreferrer" className="underline underline-offset-2 hover:text-white" onClick={(e) => e.stopPropagation()}>See the original</a>
         </p>
       )}

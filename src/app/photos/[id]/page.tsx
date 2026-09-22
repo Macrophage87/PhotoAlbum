@@ -200,7 +200,7 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
             )}
             {photo.edits ? (
               <p className="mt-2 text-sm text-muted" data-testid="edited-note">
-                Cropped or colour-corrected{photo.editedBy ? ` by ${uploaderLabel(photo.editedBy.name, photo.editedBy.email)}` : ""}. The file as it was uploaded is untouched:{" "}
+                Cropped or color-corrected{photo.editedBy ? ` by ${uploaderLabel(photo.editedBy.name, photo.editedBy.email)}` : ""}. The file as it was uploaded is untouched:{" "}
                 <a href={photoUrl(photo, "original")} target="_blank" rel="noreferrer" className="underline underline-offset-2">see the original</a>.
               </p>
             ) : null}

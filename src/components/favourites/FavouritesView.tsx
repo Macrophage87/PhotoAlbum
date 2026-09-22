@@ -24,26 +24,26 @@ export async function FavouritesView({ viewer, scope, who, base, where }: { view
       href={value === "mine" ? base : `${base}?who=family`}
       aria-current={who === value ? "page" : undefined}
       className={`px-3 py-1.5 rounded-theme text-sm ${who === value ? "bg-primary text-primary-fg" : "hover:bg-surface-alt"}`}
-      data-testid={`favourites-${value}`}
+      data-testid={`favorites-${value}`}
     >
       {label}
     </Link>
   );
   const empty =
     who === "mine"
-      ? `You have no favourites${where ? ` ${where}` : ""} yet. Press the ♡ on any photograph — in the grid, or when you are looking at it — and it will be here.`
-      : `Nobody in the family has marked a favourite${where ? ` ${where}` : ""} yet.`;
+      ? `You have no favorites${where ? ` ${where}` : ""} yet. Press the ♡ on any photograph — in the grid, or when you are looking at it — and it will be here.`
+      : `Nobody in the family has marked a favorite${where ? ` ${where}` : ""} yet.`;
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="font-display text-xl font-semibold">Favourites</h2>
-        <nav className="flex gap-1" aria-label="Whose favourites">
+        <h2 className="font-display text-xl font-semibold">Favorites</h2>
+        <nav className="flex gap-1" aria-label="Whose favorites">
           {tab("mine", "Mine")}
           {tab("family", "Everyone's")}
         </nav>
       </div>
       {photos.length > 0 && (
-        <p className="text-sm text-muted" data-testid="favourites-count">
+        <p className="text-sm text-muted" data-testid="favorites-count">
           {photos.length === FAVOURITES_LIMIT ? `The first ${FAVOURITES_LIMIT}` : `${photos.length} photo${photos.length === 1 ? "" : "s"}`}
           {who === "mine" ? ", the most recently marked first." : ", the ones most of us marked first."}
         </p>

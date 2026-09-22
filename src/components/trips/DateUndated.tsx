@@ -17,7 +17,7 @@ export function DateUndated({ tripId, undated, examples }: { tripId: string; und
   return (
     <div className="space-y-3 text-sm">
       <p className="text-muted">
-        {undated} photo{undated === 1 ? "" : "s"} here {undated === 1 ? "has" : "have"} no date worth keeping — nothing in the file, the file&apos;s own clock, or a tag a photo editor may have rewritten. Their neighbours on this trip can say when they were taken.
+        {undated} photo{undated === 1 ? "" : "s"} here {undated === 1 ? "has" : "have"} no date worth keeping — nothing in the file, the file&apos;s own clock, or a tag a photo editor may have rewritten. Their neighbors on this trip can say when they were taken.
       </p>
       <ul className="space-y-1 text-xs text-muted">
         {examples.map((e) => (
@@ -31,11 +31,11 @@ export function DateUndated({ tripId, undated, examples }: { tripId: string; und
           variant="secondary"
           disabled={pending}
           onClick={() => {
-            if (!window.confirm(`Set the date on ${undated} photo${undated === 1 ? "" : "s"} from their neighbours on this trip? Each one can still be changed by hand afterwards.`)) return;
+            if (!window.confirm(`Set the date on ${undated} photo${undated === 1 ? "" : "s"} from their neighbors on this trip? Each one can still be changed by hand afterwards.`)) return;
             start(async () => setDone(await setTripDatesFromNeighbours(tripId)));
           }}
         >
-          {pending ? "Reading the neighbours…" : `Date ${undated} photo${undated === 1 ? "" : "s"} from their neighbours`}
+          {pending ? "Reading the neighbors…" : `Date ${undated} photo${undated === 1 ? "" : "s"} from their neighbors`}
         </Button>
       ) : (
         <p role="status" className="text-emerald-800">{done} photo{done === 1 ? "" : "s"} dated. Each one says it was set by hand, and can be changed.</p>

@@ -137,7 +137,7 @@ export function SelectionProvider({ children }: { children: ReactNode }) {
             {notice && <span className="text-muted" role="status">{notice}</span>}
             {/* The batch just corrected can be handed back whole, since nothing was written over. */}
             {undoable.length > 0 && (
-              <Button variant="ghost" size="sm" disabled={pending} onClick={() => undoColour(undoable)} data-testid="undo-auto-colour">Undo auto colour</Button>
+              <Button variant="ghost" size="sm" disabled={pending} onClick={() => undoColour(undoable)} data-testid="undo-auto-color">Undo auto color</Button>
             )}
           </>
         ) : (
@@ -156,7 +156,7 @@ export function SelectionProvider({ children }: { children: ReactNode }) {
             <Button size="sm" variant="secondary" disabled={!ids.length || pending} onClick={() => setPlacing((v) => !v)}>Set a place…</Button>
             <Button size="sm" variant="secondary" disabled={!ids.length || pending} onClick={() => setDating((v) => !v)}>Fix dates…</Button>
             {/* Auto levels over the lot: a box of scans comes out flat in the same way across every frame. */}
-            <Button size="sm" variant="secondary" disabled={!ids.length || pending} onClick={autoColour} data-testid="auto-colour">{pending ? "Working…" : "Auto colour"}</Button>
+            <Button size="sm" variant="secondary" disabled={!ids.length || pending} onClick={autoColour} data-testid="auto-color">{pending ? "Working…" : "Auto color"}</Button>
             {/* The way to file a batch on an activity without dragging one tile at a time. */}
             {onOneTrip && (
               <>

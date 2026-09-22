@@ -21,7 +21,7 @@ export function NeighbourDate({ photoId, guess }: { photoId: string; guess: { ta
   if (taken) return <p className="text-sm text-emerald-800" role="status">Date taken from the other photos on this trip.</p>;
 
   return (
-    <div className="rounded-theme border border-border bg-surface-alt p-3 space-y-2 text-sm" data-testid="neighbour-date">
+    <div className="rounded-theme border border-border bg-surface-alt p-3 space-y-2 text-sm" data-testid="neighbor-date">
       <p>
         The other photos on this trip put this one at <b>{reading}</b> <span className="text-muted">({surenessLabel(guess.confidence)})</span>.
       </p>

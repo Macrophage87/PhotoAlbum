@@ -40,6 +40,7 @@ Rules:
 - Do not describe anyone's body, health or ethnicity, or anything a family would find unkind to read under their own photographs.
 - Never invent a place, an occasion or a date that is neither visible nor in what you were given. Anything you cannot determine, leave out rather than guessing.
 - Plain, warm, specific. No stock-photo language, and do not start with "This trip", "This collection" or "This photo".
+- Write in American English, with American spelling: color, favorite, neighbor, center, recognize.
 
 Answer only with the structured record.`;
 

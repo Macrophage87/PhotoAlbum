@@ -24,11 +24,11 @@ describe("keyword search", () => {
     await photo({ tripId: publicTrip, uploaderId: dana, caption: "Lunch on the Ranger", context: "lobster rolls on the mail boat", takenAt: new Date("2025-08-12T12:00:00Z") });
     await photo({ tripId: privateTrip, uploaderId: dana, caption: "Kate with a lobster roll", takenAt: new Date("2019-07-03T12:00:00Z") });
     const noTrip = await photo({ tripId: null, uploaderId: dana, title: "Dock at Bar Harbor" });
-    const col = await db.collection.create({ data: { slug: "favourites", title: "Summer Favourites", visibility: "PUBLIC", createdById: dana } });
+    const col = await db.collection.create({ data: { slug: "favorites", title: "Summer Favorites", visibility: "PUBLIC", createdById: dana } });
     await db.collectionItem.create({ data: { collectionId: col.id, photoId: noTrip.id, addedById: dana } });
   });
 
-  it("normalises the query", () => {
+  it("normalizes the query", () => {
     expect(normalizeQuery("  lobster   roll ")).toBe("lobster roll");
     expect(normalizeQuery("x".repeat(500))).toHaveLength(200);
   });
@@ -47,7 +47,7 @@ describe("keyword search", () => {
 
   it("finds by trip and collection title", async () => {
     expect((await searchMedia(member, { q: "Acadia" })).length).toBe(1);
-    expect((await searchMedia(member, { q: "favourites" })).map((h) => h.title)).toEqual(["Dock at Bar Harbor"]);
+    expect((await searchMedia(member, { q: "favorites" })).map((h) => h.title)).toEqual(["Dock at Bar Harbor"]);
   });
 
   it("never lets a name enter the anonymous ranking path", async () => {

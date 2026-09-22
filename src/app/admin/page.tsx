@@ -142,7 +142,7 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
                     <label className="flex items-center gap-1">Birthday <input type="date" name="birthday" defaultValue={p.birthday ? p.birthday.toISOString().slice(0, 10) : ""} className="h-8 rounded-theme border border-border bg-surface text-text [color-scheme:light] px-2" /></label>
                     {!p.birthday && <label className="flex items-center gap-1"><input type="checkbox" name="attest" /> adult, has agreed</label>}
                     {isMinor(p) && <label className="flex items-center gap-1"><input type="checkbox" name="parentInstruction" /> a parent asked</label>}
-                    <label className="flex items-center gap-1"><input type="checkbox" name="faceIndexing" /> recognise</label>
+                    <label className="flex items-center gap-1"><input type="checkbox" name="faceIndexing" /> recognize</label>
                     <Button type="submit" size="sm" variant="secondary">Decide</Button>
                   </form>
                 </Card>

@@ -65,7 +65,7 @@ export async function collectionCoverFor(collection: { id: string; coverPhoto: {
 export type CollectionItemCard = PhotoCard & { itemId: string; position: number };
 
 /** Items in display order. Every status is included so members see processing tiles. */
-export async function listCollectionItems(collectionId: string, opts: { viewerId?: string | null; order?: "favourites" | "arranged" } = {}): Promise<CollectionItemCard[]> {
+export async function listCollectionItems(collectionId: string, opts: { viewerId?: string | null; order?: "favorites" | "arranged" } = {}): Promise<CollectionItemCard[]> {
   const items = await db.collectionItem.findMany({
     where: { collectionId, photo: NOT_TRASHED },
     orderBy: [{ position: "asc" }, { createdAt: "asc" }],
@@ -73,7 +73,7 @@ export async function listCollectionItems(collectionId: string, opts: { viewerId
   });
   const cards = items.map((i) => ({ ...i.photo, itemId: i.id, position: i.position }));
   // An empty collection has nothing to order, and asking Postgres about an empty list is an error, not a no-op.
-  if (!cards.length || (opts.order ?? "favourites") !== "favourites") return cards;
+  if (!cards.length || (opts.order ?? "favorites") !== "favorites") return cards;
   // Favourites lead; the collection's own arrangement is the tie-break, so everything else stays where it was put.
   const state = await db.$queryRaw<{ id: string; n: bigint; mine: boolean }[]>`
     SELECT p.id,

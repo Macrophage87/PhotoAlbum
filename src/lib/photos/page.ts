@@ -13,7 +13,7 @@ export const GALLERY_PAGE = 240;
 export type PhotoPage = { photos: PhotoCard[]; nextCursor: string | null; total: number };
 
 /** How a gallery is ordered: favourites first (the default), or straight through in the order the photos were taken. */
-export type PhotoOrder = "favourites" | "taken";
+export type PhotoOrder = "favorites" | "taken";
 
 /**
  * Which items a search matches, as a list of ids.
@@ -77,8 +77,8 @@ export async function tripPhotoPage(tripId: string, opts: { uploaderId?: string;
     ...(restrict ? { id: { in: restrict } } : {}),
     status: { in: ["READY", "PENDING", "PROCESSING", "FAILED"] },
   };
-  const order = opts.order ?? "favourites";
-  if (order === "favourites") {
+  const order = opts.order ?? "favorites";
+  if (order === "favorites") {
     // Favourites lead, then the family's, then the order the day happened in. The cursor is how far down the list
     // we are: the sort key is computed, so there is nothing stable to key from, and a page is 240 rows.
     const skip = Number(opts.cursor ?? 0) || 0;

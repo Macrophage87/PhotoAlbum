@@ -156,7 +156,7 @@ On nginx the equivalent needs `client_max_body_size 2g;`,
 
 ## 4. Things outside this repo that must be changed
 
-- [ ] **Google Cloud → OAuth client → Authorised redirect URIs.** Add
+- [ ] **Google Cloud → OAuth client → Authorized redirect URIs.** Add
       `https://cieply.com/api/google/callback`. Until it is there, "Import from
       Google Photos" fails with `redirect_uri_mismatch`. Add the dev one too if
       dev is meant to have the picker; keep the old URI until nobody is on it.

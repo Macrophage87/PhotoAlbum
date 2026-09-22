@@ -12,7 +12,7 @@ export function FacesAdmin({ gates, counts }: { gates: { sidecar: boolean; envEn
       <ul className="list-disc pl-5 space-y-1 text-muted">
         <li>Computes and stores a face template (a list of numbers, not a picture) for <b>every face in every photo</b>, including children, guests and people who will never be named.</li>
         <li>Templates stay on this server, in the database, and are never sent anywhere. The sidecar keeps nothing.</li>
-        <li>Faces nobody names are deleted after {gates.retentionDays} days. Naming a group and letting it recognise someone is a separate, per-person decision that only an admin can make.</li>
+        <li>Faces nobody names are deleted after {gates.retentionDays} days. Naming a group and letting it recognize someone is a separate, per-person decision that only an admin can make.</li>
       </ul>
       <dl className="grid grid-cols-[10rem_1fr] gap-y-1">
         <dt className="text-muted">ML sidecar</dt><dd>{gates.sidecar ? "configured" : "not configured (set ML_URL and ML_TOKEN)"}</dd>

@@ -102,7 +102,7 @@ export function GraphView({ data, minScore }: { data: GraphPayload; minScore: nu
           <input type="range" min={minScore} max={0.98} step={0.01} value={threshold} onChange={(e) => setThreshold(Number(e.target.value))} aria-label="Similarity threshold" />
         </label>
         <label className="flex items-center gap-2">
-          Colour by
+          Color by
           <select value={colourBy} onChange={(e) => setColourBy(e.target.value as ColourBy)} className="h-8 rounded-theme border border-border bg-surface px-2">
             <option value="trip">trip</option>
             <option value="collection">collection</option>

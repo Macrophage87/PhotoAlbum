@@ -124,7 +124,7 @@ export function PhotoEditor({ photoId, src, initial, onDone }: { photoId: string
       <div className="grid sm:grid-cols-2 gap-x-6 gap-y-3">
         <Slider label="Brightness" value={brightness} min={0.4} max={1.8} step={0.02} neutral={1} onChange={(v) => set("brightness", v)} />
         <Slider label="Contrast" value={contrast} min={0.4} max={1.8} step={0.02} neutral={1} onChange={(v) => set("contrast", v)} />
-        <Slider label="Colour" value={saturation} min={0} max={2} step={0.02} neutral={1} onChange={(v) => set("saturation", v)} />
+        <Slider label="Color" value={saturation} min={0} max={2} step={0.02} neutral={1} onChange={(v) => set("saturation", v)} />
         <Slider label="Warmth" value={warmth} min={-100} max={100} step={2} neutral={0} onChange={(v) => set("warmth", v)} />
       </div>
 

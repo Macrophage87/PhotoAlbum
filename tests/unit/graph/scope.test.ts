@@ -19,7 +19,7 @@ describe("what the graph is asked to draw", () => {
     expect(of("scope=person%3Dabc123")).toEqual({ kind: "person", id: "abc123" });
   });
 
-  it("takes the empty choice, and anything it does not recognise, as the whole library", () => {
+  it("takes the empty choice, and anything it does not recognize, as the whole library", () => {
     expect(of("scope=")).toEqual({ kind: "all" });
     expect(of("scope=nonsense%3Dvalue")).toEqual({ kind: "all" });
     expect(of("scope=trip%3D")).toEqual({ kind: "all" });

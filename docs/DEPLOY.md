@@ -227,7 +227,7 @@ The basics (`APP_URL`, `ADMIN_EMAIL`, `SMTP_*`, `POSTGRES_*`, `APP_PORT`, `MAX_U
 
 ### Optional: Google Photos
 
-**Pick a few (the picker button).** In Google Cloud create a project, enable the *Google Photos Picker API*, configure the OAuth consent screen (External, add the family's addresses as test users unless you publish it) and create an OAuth client of type *Web application* with `https://album.example.com/api/google/callback` as the authorised redirect URI. Put the client id and secret in `.env` together with a fresh key:
+**Pick a few (the picker button).** In Google Cloud create a project, enable the *Google Photos Picker API*, configure the OAuth consent screen (External, add the family's addresses as test users unless you publish it) and create an OAuth client of type *Web application* with `https://album.example.com/api/google/callback` as the authorized redirect URI. Put the client id and secret in `.env` together with a fresh key:
 
 ```bash
 openssl rand -base64 32   # → TOKEN_ENCRYPTION_KEY

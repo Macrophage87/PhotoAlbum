@@ -17,7 +17,7 @@ describe("folding the identical copies already in the album", () => {
     const user = await db.user.create({ data: { email: "fold@example.com", role: "ADMIN" } });
     const other = await db.user.create({ data: { email: "cousin@example.com", role: "MEMBER" } });
     const trip = await db.trip.create({ data: { slug: "f", title: "F", startDate: new Date("2025-08-10"), endDate: new Date("2025-08-16"), createdById: user.id } });
-    const collection = await db.collection.create({ data: { slug: "fav", title: "Favourites", themeKey: "default", createdById: user.id } });
+    const collection = await db.collection.create({ data: { slug: "fav", title: "Favorites", themeKey: "default", createdById: user.id } });
     const mk = (name: string, extra: Record<string, unknown> = {}) =>
       db.photo.create({ data: { uploaderId: user.id, originalName: name, mimeType: "image/jpeg", storageKey: name, originalPath: `${name}/o.jpg`, sizeBytes: 1, status: "READY", contentHash: "same-bytes", ...extra } });
 

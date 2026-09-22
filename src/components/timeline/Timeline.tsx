@@ -8,11 +8,17 @@ import { TimelineNav } from "./TimelineNav";
 import { DaySelect } from "./DaySelect";
 import { DayJump } from "./DayJump";
 import { TimelineDrop } from "./TimelineDrop";
+import { getViewer } from "@/lib/auth/viewer";
+import { photoFavourites } from "@/lib/favourites/queries";
 
 export type TimelineGroups = DayGroup<PhotoCard, ActivityCardData>[];
 
-export function Timeline({ groups, tripSlug, timezone, member, idPrefix = "day", activityHrefBase }: { groups: TimelineGroups; tripSlug: string; timezone: string; member: boolean; idPrefix?: string; activityHrefBase?: string }) {
+export async function Timeline({ groups, tripSlug, timezone, member, idPrefix = "day", activityHrefBase }: { groups: TimelineGroups; tripSlug: string; timezone: string; member: boolean; idPrefix?: string; activityHrefBase?: string }) {
   if (groups.length === 0) return <p className="text-muted text-sm">Nothing on the timeline yet. Upload photos or add an activity.</p>;
+  // The timeline is where most photographs are actually looked at, so it carries the same hearts as the grids: whose
+  // favorites they are, loaded for the whole page in two small queries. Members only — a favorite is a person's.
+  const hearts = member ? await photoFavourites(groups.flatMap((g) => g.items.flatMap((i) => i.photos.map((p) => p.id))), await getViewer()) : new Map();
+  const tile = (p: PhotoCard) => toGridPhoto(p, null, member, hearts.get(p.id) ?? (member ? { mine: false, count: 0 } : null));
   const days = groups.map((g) => ({ key: g.dayKey ?? "undated", id: `${idPrefix}-${g.dayKey ?? "undated"}`, count: g.items.reduce((n, i) => n + (i.kind === "activity" ? 1 : i.photos.length), 0) }));
   return (
     <div className="flex flex-col lg:flex-row gap-8">
@@ -37,7 +43,7 @@ export function Timeline({ groups, tripSlug, timezone, member, idPrefix = "day",
                       <ActivityCard activity={item.activity} tripSlug={tripSlug} timezone={timezone} hrefBase={activityHrefBase}>
                         {item.photos.length > 0 && (
                           <div className="px-4 pb-4">
-                            <PhotoGrid photos={item.photos.map((p) => toGridPhoto(p, null, member))} draggable={member} />
+                            <PhotoGrid photos={item.photos.map(tile)} draggable={member} />
                           </div>
                         )}
                       </ActivityCard>
@@ -53,7 +59,7 @@ export function Timeline({ groups, tripSlug, timezone, member, idPrefix = "day",
                       )}
                       {/* Dropped here, a photograph comes off whatever activity it was on and stays on this day. */}
                       <TimelineDrop kind="loose" target={null} label="this day">
-                        <PhotoGrid photos={item.photos.map((p) => toGridPhoto(p, null, member))} draggable={member} />
+                        <PhotoGrid photos={item.photos.map(tile)} draggable={member} />
                       </TimelineDrop>
                     </div>
                   )}

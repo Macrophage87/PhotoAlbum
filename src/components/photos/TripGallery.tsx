@@ -72,8 +72,8 @@ export function TripGallery({ photos: initialPhotos, activities, editable, empty
               </Button>
               {notice && <span className="text-muted" role="status">{notice}</span>}
               {undoable.length > 0 && (
-                <Button variant="ghost" size="sm" disabled={pending} onClick={() => undoColour(undoable)} data-testid="undo-auto-colour">
-                  Undo auto colour
+                <Button variant="ghost" size="sm" disabled={pending} onClick={() => undoColour(undoable)} data-testid="undo-auto-color">
+                  Undo auto color
                 </Button>
               )}
             </>
@@ -137,8 +137,8 @@ export function TripGallery({ photos: initialPhotos, activities, editable, empty
                   </Button>
                 </>
               )}
-              <Button size="sm" variant="secondary" disabled={!ids.length || pending} onClick={autoColour} data-testid="auto-colour">
-                {pending ? "Working…" : "Auto colour"}
+              <Button size="sm" variant="secondary" disabled={!ids.length || pending} onClick={autoColour} data-testid="auto-color">
+                {pending ? "Working…" : "Auto color"}
               </Button>
               {tripSlug && (
                 <Button

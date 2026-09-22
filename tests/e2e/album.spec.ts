@@ -674,7 +674,7 @@ test("a YouTube link becomes an embedded video with a stored poster and a click-
     }, { timeout: 30_000, intervals: [1000] })
     .toBe(1);
   await expect(page.getByRole("heading", { name: /3 photos/ })).toBeVisible();
-  await tile.locator("button:not([data-testid='favourite-photo'])").first().click();
+  await tile.locator("button:not([data-testid='favorite-photo'])").first().click();
   const dialog = page.getByRole("dialog");
   await expect(dialog.getByText("Playing sends your request to YouTube")).toBeVisible();
   await expect(dialog.locator("iframe")).toHaveCount(0);
@@ -717,7 +717,7 @@ test("a short clip is transcoded with a poster and streams with range requests; 
   expect(partial.headers()["content-range"]).toMatch(/^bytes 0-99\//);
   expect((await partial.body()).length).toBe(100);
   await page.goto("/trips/yosemite/photos");
-  await page.locator("li", { hasText: "0:02" }).first().locator("button:not([data-testid='favourite-photo'])").first().click();
+  await page.locator("li", { hasText: "0:02" }).first().locator("button:not([data-testid='favorite-photo'])").first().click();
   await expect(page.getByRole("dialog").locator("video")).toHaveAttribute("src", /\/video\?v=/);
 });
 
@@ -897,7 +897,7 @@ test("faces are found once an admin opts in, named with consent recorded, shown 
   await form.getByRole("checkbox", { name: /Recognise this person/ }).check();
   await form.getByRole("button", { name: "Name these faces" }).click();
   await expect(page.getByRole("link", { name: /Grandma Jo/ })).toBeVisible();
-  await expect(page.getByText("recognised · by birthday")).toBeVisible();
+  await expect(page.getByText("recognized · by birthday")).toBeVisible();
   const person = await withDb((c) => c.query('SELECT id, "faceIndexing", "faceIndexingSetById" FROM "Person" WHERE name = $1', ["Grandma Jo"]));
   expect(person.rows[0].faceIndexing).toBe(true);
   expect(person.rows[0].faceIndexingSetById).toBeTruthy();
@@ -1206,7 +1206,7 @@ test("a pet tagged on a spotted animal is proposed on the next look-alike and co
   await expect(page.getByText(/black lab · 2 photos/)).toBeVisible();
 });
 
-test("the uploader crops and colour-corrects a photo, and the original stays untouched", async ({ context, page }) => {
+test("the uploader crops and color-corrects a photo, and the original stays untouched", async ({ context, page }) => {
   await signIn(context, ADMIN);
   await page.goto("/upload");
   await chooseFile(page, "photo-with-gps.jpg");
@@ -1217,7 +1217,7 @@ test("the uploader crops and colour-corrects a photo, and the original stays unt
 
   await page.goto(`/photos/${id}`);
   await page.waitForLoadState("networkidle");
-  await page.getByRole("button", { name: "Crop and colour" }).click();
+  await page.getByRole("button", { name: "Crop and color" }).click();
   await expect(page.getByTestId("photo-editor")).toBeVisible();
   await page.getByLabel("Warmth").fill("40");
   await page.getByRole("button", { name: "Turn right" }).click();
@@ -1275,7 +1275,7 @@ test("the uploader crops and colour-corrects a photo, and the original stays unt
   expect(reverted.renditions.full).toBeUndefined();
 });
 
-test("a favourite leads the list, and a tile says what it is on hover", async ({ context, page }) => {
+test("a favorite leads the list, and a tile says what it is on hover", async ({ context, page }) => {
   await signIn(context, ADMIN);
   await page.goto("/trips/acadia/photos");
   const tiles = page.locator("ul li.tile-lazy");
@@ -1291,7 +1291,7 @@ test("a favourite leads the list, and a tile says what it is on hover", async ({
   const last = tiles.nth(count - 1);
   const lastPhoto = await photoOf(last);
   expect(lastPhoto).not.toBe(before);
-  await last.getByTestId("favourite-photo").click();
+  await last.getByTestId("favorite-photo").click();
   await expect
     .poll(async () => {
       await page.reload();
@@ -1299,7 +1299,7 @@ test("a favourite leads the list, and a tile says what it is on hover", async ({
     }, { timeout: 20_000, intervals: [1000] })
     .toBe(lastPhoto);
   // The heart shows it is mine, and how many of us have marked it.
-  await expect(page.locator("ul li.tile-lazy").first().getByTestId("favourite-photo")).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator("ul li.tile-lazy").first().getByTestId("favorite-photo")).toHaveAttribute("aria-pressed", "true");
 
   // What a tile says without opening it: the caption, and when and where.
   const hover = page.locator("ul li.tile-lazy").first().getByTestId("tile-hover");
@@ -1312,7 +1312,7 @@ test("a favourite leads the list, and a tile says what it is on hover", async ({
   await expect(cards.first()).toBeVisible();
   // Read which card it is before marking it: the mark re-orders the grid, so asking afterwards asks about a
   // different card.
-  const lastHeart = page.getByTestId("favourite-trip").last();
+  const lastHeart = page.getByTestId("favorite-trip").last();
   const favourited = await lastHeart.locator("xpath=ancestor::a").getAttribute("href");
   await lastHeart.click();
   await expect
@@ -1323,7 +1323,7 @@ test("a favourite leads the list, and a tile says what it is on hover", async ({
     .toBe(favourited);
 });
 
-test("a photograph is favourited while looking at it, and turns up under Favourites for the album, the trip and the collection", async ({ browser, context, page }) => {
+test("a photograph is favorited while looking at it, and turns up under Favorites for the album, the trip and the collection", async ({ browser, context, page }) => {
   await signIn(context, ADMIN);
   // One the admin has not marked yet, so the test proves its own heart rather than finding an earlier one.
   const pick = await withDb((c) => c.query(`SELECT p.id FROM "Photo" p JOIN "Trip" t ON t.id = p."tripId" JOIN "User" u ON u.email = $1 WHERE t.slug = 'acadia' AND p.kind = 'PHOTO' AND p.status = 'READY' AND p."trashedAt" IS NULL AND NOT EXISTS (SELECT 1 FROM "PhotoFavorite" f WHERE f."photoId" = p.id AND f."userId" = u.id) ORDER BY p.id LIMIT 1`, [ADMIN]));
@@ -1333,12 +1333,12 @@ test("a photograph is favourited while looking at it, and turns up under Favouri
   // Open it big, and mark it from there — the heart is the first thing in the panel beside the picture.
   await page.goto("/trips/acadia/photos");
   await tileOf(page).locator("img").first().click();
-  const heart = page.getByTestId("lightbox-info").getByTestId("favourite-photo");
+  const heart = page.getByTestId("lightbox-info").getByTestId("favorite-photo");
   await expect(heart).toHaveAttribute("aria-pressed", "false");
-  await expect(heart).toContainText("Add to favourites");
+  await expect(heart).toContainText("Add to favorites");
   await heart.click();
   await expect(heart).toHaveAttribute("aria-pressed", "true");
-  await expect(heart).toContainText("Favourite");
+  await expect(heart).toContainText("Favorite");
   await expect
     .poll(async () => (await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "PhotoFavorite" f JOIN "User" u ON u.id = f."userId" WHERE f."photoId" = $1 AND u.email = $2`, [id, ADMIN]))).rows[0].n)
     .toBe(1);
@@ -1346,41 +1346,56 @@ test("a photograph is favourited while looking at it, and turns up under Favouri
 
   // The trip's own Favourites tab, mine and everyone's.
   await page.goto("/trips/acadia");
-  await page.getByTestId("trip-tabs").getByRole("link", { name: "Favourites" }).click();
-  await expect(page).toHaveURL(/\/trips\/acadia\/favourites$/);
+  await page.getByTestId("trip-tabs").getByRole("link", { name: "Favorites" }).click();
+  await expect(page).toHaveURL(/\/trips\/acadia\/favorites$/);
   await expect(tileOf(page)).toBeVisible();
-  await page.getByTestId("favourites-family").click();
+  await page.getByTestId("favorites-family").click();
   await expect(page).toHaveURL(/who=family/);
   await expect(tileOf(page)).toBeVisible();
 
   // The whole album's, from the menu.
   await page.goto("/");
-  await page.getByRole("link", { name: "Favourites" }).first().click();
-  await expect(page).toHaveURL(/\/favourites$/);
+  await page.getByRole("link", { name: "Favorites" }).first().click();
+  await expect(page).toHaveURL(/\/favorites$/);
   await expect(tileOf(page)).toBeVisible();
 
   // A collection's, which only shows what is in it: put the photograph in one, and it is there too.
   const col = await withDb((c) => c.query(`SELECT id, slug FROM "Collection" ORDER BY "createdAt" LIMIT 1`));
   // Already in it is fine too; only a row this test added is taken out again at the end.
   await withDb((c) => c.query(`INSERT INTO "CollectionItem" (id, "collectionId", "photoId", "position", "addedById", "createdAt") VALUES (md5(random()::text), $1, $2, 9999, (SELECT id FROM "User" WHERE email = $3), now()) ON CONFLICT DO NOTHING`, [col.rows[0].id, id, ADMIN]));
-  await page.goto(`/collections/${col.rows[0].slug}/favourites`);
+  await page.goto(`/collections/${col.rows[0].slug}/favorites`);
   await expect(tileOf(page)).toBeVisible();
 
   // Somebody without an account has no favourites, and is not shown anybody else's.
   const anon = await browser.newContext();
   const stranger = await anon.newPage();
-  const res = await stranger.goto("/trips/acadia/favourites");
+  const res = await stranger.goto("/trips/acadia/favorites");
   expect([200, 404]).toContain(res?.status());
   await expect(tileOf(stranger)).toHaveCount(0);
   await anon.close();
 
   // Let it go again from the favourites page itself, and leave the album as it was found.
-  await page.goto("/trips/acadia/favourites");
-  await tileOf(page).getByTestId("favourite-photo").click();
+  await page.goto("/trips/acadia/favorites");
+  await tileOf(page).getByTestId("favorite-photo").click();
   await expect
     .poll(async () => (await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "PhotoFavorite" f JOIN "User" u ON u.id = f."userId" WHERE f."photoId" = $1 AND u.email = $2`, [id, ADMIN]))).rows[0].n)
     .toBe(0);
   await withDb((c) => c.query(`DELETE FROM "CollectionItem" WHERE "collectionId" = $1 AND "photoId" = $2 AND "position" = 9999`, [col.rows[0].id, id]));
+
+  // And from the timeline, where most photographs are actually looked at: the same heart on the same tile.
+  await page.goto("/trips/acadia");
+  const onTimeline = tileOf(page).getByTestId("favorite-photo");
+  await expect(onTimeline).toHaveAttribute("aria-pressed", "false");
+  await onTimeline.click();
+  await expect(onTimeline).toHaveAttribute("aria-pressed", "true");
+  await expect
+    .poll(async () => (await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "PhotoFavorite" f JOIN "User" u ON u.id = f."userId" WHERE f."photoId" = $1 AND u.email = $2`, [id, ADMIN]))).rows[0].n)
+    .toBe(1);
+  // The old British address still lands on the page it moved to.
+  await page.goto("/trips/acadia/favourites");
+  await expect(page).toHaveURL(/\/trips\/acadia\/favorites$/);
+  await expect(tileOf(page)).toBeVisible();
+  await withDb((c) => c.query(`DELETE FROM "PhotoFavorite" f USING "User" u WHERE u.id = f."userId" AND f."photoId" = $1 AND u.email = $2`, [id, ADMIN]));
 });
 
 test("the date troubleshooter shows every witness and lets one be taken", async ({ context, page }) => {
@@ -1560,7 +1575,7 @@ test("photos can be uploaded straight into an activity, and stay there when its 
     .toBe(activityId);
 });
 
-test("a panorama is recognised, kept long, and shown as a panorama rather than a sliver", async ({ context, page }) => {
+test("a panorama is recognized, kept long, and shown as a panorama rather than a sliver", async ({ context, page }) => {
   await signIn(context, ADMIN);
   await page.goto("/upload");
   await chooseFile(page, "panorama.jpg");
@@ -1799,7 +1814,7 @@ test("a 3D scan is uploaded, kept whole, and shown in a viewer that can be turne
     .toBe(true);
 });
 
-test("a whole selection is auto-coloured in one go, and handed back in one press", async ({ context, page }) => {
+test("a whole selection is auto-colored in one go, and handed back in one press", async ({ context, page }) => {
   await signIn(context, ADMIN);
   // Photographs of the admin's with nothing on them yet, so what the batch does to them is unambiguous.
   const plain = await withDb((c) => c.query(`SELECT p.id FROM "Photo" p JOIN "User" u ON u.id = p."uploaderId" WHERE p."tripId" = (SELECT id FROM "Trip" WHERE slug = 'acadia') AND p.kind = 'PHOTO' AND p.status = 'READY' AND p."trashedAt" IS NULL AND p.edits IS NULL AND u.email = $1 ORDER BY p."createdAt" LIMIT 3`, [ADMIN]));
@@ -1810,15 +1825,15 @@ test("a whole selection is auto-coloured in one go, and handed back in one press
   await page.getByRole("button", { name: "Select photos" }).click();
   for (const id of picked) await page.locator(`li.tile-lazy:has(img[src*='/api/photos/${id}/']) button[aria-pressed]`).first().click();
 
-  await page.getByTestId("auto-colour").click();
-  await expect(page.getByRole("status")).toContainText("Auto colour:");
+  await page.getByTestId("auto-color").click();
+  await expect(page.getByRole("status")).toContainText("Auto color:");
   // The instruction is stored beside the picture; the file that was uploaded is not written over.
   await expect
     .poll(async () => (await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "Photo" WHERE id = ANY($1) AND edits->>'auto' = 'true'`, [picked]))).rows[0].n, { timeout: 20_000, intervals: [1000] })
     .toBe(picked.length);
 
   // And the whole batch goes back with one press, leaving nothing behind on photographs that had nothing before.
-  await page.getByTestId("undo-auto-colour").click();
+  await page.getByTestId("undo-auto-color").click();
   await expect
     .poll(async () => (await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "Photo" WHERE id = ANY($1) AND edits IS NOT NULL`, [picked]))).rows[0].n, { timeout: 20_000, intervals: [1000] })
     .toBe(0);

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { slugify, uniqueSlug } from "@/lib/trips/slug";
 
 describe("slugify", () => {
-  it("normalises titles", () => {
+  it("normalizes titles", () => {
     expect(slugify("Acadia, Maine!")).toBe("acadia-maine");
     expect(slugify("  Île de Ré — été 2025 ")).toBe("ile-de-re-ete-2025");
     expect(slugify("!!!")).toBe("trip");

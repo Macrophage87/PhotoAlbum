@@ -98,7 +98,7 @@ describe("reading a path without writing it down", () => {
     expect(await resolveTarget("/share/c/secret-collection-token")).toEqual({ section: "collection", collectionId, viaShare: true });
   });
 
-  it("recognises collections, single photographs and the plain pages", async () => {
+  it("recognizes collections, single photographs and the plain pages", async () => {
     expect(await resolveTarget("/collections/best")).toEqual({ section: "collection", collectionId });
     expect(await resolveTarget(`/photos/${photoId}`)).toEqual({ section: "item", photoId });
     expect(await resolveTarget("/")).toEqual({ section: "home" });

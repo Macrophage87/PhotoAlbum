@@ -11,7 +11,7 @@ OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "docs", "SE
 
 NAVY = colors.HexColor("#1f3a5f")
 ACCENT = colors.HexColor("#b3392b")
-GREY = colors.HexColor("#555555")
+GRAY = colors.HexColor("#555555")
 LIGHT = colors.HexColor("#f2f4f7")
 CODEBG = colors.HexColor("#f7f7f5")
 BORDER = colors.HexColor("#d9dde3")
@@ -20,7 +20,7 @@ ss = getSampleStyleSheet()
 H1 = ParagraphStyle("H1", parent=ss["Heading1"], fontName="Helvetica-Bold", fontSize=18, textColor=NAVY, spaceBefore=14, spaceAfter=8)
 H2 = ParagraphStyle("H2", parent=ss["Heading2"], fontName="Helvetica-Bold", fontSize=13, textColor=NAVY, spaceBefore=12, spaceAfter=5)
 BODY = ParagraphStyle("Body", parent=ss["Normal"], fontName="Helvetica", fontSize=10, leading=14, spaceAfter=6)
-SMALL = ParagraphStyle("Small", parent=BODY, fontSize=8.5, leading=11, textColor=GREY)
+SMALL = ParagraphStyle("Small", parent=BODY, fontSize=8.5, leading=11, textColor=GRAY)
 CELL = ParagraphStyle("Cell", parent=BODY, fontSize=9, leading=12, spaceAfter=0)
 CELLV = ParagraphStyle("CellV", parent=CELL, fontSize=8, leading=10, splitLongWords=0)
 CELLB = ParagraphStyle("CellB", parent=CELL, fontName="Helvetica-Bold")
@@ -29,7 +29,7 @@ CODE = ParagraphStyle("Code", parent=ss["Code"], fontName="Courier", fontSize=8.
 NOTE = ParagraphStyle("Note", parent=BODY, backColor=LIGHT, borderColor=BORDER, borderWidth=0.5, borderPadding=6,
                       leftIndent=4, spaceBefore=4, spaceAfter=10)
 TITLE = ParagraphStyle("Title", parent=ss["Title"], fontName="Helvetica-Bold", fontSize=26, textColor=NAVY, spaceAfter=6, alignment=TA_LEFT)
-SUB = ParagraphStyle("Sub", parent=BODY, fontSize=12, textColor=GREY, spaceAfter=18)
+SUB = ParagraphStyle("Sub", parent=BODY, fontSize=12, textColor=GRAY, spaceAfter=18)
 
 def P(t, s=BODY): return Paragraph(t, s)
 def code(t): return Preformatted(t.strip("\n"), CODE)
@@ -54,7 +54,7 @@ def table(rows, widths, first=None):
 
 def on_page(canvas, doc):
     canvas.saveState()
-    canvas.setFont("Helvetica", 8); canvas.setFillColor(GREY)
+    canvas.setFont("Helvetica", 8); canvas.setFillColor(GRAY)
     canvas.drawString(0.9*inch, 0.55*inch, "Family Album  |  Setup Guide")
     canvas.drawRightString(letter[0]-0.9*inch, 0.55*inch, f"Page {doc.page}")
     canvas.setStrokeColor(BORDER); canvas.line(0.9*inch, 0.7*inch, letter[0]-0.9*inch, 0.7*inch)
@@ -84,12 +84,12 @@ S += [P("Contents", H2), bullets([
 
 # ---------- 1 ----------
 S += [P("1. What the application does", H1),
-      P("Family Album is a private web app for organising family trip photos. Photos belong to a <b>trip</b>, and within a trip "
+      P("Family Album is a private web app for organizing family trip photos. Photos belong to a <b>trip</b>, and within a trip "
         "to an <b>activity</b> (a hike, a bike ride, a boat tour, a meal). Everything can be browsed on a <b>timeline</b> grouped by day "
         "and on a <b>map</b>. GPS tracks from a watch, bike computer or Google location history give activities a route and fitness "
         "statistics, and can place photos that have no GPS data of their own."),
       bullets([
-        "<b>Automatic organisation.</b> Uploaded photos land on the right trip by the date they were taken, and on the right activity by time of day.",
+        "<b>Automatic organization.</b> Uploaded photos land on the right trip by the date they were taken, and on the right activity by time of day.",
         "<b>Any camera or phone.</b> JPEG, PNG, WebP and iPhone HEIC are accepted. Originals are kept; web-sized WebP versions are generated for display.",
         "<b>Correct times.</b> Camera clocks are reconciled using the EXIF time-zone offset, the GPS position, or the trip's time zone. A one-click fix handles cameras left in the wrong zone.",
         "<b>Tracks and stats.</b> Import GPX, Garmin FIT, or Google Timeline exports. Activities show distance, moving time, elevation, pace or speed, heart rate, cadence, power and calories, with charts linked to the map.",
@@ -286,15 +286,15 @@ S += [P("6. Using the album", H1),
         "The sidecar runs entirely on your own server: nothing about a photo leaves it. It needs about 2 GB of memory of its own, so plan on 4 GB with a swap file, or 8 GB."),
       P("People (optional)", H2),
       P("With the ML sidecar running, an admin can turn on face detection from the Admin page after reading what it does. Faces are then found and grouped on your own server. "
-        "On the People page, name a group once and it becomes a person with a page of their photos. Whether that person is recognised in new photos is a separate decision only an admin can make, "
+        "On the People page, name a group once and it becomes a person with a page of their photos. Whether that person is recognized in new photos is a separate decision only an admin can make, "
         "off by default and never for a child without a parent's instruction; faces nobody names are deleted after six months, and anyone can be forgotten at any time. Names are only ever shown to family members. "
-        "Once someone is recognised, the album asks \"Probably Grandma Jo?\" on later photos and waits for you to say yes or no. Pets get a record with their species and years; tag one by hand from the photo viewer, and with the sidecar running the album spots animals too and asks \"Probably Biscuit?\" on later look-alikes of the same kind (a flock record like \"the chickens\" is proposed whenever chickens are seen)."),
+        "Once someone is recognized, the album asks \"Probably Grandma Jo?\" on later photos and waits for you to say yes or no. Pets get a record with their species and years; tag one by hand from the photo viewer, and with the sidecar running the album spots animals too and asks \"Probably Biscuit?\" on later look-alikes of the same kind (a flock record like \"the chickens\" is proposed whenever chickens are seen)."),
       P("Bringing photos over from Google Photos", H2),
       P("Two routes, neither a background sync (Google no longer allows one). <b>Pick a few:</b> once the operator has set up a Google OAuth client (deployment guide), each member presses <b>Connect Google Photos</b> on the Upload page once; after that, <b>Pick from Google Photos</b> opens Google's own picking page, and what they pick is copied into the album and shown on the review screen. Google leaves the location out of those copies, so add places on the review screen or file them to a trip with a track. "
         "<b>Everything at once:</b> export your library with Google Takeout (Google Photos only), copy the zip files to the server's import inbox, and import each from the Admin page. Dates, places, descriptions and album membership come across from Google's sidecar files, and each Google album becomes a private collection. A photo already in the album is not imported twice: the export fills in anything it is still missing, so importing the same export again is safe and repairs photos that arrived without a place. Delete the zip from the inbox once its photos are in: it is an unencrypted copy of your export."),
       P("Similar photos", H2),
       P("With the ML sidecar running, the album keeps track of which photos look alike. The Graph page (members only) draws them as a web of thumbnails you can pan and zoom; "
-        "colour it by trip, collection, person or who uploaded, and drag the slider to show only the closest matches. Each photo page also shows a small strip of look-alikes. Only photos you can see are ever linked."),
+        "color it by trip, collection, person or who uploaded, and drag the slider to show only the closest matches. Each photo page also shows a small strip of look-alikes. Only photos you can see are ever linked."),
       P("Videos", H2),
       P("Short clips (MP4, MOV or WebM, up to 90 seconds) upload like photos and are converted in the background to a web-playable file with a poster; they play muted when you hover over them in a gallery and with controls in the viewer. A longer file is refused before it uploads."),
       P("Longer videos live on YouTube. Upload the video there as <b>Unlisted</b>, then choose <b>Add a YouTube video</b> on a trip's or collection's Photos tab (or the Upload page) and paste the link. "
@@ -321,9 +321,9 @@ S += [P("6. Using the album", H1),
       P("Timeline and map", H2),
       bullets([
         "The trip <b>Timeline</b> groups photos and activities by local day, with a day list on the side for jumping around. Photos taken during an activity appear inside its card next to a small route drawing and key stats.",
-        "The trip <b>Map</b> shows clustered photo markers and colour-coded track lines. Click a cluster to zoom in, a marker to preview and open the photo, a track to open the activity.",
+        "The trip <b>Map</b> shows clustered photo markers and color-coded track lines. Click a cluster to zoom in, a marker to preview and open the photo, a track to open the activity.",
         "The <b>activity page</b> shows the full-size map, the stat grid, and elevation, speed, heart-rate and power charts. Moving the mouse along a chart moves a marker along the route.",
-        "The global <b>Map</b> and <b>Timeline</b> pages in the top navigation show every trip together, each keeping its own theme colours.",
+        "The global <b>Map</b> and <b>Timeline</b> pages in the top navigation show every trip together, each keeping its own theme colors.",
       ]),
       P("Themes", H2),
       P("Pick a theme when creating a trip or later in its Settings. A theme sets the palette, fonts, illustrated header art, "
@@ -335,7 +335,7 @@ S += [P("6. Using the album", H1),
         ["Highlands", "Heather purple, peat brown, moss green, mist", "Scotland, Ireland, moorland"],
         ["Swamp", "Deep green, cypress brown, egret white, sunset orange", "Everglades, bayou, wetlands"],
         ["Desert Canyon", "Terracotta, sandstone, sage, turquoise sky", "Utah, Arizona, the Southwest"],
-        ["Alpine", "Ice blue, granite grey, pine green, snow", "The Alps, Rockies, ski trips"],
+        ["Alpine", "Ice blue, granite gray, pine green, snow", "The Alps, Rockies, ski trips"],
         ["Dog Park", "Fur brown, meadow green, tennis-ball yellow, paw prints", "A collection about the dog"],
       ], [1.3*inch, 2.6*inch, W-3.9*inch]),
       P("Sharing a trip", H2),

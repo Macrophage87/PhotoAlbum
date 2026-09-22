@@ -3,6 +3,14 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   output: "standalone",
   serverExternalPackages: ["sharp", "pg-boss", "fit-file-parser", "heic-convert", "stream-json", "exifr"],
+  // The Favorites pages were briefly at the British spelling; a link somebody already sent keeps working.
+  async redirects() {
+    return [
+      { source: "/favourites", destination: "/favorites", permanent: true },
+      { source: "/trips/:slug/favourites", destination: "/trips/:slug/favorites", permanent: true },
+      { source: "/collections/:slug/favourites", destination: "/collections/:slug/favorites", permanent: true },
+    ];
+  },
   async headers() {
     return [
       {

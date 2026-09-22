@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { parseWho } from "@/components/favourites/FavouritesView";
 
-describe("whose favourites a page shows", () => {
+describe("whose favorites a page shows", () => {
   it("is this member's own unless the family's are asked for by name", () => {
     expect(parseWho(undefined)).toBe("mine");
     expect(parseWho("mine")).toBe("mine");

@@ -21,7 +21,7 @@ export async function readHead(filePath: string, bytes = 64 * 1024): Promise<Buf
 export async function parseGoogleExport(filePath: string, window: Window): Promise<{ format: GoogleFormat; points: TrackPoint[] }> {
   const head = (await readHead(filePath)).toString("utf8");
   const format = detectGoogleFormat(head);
-  if (!format) throw new Error("Unrecognised Google location export. Expected Records.json, Timeline.json, or a Semantic Location History file.");
+  if (!format) throw new Error("Unrecognized Google location export. Expected Records.json, Timeline.json, or a Semantic Location History file.");
   let points: TrackPoint[];
   switch (format) {
     case "records":

@@ -14,7 +14,7 @@ import { resetTestDb } from "../helpers/reset";
 const fixture = JSON.parse(readFileSync(path.join(__dirname, "../../fixtures/annotation-response.json"), "utf8"));
 
 describe("annotation schema and pricing", () => {
-  it("accepts the recorded response and normalises tags", () => {
+  it("accepts the recorded response and normalizes tags", () => {
     const parsed = annotationSchema.parse({ ...fixture, tags: [...fixture.tags, "Lobster", " boat "] });
     expect(toStored(parsed).tags.filter((t) => t === "lobster")).toHaveLength(1);
     expect(toStored(parsed)).not.toHaveProperty("estimatedYear");
@@ -114,7 +114,7 @@ describe("applying a record", () => {
     await applyAnnotation(photoId, "claude-opus-5", parsed, {});
     expect((await db.photo.findUniqueOrThrow({ where: { id: photoId } })).title).toBeNull();
   });
-  it("places an item the helper recognised, and asks only when the item has no position", async () => {
+  it("places an item the helper recognized, and asks only when the item has no position", async () => {
     const withPlace = { ...fixture, estimatedPlace: { name: "Inner Harbor, Baltimore", precision: "exact", lat: 39.2853, lng: -76.6093, radiusM: 800, confidence: 0.75, evidence: "the Domino Sugar sign" } };
     await applyAnnotation(photoId, "claude-opus-5", annotationSchema.parse(withPlace), {});
     const placed = await db.photo.findUniqueOrThrow({ where: { id: photoId } });

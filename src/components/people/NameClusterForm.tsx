@@ -68,13 +68,13 @@ export function NameClusterForm({ clusterId, isAdmin, people, pets = [] }: { clu
               {minorByBirthday && (
                 <label className="flex items-start gap-2">
                   <input type="checkbox" name="parentInstruction" className="mt-1" />
-                  <span>A parent has asked for this child to be recognised (a minor is otherwise never matched)</span>
+                  <span>A parent has asked for this child to be recognized (a minor is otherwise never matched)</span>
                 </label>
               )}
               <label className="flex items-start gap-2">
                 <input type="checkbox" name="faceIndexing" className="mt-1" />
                 <span>
-                  <span className="font-medium">Recognise this person in new photos</span>
+                  <span className="font-medium">Recognize this person in new photos</span>
                   <span className="block text-muted">Keeps their face templates on this server. Off by default; without a birthday or the attestation the templates are dropped now.</span>
                 </span>
               </label>

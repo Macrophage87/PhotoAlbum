@@ -50,7 +50,7 @@ describe("tagging somebody on a photograph", () => {
     return tagPersonAt(photoId, fd);
   };
 
-  it("writes down who is where, with no template and nothing recognised", async () => {
+  it("writes down who is where, with no template and nothing recognized", async () => {
     await tag({ name: "Grandma Jo" });
     const face = await db.face.findFirstOrThrow({ where: { photoId }, include: { person: true } });
     expect(face.person?.name).toBe("Grandma Jo");

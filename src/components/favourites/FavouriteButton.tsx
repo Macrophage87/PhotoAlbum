@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { toggleFavourite } from "@/app/favourites/actions";
+import { toggleFavourite } from "@/app/favorites/actions";
 import type { FavouriteKind, FavouriteState } from "@/lib/favourites/queries";
 
 const NOUN = { photo: "photo", trip: "trip", collection: "collection" } as const;
@@ -13,7 +13,7 @@ const NOUN = { photo: "photo", trip: "trip", collection: "collection" } as const
 export function FavouriteButton({ kind, id, initial, dark = false, size = "md", withLabel = false }: { kind: FavouriteKind; id: string; initial: FavouriteState; dark?: boolean; size?: "sm" | "md"; /** Say "Favourite" beside the heart, where there is room: a bare ♡ is easy to miss on a big picture. */ withLabel?: boolean }) {
   const [state, setState] = useState(initial);
   const [pending, start] = useTransition();
-  const label = state.mine ? `Remove this ${NOUN[kind]} from your favourites` : `Make this one of your favourite ${NOUN[kind]}s`;
+  const label = state.mine ? `Remove this ${NOUN[kind]} from your favorites` : `Make this one of your favorite ${NOUN[kind]}s`;
   const tone = dark ? "text-white/70 hover:text-white" : "text-muted hover:text-foreground";
 
   return (
@@ -21,9 +21,9 @@ export function FavouriteButton({ kind, id, initial, dark = false, size = "md", 
       type="button"
       aria-pressed={state.mine}
       aria-label={label}
-      title={state.count > 1 ? `${state.count} of us have this as a favourite` : label}
+      title={state.count > 1 ? `${state.count} of us have this as a favorite` : label}
       disabled={pending}
-      data-testid={`favourite-${kind}`}
+      data-testid={`favorite-${kind}`}
       className={`inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 ${size === "sm" ? "text-xs" : "text-sm"} ${state.mine ? "text-rose-600" : tone} disabled:opacity-60`}
       onClick={(e) => {
         e.preventDefault();
@@ -35,7 +35,7 @@ export function FavouriteButton({ kind, id, initial, dark = false, size = "md", 
       }}
     >
       <span aria-hidden>{state.mine ? "♥" : "♡"}</span>
-      {withLabel && <span>{state.mine ? "Favourite" : "Add to favourites"}</span>}
+      {withLabel && <span>{state.mine ? "Favorite" : "Add to favorites"}</span>}
       {state.count > 0 && <span className={state.mine ? "" : tone}>{withLabel ? `· ${state.count}` : state.count}</span>}
     </button>
   );

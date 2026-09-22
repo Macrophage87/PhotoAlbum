@@ -77,7 +77,7 @@
         },
         {
           "kind": "p",
-          "text": "Every photograph has a heart. Press **Add to favourites** while you are looking at it big, or the ♡ on its little square in a grid. To find them again, press **Favourites** in the menu for every favourite in the album, or the **Favourites** tab on a trip or a collection for just that one. **Mine** is the ones you marked, newest first; **Everyone's** is the whole family's, with the ones most of us marked at the top."
+          "text": "Every photograph has a heart. Press **Add to favorites** while you are looking at it big, or the ♡ on its little square in a grid. To find them again, press **Favorites** in the menu for every favorite in the album, or the **Favorites** tab on a trip or a collection for just that one. **Mine** is the ones you marked, newest first; **Everyone's** is the whole family's, with the ones most of us marked at the top."
         },
         {
           "kind": "h3",
@@ -285,7 +285,7 @@
       "blocks": [
         {
           "kind": "p",
-          "text": "The album can keep track of who is in a photograph, so you can ask for “the ones with Mum in them”."
+          "text": "The album can keep track of who is in a photograph, so you can ask for “the ones with Mom in them”."
         },
         {
           "kind": "h3",
@@ -303,7 +303,7 @@
               "You point at a face and say who it is. Anyone who can edit the photograph can do this. It does not switch anything on."
             ],
             [
-              "Recognising somebody",
+              "Recognizing somebody",
               "The album learns a face and looks for it in new photographs. This needs that person's agreement, and only an admin can turn it on."
             ],
             [
@@ -314,7 +314,7 @@
         },
         {
           "kind": "p",
-          "text": "This is fussier than it needs to be for a family album, and that is deliberate: a face is not the same kind of thing as a caption, and somebody may be happy to be named without wanting to be recognised."
+          "text": "This is fussier than it needs to be for a family album, and that is deliberate: a face is not the same kind of thing as a caption, and somebody may be happy to be named without wanting to be recognized."
         },
         {
           "kind": "p",

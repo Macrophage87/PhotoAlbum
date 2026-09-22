@@ -8,7 +8,7 @@ const memberLinks = [
   { href: "/", label: "Trips" },
   { href: "/timeline", label: "Timeline" },
   { href: "/map", label: "Map" },
-  { href: "/favourites", label: "Favourites" },
+  { href: "/favorites", label: "Favorites" },
   { href: "/upload", label: "Upload" },
   { href: "/review", label: "Review" },
   { href: "/people", label: "People" },

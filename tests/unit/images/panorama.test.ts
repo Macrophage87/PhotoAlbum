@@ -6,7 +6,7 @@ import { makeRenditions } from "@/lib/images/renditions";
 
 const fixture = (name: string) => fileURLToPath(new URL(`../../fixtures/${name}`, import.meta.url));
 
-describe("recognising a panorama by its shape", () => {
+describe("recognizing a panorama by its shape", () => {
   it("leaves ordinary photographs alone, however wide the crop", () => {
     expect(isPanoramaShape(4032, 3024)).toBe(false); // a phone's usual 4:3
     expect(isPanoramaShape(3840, 2160)).toBe(false); // 16:9

@@ -3,7 +3,7 @@ import { cosine, scoreCandidate, suggest, words, type Candidate, type Item } fro
 
 const acadia: Candidate = { kind: "trip", id: "t1", title: "Acadia", startDay: "2025-08-10", endDay: "2025-08-16", timezone: "America/New_York", points: [{ lat: 44.35, lng: -68.2 }], landmarks: [{ lat: 44.32, lng: -68.19, title: "Ocean Path hike" }] };
 const lake: Candidate = { kind: "trip", id: "t2", title: "Lake House 2019", startDay: "2019-07-01", endDay: "2019-07-08", timezone: "UTC", points: [], landmarks: [] };
-const favourites: Candidate = { kind: "collection", id: "c1", title: "Summer favourites", description: "the best of the beach and the boat", tags: new Set(["boat", "beach"]), peopleIds: new Set(["p1"]), centroid: [1, 0, 0], itemCount: 5 };
+const favourites: Candidate = { kind: "collection", id: "c1", title: "Summer favorites", description: "the best of the beach and the boat", tags: new Set(["boat", "beach"]), peopleIds: new Set(["p1"]), centroid: [1, 0, 0], itemCount: 5 };
 const item = (over: Partial<Item> = {}): Item => ({ id: "x", day: "2025-08-12", lat: 44.33, lng: -68.19, tags: new Set(["boat", "lobster"]), text: "lunch on the boat", peopleIds: new Set(), embedding: null, tripId: null, collectionIds: new Set(), ...over });
 
 describe("suggestion scoring", () => {

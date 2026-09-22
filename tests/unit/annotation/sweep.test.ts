@@ -20,7 +20,7 @@ describe("the annotation sweep", () => {
     await db.appSetting.create({ data: { id: "app", annotationOptInAt: new Date(), annotationOptInById: admin.id } });
   });
 
-  it("skips an item whose only opt-out is on its trip, and sends its neighbour", async () => {
+  it("skips an item whose only opt-out is on its trip, and sends its neighbor", async () => {
     const admin = await db.user.findFirstOrThrow();
     const quiet = await db.trip.create({ data: { slug: "q", title: "Quiet", startDate: new Date("2025-01-01"), endDate: new Date("2025-01-02"), annotationOptOut: true, createdById: admin.id } });
     const loud = await db.trip.create({ data: { slug: "l", title: "Loud", startDate: new Date("2025-01-01"), endDate: new Date("2025-01-02"), createdById: admin.id } });
