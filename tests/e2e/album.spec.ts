@@ -413,16 +413,23 @@ test("an activity on the list opens by pressing the card, not only its title", a
   // A phone, which is where this was reported: the little map beside the title is hidden at this width, so before
   // the whole head of the card became a link there was nothing to press but the words themselves.
   await page.setViewportSize({ width: 390, height: 844 });
+  // Put a photograph on the outing, since what was reported is not seeing them: the card must say there is one,
+  // and pressing it must land somewhere they are.
+  const act = await withDb((c) => c.query(`SELECT id FROM "Activity" WHERE title = 'Ocean Path loop' LIMIT 1`));
+  const onIt = await withDb((c) => c.query(`SELECT p.id FROM "Photo" p JOIN "Trip" t ON t.id = p."tripId" WHERE t.slug = 'acadia' AND p.status = 'READY' AND p."trashedAt" IS NULL AND p."activityId" IS NULL ORDER BY p.id LIMIT 1`));
+  await withDb((c) => c.query(`UPDATE "Photo" SET "activityId" = $2 WHERE id = $1`, [onIt.rows[0].id, act.rows[0].id]));
+
   await page.goto("/trips/acadia/activities");
   const card = page.locator("article").first();
   // The card says what is inside it, which is the other half of "I do not see the photos".
-  await expect(card).toContainText(/\d+ photos?/);
+  await expect(card).toContainText("1 photo");
   // Press the middle of the card, well away from the title.
   await card.click({ position: { x: 200, y: 120 } });
   await expect(page).toHaveURL(/\/trips\/acadia\/activities\/[a-z0-9]+$/);
   await expect(page.getByRole("heading", { name: "Ocean Path loop" })).toBeVisible();
   await expect(page.locator("li.tile-lazy").first()).toBeVisible();
   await page.setViewportSize({ width: 1280, height: 720 });
+  await withDb((c) => c.query(`UPDATE "Photo" SET "activityId" = NULL WHERE id = $1`, [onIt.rows[0].id]));
 });
 
 test("a photograph can be taken off an activity and stays on the trip", async ({ context, page }) => {
