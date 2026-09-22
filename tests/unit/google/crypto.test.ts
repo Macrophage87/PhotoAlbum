@@ -18,6 +18,6 @@ describe("sealed refresh tokens", () => {
     const parts = sealed.split(".");
     parts[3] = Buffer.from(Buffer.from(parts[3], "base64url").map((b, i) => (i === 0 ? b ^ 1 : b))).toString("base64url");
     expect(() => decryptSecret(parts.join("."), key)).toThrow();
-    expect(() => decryptSecret("nonsense", key)).toThrow(/Unrecognised/);
+    expect(() => decryptSecret("nonsense", key)).toThrow(/Unrecognized/);
   });
 });

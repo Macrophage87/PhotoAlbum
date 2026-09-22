@@ -894,7 +894,7 @@ test("faces are found once an admin opts in, named with consent recorded, shown 
   const form = page.locator("form").filter({ hasText: "Name these faces" }).first();
   await form.getByRole("textbox", { name: "Name", exact: true }).fill("Grandma Jo");
   await form.getByRole("textbox", { name: "Birthday" }).fill("1946-03-02");
-  await form.getByRole("checkbox", { name: /Recognise this person/ }).check();
+  await form.getByRole("checkbox", { name: /Recognize this person/ }).check();
   await form.getByRole("button", { name: "Name these faces" }).click();
   await expect(page.getByRole("link", { name: /Grandma Jo/ })).toBeVisible();
   await expect(page.getByText("recognized · by birthday")).toBeVisible();
@@ -945,7 +945,7 @@ test("a consented person is proposed on the next upload, names in the notes prop
   const form = page.locator("form").filter({ hasText: "Name these faces" }).first();
   await form.getByRole("textbox", { name: "Name", exact: true }).fill("Uncle Dan");
   await form.getByRole("textbox", { name: "Birthday" }).fill("1970-01-15");
-  await form.getByRole("checkbox", { name: /Recognise this person/ }).check();
+  await form.getByRole("checkbox", { name: /Recognize this person/ }).check();
   await form.getByRole("button", { name: "Name these faces" }).click();
   await expect(page.getByRole("link", { name: /Uncle Dan/ })).toBeVisible();
 
@@ -1489,14 +1489,14 @@ test("a family member moves an item to the trash with a reason, and an admin res
   // on somebody else's, while the admin sees it on both.
   await memberPage.goto(`/photos/${victim}`);
   await memberPage.waitForLoadState("networkidle");
-  await expect(memberPage.getByRole("button", { name: /Crop and colour|Edit again/ })).toBeVisible();
+  await expect(memberPage.getByRole("button", { name: /Crop and color|Edit again/ })).toBeVisible();
   const adminsOwn = await withDb((c) => c.query(`SELECT p.id FROM "Photo" p JOIN "User" u ON u.id = p."uploaderId" WHERE u.email = $1 AND p.kind = 'PHOTO' AND p.status = 'READY' LIMIT 1`, [ADMIN]));
   await memberPage.goto(`/photos/${adminsOwn.rows[0].id}`);
   await memberPage.waitForLoadState("networkidle");
-  await expect(memberPage.getByRole("button", { name: /Crop and colour|Edit again/ })).toHaveCount(0);
+  await expect(memberPage.getByRole("button", { name: /Crop and color|Edit again/ })).toHaveCount(0);
   await page.goto(`/photos/${victim}`);
   await page.waitForLoadState("networkidle");
-  await expect(page.getByRole("button", { name: /Crop and colour|Edit again/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /Crop and color|Edit again/ })).toBeVisible();
 
   // The member says why, and it leaves the album everywhere at once.
   await memberPage.goto(`/photos/${victim}`);
