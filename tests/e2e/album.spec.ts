@@ -334,9 +334,13 @@ test("the helper writes an activity's description from its own photographs, and 
   await page.getByTestId("activity-description-save").click();
   await expect(page.getByTestId("activity-description")).toContainText("and then we had chips");
 
-  // Whoever holds the activity's link reads it too.
+  // Whoever holds the activity's link reads it too. Wait for the page to show the link before reading it out of
+  // the database: pressing the button starts a server action, and asking Postgres the instant after the click can
+  // beat the write to it, which reads as a share that produced no token at all.
   await page.getByTestId("activity-share-on").click();
+  await expect(page.getByTestId("activity-shared")).toBeVisible();
   const token = (await withDb((c) => c.query(`SELECT "shareToken" FROM "Activity" WHERE id = $1`, [activityId]))).rows[0].shareToken as string;
+  expect(token).toBeTruthy();
   const anon = await browser.newContext();
   const guest = await anon.newPage();
   await guest.goto(`/share/a/${token}`);
