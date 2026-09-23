@@ -223,6 +223,14 @@
           "text": "The album reads the date the camera wrote and puts each photograph on the trip that was happening then. If no trip matches, it waits in **Photos without a trip** until somebody files it."
         },
         {
+          "kind": "h3",
+          "text": "Straight into an outing or a collection"
+        },
+        {
+          "kind": "p",
+          "text": "Open the outing and press **Add photos to this activity**, or open the collection and press **Upload photos to this collection**, then choose the photographs. They go there whatever their dates say. Ones put in a collection also go onto a trip if their dates match one, since a collection is a scrapbook, not a place."
+        },
+        {
           "kind": "note",
           "text": "**Photographs from an Android phone often arrive with no place on them.** That is the phone, not the album: it removes the location from the copy it hands over. The map can still be filled in afterwards — see “Fixing something that is wrong”."
         }

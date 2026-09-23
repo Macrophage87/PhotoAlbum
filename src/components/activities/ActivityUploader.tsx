@@ -1,9 +1,4 @@
-"use client";
-
-import { useState } from "react";
-import { useRouter } from "next/navigation";
-import { Button } from "@/components/ui";
-import { Uploader } from "@/components/photos/Uploader";
+import { InlineUploader } from "@/components/photos/InlineUploader";
 
 /**
  * Adding photos to an activity from the activity's own page.
@@ -14,22 +9,14 @@ import { Uploader } from "@/components/photos/Uploader";
  * there even when their dates say otherwise.
  */
 export function ActivityUploader({ activityId, maxClipSeconds, annotationActive }: { activityId: string; maxClipSeconds: number; annotationActive: boolean }) {
-  const [open, setOpen] = useState(false);
-  const router = useRouter();
-  if (!open) {
-    return (
-      <Button variant="secondary" size="sm" onClick={() => setOpen(true)} data-testid="activity-upload-open">
-        Add photos to this activity
-      </Button>
-    );
-  }
   return (
-    <div className="rounded-theme border border-border bg-surface p-4 space-y-3" data-testid="activity-upload">
-      <div className="flex items-center justify-between gap-2">
-        <p className="text-sm">These go on this activity and its trip, whatever date the files carry.</p>
-        <Button variant="ghost" size="sm" onClick={() => { setOpen(false); router.refresh(); }}>Done</Button>
-      </div>
-      <Uploader activityId={activityId} maxClipSeconds={maxClipSeconds} annotationActive={annotationActive} onDone={() => router.refresh()} />
-    </div>
+    <InlineUploader
+      target={{ activityId }}
+      openLabel="Add photos to this activity"
+      note="These go on this activity and its trip, whatever date the files carry."
+      testId="activity-upload"
+      maxClipSeconds={maxClipSeconds}
+      annotationActive={annotationActive}
+    />
   );
 }

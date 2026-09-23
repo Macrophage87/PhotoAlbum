@@ -6,6 +6,9 @@ import { Timeline } from "@/components/timeline/Timeline";
 import { SelectionProvider } from "@/components/photos/selection";
 import { ButtonLink } from "@/components/ui";
 import { peopleInPhotos } from "@/lib/people/in-photos";
+import { CollectionUploader } from "@/components/collections/CollectionUploader";
+import { env } from "@/lib/env";
+import { annotationGates } from "@/lib/annotation/eligibility";
 
 /** What a collection opens on: the days its photographs were taken, in order, and a way to ask it for one of them. */
 export default async function CollectionTimelinePage({ params, searchParams }: PageProps<"/collections/[slug]">) {
@@ -13,16 +16,17 @@ export default async function CollectionTimelinePage({ params, searchParams }: P
   const sp = await searchParams;
   const { collection, editable } = await loadViewableCollection(slug);
   const filter = parseGalleryFilter(sp, { member: editable });
-  const [{ groups, matched, total, active }, people] = await Promise.all([
+  const [{ groups, matched, total, active }, people, gates] = await Promise.all([
     collectionTimeline(collection.id, filter),
     editable ? peopleInPhotos({ collectionId: collection.id }) : Promise.resolve([]),
+    editable ? annotationGates() : Promise.resolve(null),
   ]);
   const timeline = (
     <div className="space-y-4">
       {editable && (
         <div className="flex flex-wrap items-center gap-2">
           <ButtonLink href={`/collections/${slug}/add`} size="sm">Add existing photos</ButtonLink>
-          <ButtonLink href={`/upload?collection=${slug}`} size="sm" variant="secondary">Upload</ButtonLink>
+          <CollectionUploader collectionId={collection.id} maxClipSeconds={env().MAX_CLIP_SECONDS} annotationActive={Boolean(gates?.active)} />
         </div>
       )}
       <GalleryFilters filter={filter} action={`/collections/${slug}`} people={editable ? people : undefined} placeholder="Search this collection" />

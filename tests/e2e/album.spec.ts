@@ -2092,7 +2092,7 @@ test("photographs are taken off a trip and out of a collection, and stay in the 
     .toBe(1);
 });
 
-test("a file the album already has, sent to a trip or a collection, is put there instead of copied", async ({ context, page }) => {
+test("a file the album already has, sent to a trip or a collection, is put there instead of copied, and a collection takes uploads on its own page", async ({ context, page }) => {
   await signIn(context, ADMIN);
   const bytes = Buffer.concat([fs.readFileSync(fixture("photo-with-gps.jpg")), Buffer.from(`\n<!-- filed not copied ${randomUUID()} -->`)]);
   const rows = async () => (await withDb((c) => c.query(`SELECT id, "tripId" FROM "Photo" WHERE "originalName" = 'filed.jpg' AND "trashedAt" IS NULL`))).rows as { id: string; tripId: string | null }[];
@@ -2114,19 +2114,27 @@ test("a file the album already has, sent to a trip or a collection, is put there
     await expect(page.getByTestId("filed-here")).toContainText("put where you chose instead of being copied", { timeout: 60_000 });
     expect(await rows()).toEqual([{ id: first.id, tripId: trip.id }]);
 
-    // And to a collection, from the collection's own Upload button: into it, and still on its trip.
-    await page.goto(`/collections/${collection.slug}/overview`);
-    await page.getByRole("main").getByRole("link", { name: "Upload", exact: true }).first().click();
-    await expect(page).toHaveURL(new RegExp(`/upload\\?collection=${collection.slug}`));
-    await chooseSameFile(page, "filed.jpg", bytes);
+    // And to a collection, uploaded on the collection's own page: into it, and still on its trip.
+    await page.goto(`/collections/${collection.slug}`);
+    await page.waitForLoadState("networkidle");
+    await page.getByTestId("collection-upload-open").click();
+    const here = page.getByTestId("collection-upload");
+    // Something new first, which goes straight into the collection as it arrives.
+    const fresh = Buffer.concat([fs.readFileSync(fixture("photo-with-gps.jpg")), Buffer.from(`\n<!-- new to the album ${randomUUID()} -->`)]);
+    await here.locator('input[type="file"]').first().setInputFiles({ name: "straight-in.jpg", mimeType: "image/jpeg", buffer: fresh });
+    await expect
+      .poll(async () => (await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "CollectionItem" ci JOIN "Photo" p ON p.id = ci."photoId" WHERE p."originalName" = 'straight-in.jpg' AND ci."collectionId" = $1`, [collection.id]))).rows[0].n, { timeout: 60_000, intervals: [500] })
+      .toBe(1);
+    // Then the one the album already has.
+    await here.locator('input[type="file"]').first().setInputFiles({ name: "filed.jpg", mimeType: "image/jpeg", buffer: bytes });
     await expect(page.getByTestId("filed-here")).toBeVisible({ timeout: 60_000 });
     await expect
       .poll(async () => (await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "CollectionItem" WHERE "photoId" = $1 AND "collectionId" = $2`, [first.id, collection.id]))).rows[0].n)
       .toBe(1);
     expect(await rows()).toEqual([{ id: first.id, tripId: trip.id }]);
   } finally {
-    await withDb((c) => c.query(`DELETE FROM "CollectionItem" WHERE "photoId" = $1`, [first.id]));
-    await withDb((c) => c.query(`UPDATE "Photo" SET "trashedAt" = now(), "trashReason" = 'DUPLICATE' WHERE id = $1`, [first.id]));
+    await withDb((c) => c.query(`DELETE FROM "CollectionItem" WHERE "photoId" IN (SELECT id FROM "Photo" WHERE id = $1 OR "originalName" = 'straight-in.jpg')`, [first.id]));
+    await withDb((c) => c.query(`UPDATE "Photo" SET "trashedAt" = now(), "trashReason" = 'DUPLICATE' WHERE id = $1 OR "originalName" = 'straight-in.jpg'`, [first.id]));
   }
 });
 
