@@ -8,7 +8,7 @@ export type NavLink = { href: string; label: string };
 
 /**
  * Collapsed navigation for narrow screens: a menu button that opens a panel of links.
- * The desktop link row is hidden below the `sm` breakpoint, and this component is hidden above it,
+ * The desktop link row is hidden below the `lg` breakpoint, and this component is hidden above it,
  * so each link exists exactly once at any viewport width.
  */
 export function MobileNav({ links, signedIn, name }: { links: NavLink[]; signedIn: boolean; name?: string | null }) {
@@ -17,7 +17,7 @@ export function MobileNav({ links, signedIn, name }: { links: NavLink[]; signedI
   const close = () => setOpen(false);
 
   return (
-    <div className="sm:hidden">
+    <div className="lg:hidden">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}

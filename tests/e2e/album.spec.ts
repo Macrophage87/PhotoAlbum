@@ -63,7 +63,9 @@ test("first sign-in bootstraps the admin and lands on the trip grid", async ({ c
   await signIn(context, ADMIN);
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Trips" })).toBeVisible();
-  await expect(page.getByRole("link", { name: "Admin" })).toBeVisible();
+  // Admin is one of the links folded behind "More" at a laptop's width.
+  await page.getByTestId("nav-more").click();
+  await expect(page.getByRole("link", { name: "Admin", exact: true })).toBeVisible();
   const role = await withDb((c) => c.query('SELECT role FROM "User" WHERE email = $1', [ADMIN]));
   expect(role.rows[0].role).toBe("ADMIN");
 });
@@ -2681,6 +2683,22 @@ test("the map's rings can be colored by day, by activity, or by who uploaded, an
   await blankTiles(page);
   await page.goto("/trips/acadia/map");
   await expect(page.getByTestId("map-count")).toBeVisible();
+  // The bar across the top fits a laptop for an admin, who has the most places to go: nothing scrolls sideways, Sign
+  // out is on screen, and the rest is one press away behind "More", from the keyboard too.
+  for (const width of [1280, 1366, 1440]) {
+    await page.setViewportSize({ width, height: 800 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBe(0);
+    await expect(page.getByRole("button", { name: "Sign out" })).toBeInViewport();
+  }
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.getByTestId("nav-more").focus();
+  await page.keyboard.press("Enter");
+  const more = page.locator("#more-menu");
+  await expect(more.getByRole("link", { name: "Admin", exact: true })).toBeVisible();
+  await expect(more).toContainText("Signed in as");
+  await page.keyboard.press("Escape");
+  await expect(more).toHaveCount(0);
+  await expect(page.getByTestId("nav-more")).toBeFocused();
   const photos = Number((await page.getByTestId("map-count").textContent())!.match(/(\d+) photo/)![1]);
   expect(photos).toBeGreaterThan(1);
   const picker = page.getByTestId("map-colour-by").getByRole("combobox");
