@@ -200,6 +200,22 @@
         },
         {
           "kind": "h3",
+          "text": "If an upload stops partway"
+        },
+        {
+          "kind": "p",
+          "text": "The connection drops, the phone goes to sleep, the page gets closed: whatever the reason, the fix is the same. **Choose all the same photographs again and upload them again.** There is no need to work out which ones made it."
+        },
+        {
+          "kind": "note",
+          "text": "**Nothing gets doubled.** The album recognizes a photograph it already has and does not add it a second time; beside those it says they were already in the album. Only the ones that were missing are added."
+        },
+        {
+          "kind": "small",
+          "text": "This works for the very same files. A copy that has since been edited, or saved again by another app, counts as a different photograph."
+        },
+        {
+          "kind": "h3",
           "text": "Where do they end up?"
         },
         {
@@ -435,6 +451,10 @@
             "What to do"
           ],
           "rows": [
+            [
+              "An upload stopped partway",
+              "Upload all the same photographs again. The ones the album already has are recognized and skipped, so nothing is doubled. See “Adding your own photographs”."
+            ],
             [
               "Wrong date, so it is under the wrong day",
               "Open the photograph and change the date. On the timeline you can pick up a whole day at once — press **Select photos**, then **Select this day** — which is the usual fix for a box of old scans that all landed on the day somebody scanned them."
