@@ -2170,6 +2170,44 @@ test("a photograph says it is done as soon as it is done, while the rest are sti
   console.log(`[timing] ready at +${readyAt - started}ms, tile showed ${lag}ms later`);
 });
 
+test("a batch whose progress checks go missing keeps its photographs, and says so without failing any", async ({ context, page }) => {
+  // Four missed answers in a row, backed off as they are, is most of a minute: the length of the thing being tested.
+  test.setTimeout(150_000);
+  await signIn(context, ADMIN);
+  await withDb((c) => c.query(`DELETE FROM "Photo" WHERE "originalName" LIKE 'blip-%'`));
+  await page.goto("/upload");
+  await page.waitForLoadState("networkidle");
+
+  // A phone that locks its screen or changes networks while a hundred photographs are being processed misses an
+  // answer or two. That used to mark every photograph still processing as failed, and list them all as ones the
+  // album could not keep — when every one of them was safe on the server. Here the first four answers go missing.
+  let missing = 4;
+  await page.route("**/api/photos/status**", async (route) => {
+    if (missing > 0) {
+      missing -= 1;
+      return route.fulfill({ status: 502, body: "Bad gateway" });
+    }
+    return route.continue();
+  });
+  const base = fs.readFileSync(fixture("photo-with-gps.jpg"));
+  await page.locator('input[type="file"]').first().setInputFiles(
+    [1, 2, 3].map((n) => ({ name: `blip-${n}.jpg`, mimeType: "image/jpeg", buffer: Buffer.concat([base, Buffer.from(`\n<!-- ${randomUUID()} -->`)]) })),
+  );
+
+  // It says it has lost touch, and fails nothing.
+  await expect(page.getByTestId("status-trouble")).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByTestId("status-trouble")).toContainText("safe on the server");
+  await expect(page.locator("li span.text-red-600")).toHaveCount(0);
+  await expect(page.getByRole("alert")).toHaveCount(0);
+
+  // And once the answers come back, every one of them turns out fine and the notice goes away.
+  await expect(page.getByTestId("upload-progress")).toHaveText("All 3 uploaded.", { timeout: 60_000 });
+  await expect(page.locator("ul li img")).toHaveCount(3);
+  await expect(page.getByTestId("status-trouble")).toHaveCount(0);
+  expect((await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "Photo" WHERE "originalName" LIKE 'blip-%' AND status = 'READY'`))).rows[0].n).toBe(3);
+  await withDb((c) => c.query(`DELETE FROM "Photo" WHERE "originalName" LIKE 'blip-%'`));
+});
+
 test("the admin page says who has been looking, and tells a secret link from the family", async ({ browser, context, page }) => {
   await signIn(context, ADMIN);
   await createTrip({ slug: "visitors", title: "Counted Trip", start: "2025-07-01", end: "2025-07-05", visibility: "LINK", shareToken: "counted-secret-token", ownerEmail: ADMIN });

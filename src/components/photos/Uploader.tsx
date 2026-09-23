@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Button, buttonClasses } from "@/components/ui";
 import { albumTakes, isScanPick, isVideoPick, refusalFor } from "@/lib/media/picker";
-import { backoffMs, isRetryable, MAX_ATTEMPTS, progressLine } from "@/lib/media/upload-retry";
+import { backoffMs, isRetryable, MAX_ATTEMPTS, MAX_BATCH, overCapMessage, progressLine, STATUS_NOTICE_AFTER, statusRetryMs } from "@/lib/media/upload-retry";
 import { AttemptError, attemptUpload } from "@/lib/media/upload-one";
 
 type Item = {
@@ -26,8 +26,6 @@ type Item = {
 
 const CONCURRENCY = 3;
 
-/** How often the album is asked what became of the items that are being processed. */
-const STATUS_POLL_MS = 1500;
 /** How many to ask about at once, so a long batch never builds an address longer than something in front will take. */
 const MAX_STATUS_IDS = 60;
 
@@ -93,6 +91,14 @@ export function Uploader({ tripId, activityId, onDone, maxClipSeconds = 90, anno
   const queue = useRef<Item[]>([]);
   /** How to stop each upload that is in the air, so leaving the page does not leave requests running. */
   const inFlight = useRef(new Map<string, () => void>());
+
+  /** The list as it is now, for code that runs outside a render (adding files) and must not read a stale copy. */
+  const itemsRef = useRef<Item[]>([]);
+  useEffect(() => {
+    itemsRef.current = items;
+  }, [items]);
+  /** Set when answers about processing have stopped coming back for a while; says so without failing anything. */
+  const [statusTrouble, setStatusTrouble] = useState<null | "offline" | "signedout">(null);
 
   const update = useCallback((localId: string, patch: Partial<Item>) => {
     setItems((prev) => prev.map((it) => (it.localId === localId ? { ...it, ...patch } : it)));
@@ -176,6 +182,14 @@ export function Uploader({ tripId, activityId, onDone, maxClipSeconds = 90, anno
         }
         fresh.push({ localId: key, file, progress: 0, status: "queued" });
       }
+      // What is still going counts against the cap too, so adding a hundred, then another hundred, then another
+      // before the first have finished is the same as adding three hundred at once.
+      const inPlay = itemsRef.current.filter((i) => i.status === "queued" || i.status === "uploading" || i.status === "processing").length;
+      const room = Math.max(0, MAX_BATCH - inPlay);
+      if (fresh.length > room) {
+        const over = fresh.splice(room);
+        refused.push({ key: `cap-${over[0].localId}`, name: over.length === 1 ? over[0].file.name : `${over.length} files`, why: overCapMessage(over.length) });
+      }
       if (!fresh.length && !refused.length) return;
       if (refused.length) setRefusals((prev) => [...prev, ...refused]);
       setItems((prev) => [...prev, ...fresh]);
@@ -207,36 +221,68 @@ export function Uploader({ tripId, activityId, onDone, maxClipSeconds = 90, anno
   const anyPending = pending.length > 0;
   useEffect(() => {
     if (!anyPending) return;
+    // A missed answer is not a failed photograph. The photographs are on the server and being processed whether or
+    // not this page is watching; a batch of a hundred takes minutes, and in minutes a phone will lock its screen or
+    // change networks. This used to mark every photograph still processing as failed at the first missed answer —
+    // and then list all of them as ones the album could not keep. Now a missed answer is waited out, longer each
+    // time, and only the server saying FAILED about a photograph fails it.
+    let stopped = false;
+    let misses = 0;
+    /** One question at a time: a wake-up arriving mid-question must not start a second round of asking. */
     let asking = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const schedule = (ms: number) => {
+      if (!stopped) timer = setTimeout(tick, ms);
+    };
     const tick = async () => {
       // A hundred ids is a long address; ask about the oldest and let the rest follow as these settle.
       const ids = pendingRef.current.slice(0, MAX_STATUS_IDS);
       if (!ids.length || asking) return;
       asking = true;
-      try {
-        const res = await fetch(`/api/photos/status?ids=${ids.join(",")}`).catch(() => null);
-        if (!res || !res.ok) {
-          const message = res?.status === 401 ? "Signed out. Sign in again to see the result." : "Lost contact with the server. Reload the page to check.";
-          // Give up on status polling rather than spinning forever; the photos themselves are already safe.
-          setItems((prev) => prev.map((it) => (it.status === "processing" ? { ...it, status: "failed", error: message } : it)));
-          return;
-        }
-        const { photos } = (await res.json()) as { photos: { id: string; status: string; error: string | null; thumbUrl: string | null; trip: Item["trip"] }[] };
-        setItems((prev) =>
-          prev.map((it) => {
-            const p = photos.find((x) => x.id === it.photoId);
-            if (!p) return it;
-            if (p.status === "READY") return { ...it, status: "ready", thumbUrl: p.thumbUrl, trip: p.trip };
-            if (p.status === "FAILED") return { ...it, status: "failed", error: p.error ?? "Processing failed" };
-            return it;
-          }),
-        );
-      } finally {
-        asking = false;
+      const res = await fetch(`/api/photos/status?ids=${ids.join(",")}`).catch(() => null);
+      asking = false;
+      if (stopped) return;
+      if (res?.status === 401) {
+        // Nothing more can be learned until they sign in again, and asking every second will not change that.
+        setStatusTrouble("signedout");
+        return;
       }
+      if (!res || !res.ok) {
+        misses += 1;
+        if (misses >= STATUS_NOTICE_AFTER) setStatusTrouble("offline");
+        schedule(statusRetryMs(misses));
+        return;
+      }
+      misses = 0;
+      setStatusTrouble(null);
+      const { photos } = (await res.json()) as { photos: { id: string; status: string; error: string | null; thumbUrl: string | null; trip: Item["trip"] }[] };
+      setItems((prev) =>
+        prev.map((it) => {
+          const p = photos.find((x) => x.id === it.photoId);
+          if (!p) return it;
+          if (p.status === "READY") return { ...it, status: "ready", thumbUrl: p.thumbUrl, trip: p.trip };
+          if (p.status === "FAILED") return { ...it, status: "failed", error: p.error ?? "Processing failed" };
+          return it;
+        }),
+      );
+      schedule(statusRetryMs(0));
     };
-    const timer = setInterval(tick, STATUS_POLL_MS);
-    return () => clearInterval(timer);
+    schedule(statusRetryMs(0));
+    // A phone coming back from a locked screen, or a laptop from sleep, is exactly when a long wait between
+    // attempts is wrong: ask straight away rather than sitting out the rest of it.
+    const again = () => {
+      if (document.visibilityState !== "visible" || stopped) return;
+      clearTimeout(timer);
+      void tick();
+    };
+    document.addEventListener("visibilitychange", again);
+    window.addEventListener("online", again);
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+      document.removeEventListener("visibilitychange", again);
+      window.removeEventListener("online", again);
+    };
   }, [anyPending]);
 
   /**
@@ -261,6 +307,8 @@ export function Uploader({ tripId, activityId, onDone, maxClipSeconds = 90, anno
     waiting: items.filter((i) => i.retrying).length,
     inFlight: items.filter((i) => i.status === "uploading").length,
     total: items.length,
+    ready: items.filter((i) => i.status === "ready").length,
+    processing: items.filter((i) => i.status === "processing").length,
   };
   /** Anything a member would want to know before closing the tab, said in one line rather than in a hundred tiles. */
   const busy = items.some((i) => i.status === "queued" || i.status === "uploading");
@@ -314,7 +362,8 @@ export function Uploader({ tripId, activityId, onDone, maxClipSeconds = 90, anno
         <p className="font-medium">Drop photos, short clips or 3D scans here</p>
         <p className="text-sm text-muted mt-1">
           JPEG, PNG, HEIC and more; MP4, MOV or WebM clips up to {maxClipSeconds} seconds (longer videos go on YouTube);
-          3D scans from Scaniverse and the like as GLB, USDZ, PLY or SPZ. Several at a time is fine.
+          3D scans from Scaniverse and the like as GLB, USDZ, PLY or SPZ. Up to {MAX_BATCH} at a time; a big batch takes a
+          few minutes to finish after it arrives, and carries on even if you leave this page.
         </p>
         <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
           <Button type="button" variant="secondary" onClick={() => libraryRef.current?.click()}>
@@ -350,6 +399,14 @@ export function Uploader({ tripId, activityId, onDone, maxClipSeconds = 90, anno
           <span aria-live="polite" className={counts.failed ? "font-medium text-red-700" : "text-muted"}>{progressLine(counts)}</span>
           {counts.waiting > 0 && <span className="text-amber-700">The connection dropped; trying again.</span>}
         </div>
+      )}
+      {/* Said without failing anything: the photographs are on the server either way, and are being processed. */}
+      {statusTrouble && counts.processing > 0 && (
+        <p className="text-sm text-amber-800" role="status" data-testid="status-trouble">
+          {statusTrouble === "signedout"
+            ? "You were signed out, so this page cannot see how the rest turned out. They are safe on the server — sign in again and they will be in the album."
+            : "This page has lost touch with the album for a moment. The photographs are safe on the server and still being processed; it will keep asking."}
+        </p>
       )}
 
       {allSettled && alreadyHere.length > 0 && (
@@ -417,7 +474,9 @@ export function Uploader({ tripId, activityId, onDone, maxClipSeconds = 90, anno
             {doneIds.length} of {items.length} uploaded.
           </span>
           {doneIds.length > 0 && (
-            <Link href={`/review?ids=${doneIds.join(",")}`} className={buttonClasses("primary", "sm")}>
+            // A long batch is a long address: past what the status check asks about in one go, send them to the
+            // review page as a whole, where everything not yet reviewed — these included — is waiting.
+            <Link href={doneIds.length <= MAX_STATUS_IDS ? `/review?ids=${doneIds.join(",")}` : "/review"} className={buttonClasses("primary", "sm")}>
               Add notes and file {doneIds.length === 1 ? "it" : "them"}
             </Link>
           )}
