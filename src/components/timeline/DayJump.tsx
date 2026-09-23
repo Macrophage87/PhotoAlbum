@@ -85,6 +85,18 @@ export function DayJump({ days, current, label }: { days: NavDay[]; current: str
                             <span className="flex-1 truncate">{d.key === "undated" ? "No date" : formatDay(d.key, "shortDay")}</span>
                             <span className="text-sm text-muted">{d.count} photo{d.count === 1 ? "" : "s"}</span>
                           </button>
+                          {d.activities?.map((a) => (
+                            <button
+                              key={a.id}
+                              type="button"
+                              data-activity-jump={a.id}
+                              onClick={() => go(a.id)}
+                              className="flex w-full items-baseline gap-2 rounded-theme py-1.5 pl-6 pr-2 text-left text-sm text-muted hover:bg-surface-alt hover:text-text"
+                            >
+                              <span className="flex-1 truncate">{a.title}</span>
+                              <span>{a.count}</span>
+                            </button>
+                          ))}
                         </li>
                       ))}
                     </ul>

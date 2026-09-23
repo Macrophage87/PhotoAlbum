@@ -2620,3 +2620,113 @@ test("on a phone the day heading itself opens the whole timeline to choose from"
   await expect(sheet).toBeHidden();
   await expect(page.locator(`#${target}`)).toBeInViewport({ timeout: 10_000 });
 });
+
+test("a day's count includes the photographs on its activities, and its activities are listed under it", async ({ context, page }) => {
+  await signIn(context, ADMIN);
+  const trip = await withDb((c) => c.query(`SELECT id FROM "Trip" WHERE slug = 'acadia'`));
+  const tripId = trip.rows[0].id as string;
+  const ids = await withDb((c) => c.query(`SELECT id FROM "Photo" WHERE "tripId" = $1 AND status = 'READY' AND "trashedAt" IS NULL ORDER BY "createdAt" LIMIT 3`, [tripId]));
+  expect(ids.rows.length).toBe(3);
+  // A day of its own, far from the rest: one photograph loose in the morning and two on an afternoon walk.
+  const activityId = `act-${randomUUID()}`;
+  await withDb((c) => c.query(`INSERT INTO "Activity" (id, "tripId", title, type, "startTime", "endTime", "updatedAt") VALUES ($1, $2, 'Ocean Path walk', 'HIKE', $3, $4, now())`, [activityId, tripId, new Date(Date.UTC(2031, 2, 14, 14)), new Date(Date.UTC(2031, 2, 14, 16))]));
+  const at = (h: number) => new Date(Date.UTC(2031, 2, 14, h));
+  await withDb((c) => c.query(`UPDATE "Photo" SET "takenAt" = $2, "tzOffsetMin" = 0, "takenAtSource" = 'EXIF_OFFSET', "activityId" = NULL WHERE id = $1`, [ids.rows[0].id, at(9)]));
+  for (const row of ids.rows.slice(1)) {
+    await withDb((c) => c.query(`UPDATE "Photo" SET "takenAt" = $2, "tzOffsetMin" = 0, "takenAtSource" = 'EXIF_OFFSET', "activityId" = $3 WHERE id = $1`, [row.id, at(15), activityId]));
+  }
+
+  try {
+    await page.goto("/trips/acadia");
+    await page.waitForLoadState("networkidle");
+    const nav = page.getByTestId("timeline-nav");
+    await expect(nav).toBeVisible();
+    const day = nav.locator('a[data-day="day-2031-03-14"]');
+    // Three, not two: the walk counts for its photographs, not as one thing.
+    await expect(day).toContainText("3");
+    await expect(page.locator("#day-2031-03-14 li.tile-lazy")).toHaveCount(3);
+
+    // The walk sits under its day in the panel, with its own count, and takes you to its card.
+    const walk = nav.locator(`a[data-activity="day-2031-03-14-${activityId}"]`);
+    await expect(walk).toContainText("Ocean Path walk");
+    await expect(walk).toContainText("2");
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await walk.click();
+    await expect(page.locator(`#day-2031-03-14-${activityId}`)).toBeInViewport({ timeout: 10_000 });
+
+    // And on a phone, the same list of days carries the same walk.
+    await page.setViewportSize({ width: 390, height: 780 });
+    await page.getByTestId("day-jump").first().click();
+    const sheet = page.getByTestId("day-jump-sheet");
+    await expect(sheet.locator(`[data-activity-jump="day-2031-03-14-${activityId}"]`)).toContainText("Ocean Path walk");
+  } finally {
+    await withDb((c) => c.query(`UPDATE "Photo" SET "activityId" = NULL WHERE "activityId" = $1`, [activityId]));
+    await withDb((c) => c.query(`DELETE FROM "Activity" WHERE id = $1`, [activityId]));
+  }
+});
+
+/**
+ * Let a map finish loading in here. There is no way out to a tile server, and MapLibre does not add its own layers
+ * until the first tiles have answered, so every request that would leave the machine is given a blank tile.
+ */
+async function blankTiles(page: Page) {
+  const blank = await sharp({ create: { width: 256, height: 256, channels: 3, background: "#e8e6df" } }).png().toBuffer();
+  await page.route(/^https?:\/\/(?!localhost|127\.0\.0\.1)/, (route) =>
+    route.request().url().endsWith(".png") ? route.fulfill({ contentType: "image/png", body: blank }) : route.fulfill({ status: 404, body: "" }),
+  );
+}
+
+test("the map's rings can be colored by day, by activity, or by who uploaded, and remember the choice", async ({ browser, context, page }) => {
+  await signIn(context, ADMIN);
+  await blankTiles(page);
+  await page.goto("/trips/acadia/map");
+  await expect(page.getByTestId("map-count")).toBeVisible();
+  const photos = Number((await page.getByTestId("map-count").textContent())!.match(/(\d+) photo/)![1]);
+  expect(photos).toBeGreaterThan(1);
+  const picker = page.getByTestId("map-colour-by").getByRole("combobox");
+  // Whether the single-photograph rings are showing, once the map has drawn its layers; null until then.
+  const ringsShown = () =>
+    page.evaluate(() => {
+      type Probe = { getLayer(l: string): unknown; getLayoutProperty(l: string, p: string): string };
+      const map = (document.querySelector(".maplibregl-map") as (HTMLElement & { __map?: Probe }) | null)?.__map;
+      return map?.getLayer("photo-rings") ? map.getLayoutProperty("photo-rings", "visibility") : null;
+    });
+
+  // Uncolored to begin with: the trip's own markers, and no legend.
+  await expect(page.getByTestId("map-legend")).toHaveCount(0);
+  await expect.poll(ringsShown).toBe("none");
+
+  for (const by of ["Day", "Activity", "Who uploaded"]) {
+    await picker.selectOption({ label: by });
+    const legend = page.getByTestId("map-legend");
+    await expect(legend).toBeVisible();
+    // Every photograph on the map is in the legend exactly once.
+    const counts = await legend.locator("li span:last-child").allTextContents();
+    expect(counts.reduce((n, t) => n + Number(t), 0)).toBe(photos);
+    await expect.poll(ringsShown).toBe("visible");
+  }
+  await page.screenshot({ path: "test-results/map-rings.png" });
+
+  // Remembered on this device.
+  await page.reload();
+  await expect(page.getByTestId("map-colour-by").getByRole("combobox")).toHaveValue("uploader");
+  await expect(page.getByTestId("map-legend")).toBeVisible();
+
+  // Somebody who is not signed in can color by day or activity, but who uploaded what is for the family only.
+  await setVisibility("acadia", "PUBLIC");
+  const anon = await browser.newContext();
+  try {
+    const anonPage = await anon.newPage();
+    const res = await anonPage.request.get("/api/trips/acadia/geojson");
+    const body = await res.json();
+    expect(body.photos.features.length).toBeGreaterThan(0);
+    expect(body.photos.features.every((f: { properties: { uploaderId: unknown; uploaderName: unknown } }) => f.properties.uploaderId === null && f.properties.uploaderName === null)).toBe(true);
+    await anonPage.goto("/trips/acadia/map");
+    const theirs = anonPage.getByTestId("map-colour-by").getByRole("combobox");
+    await expect(theirs).toBeVisible();
+    await expect(theirs.locator("option")).toHaveText(["Nothing", "Day", "Activity"]);
+  } finally {
+    await anon.close();
+    await setVisibility("acadia", "PRIVATE");
+  }
+});

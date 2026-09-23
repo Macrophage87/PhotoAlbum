@@ -67,7 +67,7 @@ export function PlaceOnMap({ src, theme, initial, tripTitle }: { src: string; th
           (p): GeoJSON.Feature<GeoJSON.Point, PhotoFeatureProps> => ({
             type: "Feature",
             geometry: { type: "Point", coordinates: [at.lng, at.lat] },
-            properties: { id: p.id, thumbUrl: p.thumbUrl, mediumUrl: p.thumbUrl, caption: p.label, takenAt: p.takenAt, tripSlug: "", tripTitle: p.tripTitle ?? "", activityId: null, gpsSource: "MANUAL" },
+            properties: { id: p.id, thumbUrl: p.thumbUrl, mediumUrl: p.thumbUrl, caption: p.label, takenAt: p.takenAt, tripSlug: "", tripTitle: p.tripTitle ?? "", activityId: null, gpsSource: "MANUAL", day: null, activityTitle: null, uploaderId: null, uploaderName: null },
           }),
         ),
       ]);

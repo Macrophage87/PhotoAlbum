@@ -1,4 +1,4 @@
-import type { DayGroup } from "@/lib/timeline/build";
+import { photosOnDay, type DayGroup } from "@/lib/timeline/build";
 import type { PhotoCard } from "@/lib/photos/queries";
 import { formatDay, formatLocalTime } from "@/lib/time/format";
 import { toGridPhoto } from "@/components/photos/toGrid";
@@ -19,7 +19,11 @@ export async function Timeline({ groups, tripSlug, timezone, member, idPrefix = 
   // favorites they are, loaded for the whole page in two small queries. Members only — a favorite is a person's.
   const hearts = member ? await photoFavourites(groups.flatMap((g) => g.items.flatMap((i) => i.photos.map((p) => p.id))), await getViewer()) : new Map();
   const tile = (p: PhotoCard) => toGridPhoto(p, null, member, hearts.get(p.id) ?? (member ? { mine: false, count: 0 } : null));
-  const days = groups.map((g) => ({ key: g.dayKey ?? "undated", id: `${idPrefix}-${g.dayKey ?? "undated"}`, count: g.items.reduce((n, i) => n + (i.kind === "activity" ? 1 : i.photos.length), 0) }));
+  const days = groups.map((g) => {
+    const id = `${idPrefix}-${g.dayKey ?? "undated"}`;
+    const activities = g.items.flatMap((i) => (i.kind === "activity" ? [{ id: `${id}-${i.activity.id}`, title: i.activity.title, count: i.photos.length }] : []));
+    return { key: g.dayKey ?? "undated", id, count: photosOnDay(g), activities };
+  });
   return (
     <div className="flex flex-col lg:flex-row gap-8">
       <TimelineNav days={days} />
@@ -35,7 +39,8 @@ export async function Timeline({ groups, tripSlug, timezone, member, idPrefix = 
             </TimelineDrop>
             <ol className="relative border-l border-border ml-2 pl-6 space-y-6 mt-2">
               {g.items.map((item, ii) => (
-                <li key={ii} className="relative">
+                // An activity's card is an anchor too, so the panel can take the reader straight to it.
+                <li key={ii} className="relative scroll-mt-32" id={item.kind === "activity" ? `${days[gi].id}-${item.activity.id}` : undefined}>
                   <span className="absolute -left-[1.85rem] top-2 w-3 h-3 rounded-full bg-primary ring-4 ring-bg" />
                   {item.kind === "activity" ? (
                     // A photograph dropped on an activity card is filed there by hand, whatever the clock says.

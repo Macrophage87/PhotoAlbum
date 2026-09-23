@@ -11,9 +11,25 @@ import { Prisma } from "@/generated/prisma/client";
 import { filterIsActive, NO_FILTER, type GalleryFilter } from "@/lib/photos/filters";
 import { idsInLocalYear, idsMatching, intersectIds } from "@/lib/photos/page";
 import { idsWithPerson } from "@/lib/people/in-photos";
+import { localDayFromOffset, localDayInZone } from "@/lib/time/local-day";
+import { uploaderLabel } from "@/components/photos/toGrid";
 
-export type PhotoFeatureProps = { id: string; thumbUrl: string; mediumUrl: string; caption: string | null; takenAt: string | null; tripSlug: string; tripTitle: string; activityId: string | null; gpsSource: string | null };
-export type TrackFeatureProps = { trackId: string; activityId: string | null; activityTitle: string | null; activityType: string | null; source: string; name: string; tripSlug: string; tripTitle: string; color: string; startTime: string; distanceM: number | null };
+/**
+ * What the map needs to colour a photograph by: its local day, its activity, and who uploaded it. Who uploaded it is
+ * part of the members-only layer, so it is null for anybody who is not signed in.
+ */
+type ColourableProps = { day: string | null; activityTitle: string | null; uploaderId: string | null; uploaderName: string | null };
+export type PhotoFeatureProps = { id: string; thumbUrl: string; mediumUrl: string; caption: string | null; takenAt: string | null; tripSlug: string; tripTitle: string; activityId: string | null; gpsSource: string | null } & ColourableProps;
+export type TrackFeatureProps = { trackId: string; activityId: string | null; activityTitle: string | null; activityType: string | null; source: string; name: string; tripSlug: string; tripTitle: string; color: string; startTime: string; distanceM: number | null } & ColourableProps;
+
+/** The day a photograph was taken where it was taken: its own clock's offset when it has one, else the trip's zone. */
+function dayOf(takenAt: Date | null, tzOffsetMin: number | null, timezone: string): string | null {
+  if (!takenAt) return null;
+  return tzOffsetMin !== null ? localDayFromOffset(takenAt, tzOffsetMin) : localDayInZone(takenAt, timezone);
+}
+
+type Uploader = { id: string; name: string | null; email: string } | null;
+const who = (member: boolean, u: Uploader) => (member && u ? { uploaderId: u.id, uploaderName: uploaderLabel(u.name, u.email) } : { uploaderId: null, uploaderName: null });
 
 export type MapPayload = {
   photos: GeoJSON.FeatureCollection<GeoJSON.Point, PhotoFeatureProps>;
@@ -30,7 +46,7 @@ export type MapPayload = {
  * search means the same thing on every surface: asking the map for "lighthouse" shows where the lighthouse
  * photographs were taken, which is a thing a map can answer and a list cannot.
  */
-async function narrowing(filter: GalleryFilter, tripId: string | null): Promise<{ where: Prisma.PhotoWhereInput; nothing: boolean }> {
+export async function narrowing(filter: GalleryFilter, tripId: string | null): Promise<{ where: Prisma.PhotoWhereInput; nothing: boolean }> {
   const lists: string[][] = [];
   if (filter.q) lists.push(await idsMatching(filter.q));
   if (filter.year) lists.push(await idsInLocalYear(tripId, filter.year));
@@ -60,7 +76,8 @@ export async function buildMapPayload(viewer: Viewer, tripId?: string, filter: G
   const active = filterIsActive(filter);
   const narrowed = await narrowing(filter, tripId ?? null);
   const tripWhere = tripId ? { id: tripId } : visibleTripsWhere(viewer);
-  const trips = await db.trip.findMany({ where: tripWhere, select: { id: true, slug: true, title: true, themeKey: true }, orderBy: { startDate: "desc" } });
+  const member = viewer.kind === "user";
+  const trips = await db.trip.findMany({ where: tripWhere, select: { id: true, slug: true, title: true, themeKey: true, timezone: true }, orderBy: { startDate: "desc" } });
   const tripIds = trips.map((t) => t.id);
   const tripById = new Map(trips.map((t) => [t.id, t]));
 
@@ -77,12 +94,12 @@ export async function buildMapPayload(viewer: Viewer, tripId?: string, filter: G
             lng: { not: null },
             ...narrowed.where,
           },
-          select: { id: true, lat: true, lng: true, caption: true, takenAt: true, updatedAt: true, tripId: true, activityId: true, gpsSource: true },
+          select: { id: true, lat: true, lng: true, caption: true, takenAt: true, tzOffsetMin: true, updatedAt: true, tripId: true, activityId: true, gpsSource: true, activity: { select: { title: true } }, uploader: { select: { id: true, name: true, email: true } } },
           orderBy: { takenAt: "asc" },
         }),
     db.track.findMany({
       where: { tripId: { in: tripIds } },
-      select: { id: true, tripId: true, name: true, source: true, simplified: true, startTime: true, minLat: true, maxLat: true, minLng: true, maxLng: true, activity: { select: { id: true, title: true, type: true } }, stats: { select: { distanceM: true } } },
+      select: { id: true, tripId: true, name: true, source: true, simplified: true, startTime: true, minLat: true, maxLat: true, minLng: true, maxLng: true, activity: { select: { id: true, title: true, type: true } }, stats: { select: { distanceM: true } }, uploader: { select: { id: true, name: true, email: true } } },
       orderBy: { startTime: "asc" },
     }),
   ]);
@@ -103,7 +120,20 @@ export async function buildMapPayload(viewer: Viewer, tripId?: string, filter: G
     return {
       type: "Feature" as const,
       geometry: { type: "Point" as const, coordinates: [p.lng, p.lat] },
-      properties: { id: p.id, thumbUrl: photoUrl(p, "thumb"), mediumUrl: photoUrl(p, "medium"), caption: p.caption, takenAt: p.takenAt?.toISOString() ?? null, tripSlug: trip?.slug ?? "", tripTitle: trip?.title ?? "", activityId: p.activityId, gpsSource: p.gpsSource },
+      properties: {
+        id: p.id,
+        thumbUrl: photoUrl(p, "thumb"),
+        mediumUrl: photoUrl(p, "medium"),
+        caption: p.caption,
+        takenAt: p.takenAt?.toISOString() ?? null,
+        tripSlug: trip?.slug ?? "",
+        tripTitle: trip?.title ?? "",
+        activityId: p.activityId,
+        gpsSource: p.gpsSource,
+        day: dayOf(p.takenAt, p.tzOffsetMin, trip?.timezone ?? "UTC"),
+        activityTitle: p.activity?.title ?? null,
+        ...who(member, p.uploader),
+      },
     };
   });
   const trackFeatures = tracks.map((t) => {
@@ -125,6 +155,8 @@ export async function buildMapPayload(viewer: Viewer, tripId?: string, filter: G
         color: t.activity ? ACTIVITY_COLOR[t.activity.type] : getTheme(trip.themeKey).map.trackColor,
         startTime: t.startTime.toISOString(),
         distanceM: t.stats?.distanceM ?? null,
+        day: localDayInZone(t.startTime, trip.timezone),
+        ...who(member, t.uploader),
       },
     };
   });
@@ -145,17 +177,32 @@ export async function buildCollectionMapPayload(viewer: Viewer, collectionId: st
   const narrowed = await narrowing(filter, null);
   const found = narrowed.nothing ? [] : await db.photo.findMany({
     where: { ...NOT_TRASHED, status: "READY", lat: { not: null }, lng: { not: null }, collections: { some: { collectionId } }, ...narrowed.where },
-    select: { id: true, lat: true, lng: true, caption: true, takenAt: true, updatedAt: true, activityId: true, gpsSource: true, trip: { select: { id: true, slug: true, title: true, visibility: true, shareToken: true } } },
+    select: { id: true, lat: true, lng: true, caption: true, takenAt: true, tzOffsetMin: true, updatedAt: true, activityId: true, gpsSource: true, activity: { select: { title: true } }, uploader: { select: { id: true, name: true, email: true } }, trip: { select: { id: true, slug: true, title: true, visibility: true, shareToken: true, timezone: true } } },
     orderBy: { takenAt: "asc" },
   });
   let all: Bounds | null = null;
   const photos = spreadOverlapping(found.map((p) => ({ ...p, lat: p.lat!, lng: p.lng! })));
   const features = photos.map((p) => {
     all = mergeBounds(all, { minLat: p.lat, maxLat: p.lat, minLng: p.lng, maxLng: p.lng });
+    const tripOpen = Boolean(p.trip && canViewTrip(viewer, p.trip));
     return {
       type: "Feature" as const,
       geometry: { type: "Point" as const, coordinates: [p.lng, p.lat] },
-      properties: { id: p.id, thumbUrl: photoUrl(p, "thumb"), mediumUrl: photoUrl(p, "medium"), caption: p.caption, takenAt: p.takenAt?.toISOString() ?? null, tripSlug: p.trip && canViewTrip(viewer, p.trip) ? p.trip.slug : "", tripTitle: p.trip && canViewTrip(viewer, p.trip) ? p.trip.title : "", activityId: p.activityId, gpsSource: p.gpsSource },
+      properties: {
+        id: p.id,
+        thumbUrl: photoUrl(p, "thumb"),
+        mediumUrl: photoUrl(p, "medium"),
+        caption: p.caption,
+        takenAt: p.takenAt?.toISOString() ?? null,
+        tripSlug: tripOpen ? p.trip!.slug : "",
+        tripTitle: tripOpen ? p.trip!.title : "",
+        activityId: p.activityId,
+        gpsSource: p.gpsSource,
+        day: dayOf(p.takenAt, p.tzOffsetMin, p.trip?.timezone ?? "UTC"),
+        // An activity belongs to its trip: named only where the trip itself may be opened, like the trip's own name.
+        activityTitle: tripOpen ? (p.activity?.title ?? null) : null,
+        ...who(viewer.kind === "user", p.uploader),
+      },
     };
   });
   const b = all as Bounds | null;

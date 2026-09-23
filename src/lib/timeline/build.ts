@@ -56,3 +56,8 @@ export function buildTimeline<P extends TimelinePhoto, A extends TimelineActivit
   if (undated.length) groups.push({ dayKey: null, items: [{ kind: "photos", time: new Date(0), photos: undated }] });
   return groups;
 }
+
+/** How many photographs a day holds, the ones filed on its activities included: an outing is part of its day. */
+export function photosOnDay<P, A>(group: DayGroup<P, A>): number {
+  return group.items.reduce((n, i) => n + i.photos.length, 0);
+}

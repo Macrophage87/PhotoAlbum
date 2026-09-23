@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildTimeline } from "@/lib/timeline/build";
+import { buildTimeline, photosOnDay } from "@/lib/timeline/build";
 
 const p = (id: string, iso: string | null, activityId: string | null = null, tzOffsetMin: number | null = -240) => ({ id, takenAt: iso ? new Date(iso) : null, tzOffsetMin, activityId });
 const a = (id: string, s: string, e: string) => ({ id, startTime: new Date(s), endTime: new Date(e) });
@@ -39,5 +39,15 @@ describe("buildTimeline", () => {
     const acts = [a("late", "2025-08-12T18:00:00Z", "2025-08-12T19:00:00Z"), a("early", "2025-08-12T08:00:00Z", "2025-08-12T09:00:00Z")];
     const groups = buildTimeline([], acts, "UTC");
     expect(groups[0].items.map((i) => (i.kind === "activity" ? i.activity.id : "?"))).toEqual(["early", "late"]);
+  });
+});
+
+describe("counting a day's photographs", () => {
+  it("counts the ones on its activities as well as the loose ones, not one per activity", () => {
+    const acts = [a("hike", "2025-08-12T13:00:00Z", "2025-08-12T17:00:00Z"), a("swim", "2025-08-12T18:00:00Z", "2025-08-12T19:00:00Z")];
+    const photos = [p("breakfast", "2025-08-12T11:30:00Z"), p("t1", "2025-08-12T14:00:00Z", "hike"), p("t2", "2025-08-12T14:10:00Z", "hike"), p("t3", "2025-08-12T14:20:00Z", "hike")];
+    const [day] = buildTimeline(photos, acts, "America/New_York");
+    // Three on the walk, one at breakfast; the swim with nothing on it adds nothing.
+    expect(photosOnDay(day)).toBe(4);
   });
 });

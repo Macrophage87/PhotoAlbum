@@ -57,7 +57,7 @@
         },
         {
           "kind": "p",
-          "text": "Down the left there is a list of every day. Press one to jump to it. The day you are looking at is marked as you scroll."
+          "text": "Down the left there is a list of every day, with how many photographs it holds and that day's walks and outings under it. Press a day, or an outing, to jump to it. The day you are looking at is marked as you scroll."
         },
         {
           "kind": "h3",
@@ -65,7 +65,7 @@
         },
         {
           "kind": "p",
-          "text": "There is no room for the list, so the date at the top of the screen does the job. Press the date and every day appears; press one to go there."
+          "text": "There is no room for the list, so the date at the top of the screen does the job. Press the date and every day appears, with its outings under it; press one to go there."
         },
         {
           "kind": "p",
@@ -96,7 +96,7 @@
             ],
             [
               "Map",
-              "Where photographs were taken. Useful for “where was that beach?”"
+              "Where photographs were taken. Useful for “where was that beach?” Use **Color by** to ring each photograph in the color of its day, its outing or the person who added it."
             ],
             [
               "Activities",

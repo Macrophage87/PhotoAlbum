@@ -3,7 +3,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { formatDay } from "@/lib/time/format";
 
-export type NavDay = { key: string; id: string; count: number };
+/** An outing on a day: its title, the anchor of its card on the path, and how many photographs are on it. */
+export type NavActivity = { id: string; title: string; count: number };
+
+/** `count` is every photograph on the day, the ones on its activities included. */
+export type NavDay = { key: string; id: string; count: number; activities?: NavActivity[] };
 
 /** Days gathered under the month they fall in; undated photographs sit at the end under their own heading. */
 export type NavMonth = { key: string; label: string; days: NavDay[]; count: number };
@@ -147,6 +151,27 @@ export function TimelineNav({ days }: { days: NavDay[] }) {
                         <span className="flex-1 truncate">{d.key === "undated" ? "No date" : formatDay(d.key, "shortDay")}</span>
                         <span className="text-xs text-muted">{d.count}</span>
                       </a>
+                      {/* The day's outings under it, so "the lighthouse walk" can be found without remembering which day it was. */}
+                      {d.activities && d.activities.length > 0 && (
+                        <ul className="mb-1">
+                          {d.activities.map((a) => (
+                            <li key={a.id}>
+                              <a
+                                href={`#${a.id}`}
+                                data-activity={a.id}
+                                onClick={() => {
+                                  asked.current = d.id;
+                                  setActive(d.id);
+                                }}
+                                className="flex items-baseline gap-1.5 pl-6 py-0.5 text-xs text-muted hover:text-text"
+                              >
+                                <span className="flex-1 truncate">{a.title}</span>
+                                <span>{a.count}</span>
+                              </a>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
                     </li>
                   ))}
                 </ul>
