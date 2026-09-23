@@ -35,15 +35,22 @@ export default async function TripMapPage({ params, searchParams }: PageProps<"/
         activities={activities.map((a) => ({ id: a.id, label: a.title }))}
         placeholder="Search this trip"
       />
-      {editable && (
-        <p className="text-sm flex flex-wrap items-center gap-3">
-          <span className="text-muted">
-            {waiting > 0 ? `${waiting} photograph${waiting === 1 ? " has" : "s have"} no place on this trip, or only a guessed one.` : "Something in the wrong spot? Move it where it belongs."}
-          </span>
-          <ButtonLink href={`/trips/${slug}/place`} size="sm" variant="secondary" data-testid="open-place">Place photos</ButtonLink>
-        </p>
-      )}
-      <TripMap key={query} src={`/api/trips/${slug}/geojson${query ? `?${query}` : ""}`} theme={mapThemeOf(getTheme(trip.themeKey))} narrowed={filterIsActive(filter)} />
+      <TripMap
+        key={query}
+        src={`/api/trips/${slug}/geojson${query ? `?${query}` : ""}`}
+        theme={mapThemeOf(getTheme(trip.themeKey))}
+        narrowed={filterIsActive(filter)}
+        below={
+          editable ? (
+            <p className="text-sm flex flex-wrap items-center gap-3">
+              <ButtonLink href={`/trips/${slug}/place`} size="sm" variant="secondary" data-testid="open-place">Place photos</ButtonLink>
+              <span className="text-muted">
+                {waiting > 0 ? `${waiting} photograph${waiting === 1 ? " has" : "s have"} no place on this trip, or only a guessed one.` : "Something in the wrong spot? Move it where it belongs."}
+              </span>
+            </p>
+          ) : undefined
+        }
+      />
     </div>
   );
 }

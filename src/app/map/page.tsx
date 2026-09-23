@@ -26,7 +26,6 @@ export default async function GlobalMapPage({ searchParams }: PageProps<"/map">)
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h1 className="font-display text-3xl font-semibold">Map</h1>
           <div className="flex flex-wrap items-center gap-2">
-            {viewer.kind === "user" && <ButtonLink href="/place" size="sm" variant="secondary">Place photos</ButtonLink>}
             <CollectionFilter current={filter ? { slug: filter.slug, title: filter.title } : null} basePath="/map" />
           </div>
         </div>
@@ -37,6 +36,7 @@ export default async function GlobalMapPage({ searchParams }: PageProps<"/map">)
           theme={mapThemeOf(getTheme(filter?.themeKey ?? "default"))}
           showTripList={!filter}
           narrowed={filterIsActive(narrow)}
+          below={viewer.kind === "user" ? <ButtonLink href="/place" size="sm" variant="secondary">Place photos</ButtonLink> : undefined}
         />
       </Container>
     </AppShell>
