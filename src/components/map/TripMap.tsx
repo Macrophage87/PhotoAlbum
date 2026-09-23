@@ -11,7 +11,7 @@ import { ACTIVITY_LABEL } from "@/lib/activities/types";
 import type { ActivityType } from "@/generated/prisma/enums";
 import { ActivityTypeIcon } from "@/components/activities/ActivityTypeIcon";
 import { formatDistance } from "@/lib/time/format";
-import { ringsFor, SLOT_COLOURS, type ColourBy } from "@/lib/map/colour-by";
+import { ringsFor, type ColourBy } from "@/lib/map/colour-by";
 
 const COLOUR_BY_KEY = "map-colour-by";
 const COLOUR_BY_LABEL: Record<ColourBy, string> = { none: "Nothing", day: "Day", activity: "Activity", uploader: "Who uploaded" };
@@ -67,9 +67,10 @@ export function TripMap({ src, theme, showTripList = false, activityHrefBase, na
     const rings = ringsFor(by, data.photos.features.map((f) => f.properties), data.tracks.features.map((f) => f.properties));
     return {
       groups: rings.groups,
+      colours: rings.colours,
       photos: { ...data.photos, features: data.photos.features.map((f) => ({ ...f, properties: { ...f.properties, slot: rings.photoSlot(f.properties) } })) },
       // A track takes the colour of what it belongs to, so a walk and the photographs along it match.
-      tracks: { ...data.tracks, features: data.tracks.features.map((f) => ({ ...f, properties: { ...f.properties, color: SLOT_COLOURS[rings.trackSlot(f.properties)] } })) },
+      tracks: { ...data.tracks, features: data.tracks.features.map((f) => ({ ...f, properties: { ...f.properties, color: rings.colours[rings.trackSlot(f.properties)] } })) },
     };
   }, [data, by]);
   const tracks = (coloured?.tracks ?? data?.tracks)?.features ?? [];
@@ -96,7 +97,7 @@ export function TripMap({ src, theme, showTripList = false, activityHrefBase, na
             <ul className="flex flex-wrap items-center gap-x-3 gap-y-1" data-testid="map-legend">
               {coloured.groups.map((g) => (
                 <li key={g.slot} className="inline-flex items-center gap-1.5 text-sm" data-slot={g.slot}>
-                  <span aria-hidden className="w-3.5 h-3.5 shrink-0 rounded-full border-[3px]" style={{ borderColor: SLOT_COLOURS[g.slot] }} />
+                  <span aria-hidden className="w-3.5 h-3.5 shrink-0 rounded-full border-[3px]" style={{ borderColor: coloured.colours[g.slot] }} />
                   <span>{g.label}</span>
                   <span className="text-xs text-muted">{g.count}</span>
                 </li>
@@ -112,6 +113,7 @@ export function TripMap({ src, theme, showTripList = false, activityHrefBase, na
               photos={coloured?.photos ?? data.photos}
               tracks={coloured?.tracks ?? data.tracks}
               rings={Boolean(coloured)}
+              slotColours={coloured?.colours}
               bounds={data.bounds}
               theme={theme}
               highlightTrackId={hover}

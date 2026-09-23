@@ -6,7 +6,7 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import type { MapTheme } from "@/lib/map/theme";
 import type { PhotoFeatureProps, TrackFeatureProps } from "@/lib/map/geojson";
 import { basemapStyle } from "./style";
-import { SLOT_COLOURS } from "@/lib/map/colour-by";
+import { SLOT_COLOURS, SLOT_COUNT } from "@/lib/map/colour-by";
 
 /** A photograph on the map, with the colour slot of its ring when the map is coloured by something. */
 export type MapPhotoProps = PhotoFeatureProps & { slot?: number };
@@ -29,6 +29,8 @@ export type MapViewProps = {
   interactive?: boolean;
   /** Ring every photograph, and every group of them, in the colour of its `slot`. */
   rings?: boolean;
+  /** Each slot's colour, by slot number; the categorical set unless given. */
+  slotColours?: readonly string[];
   /** A tap on a photograph's pin is handed straight to `onPhotoClick`, without the preview in between. */
   directPhotoClick?: boolean;
   /** A click on the map itself (not on a photo or track), for placing things. */
@@ -54,7 +56,7 @@ function clusterRadius(count: number): number {
  * hairline of white between arcs so neighbouring colours do not run together. The middle is left empty, so the
  * group's own circle and count show through it.
  */
-function clusterRing(counts: number[]): HTMLElement {
+function clusterRing(counts: number[], colours: readonly string[]): HTMLElement {
   const total = counts.reduce((a, b) => a + b, 0) || 1;
   const r = clusterRadius(total);
   const width = 6;
@@ -68,7 +70,7 @@ function clusterRing(counts: number[]): HTMLElement {
   const arcs = parts
     .map(({ n, slot }) => {
       const len = (n / total) * around;
-      const arc = `<circle cx="${c}" cy="${c}" r="${mid}" fill="none" stroke="${SLOT_COLOURS[slot]}" stroke-width="${width}" stroke-dasharray="${Math.max(0.5, len - gap)} ${around}" stroke-dashoffset="${-offset}" transform="rotate(-90 ${c} ${c})"/>`;
+      const arc = `<circle cx="${c}" cy="${c}" r="${mid}" fill="none" stroke="${colours[slot]}" stroke-width="${width}" stroke-dasharray="${Math.max(0.5, len - gap)} ${around}" stroke-dashoffset="${-offset}" transform="rotate(-90 ${c} ${c})"/>`;
       offset += len;
       return arc;
     })
@@ -81,6 +83,11 @@ function clusterRing(counts: number[]): HTMLElement {
   return el;
 }
 
+/** A lookup of ring colour by slot number. The spread is too loose for MapLibre's tuple type, and the shape is right. */
+function ringColour(colours: readonly string[]): ExpressionSpecification {
+  return ["match", ["coalesce", ["get", "slot"], -1], ...colours.flatMap((colour, i) => [i, colour]), "#ffffff"] as unknown as ExpressionSpecification;
+}
+
 function svgToImage(svg: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image(64, 64);
@@ -90,7 +97,7 @@ function svgToImage(svg: string): Promise<HTMLImageElement> {
   });
 }
 
-export function MapView({ photos, tracks, bounds, theme, className = "", onPhotoClick, onTrackClick, onTrackHover, highlightTrackId, marker, focusBounds, interactive = true, rings = false, directPhotoClick = false, onMapClick, onDropAt, acceptsDrop }: MapViewProps) {
+export function MapView({ photos, tracks, bounds, theme, className = "", onPhotoClick, onTrackClick, onTrackHover, highlightTrackId, marker, focusBounds, interactive = true, rings = false, slotColours = SLOT_COLOURS, directPhotoClick = false, onMapClick, onDropAt, acceptsDrop }: MapViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MLMap | null>(null);
   const markerRef = useRef<Marker | null>(null);
@@ -144,7 +151,7 @@ export function MapView({ photos, tracks, bounds, theme, className = "", onPhoto
         clusterRadius: 48,
         clusterMaxZoom: 16,
         // Each group keeps a count per ring colour, so its ring can be drawn in the shares it holds.
-        clusterProperties: Object.fromEntries(SLOT_COLOURS.map((_, i) => [`s${i}`, ["+", ["case", ["==", ["get", "slot"], i], 1, 0]]])),
+        clusterProperties: Object.fromEntries(Array.from({ length: SLOT_COUNT }, (_, i) => [`s${i}`, ["+", ["case", ["==", ["get", "slot"], i], 1, 0]]])),
       });
 
       map.addLayer({
@@ -197,8 +204,7 @@ export function MapView({ photos, tracks, bounds, theme, className = "", onPhoto
           "circle-radius": 17,
           "circle-color": "rgba(0,0,0,0)",
           "circle-stroke-width": 4.5,
-          // A lookup by slot number; the spread is too loose for MapLibre's tuple type, and the shape is right.
-          "circle-stroke-color": ["match", ["coalesce", ["get", "slot"], -1], ...SLOT_COLOURS.flatMap((colour, i) => [i, colour]), "#ffffff"] as unknown as ExpressionSpecification,
+          "circle-stroke-color": ringColour(SLOT_COLOURS),
         },
       });
       if (map.hasImage("photo-marker")) {
@@ -309,6 +315,7 @@ export function MapView({ photos, tracks, bounds, theme, className = "", onPhoto
     const map = mapRef.current;
     if (!map || !loaded) return;
     map.setLayoutProperty("photo-rings", "visibility", rings ? "visible" : "none");
+    map.setPaintProperty("photo-rings", "circle-stroke-color", ringColour(slotColours));
     map.setPaintProperty("clusters", "circle-stroke-width", rings ? 0 : 3);
     if (!rings) return;
     // Keyed by the group and what is in it: the same photographs coloured another way make groups with the same ids,
@@ -320,12 +327,12 @@ export function MapView({ photos, tracks, bounds, theme, className = "", onPhoto
       for (const f of map.querySourceFeatures("photos")) {
         const props = f.properties as Record<string, number> | null;
         if (!props?.cluster) continue;
-        const counts = SLOT_COLOURS.map((_, i) => Number(props[`s${i}`] ?? 0));
+        const counts = Array.from({ length: SLOT_COUNT }, (_, i) => Number(props[`s${i}`] ?? 0));
         const key = `${props.cluster_id}:${counts.join(",")}`;
         if (seen.has(key)) continue;
         seen.add(key);
         if (!drawn.has(key)) {
-          const m = new Marker({ element: clusterRing(counts) }).setLngLat((f.geometry as GeoJSON.Point).coordinates as [number, number]).addTo(map);
+          const m = new Marker({ element: clusterRing(counts, slotColours) }).setLngLat((f.geometry as GeoJSON.Point).coordinates as [number, number]).addTo(map);
           drawn.set(key, m);
         }
       }
@@ -343,7 +350,7 @@ export function MapView({ photos, tracks, bounds, theme, className = "", onPhoto
       for (const m of drawn.values()) m.remove();
     };
     // New data renumbers the groups, so the rings are drawn afresh whenever the photographs change.
-  }, [rings, photos, loaded]);
+  }, [rings, photos, loaded, slotColours]);
 
   // External highlight
   useEffect(() => {

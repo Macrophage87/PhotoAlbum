@@ -2704,6 +2704,7 @@ test("the map's rings can be colored by day, by activity, or by who uploaded, an
     const counts = await legend.locator("li span:last-child").allTextContents();
     expect(counts.reduce((n, t) => n + Number(t), 0)).toBe(photos);
     await expect.poll(ringsShown).toBe("visible");
+    if (by === "Day") await page.screenshot({ path: "test-results/map-days.png", fullPage: true });
   }
   await page.screenshot({ path: "test-results/map-rings.png", fullPage: true });
   // The choice and its key sit on top of the map, and the way to place photos directly under it.

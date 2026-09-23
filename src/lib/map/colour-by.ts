@@ -10,15 +10,51 @@ export type ColourBy = "none" | "day" | "activity" | "uploader";
  * not decoration: it is the one that keeps neighbouring hues apart for the common kinds of colour-blindness.
  */
 export const RING_HUES = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a3aa7", "#e34948"] as const;
-/** Everything past the eighth, folded together. */
-export const OTHER_SLOT = RING_HUES.length;
+
+/**
+ * Days are not separate things like people are: they come in order, so they are coloured along one scale, the first
+ * day dark and the last bright, and a glance at the map says early or late in the trip. The scale is viridis, which
+ * stays in order for colour-blind eyes and in greyscale too. More days can be told apart along a scale than in a set
+ * of unrelated hues, because a neighbour is only ever a little lighter or darker, so days keep a colour each up to
+ * fourteen; past that they are cut into fourteen runs of neighbouring days.
+ */
+export const MAX_DAY_SLOTS = 14;
+
+/** Viridis, sampled every eighth of the way from its dark purple end to its yellow end. */
+const VIRIDIS = ["#440154", "#472c7a", "#3b528b", "#2c728e", "#21918c", "#28ae80", "#5ec962", "#addc30", "#fde725"];
+/** Stop short of the palest yellow, which is hard to see as a thin ring on a pale map. */
+const VIRIDIS_TOP = 0.9;
+
+/** The colour `t` of the way along viridis (0 is the dark end), mixed between its two nearest samples. */
+export function viridis(t: number): string {
+  const x = Math.min(1, Math.max(0, t)) * (VIRIDIS.length - 1);
+  const i = Math.min(VIRIDIS.length - 2, Math.floor(x));
+  const f = x - i;
+  const rgb = (hex: string) => [1, 3, 5].map((k) => parseInt(hex.slice(k, k + 2), 16));
+  const a = rgb(VIRIDIS[i]);
+  const b = rgb(VIRIDIS[i + 1]);
+  return `#${a.map((v, k) => Math.round(v + (b[k] - v) * f).toString(16).padStart(2, "0")).join("")}`;
+}
+
+/** `n` colours spread evenly along the scale, earliest first. One day on its own takes the middle. */
+export function dayScale(n: number): string[] {
+  if (n <= 1) return [viridis(VIRIDIS_TOP / 2)];
+  return Array.from({ length: n }, (_, i) => viridis((i / (n - 1)) * VIRIDIS_TOP));
+}
+
+/** Everything past the last colour, folded together. */
+export const OTHER_SLOT = MAX_DAY_SLOTS;
 /** No day, no activity: the photographs the question has no answer for. */
-export const NONE_SLOT = RING_HUES.length + 1;
-/** Every slot's colour, by slot number. The two greys are told apart by the legend, which always names them. */
-export const SLOT_COLOURS: readonly string[] = [...RING_HUES, "#6b6a66", "#bdbcb6"];
+export const NONE_SLOT = MAX_DAY_SLOTS + 1;
+/** How many slots a map keeps count of, for every way of colouring it. */
+export const SLOT_COUNT = MAX_DAY_SLOTS + 2;
+const GREYS = ["#6b6a66", "#bdbcb6"];
+
+/** Slot colours for everything but days: the eight hues, then the two greys, which the legend always names. */
+export const SLOT_COLOURS: readonly string[] = [...RING_HUES, ...Array<string>(MAX_DAY_SLOTS - RING_HUES.length).fill(GREYS[0]), ...GREYS];
 
 export type RingGroup = { slot: number; label: string; count: number };
-export type Rings = { groups: RingGroup[]; photoSlot: (p: PhotoFeatureProps) => number; trackSlot: (t: TrackFeatureProps) => number };
+export type Rings = { groups: RingGroup[]; photoSlot: (p: PhotoFeatureProps) => number; trackSlot: (t: TrackFeatureProps) => number; /** Each slot's colour for this way of colouring, by slot number. */ colours: string[] };
 
 type Entry = { key: string; label: string; count: number; first: number };
 
@@ -28,8 +64,8 @@ const OTHER_LABEL: Record<Exclude<ColourBy, "none">, string> = { day: "Other day
 /**
  * Which colour each photograph's ring gets, and the legend that explains them.
  *
- * Days are in order, so when there are more than eight they are cut into eight runs of neighbouring days — "Aug 3 –
- * Aug 5" — rather than having all but seven folded into one grey. Activities keep the order they happened in and
+ * Days are in order and coloured along viridis, one colour a day, and past fourteen they are cut into fourteen runs
+ * of neighbouring days — "Aug 3 – Aug 5" — rather than folded into a grey. Activities keep the order they happened in and
  * people are in alphabetical order, and past eight the ones with the most photographs keep their colours and the rest
  * are folded into "Other". A track is coloured the same way as the photographs taken along it.
  */
@@ -59,16 +95,18 @@ export function ringsFor(by: Exclude<ColourBy, "none">, photos: PhotoFeatureProp
   const slotOfKey = new Map<string, number>();
   const groups: RingGroup[] = [];
 
-  if (order.length <= RING_HUES.length) {
+  const room = by === "day" ? MAX_DAY_SLOTS : RING_HUES.length;
+  // The year is worth saying only when the days shown are in more than one of them.
+  const years = by === "day" && new Set(order.map((e) => e.key.slice(0, 4))).size > 1;
+  if (order.length <= room) {
     order.forEach((e, i) => {
       slotOfKey.set(e.key, i);
-      groups.push({ slot: i, label: by === "day" ? formatDay(e.key, "shortDay") : e.label, count: e.count });
+      groups.push({ slot: i, label: by === "day" ? formatDay(e.key, years ? "shortYear" : "shortDay") : e.label, count: e.count });
     });
   } else if (by === "day") {
-    const years = new Set(order.map((e) => e.key.slice(0, 4))).size > 1;
     const style = years ? "shortYear" : "short";
-    for (let slot = 0; slot < RING_HUES.length; slot++) {
-      const run = order.filter((_, i) => Math.floor((i * RING_HUES.length) / order.length) === slot);
+    for (let slot = 0; slot < room; slot++) {
+      const run = order.filter((_, i) => Math.floor((i * room) / order.length) === slot);
       if (!run.length) continue;
       for (const e of run) slotOfKey.set(e.key, slot);
       const from = formatDay(run[0].key, style);
@@ -97,5 +135,8 @@ export function ringsFor(by: Exclude<ColourBy, "none">, photos: PhotoFeatureProp
     const key = keyOf(f);
     return key === null ? NONE_SLOT : (slotOfKey.get(key) ?? OTHER_SLOT);
   };
-  return { groups, photoSlot: slot, trackSlot: slot };
+  // Days take as many steps along the scale as there are colours in use, so a three-day trip spans dark to bright
+  // rather than using the first three fourteenths of it.
+  const colours = by === "day" ? [...dayScale(Math.min(order.length, room)), ...Array<string>(room).fill(GREYS[0])].slice(0, MAX_DAY_SLOTS).concat(GREYS) : [...SLOT_COLOURS];
+  return { groups, photoSlot: slot, trackSlot: slot, colours };
 }
