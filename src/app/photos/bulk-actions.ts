@@ -63,6 +63,57 @@ export async function bulkSetPlace(photoIds: string[], lat: number, lng: number,
   return r.count;
 }
 
+/** Where a photograph was before it was moved, so the move can be taken back. */
+export type PlaceBefore = { id: string; lat: number | null; lng: number | null; gpsSource: "EXIF" | "TRACK" | "MANUAL" | "SIDECAR" | "ESTIMATE" | null; placeName: string | null };
+
+const beforeSchema = z
+  .array(
+    z.object({
+      id: z.string().min(1),
+      lat: z.number().min(-90).max(90).nullable(),
+      lng: z.number().min(-180).max(180).nullable(),
+      gpsSource: z.enum(["EXIF", "TRACK", "MANUAL", "SIDECAR", "ESTIMATE"]).nullable(),
+      placeName: z.string().max(200).nullable(),
+    }),
+  )
+  .min(1)
+  .max(500);
+
+/**
+ * Put a selection on one spot, and hand back where each of them was.
+ *
+ * The same as `bulkSetPlace` apart from the answer: the placing screen offers "Undo" straight afterwards, because on a
+ * phone the likeliest mistake is a tap a street away from the one meant, and the fix should be one press.
+ * Nothing is revalidated: the screen keeps its own list, and every page that shows a position is built afresh when
+ * it is next opened. Rebuilding this one underneath would only make the phone fetch every link on it again.
+ */
+export async function placePhotos(photoIds: string[], lat: number, lng: number, name?: string | null): Promise<{ count: number; before: PlaceBefore[] }> {
+  const user = await requireUserOrThrow();
+  const list = await editableMediaIds(user, ids.parse(photoIds));
+  if (!list.length) return { count: 0, before: [] };
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) throw new Error("That is not a place on the map");
+  const before = await db.photo.findMany({ where: { id: { in: list } }, select: { id: true, lat: true, lng: true, gpsSource: true, placeName: true } });
+  const r = await db.photo.updateMany({ where: { id: { in: list } }, data: { lat, lng, altitude: null, gpsSource: "MANUAL", placeSetById: user.id, placeName: typeof name === "string" && name.trim() ? name.trim().slice(0, 200) : null } });
+  return { count: r.count, before };
+}
+
+/** Take a move back: each photograph returns to exactly where it was, whoever or whatever had put it there. */
+export async function restorePlaces(entries: PlaceBefore[]): Promise<number> {
+  const user = await requireUserOrThrow();
+  const all = beforeSchema.parse(entries);
+  const mine = new Set(await editableMediaIds(user, all.map((e) => e.id)));
+  const allowed = all.filter((e) => mine.has(e.id));
+  await db.$transaction(
+    allowed.map((e) =>
+      db.photo.update({
+        where: { id: e.id },
+        data: { lat: e.lat, lng: e.lng, gpsSource: e.lat === null ? null : e.gpsSource, placeName: e.placeName, ...(e.gpsSource === "MANUAL" ? {} : { placeSetById: null }) },
+      }),
+    ),
+  );
+  return allowed.length;
+}
+
 /** The instructions stored on a row, where they still make sense; anything unreadable is treated as none. */
 function editsOf(raw: unknown): PhotoEdits | null {
   const parsed = editsSchema.safeParse(raw);

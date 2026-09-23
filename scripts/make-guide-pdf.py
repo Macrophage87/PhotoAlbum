@@ -48,6 +48,8 @@ BREAK_BEFORE = {"finding", "trips", "sharing", "fixing", "ai"}
 def rich(text):
     """`**bold**` and `_italic_`, the two rules the guide's words use, in reportlab's own inline markup."""
     out = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    # Helvetica, the only font the printout carries, has no heart: on paper it is called what it is.
+    out = out.replace("♡", "heart").replace("♥", "heart")
     out = re.sub(r"\*\*([^*]+)\*\*", r"<b>\1</b>", out)
     return re.sub(r"_([^_]+)_", r"<i>\1</i>", out)
 

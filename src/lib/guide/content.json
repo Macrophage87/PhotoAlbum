@@ -366,6 +366,65 @@
       ]
     },
     {
+      "id": "placing",
+      "heading": "Putting photographs on the map, from a phone",
+      "blocks": [
+        {
+          "kind": "p",
+          "text": "A photograph from a camera usually knows where it was taken. Scans don't, and neither do many photographs sent from phones, so the map has nowhere to put them. You can put them there yourself, on a phone or a computer: in the car after a day out, or at home afterwards."
+        },
+        {
+          "kind": "h3",
+          "text": "Getting there"
+        },
+        {
+          "kind": "steps",
+          "items": [
+            "Open the trip.",
+            "Press **Map**.",
+            "Press **Place photos**, just above the map."
+          ]
+        },
+        {
+          "kind": "h3",
+          "text": "Placing"
+        },
+        {
+          "kind": "p",
+          "text": "The top of the screen is the map. Underneath are your photographs, a day at a time. The map stays put while you scroll through them."
+        },
+        {
+          "kind": "steps",
+          "items": [
+            "Tap every photograph taken in one spot. A tick appears on each. **Choose the day** ticks a whole day at once.",
+            "Get the map to the spot. Drag it with a finger and pinch to zoom, or type a town into **Find a town or landmark**. If you are standing there, press **Where I am** and the phone finds the spot for you.",
+            "Tap the spot. A pin appears. If it is not quite right, tap again.",
+            "Press **Put them here**. That's it. If you got it wrong, press **Undo** straight away."
+          ]
+        },
+        {
+          "kind": "p",
+          "text": "**Not placed yet** shows only the photographs with no place, or only a guessed one. **All photos** shows everything, for moving one that is in the wrong spot. The search box and **More ways to narrow** work here the same as everywhere else."
+        },
+        {
+          "kind": "h3",
+          "text": "Moving one that is in the wrong spot"
+        },
+        {
+          "kind": "p",
+          "text": "Choose **All photos**. Tap the photograph in the list, or tap its pin on the map; a blue ring goes round it. Then tap where it should be and press **Put them here**."
+        },
+        {
+          "kind": "note",
+          "text": "**Lines on the map are your walks and drives.** If a photograph was taken on the walk, it was taken somewhere on that line, which makes the spot much easier to find."
+        },
+        {
+          "kind": "note",
+          "text": "**Only your own.** You can place the photographs you added. An admin can place anybody's."
+        }
+      ]
+    },
+    {
       "id": "fixing",
       "heading": "Fixing something that is wrong",
       "blocks": [
@@ -382,7 +441,7 @@
             ],
             [
               "No place on the map",
-              "Open the photograph and use **Set a place**: press the map, or type an address. You can do a whole selection at once. Or drag photographs straight onto the map."
+              "On the trip's map, press **Place photos**: tap the photographs, tap the spot, press **Put them here**. It works on a phone. See “Putting photographs on the map, from a phone”. For a single photograph you can also open it and use **Set a place**."
             ],
             [
               "On the wrong outing",

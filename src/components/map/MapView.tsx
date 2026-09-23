@@ -120,7 +120,10 @@ export function MapView({ photos, tracks, bounds, theme, className = "", onPhoto
     if (interactive) map.addControl(new NavigationControl({ showCompass: false }), "top-right");
     map.on("click", (e: MapMouseEvent) => {
       if (!callbacks.current.onMapClick) return;
-      const busy = ["clusters", "photo-points", "tracks-line", "tracks-google"].filter((l) => map.getLayer(l));
+      // A tap on a line only belongs to the line where lines do something when tapped; while placing, a photograph
+      // taken on the walk belongs exactly on the walk's line, so there the tap goes to the map.
+      const layers = callbacks.current.onTrackClick ? ["clusters", "photo-points", "tracks-line", "tracks-google"] : ["clusters", "photo-points"];
+      const busy = layers.filter((l) => map.getLayer(l));
       if (busy.length && map.queryRenderedFeatures(e.point, { layers: busy }).length) return;
       callbacks.current.onMapClick({ lat: e.lngLat.lat, lng: e.lngLat.lng });
     });

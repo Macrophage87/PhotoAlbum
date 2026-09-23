@@ -2730,3 +2730,97 @@ test("the map's rings can be colored by day, by activity, or by who uploaded, an
     await setVisibility("acadia", "PRIVATE");
   }
 });
+
+test("on a phone, photographs are chosen below the map, then placed by tapping the spot, and a mistake is one press to undo", async ({ context, page }) => {
+  test.setTimeout(120_000);
+  await signIn(context, ADMIN);
+  await blankTiles(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  // Two of the admin's photographs on the trip with no place at all, and one more with a word to be found by.
+  const mine = `FROM "Photo" p JOIN "Trip" t ON t.id = p."tripId" JOIN "User" u ON u.id = p."uploaderId" WHERE t.slug = 'acadia' AND u.email = $1 AND p.status = 'READY' AND p."trashedAt" IS NULL AND p.kind = 'PHOTO'`;
+  // One that is already on the map, from its camera, and two more to take off it.
+  const placed = await withDb((c) => c.query(`SELECT p.id, p.lat, p.lng, p."gpsSource", p.caption ${mine} AND p.lat IS NOT NULL AND p."gpsSource" <> 'ESTIMATE' ORDER BY p.id LIMIT 1`, [ADMIN]));
+  expect(placed.rows.length).toBe(1);
+  const others = await withDb((c) => c.query(`SELECT p.id, p.lat, p.lng, p."gpsSource", p.caption ${mine} AND p.id <> $2 ORDER BY p.id LIMIT 2`, [ADMIN, placed.rows[0].id]));
+  expect(others.rows.length).toBe(2);
+  const rows = { rows: [...others.rows, ...placed.rows] };
+  const [a, b, c3] = rows.rows.map((r) => r.id as string);
+  const unplace = (ids: string[]) => withDb((c) => c.query(`UPDATE "Photo" SET lat = NULL, lng = NULL, "gpsSource" = NULL WHERE id = ANY($1)`, [ids]));
+  const where = async (id: string) => (await withDb((c) => c.query('SELECT lat, "gpsSource" FROM "Photo" WHERE id = $1', [id]))).rows[0] as { lat: number | null; gpsSource: string | null };
+  await unplace([a, b]);
+  await withDb((c) => c.query(`UPDATE "Photo" SET caption = 'qqplaceword' WHERE id = $1`, [c3]));
+
+  try {
+    // Reached from the trip's map.
+    await page.goto("/trips/acadia/map");
+    await page.getByTestId("open-place").click();
+    await expect(page).toHaveURL(/\/trips\/acadia\/place$/);
+    await expect(page.getByTestId("place-show-unplaced")).toHaveAttribute("aria-current", "page");
+    const tile = (id: string) => page.locator(`[data-photo="${id}"]`);
+    await expect(tile(a)).toContainText("No place");
+    await expect(tile(b)).toBeVisible();
+    // Only what has no place is offered here.
+    await expect(tile(c3)).toHaveCount(0);
+
+    // The map is on screen while the photographs are chosen, and says what to do next.
+    const map = page.locator("[data-testid=place-map] .maplibregl-canvas");
+    await expect(map).toBeInViewport({ timeout: 30_000 });
+    await tile(a).click();
+    await tile(b).click();
+    await expect(tile(a)).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByTestId("place-bar")).toContainText("2 chosen");
+    await page.screenshot({ path: "test-results/place-phone.png" });
+    // Nothing is pushed off the side of the phone: the page is exactly as wide as the screen.
+    expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBe(0);
+
+    // A tap puts a pin down, and nothing is saved until "Put them here".
+    const box = (await map.boundingBox())!;
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+    await expect(page.getByTestId("put-here")).toBeVisible();
+    expect((await where(a)).gpsSource).toBeNull();
+    await page.mouse.click(box.x + box.width / 3, box.y + box.height / 2);
+    await page.getByTestId("put-here").click();
+    await expect(page.getByTestId("place-notice")).toContainText("2 photos placed");
+    await expect.poll(async () => (await where(a)).gpsSource).toBe("MANUAL");
+    expect((await where(b)).lat).not.toBeNull();
+    await expect(tile(a)).toContainText("Placed");
+    await page.screenshot({ path: "test-results/place-phone-placed.png" });
+
+    // Undo puts them back exactly as they were: no place at all.
+    await page.getByRole("button", { name: "Undo" }).click();
+    await expect(page.getByTestId("place-notice")).toContainText("Undone");
+    await expect.poll(async () => (await where(a)).lat).toBeNull();
+    expect((await where(b)).gpsSource).toBeNull();
+    await expect(tile(a)).toContainText("No place");
+
+    // A whole day is chosen at once.
+    await page.getByTestId("choose-day").first().click();
+    await expect(page.getByTestId("place-bar")).toContainText("chosen");
+
+    // Everything, placed or not, when something already on the map is in the wrong spot; and the search narrows it.
+    await page.getByTestId("place-show-all").click();
+    await expect(page).toHaveURL(/show=all/);
+    await expect(tile(c3)).toBeVisible();
+    await page.goto("/trips/acadia/place?show=all&q=qqplaceword");
+    await expect(tile(c3)).toBeVisible();
+    await expect(page.locator("[data-photo]")).toHaveCount(1);
+  } finally {
+    for (const r of rows.rows) {
+      await withDb((c) => c.query(`UPDATE "Photo" SET lat = $2, lng = $3, "gpsSource" = $4, caption = $5 WHERE id = $1`, [r.id, r.lat, r.lng, r.gpsSource, r.caption]));
+    }
+  }
+});
+
+test("the placing screen is for members, and the old address from a trip goes to it", async ({ browser, context, page }) => {
+  const anon = await browser.newContext();
+  try {
+    const stranger = await anon.newPage();
+    await stranger.goto("/trips/acadia/place");
+    await expect(stranger).toHaveURL(/\/auth\/signin/);
+  } finally {
+    await anon.close();
+  }
+  await signIn(context, ADMIN);
+  await page.goto("/place?trip=acadia");
+  await expect(page).toHaveURL(/\/trips\/acadia\/place$/);
+});
