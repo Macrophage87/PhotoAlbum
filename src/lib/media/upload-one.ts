@@ -16,7 +16,11 @@ export class AttemptError extends Error {
  * using would never come back, and after three of them the whole batch would stop dead with no error anywhere.
  * That is what made a hundred photographs look as though nothing had happened.
  */
-export function attemptUpload(file: File, target: { tripId?: string; activityId?: string }, optOut: boolean, onProgress: (p: number) => void, register: (abort: () => void) => void): Promise<{ photoId: string; duplicate?: boolean }> {
+/** What the album did with a file it already had, when it was sent to a particular trip, activity or collection. */
+export type FiledAnswer = { trip: boolean; activity: boolean; collection: boolean; movedFrom: string | null; notYours: boolean };
+export type UploadAnswer = { photoId: string; duplicate?: boolean; filed?: FiledAnswer; owner?: string | null };
+
+export function attemptUpload(file: File, target: { tripId?: string; activityId?: string; collectionId?: string }, optOut: boolean, onProgress: (p: number) => void, register: (abort: () => void) => void): Promise<UploadAnswer> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     let settled = false;
@@ -40,6 +44,7 @@ export function attemptUpload(file: File, target: { tripId?: string; activityId?
     if (target.tripId) xhr.setRequestHeader("x-trip-id", target.tripId);
     // An activity also settles the trip, whatever the file's own date says.
     if (target.activityId) xhr.setRequestHeader("x-activity-id", target.activityId);
+    if (target.collectionId) xhr.setRequestHeader("x-collection-id", target.collectionId);
     if (optOut) xhr.setRequestHeader("x-annotation-opt-out", "1");
     xhr.upload.onprogress = (e) => {
       touch();
@@ -47,13 +52,13 @@ export function attemptUpload(file: File, target: { tripId?: string; activityId?
     };
     xhr.onload = () =>
       finish(() => {
-        let body: { photoId?: string; error?: string; duplicate?: boolean } = {};
+        let body: Partial<UploadAnswer> & { error?: string } = {};
         try {
           body = JSON.parse(xhr.responseText);
         } catch {
           // An answer that is not JSON is usually something in front of the album, not the album itself.
         }
-        if (xhr.status >= 200 && xhr.status < 300 && body.photoId) return resolve({ photoId: body.photoId, duplicate: body.duplicate });
+        if (xhr.status >= 200 && xhr.status < 300 && body.photoId) return resolve({ photoId: body.photoId, duplicate: body.duplicate, filed: body.filed, owner: body.owner });
         reject(new AttemptError(failureForStatus(xhr.status, body.error)));
       });
     xhr.onerror = () => finish(() => reject(new AttemptError({ kind: "network", message: "The connection dropped." })));

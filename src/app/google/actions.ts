@@ -9,6 +9,7 @@ import { createPickerSession, getPickerSession, listPickedItems, PickerSessionGo
 import { ALLOWED_MIMES, EXT_MIME, VIDEO_MIMES } from "@/lib/media/mime";
 import { enqueue } from "@/lib/jobs/boss";
 import { QUEUES } from "@/lib/jobs/queues";
+import { fileExisting } from "@/lib/photos/file-existing";
 
 export type PickerStart = { ok: true; sessionId: string; pickerUri: string; pollIntervalMs: number; deadline: number } | { ok: false; reconnect: boolean; message: string };
 export type PickerPoll = { state: "picking" } | { state: "queued"; photoIds: string[]; skipped: number; unsupported: number } | { state: "error"; reconnect: boolean; message: string };
@@ -44,12 +45,18 @@ export async function pollPickerSession(sessionId: string, tripId: string | null
     if (!s.mediaItemsSet) return s.deadline <= Date.now() ? { state: "error", reconnect: false, message: "That picking session has ended; start again." } : { state: "picking" };
     const items = await listPickedItems(token, sessionId);
     if (tripId && !(await db.trip.findUnique({ where: { id: tripId }, select: { id: true } }))) tripId = null;
-    const existing = new Set((await db.photo.findMany({ where: { sourceKind: "GOOGLE_PICKER", sourceId: { in: items.map((i) => i.id) } }, select: { sourceId: true } })).map((r) => r.sourceId));
+    const existing = new Map((await db.photo.findMany({ where: { sourceKind: "GOOGLE_PICKER", sourceId: { in: items.map((i) => i.id) } }, select: { id: true, sourceId: true } })).map((r) => [r.sourceId, r.id]));
     const photoIds: string[] = [];
     const jobItems: Record<string, unknown> = {};
     let skipped = 0, unsupported = 0;
     for (const item of items) {
-      if (existing.has(item.id)) { skipped++; continue; }
+      const had = existing.get(item.id);
+      if (had) {
+        // Picked again for a particular trip: the one the album has goes on it, rather than a second copy.
+        if (tripId) await fileExisting(user, had, { tripId });
+        skipped++;
+        continue;
+      }
       const ext = item.filename.toLowerCase().split(".").pop() ?? "";
       let mime = item.mimeType.split(";")[0].trim();
       if (!ALLOWED_MIMES.has(mime)) mime = EXT_MIME[ext] ?? "";

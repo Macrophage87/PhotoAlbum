@@ -5,7 +5,7 @@ import Link from "next/link";
 import { Button, buttonClasses } from "@/components/ui";
 import { albumTakes, isScanPick, isVideoPick, refusalFor } from "@/lib/media/picker";
 import { backoffMs, isRetryable, MAX_ATTEMPTS, MAX_BATCH, overCapMessage, progressLine, STATUS_NOTICE_AFTER, statusRetryMs } from "@/lib/media/upload-retry";
-import { AttemptError, attemptUpload } from "@/lib/media/upload-one";
+import { AttemptError, attemptUpload, type FiledAnswer } from "@/lib/media/upload-one";
 
 type Item = {
   localId: string;
@@ -20,6 +20,10 @@ type Item = {
   retrying?: boolean;
   /** The album already had this exact file, so nothing was added and the tile points at the one it has. */
   duplicate?: boolean;
+  /** For a duplicate sent to a particular trip, activity or collection: whether the one the album has was put there. */
+  filed?: FiledAnswer;
+  /** Whose it is, when it is somebody else's and so was left where it was. */
+  owner?: string | null;
   thumbUrl?: string | null;
   trip?: { slug: string; title: string } | null;
 };
@@ -77,7 +81,7 @@ export function tooLongMessage(durationS: number, limit: number): string {
   return `This video is ${Math.round(durationS)} seconds long; clips uploaded here are limited to ${limit} seconds. Upload longer videos to YouTube as Unlisted and add the link instead.`;
 }
 
-export function Uploader({ tripId, activityId, onDone, maxClipSeconds = 90, annotationActive = false }: { tripId?: string; /** Put what is uploaded straight into this activity, and on its trip. */ activityId?: string; onDone?: (photoIds: string[]) => void; maxClipSeconds?: number; /** Whether the AI helper is on, so the opt-out checkbox is worth showing. */ annotationActive?: boolean }) {
+export function Uploader({ tripId, activityId, collectionId, onDone, maxClipSeconds = 90, annotationActive = false }: { tripId?: string; /** Put what is uploaded straight into this activity, and on its trip. */ activityId?: string; /** Put what is uploaded into this collection as well. */ collectionId?: string; onDone?: (photoIds: string[]) => void; maxClipSeconds?: number; /** Whether the AI helper is on, so the opt-out checkbox is worth showing. */ annotationActive?: boolean }) {
   const [optOut, setOptOut] = useState(false);
   const optOutRef = useRef(false);
   const [items, setItems] = useState<Item[]>([]);
@@ -105,10 +109,10 @@ export function Uploader({ tripId, activityId, onDone, maxClipSeconds = 90, anno
   }, []);
 
   const pumpRef = useRef<() => void>(() => {});
-  const targetRef = useRef({ tripId, activityId });
+  const targetRef = useRef({ tripId, activityId, collectionId });
   useEffect(() => {
-    targetRef.current = { tripId, activityId };
-  }, [tripId, activityId]);
+    targetRef.current = { tripId, activityId, collectionId };
+  }, [tripId, activityId, collectionId]);
   useEffect(() => {
     optOutRef.current = optOut;
   }, [optOut]);
@@ -123,7 +127,7 @@ export function Uploader({ tripId, activityId, onDone, maxClipSeconds = 90, anno
       for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
         update(item.localId, { status: "uploading", attempts: attempt, retrying: false, error: undefined });
         try {
-          const { photoId, duplicate } = await attemptUpload(
+          const { photoId, duplicate, filed, owner } = await attemptUpload(
             item.file,
             targetRef.current,
             optOutRef.current,
@@ -132,7 +136,7 @@ export function Uploader({ tripId, activityId, onDone, maxClipSeconds = 90, anno
           );
           // The album already holds these bytes: nothing was added, and the tile points at the one it has rather
           // than pretending a second copy went up.
-          update(item.localId, { photoId, status: duplicate ? "ready" : "processing", progress: 1, retrying: false, duplicate });
+          update(item.localId, { photoId, status: duplicate ? "ready" : "processing", progress: 1, retrying: false, duplicate, filed, owner });
           return;
         } catch (err) {
           const failure = err instanceof AttemptError ? err.failure : { kind: "network" as const, message: err instanceof Error ? err.message : "Upload failed" };
@@ -300,7 +304,11 @@ export function Uploader({ tripId, activityId, onDone, maxClipSeconds = 90, anno
   const allSettled = items.length > 0 && items.every((i) => i.status === "ready" || i.status === "failed");
   /** The ones that never reached the album at all. Everything else arrived, whatever became of it afterwards. */
   const failed = items.filter((i) => i.status === "failed" && !i.photoId);
-  const alreadyHere = items.filter((i) => i.duplicate);
+  // A file the album already had is one of three things: put where it was sent instead of copied, left where it is
+  // because it is somebody else's, or simply already there with nowhere in particular asked for.
+  const filedHere = items.filter((i) => i.duplicate && i.filed && (i.filed.trip || i.filed.activity || i.filed.collection));
+  const notYours = items.filter((i) => i.duplicate && i.filed?.notYours);
+  const alreadyHere = items.filter((i) => i.duplicate && !filedHere.includes(i) && !notYours.includes(i));
   const counts = {
     done: items.filter((i) => Boolean(i.photoId)).length,
     failed: failed.length,
@@ -407,6 +415,36 @@ export function Uploader({ tripId, activityId, onDone, maxClipSeconds = 90, anno
             ? "You were signed out, so this page cannot see how the rest turned out. They are safe on the server — sign in again and they will be in the album."
             : "This page has lost touch with the album for a moment. The photographs are safe on the server and still being processed; it will keep asking."}
         </p>
+      )}
+
+      {allSettled && filedHere.length > 0 && (
+        <div className="rounded-theme border border-border bg-surface-alt p-3 space-y-1 text-sm" data-testid="filed-here">
+          <p className="font-medium">
+            {filedHere.length} {filedHere.length === 1 ? "was" : "were"} already in the album, so {filedHere.length === 1 ? "it was" : "they were"} put where you chose instead of being copied.
+          </p>
+          <ul className="text-muted space-y-0.5 max-h-40 overflow-y-auto">
+            {filedHere.map((i) => (
+              <li key={i.localId}>
+                <b>{i.file.name}</b>: <Link href={`/photos/${i.photoId}`} className="text-primary underline underline-offset-2">{i.filed?.movedFrom ? `moved here from ${i.filed.movedFrom}` : "now here"}</Link>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {allSettled && notYours.length > 0 && (
+        <div className="rounded-theme border border-border bg-surface-alt p-3 space-y-1 text-sm" data-testid="not-yours">
+          <p className="font-medium">
+            {notYours.length} {notYours.length === 1 ? "is" : "are"} already in the album, added by someone else. Only they or an admin can move {notYours.length === 1 ? "it" : "them"}, so {notYours.length === 1 ? "it was" : "they were"} left where {notYours.length === 1 ? "it is" : "they are"}.
+          </p>
+          <ul className="text-muted space-y-0.5 max-h-40 overflow-y-auto">
+            {notYours.map((i) => (
+              <li key={i.localId}>
+                <b>{i.file.name}</b>: <Link href={`/photos/${i.photoId}`} className="text-primary underline underline-offset-2">{i.owner ? `${i.owner}'s copy` : "the copy the album has"}</Link>
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
 
       {allSettled && alreadyHere.length > 0 && (

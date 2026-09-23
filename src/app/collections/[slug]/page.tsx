@@ -22,7 +22,7 @@ export default async function CollectionTimelinePage({ params, searchParams }: P
       {editable && (
         <div className="flex flex-wrap items-center gap-2">
           <ButtonLink href={`/collections/${slug}/add`} size="sm">Add existing photos</ButtonLink>
-          <ButtonLink href="/upload" size="sm" variant="secondary">Upload</ButtonLink>
+          <ButtonLink href={`/upload?collection=${slug}`} size="sm" variant="secondary">Upload</ButtonLink>
         </div>
       )}
       <GalleryFilters filter={filter} action={`/collections/${slug}`} people={editable ? people : undefined} placeholder="Search this collection" />

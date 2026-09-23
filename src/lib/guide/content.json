@@ -208,11 +208,11 @@
         },
         {
           "kind": "note",
-          "text": "**Nothing gets doubled.** The album recognizes a photograph it already has and does not add it a second time; beside those it says they were already in the album. Only the ones that were missing are added."
+          "text": "**Nothing gets doubled.** The album recognizes a photograph it already has and does not add it a second time. If you chose a trip, an outing or a collection to upload to, the one it already has is put there instead, and the page says so. Only the ones that were missing are added."
         },
         {
           "kind": "small",
-          "text": "This works for the very same files. A copy that has since been edited, or saved again by another app, counts as a different photograph."
+          "text": "This works for the very same files. A copy that has since been edited, or saved again by another app, counts as a different photograph. A photograph somebody else added stays where they put it; only they or an admin can move it."
         },
         {
           "kind": "h3",

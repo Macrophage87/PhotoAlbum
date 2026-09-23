@@ -6,8 +6,9 @@ import { ContainerPicker, type Container } from "@/components/containers/Contain
 import { Uploader } from "@/components/photos/Uploader";
 import { YouTubeAddForm } from "@/components/videos/YouTubeAddForm";
 
-export function UploadPanel({ initialTrip, maxClipSeconds, annotationActive }: { initialTrip?: { id: string; title: string } | null; maxClipSeconds: number; annotationActive: boolean }) {
+export function UploadPanel({ initialTrip, initialCollection, maxClipSeconds, annotationActive }: { initialTrip?: { id: string; title: string } | null; initialCollection?: { id: string; title: string } | null; maxClipSeconds: number; annotationActive: boolean }) {
   const [trip, setTrip] = useState<Container | null>(initialTrip ?? null);
+  const [collection, setCollection] = useState<Container | null>(initialCollection ?? null);
   const [activity, setActivity] = useState<Container | null>(null);
   const chooseTrip = (v: Container | null) => {
     setTrip(v);
@@ -28,8 +29,13 @@ export function UploadPanel({ initialTrip, maxClipSeconds, annotationActive }: {
             <ContainerPicker kind="activity" tripId={trip.id} value={activity} onChange={setActivity} allowNone noneLabel="Match by time taken" placeholder="Match by time taken" />
           </div>
         )}
+        {/* A collection as well, since a collection is a label rather than a place: they stay on their trip too. */}
+        <div className="w-full sm:w-64">
+          <Label htmlFor="collection">Collection</Label>
+          <ContainerPicker kind="collection" value={collection} onChange={setCollection} allowNone noneLabel="None" placeholder="None" />
+        </div>
       </div>
-      <Uploader key={`${trip?.id ?? "none"}-${activity?.id ?? "none"}`} tripId={trip?.id} activityId={activity?.id} maxClipSeconds={maxClipSeconds} annotationActive={annotationActive} />
+      <Uploader key={`${trip?.id ?? "none"}-${activity?.id ?? "none"}-${collection?.id ?? "none"}`} tripId={trip?.id} activityId={activity?.id} collectionId={collection?.id} maxClipSeconds={maxClipSeconds} annotationActive={annotationActive} />
       <YouTubeAddForm tripId={trip?.id} defaultDate={new Date().toISOString().slice(0, 10)} />
     </div>
   );

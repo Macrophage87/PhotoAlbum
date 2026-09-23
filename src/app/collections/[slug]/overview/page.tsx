@@ -31,7 +31,7 @@ export default async function CollectionOverviewPage({ params }: PageProps<"/col
           <h2 className="font-display text-xl font-semibold">Photos</h2>
           <div className="flex gap-2">
             {editable && <ButtonLink href={`/collections/${slug}/add`} size="sm">Add existing photos</ButtonLink>}
-            {editable && <ButtonLink href="/upload" size="sm" variant="secondary">Upload</ButtonLink>}
+            {editable && <ButtonLink href={`/upload?collection=${slug}`} size="sm" variant="secondary">Upload</ButtonLink>}
             <Link href={`/collections/${slug}/photos`} className="text-sm text-primary underline-offset-2 hover:underline self-center">All photos →</Link>
           </div>
         </div>
@@ -39,7 +39,7 @@ export default async function CollectionOverviewPage({ params }: PageProps<"/col
           <Card className="p-5 space-y-2">
             <p className="font-medium">Nothing here yet.</p>
             <p className="text-sm text-muted">Pick photos that are already in the album, upload new ones, or open any photo and tick this collection.</p>
-            <div className="flex gap-2 pt-1"><ButtonLink href={`/collections/${slug}/add`} size="sm">Add existing photos</ButtonLink><ButtonLink href="/upload" size="sm" variant="secondary">Upload</ButtonLink></div>
+            <div className="flex gap-2 pt-1"><ButtonLink href={`/collections/${slug}/add`} size="sm">Add existing photos</ButtonLink><ButtonLink href={`/upload?collection=${slug}`} size="sm" variant="secondary">Upload</ButtonLink></div>
           </Card>
         ) : (
           <PhotoGrid photos={ready.slice(0, 12).map((p) => toGridPhoto(p, null, editable))} emptyMessage="Nothing here yet." />

@@ -7,6 +7,8 @@ import { getViewer } from "@/lib/auth/viewer";
 import { storage, StorageLimitError } from "@/lib/storage";
 import { enqueue } from "@/lib/jobs/boss";
 import { QUEUES } from "@/lib/jobs/queues";
+import { fileExisting } from "@/lib/photos/file-existing";
+import { uploaderLabel } from "@/components/photos/toGrid";
 import { ALLOWED_MIMES as ALLOWED, EXT_BY_MIME, EXT_MIME, kindForMime, scanFormatOf, VIDEO_MIMES as VIDEO } from "@/lib/media/mime";
 
 export const dynamic = "force-dynamic";
@@ -16,6 +18,7 @@ const headerSchema = z.object({
   contentType: z.string().optional(),
   tripId: z.string().optional(),
   activityId: z.string().optional(),
+  collectionId: z.string().optional(),
   lastModified: z.coerce.number().optional(),
   annotationOptOut: z.string().optional(),
 });
@@ -31,6 +34,7 @@ export async function POST(request: Request) {
     contentType: request.headers.get("content-type") ?? undefined,
     tripId: request.headers.get("x-trip-id") ?? undefined,
     activityId: request.headers.get("x-activity-id") ?? undefined,
+    collectionId: request.headers.get("x-collection-id") ?? undefined,
     lastModified: request.headers.get("x-last-modified") ?? undefined,
     annotationOptOut: request.headers.get("x-annotation-opt-out") ?? undefined,
   });
@@ -54,6 +58,10 @@ export async function POST(request: Request) {
     const activity = await db.activity.findUnique({ where: { id: activityId }, select: { id: true, tripId: true } });
     if (!activity) return Response.json({ error: "Activity not found" }, { status: 404 });
     tripId = activity.tripId;
+  }
+  const collectionId = parsed.data.collectionId;
+  if (collectionId && !(await db.collection.findUnique({ where: { id: collectionId }, select: { id: true } }))) {
+    return Response.json({ error: "Collection not found" }, { status: 404 });
   }
 
   const isVideo = VIDEO.has(mime);
@@ -89,16 +97,27 @@ export async function POST(request: Request) {
     contentHash = digest.digest("hex");
     const already = await db.photo.findFirst({
       where: { contentHash, trashedAt: null, id: { not: photo.id } },
-      select: { id: true, originalName: true, trip: { select: { slug: true, title: true } } },
+      select: { id: true, originalName: true, trip: { select: { slug: true, title: true } }, uploader: { select: { name: true, email: true } } },
     });
     if (already) {
       // Nothing is kept: neither the bytes just written nor the row that was waiting for them. The member is told
-      // which one the album already has, so "it did not appear" is never the impression left behind.
+      // which one the album already has, so "it did not appear" is never the impression left behind. Sent to a
+      // particular trip, activity or collection, the one the album has is put there instead of a second copy.
       await storage().deletePrefix(storageKey).catch(() => undefined);
       await db.photo.delete({ where: { id: photo.id } }).catch(() => {});
-      return Response.json({ photoId: already.id, duplicate: true, originalName: already.originalName, trip: already.trip ?? null });
+      const filed = await fileExisting(viewer.user, already.id, { tripId: tripId ?? null, activityId: activityId ?? null, collectionId: collectionId ?? null });
+      return Response.json({
+        photoId: already.id,
+        duplicate: true,
+        originalName: already.originalName,
+        trip: already.trip ?? null,
+        filed,
+        // Whose it is, only when that is why it stayed put; members see who added what everywhere else too.
+        owner: filed.notYours ? uploaderLabel(already.uploader.name, already.uploader.email) : null,
+      });
     }
     await db.photo.update({ where: { id: photo.id }, data: { storageKey, originalPath, sizeBytes: bytes, contentHash } });
+    if (collectionId) await fileExisting(viewer.user, photo.id, { collectionId });
   } catch (err) {
     await db.photo.delete({ where: { id: photo.id } }).catch(() => {});
     if (err instanceof StorageLimitError) return Response.json({ error: `File is larger than ${Math.round(err.maxBytes / 1048576)} MB` }, { status: 413 });

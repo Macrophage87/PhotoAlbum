@@ -2092,6 +2092,44 @@ test("photographs are taken off a trip and out of a collection, and stay in the 
     .toBe(1);
 });
 
+test("a file the album already has, sent to a trip or a collection, is put there instead of copied", async ({ context, page }) => {
+  await signIn(context, ADMIN);
+  const bytes = Buffer.concat([fs.readFileSync(fixture("photo-with-gps.jpg")), Buffer.from(`\n<!-- filed not copied ${randomUUID()} -->`)]);
+  const rows = async () => (await withDb((c) => c.query(`SELECT id, "tripId" FROM "Photo" WHERE "originalName" = 'filed.jpg' AND "trashedAt" IS NULL`))).rows as { id: string; tripId: string | null }[];
+  const trip = (await withDb((c) => c.query(`SELECT id, slug FROM "Trip" WHERE slug = 'acadia'`))).rows[0] as { id: string; slug: string };
+  const collection = (await withDb((c) => c.query(`SELECT id, slug FROM "Collection" ORDER BY "createdAt" LIMIT 1`))).rows[0] as { id: string; slug: string };
+  expect(collection).toBeTruthy();
+
+  // Up once, onto no trip in particular: wherever its own date files it, it is somewhere other than chosen.
+  await page.goto("/upload");
+  await chooseSameFile(page, "filed.jpg", bytes);
+  await expect.poll(async () => (await rows()).length, { timeout: 60_000, intervals: [500] }).toBe(1);
+  const [first] = await rows();
+  await withDb((c) => c.query(`UPDATE "Photo" SET "tripId" = NULL, "activityId" = NULL WHERE id = $1`, [first.id]));
+
+  try {
+    // Sent again, to a trip: the same photograph goes onto it, and there is still only one.
+    await page.goto(`/upload?trip=${trip.slug}`);
+    await chooseSameFile(page, "filed.jpg", bytes);
+    await expect(page.getByTestId("filed-here")).toContainText("put where you chose instead of being copied", { timeout: 60_000 });
+    expect(await rows()).toEqual([{ id: first.id, tripId: trip.id }]);
+
+    // And to a collection, from the collection's own Upload button: into it, and still on its trip.
+    await page.goto(`/collections/${collection.slug}/overview`);
+    await page.getByRole("main").getByRole("link", { name: "Upload", exact: true }).first().click();
+    await expect(page).toHaveURL(new RegExp(`/upload\\?collection=${collection.slug}`));
+    await chooseSameFile(page, "filed.jpg", bytes);
+    await expect(page.getByTestId("filed-here")).toBeVisible({ timeout: 60_000 });
+    await expect
+      .poll(async () => (await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "CollectionItem" WHERE "photoId" = $1 AND "collectionId" = $2`, [first.id, collection.id]))).rows[0].n)
+      .toBe(1);
+    expect(await rows()).toEqual([{ id: first.id, tripId: trip.id }]);
+  } finally {
+    await withDb((c) => c.query(`DELETE FROM "CollectionItem" WHERE "photoId" = $1`, [first.id]));
+    await withDb((c) => c.query(`UPDATE "Photo" SET "trashedAt" = now(), "trashReason" = 'DUPLICATE' WHERE id = $1`, [first.id]));
+  }
+});
+
 test("the same file twice is one photograph, and the copies already in the album fold together", async ({ context, page }) => {
   await signIn(context, ADMIN);
   // One particular file, sent twice. The first goes up; the second is the same bytes and must add nothing.
