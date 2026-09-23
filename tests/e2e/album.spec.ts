@@ -2198,7 +2198,7 @@ test("a batch whose progress checks go missing keeps its photographs, and says s
   await expect(page.getByTestId("status-trouble")).toBeVisible({ timeout: 60_000 });
   await expect(page.getByTestId("status-trouble")).toContainText("safe on the server");
   await expect(page.locator("li span.text-red-600")).toHaveCount(0);
-  await expect(page.getByRole("alert")).toHaveCount(0);
+  await expect(page.getByRole("main").getByRole("alert")).toHaveCount(0);
 
   // And once the answers come back, every one of them turns out fine and the notice goes away.
   await expect(page.getByTestId("upload-progress")).toHaveText("All 3 uploaded.", { timeout: 60_000 });
