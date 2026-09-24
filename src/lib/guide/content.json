@@ -228,7 +228,19 @@
         },
         {
           "kind": "p",
-          "text": "Open the outing and press **Add photos to this activity**, or open the collection and press **Upload photos to this collection**, then choose the photographs. They go there whatever their dates say. Ones put in a collection also go onto a trip if their dates match one, since a collection is a scrapbook, not a place."
+          "text": "Open the outing and press **Add photos to this activity**, or open the collection and press **Add photos to this collection**. You are asked which you mean:"
+        },
+        {
+          "kind": "bullets",
+          "items": [
+            "**New photos from this device** — choose them from your phone or computer, as with any upload.",
+            "**Choose from photos already in the album** — search the whole album with the usual questions (words, dates, a place and a distance, who took it, who is in it) and tick the ones that belong.",
+            "**Add all … taken during it** — on an outing, every one of your photos taken between its start and end times, in one press. A trip's **Add existing photos** page has the same for the trip's days."
+          ]
+        },
+        {
+          "kind": "p",
+          "text": "Photos already on another trip are left where they are and counted, so you can find them by date and pick them if they really belong here. Ones put in a collection also stay on their trip, since a collection is a scrapbook, not a place."
         },
         {
           "kind": "note",

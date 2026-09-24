@@ -19,3 +19,11 @@ export async function moreTripCandidates(slug: string, query: string, cursor: st
   const page = await candidatePhotoPage({ kind: "trip", id: trip.id }, filter, { cursor });
   return { photos: page.photos.map((p) => toGridPhoto(p, null, true)), nextCursor: page.nextCursor };
 }
+
+/** The same, for putting existing photographs on one of the trip's activities. */
+export async function moreActivityCandidates(activityId: string, query: string, cursor: string): Promise<{ photos: GridPhoto[]; nextCursor: string | null }> {
+  await requireUserOrThrow();
+  const filter = parsePickerFilter(Object.fromEntries(new URLSearchParams(query).entries()));
+  const page = await candidatePhotoPage({ kind: "activity", id: activityId }, filter, { cursor });
+  return { photos: page.photos.map((p) => toGridPhoto(p, null, true)), nextCursor: page.nextCursor };
+}

@@ -118,7 +118,7 @@ export async function tripPhotoPage(tripId: string, opts: { uploaderId?: string;
 }
 
 /** Where the picked photographs are going, so the picker never offers what is already there. */
-export type PickerTarget = { kind: "collection"; id: string } | { kind: "trip"; id: string };
+export type PickerTarget = { kind: "collection"; id: string } | { kind: "trip"; id: string } | { kind: "activity"; id: string };
 
 /**
  * Which photographs are within a distance of a point.
@@ -168,7 +168,9 @@ export async function candidatePhotoPage(target: PickerTarget, filter: PickerFil
   const and: Prisma.PhotoWhereInput[] = [
     target.kind === "collection"
       ? { collections: { none: { collectionId: target.id } } }
-      : { OR: [{ tripId: null }, { tripId: { not: target.id } }] },
+      : target.kind === "activity"
+        ? { OR: [{ activityId: null }, { activityId: { not: target.id } }] }
+        : { OR: [{ tripId: null }, { tripId: { not: target.id } }] },
   ];
   // Nothing has claimed these: no trip, and in no collection. The pile that most wants tidying away.
   if (filter.loose) and.push({ tripId: null, collections: { none: {} } });

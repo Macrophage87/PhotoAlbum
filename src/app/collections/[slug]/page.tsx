@@ -26,7 +26,7 @@ export default async function CollectionTimelinePage({ params, searchParams }: P
       {editable && (
         <div className="flex flex-wrap items-center gap-2">
           <ButtonLink href={`/collections/${slug}/add`} size="sm">Add existing photos</ButtonLink>
-          <CollectionUploader collectionId={collection.id} maxClipSeconds={env().MAX_CLIP_SECONDS} annotationActive={Boolean(gates?.active)} />
+          <CollectionUploader collectionId={collection.id} slug={slug} maxClipSeconds={env().MAX_CLIP_SECONDS} annotationActive={Boolean(gates?.active)} />
         </div>
       )}
       <GalleryFilters filter={filter} action={`/collections/${slug}`} people={editable ? people : undefined} placeholder="Search this collection" />

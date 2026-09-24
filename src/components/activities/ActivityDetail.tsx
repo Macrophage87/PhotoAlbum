@@ -17,6 +17,7 @@ import { toGridPhoto } from "@/components/photos/toGrid";
 import { Button, Card, ConfirmSubmitButton } from "@/components/ui";
 import { ActivityUploader } from "./ActivityUploader";
 import { ShareBar } from "@/components/share/ShareBar";
+import { TakeWindow } from "@/components/photos/TakeWindow";
 
 export type ActivityDetailData = {
   id: string;
@@ -46,7 +47,7 @@ type ReadOnlyProps = { editable: false };
 export type ActivityShare = { url: string | null; enable: () => Promise<void>; disable: () => Promise<void> };
 
 /** Shared body of the activity page for members (editable) and shared/public viewers. */
-export function ActivityDetail({ trip, activity, photos, upload, share, save, describe, ...mode }: { trip: { slug: string; timezone: string; themeKey: string }; activity: ActivityDetailData; photos: PhotoCard[]; /** Members only: what the uploader needs to offer adding photos straight to this activity. */ upload?: { maxClipSeconds: number; annotationActive: boolean }; /** Whoever arranges the trip: the link to this activity, and the means to make or withdraw it. */ share?: ActivityShare; /** Write the description by hand. Absent for anyone who may not arrange the trip; they read what is there. */ save?: (text: string) => Promise<void>; /** Ask the helper to write it, with whatever is in the box as a note. Absent when the helper is off, or for anyone who may not arrange the trip. */ describe?: (note: string) => Promise<string>; } & (EditProps | ReadOnlyProps)) {
+export function ActivityDetail({ trip, activity, photos, upload, share, save, describe, ...mode }: { trip: { slug: string; timezone: string; themeKey: string }; activity: ActivityDetailData; photos: PhotoCard[]; /** Members only: what adding photos straight to this activity needs — the uploader's limits, and everything taken during it. */ upload?: { maxClipSeconds: number; annotationActive: boolean; added?: number | null; during?: { count: number; elsewhere: number; when: string; take: () => Promise<{ added: number; elsewhere: number }> } }; /** Whoever arranges the trip: the link to this activity, and the means to make or withdraw it. */ share?: ActivityShare; /** Write the description by hand. Absent for anyone who may not arrange the trip; they read what is there. */ save?: (text: string) => Promise<void>; /** Ask the helper to write it, with whatever is in the box as a note. Absent when the helper is off, or for anyone who may not arrange the trip. */ describe?: (note: string) => Promise<string>; } & (EditProps | ReadOnlyProps)) {
   const toLocalInput = (d: Date) => format(new TZDate(d, trip.timezone), "yyyy-MM-dd'T'HH:mm");
   const editing = mode.editable && mode.editing;
   return (
@@ -127,8 +128,33 @@ export function ActivityDetail({ trip, activity, photos, upload, share, save, de
           <h3 className="font-display text-lg font-semibold">
             {photos.length} photo{photos.length === 1 ? "" : "s"}
           </h3>
-          {upload && <ActivityUploader activityId={activity.id} maxClipSeconds={upload.maxClipSeconds} annotationActive={upload.annotationActive} />}
+          {upload && (
+            <ActivityUploader
+              activityId={activity.id}
+              maxClipSeconds={upload.maxClipSeconds}
+              annotationActive={upload.annotationActive}
+              pickHref={`/trips/${trip.slug}/activities/${activity.id}/add`}
+              takeAll={
+                upload.during && (
+                  <TakeWindow
+                    count={upload.during.count}
+                    elsewhere={upload.during.elsewhere}
+                    label={`Add all ${upload.during.count} photo${upload.during.count === 1 ? "" : "s"} taken during it (${upload.during.when})`}
+                    confirmText={`Put all ${upload.during.count} photo${upload.during.count === 1 ? "" : "s"} taken between ${upload.during.when} on ${activity.title}?`}
+                    doneHref={`/trips/${trip.slug}/activities/${activity.id}`}
+                    action={upload.during.take}
+                    testId="activity-window"
+                  />
+                )
+              }
+            />
+          )}
         </div>
+        {upload?.added != null && (
+          <p role="status" className="text-sm rounded-theme bg-emerald-50 border border-emerald-200 text-emerald-900 p-3" data-testid="activity-added">
+            {upload.added === 0 ? "Nothing was added: only your own photos, or anyone's for an admin, can be moved." : `${upload.added} photo${upload.added === 1 ? "" : "s"} added to this activity.`}
+          </p>
+        )}
         {mode.editable ? (
           <ActivityGallery photos={photos.map((p) => toGridPhoto(p))} emptyMessage={upload ? "Nothing here yet. Photos taken during these hours arrive on their own; anything else can be added above." : "No photos on this activity yet."} />
         ) : (

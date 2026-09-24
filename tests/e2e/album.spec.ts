@@ -1549,12 +1549,77 @@ test("a family member moves an item to the trash with a reason, and an admin res
   await memberContext.close();
 });
 
+test("an activity takes photos already in the album: everything from its hours in one press, or any picked out with the usual search", async ({ context, page }) => {
+  test.setTimeout(120_000);
+  await signIn(context, ADMIN);
+  page.on("dialog", (d) => d.accept());
+  const act = (await withDb((c) => c.query(`SELECT a.id, a."startTime", a."endTime", a."tripId" FROM "Activity" a JOIN "Trip" t ON t.id = a."tripId" WHERE t.slug = 'acadia' AND a.title = 'Ocean Path loop' LIMIT 1`))).rows[0] as { id: string; startTime: Date; endTime: Date; tripId: string };
+  const mine = `FROM "Photo" p JOIN "User" u ON u.id = p."uploaderId" WHERE u.email = $1 AND p.status = 'READY' AND p."trashedAt" IS NULL AND p.kind = 'PHOTO'`;
+  const two = (await withDb((c) => c.query(`SELECT p.id, p."tripId", p."activityId", p."takenAt", p.caption ${mine} AND (p."activityId" IS NULL OR p."activityId" <> $2) ORDER BY p.id LIMIT 2`, [ADMIN, act.id]))).rows as { id: string; tripId: string | null; activityId: string | null; takenAt: Date | null; caption: string | null }[];
+  expect(two).toHaveLength(2);
+  const [during, picked] = two;
+  const middle = new Date((new Date(act.startTime).getTime() + new Date(act.endTime).getTime()) / 2);
+  // One taken during the walk that is on no trip; one from another day, found by a word.
+  await withDb((c) => c.query(`UPDATE "Photo" SET "tripId" = NULL, "activityId" = NULL, "takenAt" = $2 WHERE id = $1`, [during.id, middle]));
+  await withDb((c) => c.query(`UPDATE "Photo" SET "tripId" = NULL, "activityId" = NULL, "takenAt" = '2019-05-01T12:00:00Z', caption = 'qqpickme lighthouse print' WHERE id = $1`, [picked.id]));
+  const row = async (id: string) => (await withDb((c) => c.query(`SELECT "tripId", "activityId" FROM "Photo" WHERE id = $1`, [id]))).rows[0];
+
+  try {
+    await page.goto(`/trips/acadia/activities/${act.id}`);
+    await page.getByTestId("activity-upload-open").click();
+    const all = page.getByTestId("activity-window");
+    await expect(all).toContainText(/Add all \d+ photos? taken during it/);
+    await all.getByRole("button").click();
+    await expect(page).toHaveURL(/added=\d+/);
+    await expect(page.getByTestId("activity-added")).toContainText("added to this activity");
+    expect(await row(during.id)).toEqual({ tripId: act.tripId, activityId: act.id });
+
+    // Or picked out of the whole album, with the same questions as a trip's own picker.
+    await page.getByTestId("activity-upload-open").click();
+    await page.getByTestId("activity-upload-pick").click();
+    await expect(page).toHaveURL(new RegExp(`/activities/${act.id}/add`));
+    await page.getByTestId("add-photos").locator('input[name="q"]').fill("qqpickme");
+    await page.getByTestId("add-photos").getByRole("button", { name: "Search" }).click();
+    await expect(page).toHaveURL(/q=qqpickme/);
+    const tile = page.locator(`li:has(img[src*='/api/photos/${picked.id}/'])`);
+    await expect(tile).toBeVisible();
+    await tile.locator("button").first().click();
+    await page.getByTestId("picker-add").click();
+    await expect(page).toHaveURL(new RegExp(`/activities/${act.id}\\?added=1`));
+    expect(await row(picked.id)).toEqual({ tripId: act.tripId, activityId: act.id });
+  } finally {
+    for (const p of two) await withDb((c) => c.query(`UPDATE "Photo" SET "tripId" = $2, "activityId" = $3, "takenAt" = $4, caption = $5 WHERE id = $1`, [p.id, p.tripId, p.activityId, p.takenAt, p.caption]));
+  }
+});
+
+test("a trip takes every photo from its days that is on no trip, in one press", async ({ context, page }) => {
+  await signIn(context, ADMIN);
+  page.on("dialog", (d) => d.accept());
+  const trip = (await withDb((c) => c.query(`SELECT id, "startDate" FROM "Trip" WHERE slug = 'acadia'`))).rows[0] as { id: string; startDate: Date };
+  const p = (await withDb((c) => c.query(`SELECT p.id, p."tripId", p."activityId", p."takenAt", p."tzOffsetMin" FROM "Photo" p JOIN "User" u ON u.id = p."uploaderId" WHERE u.email = $1 AND p.status = 'READY' AND p."trashedAt" IS NULL ORDER BY p.id DESC LIMIT 1`, [ADMIN]))).rows[0];
+  // Midday on the trip's first day, wherever in the world: on no trip yet.
+  const noon = new Date(new Date(trip.startDate).getTime() + 16 * 3600_000);
+  await withDb((c) => c.query(`UPDATE "Photo" SET "tripId" = NULL, "activityId" = NULL, "takenAt" = $2, "tzOffsetMin" = NULL WHERE id = $1`, [p.id, noon]));
+  try {
+    await page.goto("/trips/acadia/add");
+    const all = page.getByTestId("trip-window");
+    await expect(all).toContainText(/taken during the trip/);
+    await all.getByRole("button").click();
+    await expect(page).toHaveURL(/\/trips\/acadia\/photos\?added=\d+/);
+    expect((await withDb((c) => c.query(`SELECT "tripId" FROM "Photo" WHERE id = $1`, [p.id]))).rows[0].tripId).toBe(trip.id);
+  } finally {
+    await withDb((c) => c.query(`UPDATE "Photo" SET "tripId" = $2, "activityId" = $3, "takenAt" = $4, "tzOffsetMin" = $5 WHERE id = $1`, [p.id, p.tripId, p.activityId, p.takenAt, p.tzOffsetMin]));
+  }
+});
+
 test("photos can be uploaded straight into an activity, and stay there when its hours change", async ({ context, page }) => {
   await signIn(context, ADMIN);
   const act = await withDb((c) => c.query(`SELECT id, "startTime" FROM "Activity" WHERE title = 'Ocean Path loop' LIMIT 1`));
   const activityId = act.rows[0].id as string;
   await page.goto(`/trips/acadia/activities/${activityId}`);
   await page.getByTestId("activity-upload-open").click();
+  // New ones from this device, rather than ones already in the album or everything from those hours.
+  await page.getByTestId("activity-upload-device").click();
   await chooseFile(page, "photo-no-exif.jpg");
   await expect(page.getByTestId("activity-upload").locator("img[src*='/api/photos/']")).toBeVisible({ timeout: 30_000 });
 
@@ -2118,6 +2183,7 @@ test("a file the album already has, sent to a trip or a collection, is put there
     await page.goto(`/collections/${collection.slug}`);
     await page.waitForLoadState("networkidle");
     await page.getByTestId("collection-upload-open").click();
+    await page.getByTestId("collection-upload-device").click();
     const here = page.getByTestId("collection-upload");
     // Something new first, which goes straight into the collection as it arrives.
     const fresh = Buffer.concat([fs.readFileSync(fixture("photo-with-gps.jpg")), Buffer.from(`\n<!-- new to the album ${randomUUID()} -->`)]);

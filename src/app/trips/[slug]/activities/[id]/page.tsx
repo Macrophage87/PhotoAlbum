@@ -9,17 +9,37 @@ import { NOT_TRASHED } from "@/lib/photos/trash";
 import { env } from "@/lib/env";
 import { annotationGates } from "@/lib/annotation/eligibility";
 import { familyMembers } from "@/lib/people/members";
+import { activityWindow } from "@/lib/photos/in-window";
+import { attachActivityWindow } from "@/app/photos/attach-actions";
+import { formatLocalTime } from "@/lib/time/format";
 
 export default async function ActivityPage({ params, searchParams }: PageProps<"/trips/[slug]/activities/[id]">) {
   const { slug, id } = await params;
   const sp = await searchParams;
-  const { trip, editable, owns } = await loadViewableTrip(slug, `/trips/${slug}/activities/${id}`);
+  const { viewer, trip, editable, owns } = await loadViewableTrip(slug, `/trips/${slug}/activities/${id}`);
   const activity = await db.activity.findFirst({ where: { id, tripId: trip.id }, include: { track: { select: { id: true, simplified: true, stats: true } }, participants: { select: { id: true } } } });
   if (!activity) notFound();
   const photos = await db.photo.findMany({ where: { activityId: activity.id, ...NOT_TRASHED }, orderBy: [{ takenAt: "asc" }], select: photoCardSelect });
 
   // Any member may add their own photos to an activity; rearranging the activity itself belongs to the trip's maker.
-  const upload = editable ? { maxClipSeconds: env().MAX_CLIP_SECONDS, annotationActive: (await annotationGates()).active } : undefined;
+  // Offered alongside: everything of theirs taken while it was happening, counted now so the button can say how many.
+  const during = editable && viewer.kind === "user" ? await activityWindow(viewer.user, activity) : null;
+  const added = typeof sp.added === "string" && /^\d+$/.test(sp.added) ? Number(sp.added) : null;
+  const upload = editable
+    ? {
+        maxClipSeconds: env().MAX_CLIP_SECONDS,
+        annotationActive: (await annotationGates()).active,
+        added,
+        during: during
+          ? {
+              count: during.ids.length,
+              elsewhere: during.elsewhere,
+              when: `${formatLocalTime(activity.startTime, { timezone: trip.timezone })} – ${formatLocalTime(activity.endTime, { timezone: trip.timezone })}`,
+              take: attachActivityWindow.bind(null, activity.id),
+            }
+          : undefined,
+      }
+    : undefined;
   if (!owns) return <ActivityDetail trip={trip} activity={activity} photos={photos} upload={upload} editable={false} />;
   // Sharing an activity shapes what leaves the album, so it belongs with the rest of arranging the trip.
   const share = {

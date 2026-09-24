@@ -6,17 +6,28 @@ import { Button } from "@/components/ui";
 import { PhotoGrid, type GridPhoto } from "@/components/photos/PhotoGrid";
 import { PickerFilters, type PickerOption } from "@/components/photos/PickerFilters";
 import { addToCollection, moreCandidates } from "@/app/collections/actions";
-import { moreTripCandidates } from "@/app/trips/[slug]/add-actions";
+import { moreActivityCandidates, moreTripCandidates } from "@/app/trips/[slug]/add-actions";
+import { attachToActivity } from "@/app/photos/attach-actions";
 import { bulkMoveToTrip } from "@/app/photos/bulk-actions";
 import { previewAddToCollection, previewMoveToTrip } from "@/app/photos/exposure-actions";
 import { describePickerFilter, pickerFilterIsActive, pickerFilterQuery, type PickerFilter } from "@/lib/photos/picker-filter";
 import type { FilterPerson } from "@/lib/people/in-photos";
 
-/** Where the ticked photographs are going. A collection gathers them; a trip takes them over. */
-export type PickerDestination = { kind: "collection"; id: string; slug: string; title: string } | { kind: "trip"; id: string; slug: string; title: string };
+/**
+ * Where the ticked photographs are going. A collection gathers them; a trip takes them over; an activity takes them
+ * over and puts them on its trip. `slug` is the collection's or the trip's; `home` is where the page goes back to.
+ */
+export type PickerDestination =
+  | { kind: "collection"; id: string; slug: string; title: string }
+  | { kind: "trip"; id: string; slug: string; title: string }
+  | { kind: "activity"; id: string; slug: string; title: string; tripId: string };
+
+const addPath = (d: PickerDestination) => (d.kind === "collection" ? `/collections/${d.slug}/add` : d.kind === "trip" ? `/trips/${d.slug}/add` : `/trips/${d.slug}/activities/${d.id}/add`);
+const homePath = (d: PickerDestination) => (d.kind === "collection" ? `/collections/${d.slug}/photos` : d.kind === "trip" ? `/trips/${d.slug}/photos` : `/trips/${d.slug}/activities/${d.id}`);
+const where = { collection: "in the collection", trip: "on the trip", activity: "on this activity" } as const;
 
 /** Tick photos from anywhere in the album and put them somewhere; warns first when that would show them to more people. */
-export function AddPhotosPicker({ destination, initialTrip, filter, members, people, initial }: {
+export function AddPhotosPicker({ destination, initialTrip, filter, members, people, initial, extra }: {
   destination: PickerDestination;
   /** The trip the filter is already narrowed to, so the box shows its name. */
   initialTrip: { id: string; title: string } | null;
@@ -24,6 +35,8 @@ export function AddPhotosPicker({ destination, initialTrip, filter, members, peo
   members?: PickerOption[];
   people?: FilterPerson[];
   initial: { photos: GridPhoto[]; nextCursor: string | null; total: number };
+  /** Anything to offer above the search, such as taking everything from the time it happened in one go. */
+  extra?: React.ReactNode;
 }) {
   const router = useRouter();
   const [photos, setPhotos] = useState(initial.photos);
@@ -39,7 +52,9 @@ export function AddPhotosPicker({ destination, initialTrip, filter, members, peo
     if (!nextCursor) return;
     const more = destination.kind === "collection"
       ? await moreCandidates(destination.slug, query, nextCursor)
-      : await moreTripCandidates(destination.slug, query, nextCursor);
+      : destination.kind === "activity"
+        ? await moreActivityCandidates(destination.id, query, nextCursor)
+        : await moreTripCandidates(destination.slug, query, nextCursor);
     setPhotos((prev) => [...prev, ...more.photos]);
     setNextCursor(more.nextCursor);
   });
@@ -48,11 +63,14 @@ export function AddPhotosPicker({ destination, initialTrip, filter, members, peo
     if (ids.length === 0) return;
     setMessage(null);
     try {
-      const warnings = destination.kind === "collection" ? await previewAddToCollection(ids, destination.id) : await previewMoveToTrip(ids, destination.id);
+      const warnings = destination.kind === "collection" ? await previewAddToCollection(ids, destination.id) : await previewMoveToTrip(ids, destination.kind === "activity" ? destination.tripId : destination.id);
       if (warnings.length && !window.confirm(`${warnings.join("\n")}\n\nContinue?`)) return;
       if (destination.kind === "collection") {
         const n = await addToCollection(destination.id, ids);
         router.push(`/collections/${destination.slug}/photos?added=${n}`);
+      } else if (destination.kind === "activity") {
+        const n = await attachToActivity(destination.id, ids);
+        router.push(`/trips/${destination.slug}/activities/${destination.id}?added=${n}`);
       } else {
         await bulkMoveToTrip(ids, destination.id);
         router.push(`/trips/${destination.slug}/photos?added=${ids.length}`);
@@ -72,20 +90,21 @@ export function AddPhotosPicker({ destination, initialTrip, filter, members, peo
           <p className="text-sm text-muted mt-1">
             Tick the ones that belong here. {initial.total} item{initial.total === 1 ? "" : "s"} to choose from
             {pickerFilterIsActive(filter) ? ` — ${describePickerFilter(filter).join("; ") || "with this filter"}` : ""}; anything already
-            {destination.kind === "collection" ? " in the collection" : " on the trip"} is not shown.
+            {` ${where[destination.kind]}`} is not shown.
           </p>
         </div>
+        {extra}
         <PickerFilters
           filter={filter}
-          action={destination.kind === "collection" ? `/collections/${destination.slug}/add` : `/trips/${destination.slug}/add`}
+          action={addPath(destination)}
           initialTrip={initialTrip}
           members={members}
           people={people}
-          showTrip={destination.kind === "collection"}
+          showTrip={destination.kind !== "trip"}
         />
       </div>
       {message && <p role="alert" className="text-sm rounded-theme bg-red-50 border border-red-200 text-red-900 p-3">{message}</p>}
-      <PhotoGrid photos={photos} selectable selected={selected} onToggle={toggle} emptyMessage={pickerFilterIsActive(filter) ? "Nothing matches that. Try fewer words, a wider distance, or a longer stretch of days." : destination.kind === "collection" ? "Every ready photo is already in this collection." : "Every ready photo is already on this trip."} />
+      <PhotoGrid photos={photos} selectable selected={selected} onToggle={toggle} emptyMessage={pickerFilterIsActive(filter) ? "Nothing matches that. Try fewer words, a wider distance, or a longer stretch of days." : `Every ready photo is already ${where[destination.kind]}.`} />
       {nextCursor && (
         <div className="text-center">
           <Button variant="secondary" size="sm" onClick={loadMore} disabled={pending}>Load more</Button>
@@ -98,13 +117,15 @@ export function AddPhotosPicker({ destination, initialTrip, filter, members, peo
           {selected.size > 0 && <button type="button" className="ml-3 text-muted hover:underline" onClick={() => setSelected(new Set())}>Clear</button>}
         </div>
         <div className="flex gap-2">
-          <Button variant="secondary" size="sm" onClick={() => router.push(destination.kind === "collection" ? `/collections/${destination.slug}/photos` : `/trips/${destination.slug}/photos`)} disabled={pending}>Cancel</Button>
+          <Button variant="secondary" size="sm" onClick={() => router.push(homePath(destination))} disabled={pending}>Cancel</Button>
           <Button size="sm" onClick={add} disabled={pending || selected.size === 0} data-testid="picker-add">
             {pending
               ? destination.kind === "collection" ? "Adding…" : "Moving…"
               : destination.kind === "collection"
                 ? `Add ${selected.size} to collection`
-                : `Put ${selected.size} on the trip`}
+                : destination.kind === "activity"
+                  ? `Put ${selected.size} on this activity`
+                  : `Put ${selected.size} on the trip`}
           </Button>
         </div>
       </div>
