@@ -129,7 +129,9 @@ export function ActivityDetail({ trip, activity, photos, upload, share, save, de
             {photos.length} photo{photos.length === 1 ? "" : "s"}
           </h3>
           {upload && (
+            // Started afresh once something has been added, so the choices close and the notice below says what happened.
             <ActivityUploader
+              key={`added-${upload.added ?? "none"}`}
               activityId={activity.id}
               maxClipSeconds={upload.maxClipSeconds}
               annotationActive={upload.annotationActive}
