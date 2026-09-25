@@ -302,6 +302,46 @@ test("one activity can be sent on its own link, which opens it and nothing else 
   await anon.close();
 });
 
+test("an activity's cover is chosen by hand, and its shared link comes up with that photo", async ({ browser, context, page }) => {
+  await signIn(context, ADMIN);
+  const act = (await withDb((c) => c.query(`SELECT a.id, a."startTime", a."shareToken", a."coverPhotoId" FROM "Activity" a JOIN "Trip" t ON t.id = a."tripId" WHERE t.slug = 'acadia' AND a.title = 'Ocean Path loop' LIMIT 1`))).rows[0] as { id: string; startTime: Date; shareToken: string | null; coverPhotoId: string | null };
+  const two = (await withDb((c) => c.query(`SELECT p.id, p."activityId", p."takenAt" FROM "Photo" p JOIN "Trip" t ON t.id = p."tripId" WHERE t.slug = 'acadia' AND p.status = 'READY' AND p."trashedAt" IS NULL AND p.kind = 'PHOTO' ORDER BY p.id LIMIT 2`))).rows as { id: string; activityId: string | null; takenAt: Date | null }[];
+  expect(two).toHaveLength(2);
+  const [first, later] = two;
+  // Two photographs on the walk, a minute apart: left alone, the link would come up with the first.
+  const start = new Date(act.startTime).getTime();
+  await withDb((c) => c.query(`UPDATE "Photo" SET "activityId" = $2, "takenAt" = $3 WHERE id = $1`, [first.id, act.id, new Date(start + 60_000)]));
+  await withDb((c) => c.query(`UPDATE "Photo" SET "activityId" = $2, "takenAt" = $3 WHERE id = $1`, [later.id, act.id, new Date(start + 120_000)]));
+  const anon = await browser.newContext();
+  try {
+    await page.goto(`/trips/acadia/activities/${act.id}`);
+    await page.getByTestId("activity-cover-link").click();
+    await expect(page).toHaveURL(new RegExp(`/activities/${act.id}/cover`));
+    await page.getByTestId("cover-picker").locator(`li:has(img[src*='/api/photos/${later.id}/'])`).getByRole("button").click();
+    await expect(page).toHaveURL(/chosen=1/);
+    expect((await withDb((c) => c.query(`SELECT "coverPhotoId" FROM "Activity" WHERE id = $1`, [act.id]))).rows[0].coverPhotoId).toBe(later.id);
+
+    // Shared, the link unfurls with the chosen one, not the first.
+    await page.goto(`/trips/acadia/activities/${act.id}`);
+    if (await page.getByTestId("activity-share-on").count()) await page.getByTestId("activity-share-on").click();
+    await expect(page.getByTestId("activity-shared")).toBeVisible();
+    const token = (await withDb((c) => c.query(`SELECT "shareToken" FROM "Activity" WHERE id = $1`, [act.id]))).rows[0].shareToken as string;
+    const html = await (await anon.request.get(`/share/a/${token}`)).text();
+    const og = [...html.matchAll(/<meta property="og:image" content="([^"]*)"/g)].map((m) => m[1]);
+    expect(og.length).toBeGreaterThan(0);
+    expect(og[0]).toContain(later.id);
+
+    // A cover taken off the activity stops being its cover, and the link goes back to the first photograph.
+    await withDb((c) => c.query(`UPDATE "Photo" SET "activityId" = NULL WHERE id = $1`, [later.id]));
+    const after = await (await anon.request.get(`/share/a/${token}`)).text();
+    expect([...after.matchAll(/<meta property="og:image" content="([^"]*)"/g)].map((m) => m[1])[0]).toContain(first.id);
+  } finally {
+    await anon.close();
+    await withDb((c) => c.query(`UPDATE "Activity" SET "coverPhotoId" = $2, "shareToken" = $3 WHERE id = $1`, [act.id, act.coverPhotoId, act.shareToken]));
+    for (const p of two) await withDb((c) => c.query(`UPDATE "Photo" SET "activityId" = $2, "takenAt" = $3 WHERE id = $1`, [p.id, p.activityId, p.takenAt]));
+  }
+});
+
 test("the helper writes an activity's description from its own photographs, and it travels with the link", async ({ browser, context, page }) => {
   await signIn(context, ADMIN);
   const act = await withDb((c) => c.query(`SELECT id FROM "Activity" WHERE title = 'Ocean Path loop' LIMIT 1`));

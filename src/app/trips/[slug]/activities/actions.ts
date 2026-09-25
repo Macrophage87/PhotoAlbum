@@ -107,6 +107,27 @@ export async function setActivityShare(slug: string, id: string, on: boolean): P
   revalidatePath(`/trips/${slug}/activities/${id}`);
 }
 
+/**
+ * Choose (or forget) the picture the activity is known by — the one its shared link unfurls with. Arranged by
+ * whoever arranges the trip, like its link and its description, and only from the activity's own photographs.
+ */
+export async function setActivityCover(slug: string, id: string, photoId: string | null): Promise<void> {
+  const trip = await loadTrip(slug);
+  const activity = await db.activity.findFirst({ where: { id, tripId: trip.id }, select: { id: true } });
+  if (!activity) throw new Error("Activity not found");
+  if (photoId) {
+    const photo = await db.photo.findFirst({ where: { id: photoId, activityId: id }, select: { id: true } });
+    if (!photo) throw new Error("Photo is not on this activity");
+  }
+  // A photograph fronts one activity at most. One moved here from an activity it was the cover of is released there
+  // first; that activity goes back to leading with its own first photograph.
+  await db.$transaction([
+    ...(photoId ? [db.activity.updateMany({ where: { coverPhotoId: photoId, id: { not: id } }, data: { coverPhotoId: null } })] : []),
+    db.activity.update({ where: { id }, data: { coverPhotoId: photoId } }),
+  ]);
+  revalidatePath(`/trips/${slug}/activities/${id}`);
+}
+
 /** What somebody may type into the box: a note for the helper, or the description itself. Long enough for either. */
 const DESCRIPTION_TEXT = z.string().max(4000);
 

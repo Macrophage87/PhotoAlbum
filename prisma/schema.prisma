@@ -293,6 +293,10 @@ model Activity {
   shareToken  String?      @unique
   /// Who was on this outing. Empty means everybody on the trip; naming people narrows the hours to their uploads.
   participants User[]      @relation("ActivityParticipants")
+  /// The photograph the activity is known by, chosen by hand: the picture a shared link unfurls with. Honoured only
+  /// while it is still one of the activity's own; otherwise the activity is fronted by its first photograph.
+  coverPhotoId String?     @unique
+  coverPhoto   Photo?      @relation("ActivityCover", fields: [coverPhotoId], references: [id], onDelete: SetNull)
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
 
@@ -430,6 +434,7 @@ model Photo {
   linksB      PhotoLink[]      @relation("LinkB")
   collections CollectionItem[]
   coverOfCollection Collection? @relation("CollectionCover")
+  coverOfActivity   Activity?   @relation("ActivityCover")
   annotationRaw     MediaAnnotationRaw[]
   faces             Face[]
   animals           AnimalDetection[]

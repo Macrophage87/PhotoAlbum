@@ -392,6 +392,10 @@
           "text": "You can share a whole trip, a collection, or just one outing. Press **Share**, and the link is there ready to copy. Paste it into a message and it carries the title and a picture with it."
         },
         {
+          "kind": "p",
+          "text": "The picture a shared link comes up with is the cover photo. To choose it for an outing, open the outing and press **Cover photo**, beside **Share**, then press the photo you want. Left alone, an outing is shown with its first photograph. A trip's or a collection's is chosen in its **Settings**, with **Choose a cover**."
+        },
+        {
           "kind": "note",
           "text": "**A link shows everything in that thing.** A shared trip shows all its photographs — and, if there are traces from a watch or phone, the paths they recorded. That is a record of where people were and when. Share an outing on its own if that is all you meant to send."
         },

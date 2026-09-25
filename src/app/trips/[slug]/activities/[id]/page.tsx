@@ -12,6 +12,8 @@ import { familyMembers } from "@/lib/people/members";
 import { activityWindow } from "@/lib/photos/in-window";
 import { attachActivityWindow } from "@/app/photos/attach-actions";
 import { formatLocalTime } from "@/lib/time/format";
+import { activityCover } from "@/lib/activities/cover";
+import { photoUrl } from "@/lib/photos/urls";
 
 export default async function ActivityPage({ params, searchParams }: PageProps<"/trips/[slug]/activities/[id]">) {
   const { slug, id } = await params;
@@ -42,7 +44,9 @@ export default async function ActivityPage({ params, searchParams }: PageProps<"
     : undefined;
   if (!owns) return <ActivityDetail trip={trip} activity={activity} photos={photos} upload={upload} editable={false} />;
   // Sharing an activity shapes what leaves the album, so it belongs with the rest of arranging the trip.
+  const cover = await activityCover(activity);
   const share = {
+    cover: { href: `/trips/${slug}/activities/${activity.id}/cover`, thumbUrl: cover ? photoUrl(cover, "thumb") : null },
     url: shareableActivityUrl(activity, env().APP_URL),
     enable: setActivityShare.bind(null, slug, activity.id, true),
     disable: setActivityShare.bind(null, slug, activity.id, false),

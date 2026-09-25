@@ -12,19 +12,16 @@ import { TripTheme } from "@/themes/TripTheme";
 import { ActivityDetail } from "@/components/activities/ActivityDetail";
 import { ShareCookie } from "@/app/share/[token]/ShareCookie";
 import { previewCard } from "@/lib/share/preview";
+import { activityCover } from "@/lib/activities/cover";
 import { formatDateTime } from "@/lib/time/format";
 
 export async function generateMetadata({ params }: PageProps<"/share/a/[token]">): Promise<Metadata> {
   const { token } = await params;
   const activity = await getSharedActivity(token);
   if (!activity) return { title: "Shared activity", robots: { index: false, follow: false } };
-  // The first photograph of the activity stands in for it on a link preview; it is fetched with the token, since
-  // whoever is unfurling the link holds no cookie.
-  const cover = await db.photo.findFirst({
-    where: { activityId: activity.id, ...NOT_TRASHED, status: "READY" },
-    orderBy: [{ takenAt: "asc" }],
-    select: { id: true, updatedAt: true, width: true, height: true, trashedAt: true },
-  });
+  // The activity's cover stands in for it on a link preview — the one chosen for it, or else its first photograph.
+  // It is fetched with the token, since whoever is unfurling the link holds no cookie.
+  const cover = await activityCover(activity);
   const card = previewCard({
     title: activity.title,
     description: `${activity.trip.title} · ${formatDateTime(activity.startTime, activity.trip.timezone, "EEEE, MMMM d, yyyy")}`,

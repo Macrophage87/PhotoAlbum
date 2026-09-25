@@ -44,7 +44,8 @@ type ReadOnlyProps = { editable: false };
  * The link to this one activity, for whoever arranges the trip. Making a link again replaces it, which is how an
  * old one is retired.
  */
-export type ActivityShare = { url: string | null; enable: () => Promise<void>; disable: () => Promise<void> };
+/** `cover`: where to choose the picture the link comes up with, and a thumbnail of the one it comes up with now. */
+export type ActivityShare = { url: string | null; enable: () => Promise<void>; disable: () => Promise<void>; cover?: { href: string; thumbUrl: string | null } };
 
 /** Shared body of the activity page for members (editable) and shared/public viewers. */
 export function ActivityDetail({ trip, activity, photos, upload, share, save, describe, ...mode }: { trip: { slug: string; timezone: string; themeKey: string }; activity: ActivityDetailData; photos: PhotoCard[]; /** Members only: what adding photos straight to this activity needs — the uploader's limits, and everything taken during it. */ upload?: { maxClipSeconds: number; annotationActive: boolean; added?: number | null; during?: { count: number; elsewhere: number; when: string; take: () => Promise<{ added: number; elsewhere: number }> } }; /** Whoever arranges the trip: the link to this activity, and the means to make or withdraw it. */ share?: ActivityShare; /** Write the description by hand. Absent for anyone who may not arrange the trip; they read what is there. */ save?: (text: string) => Promise<void>; /** Ask the helper to write it, with whatever is in the box as a note. Absent when the helper is off, or for anyone who may not arrange the trip. */ describe?: (note: string) => Promise<string>; } & (EditProps | ReadOnlyProps)) {
@@ -82,6 +83,16 @@ export function ActivityDetail({ trip, activity, photos, upload, share, save, de
                 <Button type="submit" variant="secondary" size="sm" data-testid="activity-share-on">Share this activity</Button>
               </form>
             ))}
+          {/* The picture a shared link comes up with, and the way to choose it, beside the link itself. */}
+          {share?.cover && (
+            <a href={share.cover.href} className="inline-flex items-center gap-1.5 text-sm text-primary underline-offset-2 hover:underline" data-testid="activity-cover-link" title="The picture a shared link comes up with">
+              {share.cover.thumbUrl && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={share.cover.thumbUrl} alt="" className="w-7 h-7 rounded object-cover border border-border" />
+              )}
+              Cover photo
+            </a>
+          )}
           {mode.editable && !editing && (
             <a href="?edit=1" className="text-sm text-primary underline-offset-2 hover:underline">
               Edit

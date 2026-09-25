@@ -13,7 +13,7 @@ import type { CoverCandidate } from "@/lib/covers/candidates";
  *
  * Every tile is a form button, so the page works before any JavaScript has loaded and from the keyboard.
  */
-export function CoverPicker({ title, backHref, current, automatic, photos, nextCursor, total, pageHref, choose, clear }: {
+export function CoverPicker({ title, backHref, current, automatic, photos, nextCursor, total, pageHref, choose, clear, usedFor = "on the front page, on its own header, and wherever it is shared" }: {
   /** What is being fronted, in words: "Acadia, Maine" or "Every lighthouse". */
   title: string;
   backHref: string;
@@ -28,6 +28,8 @@ export function CoverPicker({ title, backHref, current, automatic, photos, nextC
   pageHref: string;
   choose: (photoId: string) => Promise<void>;
   clear: () => Promise<void>;
+  /** Where the cover shows, finishing "The picture … is known by:". */
+  usedFor?: string;
 }) {
   return (
     <div className="space-y-6 max-w-5xl">
@@ -35,7 +37,7 @@ export function CoverPicker({ title, backHref, current, automatic, photos, nextC
         <div>
           <h2 className="font-display text-xl font-semibold">Cover photo</h2>
           <p className="text-muted text-sm mt-1">
-            The picture {title} is known by: on the front page, on its own header, and wherever it is shared.
+            The picture {title} is known by: {usedFor}.
           </p>
         </div>
         <Link href={backHref} className="text-sm text-primary underline-offset-2 hover:underline">Back</Link>
