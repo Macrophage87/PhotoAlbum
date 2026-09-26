@@ -273,9 +273,9 @@ export async function loadTombstone(): Promise<Tombstone> {
   const current = new Set(keys.flatMap((k) => [...currentForms].map((f) => `${k.version}:${hash(k.key, f)}`)));
   const byHash = new Map(
     rows
-      // A first name of a forgotten full name that somebody the album knows also has ("Sam" while Sam Ortiz lives)
-      // is theirs, wherever they are.
-      .filter((r) => (r.scoped ? !(r.derived && whoseForm.has(`${r.keyVersion}:${r.hash}`)) : !current.has(`${r.keyVersion}:${r.hash}`)))
+      // A name kept by place stays, and is left alone only on photographs where somebody the album knows by it is
+      // tagged (see Scope.tagged): "Sam" is Sam Ortiz's where he is, and still the forgotten Sam Kent's where he was.
+      .filter((r) => r.scoped || !current.has(`${r.keyVersion}:${r.hash}`))
       .map((r) => {
         const key = `${r.keyVersion}:${r.hash}`;
         return [key, { key, capOnly: r.capitalizedOnly, derived: r.derived, scoped: r.scoped, people: r.scoped ? whoseForm.get(key) : undefined }] as const;

@@ -424,10 +424,22 @@ describe("names that are also words", () => {
     expect(await caption(tagged, "Uncle Sam hat on Ben")).toBe("Uncle Sam hat on Ben");
   });
 
-  it("leaves a first name to somebody the album knows who has it too", async () => {
-    await db.person.create({ data: { name: "Sam Ortiz", createdById: admin } });
-    const on = await forget("Sam Kent");
-    expect((await loadTombstone()).scrub("Sam at the lake", await sc(on))).toBe("Sam at the lake");
+  it("leaves a first name to somebody the album knows who has it only where they are tagged", async () => {
+    const ortiz = await db.person.create({ data: { name: "Sam Ortiz", createdById: admin } });
+    const kent = await db.person.create({ data: { name: "Sam Kent", createdById: admin } });
+    const tag = async (photoId: string, personId: string) => db.face.create({ data: { photoId, personId, status: "CONFIRMED", box: [0, 0, 1, 1], confidence: 0 } });
+    const his = await photo();
+    const both = await photo();
+    const elsewhere = await photo();
+    await tag(his, kent.id);
+    await tag(both, kent.id);
+    await tag(both, ortiz.id);
+    await tag(elsewhere, ortiz.id);
+    await optOutPerson(kent.id, new FormData());
+    const ts = await loadTombstone();
+    expect(ts.scrub("Sam at the lake", await sc(his))).toBe("A family member at the lake");
+    expect(ts.scrub("Sam at the lake", await sc(both))).toBe("Sam at the lake");
+    expect(ts.scrub("Sam at the lake", await sc(elsewhere))).toBe("Sam at the lake");
   });
 
   it("keeps every first-name form of a forgotten full name out of their own photographs", async () => {
