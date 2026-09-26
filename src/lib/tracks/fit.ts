@@ -43,18 +43,27 @@ export async function parseFit(buffer: Buffer): Promise<ParsedTrack[]> {
   const sessions = (data.sessions ?? []) as Record<string, unknown>[];
   // A multisport file (a triathlon, a paddle then a hike) holds one session per leg. Each leg becomes its own track
   // with its own sport, totals and times; lumping them together would describe the whole day by its first leg.
-  if (sessions.length > 1 && sessions.every((x) => x.start_time instanceof Date)) {
-    const legs = [...sessions].sort((a, b) => (a.start_time as Date).getTime() - (b.start_time as Date).getTime());
+  const starts = sessions.map(sessionStart);
+  if (sessions.length > 1 && starts.every((t) => t !== null)) {
+    const order = sessions.map((_, i) => i).sort((a, b) => starts[a]! - starts[b]!);
+    const legs = order.map((i): Record<string, unknown> & { start_time: Date } => ({ ...sessions[i], start_time: new Date(starts[i]!) }));
     const legPoints = legs.map((): TrackPoint[] => []);
     for (const p of points) {
       let i = 0;
-      while (i + 1 < legs.length && (legs[i + 1].start_time as Date).getTime() <= p.t) i++;
+      while (i + 1 < legs.length && legs[i + 1].start_time.getTime() <= p.t) i++;
       legPoints[i].push(p);
     }
     // Transitions are the minutes spent changing kit between legs, not an outing of their own.
     return legs.flatMap((leg, i) => (legPoints[i].length && leg.sport !== "transition" ? [toTrack(leg, legPoints[i])] : []));
   }
   return [toTrack(sessions[0] ?? {}, points)];
+}
+
+/** A session's start, worked out from its end and elapsed time when a writer left start_time out. */
+function sessionStart(s: Record<string, unknown>): number | null {
+  if (s.start_time instanceof Date) return s.start_time.getTime();
+  const elapsed = num(s.total_elapsed_time);
+  return s.timestamp instanceof Date && elapsed !== undefined ? s.timestamp.getTime() - elapsed * 1000 : null;
 }
 
 function toTrack(s: Record<string, unknown>, points: TrackPoint[]): ParsedTrack {

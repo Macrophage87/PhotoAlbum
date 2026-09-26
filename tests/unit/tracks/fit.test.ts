@@ -34,8 +34,11 @@ const ts = (ms: number) => FitEncoder.toFitTimestamp(new Date(ms));
 const T0 = Date.parse("2025-08-12T14:00:00Z");
 const MIN = 60_000;
 
-/** A multisport file: a 30-minute paddle, a 5-minute transition, then an hour's hike, one record a minute. */
-function multisportFit(): Buffer {
+/**
+ * A multisport file: a 30-minute paddle, a 5-minute transition, then an hour's hike, one record a minute. `shuffle`
+ * writes the sessions out of order and leaves the hike's start time out, as some writers do.
+ */
+function multisportFit(shuffle = false): Buffer {
   const enc = new FitEncoder();
   enc.writeMessage(0, [
     { number: 0, size: 1, baseType: FitBaseType.Enum, value: 4 },
@@ -48,17 +51,20 @@ function multisportFit(): Buffer {
       { number: 1, size: 4, baseType: FitBaseType.Sint32, value: semi(-68) },
     ], 1);
   }
-  const session = (from: number, to: number, sport: number, distanceM: number) =>
+  const session = (from: number, to: number, sport: number, distanceM: number, withStart = true) =>
     enc.writeMessage(18, [
       { number: 253, size: 4, baseType: FitBaseType.Uint32, value: ts(T0 + to * MIN) },
-      { number: 2, size: 4, baseType: FitBaseType.Uint32, value: ts(T0 + from * MIN) },
+      ...(withStart ? [{ number: 2, size: 4, baseType: FitBaseType.Uint32, value: ts(T0 + from * MIN) }] : []),
       { number: 5, size: 1, baseType: FitBaseType.Enum, value: sport },
       { number: 7, size: 4, baseType: FitBaseType.Uint32, value: (to - from) * 60 * 1000 },
       { number: 9, size: 4, baseType: FitBaseType.Uint32, value: distanceM * 100 },
-    ], 2);
-  session(0, 30, 41, 3000); // kayaking
-  session(30, 35, 3, 100); // transition
-  session(35, 95, 17, 5000); // hiking
+    ], withStart ? 2 : 3);
+  const legs = [
+    () => session(0, 30, 41, 3000), // kayaking
+    () => session(30, 35, 3, 100), // transition
+    () => session(35, 95, 17, 5000, !shuffle), // hiking
+  ];
+  for (const write of shuffle ? [legs[2], legs[0], legs[1]] : legs) write();
   return Buffer.from(enc.close());
 }
 
@@ -78,5 +84,11 @@ describe("parseFit with several sessions", () => {
     expect(hike.session?.elapsedTimeS).toBe(3600);
     expect(hike.session?.startTime?.getTime()).toBe(T0 + 35 * MIN);
     expect(hike.session?.endTime?.getTime()).toBe(T0 + 95 * MIN);
+  });
+  it("orders legs by time, and works out a missing start from the end and elapsed time", async () => {
+    const tracks = await parseFit(multisportFit(true));
+    expect(tracks.map((t) => t.sport)).toEqual(["KAYAK", "HIKE"]);
+    expect(tracks.map((t) => t.points.length)).toEqual([30, 61]);
+    expect(tracks[1].session?.startTime?.getTime()).toBe(T0 + 35 * MIN);
   });
 });
