@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { existsSync, mkdtempSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { db } from "@/lib/db";
@@ -163,6 +163,22 @@ describe("the Picker download job", () => {
     await googlePickerImport(job());
     expect((await statuses())[0]).toMatchObject({ status: "FAILED", error: "taken over", sizeBytes: 0 });
     expect(enqueued.map((e) => (e.data as { photoId: string }).photoId)).not.toContain(ids[0]);
+  });
+  it("leaves no bytes behind, and does not touch the new holder's file, when its row is taken over mid-download", async () => {
+    // What the row's new holder has already put in place.
+    const theirs = path.join(photoRoot, "photos", ids[0], "original.jpg");
+    mkdirSync(path.dirname(theirs), { recursive: true });
+    writeFileSync(theirs, "theirs");
+    google.download.mockImplementation(async (_t: string, item: { id: string }) => {
+      if (item.id === "gp-1") await db.photo.update({ where: { id: ids[0] }, data: { status: "PENDING", originalPath: `photos/${ids[0]}/original.jpg`, storageKey: `photos/${ids[0]}` } });
+      return body(10);
+    });
+    await googlePickerImport(job());
+    expect(readFileSync(theirs, "utf8")).toBe("theirs");
+    const incoming = path.join(photoRoot, "incoming");
+    expect(existsSync(incoming) ? readdirSync(incoming) : []).toEqual([]);
+    // The rows it kept are in place and nothing else is waiting in incoming/.
+    expect(existsSync(path.join(photoRoot, "photos", ids[1], "original.jpg"))).toBe(true);
   });
   it("fails every row when no access token can be had", async () => {
     google.token.mockRejectedValue(new GoogleAuthError("gone", true));

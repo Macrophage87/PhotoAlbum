@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { Readable } from "node:stream";
 import { db } from "@/lib/db";
 import { env } from "@/lib/env";
@@ -86,20 +87,27 @@ export async function googlePickerImport(job: GooglePickerImportJob, signal?: Ab
     /** How to recognise the row as still this job's (taken, then stored): nobody has written to it since this job did. */
     const taken = await db.photo.findUniqueOrThrow({ where: { id: row.id }, select: { updatedAt: true } });
     let mine: { status: "PROCESSING" | "PENDING"; originalPath: string; updatedAt: Date } = { status: "PROCESSING", originalPath: "pending", updatedAt: taken.updatedAt };
+    // Downloaded to a key of this job's own first, and moved into place only once the row is still this job's: a
+    // download that loses its row to the sweep or a re-pick must neither leave its bytes behind nor overwrite a
+    // file the row's new holder put there.
+    const incoming = `incoming/${randomUUID()}.${EXT_BY_MIME[row.mimeType]}`;
     try {
       const res = await download(row.id);
-      const { bytes } = await store.putStream(originalPath, Readable.fromWeb(res.body as never), { maxBytes: isVideo ? env().MAX_VIDEO_UPLOAD_BYTES : env().MAX_UPLOAD_BYTES });
+      const { bytes } = await store.putStream(incoming, Readable.fromWeb(res.body as never), { maxBytes: isVideo ? env().MAX_VIDEO_UPLOAD_BYTES : env().MAX_UPLOAD_BYTES });
       // Only onto a row still this job's: if the sweep or a re-pick took it meanwhile, theirs is the say now.
       const stored = await db.photo.updateMany({ where: { id: row.id, ...mine }, data: { storageKey, originalPath, sizeBytes: bytes, status: "PENDING" } });
       if (stored.count !== 1) {
+        await store.delete(incoming).catch(() => undefined);
         console.warn(`[google] ${row.originalName} was taken over while downloading; leaving it`);
         continue;
       }
       const now = await db.photo.findUniqueOrThrow({ where: { id: row.id }, select: { updatedAt: true } });
       mine = { status: "PENDING", originalPath, updatedAt: now.updatedAt };
+      await store.move(incoming, originalPath);
       if (isVideo) await enqueue(QUEUES.transcodeVideo, { photoId: row.id, tripId: row.tripId });
       else await enqueue(QUEUES.processPhoto, { photoId: row.id, tripId: row.tripId });
     } catch (err) {
+      await store.delete(incoming).catch(() => undefined);
       const reason = err instanceof NoToken ? tokenFailure(err.reason) : err instanceof StorageLimitError ? `Larger than ${Math.round(err.maxBytes / 1048576)} MB` : err instanceof GoogleAuthError ? `Google Photos refused the download. ${PICK_AGAIN}` : `Download from Google Photos failed. ${PICK_AGAIN}`;
       // Back to having no file, so picking it again fetches it rather than finding a row pointing at nothing — but
       // only while it is still this job's to put back.

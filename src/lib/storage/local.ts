@@ -1,5 +1,5 @@
 import { createReadStream, createWriteStream } from "node:fs";
-import { mkdir, rm, rmdir, stat, writeFile } from "node:fs/promises";
+import { mkdir, rename, rm, rmdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -63,6 +63,13 @@ export class LocalStorage implements StorageProvider {
     } catch {
       return false;
     }
+  }
+
+  async move(from: string, to: string): Promise<void> {
+    const target = this.localPath(to);
+    await mkdir(path.dirname(target), { recursive: true });
+    // A rename within the one storage root, so whoever reads `to` sees the old file or the new one, never half of it.
+    await rename(this.localPath(from), target);
   }
 
   async delete(key: string): Promise<void> {
