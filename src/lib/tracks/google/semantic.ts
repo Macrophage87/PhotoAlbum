@@ -67,14 +67,15 @@ export function timelineObjectToPoints(obj: TimelineObject, window: Window): Tra
 /** A placeVisit and the visits nested in it (a shop inside a shopping centre) as stays. */
 export function timelineObjectToStays(obj: TimelineObject): Stay[] {
   const out: Stay[] = [];
-  const walk = (v: PlaceVisit, level: number) => {
+  const walk = (v: PlaceVisit) => {
     const c = ll(v.location);
     const { start, end } = dur(v.duration);
-    const p = probability(v.visitConfidence);
-    if (c && start !== null) out.push({ start, end, lat: c[0], lng: c[1], level, fill: p === null || p >= MIN_VISIT_PROBABILITY });
-    for (const child of v.childVisits ?? []) walk(child, level + 1);
+    // visitConfidence is a percentage.
+    const p = probability(v.visitConfidence, 100);
+    if (c && start !== null) out.push({ start, end, lat: c[0], lng: c[1], fill: p === null || p >= MIN_VISIT_PROBABILITY });
+    for (const child of v.childVisits ?? []) walk(child);
   };
-  if (obj.placeVisit) walk(obj.placeVisit, 0);
+  if (obj.placeVisit) walk(obj.placeVisit);
   return out;
 }
 

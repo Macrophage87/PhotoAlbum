@@ -97,10 +97,28 @@ describe("google visits", () => {
     const pts = parse([walk("2025-08-12T13:50:00Z", "2025-08-12T14:00:00Z"), museum("2025-08-12T14:00:00Z", "2025-08-12T17:00:00Z"), walk("2025-08-12T15:00:00Z", "2025-08-12T15:08:00Z")]);
     const recorded = pts.filter((p) => !p.stay).map((p) => p.t);
     for (const p of pts.filter((q) => q.stay)) for (const r of recorded) expect(Math.abs(p.t - r)).toBeGreaterThanOrEqual(STAY_STEP_MS);
-    // Between 14:00 and 15:00 the visit fills in; the 8-minute walk in the middle is left alone.
-    expect(positionAt(pts, at("2025-08-12T14:30:00Z"))).toMatchObject({ lat: 40.7794 });
+    // Between 14:00 and 15:00 the visit fills in, from the nearer recorded end: the walk arrived at 14:00 and the next
+    // one set off at 15:00, both inside the visit. The 8-minute walk in the middle is left alone.
+    expect(positionAt(pts, at("2025-08-12T14:20:00Z"))).toMatchObject({ lat: 40.771 });
+    expect(positionAt(pts, at("2025-08-12T14:40:00Z"))).toMatchObject({ lat: 40.77 });
     expect(pts.filter((p) => p.stay && p.t > at("2025-08-12T15:00:00Z") && p.t < at("2025-08-12T15:08:00Z"))).toEqual([]);
     expect(positionAt(pts, at("2025-08-12T16:30:00Z"))).toMatchObject({ lat: 40.7794 });
+  });
+
+  it("fill a sparse path inside a visit from its own points, not by zig-zagging to the centre", () => {
+    // A point every 15 minutes, 300 m from the visit's centre.
+    const path = Array.from({ length: 13 }, (_, i) => ({ time: new Date(at("2025-08-12T14:00:00Z") + i * 15 * 60_000).toISOString(), point: "geo:40.7821,-73.9632" }));
+    const pts = parse([{ startTime: "2025-08-12T14:00:00Z", endTime: "2025-08-12T17:00:00Z", timelinePath: path }, museum("2025-08-12T14:00:00Z", "2025-08-12T17:00:00Z")]);
+    expect(pts.some((p) => p.stay)).toBe(true);
+    expect(pts.every((p) => p.lat === 40.7821)).toBe(true);
+    expect(computeStats(pts).distanceM).toBe(0);
+  });
+
+  it("put a point at local midnight inside a stay, where the trace is split into days", () => {
+    const midnight = at("2025-08-13T04:00:00Z");
+    const hotel: Seg = { startTime: "2025-08-12T23:52:00Z", endTime: "2025-08-13T11:00:00Z", visit: { topCandidate: { placeLocation: "geo:44.35,-68.2" } } };
+    const pts = fillStays([], [segmentToStay(hotel)!], window, [midnight]);
+    expect(pts.map((p) => p.t)).toContain(midnight);
   });
 
   it("let a visit inside another visit fill its own hours, and the outer one the rest", () => {
@@ -122,6 +140,9 @@ describe("google visits", () => {
     const pts = parse([museum("2025-08-12T14:00:00Z", "2025-08-12T17:00:00Z", { probability: 0.2 })]);
     expect(pts.map((p) => p.t)).toEqual([at("2025-08-12T14:00:00Z"), at("2025-08-12T17:00:00Z")]);
     expect(positionAt(pts, at("2025-08-12T15:30:00Z"))).toBeNull();
+    // Semantic visitConfidence is a percentage: 1 means 1%, not certainty.
+    const barely = { placeVisit: { location: { latE7: 407000000, lngE7: -740000000 }, visitConfidence: 1, duration: { startTimestamp: "2025-08-12T14:00:00Z", endTimestamp: "2025-08-12T17:00:00Z" } } };
+    expect(fillStays([], timelineObjectToStays(barely), window)).toHaveLength(2);
     const doubted = { placeVisit: { location: { latE7: 407000000, lngE7: -740000000 }, visitConfidence: 30, duration: { startTimestamp: "2025-08-12T14:00:00Z", endTimestamp: "2025-08-12T17:00:00Z" } } };
     expect(fillStays([], timelineObjectToStays(doubted), window)).toHaveLength(2);
   });

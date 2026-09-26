@@ -49,8 +49,8 @@ export function segmentToStay(seg: Segment): Stay | null {
   const ll = latLngOf(seg.visit.topCandidate?.placeLocation);
   const start = parseTime(seg.startTime);
   if (!ll || start === null) return null;
-  const p = probability(seg.visit.probability);
-  return { start, end: parseTime(seg.endTime), lat: ll[0], lng: ll[1], level: Number(seg.visit.hierarchyLevel) || 0, fill: p === null || p >= MIN_VISIT_PROBABILITY };
+  const p = probability(seg.visit.probability, 1);
+  return { start, end: parseTime(seg.endTime), lat: ll[0], lng: ll[1], fill: p === null || p >= MIN_VISIT_PROBABILITY };
 }
 
 /** Android export: { semanticSegments: [...] }. iOS export: a top-level array of the same segments. */

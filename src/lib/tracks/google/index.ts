@@ -20,9 +20,9 @@ export async function readHead(filePath: string, bytes = 64 * 1024): Promise<Buf
 
 /**
  * Parse any supported Google location export into time-sorted points inside the window. `recorded` counts the points
- * the export itself holds; the rest are filled in across visits.
+ * the export itself holds; the rest are filled in across visits (and at the `cuts`, local midnights, inside them).
  */
-export async function parseGoogleExport(filePath: string, window: Window): Promise<{ format: GoogleFormat; points: TrackPoint[]; recorded: number }> {
+export async function parseGoogleExport(filePath: string, window: Window, cuts: number[] = []): Promise<{ format: GoogleFormat; points: TrackPoint[]; recorded: number }> {
   const head = (await readHead(filePath)).toString("utf8");
   const format = detectGoogleFormat(head);
   if (!format) throw new Error("Unrecognized Google location export. Expected Records.json, Timeline.json, or a Semantic Location History file.");
@@ -37,7 +37,7 @@ export async function parseGoogleExport(filePath: string, window: Window): Promi
     default:
       parsed = await parseTimelineExport(filePath, window, format);
   }
-  return { format, points: fillStays(parsed.points, parsed.stays, window), recorded: parsed.points.length };
+  return { format, points: fillStays(parsed.points, parsed.stays, window, cuts), recorded: parsed.points.length };
 }
 
 export type { GoogleFormat } from "./detect";

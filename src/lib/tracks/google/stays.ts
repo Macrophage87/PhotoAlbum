@@ -8,19 +8,17 @@ export const STAY_STEP_MS = MAX_INTERPOLATION_GAP_MS / 2;
 export const MIN_VISIT_PROBABILITY = 0.5;
 
 /**
- * A visit: Google's claim that the person stayed at one spot from start to end. `level` is its place in Google's
- * hierarchy of visits (a shop inside a shopping centre is deeper than the centre); `fill` is false for a visit
- * Google was not confident of.
+ * A visit: Google's claim that the person stayed at one spot from start to end. `fill` is false for a visit Google
+ * was not confident of.
  */
-export type Stay = { start: number; end: number | null; lat: number; lng: number; level: number; fill: boolean };
+export type Stay = { start: number; end: number | null; lat: number; lng: number; fill: boolean };
 
 export type GoogleParse = { points: TrackPoint[]; stays: Stay[] };
 
-/** A probability Google may write as a number or a string, and on either a 0-1 or a 0-100 scale; null when absent. */
-export function probability(v: unknown): number | null {
+/** A probability Google writes as a number or a string, on the given scale (1 or 100); null when absent. */
+export function probability(v: unknown, scale: 1 | 100): number | null {
   const n = typeof v === "number" ? v : typeof v === "string" && v.trim() !== "" ? Number(v) : NaN;
-  if (!Number.isFinite(n)) return null;
-  return n > 1 ? n / 100 : n;
+  return Number.isFinite(n) ? n / scale : null;
 }
 
 /**
@@ -29,10 +27,15 @@ export function probability(v: unknown): number | null {
  *
  * Recorded points (raw paths, activity ends) always win: filler only goes into gaps between them longer than
  * positionAt will interpolate across, and not within one step of a recorded point, so a path that already covers the
- * visit is left exactly as it was rather than zig-zagging to the visit's centre and back. Where visits overlap, the
- * deepest one fills its own hours and its parent the rest.
+ * visit is left exactly as it was. Where a gap inside the visit has recorded points on both sides, the filler
+ * stays at the nearer of them rather than zig-zagging to the visit's centre and back; the centre is used only for a
+ * stretch of the visit with nothing recorded on one side. Where visits overlap, the shorter (more particular) one fills its own hours
+ * and the longer one the rest.
+ *
+ * `cuts` are extra instants to fill at when a stay spans them: local midnights, so the stay reaches right up to where
+ * the trace is split into days.
  */
-export function fillStays(points: TrackPoint[], stays: Stay[], window: Window): TrackPoint[] {
+export function fillStays(points: TrackPoint[], stays: Stay[], window: Window, cuts: number[] = []): TrackPoint[] {
   const real = [...points].sort((a, b) => a.t - b.t);
   const times = real.map((p) => p.t);
   // First index with a time at or after t.
@@ -45,32 +48,36 @@ export function fillStays(points: TrackPoint[], stays: Stay[], window: Window): 
     }
     return lo;
   };
-  const uncovered = (t: number) => {
-    const i = after(t);
-    const prev = i > 0 ? times[i - 1] : undefined, next = i < times.length ? times[i] : undefined;
-    if (prev !== undefined && next !== undefined && next - prev <= MAX_INTERPOLATION_GAP_MS) return false;
-    return (prev === undefined || t - prev >= STAY_STEP_MS) && (next === undefined || next - t >= STAY_STEP_MS);
-  };
 
   const claimed: [number, number][] = [];
   const filler: TrackPoint[] = [];
-  for (const s of [...stays].sort((a, b) => b.level - a.level || a.start - b.start)) {
+  const length = (s: Stay) => (s.end ?? s.start) - s.start;
+  for (const s of [...stays].sort((a, b) => length(a) - length(b) || a.start - b.start)) {
     const candidates: number[] = [];
-    if (s.fill && s.end !== null && s.end > s.start) {
-      const from = Math.max(s.start, window.startMs), to = Math.min(s.end, window.endMs);
+    const end = s.end ?? s.start;
+    if (s.fill && end > s.start) {
+      const from = Math.max(s.start, window.startMs), to = Math.min(end, window.endMs);
       if (from > to) continue;
       for (let t = from; t < to; t += STAY_STEP_MS) candidates.push(t);
       candidates.push(to);
+      for (const c of cuts) if (c > from && c < to) candidates.push(c);
     } else {
       candidates.push(s.start);
-      if (s.end !== null && s.end !== s.start) candidates.push(s.end);
+      if (end !== s.start) candidates.push(end);
     }
     for (const t of candidates) {
-      if (t < window.startMs || t > window.endMs || !uncovered(t)) continue;
+      if (t < window.startMs || t > window.endMs) continue;
       if (claimed.some(([a, b]) => t >= a && t <= b)) continue;
-      filler.push({ t, lat: s.lat, lng: s.lng, stay: true });
+      const i = after(t);
+      const prev = i > 0 ? real[i - 1] : undefined, next = i < real.length ? real[i] : undefined;
+      if (prev && next && next.t - prev.t <= MAX_INTERPOLATION_GAP_MS) continue;
+      if ((prev && t - prev.t < STAY_STEP_MS) || (next && next.t - t < STAY_STEP_MS)) continue;
+      // Recorded points on both sides within the visit say more about where in it the person was than its centre.
+      const within = (p: TrackPoint | undefined): p is TrackPoint => !!p && p.t >= s.start && p.t <= end;
+      const at = within(prev) && within(next) ? (t - prev.t <= next.t - t ? prev : next) : s;
+      filler.push({ t, lat: at.lat, lng: at.lng, stay: true });
     }
-    if (s.fill && s.end !== null) claimed.push([s.start, s.end]);
+    if (s.fill && end > s.start) claimed.push([s.start, end]);
   }
   return [...real, ...filler].sort((a, b) => a.t - b.t);
 }

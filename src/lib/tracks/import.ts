@@ -47,7 +47,15 @@ export async function importTrackFile(args: ImportArgs): Promise<ImportSummary> 
       startMs: wallTimeToInstant({ year: sy, month: sm, day: sd, hour: 0, minute: 0, second: 0 }, trip.timezone).getTime(),
       endMs: wallTimeToInstant({ year: ey, month: em, day: ed, hour: 23, minute: 59, second: 59, ms: 999 }, trip.timezone).getTime(),
     };
-    const { format, points, recorded } = await parseGoogleExport(filePath, window);
+    // Local midnights inside the trip, where the trace is split into days: a stay across one gets a point there.
+    const midnights: number[] = [];
+    for (let k = 1; ; k++) {
+      const d = new Date(Date.UTC(sy, sm - 1, sd + k));
+      const t = wallTimeToInstant({ year: d.getUTCFullYear(), month: d.getUTCMonth() + 1, day: d.getUTCDate(), hour: 0, minute: 0, second: 0 }, trip.timezone).getTime();
+      if (t > window.endMs) break;
+      midnights.push(t);
+    }
+    const { format, points, recorded } = await parseGoogleExport(filePath, window, midnights);
     summary.format = format;
     summary.pointsRead = recorded;
     if (!points.length) {
