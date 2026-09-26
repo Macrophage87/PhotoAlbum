@@ -18,6 +18,8 @@ vi.mock("@/lib/ml/client", async (orig) => ({ ...(await orig()) as object, embed
 
 import { updatePhoto } from "@/app/photos/[id]/actions";
 import { embedPhoto } from "@/lib/jobs/handlers/embed-photo";
+import { setContext } from "@/app/review/actions";
+import { updateAnnotation } from "@/app/annotation/actions";
 
 function form(fields: Record<string, string>): FormData {
   const fd = new FormData();
@@ -49,6 +51,20 @@ describe("refreshing the text embedding", () => {
   it("is not queued when the words are unchanged", async () => {
     await updatePhoto(photoId, form({ caption: "At the lake", context: "", tripId: "" }));
     expect(textJobs()).toEqual([]);
+  });
+
+  it("is queued for every item when notes are set in bulk, replacing or appending", async () => {
+    const other = (await db.photo.create({ data: { uploaderId: who.id, originalName: "b.jpg", mimeType: "image/jpeg", storageKey: "b", originalPath: "b/o.jpg", sizeBytes: 1, status: "READY" } })).id;
+    await setContext([photoId, other], "Lake Tahoe, 2019", "replace");
+    expect(textJobs().sort()).toEqual([photoId, other].sort());
+    sent.length = 0;
+    await setContext([photoId, other], "with Grandma", "append");
+    expect(textJobs().sort()).toEqual([photoId, other].sort());
+  });
+
+  it("is queued when a member corrects the helper's caption or description", async () => {
+    await updateAnnotation(photoId, form({ caption: "Emma blowing out candles", description: "A birthday cake with one candle." }));
+    expect(textJobs()).toEqual([photoId]);
   });
 
   it("clears the old vector once every word is gone", async () => {

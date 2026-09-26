@@ -14,6 +14,7 @@ import { estimateCost, TOKENS_PER_PLACE, type Estimate } from "@/lib/annotation/
 import { BACKFILL_CAP, backfillCandidates, backfillExclusions, taskOf, type BackfillScope, type BackfillTask } from "@/lib/jobs/handlers/annotation-batch";
 import { annotationSchema, toStored, type StoredAnnotation } from "@/lib/annotation/schema";
 import { anthropic } from "@/lib/annotation/client";
+import { refreshTextEmbedding } from "@/lib/jobs/handlers/embed-photo";
 
 /** The admin's half of the two gates. Recorded with who and when so the decision is auditable. */
 export async function setAnnotationOptIn(on: boolean): Promise<void> {
@@ -104,6 +105,8 @@ export async function updateAnnotation(photoId: string, fd: FormData): Promise<v
     estimatedPlace: null,
   });
   await db.photo.update({ where: { id: photoId }, data: { annotation: merged, annotationSource: "EDITED" } });
+  // The caption and description are part of what the item is searched by.
+  await refreshTextEmbedding(photoId);
   revalidatePath(`/photos/${photoId}`);
 }
 
