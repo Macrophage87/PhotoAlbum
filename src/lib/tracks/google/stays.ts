@@ -68,6 +68,9 @@ export function fillStays(points: TrackPoint[], stays: Stay[], window: Window, c
       if (end !== s.start) candidates.push(end);
     }
     const within = (p: TrackPoint | undefined): p is TrackPoint => !!p && p.t >= s.start && p.t <= end;
+    // Strictly inside: a recorded point at the visit's very start or end is usually just where the journey to or from
+    // it ended (Timeline.json puts activity ends there), which says nothing about where in the place the person was.
+    const inside = (p: TrackPoint | undefined): p is TrackPoint => !!p && p.t > s.start && p.t < end;
     for (const t of candidates) {
       if (t < window.startMs || t > window.endMs) continue;
       if (claimed.some(([a, b]) => t >= a && t <= b)) continue;
@@ -80,16 +83,17 @@ export function fillStays(points: TrackPoint[], stays: Stay[], window: Window, c
       const openAfter = t === to && (!next || next.t - t > MAX_INTERPOLATION_GAP_MS);
       if (prev && t - prev.t < STAY_STEP_MS && !openAfter) continue;
       if (next && next.t - t < STAY_STEP_MS && !openBefore) continue;
-      // Recorded points on both sides within the visit say more about where in it the person was than its centre.
-      const at = within(prev) && within(next) ? (t - prev.t <= next.t - t ? prev : next) : s;
+      // Recorded points on both sides within the visit, one of them inside it, say more about where in it the person
+      // was than its centre.
+      const at = within(prev) && within(next) && (inside(prev) || inside(next)) ? (t - prev.t <= next.t - t ? prev : next) : s;
       filler.push({ t, lat: at.lat, lng: at.lng, filled: at === s ? "visit" : "interpolated" });
     }
     // Local midnights inside the stay always get a point, so each day's trace reaches its end: at the nearer recorded
-    // point when one is close enough to interpolate from, otherwise at the visit.
+    // point inside the visit when one is close enough to interpolate from, otherwise at the visit.
     for (const t of cutsHere) {
       if (claimed.some(([a, b]) => t >= a && t <= b) || times.includes(t)) continue;
       const i = after(t);
-      const near = [real[i - 1], real[i]].filter((p): p is TrackPoint => !!p && Math.abs(p.t - t) <= MAX_INTERPOLATION_GAP_MS);
+      const near = [real[i - 1], real[i]].filter((p): p is TrackPoint => inside(p) && Math.abs(p.t - t) <= MAX_INTERPOLATION_GAP_MS);
       const at = near.length ? near.reduce((a, b) => (Math.abs(a.t - t) <= Math.abs(b.t - t) ? a : b)) : s;
       filler.push({ t, lat: at.lat, lng: at.lng, filled: at === s ? "visit" : "interpolated" });
     }
@@ -101,7 +105,7 @@ export function fillStays(points: TrackPoint[], stays: Stay[], window: Window, c
         const a = real[i], b = real[i + 1];
         if (b.t < s.start || b.t - a.t <= MAX_INTERPOLATION_GAP_MS) continue;
         const marks = [a.t, ...filler.filter((f) => f.t > a.t && f.t < b.t).map((f) => f.t).sort((x, y) => x - y), b.t];
-        const at = a.t >= s.start ? a : b.t <= end ? b : s;
+        const at = inside(a) ? a : inside(b) ? b : s;
         for (let k = 0; k + 1 < marks.length; k++) {
           if (marks[k + 1] - marks[k] <= MAX_INTERPOLATION_GAP_MS) continue;
           const lo = Math.max(marks[k], s.start), hi = Math.min(marks[k + 1], end);

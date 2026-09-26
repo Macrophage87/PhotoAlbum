@@ -107,6 +107,17 @@ describe("google visits", () => {
     expect(positionAt(pts, at("2025-08-12T16:30:00Z"))).toMatchObject({ lat: 40.7794 });
   });
 
+  it("label filler at the visit's place as a visit even when journeys end exactly at its bounds", () => {
+    const pts = parse([
+      { startTime: "2025-08-12T13:40:00Z", endTime: "2025-08-12T14:00:00Z", activity: { start: { latLng: "40.70°, -74.00°" }, end: { latLng: "40.7794°, -73.9632°" } } },
+      museum("2025-08-12T14:00:00Z", "2025-08-12T17:00:00Z"),
+      { startTime: "2025-08-12T17:00:00Z", endTime: "2025-08-12T17:20:00Z", activity: { start: { latLng: "40.7794°, -73.9632°" }, end: { latLng: "40.70°, -74.00°" } } },
+    ]);
+    const filler = pts.filter((p) => p.filled);
+    expect(filler.length).toBeGreaterThan(30);
+    expect(filler.every((p) => p.filled === "visit")).toBe(true);
+  });
+
   it("fill a sparse path inside a visit from its own points, not by zig-zagging to the centre", () => {
     // A point every 15 minutes, 300 m from the visit's centre.
     const path = Array.from({ length: 13 }, (_, i) => ({ time: new Date(at("2025-08-12T14:00:00Z") + i * 15 * 60_000).toISOString(), point: "geo:40.7821,-73.9632" }));
