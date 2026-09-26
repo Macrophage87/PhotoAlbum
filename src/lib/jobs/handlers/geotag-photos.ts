@@ -10,26 +10,47 @@ import { haversine } from "@/lib/geo/haversine";
 /** A recorded position of the uploader's own farther than this from another member's activity track: not together. */
 const TOGETHER_M = 300;
 /**
- * The same for a position at a visit's place or one the trace only guesses at (snapped across a gap, or interpolated
- * by the importer). A visit's point is the middle of the place, which can be well inside somewhere big.
+ * The same for a position the trace only guesses at (snapped across a gap, or interpolated by the importer), and how
+ * near another member's track must come to a visit's place, during the visit, to have been there with the uploader.
+ * A visit's point is the middle of the place, which can be well inside somewhere big.
  */
 const LOOSE_TOGETHER_M = 3_000;
+/** However near they came during a visit, a member this far from its place at the photo's moment had left. */
+const VISIT_STRAY_M = 10_000;
+/** A guessed position further than this in time from the uploader's nearest recorded fix is no evidence of anything. */
+const GUESS_WITHIN_MS = 10 * 60_000;
 
 type Position = { lat: number; lng: number; ele?: number };
-type Fix<T> = { track: T; pos: Position; kind: PositionKind };
+type Fix<T> = { track: T; pos: Position; kind: PositionKind; points: TrackPoint[] };
+
+/** Index of the last point at or before tMs (-1 if none). */
+function lastAtOrBefore(points: TrackPoint[], tMs: number): number {
+  let lo = 0, hi = points.length - 1, out = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (points[mid].t <= tMs) {
+      out = mid;
+      lo = mid + 1;
+    } else hi = mid - 1;
+  }
+  return out;
+}
 
 /**
- * The track to place a photo from, and where, judged at the photo's own moment. The uploader's own GPX/FIT comes
- * first. Then, where the uploader's own Google trace and other members' GPX/FIT cover the moment, the trace's position
- * P is compared with the nearest of their positions Q: farther apart than TOGETHER_M (for a recorded P) or
- * LOOSE_TOGETHER_M (for a visit's place or a guessed P), the uploader was elsewhere (Mom in the museum while Dad was
- * out on his bike) and her own trace places the photo; closer, they were together and Q's track, the more precise
- * record, places it. The looser limit has two accepted costs: a city museum within 3 km of Dad's ride puts Mom's
- * photos on his route, and a park so big that its centre is more than 3 km from the trail they walked together puts
- * them at the park's centre.
- * After that, the uploader's own Google trace, others' GPX/FIT, others' Google traces. Within each, start-time order.
+ * The track to place a photo from, and where. The uploader's own GPX/FIT comes first. Then, where the uploader's own
+ * Google trace (position P) and other members' GPX/FIT cover the moment, the uploader was with one of them unless:
+ * - P is recorded, and more than TOGETHER_M from all of them;
+ * - P is at a visit's place, and no member's track came within LOOSE_TOGETHER_M of that place during the visit
+ *   while still being within VISIT_STRAY_M of it at the photo's moment (Mom in the museum while Dad was out on his
+ *   bike; or Dad rode far off after they arrived at the park together);
+ * - P is a guess close in time to one of her recorded fixes, and more than LOOSE_TOGETHER_M from all of them.
+ * If she was elsewhere, her own trace places the photo; otherwise the nearest activity track she was with, the more
+ * precise record, does. The limits have accepted costs: a city museum Dad rode within 3 km of while she was in it
+ * puts her photos on his route, and a park so big that the trail they walked together never came within 3 km of
+ * its centre puts them at the centre. After that, the uploader's own Google trace, others' GPX/FIT, others' Google
+ * traces. Within each, start-time order.
  */
-function choose<T extends { source: string; uploaderId: string }>(tracks: T[], uploaderId: string, at: (t: T) => Omit<Fix<T>, "track"> | null): Fix<T> | null {
+function choose<T extends { source: string; uploaderId: string }>(tracks: T[], uploaderId: string, tMs: number, at: (t: T) => Omit<Fix<T>, "track"> | null): Fix<T> | null {
   const all = (own: boolean, google: boolean, one = false) => {
     const out: Fix<T>[] = [];
     for (const track of tracks) {
@@ -44,12 +65,43 @@ function choose<T extends { source: string; uploaderId: string }>(tracks: T[], u
   if (ownPrecise) return ownPrecise;
   const [ownGoogle] = all(true, true, true);
   const others = all(false, false);
-  if (ownGoogle && others.length) {
-    const away = (f: Fix<T>) => haversine(ownGoogle.pos.lat, ownGoogle.pos.lng, f.pos.lat, f.pos.lng);
-    const nearest = others.reduce((a, b) => (away(b) < away(a) ? b : a));
-    return away(nearest) > (ownGoogle.kind === "firm" ? TOGETHER_M : LOOSE_TOGETHER_M) ? ownGoogle : nearest;
+  if (!ownGoogle || !others.length) return ownGoogle ?? others[0] ?? all(false, true, true)[0] ?? null;
+
+  const from = (p: Position) => (f: Fix<T>) => haversine(p.lat, p.lng, f.pos.lat, f.pos.lng);
+  const away = from(ownGoogle.pos);
+  const byDistance = [...others].sort((a, b) => away(a) - away(b));
+  const own = ownGoogle.points;
+
+  if (ownGoogle.kind === "firm") return away(byDistance[0]) > TOGETHER_M ? ownGoogle : byDistance[0];
+
+  if (ownGoogle.kind === "soft") {
+    // How close in time is the recorded fix the guess rests on?
+    const k = lastAtOrBefore(own, tMs);
+    let nearestFix = Infinity;
+    for (let i = k; i >= 0 && tMs - own[i].t <= nearestFix; i--) if (!own[i].filled) nearestFix = Math.min(nearestFix, tMs - own[i].t);
+    for (let i = k + 1; i < own.length && own[i].t - tMs <= nearestFix; i++) if (!own[i].filled) nearestFix = Math.min(nearestFix, own[i].t - tMs);
+    return away(byDistance[0]) > LOOSE_TOGETHER_M && nearestFix <= GUESS_WITHIN_MS ? ownGoogle : byDistance[0];
   }
-  return ownGoogle ?? others[0] ?? all(false, true, true)[0] ?? null;
+
+  // A visit: its span is the run of visit points around the moment, its place where they sit.
+  let a = lastAtOrBefore(own, tMs), b = a + 1;
+  const isVisit = (i: number) => i >= 0 && i < own.length && own[i].filled === "visit";
+  const place = isVisit(a) ? own[a] : own[b];
+  while (isVisit(a - 1)) a--;
+  while (isVisit(b)) b++;
+  const spanFrom = own[Math.max(0, a)].t, spanTo = own[Math.min(own.length - 1, b - 1)].t;
+  const dist = (p: Position) => haversine(place.lat, place.lng, p.lat, p.lng);
+  const wasThere = (f: Fix<T>) => {
+    if (dist(f.pos) > VISIT_STRAY_M) return false;
+    const pts = f.points;
+    for (let i = Math.max(0, lastAtOrBefore(pts, spanFrom)); i < pts.length && pts[i].t <= spanTo; i++) if (pts[i].t >= spanFrom && dist(pts[i]) <= LOOSE_TOGETHER_M) return true;
+    for (const edge of [spanFrom, spanTo]) {
+      const p = positionAt(pts, edge);
+      if (p && dist(p) <= LOOSE_TOGETHER_M) return true;
+    }
+    return false;
+  };
+  return byDistance.find(wasThere) ?? ownGoogle;
 }
 
 /** Only timestamps that came from the camera (or were set by hand) are trustworthy enough to place a photo on a track. */
@@ -107,10 +159,10 @@ export async function geotagPhotos(job: GeotagPhotosJob): Promise<{ updated: num
   let updated = 0;
   for (const photo of photos) {
     const t = photo.takenAt!.getTime();
-    const chosen = choose(tracks, photo.uploaderId, (track) => {
+    const chosen = choose(tracks, photo.uploaderId, t, (track) => {
       if (t < track.startTime.getTime() || t > track.endTime.getTime()) return null;
-      const pts = pointsOf(track), pos = positionAt(pts, t);
-      return pos && { pos, kind: positionKindAt(pts, t) ?? "soft" };
+      const points = pointsOf(track), pos = positionAt(points, t);
+      return pos && { pos, kind: positionKindAt(points, t) ?? "soft", points };
     });
     if (chosen) {
       const { track, pos } = chosen;
