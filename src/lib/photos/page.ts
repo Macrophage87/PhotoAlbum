@@ -6,6 +6,7 @@ import { NOT_TRASHED } from "@/lib/photos/trash";
 import { NO_FILTER, type GalleryFilter } from "./filters";
 import { boundingBox, MILE_IN_METRES, NO_PICKER_FILTER, type PickerFilter } from "./picker-filter";
 import { idsWithPerson } from "@/lib/people/in-photos";
+import { cursorWhere, encodeCursor, type KeyColumn } from "./keyset";
 
 /** Gallery pages load this many items at a time; the client asks for the next page by cursor. */
 export const GALLERY_PAGE = 240;
@@ -54,6 +55,9 @@ export function intersectIds(lists: string[][]): string[] {
     return acc.filter((id) => here.has(id));
   });
 }
+
+/** By when they were taken, the undated last, then when they arrived: the order the date-ordered grids page in. */
+const takenOrder = (dir: "asc" | "desc"): KeyColumn[] => [{ field: "takenAt", dir, nullsLast: true }, { field: "createdAt", dir }];
 
 /** One page of a trip's gallery in capture order, with a cursor (the last item's id) for the next page. */
 export async function tripPhotoPage(tripId: string, opts: { uploaderId?: string; cursor?: string | null; take?: number; viewerId?: string | null; order?: PhotoOrder; filter?: GalleryFilter } = {}): Promise<PhotoPage> {
@@ -105,19 +109,19 @@ export async function tripPhotoPage(tripId: string, opts: { uploaderId?: string;
   }
   // Latest first still leaves the undated at the end: "no date" is neither early nor late.
   const dir = order === "newest" ? "desc" : "asc";
+  const columns = takenOrder(dir);
   const [photos, total] = await Promise.all([
     db.photo.findMany({
-      where,
+      where: { AND: [where, await cursorWhere(opts.cursor, columns)] },
       orderBy: [{ takenAt: { sort: dir, nulls: "last" } }, { createdAt: dir }, { id: dir }],
-      select: photoCardSelect,
+      select: { ...photoCardSelect, createdAt: true },
       take: take + 1,
-      ...(opts.cursor ? { cursor: { id: opts.cursor }, skip: 1 } : {}),
     }),
     db.photo.count({ where }),
   ]);
   const more = photos.length > take;
   const page = more ? photos.slice(0, take) : photos;
-  return { photos: page, nextCursor: more ? page[page.length - 1].id : null, total };
+  return { photos: page, nextCursor: more ? encodeCursor(page[page.length - 1], columns) : null, total };
 }
 
 /** Where the picked photographs are going, so the picker never offers what is already there. */
@@ -185,19 +189,19 @@ export async function candidatePhotoPage(target: PickerTarget, filter: PickerFil
   if (restrict) and.push({ id: { in: restrict } });
 
   const where: Prisma.PhotoWhereInput = { status: "READY", ...NOT_TRASHED, AND: and };
+  const columns = takenOrder("desc");
   const [photos, total] = await Promise.all([
     db.photo.findMany({
-      where,
+      where: { AND: [where, await cursorWhere(opts.cursor, columns)] },
       orderBy: [{ takenAt: { sort: "desc", nulls: "last" } }, { createdAt: "desc" }, { id: "desc" }],
-      select: photoCardSelect,
+      select: { ...photoCardSelect, createdAt: true },
       take: take + 1,
-      ...(opts.cursor ? { cursor: { id: opts.cursor }, skip: 1 } : {}),
     }),
     db.photo.count({ where }),
   ]);
   const more = photos.length > take;
   const page = more ? photos.slice(0, take) : photos;
-  return { photos: page, nextCursor: more ? page[page.length - 1].id : null, total };
+  return { photos: page, nextCursor: more ? encodeCursor(page[page.length - 1], columns) : null, total };
 }
 
 /** How many the overview page shows. */

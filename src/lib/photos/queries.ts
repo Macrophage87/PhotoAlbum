@@ -4,6 +4,7 @@ import { NOT_TRASHED } from "@/lib/photos/trash";
 import { GALLERY_PAGE, idsInLocalYear, idsMatching, intersectIds } from "./page";
 import { NO_FILTER, type GalleryFilter } from "./filters";
 import { idsWithPerson } from "@/lib/people/in-photos";
+import { cursorWhere, encodeCursor, type KeyColumn } from "./keyset";
 
 export const photoCardSelect = {
   id: true,
@@ -47,6 +48,8 @@ export async function listTripPhotos(tripId: string, uploaderId?: string): Promi
   });
 }
 
+const UNASSIGNED_ORDER: KeyColumn[] = [{ field: "createdAt", dir: "desc" }];
+
 /**
  * One page of the photographs on no trip, newest upload first, with a cursor (the last one's id) for the next page.
  *
@@ -73,11 +76,11 @@ export async function unassignedPhotoPage(filter: GalleryFilter = NO_FILTER, opt
   const [photos, matched, total] = await Promise.all([
     nothing
       ? Promise.resolve([])
-      : db.photo.findMany({ where, orderBy: [{ createdAt: "desc" }, { id: "desc" }], select: photoCardSelect, take: take + 1, ...(opts.cursor ? { cursor: { id: opts.cursor }, skip: 1 } : {}) }),
+      : db.photo.findMany({ where: { AND: [where, await cursorWhere(opts.cursor, UNASSIGNED_ORDER)] }, orderBy: [{ createdAt: "desc" }, { id: "desc" }], select: { ...photoCardSelect, createdAt: true }, take: take + 1 }),
     nothing ? Promise.resolve(0) : db.photo.count({ where }),
     db.photo.count({ where: { tripId: null, ...NOT_TRASHED } }),
   ]);
   const more = photos.length > take;
   const page = more ? photos.slice(0, take) : photos;
-  return { photos: page, nextCursor: more ? page[page.length - 1].id : null, matched, total };
+  return { photos: page, nextCursor: more ? encodeCursor(page[page.length - 1], UNASSIGNED_ORDER) : null, matched, total };
 }
