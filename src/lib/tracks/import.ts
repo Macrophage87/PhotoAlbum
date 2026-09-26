@@ -53,7 +53,8 @@ export async function importTrackFile(args: ImportArgs): Promise<ImportSummary> 
       const d = new Date(Date.UTC(sy, sm - 1, sd + k));
       const t = wallTimeToInstant({ year: d.getUTCFullYear(), month: d.getUTCMonth() + 1, day: d.getUTCDate(), hour: 0, minute: 0, second: 0 }, trip.timezone).getTime();
       if (t > window.endMs) break;
-      midnights.push(t);
+      // Midnight itself starts the next day's trace; the instant before it ends this one, so the day reaches 23:59:59.
+      midnights.push(t - 1, t);
     }
     const { format, points, recorded } = await parseGoogleExport(filePath, window, midnights);
     summary.format = format;

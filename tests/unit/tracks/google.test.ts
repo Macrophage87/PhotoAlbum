@@ -7,6 +7,7 @@ import { timelineObjectToPoints, timelineObjectToStays } from "@/lib/tracks/goog
 import { fillStays, STAY_STEP_MS } from "@/lib/tracks/google/stays";
 import { segmentToPoints, segmentToStay } from "@/lib/tracks/google/timeline";
 import { computeStats } from "@/lib/tracks/stats";
+import { splitByLocalDay } from "@/lib/tracks/split";
 import { positionAt } from "@/lib/tracks/interpolate";
 
 const fx = (n: string) => path.join(__dirname, "../../fixtures", n);
@@ -117,8 +118,18 @@ describe("google visits", () => {
   it("put a point at local midnight inside a stay, where the trace is split into days", () => {
     const midnight = at("2025-08-13T04:00:00Z");
     const hotel: Seg = { startTime: "2025-08-12T23:52:00Z", endTime: "2025-08-13T11:00:00Z", visit: { topCandidate: { placeLocation: "geo:44.35,-68.2" } } };
-    const pts = fillStays([], [segmentToStay(hotel)!], window, [midnight]);
+    const pts = fillStays([], [segmentToStay(hotel)!], window, [midnight - 1, midnight]);
     expect(pts.map((p) => p.t)).toContain(midnight);
+    // Split into days in the trip's zone, the first day's trace still reaches the last second before midnight.
+    const [day1, day2] = [...splitByLocalDay(pts, "America/New_York").values()];
+    expect(positionAt(day1, at("2025-08-13T03:59:59Z"))).toMatchObject({ lat: 44.35 });
+    expect(day2[0].t).toBe(midnight);
+  });
+
+  it("fill the middle of a gap inside a visit that falls between the steps", () => {
+    const walk = (t: string): Seg => ({ startTime: t, endTime: t, timelinePath: [{ point: "geo:40.78,-73.96", time: t }] });
+    const pts = parse([museum("2025-08-12T13:00:00Z", "2025-08-12T15:00:00Z"), walk("2025-08-12T14:02:00Z"), walk("2025-08-12T14:13:00Z")]);
+    expect(positionAt(pts, at("2025-08-12T14:07:00Z"))).toMatchObject({ lat: 40.78 });
   });
 
   it("let a visit inside another visit fill its own hours, and the outer one the rest", () => {
