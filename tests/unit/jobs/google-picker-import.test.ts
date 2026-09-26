@@ -127,7 +127,8 @@ describe("the Picker download job", () => {
     await googlePickerImport(job());
     const clip = await db.photo.findUniqueOrThrow({ where: { id: ids[2] } });
     expect(clip).toMatchObject({ status: "FAILED", originalPath: "pending", storageKey: "pending", sizeBytes: 0 });
-    expect(existsSync(path.join(photoRoot, "photos", ids[2]))).toBe(false);
+    const folder = path.join(photoRoot, "photos", ids[2]);
+    expect(existsSync(folder) ? readdirSync(folder) : []).toEqual([]);
   });
   it("takes back its own rows a crashed run left half-taken, but not ones another download is working on", async () => {
     google.download.mockImplementation(async () => body(10));
@@ -165,20 +166,37 @@ describe("the Picker download job", () => {
     expect(enqueued.map((e) => (e.data as { photoId: string }).photoId)).not.toContain(ids[0]);
   });
   it("leaves no bytes behind, and does not touch the new holder's file, when its row is taken over mid-download", async () => {
-    // What the row's new holder has already put in place.
-    const theirs = path.join(photoRoot, "photos", ids[0], "original.jpg");
+    // What the row's new holder has already put in its folder and pointed the row at.
+    const theirsKey = `photos/${ids[0]}/original-theirs.jpg`;
+    const theirs = path.join(photoRoot, theirsKey);
     mkdirSync(path.dirname(theirs), { recursive: true });
     writeFileSync(theirs, "theirs");
     google.download.mockImplementation(async (_t: string, item: { id: string }) => {
-      if (item.id === "gp-1") await db.photo.update({ where: { id: ids[0] }, data: { status: "PENDING", originalPath: `photos/${ids[0]}/original.jpg`, storageKey: `photos/${ids[0]}` } });
+      if (item.id === "gp-1") await db.photo.update({ where: { id: ids[0] }, data: { status: "PENDING", originalPath: theirsKey, storageKey: `photos/${ids[0]}` } });
       return body(10);
     });
     await googlePickerImport(job());
     expect(readFileSync(theirs, "utf8")).toBe("theirs");
-    const incoming = path.join(photoRoot, "incoming");
-    expect(existsSync(incoming) ? readdirSync(incoming) : []).toEqual([]);
-    // The rows it kept are in place and nothing else is waiting in incoming/.
-    expect(existsSync(path.join(photoRoot, "photos", ids[1], "original.jpg"))).toBe(true);
+    // Ours is gone: theirs is the only thing in the folder.
+    expect(readdirSync(path.dirname(theirs))).toEqual(["original-theirs.jpg"]);
+    expect((await db.photo.findUniqueOrThrow({ where: { id: ids[0] } })).originalPath).toBe(theirsKey);
+    // A row it kept points at a file of its own name, which is there.
+    const kept = await db.photo.findUniqueOrThrow({ where: { id: ids[1] } });
+    expect(kept.originalPath).toMatch(new RegExp(`^photos/${ids[1]}/original-[0-9a-f-]+\\.jpg$`));
+    expect(existsSync(path.join(photoRoot, kept.originalPath))).toBe(true);
+  });
+  it("removes only its own file when a download fails part-way, leaving anything else in the folder", async () => {
+    const other = path.join(photoRoot, "photos", ids[0], "original-converted.jpg");
+    mkdirSync(path.dirname(other), { recursive: true });
+    writeFileSync(other, "not this job's");
+    google.download.mockImplementation(async (_t: string, item: { id: string }) => {
+      if (item.id !== "gp-1") return body(10);
+      // Some bytes arrive, then the connection goes.
+      return new Response(new ReadableStream({ start(c) { c.enqueue(new Uint8Array(5)); setTimeout(() => c.error(new Error("socket hang up")), 10); } }), { status: 200 });
+    });
+    await googlePickerImport(job());
+    expect((await statuses())[0]).toMatchObject({ status: "FAILED", sizeBytes: 0 });
+    expect(readdirSync(path.dirname(other))).toEqual(["original-converted.jpg"]);
   });
   it("fails every row when no access token can be had", async () => {
     google.token.mockRejectedValue(new GoogleAuthError("gone", true));

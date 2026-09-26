@@ -11,8 +11,6 @@ export interface StorageProvider {
   getStream(key: string, range?: { start: number; end: number }): Promise<{ stream: Readable; size: number }>;
   exists(key: string): Promise<boolean>;
   delete(key: string): Promise<void>;
-  /** Put a stored file under another key, replacing whatever was there, in one step. */
-  move(from: string, to: string): Promise<void>;
   deletePrefix(prefix: string): Promise<void>;
   /** Fast path for libraries that read files directly (sharp, parsers). Undefined for remote stores. */
   localPath?(key: string): string;

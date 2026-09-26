@@ -79,7 +79,10 @@ export async function googlePickerImport(job: GooglePickerImportJob, signal?: Ab
     if (signal?.aborted) break;
     const isVideo = row.kind === "VIDEO";
     const storageKey = `photos/${row.id}`;
-    const originalPath = `${storageKey}/original.${EXT_BY_MIME[row.mimeType]}`;
+    // A name of this download's own, in the photo's folder, and written onto the row in the same guarded write that
+    // says the download arrived: a download that loses its row to the sweep or a re-pick then neither overwrites the
+    // new holder's file nor leaves the row pointing at something missing, and removes only what it wrote itself.
+    const originalPath = `${storageKey}/original-${randomUUID()}.${EXT_BY_MIME[row.mimeType]}`;
     // Taken for this job, atomically: a row picked again while this job waited may have been fetched by the job that
     // picking queued, or be being fetched by it now. Whoever takes it first has it; the other passes it by.
     const claim = await db.photo.updateMany({ where: { id: row.id, ...takeableDownload() }, data: { status: "PROCESSING" } });
@@ -87,32 +90,31 @@ export async function googlePickerImport(job: GooglePickerImportJob, signal?: Ab
     /** How to recognise the row as still this job's (taken, then stored): nobody has written to it since this job did. */
     const taken = await db.photo.findUniqueOrThrow({ where: { id: row.id }, select: { updatedAt: true } });
     let mine: { status: "PROCESSING" | "PENDING"; originalPath: string; updatedAt: Date } = { status: "PROCESSING", originalPath: "pending", updatedAt: taken.updatedAt };
-    // Downloaded to a key of this job's own first, and moved into place only once the row is still this job's: a
-    // download that loses its row to the sweep or a re-pick must neither leave its bytes behind nor overwrite a
-    // file the row's new holder put there.
-    const incoming = `incoming/${randomUUID()}.${EXT_BY_MIME[row.mimeType]}`;
+    /** Set once the row points at this download's file. */
+    let written = false;
     try {
       const res = await download(row.id);
-      const { bytes } = await store.putStream(incoming, Readable.fromWeb(res.body as never), { maxBytes: isVideo ? env().MAX_VIDEO_UPLOAD_BYTES : env().MAX_UPLOAD_BYTES });
+      const { bytes } = await store.putStream(originalPath, Readable.fromWeb(res.body as never), { maxBytes: isVideo ? env().MAX_VIDEO_UPLOAD_BYTES : env().MAX_UPLOAD_BYTES });
       // Only onto a row still this job's: if the sweep or a re-pick took it meanwhile, theirs is the say now.
       const stored = await db.photo.updateMany({ where: { id: row.id, ...mine }, data: { storageKey, originalPath, sizeBytes: bytes, status: "PENDING" } });
       if (stored.count !== 1) {
-        await store.delete(incoming).catch(() => undefined);
+        await store.delete(originalPath).catch(() => undefined);
         console.warn(`[google] ${row.originalName} was taken over while downloading; leaving it`);
         continue;
       }
+      written = true;
       const now = await db.photo.findUniqueOrThrow({ where: { id: row.id }, select: { updatedAt: true } });
       mine = { status: "PENDING", originalPath, updatedAt: now.updatedAt };
-      await store.move(incoming, originalPath);
       if (isVideo) await enqueue(QUEUES.transcodeVideo, { photoId: row.id, tripId: row.tripId });
       else await enqueue(QUEUES.processPhoto, { photoId: row.id, tripId: row.tripId });
     } catch (err) {
-      await store.delete(incoming).catch(() => undefined);
       const reason = err instanceof NoToken ? tokenFailure(err.reason) : err instanceof StorageLimitError ? `Larger than ${Math.round(err.maxBytes / 1048576)} MB` : err instanceof GoogleAuthError ? `Google Photos refused the download. ${PICK_AGAIN}` : `Download from Google Photos failed. ${PICK_AGAIN}`;
       // Back to having no file, so picking it again fetches it rather than finding a row pointing at nothing — but
       // only while it is still this job's to put back.
       const reset = await db.photo.updateMany({ where: { id: row.id, ...mine }, data: { status: "FAILED", error: reason, storageKey: "pending", originalPath: "pending", sizeBytes: 0 } }).catch(() => ({ count: 0 }));
-      if (reset.count === 1) await store.deletePrefix(storageKey).catch(() => undefined);
+      // Only this download's own file, and only while no row points at it: once written onto the row it goes only
+      // with the row's pointer to it. Anything else in the folder is not this job's to remove.
+      if (!written || reset.count === 1) await store.delete(originalPath).catch(() => undefined);
       if (err instanceof NoToken) {
         // The refresh itself failed (accessTokenFor marks the account when Google says the grant is gone), so
         // nothing else in this queue can be fetched either.
