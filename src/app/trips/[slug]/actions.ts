@@ -14,7 +14,8 @@ import type { TripFormState } from "@/app/trips/new/actions";
 import { levelOf } from "@/lib/visibility/exposure";
 import { canEditContainer, editableMediaIds, NOT_YOUR_CONTAINER } from "@/lib/auth/ownership";
 import { writeContainerDescription } from "@/lib/annotation/container";
-import { handWrittenMembersOnly } from "@/lib/annotation/members-only";
+import { handWrittenDescription } from "@/lib/annotation/members-only";
+import { rejudgeLater } from "@/lib/annotation/rejudge";
 import { descriptionStaysHelpers } from "@/lib/annotation/helper-text";
 
 /** The trip, where this member may change it: whoever made it, and admins. */
@@ -24,6 +25,12 @@ async function loadEditableTrip(slug: string) {
   if (!trip) throw new Error("Trip not found");
   if (!canEditContainer(user, trip)) throw new Error(NOT_YOUR_CONTAINER);
   return trip;
+}
+
+/** A description saved by hand, as stored; see `handWrittenDescription`. */
+async function handWrittenStored(before: Parameters<typeof handWrittenDescription>[0], text: string | null | undefined) {
+  const { descriptionMembersOnly, descriptionSharedAt } = await handWrittenDescription(before, text);
+  return { descriptionMembersOnly, descriptionSharedAt };
 }
 
 const visibilitySchema = z.enum(["PRIVATE", "LINK", "PUBLIC"]);
@@ -44,7 +51,7 @@ export async function updateTrip(slug: string, _prev: TripFormState, fd: FormDat
     data: {
       title: v.title,
       description: v.description,
-      descriptionMembersOnly: await handWrittenMembersOnly(trip, v.description),
+      ...(await handWrittenStored(trip, v.description)),
       descriptionByHelper: descriptionStaysHelpers(trip, v.description),
       startDate: dayToDateColumn(v.startDate),
       endDate: dayToDateColumn(v.endDate),
@@ -56,6 +63,8 @@ export async function updateTrip(slug: string, _prev: TripFormState, fd: FormDat
       ...(there ? { participants: { set: there.map((id) => ({ id })) } } : {}),
     },
   });
+  // Whether a word of its title gives anything away depends on who may open it: judged again in the background.
+  if (changed || v.title !== trip.title) await rejudgeLater({ tripId: trip.id });
   if (changed) {
     // Bump photo versions so public caches stop matching after a change in exposure.
     await db.photo.updateMany({ where: { tripId: trip.id }, data: { updatedAt: new Date() } });
@@ -160,7 +169,7 @@ const DESCRIPTION_TEXT = z.string().max(4000);
 export async function setTripDescription(slug: string, text: string): Promise<void> {
   const trip = await loadEditableTrip(slug);
   const description = DESCRIPTION_TEXT.parse(text).trim();
-  await db.trip.update({ where: { id: trip.id }, data: { description: description || null, descriptionMembersOnly: await handWrittenMembersOnly(trip, description), descriptionByHelper: descriptionStaysHelpers(trip, description) } });
+  await db.trip.update({ where: { id: trip.id }, data: { description: description || null, ...(await handWrittenStored(trip, description)), descriptionByHelper: descriptionStaysHelpers(trip, description) } });
   revalidatePath(`/trips/${slug}`, "layout");
 }
 
@@ -170,7 +179,7 @@ export async function setTripDescription(slug: string, text: string): Promise<vo
  */
 export async function setTripDescriptionShared(slug: string, everyone: boolean): Promise<void> {
   const trip = await loadEditableTrip(slug);
-  await db.trip.update({ where: { id: trip.id }, data: { descriptionMembersOnly: !everyone } });
+  await db.trip.update({ where: { id: trip.id }, data: { descriptionMembersOnly: !everyone, descriptionSharedAt: everyone ? new Date() : null } });
   revalidatePath(`/trips/${slug}`, "layout");
 }
 

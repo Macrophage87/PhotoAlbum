@@ -13,16 +13,22 @@
 -- AlterTable
 ALTER TABLE "Photo" ADD COLUMN     "annotationMembersOnly" BOOLEAN NOT NULL DEFAULT false,
 ADD COLUMN     "membersTitle" TEXT,
+ADD COLUMN     "annotationTitleOnly" BOOLEAN NOT NULL DEFAULT false,
+ADD COLUMN     "annotationSharedAt" TIMESTAMP(3),
 ADD COLUMN     "placeEstimateMembersOnly" BOOLEAN NOT NULL DEFAULT false;
 
 -- AlterTable
-ALTER TABLE "Trip" ADD COLUMN     "descriptionMembersOnly" BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE "Trip" ADD COLUMN     "descriptionMembersOnly" BOOLEAN NOT NULL DEFAULT false,
+ADD COLUMN     "descriptionSharedAt" TIMESTAMP(3);
 
 -- AlterTable
-ALTER TABLE "Collection" ADD COLUMN     "descriptionMembersOnly" BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE "Collection" ADD COLUMN     "descriptionMembersOnly" BOOLEAN NOT NULL DEFAULT false,
+ADD COLUMN     "descriptionSharedAt" TIMESTAMP(3);
 
 -- AlterTable
-ALTER TABLE "Activity" ADD COLUMN     "descriptionMembersOnly" BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE "Activity" ADD COLUMN     "descriptionMembersOnly" BOOLEAN NOT NULL DEFAULT false,
+ADD COLUMN     "descriptionTitleOnly" BOOLEAN NOT NULL DEFAULT false,
+ADD COLUMN     "descriptionSharedAt" TIMESTAMP(3);
 
 -- The helper's text, indexed the same way in whichever column it belongs to.
 CREATE OR REPLACE FUNCTION photo_search_annotation(p "Photo") RETURNS tsvector LANGUAGE sql STABLE AS $$
@@ -85,128 +91,40 @@ BEGIN
   RETURN NULL;
 END $$;
 
--- Recognising a name in a sentence. Mirrors `namePatterns` and `mentionsAnyName` in src/lib/annotation/members-only.ts:
--- the whole name, and its first word when that is a given name of three letters or more (not "van" or "de"), as
--- whole words, with a possessive or a plural allowed. Accents are left as they are here; the application folds them.
-CREATE OR REPLACE FUNCTION name_patterns(name text) RETURNS SETOF text LANGUAGE sql IMMUTABLE AS $$
-  SELECT pattern FROM (SELECT array_remove(regexp_split_to_array(lower(coalesce(name, '')), '[^[:alnum:]]+'), '') AS w) x,
-  LATERAL (
-    SELECT array_to_string(x.w, '[^[:alnum:]]+') AS pattern WHERE length(array_to_string(x.w, '')) >= 2
-    UNION ALL
-    SELECT x.w[1] WHERE cardinality(x.w) > 1 AND length(x.w[1]) >= 3
-      AND NOT (x.w[1] = ANY (ARRAY['de', 'la', 'le', 'da', 'di', 'du', 'st', 'van', 'von', 'der', 'den', 'del', 'della', 'dos', 'das', 'des', 'san', 'santa', 'saint', 'ste']))
-  ) p
-$$;
-
--- One pattern for all of them, so a table is read once against one compiled expression. Null when there are none.
-CREATE OR REPLACE FUNCTION name_regex(names text[]) RETURNS text LANGUAGE sql IMMUTABLE AS $$
-  SELECT '\m(' || string_agg(DISTINCT p, '|') || ')(''s|’s|s)?\M' FROM unnest(names) n, LATERAL name_patterns(n) p
-$$;
-
--- The words of titles strangers cannot read, as `mentionsAnyTitle` has them: four letters or more, not a number, not
--- a word every title has.
-CREATE OR REPLACE FUNCTION title_regex(titles text[]) RETURNS text LANGUAGE sql IMMUTABLE AS $$
-  SELECT '\m(' || string_agg(DISTINCT w, '|') || ')(''s|’s|s)?\M'
-  FROM unnest(titles) t, LATERAL regexp_split_to_table(lower(coalesce(t, '')), '[^[:alnum:]]+') w
-  WHERE length(w) >= 4 AND w !~ '^[0-9]+$'
-    AND NOT (w = ANY (ARRAY['with', 'from', 'this', 'that', 'trip', 'week', 'weekend', 'photos', 'photo', 'pictures', 'family', 'holiday', 'vacation', 'visit', 'summer', 'winter', 'spring', 'autumn', 'fall', 'days', 'into', 'over', 'around']))
-$$;
-
--- Everything the helper wrote about a photograph that anybody could read.
-CREATE OR REPLACE FUNCTION photo_helper_text(p "Photo") RETURNS text LANGUAGE sql STABLE AS $$
-  SELECT concat_ws(' ', p.annotation->>'title', p.annotation->>'caption', p.annotation->>'description', p.annotation->>'searchSummary', p.annotation->>'place', p.annotation->>'tags')
-$$;
-
--- Text that names somebody goes members-only, wherever it is: the helper's text on a photograph (and the title it
--- gave, or any title naming them, moves to "membersTitle"), its guess at a place, and trip, collection and activity
--- descriptions. Called when a name first becomes known or changes, so what was written before somebody was added to
--- the album is judged by the same rule as what is written after.
-CREATE OR REPLACE FUNCTION flag_named_text(rx text) RETURNS void LANGUAGE plpgsql AS $$
-BEGIN
-  IF rx IS NULL THEN RETURN; END IF;
-  UPDATE "Photo" p SET
-    "annotationMembersOnly" = true,
-    "membersTitle" = CASE
-      WHEN p.kind = 'EXTERNAL_VIDEO' THEN p."membersTitle"
-      WHEN p.title IS NOT NULL AND (p.title ~* rx OR btrim(p.title) = btrim(p.annotation->>'title')) THEN COALESCE(NULLIF(btrim(p."membersTitle"), ''), p.title)
-      ELSE COALESCE(NULLIF(btrim(p."membersTitle"), ''), NULLIF(btrim(p.annotation->>'title'), '')) END,
-    title = CASE WHEN p.kind <> 'EXTERNAL_VIDEO' AND p.title IS NOT NULL AND (p.title ~* rx OR btrim(p.title) = btrim(p.annotation->>'title')) THEN NULL ELSE p.title END
-  WHERE p.annotation IS NOT NULL AND (photo_helper_text(p) ~* rx OR (p.kind <> 'EXTERNAL_VIDEO' AND p.title ~* rx));
-  UPDATE "Photo" SET "placeEstimateMembersOnly" = true WHERE NOT "placeEstimateMembersOnly" AND "gpsSource" = 'ESTIMATE' AND concat_ws(' ', "placeEstimateName", "placeEstimateNote") ~* rx;
-  UPDATE "Trip" SET "descriptionMembersOnly" = true WHERE NOT "descriptionMembersOnly" AND description ~* rx;
-  UPDATE "Collection" SET "descriptionMembersOnly" = true WHERE NOT "descriptionMembersOnly" AND description ~* rx;
-  UPDATE "Activity" SET "descriptionMembersOnly" = true WHERE NOT "descriptionMembersOnly" AND description ~* rx;
-END $$;
-
-CREATE OR REPLACE FUNCTION members_only_on_name() RETURNS trigger LANGUAGE plpgsql AS $$
-BEGIN
-  IF TG_OP = 'INSERT' OR NEW.name IS DISTINCT FROM OLD.name THEN
-    PERFORM flag_named_text(name_regex(ARRAY[NEW.name]));
-  END IF;
-  RETURN NULL;
-END $$;
-DROP TRIGGER IF EXISTS person_name_members_only ON "Person";
-CREATE TRIGGER person_name_members_only AFTER INSERT OR UPDATE OF name ON "Person"
-  FOR EACH ROW EXECUTE FUNCTION members_only_on_name();
-DROP TRIGGER IF EXISTS user_name_members_only ON "User";
-CREATE TRIGGER user_name_members_only AFTER INSERT OR UPDATE OF name ON "User"
-  FOR EACH ROW EXECUTE FUNCTION members_only_on_name();
-
--- What is already described cannot say what it was given, so it is judged by what it could have been given — notes,
--- anybody tagged in it — and by what it says: a name the album knows, or a word from the title of a trip or
--- collection strangers cannot open. Erring towards members-only only costs a stranger a description. One pass over
--- every photograph, which also re-indexes it under the new split, and one compiled pattern for all the names.
--- Rebuilding the two text indexes afterwards is several times quicker than keeping them up to date through a write
--- to every row, and this has to finish well inside a deploy's health check.
+-- What is already described cannot say what it was given, so it is judged here by what it could have been given:
+-- the uploader's notes, or anybody tagged in it. What it says — a name the album knows, a word from a private trip's
+-- title — is judged by the application (src/lib/annotation/rejudge.ts), which the worker runs over the whole album
+-- when it starts, so the one matcher decides everywhere. Erring towards members-only only costs a stranger a
+-- description. One pass over every photograph, which also re-indexes it under the new split.
+--
+-- Only the helper's own title moves: a title the family typed is theirs to publish, names and all.
 DROP INDEX IF EXISTS "Photo_searchVector_idx";
 DROP INDEX IF EXISTS "Photo_searchVectorMembers_idx";
 
 DO $$
-DECLARE
-  rx text;
-  helper int; titles int; places int; trips int; collections int; activities int;
+DECLARE helper int; titles int; places int;
 BEGIN
-  SELECT name_regex(array_agg(name)) INTO rx FROM (SELECT name FROM "Person" UNION SELECT name FROM "User" WHERE name IS NOT NULL) n;
-
   UPDATE "Photo" p SET
     "annotationMembersOnly" = j.flag,
-    "membersTitle" = CASE WHEN NOT j.flag OR p.kind = 'EXTERNAL_VIDEO' THEN NULL WHEN j.move THEN p.title ELSE NULLIF(btrim(p.annotation->>'title'), '') END,
-    title = CASE WHEN j.flag AND j.move THEN NULL ELSE p.title END,
-    "placeEstimateMembersOnly" = p."gpsSource" IS NOT DISTINCT FROM 'ESTIMATE' AND (j.flag OR NULLIF(btrim(p.context), '') IS NOT NULL
-      OR COALESCE(concat_ws(' ', p."placeEstimateName", p."placeEstimateNote") ~* rx, false)
-      OR COALESCE(concat_ws(' ', p."placeEstimateName", p."placeEstimateNote") ~* j.trx, false))
+    "membersTitle" = CASE WHEN j.flag AND p.kind <> 'EXTERNAL_VIDEO' THEN NULLIF(btrim(p.annotation->>'title'), '') END,
+    title = CASE WHEN j.flag AND p.kind <> 'EXTERNAL_VIDEO' AND btrim(p.title) IS NOT DISTINCT FROM btrim(p.annotation->>'title') THEN NULL ELSE p.title END,
+    "placeEstimateMembersOnly" = p."gpsSource" IS NOT DISTINCT FROM 'ESTIMATE' AND (j.flag OR NULLIF(btrim(p.context), '') IS NOT NULL)
   FROM (
-    SELECT q.id, t.trx,
-      q.annotation IS NOT NULL AND (
+    SELECT q.id, q.annotation IS NOT NULL AND (
         NULLIF(btrim(q.context), '') IS NOT NULL
         OR EXISTS (SELECT 1 FROM "Face" f WHERE f."photoId" = q.id AND f."personId" IS NOT NULL)
-        OR EXISTS (SELECT 1 FROM "AnimalDetection" a WHERE a."photoId" = q.id AND a."personId" IS NOT NULL)
-        OR COALESCE(photo_helper_text(q) ~* rx, false)
-        OR COALESCE(photo_helper_text(q) ~* t.trx, false)) AS flag,
-      q.kind <> 'EXTERNAL_VIDEO' AND q.title IS NOT NULL AND (btrim(q.title) IS NOT DISTINCT FROM btrim(q.annotation->>'title') OR COALESCE(q.title ~* rx, false)) AS move
-    FROM "Photo" q,
-    LATERAL (SELECT title_regex(ARRAY(
-      SELECT tr.title FROM "Trip" tr WHERE tr.id = q."tripId" AND tr.visibility <> 'PUBLIC'
-      UNION ALL
-      SELECT c.title FROM "CollectionItem" ci JOIN "Collection" c ON c.id = ci."collectionId" WHERE ci."photoId" = q.id AND c.visibility <> 'PUBLIC')) AS trx) t
+        OR EXISTS (SELECT 1 FROM "AnimalDetection" a WHERE a."photoId" = q.id AND a."personId" IS NOT NULL)) AS flag
+    FROM "Photo" q
   ) j
   WHERE j.id = p.id;
 
-  -- A description cannot say whether the helper wrote it either; one that names anybody the album knows is kept for
-  -- members, and so is an activity's that repeats a word of its trip's title while the trip is not public.
-  UPDATE "Trip" SET "descriptionMembersOnly" = true WHERE description ~* rx;
-  UPDATE "Collection" SET "descriptionMembersOnly" = true WHERE description ~* rx;
-  UPDATE "Activity" a SET "descriptionMembersOnly" = true FROM "Trip" t
-    WHERE t.id = a."tripId" AND (a.description ~* rx OR (t.visibility <> 'PUBLIC' AND a.description ~* title_regex(ARRAY[t.title])));
-
   SELECT count(*) FILTER (WHERE "annotationMembersOnly"), count(*) FILTER (WHERE "membersTitle" IS NOT NULL AND title IS NULL), count(*) FILTER (WHERE "placeEstimateMembersOnly")
     INTO helper, titles, places FROM "Photo";
-  SELECT count(*) INTO trips FROM "Trip" WHERE "descriptionMembersOnly";
-  SELECT count(*) INTO collections FROM "Collection" WHERE "descriptionMembersOnly";
-  SELECT count(*) INTO activities FROM "Activity" WHERE "descriptionMembersOnly";
-  RAISE NOTICE 'members_only_text: helper text kept for members on % photographs (% titles moved to membersTitle), % place guesses; descriptions kept for members on % trips, % collections, % activities',
-    helper, titles, places, trips, collections, activities;
+  RAISE NOTICE 'members_only_text: helper text kept for members on % photographs with notes or somebody tagged (% titles moved to membersTitle), % place guesses; names and private title words are judged when the worker starts',
+    helper, titles, places;
 END $$;
 
+-- Rebuilding the two text indexes afterwards is several times quicker than keeping them up to date through a write
+-- to every row, and this has to finish well inside a deploy's health check.
 CREATE INDEX IF NOT EXISTS "Photo_searchVector_idx" ON "Photo" USING GIN ("searchVector");
 CREATE INDEX IF NOT EXISTS "Photo_searchVectorMembers_idx" ON "Photo" USING GIN ("searchVectorMembers");

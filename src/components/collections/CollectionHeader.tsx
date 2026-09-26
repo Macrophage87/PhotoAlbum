@@ -32,7 +32,7 @@ export function CollectionHeader({ collection, shareUrl, save, describe, share }
               reader when there is none to read: an empty box belongs to whoever may fill it. */}
           {(save || collection.description) && (
             <div className="mt-3">
-              <DescriptionEditor what="collection" description={collection.description} save={save} describe={describe} membersOnly={collection.descriptionMembersOnly} share={share} className="text-text/90" />
+              <DescriptionEditor what="collection" description={collection.description} save={save} describe={describe} membersOnly={collection.descriptionMembersOnly} share={share} strangersCanOpen={collection.visibility !== "PRIVATE"} className="text-text/90" />
             </div>
           )}
         </div>

@@ -54,10 +54,11 @@ export async function idsMatching(q: string, opts: { member: boolean; scope?: Ma
     WHERE p."trashedAt" IS NULL AND ${within.length ? Prisma.join(within, " AND ") : Prisma.sql`TRUE`}
       AND (${column} @@ qq.query OR p."originalName" ILIKE ${like} OR p.caption ILIKE ${like} OR ${titled})
     ORDER BY ts_rank_cd(${column}, qq.query) DESC, p.id
-    LIMIT ${limit}`;
-  // Kept quiet from the viewer, who sees the best-ranked matches; said here so a word that means nothing is noticed.
-  if (rows.length === limit) console.warn(`[search] "${q.slice(0, 40)}" matched more than ${limit} items in its scope; the best-ranked ${limit} are used`);
-  return rows.map((r) => r.id);
+    LIMIT ${limit + 1}`;
+  // Kept quiet from the viewer, who sees the best-ranked matches; said here, without the words (somebody's search is
+  // theirs), so a limit that is too low is noticed.
+  if (rows.length > limit) console.warn(`[search] a word search matched more than ${limit} items in its scope; the best-ranked ${limit} are used`);
+  return rows.slice(0, limit).map((r) => r.id);
 }
 
 /**

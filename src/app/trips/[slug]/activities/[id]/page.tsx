@@ -67,6 +67,7 @@ export default async function ActivityPage({ params, searchParams }: PageProps<"
       save={save}
       describe={describe}
       shareDescription={setActivityDescriptionShared.bind(null, slug, activity.id)}
+      strangersCanOpen={trip.visibility !== "PRIVATE" || Boolean(activity.shareToken)}
       editable
       editing={sp.edit === "1"}
       members={await familyMembers()}

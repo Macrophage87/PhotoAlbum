@@ -12,6 +12,7 @@ import { knownAdult, nameMayLeaveServer, namingOutcome } from "@/lib/people/cons
 import { forgetNameEverywhere, forgetNameInText, forgetOnPhoto, matcherFor, memberTextMentioning, photosMentioning, taggedPhotoIds } from "@/lib/people/forget";
 import { enqueueFaceDetection } from "@/lib/jobs/handlers/detect-faces";
 import { confirmFaceAs, rejectProposal } from "@/lib/people/matching";
+import { rejudgeLater } from "@/lib/annotation/rejudge";
 
 async function requireAdmin() {
   const user = await requireUserOrThrow();
@@ -96,6 +97,8 @@ export async function nameCluster(clusterId: string, fd: FormData): Promise<void
   await db.faceCluster.update({ where: { id: clusterId }, data: { personId: person.id, label: person.name } });
   await db.face.updateMany({ where: { clusterId }, data: { personId: person.id, status: "CONFIRMED" } });
   if (effective.nullTemplates) await nullTemplatesFor(person.id);
+  // A new name: what was written before it was known is judged again, in the background.
+  if (!existing) await rejudgeLater({ names: [person.name] });
   revalidatePath("/people", "layout");
   revalidatePath("/admin");
 }
@@ -259,6 +262,7 @@ export async function updatePerson(personId: string, fd: FormData): Promise<void
   if (!canChangePerson(user, person)) throw new Error(NOT_YOUR_PERSON);
   const v = z.object({ name: z.string().trim().min(1).max(80), relationship: z.string().trim().max(80).transform((x) => x || null) }).parse({ name: fd.get("name"), relationship: fd.get("relationship") ?? "" });
   await db.person.update({ where: { id: personId }, data: { name: v.name, relationship: v.relationship, formerNames: withFormerName(person, v.name) } });
+  await rejudgeLater({ names: [v.name] });
   revalidatePath("/people", "layout");
 }
 
@@ -365,6 +369,7 @@ export async function tagPersonAt(photoId: string, fd: FormData): Promise<void> 
   const person = v.personId
     ? await db.person.findUniqueOrThrow({ where: { id: v.personId } })
     : await db.person.create({ data: { name: v.name!, kind: "HUMAN", createdById: user.id } });
+  if (!v.personId) await rejudgeLater({ names: [person.name] });
   if (person.optedOutAt) throw new Error("This person asked to be forgotten");
   // One tag per person per photograph: tagging somebody twice moves their box rather than stacking another.
   const already = await db.face.findFirst({ where: { photoId, personId: person.id, confidence: 0 }, select: { id: true } });
@@ -471,6 +476,7 @@ export async function createPet(fd: FormData): Promise<void> {
   const user = await requireUserOrThrow();
   const v = petSchema.parse({ name: fd.get("name"), species: fd.get("species"), livedFrom: fd.get("livedFrom") || undefined, livedTo: fd.get("livedTo") || undefined, isFlock: fd.get("isFlock") === "on", descriptors: fd.get("descriptors") ?? undefined });
   await db.person.create({ data: { kind: "PET", name: v.name, species: v.species, livedFrom: v.livedFrom, livedTo: v.livedTo, isFlock: v.isFlock, descriptors: v.descriptors, createdById: user.id } });
+  await rejudgeLater({ names: [v.name] });
   revalidatePath("/people", "layout");
 }
 
@@ -480,6 +486,7 @@ export async function updatePet(personId: string, fd: FormData): Promise<void> {
   if (!canChangePerson(user, pet)) throw new Error(NOT_YOUR_PERSON);
   const v = petSchema.parse({ name: fd.get("name"), species: fd.get("species"), livedFrom: fd.get("livedFrom") || undefined, livedTo: fd.get("livedTo") || undefined, isFlock: fd.get("isFlock") === "on", descriptors: fd.get("descriptors") ?? undefined });
   await db.person.update({ where: { id: personId, kind: "PET" }, data: { name: v.name, formerNames: withFormerName(pet, v.name), species: v.species, livedFrom: v.livedFrom, livedTo: v.livedTo, isFlock: v.isFlock, descriptors: v.descriptors } });
+  await rejudgeLater({ names: [v.name] });
   revalidatePath("/people", "layout");
 }
 

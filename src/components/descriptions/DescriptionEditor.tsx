@@ -27,6 +27,7 @@ export function DescriptionEditor({
   describe,
   membersOnly = false,
   share,
+  strangersCanOpen = true,
   className = "",
 }: {
   what: DescribedKind;
@@ -42,6 +43,12 @@ export function DescriptionEditor({
   membersOnly?: boolean;
   /** Whoever arranges it: show it to everyone who may open this, or keep it for the family. Saving never changes it. */
   share?: (everyone: boolean) => Promise<void>;
+  /**
+   * Whether anybody outside the family can open this at all (a public or linked trip or collection, an activity with
+   * a link). While nobody can, whether the description is the family's only makes no difference yet, so it is only
+   * mentioned, and there is nothing to show to everyone.
+   */
+  strangersCanOpen?: boolean;
   /** The paragraph is read in a themed header on a trip and a collection, and on a plain page on an activity. */
   className?: string;
 }) {
@@ -52,7 +59,7 @@ export function DescriptionEditor({
 
   const paragraph = <p className={`max-w-3xl whitespace-pre-line ${className}`} data-testid={`${what}-description`}>{description}</p>;
   const read =
-    membersOnly && description ? (
+    membersOnly && description && strangersCanOpen ? (
       <div className="space-y-1">
         <span data-testid={`${what}-description-family-only`}><Badge>Family only</Badge></span>
         {paragraph}
@@ -61,6 +68,12 @@ export function DescriptionEditor({
       paragraph
     );
   if (!save) return description ? read : null;
+  // Whoever arranges it is told, in one line, who reads what they wrote.
+  const status = !strangersCanOpen
+    ? `Only the family can open this ${WORD[what]}${membersOnly ? ", and this description stays with the family if that changes" : ""}.`
+    : membersOnly
+      ? "Only the family can read this."
+      : `Everyone who can open this ${WORD[what]} can read this.`;
 
   const run = (work: () => Promise<void>) =>
     start(async () => {
@@ -76,7 +89,8 @@ export function DescriptionEditor({
     return (
       <div className="space-y-2">
         {description && read}
-        {description && share && (
+        {description && <p className="text-xs text-muted" data-testid={`${what}-description-status`}>{status}</p>}
+        {description && share && strangersCanOpen && (
           <Button
             size="sm"
             variant="ghost"

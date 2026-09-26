@@ -224,11 +224,13 @@ export async function setPhotoPlace(id: string, fd: FormData): Promise<PlaceResu
 export async function confirmPlaceEstimate(id: string): Promise<PlaceResult> {
   const user = await editorOrNull(id);
   if (!user) return { ok: false, message: NOT_YOURS };
-  const photo = await db.photo.findUnique({ where: { id }, select: { lat: true, lng: true, gpsSource: true, placeName: true, placeEstimateName: true } });
+  const photo = await db.photo.findUnique({ where: { id }, select: { lat: true, lng: true, gpsSource: true, placeName: true, placeEstimateName: true, placeEstimateMembersOnly: true } });
   if (!photo) return { ok: false, message: "Photo not found" };
   if (photo.gpsSource !== "ESTIMATE" || photo.lat === null || photo.lng === null) return { ok: false, message: "There is no estimated place to accept" };
-  // The helper's name for the place becomes the item's own, so accepting a guess does not turn it back into coordinates.
-  const name = photo.placeName ?? photo.placeEstimateName;
+  // The helper's name for the place becomes the item's own, so accepting a guess does not turn it back into
+  // coordinates — unless the name is the family's (it came from the notes, or names somebody): the place name is
+  // shown to anybody who may see the item, so that one is left for a member to write or look up themselves.
+  const name = photo.placeName ?? (photo.placeEstimateMembersOnly ? null : photo.placeEstimateName);
   await db.photo.update({ where: { id }, data: { gpsSource: "MANUAL", placeSetById: user.id, placeName: name } });
   revalidatePath(`/photos/${id}`);
   revalidatePath("/trips", "layout");
