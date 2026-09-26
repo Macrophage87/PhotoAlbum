@@ -62,7 +62,7 @@ const schema = z.object({
   GOOGLE_PHOTOS_API_URL: urlWithDefault("https://photospicker.googleapis.com/v1"),
   // Automatic pet matching through the sidecar's animal detector (needs ML_URL); on by default when the sidecar is set.
   PET_MATCHING_ENABLED: boolish.transform((v) => v ?? true),
-  // Address lookup for "Set a place": a Nominatim-compatible search endpoint, called server-side only when a member searches. Blank turns lookup off.
+  // Address lookup for "Set a place": a Nominatim-compatible search endpoint, called server-side only when a member searches. Blank means the public OpenStreetMap server; set GEOCODER_ENABLED=false to turn lookup off.
   GEOCODER_URL: urlWithDefault("https://nominatim.openstreetmap.org/search"),
   GEOCODER_ENABLED: boolish.transform((v) => v ?? true),
   // Visitor statistics: counted on this server, never sent anywhere, and shown only on the Admin page.
