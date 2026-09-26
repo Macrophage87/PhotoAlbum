@@ -7,41 +7,35 @@ import type { TakenAtSource } from "@/generated/prisma/enums";
 import { NOT_TRASHED } from "@/lib/photos/trash";
 import { haversine } from "@/lib/geo/haversine";
 
-/** Within this, the uploader's own Google trace and another member's activity track put them in the same place. */
+/** A recorded position of the uploader's own farther than this from another member's activity track: not together. */
 const TOGETHER_M = 300;
-/** A visit's filler sits at the place's centre, which can be well inside somewhere big but not this far from a trail. */
-const VISIT_APART_M = 3_000;
+/**
+ * The same for a position at a visit's place or one the trace only guesses at (snapped across a gap, or interpolated
+ * by the importer). A visit's point is the middle of the place, which can be well inside somewhere big.
+ */
+const LOOSE_TOGETHER_M = 3_000;
 
 type Position = { lat: number; lng: number; ele?: number };
 type Fix<T> = { track: T; pos: Position; kind: PositionKind };
-type Covering = { startTime: Date; endTime: Date };
-
-/** A track's position at an instant, or null where it does not cover it. */
-function positionOn<T extends Covering>(track: T, points: TrackPoint[], tMs: number): Position | null {
-  return tMs < track.startTime.getTime() || tMs > track.endTime.getTime() ? null : positionAt(points, tMs);
-}
 
 /**
- * The track to place a photo from, and where. The uploader's own GPX/FIT comes first. Then, where the uploader's own
- * Google trace and other members' GPX/FIT cover the moment, the trace is weighed against them:
- * - a recorded position more than TOGETHER_M from every one of them says the uploader was elsewhere (Mom in the
- *   museum while Dad was out on his bike), so the trace places the photo;
- * - a position at a visit's place is judged at the visit's doors: the uploader's last recorded fix before it and
- *   first after it, against each activity track at those same moments. Apart at every door that can be compared
- *   means elsewhere; together at any door means together (the trailhead of a park whose centre is far from the
- *   trail). With no door to compare, the visit's centre must be more than VISIT_APART_M away;
- * - a position snapped across a signal gap, or interpolated by the importer, says nothing.
- * Wherever the uploader was not shown to be elsewhere, the nearest activity track they were with (or simply the
- * nearest), the more precise record, places the photo. After that, the uploader's own Google trace, others' GPX/FIT,
- * others' Google traces. Within each, start-time order.
+ * The track to place a photo from, and where, judged at the photo's own moment. The uploader's own GPX/FIT comes
+ * first. Then, where the uploader's own Google trace and other members' GPX/FIT cover the moment, the trace's position
+ * P is compared with the nearest of their positions Q: farther apart than TOGETHER_M (for a recorded P) or
+ * LOOSE_TOGETHER_M (for a visit's place or a guessed P), the uploader was elsewhere (Mom in the museum while Dad was
+ * out on his bike) and her own trace places the photo; closer, they were together and Q's track, the more precise
+ * record, places it. The looser limit has two accepted costs: a city museum within 3 km of Dad's ride puts Mom's
+ * photos on his route, and a park so big that its centre is more than 3 km from the trail they walked together puts
+ * them at the park's centre.
+ * After that, the uploader's own Google trace, others' GPX/FIT, others' Google traces. Within each, start-time order.
  */
-function choose<T extends Covering & { source: string; uploaderId: string }>(tracks: T[], uploaderId: string, tMs: number, pointsOf: (t: T) => TrackPoint[]): Fix<T> | null {
+function choose<T extends { source: string; uploaderId: string }>(tracks: T[], uploaderId: string, at: (t: T) => Omit<Fix<T>, "track"> | null): Fix<T> | null {
   const all = (own: boolean, google: boolean, one = false) => {
     const out: Fix<T>[] = [];
     for (const track of tracks) {
       if ((track.uploaderId === uploaderId) !== own || (track.source === "GOOGLE") !== google) continue;
-      const pos = positionOn(track, pointsOf(track), tMs);
-      if (pos) out.push({ track, pos, kind: positionKindAt(pointsOf(track), tMs) ?? "soft" });
+      const fix = at(track);
+      if (fix) out.push({ track, ...fix });
       if (one && out.length) break;
     }
     return out;
@@ -50,29 +44,12 @@ function choose<T extends Covering & { source: string; uploaderId: string }>(tra
   if (ownPrecise) return ownPrecise;
   const [ownGoogle] = all(true, true, true);
   const others = all(false, false);
-  if (!ownGoogle || !others.length) return ownGoogle ?? others[0] ?? all(false, true, true)[0] ?? null;
-
-  const away = (f: Fix<T>) => haversine(ownGoogle.pos.lat, ownGoogle.pos.lng, f.pos.lat, f.pos.lng);
-  const byDistance = [...others].sort((a, b) => away(a) - away(b));
-  if (ownGoogle.kind === "firm") return away(byDistance[0]) > TOGETHER_M ? ownGoogle : byDistance[0];
-  if (ownGoogle.kind === "soft") return byDistance[0];
-
-  // A visit: compare at its doors.
-  const own = pointsOf(ownGoogle.track);
-  let k = 0;
-  while (k < own.length && own[k].t <= tMs) k++;
-  let before: TrackPoint | undefined, after: TrackPoint | undefined;
-  for (let i = k - 1; i >= 0 && !before; i--) if (!own[i].filled) before = own[i];
-  for (let i = k; i < own.length && !after; i++) if (!own[i].filled) after = own[i];
-  const together = (f: Fix<T>) => {
-    const doors = [before, after].filter((d): d is TrackPoint => !!d);
-    const gaps = doors.flatMap((d) => {
-      const p = positionOn(f.track, pointsOf(f.track), d.t);
-      return p ? [haversine(d.lat, d.lng, p.lat, p.lng)] : [];
-    });
-    return gaps.length ? gaps.some((g) => g <= TOGETHER_M) : away(f) <= VISIT_APART_M;
-  };
-  return byDistance.find(together) ?? ownGoogle;
+  if (ownGoogle && others.length) {
+    const away = (f: Fix<T>) => haversine(ownGoogle.pos.lat, ownGoogle.pos.lng, f.pos.lat, f.pos.lng);
+    const nearest = others.reduce((a, b) => (away(b) < away(a) ? b : a));
+    return away(nearest) > (ownGoogle.kind === "firm" ? TOGETHER_M : LOOSE_TOGETHER_M) ? ownGoogle : nearest;
+  }
+  return ownGoogle ?? others[0] ?? all(false, true, true)[0] ?? null;
 }
 
 /** Only timestamps that came from the camera (or were set by hand) are trustworthy enough to place a photo on a track. */
@@ -130,7 +107,11 @@ export async function geotagPhotos(job: GeotagPhotosJob): Promise<{ updated: num
   let updated = 0;
   for (const photo of photos) {
     const t = photo.takenAt!.getTime();
-    const chosen = choose(tracks, photo.uploaderId, t, pointsOf);
+    const chosen = choose(tracks, photo.uploaderId, (track) => {
+      if (t < track.startTime.getTime() || t > track.endTime.getTime()) return null;
+      const pts = pointsOf(track), pos = positionAt(pts, t);
+      return pos && { pos, kind: positionKindAt(pts, t) ?? "soft" };
+    });
     if (chosen) {
       const { track, pos } = chosen;
       const same = photo.gpsSource === "TRACK" && photo.lat === pos.lat && photo.lng === pos.lng && (photo.altitude ?? null) === (pos.ele ?? null);

@@ -1,7 +1,11 @@
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { db } from "@/lib/db";
 import { encodePoints } from "@/lib/tracks/encode";
 import { geotagPhotos } from "@/lib/jobs/handlers/geotag-photos";
+import { storage } from "@/lib/storage";
+import { importTrackFile } from "@/lib/tracks/import";
 import type { TrackPoint } from "@/lib/tracks/types";
 import { resetTestDb } from "../helpers/reset";
 
@@ -83,125 +87,143 @@ describe("geotagPhotos", () => {
     expect((await db.photo.findUniqueOrThrow({ where: { id: mine.id } })).lat).toBe(50);
   });
 
-  it("prefers the photographer's own Google trace over another member's activity track", async () => {
-    const dad = await db.user.create({ data: { email: "dad@example.com", role: "MEMBER" } });
-    await makeTrack(tripId, dad.id, line(10), "GPX");
-    await makeTrack(tripId, userId, line(10).map((p) => ({ ...p, lat: 50 })), "GOOGLE");
-    const mine = await makePhoto(tripId, userId, new Date(T0 + 3 * 60_000));
-    const his = await makePhoto(tripId, dad.id, new Date(T0 + 3 * 60_000));
-    await geotagPhotos({ tripId });
-    expect((await db.photo.findUniqueOrThrow({ where: { id: mine.id } })).lat).toBe(50);
-    expect((await db.photo.findUniqueOrThrow({ where: { id: his.id } })).lat).toBeCloseTo(44.003, 5);
-  });
-
-  it("keeps a photo on another member's activity track when the uploader's own trace puts them together", async () => {
-    const dad = await db.user.create({ data: { email: "dad2@example.com", role: "MEMBER" } });
-    await makeTrack(tripId, dad.id, line(10), "GPX");
-    const mine = await makePhoto(tripId, userId, new Date(T0 + 3 * 60_000));
-    await geotagPhotos({ tripId });
-    expect((await db.photo.findUniqueOrThrow({ where: { id: mine.id } })).lat).toBeCloseTo(44.003, 5);
-    // Her own coarse trace, about 110 m off his: they were walking together, and his track is the precise one.
-    const own = await makeTrack(tripId, userId, line(10).map((p) => ({ ...p, lat: p.lat + 0.001 })), "GOOGLE");
-    await geotagPhotos({ tripId, trackIds: [own.id] });
-    expect((await db.photo.findUniqueOrThrow({ where: { id: mine.id } })).lat).toBeCloseTo(44.003, 5);
-    await geotagPhotos({ tripId });
-    expect((await db.photo.findUniqueOrThrow({ where: { id: mine.id } })).lat).toBeCloseTo(44.003, 5);
-  });
-
-  it("moves a photo onto the uploader's own trace when it puts them apart from another member's activity track", async () => {
-    const dad = await db.user.create({ data: { email: "dad3@example.com", role: "MEMBER" } });
-    await makeTrack(tripId, dad.id, line(10), "GPX");
-    const mine = await makePhoto(tripId, userId, new Date(T0 + 3 * 60_000));
-    await geotagPhotos({ tripId });
-    // Her own trace is a few kilometres away: she was not on his ride.
-    const own = await makeTrack(tripId, userId, line(10).map((p) => ({ ...p, lat: p.lat + 0.05 })), "GOOGLE");
-    await geotagPhotos({ tripId, trackIds: [own.id] });
-    expect((await db.photo.findUniqueOrThrow({ where: { id: mine.id } })).lat).toBeCloseTo(44.053, 5);
-  });
-
-  describe("when the uploader's own trace and another member's activity track disagree", () => {
+  describe("whether the uploader was with another member, from a Google Timeline export imported end to end", () => {
+    const M = 60_000;
+    const E = (m: number) => m / (111_195 * Math.cos((44 * Math.PI) / 180)); // degrees of longitude per metre east
+    const N = (m: number) => m / 111_195;
+    const iso = (ms: number) => new Date(ms).toISOString();
+    // Dad's GPX: one fix a minute, heading north from (44, -68 + east) at `perMin` metres a minute.
+    const dadAt = (min: number, perMin: number, east = 0) => ({ lat: 44 + N(min * perMin), lng: -68 + E(east) });
+    const dadTrack = (userId: string, minutes: number, perMin: number, east = 0) =>
+      makeTrack(tripId, userId, Array.from({ length: minutes + 1 }, (_, i) => ({ t: T0 + i * M, ...dadAt(i, perMin, east) })), "GPX");
+    type LL = { lat: number; lng: number };
+    const geo = (p: LL) => `geo:${p.lat.toFixed(7)},${p.lng.toFixed(7)}`;
+    const recorded = (fixes: [number, LL][]) => ({ startTime: iso(fixes[0][0]), endTime: iso(fixes[fixes.length - 1][0]), timelinePath: fixes.map(([t, p]) => ({ point: geo(p), time: iso(t) })) });
+    const visit = (from: number, to: number, p: LL) => ({ startTime: iso(from), endTime: iso(to), visit: { probability: 0.9, topCandidate: { placeLocation: { latLng: `${p.lat.toFixed(7)}°, ${p.lng.toFixed(7)}°` } } } });
+    const move = (from: number, to: number, a: LL, b: LL) => ({ startTime: iso(from), endTime: iso(to), activity: { start: { latLng: `${a.lat.toFixed(7)}°, ${a.lng.toFixed(7)}°` }, end: { latLng: `${b.lat.toFixed(7)}°, ${b.lng.toFixed(7)}°` } } });
+    // Mom's Timeline.json goes through the real import: parse, fill visits, split into days, encode, store.
+    const importTimeline = async (userId: string, segments: unknown[]) => {
+      const key = `imports/test/${Math.random().toString(36).slice(2)}.json`;
+      const file = storage().localPath!(key);
+      await mkdir(path.dirname(file), { recursive: true });
+      await writeFile(file, JSON.stringify({ semanticSegments: segments }));
+      const summary = await importTrackFile({ importKey: key, tripId, userId, sourceHint: "google", originalName: "Timeline.json" });
+      expect(summary.tracks.length).toBeGreaterThan(0);
+    };
+    const placed = async (id: string) => {
+      const p = await db.photo.findUniqueOrThrow({ where: { id } });
+      return { lat: p.lat!, lng: p.lng! };
+    };
     let dadId: string;
     beforeEach(async () => {
-      dadId = (await db.user.create({ data: { email: "dad4@example.com", role: "MEMBER" } })).id;
-      await makeTrack(tripId, dadId, line(40), "GPX");
+      dadId = (await db.user.create({ data: { email: "dad@example.com", role: "MEMBER" } })).id;
     });
-    const latOf = async (id: string) => (await db.photo.findUniqueOrThrow({ where: { id } })).lat;
 
-    it("keeps the activity track when the trace only snaps across a signal gap (D)", async () => {
-      // Her trace has fixes at 13:00 and 13:30 only; at 13:04 it snaps back to 13:00, ~800 m behind his.
-      await makeTrack(tripId, userId, [{ t: T0, lat: 43.997, lng: -68 }, { t: T0 + 30 * 60_000, lat: 44.03, lng: -68 }], "GOOGLE");
-      const mine = await makePhoto(tripId, userId, new Date(T0 + 4 * 60_000));
+    it("apart: a museum 8 km from Dad's ride", async () => {
+      await dadTrack(dadId, 240, 300);
+      const museum = { lat: dadAt(110, 300).lat, lng: -68 + E(8_000) };
+      await importTimeline(userId, [move(T0, T0 + 20 * M, dadAt(0, 300), museum), visit(T0 + 20 * M, T0 + 200 * M, museum), move(T0 + 200 * M, T0 + 220 * M, museum, dadAt(0, 300))]);
+      const photo = await makePhoto(tripId, userId, new Date(T0 + 110 * M));
       await geotagPhotos({ tripId });
-      expect(await latOf(mine.id)).toBeCloseTo(44.004, 5);
+      expect((await placed(photo.id)).lng).toBeCloseTo(museum.lng, 6);
     });
 
-    it("keeps the activity track when the trace there is only filled in across a visit (B)", async () => {
-      // A big park recorded as a visit: filler every 5 minutes at its centre, 2 km off the trail.
-      await makeTrack(tripId, userId, Array.from({ length: 7 }, (_, i) => ({ t: T0 + i * 5 * 60_000, lat: 44.02, lng: -68, filled: "visit" as const })), "GOOGLE");
-      const mine = await makePhoto(tripId, userId, new Date(T0 + 12 * 60_000));
+    it("together: hiking with Dad through a park whose centre is 2 km off the trail", async () => {
+      await dadTrack(dadId, 240, 60);
+      const along = (from: number, to: number) => recorded(Array.from({ length: (to - from) / 2 + 1 }, (_, k) => [T0 + (from + 2 * k) * M, dadAt(from + 2 * k, 60)] as [number, LL]));
+      await importTimeline(userId, [along(0, 20), visit(T0 + 20 * M, T0 + 120 * M, { lat: dadAt(70, 60).lat, lng: -68 + E(2_000) }), along(120, 140)]);
+      const photo = await makePhoto(tripId, userId, new Date(T0 + 70 * M));
       await geotagPhotos({ tripId });
-      expect(await latOf(mine.id)).toBeCloseTo(44.012, 5);
+      expect(await placed(photo.id)).toEqual({ lat: expect.closeTo(dadAt(70, 60).lat, 6), lng: -68 });
     });
 
-    it("follows the uploader's own visit when it is kilometres from the activity track (museum)", async () => {
-      // Three hours in a museum, nothing recorded but the visit, 9 km from Dad's ride.
-      await makeTrack(tripId, userId, Array.from({ length: 37 }, (_, i) => ({ t: T0 + i * 5 * 60_000, lat: 44.081, lng: -68, filled: "visit" as const })), "GOOGLE");
-      const mine = await makePhoto(tripId, userId, new Date(T0 + 12 * 60_000));
+    it("apart: a hotel 80 km away, its doors hours from the photo", async () => {
+      await dadTrack(dadId, 600, 300);
+      const hotel = { lat: 44, lng: -68 + E(80_000) };
+      await importTimeline(userId, [move(T0 - 150 * M, T0 - 120 * M, { lat: 44.1, lng: hotel.lng }, hotel), visit(T0 - 120 * M, T0 + 630 * M, hotel), move(T0 + 630 * M, T0 + 650 * M, hotel, { lat: 44.1, lng: hotel.lng })]);
+      const photo = await makePhoto(tripId, userId, new Date(T0 + 300 * M));
       await geotagPhotos({ tripId });
-      expect(await latOf(mine.id)).toBe(44.081);
+      expect((await placed(photo.id)).lng).toBeCloseTo(hotel.lng, 6);
     });
 
-    it("follows the uploader's own visit when she was apart from him at its doors, though its centre is near his route (F)", async () => {
-      // Dad rides north for four hours. Mom walks to a museum 2 km east of where he will be at 14:40, stays three
-      // hours with nothing recorded but the visit, and walks off. At both doors he is kilometres away.
-      await makeTrack(tripId, dadId, line(240), "GPX");
-      const east = (m: number) => -68 + m / (111_195 * Math.cos((44.1 * Math.PI) / 180));
-      const museum = { lat: 44.1, lng: east(2_000) };
-      await makeTrack(tripId, userId, [
-        ...Array.from({ length: 11 }, (_, i) => ({ t: T0 + i * 60_000, ...museum })),
-        ...Array.from({ length: 37 }, (_, i) => ({ t: T0 + (15 + i * 5) * 60_000, ...museum, filled: "visit" as const })),
-        ...Array.from({ length: 10 }, (_, i) => ({ t: T0 + (200 + i) * 60_000, ...museum })),
-      ], "GOOGLE");
-      const mine = await makePhoto(tripId, userId, new Date(T0 + 100 * 60_000));
+    it("apart: arrived somewhere together, and Dad rode on 6 km before the photo", async () => {
+      await dadTrack(dadId, 300, 43);
+      const spot = dadAt(20, 43);
+      const along = recorded(Array.from({ length: 11 }, (_, k) => [T0 + 2 * k * M, dadAt(2 * k, 43)] as [number, LL]));
+      await importTimeline(userId, [along, visit(T0 + 20 * M, T0 + 170 * M, spot), move(T0 + 170 * M, T0 + 190 * M, spot, dadAt(0, 43))]);
+      const photo = await makePhoto(tripId, userId, new Date(T0 + 160 * M));
       await geotagPhotos({ tripId });
-      const p = await db.photo.findUniqueOrThrow({ where: { id: mine.id } });
-      expect([p.lat, p.lng]).toEqual([museum.lat, expect.closeTo(museum.lng, 6)]);
+      expect(await placed(photo.id)).toEqual({ lat: expect.closeTo(spot.lat, 6), lng: expect.closeTo(spot.lng, 6) });
     });
 
-    it("keeps the activity track when she was with him at the doors of a huge park whose centre is far off (B, doors)", async () => {
-      await makeTrack(tripId, dadId, line(240), "GPX");
-      const east = (m: number) => -68 + m / (111_195 * Math.cos((44 * Math.PI) / 180));
-      // Her recorded fixes follow his trail up to 13:10 and again from 14:00; in between, the park's centre 3.5 km east.
-      await makeTrack(tripId, userId, [
-        ...line(11),
-        ...Array.from({ length: 9 }, (_, i) => ({ t: T0 + (15 + i * 5) * 60_000, lat: 44.03, lng: east(3_500), filled: "visit" as const })),
-        ...line(10, 60),
-      ], "GOOGLE");
-      const mine = await makePhoto(tripId, userId, new Date(T0 + 30 * 60_000));
+    it("apart: her trace only snaps across a signal gap, but Dad is 50 km away", async () => {
+      await dadTrack(dadId, 60, 300);
+      const far = (min: number) => ({ lat: dadAt(min, 300).lat, lng: -68 + E(50_000) });
+      await importTimeline(userId, [recorded([[T0, far(0)], [T0 + 40 * M, far(40)]])]);
+      const photo = await makePhoto(tripId, userId, new Date(T0 + 4 * M));
       await geotagPhotos({ tripId });
-      expect(await latOf(mine.id)).toBeCloseTo(44.03, 5);
-      expect((await db.photo.findUniqueOrThrow({ where: { id: mine.id } })).lng).toBe(-68);
+      expect((await placed(photo.id)).lng).toBeCloseTo(far(0).lng, 6);
     });
 
-    for (const km of [1, 5]) {
-      it(`follows her own trace logged every 8 minutes when it is ${km} km from his (A)`, async () => {
-        const east = -68 + (km * 1000) / (111_195 * Math.cos((44 * Math.PI) / 180));
-        await makeTrack(tripId, userId, Array.from({ length: 5 }, (_, i) => ({ t: T0 + i * 8 * 60_000, lat: 44 + i * 0.008, lng: east })), "GOOGLE");
-        const mine = await makePhoto(tripId, userId, new Date(T0 + 12 * 60_000));
+    for (const [east, apart] of [[1_000, true], [100, false]] as const) {
+      it(`${apart ? "apart" : "together"}: her own recorded path ${east} m from Dad's`, async () => {
+        await dadTrack(dadId, 60, 300);
+        const hers = (min: number) => ({ lat: dadAt(min, 300).lat, lng: -68 + E(east) });
+        await importTimeline(userId, [recorded(Array.from({ length: 31 }, (_, k) => [T0 + 2 * k * M, hers(2 * k)] as [number, LL]))]);
+        const photo = await makePhoto(tripId, userId, new Date(T0 + 31 * M));
         await geotagPhotos({ tripId });
-        const p = await db.photo.findUniqueOrThrow({ where: { id: mine.id } });
-        expect(p.lng).toBeCloseTo(east, 6);
+        expect((await placed(photo.id)).lng).toBeCloseTo(apart ? hers(31).lng : -68, 6);
       });
     }
 
-    it("chooses the member she was with when two others' activity tracks cover the moment (C)", async () => {
-      const son = (await db.user.create({ data: { email: "son@example.com", role: "MEMBER" } })).id;
-      // Dad is 5 km away; her own trace and Son's track are within 100 m of each other.
-      await makeTrack(tripId, son, line(40).map((p) => ({ ...p, lat: p.lat + 0.045 })), "GPX");
-      await makeTrack(tripId, userId, line(40).map((p) => ({ ...p, lat: p.lat + 0.0455 })), "GOOGLE");
-      const mine = await makePhoto(tripId, userId, new Date(T0 + 4 * 60_000));
+    const dadRoute = (userId: string, minutes: number, where: (min: number) => LL) =>
+      makeTrack(tripId, userId, Array.from({ length: minutes + 1 }, (_, i) => ({ t: T0 + i * M, ...where(i) })), "GPX");
+
+    it("apart: breakfast together at the hotel, then Mom's museum 5 km east while Dad rides 86 km north (G)", async () => {
+      const hotel = { lat: 44, lng: -68 };
+      await dadRoute(dadId, 240, (i) => (i <= 60 ? hotel : { lat: 44 + N(Math.min(86_000, (i - 60) * 500)), lng: -68 }));
+      const museum = { lat: 44, lng: -68 + E(5_000) };
+      await importTimeline(userId, [visit(T0, T0 + 60 * M, hotel), move(T0 + 60 * M, T0 + 80 * M, hotel, museum), visit(T0 + 80 * M, T0 + 240 * M, museum)]);
+      const photo = await makePhoto(tripId, userId, new Date(T0 + 200 * M));
       await geotagPhotos({ tripId });
-      expect(await latOf(mine.id)).toBeCloseTo(44.049, 5);
+      expect(await placed(photo.id)).toEqual({ lat: 44, lng: expect.closeTo(museum.lng, 6) });
+    });
+
+    it("apart: arrived at a park together, Dad rode 20 km east after half an hour, photo two hours on (I)", async () => {
+      const park = dadAt(20, 60);
+      await dadRoute(dadId, 200, (i) => (i <= 20 ? dadAt(i, 60) : i <= 50 ? park : { lat: park.lat, lng: park.lng + E(Math.min(20_000, (i - 50) * 330)) }));
+      await importTimeline(userId, [recorded(Array.from({ length: 11 }, (_, k) => [T0 + 2 * k * M, dadAt(2 * k, 60)] as [number, LL])), visit(T0 + 20 * M, T0 + 200 * M, park)]);
+      const photo = await makePhoto(tripId, userId, new Date(T0 + 140 * M));
+      await geotagPhotos({ tripId });
+      expect(await placed(photo.id)).toEqual({ lat: expect.closeTo(park.lat, 6), lng: expect.closeTo(park.lng, 6) });
+    });
+
+    it("apart, by accepted trade-off: a park whose centre is 3.9 km from Dad at the moment goes to its centre (B2)", async () => {
+      await dadTrack(dadId, 240, 60);
+      const centre = { lat: dadAt(70, 60).lat, lng: -68 + E(3_900) };
+      const along = (from: number, to: number) => recorded(Array.from({ length: (to - from) / 2 + 1 }, (_, k) => [T0 + (from + 2 * k) * M, dadAt(from + 2 * k, 60)] as [number, LL]));
+      await importTimeline(userId, [along(0, 20), visit(T0 + 20 * M, T0 + 120 * M, centre), along(120, 140)]);
+      const photo = await makePhoto(tripId, userId, new Date(T0 + 70 * M));
+      await geotagPhotos({ tripId });
+      expect((await placed(photo.id)).lng).toBeCloseTo(centre.lng, 6);
+    });
+
+    it("together: with Son rather than Dad, when both ride and Son is the one beside her (C)", async () => {
+      const son = (await db.user.create({ data: { email: "son@example.com", role: "MEMBER" } })).id;
+      await dadTrack(dadId, 60, 300, 5_000);
+      await dadTrack(son, 60, 300);
+      await importTimeline(userId, [recorded(Array.from({ length: 31 }, (_, k) => [T0 + 2 * k * M, { lat: dadAt(2 * k, 300).lat, lng: -68 + E(100) }] as [number, LL]))]);
+      const photo = await makePhoto(tripId, userId, new Date(T0 + 31 * M));
+      await geotagPhotos({ tripId });
+      expect((await placed(photo.id)).lng).toBeCloseTo(-68, 6);
+    });
+
+    it("together: her trace snaps across a signal gap to a point a kilometre behind Dad on his route (D)", async () => {
+      await dadTrack(dadId, 60, 300);
+      await importTimeline(userId, [recorded([[T0, dadAt(0, 300)], [T0 + 30 * M, dadAt(30, 300)]])]);
+      const photo = await makePhoto(tripId, userId, new Date(T0 + 4 * M));
+      await geotagPhotos({ tripId });
+      expect((await placed(photo.id)).lat).toBeCloseTo(dadAt(4, 300).lat, 6);
     });
   });
 
