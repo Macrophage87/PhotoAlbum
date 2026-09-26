@@ -2792,6 +2792,16 @@ test("on a phone the day heading itself opens the whole timeline to choose from"
   const days = page.locator("section[id^='day-']");
   expect(await sheet.locator("[data-day-jump]").count()).toBe(await days.count());
   await expect(sheet.locator('[data-day-jump][aria-current="true"]')).toHaveCount(1);
+  // It is a modal sheet for the keyboard too (#128): focus starts on the day being read, Tab stays inside, and
+  // Escape hands focus back to the heading that opened it.
+  await expect(sheet.locator('[data-day-jump][aria-current="true"]')).toBeFocused();
+  for (let i = 0; i < (await sheet.locator("button").count()) + 2; i++) await page.keyboard.press("Tab");
+  expect(await page.evaluate(() => Boolean(document.activeElement?.closest("[data-testid=day-jump-sheet]")))).toBe(true);
+  await page.keyboard.press("Escape");
+  await expect(sheet).toBeHidden();
+  await expect(page.getByTestId("day-jump").first()).toBeFocused();
+  await page.getByTestId("day-jump").first().click();
+  await expect(sheet).toBeVisible();
 
   const last = sheet.locator("[data-day-jump]").last();
   const target = (await last.getAttribute("data-day-jump"))!;

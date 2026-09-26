@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { formatDay } from "@/lib/time/format";
 import { monthsOf, type NavDay } from "./TimelineNav";
@@ -20,19 +20,41 @@ import { monthsOf, type NavDay } from "./TimelineNav";
 export function DayJump({ days, current, label }: { days: NavDay[]; current: string; label: string }) {
   const [open, setOpen] = useState(false);
   const months = useMemo(() => monthsOf(days), [days]);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const dialog = useRef<HTMLDivElement>(null);
+
+  // Into the sheet on the day being looked at, so the list starts where the reader is; the Close button otherwise.
+  const focusStart = useEffectEvent(() => {
+    const sheet = dialog.current;
+    const here = sheet?.querySelector<HTMLElement>(`[data-day-jump="${CSS.escape(current)}"]`);
+    (here ?? sheet?.querySelector<HTMLElement>("[data-day-jump-close]"))?.focus();
+  });
 
   useEffect(() => {
     if (!open) return;
-    const esc = (e: KeyboardEvent) => {
+    focusStart();
+    const keys = (e: KeyboardEvent) => {
       if (e.key === "Escape") setOpen(false);
+      if (e.key === "Tab" && dialog.current) {
+        // A modal sheet keeps the keyboard inside it, as the lightbox does.
+        const focusable = Array.from(dialog.current.querySelectorAll<HTMLElement>("button:not([disabled]):not([tabindex='-1']), a[href]"));
+        if (!focusable.length) return;
+        const first = focusable[0], last = focusable[focusable.length - 1];
+        const inside = dialog.current.contains(document.activeElement);
+        if (e.shiftKey && (document.activeElement === first || !inside)) { e.preventDefault(); last.focus(); }
+        else if (!e.shiftKey && (document.activeElement === last || !inside)) { e.preventDefault(); first.focus(); }
+      }
     };
-    document.addEventListener("keydown", esc);
+    document.addEventListener("keydown", keys);
     // Nothing behind the sheet should scroll under it.
     const had = document.body.style.overflow;
     document.body.style.overflow = "hidden";
+    const opener = trigger.current;
     return () => {
-      document.removeEventListener("keydown", esc);
+      document.removeEventListener("keydown", keys);
       document.body.style.overflow = had;
+      // Back to the heading that opened it, without undoing the scroll to the day just chosen.
+      opener?.focus({ preventScroll: true });
     };
   }, [open]);
 
@@ -48,6 +70,7 @@ export function DayJump({ days, current, label }: { days: NavDay[]; current: str
     <>
       <span className="hidden lg:inline">{label}</span>
       <button
+        ref={trigger}
         type="button"
         data-testid="day-jump"
         onClick={() => setOpen(true)}
@@ -61,12 +84,13 @@ export function DayJump({ days, current, label }: { days: NavDay[]; current: str
 
       {open &&
         createPortal(
-          <div className="fixed inset-0 z-50 flex flex-col justify-end" role="dialog" aria-modal="true" aria-label="Go to a day">
-            <button type="button" aria-label="Close" className="absolute inset-0 bg-black/40" onClick={() => setOpen(false)} />
+          <div ref={dialog} className="fixed inset-0 z-50 flex flex-col justify-end" role="dialog" aria-modal="true" aria-label="Go to a day">
+            {/* The backdrop closes it on a tap; keyboard users have the Close button, so it is left out of the tab order. */}
+            <button type="button" aria-label="Close" tabIndex={-1} className="absolute inset-0 bg-black/40" onClick={() => setOpen(false)} />
             <div data-testid="day-jump-sheet" className="relative max-h-[70vh] overflow-y-auto rounded-t-theme border-t border-border bg-surface font-body text-base font-normal shadow-lg">
               <div className="sticky top-0 flex items-baseline justify-between gap-3 border-b border-border bg-surface px-4 py-3">
                 <p className="font-display text-lg font-semibold">Go to a day</p>
-                <button type="button" className="text-sm text-muted hover:text-text" onClick={() => setOpen(false)}>Close</button>
+                <button type="button" data-day-jump-close className="text-sm text-muted hover:text-text" onClick={() => setOpen(false)}>Close</button>
               </div>
               <div className="p-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
                 {months.map((m) => (
