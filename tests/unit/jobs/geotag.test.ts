@@ -119,6 +119,41 @@ describe("geotagPhotos", () => {
     expect((await db.photo.findUniqueOrThrow({ where: { id: mine.id } })).lat).toBeCloseTo(44.053, 5);
   });
 
+  describe("when the uploader's own trace and another member's activity track disagree", () => {
+    let dadId: string;
+    beforeEach(async () => {
+      dadId = (await db.user.create({ data: { email: "dad4@example.com", role: "MEMBER" } })).id;
+      await makeTrack(tripId, dadId, line(40), "GPX");
+    });
+    const latOf = async (id: string) => (await db.photo.findUniqueOrThrow({ where: { id } })).lat;
+
+    it("keeps the activity track when the trace only snaps across a signal gap (D)", async () => {
+      // Her trace has fixes at 13:00 and 13:30 only; at 13:04 it snaps back to 13:00, ~800 m behind his.
+      await makeTrack(tripId, userId, [{ t: T0, lat: 43.997, lng: -68 }, { t: T0 + 30 * 60_000, lat: 44.03, lng: -68 }], "GOOGLE");
+      const mine = await makePhoto(tripId, userId, new Date(T0 + 4 * 60_000));
+      await geotagPhotos({ tripId });
+      expect(await latOf(mine.id)).toBeCloseTo(44.004, 5);
+    });
+
+    it("keeps the activity track when the trace there is only filled in across a visit (B)", async () => {
+      // A big park recorded as a visit: filler every 5 minutes at its centre, 2 km off the trail.
+      await makeTrack(tripId, userId, Array.from({ length: 7 }, (_, i) => ({ t: T0 + i * 5 * 60_000, lat: 44.02, lng: -68, filled: true as const })), "GOOGLE");
+      const mine = await makePhoto(tripId, userId, new Date(T0 + 12 * 60_000));
+      await geotagPhotos({ tripId });
+      expect(await latOf(mine.id)).toBeCloseTo(44.012, 5);
+    });
+
+    it("chooses the member she was with when two others' activity tracks cover the moment (C)", async () => {
+      const son = (await db.user.create({ data: { email: "son@example.com", role: "MEMBER" } })).id;
+      // Dad is 5 km away; her own trace and Son's track are within 100 m of each other.
+      await makeTrack(tripId, son, line(40).map((p) => ({ ...p, lat: p.lat + 0.045 })), "GPX");
+      await makeTrack(tripId, userId, line(40).map((p) => ({ ...p, lat: p.lat + 0.0455 })), "GOOGLE");
+      const mine = await makePhoto(tripId, userId, new Date(T0 + 4 * 60_000));
+      await geotagPhotos({ tripId });
+      expect(await latOf(mine.id)).toBeCloseTo(44.049, 5);
+    });
+  });
+
   it("moves a photo onto its photographer's own Google trace imported after someone else's", async () => {
     const other = await db.user.create({ data: { email: "o2@example.com", role: "MEMBER" } });
     await makeTrack(tripId, other.id, line(10).map((p) => ({ ...p, lat: 60 })), "GOOGLE");

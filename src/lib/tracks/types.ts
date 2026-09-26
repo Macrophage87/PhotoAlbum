@@ -76,4 +76,6 @@ export type ColumnarPoints = {
   pwr?: number[];
   spd?: number[];
   dist?: number[];
+  /** 1 where the point was filled in rather than recorded (see TrackPoint.filled); absent in older blobs. */
+  filled?: (0 | 1)[];
 };

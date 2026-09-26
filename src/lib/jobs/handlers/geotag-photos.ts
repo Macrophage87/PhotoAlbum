@@ -1,6 +1,6 @@
 import { db } from "@/lib/db";
 import { columnarToPoints, decodePoints } from "@/lib/tracks/encode";
-import { positionAt } from "@/lib/tracks/interpolate";
+import { isFirmAt, positionAt } from "@/lib/tracks/interpolate";
 import type { TrackPoint } from "@/lib/tracks/types";
 import type { GeotagPhotosJob } from "../queues";
 import type { TakenAtSource } from "@/generated/prisma/enums";
@@ -11,30 +11,38 @@ import { haversine } from "@/lib/geo/haversine";
 const TOGETHER_M = 300;
 
 type Position = { lat: number; lng: number; ele?: number };
+type Fix<T> = { track: T; pos: Position; firm: boolean };
 
 /**
  * The track to place a photo from, and where. The uploader's own GPX/FIT comes first. Then, where the uploader's own
- * Google trace and another member's GPX/FIT both cover the moment, the two are compared: within TOGETHER_M they were
- * together and the activity track is the more precise record of where; farther apart they were not, and the
- * uploader's own trace says where the photo was taken (Mom in the museum while Dad was out on his bike). After that,
- * the uploader's own Google trace, others' GPX/FIT, others' Google traces. Within each, start-time order.
+ * Google trace and other members' GPX/FIT cover the moment, they are compared. Within TOGETHER_M of any of them the
+ * uploader was with that member, and the nearest such activity track is the more precise record of where. Farther
+ * from all of them, the uploader was elsewhere (Mom in the museum while Dad was out on his bike), but only if the
+ * trace's position there rests on recorded fixes close either side: one snapped across a signal gap, or drawn from
+ * points filled in across a visit, is no evidence of being apart, and the activity track is kept. After that, the
+ * uploader's own Google trace, others' GPX/FIT, others' Google traces. Within each, start-time order.
  */
-function choose<T extends { source: string; uploaderId: string }>(tracks: T[], uploaderId: string, at: (t: T) => Position | null): { track: T; pos: Position } | null {
-  const first = (own: boolean, google: boolean) => {
+function choose<T extends { source: string; uploaderId: string }>(tracks: T[], uploaderId: string, at: (t: T) => Omit<Fix<T>, "track"> | null): Fix<T> | null {
+  const all = (own: boolean, google: boolean, one = false) => {
+    const out: Fix<T>[] = [];
     for (const track of tracks) {
       if ((track.uploaderId === uploaderId) !== own || (track.source === "GOOGLE") !== google) continue;
-      const pos = at(track);
-      if (pos) return { track, pos };
+      const fix = at(track);
+      if (fix) out.push({ track, ...fix });
+      if (one && out.length) break;
     }
-    return null;
+    return out;
   };
-  const ownPrecise = first(true, false);
+  const [ownPrecise] = all(true, false, true);
   if (ownPrecise) return ownPrecise;
-  const ownGoogle = first(true, true), otherPrecise = first(false, false);
-  if (ownGoogle && otherPrecise) {
-    return haversine(ownGoogle.pos.lat, ownGoogle.pos.lng, otherPrecise.pos.lat, otherPrecise.pos.lng) <= TOGETHER_M ? otherPrecise : ownGoogle;
+  const [ownGoogle] = all(true, true, true);
+  const others = all(false, false);
+  if (ownGoogle && others.length) {
+    const away = (f: Fix<T>) => haversine(ownGoogle.pos.lat, ownGoogle.pos.lng, f.pos.lat, f.pos.lng);
+    const nearest = others.reduce((a, b) => (away(b) < away(a) ? b : a));
+    return away(nearest) <= TOGETHER_M || !ownGoogle.firm ? nearest : ownGoogle;
   }
-  return ownGoogle ?? otherPrecise ?? first(false, true);
+  return ownGoogle ?? others[0] ?? all(false, true, true)[0] ?? null;
 }
 
 /** Only timestamps that came from the camera (or were set by hand) are trustworthy enough to place a photo on a track. */
@@ -92,7 +100,11 @@ export async function geotagPhotos(job: GeotagPhotosJob): Promise<{ updated: num
   let updated = 0;
   for (const photo of photos) {
     const t = photo.takenAt!.getTime();
-    const chosen = choose(tracks, photo.uploaderId, (track) => (t < track.startTime.getTime() || t > track.endTime.getTime() ? null : positionAt(pointsOf(track), t)));
+    const chosen = choose(tracks, photo.uploaderId, (track) => {
+      if (t < track.startTime.getTime() || t > track.endTime.getTime()) return null;
+      const pts = pointsOf(track), pos = positionAt(pts, t);
+      return pos && { pos, firm: isFirmAt(pts, t) };
+    });
     if (chosen) {
       const { track, pos } = chosen;
       const same = photo.gpsSource === "TRACK" && photo.lat === pos.lat && photo.lng === pos.lng && (photo.altitude ?? null) === (pos.ele ?? null);

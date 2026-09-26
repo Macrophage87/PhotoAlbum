@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { simplifyLine } from "@/lib/tracks/simplify";
 import { columnarToPoints, decodePoints, encodePoints } from "@/lib/tracks/encode";
 import { splitByLocalDay } from "@/lib/tracks/split";
-import { positionAt } from "@/lib/tracks/interpolate";
+import { isFirmAt, positionAt } from "@/lib/tracks/interpolate";
 import { detectTrackKind } from "@/lib/tracks/detect";
 import { cleanPoints } from "@/lib/tracks/clean";
 import type { TrackPoint } from "@/lib/tracks/types";
@@ -124,5 +124,23 @@ describe("splitByLocalDay across a midnight", () => {
     ];
     const m = splitByLocalDay(pts, "America/New_York");
     expect([...m.values()].map((d) => d.length)).toEqual([1, 1]);
+  });
+});
+
+describe("filled points in the stored blob", () => {
+  it("round-trip, and older blobs without the column read as recorded", () => {
+    const pts: TrackPoint[] = [{ t: 0, lat: 44, lng: -68 }, { t: 60_000, lat: 44.001, lng: -68, filled: true }];
+    const { blob, startTime } = encodePoints(pts);
+    expect(columnarToPoints(decodePoints(blob), startTime).map((p) => !!p.filled)).toEqual([false, true]);
+    const old = encodePoints([{ t: 0, lat: 44, lng: -68 }, { t: 60_000, lat: 44.001, lng: -68 }]);
+    expect(decodePoints(old.blob).filled).toBeUndefined();
+    expect(columnarToPoints(decodePoints(old.blob), old.startTime).some((p) => p.filled)).toBe(false);
+  });
+  it("isFirmAt trusts only recorded fixes close either side", () => {
+    const pts: TrackPoint[] = [{ t: 0, lat: 0, lng: 0 }, { t: 240_000, lat: 0, lng: 0 }, { t: 1_800_000, lat: 0, lng: 0 }, { t: 2_000_000, lat: 0, lng: 0, filled: true }];
+    expect(isFirmAt(pts, 120_000)).toBe(true);
+    expect(isFirmAt(pts, 240_000)).toBe(true);
+    expect(isFirmAt(pts, 300_000)).toBe(false); // snapped across a 26-minute gap
+    expect(isFirmAt(pts, 1_900_000)).toBe(false); // next to a filled point
   });
 });
