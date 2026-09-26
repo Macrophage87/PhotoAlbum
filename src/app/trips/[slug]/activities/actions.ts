@@ -16,6 +16,7 @@ import { reassignPhotosForActivity } from "@/lib/activities/reassign";
 import { fieldErrors, participantsFromForm } from "@/lib/trips/validation";
 import type { ActivityType } from "@/generated/prisma/enums";
 import type { ActivityFormState } from "@/components/activities/ActivityForm";
+import { forgetTrackFiles } from "@/lib/tracks/files";
 
 /** An activity is part of the shape of a trip, so it is the trip's maker (and admins) who arrange them. */
 async function loadTrip(slug: string) {
@@ -77,11 +78,14 @@ export async function updateActivity(slug: string, id: string, _prev: ActivityFo
 
 export async function deleteActivity(slug: string, id: string, fd: FormData): Promise<void> {
   const trip = await loadTrip(slug);
-  const activity = await db.activity.findFirst({ where: { id, tripId: trip.id }, select: { id: true, trackId: true } });
+  const activity = await db.activity.findFirst({ where: { id, tripId: trip.id }, select: { id: true, trackId: true, track: { select: { originalFile: true } } } });
   if (!activity) return;
   const deleteTrack = fd.get("deleteTrack") === "on";
   await db.activity.delete({ where: { id } });
-  if (deleteTrack && activity.trackId) await db.track.delete({ where: { id: activity.trackId } }).catch(() => {});
+  if (deleteTrack && activity.trackId) {
+    await db.track.delete({ where: { id: activity.trackId } }).catch(() => {});
+    await forgetTrackFiles([activity.track?.originalFile]);
+  }
   revalidatePath(`/trips/${slug}`, "layout");
   redirect(`/trips/${slug}/activities`);
 }

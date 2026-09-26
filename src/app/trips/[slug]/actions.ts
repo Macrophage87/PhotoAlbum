@@ -14,6 +14,7 @@ import type { TripFormState } from "@/app/trips/new/actions";
 import { levelOf } from "@/lib/visibility/exposure";
 import { canEditContainer, editableMediaIds, NOT_YOUR_CONTAINER } from "@/lib/auth/ownership";
 import { writeContainerDescription } from "@/lib/annotation/container";
+import { forgetTrackFiles } from "@/lib/tracks/files";
 
 /** The trip, where this member may change it: whoever made it, and admins. */
 async function loadEditableTrip(slug: string) {
@@ -90,7 +91,10 @@ export async function deleteTrip(slug: string): Promise<void> {
   const trip = await loadEditableTrip(slug);
   const me = await requireUserOrThrow();
   if (me.role !== "ADMIN") throw new Error("Only an admin can delete a trip");
+  const files = await db.track.findMany({ where: { tripId: trip.id }, select: { originalFile: true } });
   await db.trip.delete({ where: { id: trip.id } });
+  // Its tracks went with it, so the files they were read from have nothing left to belong to.
+  await forgetTrackFiles(files.map((f) => f.originalFile));
   revalidatePath("/", "layout");
   redirect("/photos");
 }
