@@ -70,7 +70,7 @@ export default async function ReviewPage({ searchParams }: PageProps<"/review">)
         ) : (
           <SelectionProvider>
             <ReviewPanel allIds={allIds} annotation={gates.active ? { quietMinutes: env().ANNOTATION_QUIET_MINUTES, pending: photos.filter((p) => !p.annotatedAt && !optedOut(p)).length } : null} />
-            {editable && <YouTubeAddForm defaultDate={new Date().toISOString().slice(0, 10)} />}
+            {editable && <YouTubeAddForm />}
             {google && <GooglePickerButton status={google} configured next="/review" />}
             <PhotoGrid photos={photos.map((p) => toGridPhoto(p, p.reviewedAt ? null : "unreviewed", true))} />
             {(proposals.length > 0 || unnamedFaces > 0) && (

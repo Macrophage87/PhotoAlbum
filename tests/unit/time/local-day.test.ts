@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { localDayFromOffset, localDayInZone, offsetMinutesInZone, parseOffsetString, photoDay, wallTimeToInstant } from "@/lib/time/local-day";
+import { localDayFromOffset, localDayInZone, offsetMinutesInZone, parseOffsetString, localToday, photoDay, wallTimeToInstant } from "@/lib/time/local-day";
 import { formatDayRange } from "@/lib/time/format";
 
 describe("local day helpers", () => {
@@ -41,5 +41,19 @@ describe("the day a photograph is shown under", () => {
     expect(photoDay(at, null, "America/New_York")).toBe("2025-08-12");
     expect(photoDay(at, null)).toBe("2025-08-12");
     expect(photoDay(new Date("2025-08-12T02:00:00Z"), null, "America/New_York")).toBe("2025-08-11");
+  });
+});
+
+describe("today, for a form's default date (#127)", () => {
+  it("is the day on the local clock, not the UTC day", () => {
+    const prev = process.env.TZ;
+    process.env.TZ = "America/New_York";
+    try {
+      // 8 PM on Sep 26 in New York is already Sep 27 in UTC.
+      expect(localToday(new Date("2026-09-27T00:00:00Z"))).toBe("2026-09-26");
+    } finally {
+      if (prev === undefined) delete process.env.TZ;
+      else process.env.TZ = prev;
+    }
   });
 });

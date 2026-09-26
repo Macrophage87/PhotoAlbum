@@ -36,7 +36,7 @@ export function UploadPanel({ initialTrip, initialCollection, maxClipSeconds, an
         </div>
       </div>
       <Uploader key={`${trip?.id ?? "none"}-${activity?.id ?? "none"}-${collection?.id ?? "none"}`} tripId={trip?.id} activityId={activity?.id} collectionId={collection?.id} maxClipSeconds={maxClipSeconds} annotationActive={annotationActive} />
-      <YouTubeAddForm tripId={trip?.id} defaultDate={new Date().toISOString().slice(0, 10)} />
+      <YouTubeAddForm tripId={trip?.id} />
     </div>
   );
 }

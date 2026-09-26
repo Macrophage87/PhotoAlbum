@@ -16,6 +16,14 @@ export function localDayInZone(instant: Date, timezone: string): LocalDay {
   return `${z.getFullYear()}-${pad(z.getMonth() + 1)}-${pad(z.getDate())}`;
 }
 
+/**
+ * Today's date on the clock of whoever is running this: for a default typed into a form in the browser, where
+ * `toISOString().slice(0, 10)` would be the UTC day (tomorrow, on an American evening). Not for server rendering.
+ */
+export function localToday(now = new Date()): LocalDay {
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+}
+
 /** UTC offset (minutes east of UTC) that `timezone` has at `instant`. */
 export function offsetMinutesInZone(instant: Date, timezone: string): number {
   return -new TZDate(instant, timezone).getTimezoneOffset();
