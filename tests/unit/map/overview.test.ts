@@ -3,7 +3,7 @@ import { db } from "@/lib/db";
 import { buildMapPayload } from "@/lib/map/geojson";
 import { OVERVIEW_POINTS, overviewLines } from "@/lib/map/overview";
 import { persistTrack } from "@/lib/tracks/persist";
-import { thinLine } from "@/lib/tracks/simplify";
+import { townWithSpur } from "../helpers/lines";
 import type { Viewer } from "@/lib/auth/viewer";
 import { resetTestDb } from "../helpers/reset";
 
@@ -11,8 +11,8 @@ const member: Viewer = { kind: "user", user: { id: "u", email: "m@example.com", 
 
 describe("track lines on the map of everything", () => {
   let tripId: string, userId: string, old: string, short: string;
-  // A zigzag, so no simplification can reduce it to a straight line and every stored point matters.
-  const longLine: [number, number][] = Array.from({ length: 5000 }, (_, i) => [44 + i / 1e4 + 0.123456789, -68 - (i % 2) / 1e3]);
+  // A winding line, so no simplification can make it straight, stored with more points than the map wants.
+  const longLine: [number, number][] = Array.from({ length: 5000 }, (_, i) => [44 + i / 1e4 + 0.123456789, -68 + Math.sin(i / 80) / 100]);
   const shortLine: [number, number][] = [[44, -68], [44.1, -68.1], [44.2, -68.05]];
   const track = (simplified: [number, number][], overview?: [number, number][]) => db.track.create({ data: { tripId, uploaderId: userId, source: "GPX", name: "walk", startTime: new Date("2025-08-11T10:00:00Z"), endTime: new Date("2025-08-11T12:00:00Z"), pointCount: simplified.length, minLat: 44, maxLat: 45, minLng: -69, maxLng: -68, simplified, ...(overview ? { overview } : {}), pointsBlob: new Uint8Array([0]) } });
   beforeEach(async () => {
@@ -39,22 +39,30 @@ describe("track lines on the map of everything", () => {
     expect(overview[overview.length - 1]).toEqual(simplified[simplified.length - 1]);
   });
 
-  it("thins an older track's line when it has no short copy yet, and uses the stored one when it has", async () => {
-    const rows = await db.track.findMany({ select: { id: true, overview: true } });
-    const lines = await overviewLines(rows);
+  it("works out an older track's short line when the map first needs it, and keeps it for next time", async () => {
+    const lines = await overviewLines(await db.track.findMany({ select: { id: true, overview: true } }));
     const thin = lines.get(old)!;
-    expect(thin).toHaveLength(OVERVIEW_POINTS);
-    thinLine(longLine, OVERVIEW_POINTS).forEach(([lat, lng], i) => {
-      expect(thin[i][0]).toBeCloseTo(lat, 5);
-      expect(thin[i][1]).toBeCloseTo(lng, 5);
-    });
+    expect(thin.length).toBeLessThanOrEqual(OVERVIEW_POINTS);
+    expect(thin.length).toBeGreaterThan(10);
+    expect(thin[0][0]).toBeCloseTo(longLine[0][0], 5);
+    expect(thin[thin.length - 1][0]).toBeCloseTo(longLine[longLine.length - 1][0], 5);
     expect(lines.get(short)).toEqual(shortLine);
+    // Written back without the map waiting for it.
+    await expect.poll(async () => ((await db.track.findUniqueOrThrow({ where: { id: old } })).overview as unknown[] | null)?.length ?? 0).toBe(thin.length);
+  });
+
+  it("keeps the spur of a track that went into town and out along a straight road", async () => {
+    const { line, spur } = townWithSpur();
+    const id = (await track(line)).id;
+    const drawn = (await overviewLines([{ id, overview: null }])).get(id)!;
+    expect(drawn).toContainEqual(spur);
   });
 
   it("sends the short line across all trips and the whole line on the trip's own map", async () => {
     const lengthOf = (p: Awaited<ReturnType<typeof buildMapPayload>>, id: string) => p.tracks.features.find((f) => f.properties.trackId === id)!.geometry.coordinates.length;
     const everything = await buildMapPayload(member);
-    expect(lengthOf(everything, old)).toBe(OVERVIEW_POINTS);
+    expect(lengthOf(everything, old)).toBeLessThanOrEqual(OVERVIEW_POINTS);
+    expect(lengthOf(everything, old)).toBeGreaterThan(10);
     expect(lengthOf(everything, short)).toBe(3);
     // Still longitude first, as GeoJSON wants.
     expect(everything.tracks.features.find((f) => f.properties.trackId === short)!.geometry.coordinates[1]).toEqual([-68.1, 44.1]);

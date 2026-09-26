@@ -8,7 +8,7 @@ import { computeStats, mergeStats } from "./stats";
 import type { ParsedTrack } from "./types";
 import { guessTypeFromSpeed } from "./sport";
 import { reassignPhotosForActivity } from "@/lib/activities/reassign";
-import { OVERVIEW_POINTS } from "@/lib/map/overview";
+import { overviewOf } from "@/lib/map/overview";
 
 export type PersistOptions = {
   tripId: string;
@@ -30,9 +30,8 @@ export async function persistTrack(parsed: ParsedTrack, opts: PersistOptions): P
   const computed = computeStats(points, { skipElevation: isGoogle, cyclingCadence: (opts.activityType ?? parsed.sport) === "BIKE" });
   const stats = mergeStats(computed, parsed.session);
   const { line } = simplifyLine(points, isGoogle ? 15 : 5);
-  // The line again at a few hundred points, for the map of every trip, where the full one is far too much. Cut from
-  // the simplified line rather than every recorded point: the same shape, for a fraction of the work.
-  const { line: overview } = simplifyLine(line.map(([lat, lng]) => ({ lat, lng })), isGoogle ? 15 : 5, OVERVIEW_POINTS);
+  // The line again at a few hundred points, for the map of every trip, where the full one is far too much.
+  const overview = overviewOf(line);
   const { blob, startTime, endTime, flags } = encodePoints(points);
   const b = boundsOf(points)!;
 
