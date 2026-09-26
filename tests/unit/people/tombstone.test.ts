@@ -21,6 +21,7 @@ import { withoutUnpermittedNames as withoutContainerNames } from "@/lib/annotati
 import { forgetKeyState, forgottenNames, forgottenScope, loadTombstone } from "@/lib/people/tombstone";
 import { completePendingForgets } from "@/lib/people/forget-person";
 import { withForgetLock } from "@/lib/people/names-changed";
+import { nameMatcher } from "@/lib/people/scrub";
 import { Client } from "pg";
 
 const record = (over: Partial<StoredAnnotation> & Record<string, unknown> = {}) =>
@@ -245,7 +246,9 @@ describe("names that are also words", () => {
     // On her photographs she is the likelier reading after "in" or "to".
     expect(ts.scrub("By the pool with Florence", await sc(on))).toBe("By the pool with a family member");
     // Where somebody is somewhere, it is the place: "in Florence." at the end of a sentence.
-    expect(ts.scrub("Florence and Ben in Florence.", await sc(on))).toBe("A family member and Ben in Florence.");
+    expect(ts.scrub("Florence and Ben stayed in Florence.", await sc(on))).toBe("A family member and Ben stayed in Florence.");
+    expect(ts.scrub("We stayed in Florence, then Florence slept.", await sc(on))).toBe("We stayed in Florence, then a family member slept.");
+    for (const [t, want] of [["We flew to Florence.", "We flew to Florence."], ["We visited Florence, Italy", "We visited Florence, Italy"], ["Ben leaned in Florence.", "Ben leaned in a family member."], ["Ben ran back to Florence for a hug.", "Ben ran back to a family member for a hug."], ["Ben visited Florence in hospital.", "Ben visited a family member in hospital."]]) expect(ts.scrub(t, await sc(on))).toBe(want);
     // Elsewhere, not at all.
     const elsewhere = await photo();
     expect(ts.scrub("Florence in spring", await sc(elsewhere))).toBe("Florence in spring");
@@ -423,7 +426,8 @@ describe("names that are also words", () => {
     expect(await caption(mate, "Sam blowing out candles")).toBe("Sam blowing out candles");
     expect(await caption(zoo, "Sam at the zoo")).toBe("Sam at the zoo");
     // "Uncle Sam" is somebody else.
-    expect(await caption(tagged, "Uncle Sam hat on Ben")).toBe("Uncle Sam hat on Ben");
+    // On his own photograph "Uncle Sam" is him.
+    expect(await caption(tagged, "Uncle Sam hugged the kids.")).toBe("A family member hugged the kids.");
   });
 
   it("leaves a first name to somebody the album knows who has it only where they are tagged", async () => {
@@ -505,14 +509,26 @@ describe("names that are also words", () => {
       [kent, "Grandpa Sam at the lake", "A family member at the lake"],
       [kent, "Ben and Grandpa Sam blew out candles", "Ben and a family member blew out candles"],
       [kelly, "Aunt Grace smiled", "A family member smiled"],
-      [kent, "Uncle Sam hat on Ben", "Uncle Sam hat on Ben"],
+      [kent, "Uncle Sam hat on Ben", "A family member hat on Ben"],
       [ruth, "Aunt Ruth waves", "Aunt Ruth waves"],
       [ruth, "Ruth waves", "A family member waves"],
       [will, "Will you look at that!", "Will you look at that!"],
       [jack, "Jack in the box", "Jack in the box"],
     ];
     for (const [on, text, want] of cases) expect(ts.scrub(text, await sc(on))).toBe(want);
-    // Elsewhere, "Grandpa Sam" is somebody else's.
+    // A hyphenated kinship word goes whole, as in the forget-time scrub.
+    const ada = await forget("Ada Byron");
+    const ts2 = await loadTombstone();
+    expect(ts2.scrub("Great-Aunt Ada at the lake", await sc(ada))).toBe("A family member at the lake");
+    expect(nameMatcher(["Ada Byron"]).scrub("Great-Aunt Ada at the lake", { tagged: true })).toBe("A family member at the lake");
+    const greatAunt = await forget("Great-Aunt Rosa");
+    const ts3 = await loadTombstone();
+    expect(ts3.scrub("Aunt Rosa waves", await sc(greatAunt))).toBe("Aunt Rosa waves");
+    expect(ts3.scrub("Step-Mom Rosa waves", await sc(greatAunt))).toBe("Step-Mom Rosa waves");
+    expect(ts3.scrub("Great-Aunt Rosa waves", await sc(greatAunt))).toBe("A family member waves");
+    expect(ts.scrub("Nana Ruth bakes", await sc(ruth))).toBe("A family member bakes");
+    // Elsewhere, "Grandpa Sam" is somebody else's, and "Uncle Sam" the saying.
+    expect(ts.scrub("Uncle Sam hat on Ben", await sc(await photo()))).toBe("Uncle Sam hat on Ben");
     expect(ts.scrub("Grandpa Sam at the lake", await sc(await photo()))).toBe("Grandpa Sam at the lake");
   });
 
@@ -550,6 +566,29 @@ describe("names that are also words", () => {
     const row = (await db.forgottenName.findMany()).find((r) => r.taggedPhotoIds.includes(own))!;
     for (const id of place) expect(row.photoIds).not.toContain(id);
     expect(row.photoIds).toContain(pool);
+  });
+
+  it("keeps kinship words hashed, since some are names", async () => {
+    for (const name of ["Tia Johnson", "Nan Smith", "Oma Lee", "Nana Ama Mensah", "Grand Duke Ivan"]) await forget(name);
+    const words = new Set(["tia", "nan", "oma", "nana", "grand", "duke", "grandma", "aunt", "grand duke", "nana ama"]);
+    const rows = await db.forgottenName.findMany();
+    expect(rows.some((r) => r.kinship.length > 0)).toBe(true);
+    for (const r of rows) for (const k of r.kinship) expect(words.has(k)).toBe(false);
+    expect(JSON.stringify(rows.map((r) => r.kinship))).not.toMatch(/tia|nan|oma|grand|duke/i);
+  });
+
+  it("reads 'in the sun' as the place only where the phrase ends", async () => {
+    const florence = await db.person.create({ data: { name: "Florence", createdById: admin } });
+    const own = await photo();
+    await db.face.create({ data: { photoId: own, personId: florence.id, status: "CONFIRMED", box: [0, 0, 1, 1], confidence: 0 } });
+    const hat = await photo();
+    await db.photo.update({ where: { id: hat }, data: { context: "Florence in the sun hat" } });
+    const sun = await photo();
+    await db.photo.update({ where: { id: sun }, data: { context: "Florence in the sun." } });
+    await optOutPerson(florence.id, new FormData());
+    const row = (await db.forgottenName.findMany()).find((r) => r.taggedPhotoIds.includes(own))!;
+    expect(row.photoIds).toContain(hat);
+    expect(row.photoIds).not.toContain(sun);
   });
 
   it("looks nothing up when nothing forgotten is kept by place", async () => {

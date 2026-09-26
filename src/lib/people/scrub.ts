@@ -150,7 +150,11 @@ function isUpperWord(w: string) {
  * A title in title case ("Grace Swimming At The Lake"): capitals there say nothing about names. Judged on the words
  * that are not the person's own name, which are capitalized anyway.
  */
+/** Sayings in capitals whatever the sentence around them ("Singing Amazing Grace"), left out of judging title case. */
+const IDIOM_WORDS = /(?<![\p{L}\p{M}])(?:Amazing[ \t]+Grace|Uncle[ \t]+Sam|Book[ \t]+of[ \t]+Ruth|Jack[ \t]+in[ \t]+the[ \t]+Box)(?![\p{L}\p{M}])/giu;
+
 function titleCase(text: string, own: Set<string>): boolean {
+  text = text.replace(IDIOM_WORDS, " ");
   const words = (text.match(/[\p{L}][\p{L}\p{M}'’-]*/gu) ?? []).filter((w) => letters(w) >= 2 && !own.has(bare(w)));
   if (words.length < 2) return false;
   return words.filter((w) => /^\p{Lu}/u.test(w)).length / words.length >= 0.75;
@@ -175,7 +179,7 @@ function sentenceAt(text: string, at: number): [number, number] {
 function titleCaseAt(text: string, at: number, own: Set<string>): boolean {
   const [a, b] = sentenceAt(text, at);
   // Two capitalized words are no title of their own ("The Union Jack."): a sentence that short is judged with the text.
-  const words = (text.slice(a, b).match(/[\p{L}][\p{L}\p{M}'’-]*/gu) ?? []).filter((w) => letters(w) >= 2 && !own.has(bare(w)));
+  const words = (text.slice(a, b).replace(IDIOM_WORDS, " ").match(/[\p{L}][\p{L}\p{M}'’-]*/gu) ?? []).filter((w) => letters(w) >= 2 && !own.has(bare(w)));
   return words.length >= 3 ? titleCase(text.slice(a, b), own) : words.length === 0 ? false : titleCase(text, own) && titleCase(text.slice(a, b), own);
 }
 
@@ -213,7 +217,13 @@ const PLACE_OPENING = /^(?:[ \t]*$|[ \t]*[\n,;:.!?)\]–—-]|[ \t]+(?:and|in|of
 const PLACE_OPENING_CLEAR = /^[ \t]+(?:trip|trips|holiday|holidays|vacation|visit|getaway|weekend|skyline|\d)(?![\p{L}\p{M}])/iu;
 
 /** Going somewhere: "flew to", "drove from", "visiting", "a trip to", "the road to". */
-const TRAVEL_BEFORE = /(?<![\p{L}\p{M}])(?:(?:flew|fly|flying|flies|drove|drive|driving|went|go|going|moved|move|moving|travell?ed|travell?ing|travel|headed|heading|returned|trip|trips|road|train|flight|ferry|bus|back|way)[ \t]+(?:to|from|into)|visit|visits|visited|visiting)[ \t]+$/iu;
+const TRANSPORT = "flew|fly|flying|flies|drove|drive|driving|train|trains|flight|flights|ferry|bus|road[ \\t]+trip|sailed|sail|sailing|cruise|cruised|cruising";
+/** Going there by some means: "flew to", "drove from", "the train to", "a road trip to". */
+const TRAVEL_BEFORE = new RegExp(`(?<![\\p{L}\\p{M}])(?:${TRANSPORT})[ \\t]+(?:to|from|into)[ \\t]+$`, "iu");
+/** Visiting a place, which counts only with a clear place after it ("visited Florence, Italy", "visiting Florence 2019"). */
+const VISIT_BEFORE = /(?<![\p{L}\p{M}])(?:visit|visits|visited|visiting)[ \t]+$/iu;
+/** Staying or arriving somewhere, earlier in the sentence than "in <place>": "we stayed a week in Florence." */
+const STAY_BEFORE = new RegExp(`(?<![\\p{L}\\p{M}])(?:stayed|staying|stay|stays|arrived|arriving|arrive|lived|living|live|holiday|holidays|vacation|honeymoon|${TRANSPORT})(?![\\p{L}\\p{M}])[^.!?\\n]*(?<![\\p{L}\\p{M}])in[ \\t]+$`, "iu");
 
 /** "Florence, Italy", "Paris, TX": a place, then the larger place it is in. */
 const PLACE_COMMA = /^,[ \t]*(\p{Lu}[\p{L}\p{M}'’.-]*)/u;
@@ -260,7 +270,7 @@ export function notThePerson(text: string, start: number, end: number, n: Neighb
   const before = text.slice(0, start);
   const after = text.slice(end);
   const match = text.slice(start, end);
-  if (isIdiom(before, match, after)) return true;
+  if (isIdiom(before, match, after, Boolean(n.ownPhotos))) return true;
   const { prev, next, possessive } = neighbours(before, after);
   const p = prev ? bare(prev.replace(/\.$/u, "")) : null;
   if (n.otherWords && ((p && n.otherWords.has(p)) || (next && n.otherWords.has(bare(next))))) return true;
@@ -282,11 +292,13 @@ export function notThePerson(text: string, start: number, end: number, n: Neighb
     const comma = Boolean(region && !n.own?.has(bare(region)) && !n.isNameWord?.(region));
     if (comma) return true;
     if ((place === "wide" || place === "near") && afterPlaceWord) return true;
-    // On their own photographs, a first name taken from a full one is the place only where somebody travels: "We
-    // flew to Charlotte", "visiting Charlotte", "in Charlotte." ("Ben waved to Charlotte" is her).
+    // On their own photographs their name is the place only where somebody plainly goes or stays there: "We flew to
+    // Charlotte", "visiting Charlotte 2019", "we stayed in Charlotte." ("Ben ran back to Madison", "Ben leaned in
+    // Madison" and "Ben visited Madison in hospital" are her).
     if (place === "travel" && !possessive) {
       if (TRAVEL_BEFORE.test(before)) return true;
-      if (p === "in" && (/^[ \t]*(?:$|[\n.!?;])/u.test(after) || PLACE_OPENING_CLEAR.test(after) || /^,[ \t]*\p{Lu}/u.test(after))) return true;
+      if (VISIT_BEFORE.test(before) && PLACE_OPENING_CLEAR.test(after)) return true;
+      if (p === "in" && (PLACE_OPENING_CLEAR.test(after) || (/^[ \t]*(?:$|[\n.!?;,])/u.test(after) && STAY_BEFORE.test(before)))) return true;
     }
     // "Atlanta, Georgia": the region after a city the album knows.
     const city = before.match(/(\p{Lu}[\p{L}\p{M}'’.-]*),[ \t]*$/u)?.[1] ?? null;
@@ -326,14 +338,35 @@ export function isPlaceOrDateWord(word: string): boolean {
  * Sayings and words that happen to be a first name: "Uncle Sam", "the Book of Ruth", "Amazing Grace", "Jack in the
  * box", and "Will" asking something ("Will you look at that!").
  */
-function isIdiom(before: string, match: string, after: string): boolean {
+function isIdiom(before: string, match: string, after: string, ownPhotos = false): boolean {
   const m = bare(match);
-  if (m === "sam" && /(?<![\p{L}])uncle[ \t]+$/iu.test(before)) return true;
+  // A kinship word and the name on their own photograph is them ("Uncle Sam hugged the kids").
+  if (!ownPhotos && m === "sam" && /(?<![\p{L}])uncle[ \t]+$/iu.test(before)) return true;
   if (m === "ruth" && /(?<![\p{L}])book[ \t]+of[ \t]+$/iu.test(before)) return true;
   if (m === "grace" && /(?<![\p{L}])amazing[ \t]+$/iu.test(before)) return true;
   if (m === "jack" && /^[ \t]+in[ \t]+the[ \t]+box(?![\p{L}])/iu.test(after)) return true;
   if (m === "will" && /^[ \t]+(?:you|we|they|it|he|she|i|this|that|there)(?![\p{L}\p{M}'’])/iu.test(after)) return true;
   return false;
+}
+
+/** Kinship words that mean the same person: "Nana Ruth" is Grandma Ruth. */
+const KIN_GROUPS: string[][] = [
+  ["grandma", "nana", "nanna", "nan", "granny", "gran", "grandmother", "oma", "abuela", "nonna", "bubbe"],
+  ["grandpa", "granddad", "grandad", "gramps", "grandfather", "opa", "abuelo", "nonno", "zayde", "pop", "pops"],
+  ["mom", "mum", "mother", "mama", "ma", "mommy", "mummy"],
+  ["dad", "father", "papa", "pa", "daddy"],
+  ["aunt", "auntie", "aunty", "tia", "tía"],
+  ["uncle", "tio", "tío"],
+];
+const KIN_CANON = new Map(KIN_GROUPS.flatMap((g) => g.map((w) => [unaccented(w), g[0]] as const)));
+
+/** A kinship word (or hyphenated run, "Great-Aunt") as compared: each word by its group ("nana" is "grandma"). */
+export function kinshipKey(run: string): string {
+  return bare(run)
+    .split(/[\s\-‐]+/u)
+    .filter(Boolean)
+    .map((w) => KIN_CANON.get(w) ?? w)
+    .join(" ");
 }
 
 /** Marks a stand-in whose kinship word goes with it (see nameMatcher). */
@@ -540,7 +573,7 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
       let k = 0;
       while (k < tokens.length - 1 && isKin(tokens[k])) k++;
       const core = tokens.slice(k);
-      const kinship = tokens.slice(0, k).map(bare);
+      const kinship = tokens.slice(0, k).map(kinshipKey);
       for (const w of kinship) ownKin.add(w);
       // "June", "Grace", "Will": remembered, they would take every month and every question with them.
       if (ni === 0 && tokens.length === 1 && letters(s) >= 3 && !isKin(s) && !NOT_SAFE.has(bare(s)) && !MONTHS.has(bare(s))) oneWord.push(s);
@@ -647,7 +680,7 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
         // family member at the lake" — unless their name carries another one ("Aunt Ruth" is not Grandma Ruth).
         const kin = before.match(/(?<![\p{L}\p{M}])(\p{L}[\p{L}\p{M}'’.-]*)[ \t]+$/u);
         if (kin && isKin(kin[1].replace(/\.$/u, ""))) {
-          if (ownKin.size && !ownKin.has(bare(kin[1]))) return m;
+          if (ownKin.size && !ownKin.has(kinshipKey(kin[1]))) return m;
           if (where.tagged && where.onPhoto !== false) {
             const rest = before.slice(0, before.length - kin[0].length);
             return `${KIN_MARK}${standInFor(m, rest, whole.slice(offset + m.length), title)}`;

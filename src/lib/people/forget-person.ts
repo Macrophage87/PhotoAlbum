@@ -113,7 +113,7 @@ export async function completePendingForgets(): Promise<number> {
 const TRIP_WORD_AFTER = /^[ \t]+(?:trip|trips|holiday|holidays|vacation|visit|getaway|weekend|skyline|day|days|\d)(?![\p{L}\p{M}])/iu;
 
 /** The time of day, the weather or the light after a place: "Florence at night", "Florence in the rain". */
-const SCENE_AFTER = /^[ \t]+(?:(?:at|by)[ \t]+(?:night|dusk|dawn|sunset|sunrise|twilight|midnight|daybreak)|in[ \t]+the[ \t]+(?:rain|snow|fog|mist|drizzle|sun|sunshine)|in[ \t]+(?:rain|snow|fog|mist))(?![\p{L}\p{M}])/iu;
+const SCENE_AFTER = /^[ \t]+(?:(?:at|by)[ \t]+(?:night|dusk|dawn|sunset|sunrise|twilight|midnight|daybreak)|in[ \t]+(?:the[ \t]+)?(?:rain|snow|fog|mist|drizzle|sun|sunshine)(?=[ \t]*(?:$|[\n.,;:!?)]|(?:and|with)(?![\p{L}\p{M}]))))(?![\p{L}\p{M}])/iu;
 /** Another place joined to it: "Florence and Siena", "Florence vs Rome", "Pisa to Florence". */
 const JOINED_AFTER = /^[ \t]+(?:and|&|vs\.?|versus|or|to)[ \t]+(\p{Lu}[\p{L}\p{M}'’.-]*)/u;
 const JOINED_BEFORE = /(\p{Lu}[\p{L}\p{M}'’.-]*)[ \t]+(?:and|&|vs\.?|versus|or|to)[ \t]+$/u;

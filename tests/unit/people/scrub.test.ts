@@ -217,7 +217,11 @@ describe("words around a first name", () => {
 
   it("take a kinship word with the name on their own photograph, as the forgotten names do", () => {
     expect(nameMatcher(["Sam Kent"]).scrub("Grandpa Sam at the lake", { tagged: true })).toBe("A family member at the lake");
-    expect(nameMatcher(["Sam Kent"]).scrub("Uncle Sam hat on Ben", { tagged: true })).toBe("Uncle Sam hat on Ben");
+    // On his own photograph "Uncle Sam" is him; elsewhere the saying.
+    expect(nameMatcher(["Sam Kent"]).scrub("Uncle Sam hugged the kids.", { tagged: true })).toBe("A family member hugged the kids.");
+    expect(nameMatcher(["Sam Kent"]).scrub("Uncle Sam hat on Ben")).toBe("Uncle Sam hat on Ben");
+    expect(nameMatcher(["Grandma Ruth"]).scrub("Nana Ruth bakes", { tagged: true })).toBe("A family member bakes");
+    expect(nameMatcher(["Grace Kelly"]).scrub("Singing Amazing Grace with Grace Kelly")).toBe("Singing Amazing Grace with a family member");
     expect(nameMatcher(["Grandma Ruth"]).scrub("Aunt Ruth waves", { tagged: true })).toBe("Aunt Ruth waves");
     expect(nameMatcher(["Will Turner"]).scrub("Will you look at that!", { tagged: true })).toBe("Will you look at that!");
     expect(nameMatcher(["Jack Brown"]).scrub("Jack in the box", { tagged: true })).toBe("Jack in the box");

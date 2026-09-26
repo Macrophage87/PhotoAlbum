@@ -3,7 +3,7 @@ import { env } from "@/lib/env";
 import { db } from "@/lib/db";
 import { Prisma } from "@/generated/prisma/client";
 import type { StoredAnnotation } from "@/lib/annotation/schema";
-import { inTitleCase, isEverydayWord, isKinWord, isPlaceOrDateWord, normalizeName, notThePerson, replaceSpans, type Neighbourhood } from "./scrub";
+import { inTitleCase, isEverydayWord, isKinWord, kinshipKey, isPlaceOrDateWord, normalizeName, notThePerson, replaceSpans, type Neighbourhood } from "./scrub";
 
 /**
  * What the album remembers of somebody it has forgotten: keyed hashes of their names, never the names.
@@ -127,7 +127,7 @@ export async function rememberForgotten(forms: { form: string; capitalizedOnly: 
     const h = hash(w.key, n);
     const oneWord = (!CJK.test(n) && !n.includes(" ")) || Boolean(f.derived);
     // A spelling stored both ways is matched the stricter way.
-    rows.set(h, { hash: h, keyVersion: w.version, capitalizedOnly: (rows.get(h)?.capitalizedOnly ?? true) && f.capitalizedOnly, derived: (rows.get(h)?.derived ?? true) && Boolean(f.derived), kinship: [...new Set([...(rows.get(h)?.kinship ?? []), ...(f.kinship ?? []).map(normalizeName)])], photoIds: oneWord ? photoIds : [], taggedPhotoIds: oneWord ? taggedPhotoIds : [], containerIds: oneWord ? containerIds : [] });
+    rows.set(h, { hash: h, keyVersion: w.version, capitalizedOnly: (rows.get(h)?.capitalizedOnly ?? true) && f.capitalizedOnly, derived: (rows.get(h)?.derived ?? true) && Boolean(f.derived), kinship: [...new Set([...(rows.get(h)?.kinship ?? []), ...(f.kinship ?? []).map((k) => hash(w.key, `kin:${kinshipKey(k)}`))])], photoIds: oneWord ? photoIds : [], taggedPhotoIds: oneWord ? taggedPhotoIds : [], containerIds: oneWord ? containerIds : [] });
   }
   if (!rows.size) return;
   // From the first name hashed under FORGET_KEY, running without that very key is noticed (see forgetKeyState).
@@ -292,6 +292,7 @@ export async function loadTombstone(): Promise<Tombstone> {
     return undefined;
   };
   const capital = (raw: string) => /^\p{Lu}/u.test(raw);
+  const keyOf = (rowKey: string) => keys.find((k) => rowKey.startsWith(`${k.version}:`))!.key;
   const isNameWord = (w: string) => {
     const n = normalizeName(w);
     return currentForms.has(n) || lookup(n) !== undefined;
@@ -329,11 +330,15 @@ export async function loadTombstone(): Promise<Tombstone> {
           // A kinship word before it: on their own photograph it is them, and goes with the name ("Grandpa Sam at the
           // lake" is "A family member at the lake") unless their name carries another ("Aunt Ruth" is not Grandma
           // Ruth); elsewhere it is somebody else's ("Uncle Sam hat"). Their own "Grandma Ruth" is matched whole.
-          const kin = i > 0 && isKinWord(tokens[i - 1].raw) && /^[\s]+$/u.test(text.slice(tokens[i - 1].end, run[0].start)) ? tokens[i - 1] : null;
-          if (kin) {
-            const other = found.kinship.length > 0 && !found.kinship.includes(kin.norm);
+          let k = i > 0 && isKinWord(tokens[i - 1].raw) && /^[\s]+$/u.test(text.slice(tokens[i - 1].end, run[0].start)) ? i - 1 : -1;
+          // All of a hyphenated one: "Great-Aunt", "Step-Mom".
+          while (k > 0 && isKinWord(tokens[k - 1].raw) && /^[-‐]$/u.test(text.slice(tokens[k - 1].end, tokens[k].start))) k--;
+          if (k >= 0) {
+            // Kept hashed like the names ("Tia", "Nan" and "Oma" are names too), under the row's own key.
+            const kinRun = hash(keyOf(found.key), `kin:${kinshipKey(tokens.slice(k, i).map((t) => t.raw).join(" "))}`);
+            const other = found.kinship.length > 0 && !found.kinship.includes(kinRun);
             if (other) continue;
-            if (scope.own.has(found.key)) start = kin.start;
+            if (scope.own.has(found.key)) start = tokens[k].start;
             else if (found.derived) continue;
           }
         } else if (found.capOnly && !guarded(text, run, true)) continue;
