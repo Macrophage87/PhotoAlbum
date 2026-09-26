@@ -11,16 +11,19 @@ vi.hoisted(() => { /* env is read once, so it is set from the module-level const
 process.env.IMPORT_INBOX_DIR = inbox;
 process.env.PHOTO_STORAGE_ROOT = photoRoot;
 const enqueued = vi.hoisted(() => [] as { queue: string; data: unknown }[]);
-vi.mock("@/lib/jobs/boss", () => ({ enqueue: async (queue: string, data: unknown) => { enqueued.push({ queue, data }); } }));
+/** A queue whose next enqueue fails, as pg-boss does when its database connection drops. */
+const refuse = vi.hoisted(() => ({ queue: null as string | null }));
+vi.mock("@/lib/jobs/boss", () => ({ enqueue: async (queue: string, data: unknown) => { if (refuse.queue === queue) { refuse.queue = null; throw new Error("queue unavailable"); } enqueued.push({ queue, data }); } }));
 
 import { closeDeadImports, importTakeoutArchive } from "@/lib/takeout/import";
-import { copyFileSync } from "node:fs";
+import { copyFileSync, readdirSync } from "node:fs";
 
 describe("importing a Takeout archive", () => {
   let userId: string;
   beforeEach(async () => {
     await resetTestDb();
     enqueued.length = 0;
+    refuse.queue = null;
     userId = (await db.user.create({ data: { email: "t@example.com", role: "ADMIN" } })).id;
     copyFileSync(path.join(process.cwd(), "tests/fixtures/takeout.zip"), path.join(inbox, "takeout-001.zip"));
   });
@@ -98,6 +101,54 @@ describe("importing a Takeout archive", () => {
     const r = await run();
     expect(r.collectionsCreated).toBe(0);
     expect(await db.collectionItem.count({ where: { collectionId: mine.id } })).toBe(3);
+  });
+  it("leaves no half-imported row behind a failure, so importing again brings the photo in", async () => {
+    // The clip is the one whose processing cannot be queued.
+    refuse.queue = "transcode-video";
+    const first = await run();
+    expect({ imported: first.imported, failed: first.failed }).toEqual({ imported: 3, failed: 1 });
+    // Nothing that looks imported, no file with no row, and no row still waiting for a file.
+    expect(await db.photo.count()).toBe(3);
+    expect(await db.photo.count({ where: { originalPath: "pending" } })).toBe(0);
+    const stored = readdirSync(path.join(photoRoot, "photos"));
+    expect((await db.photo.findMany({ select: { id: true } })).every((p) => stored.includes(p.id))).toBe(true);
+    const again = await run();
+    expect({ imported: again.imported, failed: again.failed }).toEqual({ imported: 1, failed: 0 });
+    expect(await db.photo.count()).toBe(4);
+  });
+  it("takes over a row an interrupted run left without its file, rather than calling it a duplicate", async () => {
+    // As a worker restart between making the row and storing its bytes leaves it.
+    await db.photo.create({ data: { uploaderId: userId, sourceKind: "TAKEOUT", sourceId: "AF1QipMockOtterCliff", status: "PENDING", originalName: "photo-with-gps.jpg", mimeType: "image/jpeg", storageKey: "pending", originalPath: "pending", sizeBytes: 0 } });
+    const r = await run();
+    expect(r.imported).toBe(4);
+    const rows = await db.photo.findMany({ where: { originalName: "photo-with-gps.jpg" } });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].originalPath).not.toBe("pending");
+  });
+  it("does not count a photo in the trash as already in the album", async () => {
+    await run();
+    await db.photo.updateMany({ where: { originalName: "photo-with-gps.jpg" }, data: { trashedAt: new Date(), trashReason: "OTHER" } });
+    const again = await run();
+    expect(again.imported).toBe(1);
+    expect(await db.photo.count({ where: { originalName: "photo-with-gps.jpg", trashedAt: null } })).toBe(1);
+  });
+  it("finds a photo brought in through the Picker by its name and capture time, and repairs it instead of importing it twice", async () => {
+    // The Picker copy: other bytes, the Picker's own id, no position, and a date read from EXIF in another zone.
+    const picked = await db.photo.create({ data: { uploaderId: userId, sourceKind: "GOOGLE_PICKER", sourceId: "picker-id", status: "READY", originalName: "photo-with-gps.jpg", mimeType: "image/jpeg", storageKey: "photos/p", originalPath: "photos/p/original.jpg", sizeBytes: 5, contentHash: "0".repeat(64), takenAt: new Date("2025-08-12T17:30:00.000Z"), takenAtSource: "EXIF_TZLOOKUP" } });
+    // Same name, but a different moment: a different photograph.
+    await db.photo.create({ data: { uploaderId: userId, sourceKind: "GOOGLE_PICKER", sourceId: "other", status: "READY", originalName: "photo-no-gps.jpg", mimeType: "image/jpeg", storageKey: "photos/q", originalPath: "photos/q/original.jpg", sizeBytes: 5, takenAt: new Date("2025-08-12T17:31:07.000Z"), takenAtSource: "EXIF_TZLOOKUP" } });
+    const r = await run();
+    expect(r.imported).toBe(3);
+    expect(await db.photo.count({ where: { originalName: "photo-with-gps.jpg" } })).toBe(1);
+    expect(await db.photo.findUniqueOrThrow({ where: { id: picked.id } })).toMatchObject({ lat: 44.3186, lng: -68.1917, gpsSource: "SIDECAR" });
+    expect(await db.photo.count({ where: { originalName: "photo-no-gps.jpg" } })).toBe(2);
+  });
+  it("does not file an album into another member's private collection of the same name", async () => {
+    const other = await db.user.create({ data: { email: "mom@example.com", role: "MEMBER" } });
+    const hers = await db.collection.create({ data: { slug: "lake-house", title: "Lake House", themeKey: "default", visibility: "PRIVATE", createdById: other.id } });
+    const r = await run();
+    expect(r.collectionsCreated).toBe(1);
+    expect(await db.collectionItem.count({ where: { collectionId: hers.id } })).toBe(0);
   });
   it("closes a run whose worker stopped sending heartbeats", async () => {
     const old = new Date(Date.now() - 20 * 60_000);
