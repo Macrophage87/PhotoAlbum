@@ -76,7 +76,7 @@ export async function transcodeVideo(job: TranscodeVideoJob, signal?: AbortSigna
       let trip = job.tripId ? await db.trip.findUnique({ where: { id: job.tripId } }) : photo.tripId ? await db.trip.findUnique({ where: { id: photo.tripId } }) : null;
       // On none of the uploader's trips' days (a ride on the last evening that runs past midnight): the trip out on an
       // activity or a track at that moment is chosen once the row is locked, from what is there then.
-      let dayless: { id: string; timezone: string }[] | null = null;
+      let dayless: { id: string; startDate: Date; endDate: Date; timezone: string }[] | null = null;
       if (!trip) {
         const candidates = await db.trip.findMany({ where: whoWasThere(photo.uploaderId), select: { id: true, startDate: true, endDate: true, timezone: true } });
         const matches = candidates.filter((c) => pickTripByDay([c], localDayFromOffset(instant, offsetMinutesInZone(instant, c.timezone))));
@@ -102,7 +102,7 @@ export async function transcodeVideo(job: TranscodeVideoJob, signal?: AbortSigna
         // On no trip's days: the single trip with an activity or a track running at the instant, as the trip's
         // activities and tracks stand now, whose zone then gives the clip's offset (a kept date keeps its own).
         if (decides && !tripId && dayless) {
-          const running = await pickTripByCoverage(dayless, now.uploaderId, () => (keepDate ? now.takenAt : instant), tx);
+          const running = await pickTripByCoverage(dayless, now.uploaderId, () => (keepDate ? { takenAt: now.takenAt, source: now.takenAtSource } : { takenAt: instant, source: takenAtSource }), tx);
           if (running) {
             tripId = running.id;
             zoned = offsetMinutesInZone(instant, running.timezone);

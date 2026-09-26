@@ -197,7 +197,7 @@ export async function processPhoto(job: ProcessPhotoJob, signal?: AbortSignal): 
       // activities and tracks stand now. Its zone then reads a clock that has none of its own; a kept date stays.
       if (decides && !tripId && dayless) {
         const d = dayless;
-        const running = await pickTripByCoverage(d.candidates, now.uploaderId, (c) => (keepDate ? now.takenAt : (d.inZone(c.timezone)?.takenAt ?? null)), tx);
+        const running = await pickTripByCoverage(d.candidates, now.uploaderId, (c) => (keepDate ? { takenAt: now.takenAt, source: now.takenAtSource } : d.inZone(c.timezone)), tx);
         const inZone = running && !keepDate ? d.inZone(running.timezone) : null;
         if (running) tripId = running.id;
         if (inZone) {

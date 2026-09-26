@@ -5,6 +5,7 @@ import type { TrackPoint } from "@/lib/tracks/types";
 import type { GeotagPhotosJob } from "../queues";
 import type { TakenAtSource } from "@/generated/prisma/enums";
 import { NOT_TRASHED } from "@/lib/photos/trash";
+import { TRUSTED_TIME_SOURCES } from "@/lib/photos/date-from-neighbours";
 import { haversine } from "@/lib/geo/haversine";
 
 /** A recorded position of the uploader's own farther than this from another member's activity track: not together. */
@@ -127,9 +128,6 @@ function firstAtOrAfter(points: TrackPoint[], t: number): number {
   }
   return lo;
 }
-
-/** Only timestamps that came from the camera (or were set by hand) are trustworthy enough to place a photo on a track. */
-const TRUSTED_TIME_SOURCES: TakenAtSource[] = ["EXIF_OFFSET", "EXIF_TZLOOKUP", "TRIP_TZ", "MANUAL", "SIDECAR"];
 
 /**
  * Give GPS-less photos a position by interpolating along any track that covers the moment they were taken.

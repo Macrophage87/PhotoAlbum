@@ -128,6 +128,31 @@ describe("a photograph from a ride that runs past a trip's last midnight", () =>
     expect(await upload("2025:08:17 00:45:00")).toMatchObject({ tripId: null, activityId: null });
   });
 
+  it("is not pulled onto a trip whose dates are nowhere near it by a track filed there by mistake", async () => {
+    // A trip of 1–5 August, with a ride running at 00:40 on the 17th: a GPX imported into the wrong trip.
+    const early = await db.trip.create({ data: { slug: "early", title: "Early", startDate: new Date("2025-08-01"), endDate: new Date("2025-08-05"), timezone: "America/New_York", createdById: userId } });
+    await ride(early.id, RIDE_START, RIDE_END);
+    expect(await upload("2025:08:17 00:40:00")).toMatchObject({ tripId: null, activityId: null });
+    // The same ride on the trip it belongs to still takes it.
+    const r = await ride(tripId, RIDE_START, RIDE_END);
+    expect(await upload("2025:08:17 00:45:00")).toMatchObject({ tripId, activityId: r.id });
+  });
+
+  it("goes only by a date the album trusts: not a file's modified time, nor the upload time", async () => {
+    await ride(tripId, RIDE_START, RIDE_END);
+    // No date in the file: the browser's modified time, 00:40 on the 17th, is all there is.
+    const photo = await db.photo.create({ data: { uploaderId: userId, originalName: "copied.jpg", mimeType: "image/jpeg", storageKey: "pending", originalPath: "pending", sizeBytes: 1, status: "PENDING", exif: { fileLastModified: Date.parse("2025-08-17T04:40:00Z") } } });
+    const key = `photos/${photo.id}`;
+    mkdirSync(path.join(photoRoot, key), { recursive: true });
+    copyFileSync(path.join(process.cwd(), "tests/fixtures/photo-no-exif.jpg"), path.join(photoRoot, key, "original.jpg"));
+    await db.photo.update({ where: { id: photo.id }, data: { storageKey: key, originalPath: `${key}/original.jpg` } });
+    await processPhoto({ photoId: photo.id });
+    expect(await db.photo.findUniqueOrThrow({ where: { id: photo.id } })).toMatchObject({ takenAtSource: "FILE_MTIME", tripId: null, activityId: null });
+
+    const other = await db.photo.create({ data: { uploaderId: userId, originalName: "x.jpg", mimeType: "image/jpeg", storageKey: "k", originalPath: "k/o.jpg", sizeBytes: 1, status: "READY" } });
+    expect(await applyPhotoInstant({ ...other }, new Date("2025-08-17T04:40:00Z"), -240, "UPLOAD_TIME", null)).toBeNull();
+  });
+
   it("follows a date set by hand onto the trip the ride was on", async () => {
     const r = await ride(tripId, RIDE_START, RIDE_END);
     const photo = await db.photo.create({ data: { uploaderId: userId, originalName: "x.jpg", mimeType: "image/jpeg", storageKey: "k", originalPath: "k/o.jpg", sizeBytes: 1, status: "READY" } });
