@@ -50,6 +50,17 @@ function fingerprint(key: Buffer): string {
   return createHash("sha256").update(key).digest("hex").slice(0, 16);
 }
 
+/**
+ * The secret in FORGET_KEY: 32 bytes of base64 as `openssl rand -base64 32` makes them, or else the text itself if it
+ * is at least 16 characters (HKDF takes a secret of any length). Anything shorter is refused.
+ */
+function secretOf(value: string): Buffer {
+  const v = value.trim();
+  const decoded = Buffer.from(v, "base64");
+  if (decoded.length === 32 && decoded.toString("base64") === v) return decoded;
+  return v.length >= 16 ? Buffer.from(v, "utf8") : Buffer.alloc(0);
+}
+
 /** This install's random salt, made once and kept in the database. */
 async function installSalt(): Promise<Buffer> {
   // Two first uses at once must agree on one salt: whichever insert or fill comes first wins, and both read it back.
@@ -67,10 +78,10 @@ async function installSalt(): Promise<Buffer> {
 export async function forgetKeyState(): Promise<ForgetKeyState> {
   const e = env();
   const production = e.NODE_ENV === "production";
-  const secret = e.FORGET_KEY ? Buffer.from(e.FORGET_KEY, "base64") : null;
+  const secret = e.FORGET_KEY ? secretOf(e.FORGET_KEY) : null;
   const salt = await installSalt();
   const v0: VersionKey = { version: 0, key: Buffer.from(hkdfSync("sha256", salt, Buffer.alloc(0), "forgotten-name v0", 32)) };
-  const v1: VersionKey | null = secret?.length === 32 ? { version: 1, key: Buffer.from(hkdfSync("sha256", secret, salt, "forgotten-name v1", 32)) } : null;
+  const v1: VersionKey | null = secret?.length ? { version: 1, key: Buffer.from(hkdfSync("sha256", secret, salt, "forgotten-name v1", 32)) } : null;
   const [setting, counts] = await Promise.all([
     db.appSetting.findUniqueOrThrow({ where: { id: "app" }, select: { forgetKeyFingerprint: true } }),
     db.forgottenName.groupBy({ by: ["keyVersion"], _count: { _all: true } }),
@@ -83,7 +94,7 @@ export async function forgetKeyState(): Promise<ForgetKeyState> {
   // Names hashed under FORGET_KEY, and no FORGET_KEY (or another) to recognise them with.
   const paused = Boolean((recorded || count(1) > 0) && !matches);
   if (paused) problem = v1 ? "FORGET_KEY has changed, so names forgotten before are not recognised. Put the earlier FORGET_KEY back." : "FORGET_KEY is not set, and names were forgotten under it. Put it back.";
-  else if (secret && !v1) problem = "FORGET_KEY is not 32 bytes of base64.";
+  else if (e.FORGET_KEY && !v1) problem = "FORGET_KEY is too short: use 32 random bytes of base64 (openssl rand -base64 32), or at least 16 characters.";
   else if (!v1 && production) problem = "FORGET_KEY is not set, so nobody can be forgotten until it is.";
   else if (!v1) problem = "FORGET_KEY is not set, so forgotten names are hashed under a key made from the database alone. Set it before this album is used for real.";
   else if (weak) problem = `${weak} forgotten ${weak === 1 ? "name was" : "names were"} kept before FORGET_KEY was set, under a key made from the database alone. They are still recognised, but a copy of the database is enough to test names against them.`;
@@ -289,13 +300,10 @@ export async function loadTombstone(): Promise<Tombstone> {
   );
   if (!byHash.size) return empty(loadedAt);
   /** A forgotten name this normalized run is, if any. */
-  const lookup = (norm: string): { key: string; capOnly: boolean; derived: boolean; kinshipGroups: KinshipGroup[]; scoped: boolean; people?: Set<string> } | undefined => {
-    for (const k of keys) {
-      const v = byHash.get(`${k.version}:${hash(k.key, norm)}`);
-      if (v) return v;
-    }
-    return undefined;
-  };
+  type Found = { readonly key: string; readonly capOnly: boolean; readonly derived: boolean; readonly kinshipGroups: KinshipGroup[]; readonly scoped: boolean; readonly people: Set<string> | undefined };
+  /** Every forgotten name this normalized run is, under any key (forgotten before FORGET_KEY was set, and after). */
+  const lookupAll = (norm: string): Found[] => keys.map((k) => byHash.get(`${k.version}:${hash(k.key, norm)}`)).filter((v): v is Found => Boolean(v));
+  const lookup = (norm: string): Found | undefined => lookupAll(norm)[0];
   const capital = (raw: string) => /^\p{Lu}/u.test(raw);
   const keyOf = (rowKey: string) => keys.find((k) => rowKey.startsWith(`${k.version}:`))!.key;
   const isNameWord = (w: string) => {
@@ -323,47 +331,55 @@ export async function loadTombstone(): Promise<Tombstone> {
         const run = tokens.slice(i, i + n);
         // Only words next to each other: a run broken by anything but a hyphen or a space is not a name.
         if (run.some((t, j) => j > 0 && !/^[\s\-‐]+$/u.test(text.slice(run[j - 1].end, t.start)))) continue;
-        const found = lookup(run.map((t) => t.norm).join(" "));
-        if (!found) continue;
-        let start = run[0].start;
-        if (n === 1 || found.scoped) {
-          // Only where the forget found them; a row from before that was kept, nowhere.
-          if (!scope?.rows.has(found.key)) continue;
-          // Somebody the album knows by that name is on these photographs: it is theirs here.
-          if (found.people && [...found.people].some((id) => scope.tagged.has(id))) continue;
-          if (mode === "tag") {
-            if (!wholeTag) continue;
-          } else if (mode === "summary") {
-            // Keywords: a word of its own, in any case, but not "florence duomo" or "may 2019".
-            const beside = [tokens[i - 1], tokens[i + 1]].filter(Boolean);
-            if (beside.some((t) => isPlaceOrDateWord(t.raw) || /^\p{Lu}/u.test(t.raw))) continue;
-          } else if (!guarded(text, run, found.capOnly, found)) continue;
-          // A kinship word before it: on their own photograph it is them, and goes with the name ("Grandpa Sam at the
-          // lake" is "A family member at the lake") unless their name carries another ("Aunt Ruth" is not Grandma
-          // Ruth); elsewhere it is somebody else's ("Uncle Sam hat"). Their own "Grandma Ruth" is matched whole.
-          let k = i > 0 && isKinWord(tokens[i - 1].raw) && !isTitlePrefix(tokens[i - 1].raw) && /^[\s]+$/u.test(text.slice(tokens[i - 1].end, run[0].start)) ? i - 1 : -1;
-          // All of a hyphenated one: "Great-Aunt", "Step-Mom".
-          // A descriptor before a kinship word belongs to the title too: "Big Sister Ada".
-          const joins = (t: { raw: string }) => titlePrefix(t) || /^(?:big|little|baby|old|young)$/iu.test(t.raw);
-          while (k > 0 && isKinWord(tokens[k - 1].raw) && (/^[-‐]$/u.test(text.slice(tokens[k - 1].end, tokens[k].start)) || (joins(tokens[k - 1]) && /^[ \t]+$/u.test(text.slice(tokens[k - 1].end, tokens[k].start))))) k--;
-          if (k >= 0) {
-            // Kept hashed like the names ("Tia", "Nan" and "Oma" are names too), under the row's own key.
-            const kinRun = hash(keyOf(found.key), `kin:${kinshipKey(tokens.slice(k, i).map((t) => t.raw).join(" "))}`);
-            // Whoever was tagged on these photographs decides: their title, or any if their name had none. Two
-            // forgotten Adas keep their own ("Great Aunt Ada" on hers, "Grandma Ada" on Ada Byron's).
-            const accepts = (groups: KinshipGroup[]) => groups.length === 0 || groups.some((g) => g.kin.length === 0 || g.kin.includes(kinRun));
-            // Their photographs are kept hashed too, so the groups say nothing without the key.
-            const here = new Set([...scope.photos].map((id) => hash(keyOf(found.key), `photo:${id}`)));
-            const theirs = found.kinshipGroups.filter((g) => g.photos.some((p) => here.has(p)));
-            if (scope.own.has(found.key) && theirs.length) {
-              if (!accepts(theirs)) continue;
-              start = tokens[k].start;
-            } else {
-              if (!accepts(found.kinshipGroups)) continue;
-              if (found.derived) continue;
+        // The same name may have been forgotten more than once, under either key: whichever is in play here counts.
+        const attempt = (found: Found): number | null => {
+          let start = run[0].start;
+          if (n === 1 || found.scoped) {
+            // Only where the forget found them; a row from before that was kept, nowhere.
+            if (!scope?.rows.has(found.key)) return null;
+            // Somebody the album knows by that name is on these photographs: it is theirs here.
+            if (found.people && [...found.people].some((id) => scope.tagged.has(id))) return null;
+            if (mode === "tag") {
+              if (!wholeTag) return null;
+            } else if (mode === "summary") {
+              // Keywords: a word of its own, in any case, but not "florence duomo" or "may 2019".
+              const beside = [tokens[i - 1], tokens[i + 1]].filter(Boolean);
+              if (beside.some((t) => isPlaceOrDateWord(t.raw) || /^\p{Lu}/u.test(t.raw))) return null;
+            } else if (!guarded(text, run, found.capOnly, found)) return null;
+            // A kinship word before it: on their own photograph it is them, and goes with the name ("Grandpa Sam at the
+            // lake" is "A family member at the lake") unless their name carries another ("Aunt Ruth" is not Grandma
+            // Ruth); elsewhere it is somebody else's ("Uncle Sam hat"). Their own "Grandma Ruth" is matched whole.
+            let k = i > 0 && isKinWord(tokens[i - 1].raw) && !isTitlePrefix(tokens[i - 1].raw) && /^[\s]+$/u.test(text.slice(tokens[i - 1].end, run[0].start)) ? i - 1 : -1;
+            // All of a hyphenated one: "Great-Aunt", "Step-Mom".
+            // A descriptor before a kinship word belongs to the title too: "Big Sister Ada".
+            const joins = (t: { raw: string }) => titlePrefix(t) || /^(?:big|little|baby|old|young)$/iu.test(t.raw);
+            while (k > 0 && isKinWord(tokens[k - 1].raw) && (/^[-‐]$/u.test(text.slice(tokens[k - 1].end, tokens[k].start)) || (joins(tokens[k - 1]) && /^[ \t]+$/u.test(text.slice(tokens[k - 1].end, tokens[k].start))))) k--;
+            if (k >= 0) {
+              // Kept hashed like the names ("Tia", "Nan" and "Oma" are names too), under the row's own key.
+              const kinRun = hash(keyOf(found.key), `kin:${kinshipKey(tokens.slice(k, i).map((t) => t.raw).join(" "))}`);
+              // Whoever was tagged on these photographs decides: their title, or any if their name had none. Two
+              // forgotten Adas keep their own ("Great Aunt Ada" on hers, "Grandma Ada" on Ada Byron's).
+              const accepts = (groups: KinshipGroup[]) => groups.length === 0 || groups.some((g) => g.kin.length === 0 || g.kin.includes(kinRun));
+              // Their photographs are kept hashed too, so the groups say nothing without the key.
+              const here = new Set([...scope.photos].map((id) => hash(keyOf(found.key), `photo:${id}`)));
+              const theirs = found.kinshipGroups.filter((g) => g.photos.some((p) => here.has(p)));
+              if (scope.own.has(found.key) && theirs.length) {
+                if (!accepts(theirs)) return null;
+                start = tokens[k].start;
+              } else {
+                if (!accepts(found.kinshipGroups)) return null;
+                if (found.derived) return null;
+              }
             }
-          }
-        } else if (found.capOnly && !guarded(text, run, true)) continue;
+          } else if (found.capOnly && !guarded(text, run, true)) return null;
+          return start;
+        };
+        let start: number | null = null;
+        for (const found of lookupAll(run.map((t) => t.norm).join(" "))) {
+          start = attempt(found);
+          if (start !== null) break;
+        }
+        if (start === null) continue;
         spans.push([start, run[n - 1].end]);
         i += n - 1;
         break;
