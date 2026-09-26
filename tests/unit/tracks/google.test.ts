@@ -8,6 +8,7 @@ import { fillStays, STAY_STEP_MS } from "@/lib/tracks/google/stays";
 import { segmentToPoints, segmentToStay } from "@/lib/tracks/google/timeline";
 import { computeStats } from "@/lib/tracks/stats";
 import { splitByLocalDay } from "@/lib/tracks/split";
+import type { TrackPoint } from "@/lib/tracks/types";
 import { positionAt } from "@/lib/tracks/interpolate";
 
 const fx = (n: string) => path.join(__dirname, "../../fixtures", n);
@@ -41,7 +42,7 @@ describe("google parsers", () => {
     // 3 path points + activity start/end, NYC segment excluded; the 55-minute visit fills the gap between them every
     // 5 min, except within 5 min of the path's last point (11)
     expect(points).toHaveLength(16);
-    expect(points.filter((p) => !p.stay)).toHaveLength(5);
+    expect(points.filter((p) => !p.filled)).toHaveLength(5);
     expect(points[1].t).toBe(Date.parse("2025-08-12T14:05:00Z"));
     expect(points.every((p) => p.lat > 44)).toBe(true);
   });
@@ -70,7 +71,7 @@ describe("google visits", () => {
     const pts = parse([museum("2025-08-12T14:00:00Z", "2025-08-12T17:00:00Z", { probability: 0.9 })]);
     expect(pts[0].t).toBe(at("2025-08-12T14:00:00Z"));
     expect(pts.at(-1)!.t).toBe(at("2025-08-12T17:00:00Z"));
-    expect(pts.every((p) => p.stay)).toBe(true);
+    expect(pts.every((p) => p.filled)).toBe(true);
     expect(positionAt(pts, at("2025-08-12T15:30:00Z"))).toMatchObject({ lat: 40.7794, lng: -73.9632 });
 
     const visit = { placeVisit: { location: { latitudeE7: 407794000, longitudeE7: -739632000 }, duration: { startTimestamp: "2025-08-12T14:00:00Z", endTimestamp: "2025-08-12T17:00:00Z" } } };
@@ -96,13 +97,13 @@ describe("google visits", () => {
   it("fill only the hours between recorded stretches, not within a step of them", () => {
     const walk = (from: string, to: string): Seg => ({ startTime: from, endTime: to, timelinePath: [{ point: "geo:40.77,-73.96", time: from }, { point: "geo:40.771,-73.96", time: to }] });
     const pts = parse([walk("2025-08-12T13:50:00Z", "2025-08-12T14:00:00Z"), museum("2025-08-12T14:00:00Z", "2025-08-12T17:00:00Z"), walk("2025-08-12T15:00:00Z", "2025-08-12T15:08:00Z")]);
-    const recorded = pts.filter((p) => !p.stay).map((p) => p.t);
-    for (const p of pts.filter((q) => q.stay)) for (const r of recorded) expect(Math.abs(p.t - r)).toBeGreaterThanOrEqual(STAY_STEP_MS);
+    const recorded = pts.filter((p) => !p.filled).map((p) => p.t);
+    for (const p of pts.filter((q) => q.filled)) for (const r of recorded) expect(Math.abs(p.t - r)).toBeGreaterThanOrEqual(STAY_STEP_MS);
     // Between 14:00 and 15:00 the visit fills in, from the nearer recorded end: the walk arrived at 14:00 and the next
     // one set off at 15:00, both inside the visit. The 8-minute walk in the middle is left alone.
     expect(positionAt(pts, at("2025-08-12T14:20:00Z"))).toMatchObject({ lat: 40.771 });
     expect(positionAt(pts, at("2025-08-12T14:40:00Z"))).toMatchObject({ lat: 40.77 });
-    expect(pts.filter((p) => p.stay && p.t > at("2025-08-12T15:00:00Z") && p.t < at("2025-08-12T15:08:00Z"))).toEqual([]);
+    expect(pts.filter((p) => p.filled && p.t > at("2025-08-12T15:00:00Z") && p.t < at("2025-08-12T15:08:00Z"))).toEqual([]);
     expect(positionAt(pts, at("2025-08-12T16:30:00Z"))).toMatchObject({ lat: 40.7794 });
   });
 
@@ -110,7 +111,7 @@ describe("google visits", () => {
     // A point every 15 minutes, 300 m from the visit's centre.
     const path = Array.from({ length: 13 }, (_, i) => ({ time: new Date(at("2025-08-12T14:00:00Z") + i * 15 * 60_000).toISOString(), point: "geo:40.7821,-73.9632" }));
     const pts = parse([{ startTime: "2025-08-12T14:00:00Z", endTime: "2025-08-12T17:00:00Z", timelinePath: path }, museum("2025-08-12T14:00:00Z", "2025-08-12T17:00:00Z")]);
-    expect(pts.some((p) => p.stay)).toBe(true);
+    expect(pts.some((p) => p.filled)).toBe(true);
     expect(pts.every((p) => p.lat === 40.7821)).toBe(true);
     expect(computeStats(pts).distanceM).toBe(0);
   });
@@ -124,6 +125,32 @@ describe("google visits", () => {
     const [day1, day2] = [...splitByLocalDay(pts, "America/New_York").values()];
     expect(positionAt(day1, at("2025-08-13T03:59:59Z"))).toMatchObject({ lat: 44.35 });
     expect(day2[0].t).toBe(midnight);
+  });
+
+  it("keep a visit's start when the first recorded point comes a few minutes later", () => {
+    const path = Array.from({ length: 29 }, (_, i) => ({ time: new Date(at("2025-08-12T14:03:18Z") + i * 120_000).toISOString(), point: "geo:40.78,-73.96" }));
+    const pts = parse([museum("2025-08-12T14:00:00Z", "2025-08-12T15:00:00Z"), { startTime: "2025-08-12T14:03:18Z", endTime: "2025-08-12T15:00:00Z", timelinePath: path }]);
+    expect(pts[0]).toMatchObject({ t: at("2025-08-12T14:00:00Z"), lat: 40.7794 });
+    expect(positionAt(pts, at("2025-08-12T14:01:00Z"))).not.toBeNull();
+  });
+
+  describe("across a local midnight inside a hotel stay (New York)", () => {
+    const midnight = at("2025-08-13T04:00:00Z");
+    const hotel: Seg = { startTime: "2025-08-13T00:00:00Z", endTime: "2025-08-13T12:00:00Z", visit: { topCandidate: { placeLocation: "geo:44.35,-68.2" } } };
+    const recordedAt = (...isos: string[]): TrackPoint[] => isos.map((iso) => ({ t: at(iso), lat: 44.351, lng: -68.2 }));
+    const days = (recorded: TrackPoint[]) => [...splitByLocalDay(fillStays(recorded, [segmentToStay(hotel)!], window, [midnight - 1, midnight]), "America/New_York").values()];
+
+    it("covers the minutes either side even when a recorded point is just after midnight", () => {
+      const [day1, day2] = days(recordedAt("2025-08-13T03:40:00Z", "2025-08-13T04:03:00Z"));
+      expect(positionAt(day1, at("2025-08-13T03:58:00Z"))).not.toBeNull();
+      expect(positionAt(day1, at("2025-08-13T03:59:59Z"))).not.toBeNull();
+      expect(positionAt(day2, at("2025-08-13T04:01:00Z"))).not.toBeNull();
+    });
+    it("covers midnight between two recorded points seven minutes apart", () => {
+      const [day1, day2] = days(recordedAt("2025-08-13T03:57:00Z", "2025-08-13T04:04:00Z"));
+      expect(positionAt(day1, at("2025-08-13T03:59:59Z"))).toMatchObject({ lat: 44.351 });
+      expect(positionAt(day2, at("2025-08-13T04:02:00Z"))).toMatchObject({ lat: 44.351 });
+    });
   });
 
   it("fill the middle of a gap inside a visit that falls between the steps", () => {

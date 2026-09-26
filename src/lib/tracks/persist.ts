@@ -71,5 +71,5 @@ export async function persistTrack(parsed: ParsedTrack, opts: PersistOptions): P
     await reassignPhotosForActivity(activity.id);
   }
   // Points filled in across a Google visit are not counted as read from the file.
-  return { trackId: track.id, activityId, name: parsed.name, pointCount: points.filter((p) => !p.stay).length, distanceM: stats.distanceM, type };
+  return { trackId: track.id, activityId, name: parsed.name, pointCount: points.filter((p) => !p.filled).length, distanceM: stats.distanceM, type };
 }

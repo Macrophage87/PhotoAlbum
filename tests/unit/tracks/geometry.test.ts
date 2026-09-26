@@ -102,3 +102,27 @@ describe("detectTrackKind / cleanPoints", () => {
     expect(out.map((p) => p.t)).toEqual([1, 2]);
   });
 });
+
+describe("splitByLocalDay across a midnight", () => {
+  it("ends the day on the last instant before midnight and starts the next at midnight, when close enough", () => {
+    const pts: TrackPoint[] = [
+      { t: Date.parse("2025-08-13T03:55:00Z"), lat: 44, lng: -68 }, // 23:55 in New York
+      { t: Date.parse("2025-08-13T04:05:00Z"), lat: 44.01, lng: -68 }, // 00:05
+    ];
+    const m = splitByLocalDay(pts, "America/New_York");
+    const day1 = m.get("2025-08-12")!, day2 = m.get("2025-08-13")!;
+    const midnight = Date.parse("2025-08-13T04:00:00Z");
+    expect(day1.map((p) => p.t)).toEqual([pts[0].t, midnight - 1]);
+    expect(day2.map((p) => p.t)).toEqual([midnight, pts[1].t]);
+    expect(day2[0].lat).toBeCloseTo(44.005, 6);
+    expect(positionAt(day1, midnight - 1000)).not.toBeNull();
+  });
+  it("leaves a long gap across midnight as it is", () => {
+    const pts: TrackPoint[] = [
+      { t: Date.parse("2025-08-13T03:30:00Z"), lat: 44, lng: -68 },
+      { t: Date.parse("2025-08-13T04:30:00Z"), lat: 44, lng: -68 },
+    ];
+    const m = splitByLocalDay(pts, "America/New_York");
+    expect([...m.values()].map((d) => d.length)).toEqual([1, 1]);
+  });
+});
