@@ -147,8 +147,9 @@ docker compose up --build -d
         "before serving, so upgrades need no manual database step. Three optional services live behind compose profiles: <b>worker</b> (background jobs "
         "in their own container), <b>ml</b> (the local ML sidecar) and <b>ml-init</b> (a one-off download of the model weights into the <b>ml-models</b> volume)."),
       P("Browse to <b>http://localhost:3000</b> on the server itself. The port is published on the loopback address only "
-        "(APP_BIND=127.0.0.1), so from other machines the album is reached through the reverse proxy (section 7). Change the "
-        "host port with APP_PORT in .env if 3000 is taken."),
+        "(APP_BIND=127.0.0.1), so from other machines the album is reached through the reverse proxy (section 7). If you open the album as "
+        "http://&lt;server&gt;:&lt;port&gt; from other devices (no proxy), set APP_BIND=0.0.0.0 in .env and run <b>docker compose up -d</b>. "
+        "Change the host port with APP_PORT in .env if 3000 is taken."),
       P("Reading the sign-in link without email", H2),
       P("If SMTP_HOST is left empty, sign-in and invite links are printed to the container log instead of being sent. "
         "This is fine for first setup and for a purely local install."),
@@ -420,7 +421,9 @@ docker compose run --rm ml-init       # only after an upgrade that changes the s
 """),
       P("Database migrations run automatically at container start. Take a database dump before upgrading, as a precaution. "
         "An AI-description backfill still in progress is cut short by an upgrade; the Admin page says so under that run within about an hour. Wait until none of its rows reads in progress, then start the backfill again for what is left (the app refuses a new run while one is open). "
-        "The first upgrade to the media-hub release replaces the database container with the pgvector image; the data in the pgdata volume is kept as it is.")]
+        "The first upgrade to the media-hub release replaces the database container with the pgvector image; the data in the pgdata volume is kept as it is."),
+      P("The app's port is now published on 127.0.0.1 only (APP_BIND). If you open the album as http://&lt;server&gt;:&lt;port&gt; from other devices "
+        "(no proxy), set APP_BIND=0.0.0.0 in .env and run <b>docker compose up -d</b>. Without a proxy, all sign-in requests share one rate-limit bucket.")]
 
 # ---------- 9 ----------
 S += [P("9. Development setup and tests", H1),
@@ -471,7 +474,7 @@ S += [P("10. Troubleshooting", H1),
       table([
         ["Symptom", "Likely cause and fix"],
         ["Sign-in says 'check your email' but nothing arrives for a new person", "Only ADMIN_EMAIL, existing members and invited addresses receive a link; everyone else gets the same message and no email. Invite them from the Admin page, and check .env spelling (restart the app after edits)."],
-        ["No sign-in email arrives", "SMTP_HOST empty (links are in the log: docker compose logs app | grep auth/verify), wrong port/SECURE combination, or the provider rejects SMTP_FROM. Test with Mailpit first."],
+        ["No sign-in email arrives", "SMTP_HOST empty (links are in the log: docker compose logs app | grep auth/verify), wrong port/SECURE combination, or the provider rejects SMTP_FROM. SMTP errors are logged: check docker compose logs app. Test with Mailpit first."],
         ["Links in emails point to localhost", "APP_URL is still the default. Set it to the public URL and restart."],
         ["Uploads fail around 1 MB or 100 MB", "Reverse proxy body limit (raise client_max_body_size / max_size) or MAX_UPLOAD_BYTES."],
         ["Photo stays on the spinner", "Processing job failed; see the app log. A failed photo shows its error on the detail page. HEIC files take several seconds each."],

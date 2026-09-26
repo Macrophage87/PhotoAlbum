@@ -252,6 +252,8 @@ The heavy-work lock (transcoding, embeddings, faces, animals one at a time) is h
    docker compose logs app | grep "auth/verify"
    ```
 
+   If no email arrives, check the app's log (`docker compose logs app`): SMTP errors are logged there.
+
 4. You are now the admin. Go to **Admin** in the navigation to invite family members by email.
 
 Optionally load the demo content (two trips, a hike with track and stats, sample photos, a collection, a short clip, a YouTube embed, two named people and a pet, with descriptions and face templates from offline fixtures):
@@ -318,7 +320,11 @@ docker compose up --build -d
 docker image prune -f
 ```
 
-Migrations run automatically at start. Take a database dump first (step 9) before any upgrade. In-flight photo processing is given 45 seconds to finish before the old container stops. A description backfill that is still submitting is cut short by an upgrade: the Admin page says so under that run within about an hour. Wait until no row of that run still reads "in progress" (batches already sent keep processing at Anthropic for up to a day), then run the backfill again for the remaining items; the app refuses to start a new run while one is open, so nothing is sent twice.
+Migrations run automatically at start. Take a database dump first (step 9) before any upgrade.
+
+The app's port is now published on `127.0.0.1` only (`APP_BIND`). If you open the album as `http://<server>:<port>` from other devices (no proxy), set `APP_BIND=0.0.0.0` in `.env` and run `docker compose up -d`; without a proxy, all sign-in requests share one rate-limit bucket.
+
+ In-flight photo processing is given 45 seconds to finish before the old container stops. A description backfill that is still submitting is cut short by an upgrade: the Admin page says so under that run within about an hour. Wait until no row of that run still reads "in progress" (batches already sent keep processing at Anthropic for up to a day), then run the backfill again for the remaining items; the app refuses to start a new run while one is open, so nothing is sent twice.
 
 Two things to know when upgrading an install from before the media-hub release: the database image changed from `postgres:16` to `pgvector/pgvector:pg16` (same data format; compose replaces the container and keeps the `pgdata` volume, and the first start creates the `vector` extension), and if you run the ML sidecar its profile must be part of every `up`. Put `COMPOSE_PROFILES=ml` (plus `worker` if used) in `.env` so `docker compose up --build -d` and `deploy/update.sh` include it, then run `docker compose run --rm ml-init` once to fetch the weights.
 

@@ -64,6 +64,8 @@ Open <http://localhost:3000>, enter the admin email, and follow the sign-in link
 docker compose logs -f app | grep "auth/verify"
 ```
 
+The port is published on `127.0.0.1` only. If you open the album as `http://<server>:<port>` from other devices (no proxy), set `APP_BIND=0.0.0.0` in `.env` and run `docker compose up -d` (only on a trusted network: without a proxy, all sign-in requests share one rate-limit bucket).
+
 To load demo content (two trips, a hike with stats, sample photos, a collection, a short clip, a YouTube embed, two named people, a pet and AI-style descriptions):
 
 ```bash
