@@ -83,6 +83,32 @@ describe("geotagPhotos", () => {
     expect((await db.photo.findUniqueOrThrow({ where: { id: mine.id } })).lat).toBe(50);
   });
 
+  it("prefers the photographer's own Google trace over another member's activity track", async () => {
+    const dad = await db.user.create({ data: { email: "dad@example.com", role: "MEMBER" } });
+    await makeTrack(tripId, dad.id, line(10), "GPX");
+    await makeTrack(tripId, userId, line(10).map((p) => ({ ...p, lat: 50 })), "GOOGLE");
+    const mine = await makePhoto(tripId, userId, new Date(T0 + 3 * 60_000));
+    const his = await makePhoto(tripId, dad.id, new Date(T0 + 3 * 60_000));
+    await geotagPhotos({ tripId });
+    expect((await db.photo.findUniqueOrThrow({ where: { id: mine.id } })).lat).toBe(50);
+    expect((await db.photo.findUniqueOrThrow({ where: { id: his.id } })).lat).toBeCloseTo(44.003, 5);
+  });
+
+  it("moves a photo onto its photographer's own Google trace imported after someone else's", async () => {
+    const other = await db.user.create({ data: { email: "o2@example.com", role: "MEMBER" } });
+    await makeTrack(tripId, other.id, line(10).map((p) => ({ ...p, lat: 60 })), "GOOGLE");
+    const mine = await makePhoto(tripId, userId, new Date(T0 + 3 * 60_000));
+    await geotagPhotos({ tripId });
+    expect((await db.photo.findUniqueOrThrow({ where: { id: mine.id } })).lat).toBe(60);
+    const own = await makeTrack(tripId, userId, line(10).map((p) => ({ ...p, lat: 50 })), "GOOGLE");
+    await geotagPhotos({ tripId, trackIds: [own.id] });
+    expect((await db.photo.findUniqueOrThrow({ where: { id: mine.id } })).lat).toBe(50);
+    // Another member's new trace does not pull it back.
+    const again = await makeTrack(tripId, other.id, line(10).map((p) => ({ ...p, lat: 70 })), "GOOGLE");
+    await geotagPhotos({ tripId, trackIds: [again.id] });
+    expect((await db.photo.findUniqueOrThrow({ where: { id: mine.id } })).lat).toBe(50);
+  });
+
   it("is a no-op without tracks or candidates", async () => {
     expect(await geotagPhotos({ tripId })).toEqual({ updated: 0 });
     await makePhoto(tripId, userId, new Date(T0));
