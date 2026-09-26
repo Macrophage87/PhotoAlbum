@@ -68,12 +68,29 @@ describe("splitByLocalDay", () => {
     ];
     const m = splitByLocalDay(pts, "America/New_York");
     const day1 = m.get("2025-08-12")!;
-    expect(day1.map((p) => p.t)).toEqual([pts[0].t, pts[1].t, pts[2].t]);
-    expect(m.get("2025-08-13")!.map((p) => p.t)).toEqual([pts[2].t, pts[3].t]);
+    // Close enough to interpolate across: joined at midnight (the last instant before it, then midnight itself).
+    const midnight = Date.parse("2025-08-13T04:00:00Z");
+    expect(day1.map((p) => p.t)).toEqual([pts[0].t, pts[1].t, midnight - 1]);
+    expect(m.get("2025-08-13")!.map((p) => p.t)).toEqual([midnight, pts[2].t, pts[3].t]);
     // A photograph at 23:59 now falls inside the first day's track and is interpolated across the gap.
     const at = Date.parse("2025-08-13T03:59:00Z");
     expect(at).toBeLessThanOrEqual(day1[day1.length - 1].t);
     expect(positionAt(day1, at)?.lat).toBeCloseTo(44 + 0.01 * (4 / 9), 6);
+  });
+
+  it("ends a day on the next day's first point across a gap only within the snap window (#120)", () => {
+    const pts: TrackPoint[] = [
+      { t: Date.parse("2025-08-13T03:40:00Z"), lat: 43.99, lng: -68 }, // 23:40 on the 12th in New York
+      { t: Date.parse("2025-08-13T03:52:00Z"), lat: 44, lng: -68 }, // 23:52
+      { t: Date.parse("2025-08-13T04:04:00Z"), lat: 44.01, lng: -68 }, // 00:04 on the 13th: 12 minutes on
+      { t: Date.parse("2025-08-13T05:00:00Z"), lat: 44.02, lng: -68 },
+    ];
+    const m = splitByLocalDay(pts, "America/New_York");
+    const day1 = m.get("2025-08-12")!;
+    expect(day1.map((p) => p.t)).toEqual([pts[0].t, pts[1].t, pts[2].t]);
+    expect(m.get("2025-08-13")!.map((p) => p.t)).toEqual([pts[2].t, pts[3].t]);
+    // A photograph at 23:59 is inside the first day's track, and snaps to the nearer side of the gap.
+    expect(positionAt(day1, Date.parse("2025-08-13T03:59:00Z"))?.lat).toBe(44.01);
   });
 
   it("draws no connector across a long gap or from a day of a single point", () => {
@@ -85,8 +102,8 @@ describe("splitByLocalDay", () => {
     ];
     expect(splitByLocalDay(night, "America/New_York").get("2025-08-12")).toHaveLength(2);
     const lone: TrackPoint[] = [
-      { t: Date.parse("2025-08-13T03:58:00Z"), lat: 44, lng: -68 }, // 23:58, the day's only point
-      { t: Date.parse("2025-08-13T04:02:00Z"), lat: 44, lng: -68 },
+      { t: Date.parse("2025-08-13T03:50:00Z"), lat: 44, lng: -68 }, // 23:50, the day's only point
+      { t: Date.parse("2025-08-13T04:03:00Z"), lat: 44, lng: -68 }, // 13 minutes on: too far to join at midnight
       { t: Date.parse("2025-08-13T04:10:00Z"), lat: 44, lng: -68 },
     ];
     expect(splitByLocalDay(lone, "America/New_York").get("2025-08-12")).toHaveLength(1);

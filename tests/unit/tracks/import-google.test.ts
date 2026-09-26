@@ -45,7 +45,8 @@ describe("importing a Google export", () => {
   });
 
   it("never replaces another member's trace", async () => {
-    const other = (await db.user.create({ data: { email: "o@example.com", role: "MEMBER" } })).id;
+    // An admin too: only the trip's maker, or an admin, may import into it at all.
+    const other = (await db.user.create({ data: { email: "o@example.com", role: "ADMIN" } })).id;
     await importTrackFile(args(other));
     await importTrackFile(args(userId, true));
     expect(await db.track.count({ where: { tripId } })).toBe(2);
