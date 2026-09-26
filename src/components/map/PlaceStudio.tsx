@@ -10,8 +10,11 @@ import type { PlacingPhoto } from "@/lib/photos/placing";
 import type { GeocodeHit } from "@/app/api/geocode/route";
 import { formatDay } from "@/lib/time/format";
 import { NONE_SLOT } from "@/lib/map/colour-by";
+import { spreadFeatures } from "@/lib/map/jitter";
 
 type Spot = { lat: number; lng: number; name?: string | null };
+/** What Undo needs: where each was on the server, and what the helper had guessed, which only the list knows. */
+type Undo = { before: PlaceBefore[]; guesses: Map<string, string | null> };
 
 /** A small box round one point, for the map to fly to: close enough to see the street, far enough to see the town. */
 function around(at: { lat: number; lng: number }, span = 0.01): [[number, number], [number, number]] {
@@ -51,7 +54,7 @@ export function PlaceStudio({ photos: initial, total, theme, tracks, bounds }: {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [pin, setPin] = useState<Spot | null>(null);
   const [focus, setFocus] = useState<MapPayload["bounds"]>(null);
-  const [notice, setNotice] = useState<{ text: string; undo?: PlaceBefore[] } | null>(null);
+  const [notice, setNotice] = useState<{ text: string; undo?: Undo } | null>(null);
   const [hits, setHits] = useState<GeocodeHit[] | null>(null);
   const [lookupNote, setLookupNote] = useState<string | null>(null);
   const [pending, start] = useTransition();
@@ -71,17 +74,18 @@ export function PlaceStudio({ photos: initial, total, theme, tracks, bounds }: {
   }, [items]);
 
   // Only what is listed goes on the map, the chosen ones ringed in blue and the rest in gray, so a group's ring shows
-  // how much of it is chosen.
+  // how much of it is chosen. The whole point here is putting many on exactly one spot, so they are fanned out a
+  // little, or only the top pin of the heap could ever be tapped.
   const mapPhotos = useMemo(
     () => ({
       type: "FeatureCollection" as const,
-      features: items
+      features: spreadFeatures(items
         .filter((p) => p.lat !== null && p.lng !== null)
         .map((p): GeoJSON.Feature<GeoJSON.Point, MapPhotoProps> => ({
           type: "Feature",
           geometry: { type: "Point", coordinates: [p.lng!, p.lat!] },
           properties: { id: p.id, thumbUrl: p.thumbUrl, mediumUrl: p.thumbUrl, caption: p.label, takenAt: p.takenAt, tripSlug: "", tripTitle: "", activityId: null, gpsSource: null, day: p.day, activityTitle: null, uploaderId: null, uploaderName: null, slot: selected.has(p.id) ? 0 : NONE_SLOT },
-        })),
+        }))),
     }),
     [items, selected],
   );
@@ -134,15 +138,16 @@ export function PlaceStudio({ photos: initial, total, theme, tracks, bounds }: {
           return;
         }
         const moved = new Set(r.before.map((b) => b.id));
+        const guesses = new Map(chosen.filter((p) => moved.has(p.id)).map((p) => [p.id, p.guess]));
         setItems((prev) => prev.map((p) => (moved.has(p.id) ? { ...p, lat: pin.lat, lng: pin.lng, by: "hand", guess: null } : p)));
-        setNotice({ text: `${r.count} photo${r.count === 1 ? "" : "s"} placed${pin.name ? ` at ${pin.name}` : ""}.`, undo: r.before });
+        setNotice({ text: `${r.count} photo${r.count === 1 ? "" : "s"} placed${pin.name ? ` at ${pin.name}` : ""}.`, undo: { before: r.before, guesses } });
         clear();
       } catch {
         setNotice({ text: "That did not save. Check the connection and press it again." });
       }
     });
 
-  const undo = (before: PlaceBefore[]) =>
+  const undo = ({ before, guesses }: Undo) =>
     start(async () => {
       try {
         await restorePlaces(before);
@@ -152,7 +157,7 @@ export function PlaceStudio({ photos: initial, total, theme, tracks, bounds }: {
             const b = back.get(p.id);
             if (!b) return p;
             const by: PlacingPhoto["by"] = b.lat === null ? "none" : b.gpsSource === "ESTIMATE" ? "guess" : b.gpsSource === "MANUAL" ? "hand" : b.gpsSource === "TRACK" ? "track" : "camera";
-            return { ...p, lat: b.lat, lng: b.lng, by };
+            return { ...p, lat: b.lat, lng: b.lng, by, guess: by === "guess" ? (guesses.get(p.id) ?? null) : null };
           }),
         );
         setNotice({ text: "Undone. They are back where they were." });
