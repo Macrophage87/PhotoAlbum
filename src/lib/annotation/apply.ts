@@ -169,8 +169,10 @@ export async function applyAnnotation(photoId: string, model: string, parsed: An
   }
   if (kept !== true) {
     await recordFailure(photoId, "names_changed", { terminal: false });
-    // Asked again once the change has settled, so no item is left undescribed for it.
-    await enqueue(QUEUES.annotatePhoto, { photoId }, { singletonKey: `annotate:${photoId}`, singletonSeconds: 60, startAfter: 60 });
+    // Asked again once the change has settled, so no item is left undescribed for it. A member's "Describe again,
+    // replacing ours" goes on being that, under its own key, as `reannotate` queues it.
+    if (opts.replaceEdited) await enqueue(QUEUES.annotatePhoto, { photoId, replace: true }, { singletonKey: `annotate-replace:${photoId}`, singletonSeconds: 60, startAfter: 60 });
+    else await enqueue(QUEUES.annotatePhoto, { photoId }, { singletonKey: `annotate:${photoId}`, singletonSeconds: 60, startAfter: 60 });
     return;
   }
   // The place guess is only ever recorded for an item that was actually asked, so clearing a position later still
