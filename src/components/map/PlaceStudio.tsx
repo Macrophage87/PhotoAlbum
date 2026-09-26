@@ -11,13 +11,14 @@ import type { GeocodeHit } from "@/app/api/geocode/route";
 import { formatDay } from "@/lib/time/format";
 import { NONE_SLOT } from "@/lib/map/colour-by";
 import { spreadFeatures } from "@/lib/map/jitter";
+import { undoneText } from "@/lib/map/undo-text";
 
 type Spot = { lat: number; lng: number; name?: string | null };
 /**
  * What Undo needs: where each was, the server's token for its own note of the move, and what the helper had guessed,
  * which only the list knows.
  */
-type Undo = { before: PlaceBefore[]; token: string | null; guesses: Map<string, string | null> };
+type Undo = { before: PlaceBefore[]; token: string | null; guesses: Map<string, string | null>; to: { lat: number; lng: number } };
 
 /** A small box round one point, for the map to fly to: close enough to see the street, far enough to see the town. */
 function around(at: { lat: number; lng: number }, span = 0.01): [[number, number], [number, number]] {
@@ -143,18 +144,19 @@ export function PlaceStudio({ photos: initial, total, theme, tracks, bounds }: {
         const moved = new Set(r.before.map((b) => b.id));
         const guesses = new Map(chosen.filter((p) => moved.has(p.id)).map((p) => [p.id, p.guess]));
         setItems((prev) => prev.map((p) => (moved.has(p.id) ? { ...p, lat: pin.lat, lng: pin.lng, by: "hand", guess: null } : p)));
-        setNotice({ text: `${r.count} photo${r.count === 1 ? "" : "s"} placed${pin.name ? ` at ${pin.name}` : ""}.`, undo: { before: r.before, token: r.undo, guesses } });
+        setNotice({ text: `${r.count} photo${r.count === 1 ? "" : "s"} placed${pin.name ? ` at ${pin.name}` : ""}.`, undo: { before: r.before, token: r.undo, guesses, to: { lat: pin.lat, lng: pin.lng } } });
         clear();
       } catch {
         setNotice({ text: "That did not save. Check the connection and press it again." });
       }
     });
 
-  const undo = ({ before, token, guesses }: Undo) =>
+  const undo = ({ before, token, guesses, to }: Undo) =>
     start(async () => {
       try {
         // What the server wrote, not what was sent: without its note of the move, a spot comes back as placed by hand.
-        const back = new Map((await restorePlaces(before, token)).map((b) => [b.id, b]));
+        const { restored, changed } = await restorePlaces(before, token, to);
+        const back = new Map(restored.map((b) => [b.id, b]));
         setItems((prev) =>
           prev.map((p) => {
             const b = back.get(p.id);
@@ -163,7 +165,7 @@ export function PlaceStudio({ photos: initial, total, theme, tracks, bounds }: {
             return { ...p, lat: b.lat, lng: b.lng, by, guess: by === "guess" ? (guesses.get(p.id) ?? null) : null };
           }),
         );
-        setNotice({ text: "Undone. They are back where they were." });
+        setNotice({ text: undoneText(restored.length, changed) });
       } catch {
         setNotice({ text: "That did not undo. Check the connection and press it again." });
       }

@@ -70,6 +70,7 @@ describe("a place cleared by hand", () => {
     await restorePlaces(before, undo);
     expect(await row()).toMatchObject({ lat: null, gpsSource: null, placeSetById: who.id });
     // Without the server's note, a position the browser sends back is the presser's own placing, whatever it claims.
+    await placePhotos([photoId], 10, 20);
     await restorePlaces([{ id: photoId, lat: 1, lng: 2, gpsSource: "EXIF", placeName: null, removedByHand: false }]);
     expect(await row()).toMatchObject({ lat: 1, gpsSource: "MANUAL", placeSetById: who.id });
   });

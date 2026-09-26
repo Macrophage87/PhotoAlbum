@@ -8,6 +8,7 @@ import { annotationSchema } from "@/lib/annotation/schema";
 import { writtenFromMembersOnly } from "@/lib/annotation/members-only";
 import { flagPhoto, MATCHER_VERSION, rejudgeNames, rejudgeSweep, rejudgeText, rejudgeTitles } from "@/lib/annotation/rejudge";
 import type { Viewer } from "@/lib/auth/viewer";
+import { readablePlaceGuess } from "@/lib/photos/readable-text";
 import { resetTestDb } from "../helpers/reset";
 
 const anon: Viewer = { kind: "anonymous", user: null, shareTokens: new Map() };
@@ -132,6 +133,22 @@ describe("what strangers may search, container by container, and the words' scop
     expect((await searchMedia(anon, { q: "biscuit" }, 120, null)).map((h) => h.id)).toEqual([typed.id]);
     // Asked again, nothing more happens.
     expect((await rejudgeNames(["Biscuit"])).photos).toBe(0);
+  });
+
+  it("re-judges a guess the album holds under a place set by hand, so an undo cannot bring it back open", async () => {
+    const guess = { name: "Biscuit's beach", precision: "city" as const, lat: 39.4, lng: -76.6, radiusM: 5000, confidence: 0.8, evidence: "the dunes" };
+    const p = await photo({});
+    await applyPlaceEstimate(p.id, guess);
+    expect((await db.photo.findUniqueOrThrow({ where: { id: p.id } })).placeEstimateMembersOnly).toBe(false);
+    // Moved by hand on the placing screen: the guess is kept underneath, for Undo to bring back.
+    await db.photo.update({ where: { id: p.id }, data: { lat: 10, lng: 20, gpsSource: "MANUAL", placeSetById: dana } });
+    await db.person.create({ data: { name: "Biscuit", kind: "PET", createdById: dana } });
+    expect((await rejudgeNames(["Biscuit"])).places).toBe(1);
+    expect(await db.photo.findUniqueOrThrow({ where: { id: p.id } })).toMatchObject({ gpsSource: "MANUAL", placeEstimateName: "Biscuit's beach", placeEstimateMembersOnly: true });
+    // Taken back to the guess, it stays the family's.
+    await db.photo.update({ where: { id: p.id }, data: { lat: 39.4, lng: -76.6, gpsSource: "ESTIMATE", placeSetById: null } });
+    const info = await db.photo.findUniqueOrThrow({ where: { id: p.id } });
+    expect(readablePlaceGuess(info, false)).toEqual({ name: null, note: null });
   });
 
   it("leaves alone what a member chose to show to everyone", async () => {

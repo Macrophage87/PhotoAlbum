@@ -16,7 +16,9 @@ export type PlaceSnapshot = {
   placeName: string | null;
   placeSetById: string | null;
 };
-type Snapshot = { at: number; userId: string; places: Map<string, PlaceSnapshot> };
+/** Where the move put them: an Undo only takes back a photograph that is still there, as that member left it. */
+export type PlacedAt = { lat: number; lng: number };
+type Snapshot = { at: number; userId: string; to: PlacedAt; places: Map<string, PlaceSnapshot> };
 
 const TTL_MS = 60 * 60_000;
 const holder = globalThis as unknown as { placeUndo?: Map<string, Snapshot> };
@@ -26,18 +28,21 @@ function prune(now: number) {
   for (const [token, s] of store) if (now - s.at > TTL_MS) store.delete(token);
 }
 
-export function rememberPlaces(userId: string, rows: ({ id: string } & PlaceSnapshot)[], now = Date.now()): string {
+export function rememberPlaces(userId: string, rows: ({ id: string } & PlaceSnapshot)[], to: PlacedAt, now = Date.now()): string {
   prune(now);
   const token = randomUUID();
-  store.set(token, { at: now, userId, places: new Map(rows.map(({ id, lat, lng, altitude, gpsSource, placeName, placeSetById }) => [id, { lat, lng, altitude, gpsSource, placeName, placeSetById }])) });
+  store.set(token, { at: now, userId, to: { lat: to.lat, lng: to.lng }, places: new Map(rows.map(({ id, lat, lng, altitude, gpsSource, placeName, placeSetById }) => [id, { lat, lng, altitude, gpsSource, placeName, placeSetById }])) });
   return token;
 }
 
-/** The places remembered under a token, for the member who made the move; null when there is no such snapshot. */
-export function placesFor(token: string | null | undefined, userId: string, now = Date.now()): Map<string, PlaceSnapshot> | null {
+/**
+ * The places remembered under a token, and where the move put them, for the member who made the move; null when
+ * there is no such snapshot.
+ */
+export function placesFor(token: string | null | undefined, userId: string, now = Date.now()): { to: PlacedAt; places: Map<string, PlaceSnapshot> } | null {
   prune(now);
   const s = token ? store.get(token) : undefined;
-  return s && s.userId === userId ? s.places : null;
+  return s && s.userId === userId ? { to: s.to, places: s.places } : null;
 }
 
 /** Undo is pressed once: a note that has been used is dropped, so it cannot put the places back over later changes. */

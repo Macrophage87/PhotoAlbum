@@ -158,6 +158,9 @@ async function settle(first: Row, decide: (r: Row) => Promise<"flag" | "hits" | 
   if (r) miss(result, r.id);
 }
 
+/** A guess the album still holds, shown or not: it has a name or evidence to judge. */
+const HELD_GUESS = { OR: [{ placeEstimateName: { not: null } }, { placeEstimateNote: { not: null } }] } satisfies Prisma.PhotoWhereInput;
+
 /**
  * Names: flag what mentions them and is not members-only yet (or is only because of a title word, which a name
  * outranks), and take the helper's titles off members-only items. `names` absent means everybody the album knows.
@@ -175,19 +178,20 @@ export async function rejudgeNames(names?: string[]): Promise<RejudgeResult> {
   };
   for await (const r of annotated()) await settle(r, decide, test, result);
 
-  // Place guesses, guarded on the words of the guess.
+  // Place guesses, guarded on the words of the guess: every guess the album holds, whether or not it is the item's
+  // place right now. One under a place set by hand comes back when that move is undone, with whatever flag it had.
   let cursor: string | null = null;
   for (;;) {
-    const guesses: { id: string; placeEstimateName: string | null; placeEstimateNote: string | null }[] = await db.photo.findMany({ where: { gpsSource: "ESTIMATE", placeEstimateMembersOnly: false }, orderBy: { id: "asc" }, take: BATCH, ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}), select: { id: true, placeEstimateName: true, placeEstimateNote: true } });
+    const guesses: { id: string; placeEstimateName: string | null; placeEstimateNote: string | null }[] = await db.photo.findMany({ where: { ...HELD_GUESS, placeEstimateMembersOnly: false }, orderBy: { id: "asc" }, take: BATCH, ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}), select: { id: true, placeEstimateName: true, placeEstimateNote: true } });
     if (!guesses.length) break;
     for (const first of guesses) {
       let g: (typeof guesses)[number] | null = first;
       let settled = false;
       for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
         if (!g || !test([g.placeEstimateName, g.placeEstimateNote].filter(Boolean).join("\n"))) { settled = true; break; }
-        const done = await db.photo.updateMany({ where: { id: g.id, gpsSource: "ESTIMATE", placeEstimateMembersOnly: false, placeEstimateName: g.placeEstimateName, placeEstimateNote: g.placeEstimateNote }, data: { placeEstimateMembersOnly: true } });
+        const done = await db.photo.updateMany({ where: { id: g.id, ...HELD_GUESS, placeEstimateMembersOnly: false, placeEstimateName: g.placeEstimateName, placeEstimateNote: g.placeEstimateNote }, data: { placeEstimateMembersOnly: true } });
         if (done.count) { result.places++; settled = true; break; }
-        g = await db.photo.findFirst({ where: { id: g.id, gpsSource: "ESTIMATE", placeEstimateMembersOnly: false }, select: { id: true, placeEstimateName: true, placeEstimateNote: true } });
+        g = await db.photo.findFirst({ where: { id: g.id, ...HELD_GUESS, placeEstimateMembersOnly: false }, select: { id: true, placeEstimateName: true, placeEstimateNote: true } });
       }
       if (!settled) miss(result, first.id);
       await pace();
