@@ -41,8 +41,11 @@ export async function nameScrubber(): Promise<NameScrubber> {
       // A photograph's own trip, activity and collections count too: tagged on one of the birthday's photographs,
       // "Sam's 5th birthday" is about them on all of them.
       const tagged = (photoIds.length || containers.length) && matchers.length ? await taggedOn(photoIds, [...containers, ...(await containersOf(photoIds))]) : new Set<string>();
+      // Only a photograph they are on themselves reads a place-like name as theirs wherever a place is not plainly
+      // meant; a request about a whole trip, collection or activity never does.
+      const onPhoto = !containers.length && photoIds.length && tagged.size ? await taggedOn(photoIds) : new Set<string>();
       const scope = tombstone.empty ? NO_SCOPE : await forgottenScope({ photoIds, containers }, tombstone);
-      return scrubWith(matchers, tagged, tombstone, scope);
+      return scrubWith(matchers, tagged, onPhoto, tombstone, scope);
     },
   };
 }
@@ -74,10 +77,10 @@ async function taggedOn(photoIds: string[], containers: Containers = []): Promis
 
 type Matcher = { id: string; m: NameMatcher; pending: boolean };
 
-function scrubWith(matchers: Matcher[], tagged: Set<string>, tombstone: Tombstone, scope: Scope): NameScrub {
+function scrubWith(matchers: Matcher[], tagged: Set<string>, onPhoto: Set<string>, tombstone: Tombstone, scope: Scope): NameScrub {
   return (text) => {
     if (typeof text !== "string" || !text) return text ?? null;
-    const named = matchers.reduce((t, { id, m, pending }) => m.scrub(t, { tagged: tagged.has(id), fullOnly: !pending }), text);
+    const named = matchers.reduce((t, { id, m, pending }) => m.scrub(t, { tagged: tagged.has(id), onPhoto: onPhoto.has(id), fullOnly: !pending }), text);
     // A one-word forgotten name only where its owner was tagged (see tombstone.ts).
     return tombstone.scrub(named, scope);
   };

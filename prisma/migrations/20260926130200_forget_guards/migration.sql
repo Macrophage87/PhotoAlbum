@@ -39,6 +39,8 @@ CREATE TABLE "ForgottenName" (
   "capitalizedOnly" BOOLEAN NOT NULL DEFAULT false,
   "photoIds" TEXT[] DEFAULT ARRAY[]::TEXT[],
   "containerIds" TEXT[] DEFAULT ARRAY[]::TEXT[],
+  "taggedPhotoIds" TEXT[] DEFAULT ARRAY[]::TEXT[],
+  "derived" BOOLEAN NOT NULL DEFAULT false,
   "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT "ForgottenName_pkey" PRIMARY KEY ("hash")
 );

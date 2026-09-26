@@ -214,6 +214,11 @@ export type Neighbourhood = {
    * one, so "Florence at the lake" and "Florence and Ben swam." are her.
    */
   ownPhotos?: boolean;
+  /**
+   * "clear": a place opening a sentence only where plainly one ("Florence 2019", "Florence trip"), as on their own
+   * photographs, without their other allowances: for photographs a note of theirs names them on.
+   */
+  opening?: "clear" | "wide";
   /** Whether a word is somebody's name the album knows: "Left to right: Ada, Ben" is no place and its region. */
   isNameWord?: (word: string) => boolean;
 };
@@ -250,11 +255,14 @@ export function notThePerson(text: string, start: number, end: number, n: Neighb
     const comma = Boolean(region && !n.own?.has(bare(region)) && !n.isNameWord?.(region));
     if (comma) return true;
     if (place !== "comma" && afterPlaceWord) return true;
+    // "Atlanta, Georgia": the region after its city, away from their own photographs.
+    const city = before.match(/(\p{Lu}[\p{L}\p{M}'’.-]*),[ \t]*$/u)?.[1] ?? null;
+    if (!n.ownPhotos && city && !n.own?.has(bare(city)) && !n.isNameWord?.(city)) return true;
     // Opening a sentence or a title ("Trip: Florence"), with nothing after it that a person would do.
     const opening = startsSentence(before) || /:[ \t]*$/u.test(before);
     // ("Left to right: Florence, Ben." lists people.)
     if (opening && !possessive && !(region && !comma)) {
-      if (n.ownPhotos ? PLACE_OPENING_CLEAR.test(after) : PLACE_OPENING.test(after)) return true;
+      if (n.ownPhotos || n.opening === "clear" ? PLACE_OPENING_CLEAR.test(after) : PLACE_OPENING.test(after)) return true;
     }
   }
   const caps = isUpperWord(match.replace(/[^\p{L}]/gu, ""));
@@ -356,6 +364,12 @@ export type Where = {
    * is as often a place in a member's title ("Florence and Tuscany 2019").
    */
   fullOnly?: boolean;
+  /**
+   * With `tagged`: whether they are on this very photograph (the default), or only elsewhere in its trip, collection
+   * or activity. Their short names count either way; only on their own photograph is a place-like name taken for
+   * them wherever a place is not plainly meant ("Charlotte in the rain" of the "Charlotte, NC 2020" trip is the city).
+   */
+  onPhoto?: boolean;
 };
 
 export type NameMatcher = {
@@ -378,7 +392,7 @@ export type NameMatcher = {
    * "June", "Grace" or "Will" (their own photographs were scrubbed when they were forgotten). A full name of everyday
    * words, and every one-word name, only as a name is written: "Sage", not "sage green".
    */
-  tombstoneForms: { form: string; capitalizedOnly: boolean }[];
+  tombstoneForms: { form: string; capitalizedOnly: boolean; derived?: boolean }[];
 };
 
 /** `whole`: all of their name ("Florence"), not the first name of a full one ("Florence" of Florence Adams). */
@@ -412,6 +426,7 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
   const strong = new Set<string>(); // any case, in keywords on their photographs: a first name that is no word
   const weak = new Set<string>(); // in keywords only as the whole tag, or beside another word of the name
   const oneWord: string[] = []; // a one-word name that is all of their name, for the tombstone
+  const firstNames: string[] = []; // the first name of a full one, for the tombstone (kept only where they were)
   const cjkAlbum: string[] = [];
   const cjkTagged: string[] = [];
   const capitalized = (w: string) => w.charAt(0).toUpperCase() + w.slice(1);
@@ -457,6 +472,8 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
       const core = tokens.slice(k);
       // "June", "Grace", "Will": remembered, they would take every month and every question with them.
       if (ni === 0 && tokens.length === 1 && letters(s) >= 3 && !isKin(s) && !NOT_SAFE.has(bare(s)) && !MONTHS.has(bare(s))) oneWord.push(s);
+      // "Sam" of Sam Kent: on the photographs the forget went through, "Sam blew out the candles" is still him.
+      else if (core.length >= 2 && letters(core[0]) >= 3 && !isKin(core[0]) && !NOT_SAFE.has(bare(core[0])) && !MONTHS.has(bare(core[0]))) firstNames.push(capitalized(core[0]));
       // In keywords, a first name that is no everyday word counts on its own; a surname, a middle name or an
       // everyday word ("grace", "byron bay", "wood fire") only as the whole tag or beside another word of the name.
       core.forEach((w, i) => {
@@ -543,8 +560,8 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
           // Florence"), and one before a number is a date or a thing ("Florence 2019"); on them, only a place written
           // as one ("Florence, Italy").
           // A first name taken from a full one is the place after "to" even there ("We flew to Florence.").
-          place: !where.tagged ? "wide" : short?.whole ? "comma" : "near",
-          ownPhotos: Boolean(where.tagged),
+          place: !where.tagged || where.onPhoto === false ? "wide" : short?.whole ? "comma" : "near",
+          ownPhotos: Boolean(where.tagged) && where.onPhoto !== false,
           number: !where.tagged,
         });
         return somebodyElse ? m : standInFor(m, whole.slice(0, offset), whole.slice(offset + m.length), title);
@@ -614,6 +631,7 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
       ...longAny.map((form) => ({ form, capitalizedOnly: false })),
       ...longCap.map((form) => ({ form, capitalizedOnly: true })),
       ...oneWord.map((form) => ({ form, capitalizedOnly: true })),
+      ...firstNames.map((form) => ({ form, capitalizedOnly: true, derived: true })),
       ...cjkAlbum.map((form) => ({ form, capitalizedOnly: false })),
     ],
   };

@@ -3,7 +3,7 @@ import { env } from "@/lib/env";
 import { db } from "@/lib/db";
 import { Prisma } from "@/generated/prisma/client";
 import type { StoredAnnotation } from "@/lib/annotation/schema";
-import { inTitleCase, isEverydayWord, isPlaceOrDateWord, normalizeName, notThePerson, replaceSpans } from "./scrub";
+import { inTitleCase, isEverydayWord, isPlaceOrDateWord, normalizeName, notThePerson, replaceSpans, type Neighbourhood } from "./scrub";
 
 /**
  * What the album remembers of somebody it has forgotten: keyed hashes of their names, never the names.
@@ -113,20 +113,21 @@ function normalizedForm(f: string): string {
  * trips, collections and activities (see `containerKey`) — ids only — and is only ever looked for there: "Florence"
  * anywhere else is a city.
  */
-export async function rememberForgotten(forms: { form: string; capitalizedOnly: boolean }[], where: { photoIds?: Iterable<string>; containerIds?: Iterable<string> } = {}): Promise<void> {
-  const photoIds = [...new Set(where.photoIds ?? [])];
+export async function rememberForgotten(forms: { form: string; capitalizedOnly: boolean; derived?: boolean }[], where: { photoIds?: Iterable<string>; taggedPhotoIds?: Iterable<string>; containerIds?: Iterable<string> } = {}): Promise<void> {
+  const taggedPhotoIds = [...new Set(where.taggedPhotoIds ?? [])];
+  const photoIds = [...new Set([...(where.photoIds ?? []), ...taggedPhotoIds])];
   const containerIds = [...new Set(where.containerIds ?? [])];
   const state = await forgetKeyState();
   const w = state.write;
   if (!w) throw new Error(`Forgetting is paused: ${state.problem ?? "no key"}`);
-  const rows = new Map<string, { hash: string; keyVersion: number; capitalizedOnly: boolean; photoIds: string[]; containerIds: string[] }>();
+  const rows = new Map<string, { hash: string; keyVersion: number; capitalizedOnly: boolean; derived: boolean; photoIds: string[]; taggedPhotoIds: string[]; containerIds: string[] }>();
   for (const f of forms) {
     const n = normalizedForm(f.form);
     if (!n || n.split(" ").length > MAX_WORDS) continue;
     const h = hash(w.key, n);
     const oneWord = !CJK.test(n) && !n.includes(" ");
     // A spelling stored both ways is matched the stricter way.
-    rows.set(h, { hash: h, keyVersion: w.version, capitalizedOnly: (rows.get(h)?.capitalizedOnly ?? true) && f.capitalizedOnly, photoIds: oneWord ? photoIds : [], containerIds: oneWord ? containerIds : [] });
+    rows.set(h, { hash: h, keyVersion: w.version, capitalizedOnly: (rows.get(h)?.capitalizedOnly ?? true) && f.capitalizedOnly, derived: (rows.get(h)?.derived ?? true) && Boolean(f.derived), photoIds: oneWord ? photoIds : [], taggedPhotoIds: oneWord ? taggedPhotoIds : [], containerIds: oneWord ? containerIds : [] });
   }
   if (!rows.size) return;
   // From the first name hashed under FORGET_KEY, running without that very key is noticed (see forgetKeyState).
@@ -134,11 +135,13 @@ export async function rememberForgotten(forms: { form: string; capitalizedOnly: 
   // The same name forgotten again (another Ximena, on other photographs) is looked for in both places.
   for (const r of rows.values()) {
     await db.$executeRaw`
-      INSERT INTO "ForgottenName" (hash, "keyVersion", "capitalizedOnly", "photoIds", "containerIds")
-      VALUES (${r.hash}, ${r.keyVersion}, ${r.capitalizedOnly}, ${r.photoIds}::text[], ${r.containerIds}::text[])
+      INSERT INTO "ForgottenName" (hash, "keyVersion", "capitalizedOnly", derived, "photoIds", "taggedPhotoIds", "containerIds")
+      VALUES (${r.hash}, ${r.keyVersion}, ${r.capitalizedOnly}, ${r.derived}, ${r.photoIds}::text[], ${r.taggedPhotoIds}::text[], ${r.containerIds}::text[])
       ON CONFLICT (hash) DO UPDATE SET
         "capitalizedOnly" = "ForgottenName"."capitalizedOnly" AND EXCLUDED."capitalizedOnly",
+        derived = "ForgottenName".derived AND EXCLUDED.derived,
         "photoIds" = ARRAY(SELECT DISTINCT unnest(COALESCE("ForgottenName"."photoIds", '{}') || EXCLUDED."photoIds")),
+        "taggedPhotoIds" = ARRAY(SELECT DISTINCT unnest(COALESCE("ForgottenName"."taggedPhotoIds", '{}') || EXCLUDED."taggedPhotoIds")),
         "containerIds" = ARRAY(SELECT DISTINCT unnest(COALESCE("ForgottenName"."containerIds", '{}') || EXCLUDED."containerIds"))`;
   }
 }
@@ -164,8 +167,15 @@ export function containerKey(kind: "trip" | "collection" | "activity", id: strin
  * The one-word forgotten names in play for a text (see `forgottenScope`), as `${keyVersion}:${hash}`, and who the
  * album knows is tagged on its photographs (a living Ximena Ruiz keeps "Ximena" on hers).
  */
-export type Scope = { rows: ReadonlySet<string>; tagged: ReadonlySet<string>; whole?: boolean };
-export const NO_SCOPE: Scope = { rows: new Set(), tagged: new Set() };
+export type Scope = {
+  rows: ReadonlySet<string>;
+  /** Of those, the ones whose owner was tagged on one of these photographs, where they are the likelier reading. */
+  own: ReadonlySet<string>;
+  tagged: ReadonlySet<string>;
+  /** About a whole trip, collection or activity. */
+  whole?: boolean;
+};
+export const NO_SCOPE: Scope = { rows: new Set(), own: new Set(), tagged: new Set() };
 
 /**
  * Which one-word forgotten names count in text about these photographs (theirs, and their trips', collections' and
@@ -191,8 +201,8 @@ export async function forgottenScope(where: { photoIds?: string[]; containers?: 
         UNION SELECT "photoId" FROM "CollectionItem" WHERE "collectionId" = ANY(${of("collection")}::text[])`
     : null;
   const [rows, tagged] = await Promise.all([
-    db.$queryRaw<{ keyVersion: number; hash: string }[]>`
-      SELECT "keyVersion", hash FROM "ForgottenName"
+    db.$queryRaw<{ keyVersion: number; hash: string; own: boolean }[]>`
+      SELECT "keyVersion", hash, (${containers.length === 0} AND "taggedPhotoIds" && ${photoIds}::text[]) AS own FROM "ForgottenName"
       WHERE "photoIds" && ${photoIds}::text[] OR "containerIds" && ${keys}::text[] ${inContainers ? Prisma.sql`OR "photoIds" && ARRAY(${inContainers})` : Prisma.empty}`,
     db.$queryRaw<{ personId: string }[]>`
       SELECT "personId" FROM "Face" WHERE "personId" IS NOT NULL AND "photoId" = ANY(${photoIds}::text[])
@@ -200,7 +210,7 @@ export async function forgottenScope(where: { photoIds?: string[]; containers?: 
       ${inContainers ? Prisma.sql`UNION SELECT "personId" FROM "Face" WHERE "personId" IS NOT NULL AND "photoId" IN (${inContainers}) UNION SELECT "personId" FROM "AnimalDetection" WHERE "personId" IS NOT NULL AND "photoId" IN (${inContainers})` : Prisma.empty}`,
   ]);
   // A whole trip, collection or activity is about many photographs, few of them hers: the wider place guard there.
-  return { rows: new Set(rows.map((r) => `${r.keyVersion}:${r.hash}`)), tagged: new Set(tagged.map((t) => t.personId)), whole: containers.length > 0 };
+  return { rows: new Set(rows.map((r) => `${r.keyVersion}:${r.hash}`)), own: new Set(rows.filter((r) => r.own).map((r) => `${r.keyVersion}:${r.hash}`)), tagged: new Set(tagged.map((t) => t.personId)), whole: containers.length > 0 };
 }
 
 /** Whether any forgotten name is kept with the places it was found. */
@@ -239,8 +249,8 @@ export async function tombstoneStale(ts: Tombstone): Promise<boolean> {
 export async function loadTombstone(): Promise<Tombstone> {
   const loadedAt = new Date();
   const state = await forgetKeyState();
-  const rows = await db.$queryRaw<{ hash: string; keyVersion: number; capitalizedOnly: boolean; scoped: boolean }[]>`
-    SELECT hash, "keyVersion", "capitalizedOnly", (cardinality(COALESCE("photoIds", '{}')) + cardinality(COALESCE("containerIds", '{}')) > 0) AS scoped
+  const rows = await db.$queryRaw<{ hash: string; keyVersion: number; capitalizedOnly: boolean; derived: boolean; scoped: boolean }[]>`
+    SELECT hash, "keyVersion", "capitalizedOnly", derived, (cardinality(COALESCE("photoIds", '{}')) + cardinality(COALESCE("containerIds", '{}')) > 0) AS scoped
     FROM "ForgottenName" WHERE "keyVersion" = ANY(${state.keys.map((k) => k.version)}::int[])`;
   if (!rows.length) return empty(loadedAt);
   const keys = state.keys.filter((k) => rows.some((r) => r.keyVersion === k.version));
@@ -266,12 +276,12 @@ export async function loadTombstone(): Promise<Tombstone> {
       .filter((r) => r.scoped || !current.has(`${r.keyVersion}:${r.hash}`))
       .map((r) => {
         const key = `${r.keyVersion}:${r.hash}`;
-        return [key, { key, capOnly: r.capitalizedOnly, scoped: r.scoped, people: r.scoped ? whoseForm.get(key) : undefined }] as const;
+        return [key, { key, capOnly: r.capitalizedOnly, derived: r.derived, scoped: r.scoped, people: r.scoped ? whoseForm.get(key) : undefined }] as const;
       }),
   );
   if (!byHash.size) return empty(loadedAt);
   /** A forgotten name this normalized run is, if any. */
-  const lookup = (norm: string): { key: string; capOnly: boolean; scoped: boolean; people?: Set<string> } | undefined => {
+  const lookup = (norm: string): { key: string; capOnly: boolean; derived: boolean; scoped: boolean; people?: Set<string> } | undefined => {
     for (const k of keys) {
       const v = byHash.get(`${k.version}:${hash(k.key, norm)}`);
       if (v) return v;
@@ -312,18 +322,28 @@ export async function loadTombstone(): Promise<Tombstone> {
             // Keywords: a word of its own, in any case, but not "florence duomo" or "may 2019".
             const beside = [tokens[i - 1], tokens[i + 1]].filter(Boolean);
             if (beside.some((t) => isPlaceOrDateWord(t.raw) || /^\p{Lu}/u.test(t.raw))) continue;
-          } else if (!guarded(text, run, found.capOnly)) continue;
+          } else if (!guarded(text, run, found.capOnly, found)) continue;
         } else if (found.capOnly && !guarded(text, run, true)) continue;
         spans.push([run[0].start, run[n - 1].end]);
         i += n - 1;
         break;
       }
     }
-    function guarded(t: string, run: typeof tokens, capOnly: boolean): boolean {
+    /**
+     * The words around a match. A one-word name on a photograph its owner was tagged on is them wherever a place is
+     * not plainly meant (a first name of a full one still a place after "to"); on one a note of theirs named them,
+     * after "in" or "to" it is the place ("Duomo in Florence"); about a whole trip, the wider guard.
+     */
+    function placeRules(found?: { key: string; derived: boolean }): Pick<Neighbourhood, "place" | "ownPhotos" | "opening"> {
+      if (!found || !scope || scope.whole) return { place: "near" };
+      if (scope.own.has(found.key)) return { place: found.derived ? "near" : "comma", ownPhotos: true };
+      return { place: "near", opening: "clear" };
+    }
+    function guarded(t: string, run: typeof tokens, capOnly: boolean, found?: { key: string; derived: boolean }): boolean {
       if (!capOnly) return true;
       if (!run.every((x) => capital(x.raw))) return false;
       title ??= inTitleCase(t, run.map((x) => x.raw));
-      return !notThePerson(t, run[0].start, run[run.length - 1].end, { title, date: isEverydayWord(run[0].raw), place: scope && !scope.whole ? "comma" : "near", number: true, ownPhotos: Boolean(scope && !scope.whole), own: new Set(run.map((x) => x.norm)), isNameWord });
+      return !notThePerson(t, run[0].start, run[run.length - 1].end, { title, date: isEverydayWord(run[0].raw), ...placeRules(found), number: true, own: new Set(run.map((x) => x.norm)), isNameWord });
     }
     for (const m of text.matchAll(CJK_RUN)) {
       const chars = [...m[0]];

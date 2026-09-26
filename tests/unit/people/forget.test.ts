@@ -248,6 +248,15 @@ describe("forgetting somebody", () => {
     expect(safe.trip?.title).toBe("A family member's 5th birthday");
   });
 
+  it("reads a place-like name as the place on a trip-mate's photograph", async () => {
+    const charlotte = await db.person.create({ data: { name: "Charlotte Smith", createdById: admin } });
+    const trip = await db.trip.create({ data: { slug: "clt", title: "Charlotte, NC 2020", startDate: new Date("2020-07-01"), endDate: new Date("2020-07-01"), createdById: admin } });
+    const hers = (await db.photo.create({ data: { uploaderId: admin, originalName: "c1.jpg", mimeType: "image/jpeg", storageKey: "c1", originalPath: "c1/o.jpg", sizeBytes: 1, status: "READY", tripId: trip.id } })).id;
+    const rain = (await db.photo.create({ data: { uploaderId: admin, originalName: "c2.jpg", mimeType: "image/jpeg", storageKey: "c2", originalPath: "c2/o.jpg", sizeBytes: 1, status: "READY", tripId: trip.id, caption: "Charlotte in the rain" } })).id;
+    await db.face.create({ data: { photoId: hers, personId: charlotte.id, status: "CONFIRMED", box: [0, 0, 1, 1], confidence: 0 } });
+    expect(await withoutUnpermittedNames((await loadItem(rain))!)).toMatchObject({ caption: "Charlotte in the rain", trip: { title: "Charlotte, NC 2020" } });
+  });
+
   it("takes the first name of somebody waiting to be forgotten out of everything, and out of answers", async () => {
     await db.person.create({ data: { name: "Ximena Ortiz", forgetPendingAt: new Date(), optedOutAt: new Date(), createdById: admin } });
     const elsewhere = (await db.photo.create({ data: { uploaderId: admin, originalName: "x.jpg", mimeType: "image/jpeg", storageKey: "x", originalPath: "x/o.jpg", sizeBytes: 1, status: "READY" } })).id;

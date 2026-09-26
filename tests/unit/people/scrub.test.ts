@@ -194,6 +194,15 @@ describe("words around a first name", () => {
     for (const t of ["Florence at the lake", "Florence and Tuscany 2019", "Florence in spring", "Florence, Italy", "Trip: Florence"]) expect(f.scrub(t)).toBe(t);
   });
 
+  it("keep a region after its city away from their photographs", () => {
+    const g = nameMatcher(["Georgia Brown"]);
+    for (const t of ["Atlanta, Georgia", "We drove to Savannah, Georgia at dawn"]) expect(g.scrub(t)).toBe(t);
+    // In their trip but not on this photograph, a place-like name is the place unless plainly them.
+    const c = nameMatcher(["Charlotte Smith"]);
+    expect(c.scrub("Charlotte in the rain", { tagged: true, onPhoto: false })).toBe("Charlotte in the rain");
+    expect(c.scrub("Charlotte in the rain", { tagged: true })).toBe("A family member in the rain");
+  });
+
   it("are theirs when they are words of their own name", () => {
     const m = nameMatcher(["Mary Ann Smith"]);
     expect(m.scrub("Mary Ann swam; Mary Smith dived")).toBe("A family member swam; a family member dived");

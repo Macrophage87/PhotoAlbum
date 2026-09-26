@@ -956,6 +956,10 @@ model ForgottenName {
   /// named them ("trip:<id>"): ids only. It is looked for nowhere else.
   photoIds        String[] @default([])
   containerIds    String[] @default([])
+  /// Of photoIds, the ones its owner was tagged on: there a place-like name is them unless a place is plainly meant.
+  taggedPhotoIds  String[] @default([])
+  /// The first name of a full one ("Sam" of Sam Kent), not all of somebody's name.
+  derived         Boolean  @default(false)
   createdAt       DateTime @default(now())
 
   @@index([photoIds], type: Gin)

@@ -1,7 +1,7 @@
 import { db } from "@/lib/db";
 import { forgetNameInText, matcherFor, memberTextMentioning, photosInContainers, photosMentioning, taggedPhotoIds } from "./forget";
 import { containerKey, forgetKeyState, rememberForgotten } from "./tombstone";
-import { isListedPlace } from "./scrub";
+import { isListedPlace, notThePerson } from "./scrub";
 import { withForgetLock } from "./names-changed";
 
 /**
@@ -36,9 +36,12 @@ export async function forgetPerson(personId: string, opts: { keepName: boolean; 
     // A one-word name that is also a place ("Florence"): the album's Florence trip is no mention of her. Only her
     // own photographs, and those whose notes name her where the words around it do not make it the place.
     const place = isListedPlace(person.name);
-    // Notes naming them at all ("Florence at the pool"), whatever the words around it: what the helper writes from
-    // them is about her.
-    const noted = await notesNaming(m.tombstoneForms.map((f) => f.form).filter((f) => !/\s/u.test(f)));
+    // Notes naming them ("Florence at the pool"): what the helper writes from them is about her. A name that is also
+    // a place counts only where the note is not plainly about the place ("Our week in Florence").
+    const oneWords = m.tombstoneForms.filter((f) => !/\s/u.test(f.form));
+    const placeLike = oneWords.filter((f) => isListedPlace(f.form));
+    const notedPlace = await notesNaming(placeLike.map((f) => f.form), true);
+    const noted = [...new Set([...(await notesNaming(oneWords.filter((f) => !isListedPlace(f.form)).map((f) => f.form), false)), ...notedPlace])];
     const photoIds = [...new Set([...tagged, ...before.photos.map((p) => p.id), ...noted, ...(place ? [] : [...(await photosMentioning(m)), ...(await photosInContainers(before))])])];
     const containerIds = place ? [] : [...before.trips.map((t) => containerKey("trip", t.id)), ...before.collections.map((c) => containerKey("collection", c.id)), ...before.activities.map((a) => containerKey("activity", a.id))];
     await held.assertHeld();
@@ -51,7 +54,11 @@ export async function forgetPerson(personId: string, opts: { keepName: boolean; 
     // are remembered, so names read before are read again.
     if (!keepName && !later) {
       await held.assertHeld();
-      await rememberForgotten(m.tombstoneForms, { photoIds, containerIds });
+      // A one-word name that is also a place is kept only with her own photographs and the notes that plainly mean
+      // her; any other with everything the forget went through.
+      const placeForms = new Set(placeLike.map((f) => f.form));
+      await rememberForgotten(m.tombstoneForms.filter((f) => !placeForms.has(f.form)), { photoIds, taggedPhotoIds: tagged, containerIds });
+      if (placeForms.size) await rememberForgotten(placeLike, { photoIds: notedPlace, taggedPhotoIds: tagged });
       await db.appSetting.update({ where: { id: "app" }, data: { lastForgetAt: new Date() } });
     }
     await held.assertHeld();
@@ -95,10 +102,21 @@ export async function completePendingForgets(): Promise<number> {
   return waiting.length;
 }
 
-/** Photographs whose notes have one of these one-word names in them, written as a name. */
-async function notesNaming(words: string[]): Promise<string[]> {
+/**
+ * Photographs whose notes have one of these one-word names in them, written as a name. `places`: names that are also
+ * places, counted only where the note is not plainly about the place — not after "in" or "to", not before ", Italy",
+ * a trip word or a number ("Florence at the pool" counts; "Our week in Florence" does not).
+ */
+async function notesNaming(words: string[], places: boolean): Promise<string[]> {
   if (!words.length) return [];
   const rows = await db.photo.findMany({ where: { OR: words.map((w) => ({ context: { contains: w } })) }, select: { id: true, context: true } });
-  const rx = new RegExp(`(?<![\\p{L}\\p{M}])(?:${words.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})(?![\\p{L}\\p{M}])`, "u");
-  return rows.filter((r) => r.context && rx.test(r.context)).map((r) => r.id);
+  const rx = new RegExp(`(?<![\\p{L}\\p{M}])(?:${words.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})(?![\\p{L}\\p{M}])`, "gu");
+  const her = (text: string) =>
+    [...text.matchAll(rx)].some((m) => {
+      if (!places) return true;
+      const end = m.index! + m[0].length;
+      if (/^[ \t]+(?:trip|trips|holiday|holidays|vacation|visit|getaway|weekend|skyline|\d)(?![\p{L}\p{M}])/iu.test(text.slice(end))) return false;
+      return !notThePerson(text, m.index!, end, { place: "near", opening: "clear", number: true });
+    });
+  return rows.filter((r) => r.context && her(r.context)).map((r) => r.id);
 }
