@@ -16,8 +16,9 @@ export async function GET(request: NextRequest, { params }: RouteContext<"/api/t
   const viewer = await getViewer();
   const trip = await db.trip.findUnique({ where: { slug }, select: { id: true, visibility: true, shareToken: true } });
   if (!trip || !canViewTrip(viewer, trip)) return NextResponse.json({ error: "Not found" }, { status: 404 });
-  const member = viewer.kind === "user";
   const sp = request.nextUrl.searchParams;
+  // A share page draws its first page as any visitor sees it, members included; its later pages must match.
+  const member = viewer.kind === "user" && sp.get("view") !== "share";
   // The next page of a narrowed gallery is the next page of that same narrowing, read the same way the page reads it.
   const filter = parseGalleryFilter(Object.fromEntries(sp.entries()), { member });
   // The same order the page was built in, or the next page would continue a different list.
@@ -25,8 +26,9 @@ export async function GET(request: NextRequest, { params }: RouteContext<"/api/t
   const order = asked === "oldest" ? "taken" : asked === "newest" ? "newest" : "favorites";
   // `ids` re-reads photos the gallery already shows, after an action changed them, under the same rules and filter.
   const ids = sp.get("ids")?.split(",").filter(Boolean).slice(0, REREAD_MAX);
-  const page = await tripPhotoPage(trip.id, ids ? { ids, take: Math.max(ids.length, 1), filter, order, viewerId: member ? viewer.user.id : null } : { cursor: sp.get("cursor"), filter, order, viewerId: member ? viewer.user.id : null });
+  const viewerId = member && viewer.kind === "user" ? viewer.user.id : null;
+  const page = await tripPhotoPage(trip.id, ids ? { ids, take: Math.max(ids.length, 1), filter, order, viewerId } : { cursor: sp.get("cursor"), filter, order, viewerId });
   // Hearts as the page draws them, so a tile from a later page has one too.
-  const favourites = await photoFavourites(page.photos.map((p) => p.id), viewer);
+  const favourites = member ? await photoFavourites(page.photos.map((p) => p.id), viewer) : new Map();
   return NextResponse.json({ photos: page.photos.map((p) => toGridPhoto(p, null, member, favourites.get(p.id))), nextCursor: ids ? null : page.nextCursor, total: page.total }, { headers: { "Cache-Control": "private, no-store" } });
 }
