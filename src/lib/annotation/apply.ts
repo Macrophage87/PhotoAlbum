@@ -80,7 +80,7 @@ const OPEN_TO_A_DATE_GUESS = {
  */
 export async function applyAnnotation(photoId: string, model: string, parsed: Annotation, raw: { usage?: Usage; batched?: boolean } & Record<string, unknown>, opts: { sent?: boolean | null; requestedAt?: Date; tombstone?: Tombstone; attempts?: number; replaceEdited?: boolean } = {}): Promise<void> {
   const requestedAt = opts.requestedAt;
-  const current = await db.photo.findUnique({ where: { id: photoId }, select: { takenAt: true, takenAtSource: true, estimatedDateSource: true, annotationSource: true, title: true, membersTitle: true, titleByHelper: true, annotation: true, kind: true, lat: true, placeSetById: true, placeEstimatedAt: true, context: true } });
+  const current = await db.photo.findUnique({ where: { id: photoId }, select: { takenAt: true, takenAtSource: true, estimatedDateSource: true, annotationSource: true, title: true, membersTitle: true, titleByHelper: true, annotation: true, annotationRevision: true, kind: true, lat: true, placeSetById: true, placeEstimatedAt: true, context: true } });
   if (!current) return;
   // Nobody forgotten comes back by way of a new answer, whoever it is about: their names are taken out first.
   const tombstone = opts.tombstone ?? (await loadTombstone());
@@ -120,8 +120,10 @@ export async function applyAnnotation(photoId: string, model: string, parsed: An
     if (forget.underWay) throw stale;
     // Somebody was forgotten since the forgotten names were read: read them again, and judge the answer afresh.
     if (forget.reload) throw reload;
+    // The text as it was read, too: a member's edit (or anything else that rewrote it) after the read is newer than
+    // this answer's view of it, so the answer is judged again against it rather than written over it.
     const written = await tx.photo.updateMany({
-      where: { id: photoId, ...(requestedAt ? unchangedSince(requestedAt) : {}) },
+      where: { id: photoId, annotationRevision: current.annotationRevision, annotationSource: current.annotationSource, ...(requestedAt ? unchangedSince(requestedAt) : {}) },
       data: {
         annotation: stored,
         annotationModel: model,
@@ -170,8 +172,11 @@ export async function applyAnnotation(photoId: string, model: string, parsed: An
   if (kept !== true) {
     await recordFailure(photoId, "names_changed", { terminal: false });
     // Asked again once the change has settled, so no item is left undescribed for it. A member's "Describe again,
-    // replacing ours" goes on being that, under its own key, as `reannotate` queues it.
-    if (opts.replaceEdited) await enqueue(QUEUES.annotatePhoto, { photoId, replace: true }, { singletonKey: `annotate-replace:${photoId}`, singletonSeconds: 60, startAfter: 60 });
+    // replacing ours" goes on being that, under its own key, as `reannotate` queues it — unless the text was written
+    // again since it was read: words a member wrote after asking are not the ones they agreed to lose.
+    const since = await db.photo.findUnique({ where: { id: photoId }, select: { annotationRevision: true, annotationSource: true } });
+    const rewritten = !since || since.annotationRevision !== current.annotationRevision || since.annotationSource !== current.annotationSource;
+    if (opts.replaceEdited && !rewritten) await enqueue(QUEUES.annotatePhoto, { photoId, replace: true }, { singletonKey: `annotate-replace:${photoId}`, singletonSeconds: 60, startAfter: 60 });
     else await enqueue(QUEUES.annotatePhoto, { photoId }, { singletonKey: `annotate:${photoId}`, singletonSeconds: 60, startAfter: 60 });
     return;
   }
