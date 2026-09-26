@@ -15,7 +15,8 @@ function remember(cookie: string, value: string) {
  */
 export function SortToggle<V extends string>({ value, options, cookie, label, testId, param = "order" }: {
   value: V;
-  options: { value: V; label: string }[];
+  /** `remember: false` for an order only this page has, which other lists sharing the cookie could not honour. */
+  options: { value: V; label: string; remember?: false }[];
   cookie: string;
   /** What the choice is about, for screen readers: "Which way the timeline runs". */
   label: string;
@@ -39,7 +40,7 @@ export function SortToggle<V extends string>({ value, options, cookie, label, te
         <Link
           key={o.value}
           href={href(o.value)}
-          onClick={() => remember(cookie, o.value)}
+          onClick={() => o.remember !== false && remember(cookie, o.value)}
           aria-current={value === o.value ? "true" : undefined}
           data-testid={`${testId}-${o.value}`}
           className={`px-2.5 py-1 rounded-theme whitespace-nowrap ${value === o.value ? "bg-primary text-primary-fg" : "text-muted hover:text-text hover:bg-surface-alt"}`}

@@ -173,7 +173,11 @@ const orderSchema = z.array(z.string().min(1)).max(5000);
 export async function reorderCollection(slug: string, itemIds: string[]): Promise<void> {
   const collection = await loadEditableCollection(slug);
   const order = orderSchema.parse(itemIds);
-  await db.$transaction(order.map((id, position) => db.collectionItem.updateMany({ where: { id, collectionId: collection.id }, data: { position } })));
+  await db.$transaction([
+    ...order.map((id, position) => db.collectionItem.updateMany({ where: { id, collectionId: collection.id }, data: { position } })),
+    // From now on the collection opens in this order rather than favourites first.
+    db.collection.update({ where: { id: collection.id }, data: { arrangedAt: new Date() } }),
+  ]);
   revalidatePath(`/collections/${slug}`, "layout");
 }
 
@@ -182,7 +186,10 @@ export async function sortCollectionByDate(slug: string): Promise<void> {
   const collection = await loadEditableCollection(slug);
   const items = await db.collectionItem.findMany({ where: { collectionId: collection.id }, select: { id: true, photo: { select: { takenAt: true, createdAt: true } } } });
   items.sort((a, b) => (a.photo.takenAt?.getTime() ?? Infinity) - (b.photo.takenAt?.getTime() ?? Infinity) || a.photo.createdAt.getTime() - b.photo.createdAt.getTime());
-  await db.$transaction(items.map((it, position) => db.collectionItem.update({ where: { id: it.id }, data: { position } })));
+  await db.$transaction([
+    ...items.map((it, position) => db.collectionItem.update({ where: { id: it.id }, data: { position } })),
+    db.collection.update({ where: { id: collection.id }, data: { arrangedAt: new Date() } }),
+  ]);
   revalidatePath(`/collections/${slug}`, "layout");
 }
 

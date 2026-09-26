@@ -62,7 +62,16 @@ export async function collectionCoverFor(collection: { id: string; coverPhoto: {
   return item?.photo ?? null;
 }
 
-export type CollectionItemCard = PhotoCard & { itemId: string; position: number };
+/** Where an item stands in the saved order, counting from 0, whichever order the list is shown in. */
+export type CollectionItemCard = PhotoCard & { itemId: string; position: number; arranged: number };
+
+/**
+ * The order a collection is shown in when nobody asks for another: the saved one, once somebody has arranged it, and
+ * otherwise favourites first. Pages without an order of their own (the overview, a shared link) use this.
+ */
+export function defaultCollectionOrder(collection: { arrangedAt: Date | null }): "arranged" | "favorites" {
+  return collection.arrangedAt ? "arranged" : "favorites";
+}
 
 /** Items in display order. Every status is included so members see processing tiles. */
 export async function listCollectionItems(collectionId: string, opts: { viewerId?: string | null; order?: "favorites" | "arranged" | "oldest" | "newest" } = {}): Promise<CollectionItemCard[]> {
@@ -71,7 +80,7 @@ export async function listCollectionItems(collectionId: string, opts: { viewerId
     orderBy: [{ position: "asc" }, { createdAt: "asc" }],
     select: { id: true, position: true, photo: { select: photoCardSelect } },
   });
-  const cards = items.map((i) => ({ ...i.photo, itemId: i.id, position: i.position }));
+  const cards = items.map((i, arranged) => ({ ...i.photo, itemId: i.id, position: i.position, arranged }));
   // By when they were taken, either way round; the undated keep their arranged places at the end, and the
   // arrangement settles ties.
   if (opts.order === "oldest" || opts.order === "newest") {

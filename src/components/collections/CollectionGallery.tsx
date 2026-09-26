@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { usePathname, useRouter } from "next/navigation";
 import { PhotoGrid, type GridPhoto } from "@/components/photos/PhotoGrid";
 import { Button } from "@/components/ui";
 import { ContainerPicker, type Container } from "@/components/containers/ContainerPicker";
@@ -9,7 +10,8 @@ import { bulkMoveToTrip, bulkTrash } from "@/app/photos/bulk-actions";
 import { BulkTrashControl } from "@/components/photos/TrashButton";
 import { previewAddToCollection, previewMoveToTrip } from "@/app/photos/exposure-actions";
 
-export type CollectionGridPhoto = GridPhoto & { itemId: string };
+/** `arranged`: the item's place in the saved order, whatever order the grid is showing. */
+export type CollectionGridPhoto = GridPhoto & { itemId: string; arranged: number };
 
 /**
  * A collection's items for members: select to remove or set the cover, arrange by drag, or sort by date.
@@ -29,6 +31,10 @@ export function CollectionGallery({ collectionId, slug, photos, editable, emptyM
   const confirmExposure = async (warnings: string[]) => warnings.length === 0 || window.confirm(`${warnings.join("\n")}\n\nContinue?`);
   const [pending, start] = useTransition();
   const ids = [...selected];
+  const router = useRouter();
+  const pathname = usePathname();
+  /** The saved order, which is what Arrange starts from and saves over, not whichever order the grid is showing. */
+  const saved = () => [...photos].sort((a, b) => a.arranged - b.arranged);
   /** Only a finished photograph, out of the trash, has a picture to lead with. */
   const coverable = ids.length === 1 && photos.find((p) => p.id === ids[0])?.status === "READY";
 
@@ -37,6 +43,12 @@ export function CollectionGallery({ collectionId, slug, photos, editable, emptyM
       await fn();
       setSelected(new Set());
       setMode("view");
+    });
+  /** Having just put the collection in order, show it in that order rather than the one it was being viewed in. */
+  const arrangeAnd = (fn: () => Promise<unknown>) =>
+    finish(async () => {
+      await fn();
+      router.replace(`${pathname}?order=arranged`);
     });
 
   const remove = () =>
@@ -77,8 +89,8 @@ export function CollectionGallery({ collectionId, slug, photos, editable, emptyM
             <>
               <Button variant="secondary" size="sm" onClick={() => { setMode("select"); setNotice(null); }}>Select photos</Button>
               {notice && <span className="text-muted" role="status">{notice}</span>}
-              <Button variant="secondary" size="sm" onClick={() => { setOrder(photos); setMode("arrange"); }}>Arrange</Button>
-              <Button variant="ghost" size="sm" disabled={pending} onClick={() => start(() => sortCollectionByDate(slug))}>Sort by date</Button>
+              <Button variant="secondary" size="sm" onClick={() => { setOrder(saved()); setMode("arrange"); }}>Arrange</Button>
+              <Button variant="ghost" size="sm" disabled={pending} onClick={() => arrangeAnd(() => sortCollectionByDate(slug))}>Sort by date</Button>
             </>
           )}
           {mode === "select" && (
@@ -112,7 +124,7 @@ export function CollectionGallery({ collectionId, slug, photos, editable, emptyM
           {mode === "arrange" && (
             <>
               <span className="text-muted">Drag photos into order</span>
-              <Button size="sm" disabled={pending} onClick={() => finish(() => reorderCollection(slug, order.map((p) => p.itemId)))}>Save order</Button>
+              <Button size="sm" disabled={pending} onClick={() => arrangeAnd(() => reorderCollection(slug, order.map((p) => p.itemId)))}>Save order</Button>
               <Button variant="ghost" size="sm" onClick={() => setMode("view")}>Cancel</Button>
             </>
           )}

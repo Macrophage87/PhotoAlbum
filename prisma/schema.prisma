@@ -471,6 +471,9 @@ model Collection {
   /// One photograph may lead any number of collections, as it may sit in any number of them.
   coverPhotoId String?
   coverPhoto   Photo?         @relation("CollectionCover", fields: [coverPhotoId], references: [id], onDelete: SetNull)
+  /// When somebody last put the items in an order of their own (by hand, or by date). Null means nobody has, and
+  /// the items sit in the order they were added; once set, the collection opens in its saved order.
+  arrangedAt   DateTime?
   annotationOptOut Boolean    @default(false)
   createdById  String
   createdBy    User           @relation(fields: [createdById], references: [id])
