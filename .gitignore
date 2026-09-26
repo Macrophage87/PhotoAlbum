@@ -51,6 +51,9 @@ next-env.d.ts
 /playwright-report
 /.scratch
 
+# local photo storage and Takeout inbox for `pnpm dev` outside Docker (README, Development)
+/.data
+
 # copied from node_modules by scripts/copy-map-worker.mjs
 /public/maplibre
 __pycache__/

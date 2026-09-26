@@ -22,6 +22,8 @@ const BLANK = {
   GOOGLE_ACCOUNTS_URL: "",
   GOOGLE_OAUTH_BASE_URL: "",
   GOOGLE_PHOTOS_API_URL: "",
+  GEOCODER_URL: "",
+  GEOCODER_ENABLED: "",
 };
 
 describe("blank URL variables", () => {
@@ -45,5 +47,12 @@ describe("blank URL variables", () => {
     await expect(loadEnv({ ...BLANK, ML_URL: "http://ml:8000" })).rejects.toThrow(/ML_TOKEN/);
     const e = await loadEnv({ ...BLANK, ML_URL: "http://ml:8000", ML_TOKEN: "t" });
     expect(e.ML_URL).toBe("http://ml:8000");
+  });
+
+  it("does not turn address lookup off with a blank GEOCODER_URL; only GEOCODER_ENABLED=false does", async () => {
+    const e = await loadEnv(BLANK);
+    expect(e.GEOCODER_URL).toBe("https://nominatim.openstreetmap.org/search");
+    expect(e.GEOCODER_ENABLED).toBe(true);
+    expect((await loadEnv({ ...BLANK, GEOCODER_ENABLED: "false" })).GEOCODER_ENABLED).toBe(false);
   });
 });

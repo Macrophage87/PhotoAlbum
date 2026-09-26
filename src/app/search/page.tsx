@@ -116,7 +116,7 @@ export default async function SearchPage({ searchParams }: PageProps<"/search">)
                       </optgroup>
                     )}
                   </select>
-                  <span className={fieldLabel}>Choose several for the ones they are all in</span>
+                  <span className={fieldLabel}>Choose several for the ones they are all in. On a computer, hold Ctrl (Command on a Mac) as you click each name.</span>
                 </div>
               )}
               <div className={field}>

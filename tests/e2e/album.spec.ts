@@ -8,6 +8,8 @@ import { createTrip, inviteFor, magicLinkFor, pressSignIn, resetDb, setVisibilit
 
 // Must match ADMIN_EMAIL as set by scripts/e2e-server.mjs: only that address may bootstrap the admin account.
 const ADMIN = process.env.E2E_ADMIN_EMAIL ?? "e2e-admin@example.com";
+// What the album calls the admin, who has no display name here: the part of the address before the @ (uploaderLabel).
+const ADMIN_LABEL = ADMIN.split("@")[0];
 const fixture = (n: string) => path.join(__dirname, "../fixtures", n);
 
 /**
@@ -111,7 +113,7 @@ test("uploading a photo processes it and assigns it to the trip by date", async 
   await place.getByRole("button", { name: /Jordan Pond, Mount Desert Island/ }).click();
   await place.getByRole("button", { name: "Save place" }).click();
   // The label names whoever pinned it, falling back to the part of their address before the @.
-  await expect(place.getByText("set by e2e-admin")).toBeVisible();
+  await expect(place.getByText(`set by ${ADMIN_LABEL}`)).toBeVisible();
   // What was looked up is what the place is called: the coordinates are shown under the name, not instead of it.
   await expect(place.getByTestId("place-name")).toHaveText(/Jordan Pond/);
   await expect(place.getByText("44.32600, -68.25300")).toBeVisible();
@@ -400,7 +402,7 @@ test("a trip can say who was on it, and stops collecting everybody else's photog
   // Say who was on the trip: the admin, and not them.
   await page.goto("/trips/acadia/settings");
   await page.getByTestId("trip-who-open").click();
-  await page.getByTestId("trip-who").getByLabel("e2e-admin@example.com").check();
+  await page.getByTestId("trip-who").getByLabel(ADMIN, { exact: true }).check();
   await page.getByRole("button", { name: "Save changes" }).click();
   await expect(page).toHaveURL(/saved=1/);
   const named = await withDb((c) => c.query(`SELECT u.email FROM "_TripParticipants" tp JOIN "User" u ON u.id = tp."B" JOIN "Trip" t ON t.id = tp."A" WHERE t.slug = 'acadia'`));
@@ -425,7 +427,7 @@ test("a trip can say who was on it, and stops collecting everybody else's photog
 
   // Put it back to everybody, so the rest of the file sees the trip it expects.
   await page.goto("/trips/acadia/settings");
-  await page.getByTestId("trip-who").getByLabel("e2e-admin@example.com").uncheck();
+  await page.getByTestId("trip-who").getByLabel(ADMIN, { exact: true }).uncheck();
   await page.getByRole("button", { name: "Save changes" }).click();
   await expect(page).toHaveURL(/saved=1/);
   const cleared = await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "_TripParticipants"`));
@@ -657,7 +659,7 @@ test("exposure warnings fire when widening and when lowering, and bulk actions a
   // Uploader names are a members-only layer.
   await page.goto("/collections/best-of-2025/photos");
   await page.locator("li button").first().click();
-  await expect(page.getByText("Uploaded by e2e-admin").first()).toBeVisible();
+  await expect(page.getByText(`Uploaded by ${ADMIN_LABEL}`).first()).toBeVisible();
   const anon = await browser.newContext();
   const anonPage = await anon.newPage();
   await anonPage.goto("/collections/best-of-2025/photos");
@@ -780,7 +782,7 @@ test("notes from the review screen and the item page are searchable, within what
 
   await page.goto("/search?q=lobster");
   await expect(page.getByRole("status")).toContainText("1 result");
-  await expect(page.getByText("Uploaded by e2e-admin").first()).toBeVisible();
+  await expect(page.getByText(`Uploaded by ${ADMIN_LABEL}`).first()).toBeVisible();
   await page.goto("/search?q=Mock+video");
   await expect(page.getByRole("status")).toContainText("1 result");
 
@@ -875,7 +877,7 @@ test("the AI helper describes reviewed items once an admin opts in, and opted-ou
   await expect(guessedPlace.getByText("the Domino Sugar sign across the water")).toBeVisible();
   // Accepting it keeps the position but stops it being a guess, and records who agreed.
   await guessedPlace.getByRole("button", { name: "Use this place" }).click();
-  await expect(guessedPlace.getByText("set by e2e-admin")).toBeVisible();
+  await expect(guessedPlace.getByText(`set by ${ADMIN_LABEL}`)).toBeVisible();
   const accepted = await withDb((c) => c.query('SELECT lat, "gpsSource" FROM "Photo" WHERE id = $1', [guessed.rows[0].id]));
   expect(accepted.rows[0]).toMatchObject({ gpsSource: "MANUAL", lat: guessed.rows[0].lat });
 
@@ -1231,12 +1233,12 @@ test("a pet tagged on a spotted animal is proposed on the next look-alike and co
   // The viewer's side panel: date, an Edit link for members, and a date that can be changed and put back.
   const info = dialog.getByTestId("lightbox-info");
   await expect(info.getByTestId("lightbox-edit")).toHaveAttribute("href", `/photos/${first.rows[0].id}`);
-  await expect(info.getByText("Uploaded by e2e-admin")).toBeVisible();
+  await expect(info.getByText(`Uploaded by ${ADMIN_LABEL}`)).toBeVisible();
   await expect(dialog.locator(`a[href*='/api/photos/${first.rows[0].id}/original']`)).toBeVisible();
   await info.getByRole("button", { name: "Change date" }).click();
   await info.getByLabel("Date taken").fill("2019-07-04T10:30");
   await info.getByRole("button", { name: "Save date" }).click();
-  await expect(info.getByText("set by e2e-admin")).toBeVisible();
+  await expect(info.getByText(`set by ${ADMIN_LABEL}`)).toBeVisible();
   const manual = await withDb((c) => c.query('SELECT "takenAtSource", "takenAt" FROM "Photo" WHERE id = $1', [first.rows[0].id]));
   expect(manual.rows[0].takenAtSource).toBe("MANUAL");
   expect(new Date(manual.rows[0].takenAt).getUTCFullYear()).toBe(2019);
@@ -1910,7 +1912,8 @@ test("a photo is dragged onto an activity on the timeline, and a selection can b
   const activityId = act.rows[0].id as string;
   // A photo of the admin's on the trip but on no activity: the one the timeline shows loose under its day.
   const loose = await withDb((c) => c.query(`SELECT p.id FROM "Photo" p JOIN "User" u ON u.id = p."uploaderId" WHERE p."tripId" = (SELECT id FROM "Trip" WHERE slug = 'acadia') AND p."activityId" IS NULL AND p.status = 'READY' AND p."trashedAt" IS NULL AND u.email = $1 ORDER BY p."createdAt" LIMIT 1`, [ADMIN]));
-  test.skip(loose.rows.length === 0, "no loose photo on the trip to drag");
+  // Fail, not skip, when an earlier test has filed every one: a skipped check reads as green in CI.
+  expect(loose.rows.length, "a photo of the admin's on Acadia with no activity, left by the upload tests").toBeGreaterThan(0);
   const photoId = loose.rows[0].id as string;
 
   await page.goto("/trips/acadia");
@@ -1989,7 +1992,7 @@ test("photographs with no place are dropped onto the map, several at a time", as
   // Something of the admin's with no position at all: the map cannot know where a file with no GPS was taken.
   await withDb((c) => c.query(`UPDATE "Photo" SET lat = NULL, lng = NULL, "gpsSource" = NULL WHERE "originalName" = 'photo-no-exif.jpg'`));
   const waiting = await withDb((c) => c.query(`SELECT p.id FROM "Photo" p JOIN "User" u ON u.id = p."uploaderId" WHERE u.email = $1 AND p.lat IS NULL AND p.status = 'READY' AND p."trashedAt" IS NULL ORDER BY p."createdAt" LIMIT 2`, [ADMIN]));
-  test.skip(waiting.rows.length < 1, "nothing is waiting for a place");
+  expect(waiting.rows.length, "photo-no-exif.jpg, uploaded by the admin earlier in this file").toBeGreaterThan(0);
 
   await page.goto("/place");
   const tray = page.getByTestId("place-tray");
@@ -2079,7 +2082,7 @@ test("a whole selection is auto-colored in one go, and handed back in one press"
   // Photographs of the admin's with nothing on them yet, so what the batch does to them is unambiguous.
   const plain = await withDb((c) => c.query(`SELECT p.id FROM "Photo" p JOIN "User" u ON u.id = p."uploaderId" WHERE p."tripId" = (SELECT id FROM "Trip" WHERE slug = 'acadia') AND p.kind = 'PHOTO' AND p.status = 'READY' AND p."trashedAt" IS NULL AND p.edits IS NULL AND u.email = $1 ORDER BY p."createdAt" LIMIT 3`, [ADMIN]));
   const picked = plain.rows.map((r: { id: string }) => r.id);
-  test.skip(picked.length === 0, "no untouched photographs on the trip");
+  expect(picked.length, "an unedited photo of the admin's on Acadia; an earlier test has edited them all").toBeGreaterThan(0);
 
   await page.goto("/trips/acadia/photos");
   await page.getByRole("button", { name: "Select photos" }).click();
@@ -2369,7 +2372,7 @@ test("existing photographs are put on a trip by searching for them, by place and
     WHERE p."tripId" IS NULL AND p.status = 'READY' AND p."trashedAt" IS NULL
       AND NOT EXISTS (SELECT 1 FROM "CollectionItem" ci WHERE ci."photoId" = p.id)
     ORDER BY p."createdAt" LIMIT 1`))).rows[0];
-  test.skip(!loose, "nothing unclaimed to gather up");
+  expect(loose, "a photo on no trip and in no collection, left by an earlier test").toBeTruthy();
   await withDb((c) => c.query(`UPDATE "Photo" SET "placeName" = $1, lat = 44.2223, lng = -68.3372 WHERE id = $2`, ["Bass Harbor Head Light", loose.id]));
 
   // The trip's gallery now offers a way in; trips had none before, uploads reached them only by date.

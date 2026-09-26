@@ -94,7 +94,7 @@ export function GalleryFilters({ filter, action, members, people, activities, ye
                     </optgroup>
                   )}
                 </select>
-                <span className="text-xs text-muted">Choose several for the ones they are all in</span>
+                <span className="text-xs text-muted">Choose several for the ones they are all in. On a computer, hold Ctrl (Command on a Mac) as you click each name.</span>
               </div>
             )}
 

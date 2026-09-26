@@ -113,7 +113,7 @@
             ],
             [
               "Photos",
-              "All of them in a plain grid, newest first."
+              "All of them in a plain grid, **Favorites first**. You can also put them in date order, oldest or newest first."
             ],
             [
               "Overview",
@@ -169,7 +169,7 @@
             ],
             [
               "Who is in it",
-              "A person or a pet. Choose two names and you get the ones they are _both_ in."
+              "A person or a pet. Choose two names and you get the ones they are _both_ in. On a computer, hold **Ctrl** (**Command** on a Mac) as you click each name; without it, each click replaces the name before. On a phone or tablet, just tap each name."
             ],
             [
               "Part of the trip",

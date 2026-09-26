@@ -34,6 +34,20 @@ describe("the family's guide", () => {
     expect(first.heading).toMatch(/getting in/i);
     expect(JSON.stringify(first)).toMatch(/password/i);
   });
+
+  it("says a Photos grid opens Favorites first, as the pages do (their sortChoice fallback is \"favorites\")", () => {
+    const rows = G.sections.flatMap((s) => s.blocks).flatMap((b) => (b.kind === "table" ? b.rows : []));
+    const photos = rows.filter((r) => r[0] === "Photos");
+    expect(photos.length).toBeGreaterThan(0);
+    for (const row of photos) expect(row[1]).toMatch(/favorites first/i);
+  });
+
+  it("explains that choosing two names on a computer takes Ctrl or Command, which a plain click does not do", () => {
+    const rows = G.sections.flatMap((s) => s.blocks).flatMap((b) => (b.kind === "table" ? b.rows : []));
+    const who = rows.find((r) => r[0] === "Who is in it");
+    expect(who?.[1]).toMatch(/Ctrl/);
+    expect(who?.[1]).toMatch(/hold \*\*Ctrl\*\* \(\*\*Command\*\* on a Mac\) as you click each name/);
+  });
 });
 
 describe("the guide's two marks of inline markup", () => {
