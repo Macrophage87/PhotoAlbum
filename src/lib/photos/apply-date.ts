@@ -20,7 +20,7 @@ export async function applyPhotoInstant(
   tzOffsetMin: number,
   source: TakenAtSource,
   dateSetById: string | null,
-  opts: { geotag?: boolean; releaseKeptOff?: boolean } = {},
+  opts: { geotag?: boolean; releaseKeptOff?: boolean; keepActivity?: boolean } = {},
 ): Promise<string | null> {
   let tripId = photo.tripId;
   if (!tripId) {
@@ -33,7 +33,11 @@ export async function applyPhotoInstant(
   // only a member typing (or picking) the one date this photo was taken — `releaseKeptOff` — says when it really
   // was, so that time decides again.
   const keptOff = !photo.activityId && photo.activitySetById !== null;
-  const { activityId, activitySetById } = await activityFor(opts.releaseKeptOff && keptOff ? { ...photo, activitySetById: null } : photo, tripId, takenAt);
+  // `keepActivity`: a date only known to the day says nothing about which hour's outing it was, so the filing stays
+  // as it is (or empty, on a trip it has only just joined).
+  const { activityId, activitySetById } = opts.keepActivity
+    ? tripId === photo.tripId ? { activityId: photo.activityId, activitySetById: photo.activitySetById } : { activityId: null, activitySetById: null }
+    : await activityFor(opts.releaseKeptOff && keptOff ? { ...photo, activitySetById: null } : photo, tripId, takenAt);
   await db.photo.update({
     where: { id: photo.id },
     data: {

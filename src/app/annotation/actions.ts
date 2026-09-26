@@ -115,8 +115,9 @@ export async function updateAnnotation(photoId: string, fd: FormData): Promise<v
 }
 
 /**
- * Turn the helper's estimate (or the member's own) into the item's real date. It goes the way any date a member
- * sets goes, so the trip, the activity and a pin taken from a track at the old time all follow it.
+ * Turn the helper's estimate (or the member's own) into the item's real date. Only the day is known — the noon is
+ * made up — so the day may put it on a trip, and a pin taken from a track at the old time goes, but the made-up hour
+ * neither picks an activity nor places it on a track, and a photo kept off every activity stays off.
  */
 export async function confirmEstimatedDate(photoId: string, fd: FormData): Promise<void> {
   const user = await requireUserOrThrow();
@@ -125,7 +126,7 @@ export async function confirmEstimatedDate(photoId: string, fd: FormData): Promi
   if (!canEditMedia(user, photo)) throw new Error(NOT_YOURS);
   const day = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).parse(fd.get("date"));
   await db.photo.update({ where: { id: photoId }, data: { estimatedDateSource: "MEMBER", estimatedDateNote: null, estimatedDateConfidence: null } });
-  await applyPhotoInstant(photo, new Date(`${day}T12:00:00Z`), 0, "MANUAL", user.id, { releaseKeptOff: true });
+  await applyPhotoInstant(photo, new Date(`${day}T12:00:00Z`), 0, "MANUAL", user.id, { geotag: false, keepActivity: true });
   await enqueueMatch([photoId]);
   revalidatePath(`/photos/${photoId}`);
   revalidatePath("/review");

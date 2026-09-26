@@ -37,7 +37,8 @@ const WEAK_DATE = ["FILE_MTIME", "UPLOAD_TIME", "FILE_NAME", "EXIF_CREATED"];
 /** Likewise a place the album worked out for itself. */
 const WEAK_PLACE = ["TRACK", "ESTIMATE", "SIDECAR"];
 
-export type FoldPlan = { data: Record<string, unknown>; filled: string[] };
+/** `conflict`: the copy's place was removed by hand while the keeper's was pinned by hand; the pin stays. */
+export type FoldPlan = { data: Record<string, unknown>; filled: string[]; conflict?: "place" };
 
 /**
  * What the keeper should take from one of its copies. Only what the keeper is missing, or holds on weaker grounds
@@ -73,12 +74,16 @@ export function planFold(keeper: FoldablePhoto, copy: FoldablePhoto): FoldPlan {
   const keeperPlaceIsWeak = !keeperHasPlace || keeper.gpsSource === null || WEAK_PLACE.includes(keeper.gpsSource);
   const copyHasPlace = copy.lat !== null && copy.lng !== null;
   const copyPlaceIsBetter = copyHasPlace && copy.gpsSource !== null && !WEAK_PLACE.includes(copy.gpsSource);
-  // A place somebody removed by hand is the strongest word on it there is: never filled on the keeper, and a copy
-  // that had its place removed takes the keeper's away too, with who removed it — it is the same photograph.
+  // A place somebody removed by hand is never filled on the keeper, and a copy that had its place removed takes the
+  // keeper's away too, with who removed it — it is the same photograph. Unless the keeper's place was pinned by
+  // hand as well: two members disagree, the pin stays, and the report says so for somebody to look at.
   const keeperCleared = !keeperHasPlace && keeper.placeSetById !== null;
   const copyCleared = !copyHasPlace && copy.placeSetById !== null;
+  let conflict: FoldPlan["conflict"];
   if (keeperCleared) {
     // Nothing to take.
+  } else if (copyCleared && keeper.gpsSource === "MANUAL") {
+    conflict = "place";
   } else if (copyCleared) {
     Object.assign(data, { lat: null, lng: null, altitude: null, gpsSource: null, placeName: null, placeSetById: copy.placeSetById });
     filled.push("place removed");
@@ -104,7 +109,7 @@ export function planFold(keeper: FoldablePhoto, copy: FoldablePhoto): FoldPlan {
     filled.push("trip");
   }
 
-  return { data, filled };
+  return { data, filled, ...(conflict ? { conflict } : {}) };
 }
 
 /** Which of a group of identical files to keep: the one that has been in the album longest. */
@@ -113,6 +118,8 @@ export function keeperOf<T extends { createdAt: Date; id: string }>(group: T[]):
 }
 
 export function describeFold(count: number, filled: string[]): string {
-  const what = filled.length ? `, keeping the ${filled.join(", ")} from ${filled.length === 1 ? "it" : "them"}` : "";
-  return `${count} identical ${count === 1 ? "copy" : "copies"} folded in${what}.`;
+  const kept = filled.filter((f) => f !== "place removed");
+  const what = kept.length ? `, keeping the ${kept.join(", ")} from ${count === 1 ? "it" : "them"}` : "";
+  const removed = filled.includes("place removed") ? `${kept.length ? " and" : ","} with the place removed` : "";
+  return `${count} identical ${count === 1 ? "copy" : "copies"} folded in${what}${removed}.`;
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { keeperOf, planFold, type FoldablePhoto } from "@/lib/photos/fold-duplicates";
+import { describeFold, keeperOf, planFold, type FoldablePhoto } from "@/lib/photos/fold-duplicates";
 
 const photo = (over: Partial<FoldablePhoto> = {}): FoldablePhoto => ({
   id: "a", caption: null, title: null, context: null, takenAt: null, takenAtSource: null,
@@ -57,6 +57,18 @@ describe("folding one identical copy into another", () => {
     const pinned = photo({ id: "b", lat: 39.4, lng: -76.6, gpsSource: "EXIF", placeName: "Home" });
     expect(planFold(cleared, pinned).data).toEqual({});
     expect(planFold(pinned, photo({ id: "c", placeSetById: "nana" })).data).toMatchObject({ lat: null, lng: null, gpsSource: null, placeName: null, placeSetById: "nana" });
+  });
+
+  it("keeps a place pinned by hand on the keeper over a copy's removal, and says the two disagree", () => {
+    const pinned = photo({ lat: 44.2, lng: -68.3, gpsSource: "MANUAL", placeSetById: "grandpa" });
+    const plan = planFold(pinned, photo({ id: "b", placeSetById: "nana" }));
+    expect(plan.data).toEqual({});
+    expect(plan.conflict).toBe("place");
+  });
+
+  it("says a removed place in words, not as something kept", () => {
+    expect(describeFold(1, ["place removed"])).toBe("1 identical copy folded in, with the place removed.");
+    expect(describeFold(2, ["caption", "place removed"])).toBe("2 identical copies folded in, keeping the caption from them and with the place removed.");
   });
 
   it("carries who pinned a copy's place, and who chose its activity, with them", () => {
