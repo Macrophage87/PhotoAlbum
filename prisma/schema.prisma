@@ -960,6 +960,9 @@ model ForgottenName {
   taggedPhotoIds  String[] @default([])
   /// The first name of a full one ("Sam" of Sam Kent), not all of somebody's name.
   derived         Boolean  @default(false)
+  /// The kinship words of the name it was taken from ("grandma" of Grandma Ruth): with another before it, it is
+  /// somebody else ("Aunt Ruth"). Plain words, never a name.
+  kinship         String[] @default([])
   createdAt       DateTime @default(now())
 
   @@index([photoIds], type: Gin)

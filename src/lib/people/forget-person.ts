@@ -1,7 +1,7 @@
 import { db } from "@/lib/db";
 import { forgetNameInText, matcherFor, memberTextMentioning, photosInContainers, photosMentioning, taggedPhotoIds } from "./forget";
 import { containerKey, forgetKeyState, rememberForgotten } from "./tombstone";
-import { isListedPlace, notThePerson, type NameMatcher, type Neighbourhood } from "./scrub";
+import { isListedPlace, nameMatcher, notThePerson, type NameMatcher, type Neighbourhood } from "./scrub";
 import { withForgetLock } from "./names-changed";
 
 /**
@@ -44,6 +44,9 @@ export async function forgetPerson(personId: string, opts: { keepName: boolean; 
     const placeLike = wholeOneWords.filter((f) => isListedPlace(f.form));
     const notedPlace = await notesNaming(placeLike.map((f) => f.form), true);
     const notedFull = await notesNamingInFull(m);
+    // A first name of a full one, not on a photograph whose notes give somebody the album knows by it in full ("Sam
+    // Kent and Sam Ortiz at the lake"): there it could be either.
+    const derivedNoted = await withoutNamesakes(notedFull, derived.map((f) => f.form), personId);
     const noted = [...new Set([...(await notesNaming(wholeOneWords.filter((f) => !isListedPlace(f.form)).map((f) => f.form), false)), ...notedPlace, ...notedFull])];
     const photoIds = [...new Set([...tagged, ...before.photos.map((p) => p.id), ...noted, ...(place ? [] : [...(await photosMentioning(m)), ...(await photosInContainers(before))])])];
     const containerIds = place ? [] : [...before.trips.map((t) => containerKey("trip", t.id)), ...before.collections.map((c) => containerKey("collection", c.id)), ...before.activities.map((a) => containerKey("activity", a.id))];
@@ -63,7 +66,7 @@ export async function forgetPerson(personId: string, opts: { keepName: boolean; 
       const placeForms = new Set(placeLike.map((f) => f.form));
       await rememberForgotten(m.tombstoneForms.filter((f) => !f.derived && !placeForms.has(f.form)), { photoIds, taggedPhotoIds: tagged, containerIds });
       if (placeForms.size) await rememberForgotten(placeLike, { photoIds: notedPlace, taggedPhotoIds: tagged });
-      if (derived.length) await rememberForgotten(derived, { photoIds: notedFull, taggedPhotoIds: tagged });
+      if (derived.length) await rememberForgotten(derived, { photoIds: derivedNoted, taggedPhotoIds: tagged });
       await db.appSetting.update({ where: { id: "app" }, data: { lastForgetAt: new Date() } });
     }
     await held.assertHeld();
@@ -109,12 +112,21 @@ export async function completePendingForgets(): Promise<number> {
 
 const TRIP_WORD_AFTER = /^[ \t]+(?:trip|trips|holiday|holidays|vacation|visit|getaway|weekend|skyline|day|days|\d)(?![\p{L}\p{M}])/iu;
 
+/** The time of day, the weather or the light after a place: "Florence at night", "Florence in the rain". */
+const SCENE_AFTER = /^[ \t]+(?:(?:at|by)[ \t]+(?:night|dusk|dawn|sunset|sunrise|twilight|midnight|daybreak)|in[ \t]+the[ \t]+(?:rain|snow|fog|mist|drizzle|sun|sunshine)|in[ \t]+(?:rain|snow|fog|mist))(?![\p{L}\p{M}])/iu;
+/** Another place joined to it: "Florence and Siena", "Florence vs Rome", "Pisa to Florence". */
+const JOINED_AFTER = /^[ \t]+(?:and|&|vs\.?|versus|or|to)[ \t]+(\p{Lu}[\p{L}\p{M}'’.-]*)/u;
+const JOINED_BEFORE = /(\p{Lu}[\p{L}\p{M}'’.-]*)[ \t]+(?:and|&|vs\.?|versus|or|to)[ \t]+$/u;
+
 /** Whether any mention of these words in a text is the place, by the rules given. */
 function usedAsPlace(text: string | null | undefined, rx: RegExp, rules: Neighbourhood): boolean {
   if (!text) return false;
   return [...text.matchAll(rx)].some((m) => {
     const end = m.index! + m[0].length;
-    return TRIP_WORD_AFTER.test(text.slice(end)) || notThePerson(text, m.index!, end, rules);
+    const after = text.slice(end);
+    const before = text.slice(0, m.index!);
+    const joined = [after.match(JOINED_AFTER)?.[1], before.match(JOINED_BEFORE)?.[1]].some((w) => w && isListedPlace(w));
+    return joined || SCENE_AFTER.test(after) || TRIP_WORD_AFTER.test(after) || notThePerson(text, m.index!, end, rules);
   });
 }
 
@@ -164,4 +176,15 @@ async function notesNamingInFull(m: NameMatcher): Promise<string[]> {
   const probe = (f: string) => [...f.split(/\s+/)].sort((a, b) => b.length - a.length)[0];
   const rows = await db.photo.findMany({ where: { OR: fulls.map((f) => ({ context: { contains: probe(f), mode: "insensitive" as const } })) }, select: { id: true, context: true } });
   return rows.filter((r) => m.mentions(r.context, { fullOnly: true })).map((r) => r.id);
+}
+
+/** Of these photographs, those whose notes name nobody else the album knows who shares one of these first names. */
+async function withoutNamesakes(photoIds: string[], firstNames: string[], personId: string): Promise<string[]> {
+  if (!photoIds.length || !firstNames.length) return photoIds;
+  const words = new Set(firstNames.flatMap((f) => f.toLowerCase().split(/\s+/)));
+  const namesakes = (await db.person.findMany({ where: { id: { not: personId } }, select: { name: true } })).map((p) => p.name).filter((n) => n.toLowerCase().split(/[\s-]+/).some((w) => words.has(w)));
+  if (!namesakes.length) return photoIds;
+  const rows = await db.photo.findMany({ where: { id: { in: photoIds } }, select: { id: true, context: true } });
+  const mentions = (context: string | null) => namesakes.some((n) => nameMatcher([n]).mentions(context, { fullOnly: true }));
+  return rows.filter((r) => !mentions(r.context)).map((r) => r.id);
 }

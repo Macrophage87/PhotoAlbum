@@ -260,6 +260,7 @@ export function notThePerson(text: string, start: number, end: number, n: Neighb
   const before = text.slice(0, start);
   const after = text.slice(end);
   const match = text.slice(start, end);
+  if (isIdiom(before, match, after)) return true;
   const { prev, next, possessive } = neighbours(before, after);
   const p = prev ? bare(prev.replace(/\.$/u, "")) : null;
   if (n.otherWords && ((p && n.otherWords.has(p)) || (next && n.otherWords.has(bare(next))))) return true;
@@ -320,6 +321,23 @@ export function isPlaceOrDateWord(word: string): boolean {
   const w = bare(word);
   return /^\d/u.test(w) || PLACE_NAMES.has(w) || WHEN_WORDS.has(w);
 }
+
+/**
+ * Sayings and words that happen to be a first name: "Uncle Sam", "the Book of Ruth", "Amazing Grace", "Jack in the
+ * box", and "Will" asking something ("Will you look at that!").
+ */
+function isIdiom(before: string, match: string, after: string): boolean {
+  const m = bare(match);
+  if (m === "sam" && /(?<![\p{L}])uncle[ \t]+$/iu.test(before)) return true;
+  if (m === "ruth" && /(?<![\p{L}])book[ \t]+of[ \t]+$/iu.test(before)) return true;
+  if (m === "grace" && /(?<![\p{L}])amazing[ \t]+$/iu.test(before)) return true;
+  if (m === "jack" && /^[ \t]+in[ \t]+the[ \t]+box(?![\p{L}])/iu.test(after)) return true;
+  if (m === "will" && /^[ \t]+(?:you|we|they|it|he|she|i|this|that|there)(?![\p{L}\p{M}'’])/iu.test(after)) return true;
+  return false;
+}
+
+/** Marks a stand-in whose kinship word goes with it (see nameMatcher). */
+const KIN_MARK = "\u0001";
 
 /** Whether a word is a title or kinship word ("Uncle", "Grandma", "Dr."). */
 export function isKinWord(word: string): boolean {
@@ -443,7 +461,7 @@ export type NameMatcher = {
    * "June", "Grace" or "Will" (their own photographs were scrubbed when they were forgotten). A full name of everyday
    * words, and every one-word name, only as a name is written: "Sage", not "sage green".
    */
-  tombstoneForms: { form: string; capitalizedOnly: boolean; derived?: boolean }[];
+  tombstoneForms: { form: string; capitalizedOnly: boolean; derived?: boolean; kinship?: string[] }[];
 };
 
 /** `whole`: all of their name ("Florence"), not the first name of a full one ("Florence" of Florence Adams). */
@@ -477,7 +495,8 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
   const strong = new Set<string>(); // any case, in keywords on their photographs: a first name that is no word
   const weak = new Set<string>(); // in keywords only as the whole tag, or beside another word of the name
   const oneWord: string[] = []; // a one-word name that is all of their name, for the tombstone
-  const firstNames: string[] = []; // the first name of a full one, for the tombstone (kept only where they were)
+  const firstNames: { form: string; kinship: string[] }[] = []; // the first name of a full one, for the tombstone (kept only where they were)
+  const ownKin = new Set<string>(); // kinship words of their own name ("grandma" of Grandma Ruth)
   const cjkAlbum: string[] = [];
   const cjkTagged: string[] = [];
   const capitalized = (w: string) => w.charAt(0).toUpperCase() + w.slice(1);
@@ -521,14 +540,16 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
       let k = 0;
       while (k < tokens.length - 1 && isKin(tokens[k])) k++;
       const core = tokens.slice(k);
+      const kinship = tokens.slice(0, k).map(bare);
+      for (const w of kinship) ownKin.add(w);
       // "June", "Grace", "Will": remembered, they would take every month and every question with them.
       if (ni === 0 && tokens.length === 1 && letters(s) >= 3 && !isKin(s) && !NOT_SAFE.has(bare(s)) && !MONTHS.has(bare(s))) oneWord.push(s);
       // "Sam" of Sam Kent, "Ruth" of Grandma Ruth, "Jack" and "Mary Ann": on the photographs they were tagged on,
       // "Jack at the lake" is still him. Months stay out ("May 2020").
       else if (ni === 0 && tokens.length >= 2) {
         const usable = (w: string) => letters(w) >= 2 && !isKin(w) && !NOT_A_NAME_WORD.has(bare(w)) && !MONTHS.has(bare(w));
-        if (usable(core[0])) firstNames.push(capitalized(core[0]));
-        if (core.length >= 3 && usable(core[0]) && usable(core[1])) firstNames.push(`${capitalized(core[0])} ${capitalized(core[1])}`);
+        if (usable(core[0])) firstNames.push({ form: capitalized(core[0]), kinship });
+        if (core.length >= 3 && usable(core[0]) && usable(core[1])) firstNames.push({ form: `${capitalized(core[0])} ${capitalized(core[1])}`, kinship });
       }
       // In keywords, a first name that is no everyday word counts on its own; a surname, a middle name or an
       // everyday word ("grace", "byron bay", "wood fire") only as the whole tag or beside another word of the name.
@@ -616,12 +637,26 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
           // Florence"), and one before a number is a date or a thing ("Florence 2019"); on them, only a place written
           // as one ("Florence, Italy").
           // A first name taken from a full one is the place after "to" even there ("We flew to Florence.").
-          place: !where.tagged || where.onPhoto === false ? "wide" : short?.whole ? "comma" : "travel",
+          place: !where.tagged || where.onPhoto === false ? "wide" : "travel",
           ownPhotos: Boolean(where.tagged) && where.onPhoto !== false,
           number: !where.tagged,
         });
-        return somebodyElse ? m : standInFor(m, whole.slice(0, offset), whole.slice(offset + m.length), title);
+        if (somebodyElse) return m;
+        const before = whole.slice(0, offset);
+        // On their own photograph, a kinship word before their name is them too: "Grandpa Sam at the lake" is "A
+        // family member at the lake" — unless their name carries another one ("Aunt Ruth" is not Grandma Ruth).
+        const kin = before.match(/(?<![\p{L}\p{M}])(\p{L}[\p{L}\p{M}'’.-]*)[ \t]+$/u);
+        if (kin && isKin(kin[1].replace(/\.$/u, ""))) {
+          if (ownKin.size && !ownKin.has(bare(kin[1]))) return m;
+          if (where.tagged && where.onPhoto !== false) {
+            const rest = before.slice(0, before.length - kin[0].length);
+            return `${KIN_MARK}${standInFor(m, rest, whole.slice(offset + m.length), title)}`;
+          }
+        }
+        return standInFor(m, before, whole.slice(offset + m.length), title);
       });
+      // The kinship word goes with the name it was part of.
+      if (out.includes(KIN_MARK)) out = out.replace(new RegExp(`(?<![\\p{L}\\p{M}])\\p{L}[\\p{L}\\p{M}'’.-]*[ \\t]+${KIN_MARK}`, "gu"), "").replaceAll(KIN_MARK, "");
     }
     return out === text ? out : withoutDoubledArticle(out);
   };
@@ -687,7 +722,7 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
       ...longAny.map((form) => ({ form, capitalizedOnly: false })),
       ...longCap.map((form) => ({ form, capitalizedOnly: true })),
       ...oneWord.map((form) => ({ form, capitalizedOnly: true })),
-      ...firstNames.map((form) => ({ form, capitalizedOnly: true, derived: true })),
+      ...firstNames.map(({ form, kinship }) => ({ form, capitalizedOnly: true, derived: true, kinship })),
       ...cjkAlbum.map((form) => ({ form, capitalizedOnly: false })),
     ],
   };

@@ -243,7 +243,9 @@ describe("names that are also words", () => {
     const ts = await loadTombstone();
     for (const t of ["Florence, Italy in spring.", "A trip to Florence, Italy", "Florence Nightingale statue", "Florence 2019", "Florence trip"]) expect(ts.scrub(t, await sc(on))).toBe(t);
     // On her photographs she is the likelier reading after "in" or "to".
-    expect(ts.scrub("By the pool in Florence", await sc(on))).toBe("By the pool in a family member");
+    expect(ts.scrub("By the pool with Florence", await sc(on))).toBe("By the pool with a family member");
+    // Where somebody is somewhere, it is the place: "in Florence." at the end of a sentence.
+    expect(ts.scrub("Florence and Ben in Florence.", await sc(on))).toBe("A family member and Ben in Florence.");
     // Elsewhere, not at all.
     const elsewhere = await photo();
     expect(ts.scrub("Florence in spring", await sc(elsewhere))).toBe("Florence in spring");
@@ -490,6 +492,64 @@ describe("names that are also words", () => {
     }
     await applyAnnotation(pool, "m", record({ caption: "Florence at the pool" }), { content: [] }, { requestedAt: new Date() });
     expect(((await db.photo.findUniqueOrThrow({ where: { id: pool } })).annotation as StoredAnnotation).caption).toBe("A family member at the pool");
+  });
+
+  it("takes a kinship word with their first name on their own photograph, unless it is somebody else's", async () => {
+    const kent = await forget("Sam Kent");
+    const kelly = await forget("Grace Kelly");
+    const ruth = await forget("Grandma Ruth");
+    const will = await forget("Will Turner");
+    const jack = await forget("Jack Brown");
+    const ts = await loadTombstone();
+    const cases: [string, string, string][] = [
+      [kent, "Grandpa Sam at the lake", "A family member at the lake"],
+      [kent, "Ben and Grandpa Sam blew out candles", "Ben and a family member blew out candles"],
+      [kelly, "Aunt Grace smiled", "A family member smiled"],
+      [kent, "Uncle Sam hat on Ben", "Uncle Sam hat on Ben"],
+      [ruth, "Aunt Ruth waves", "Aunt Ruth waves"],
+      [ruth, "Ruth waves", "A family member waves"],
+      [will, "Will you look at that!", "Will you look at that!"],
+      [jack, "Jack in the box", "Jack in the box"],
+    ];
+    for (const [on, text, want] of cases) expect(ts.scrub(text, await sc(on))).toBe(want);
+    // Elsewhere, "Grandpa Sam" is somebody else's.
+    expect(ts.scrub("Grandpa Sam at the lake", await sc(await photo()))).toBe("Grandpa Sam at the lake");
+  });
+
+  it("travels to a place-named person's city on her own photograph", async () => {
+    const on = await forget("Charlotte");
+    const ts = await loadTombstone();
+    expect(ts.scrub("We flew to Charlotte.", await sc(on))).toBe("We flew to Charlotte.");
+    expect(ts.scrub("Ben waved to Charlotte.", await sc(on))).toBe("Ben waved to a family member.");
+  });
+
+  it("leaves a forgotten first name alone where notes name a living namesake in full", async () => {
+    await db.person.create({ data: { name: "Sam Ortiz", createdById: admin } });
+    const kent = await db.person.create({ data: { name: "Sam Kent", createdById: admin } });
+    const his = await photo();
+    await db.face.create({ data: { photoId: his, personId: kent.id, status: "CONFIRMED", box: [0, 0, 1, 1], confidence: 0 } });
+    const both = await photo();
+    await db.photo.update({ where: { id: both }, data: { context: "Sam Kent and Sam Ortiz at the lake" } });
+    const alone = await photo();
+    await db.photo.update({ where: { id: alone }, data: { context: "Sam Kent at the lake" } });
+    await optOutPerson(kent.id, new FormData());
+    const ts = await loadTombstone();
+    expect(ts.scrub("Sam waved", await sc(both))).toBe("Sam waved");
+    expect(ts.scrub("Sam waved", await sc(alone))).toBe("A family member waved");
+  });
+
+  it("leaves notes about the place in a trip with no place in its name", async () => {
+    const florence = await db.person.create({ data: { name: "Florence", createdById: admin } });
+    const own = await photo();
+    await db.face.create({ data: { photoId: own, personId: florence.id, status: "CONFIRMED", box: [0, 0, 1, 1], confidence: 0 } });
+    const trip = await db.trip.create({ data: { slug: "tus", title: "Tuscany", description: "Two weeks driving around.", startDate: new Date("2019-05-01"), endDate: new Date("2019-05-14"), createdById: admin } });
+    const note = async (context: string, tripId: string | null = trip.id) => (await db.photo.create({ data: { uploaderId: admin, originalName: "t.jpg", mimeType: "image/jpeg", storageKey: "t", originalPath: "t/o.jpg", sizeBytes: 1, status: "READY", tripId, context } })).id;
+    const place = [await note("Florence at night"), await note("Florence and Siena by train"), await note("Florence in the rain"), await note("Ponte Vecchio. Florence at dusk"), await note("Florence at night", null), await note("Florence vs Rome", null)];
+    const pool = await note("Florence at the pool", null);
+    await optOutPerson(florence.id, new FormData());
+    const row = (await db.forgottenName.findMany()).find((r) => r.taggedPhotoIds.includes(own))!;
+    for (const id of place) expect(row.photoIds).not.toContain(id);
+    expect(row.photoIds).toContain(pool);
   });
 
   it("looks nothing up when nothing forgotten is kept by place", async () => {

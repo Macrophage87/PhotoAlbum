@@ -47,7 +47,7 @@ export default async function ForgottenPage() {
       <Container className="py-10 space-y-6 max-w-3xl">
         <div>
           <h1 className="font-display text-3xl font-semibold">Forgotten</h1>
-          <p className="text-muted mt-1">When somebody is forgotten, their face data, their tags and their person page go, and their name is taken out of everything the AI helper wrote and out of the name search. Words members wrote themselves are left as they wrote them; these still mention a forgotten name. From then on the album keeps their full names out of what goes to and comes back from the AI helper, and a one-word name only on the photos they were tagged on: a first name alone, anywhere else, is not taken out.</p>
+          <p className="text-muted mt-1">When somebody is forgotten, their face data, their tags and their person page go, and their name is taken out of everything the AI helper wrote and out of the name search. Words members wrote themselves are left as they wrote them; these still mention a forgotten name. From then on the album keeps their full names out of what goes to and comes back from the AI helper, and a one-word name only on the photos they were tagged on: a first name alone, anywhere else, is not taken out. First names that are also months, like May or June, are never looked for, even on their own photos.</p>
         </div>
         {shown.length === 0 && <p>Nothing left to see to.</p>}
         {shown.map((l) => (

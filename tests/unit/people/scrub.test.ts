@@ -215,6 +215,14 @@ describe("words around a first name", () => {
     expect(nameMatcher(["Georgia Brown"]).scrub("Atlanta, Georgia. Then Savannah, Georgia. Georgia waved.")).toBe("Atlanta, Georgia. Then Savannah, Georgia. A family member waved.");
   });
 
+  it("take a kinship word with the name on their own photograph, as the forgotten names do", () => {
+    expect(nameMatcher(["Sam Kent"]).scrub("Grandpa Sam at the lake", { tagged: true })).toBe("A family member at the lake");
+    expect(nameMatcher(["Sam Kent"]).scrub("Uncle Sam hat on Ben", { tagged: true })).toBe("Uncle Sam hat on Ben");
+    expect(nameMatcher(["Grandma Ruth"]).scrub("Aunt Ruth waves", { tagged: true })).toBe("Aunt Ruth waves");
+    expect(nameMatcher(["Will Turner"]).scrub("Will you look at that!", { tagged: true })).toBe("Will you look at that!");
+    expect(nameMatcher(["Jack Brown"]).scrub("Jack in the box", { tagged: true })).toBe("Jack in the box");
+  });
+
   it("are theirs when they are words of their own name", () => {
     const m = nameMatcher(["Mary Ann Smith"]);
     expect(m.scrub("Mary Ann swam; Mary Smith dived")).toBe("A family member swam; a family member dived");

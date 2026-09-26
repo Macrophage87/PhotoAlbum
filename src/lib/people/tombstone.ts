@@ -113,21 +113,21 @@ function normalizedForm(f: string): string {
  * trips, collections and activities (see `containerKey`) — ids only — and is only ever looked for there: "Florence"
  * anywhere else is a city.
  */
-export async function rememberForgotten(forms: { form: string; capitalizedOnly: boolean; derived?: boolean }[], where: { photoIds?: Iterable<string>; taggedPhotoIds?: Iterable<string>; containerIds?: Iterable<string> } = {}): Promise<void> {
+export async function rememberForgotten(forms: { form: string; capitalizedOnly: boolean; derived?: boolean; kinship?: string[] }[], where: { photoIds?: Iterable<string>; taggedPhotoIds?: Iterable<string>; containerIds?: Iterable<string> } = {}): Promise<void> {
   const taggedPhotoIds = [...new Set(where.taggedPhotoIds ?? [])];
   const photoIds = [...new Set([...(where.photoIds ?? []), ...taggedPhotoIds])];
   const containerIds = [...new Set(where.containerIds ?? [])];
   const state = await forgetKeyState();
   const w = state.write;
   if (!w) throw new Error(`Forgetting is paused: ${state.problem ?? "no key"}`);
-  const rows = new Map<string, { hash: string; keyVersion: number; capitalizedOnly: boolean; derived: boolean; photoIds: string[]; taggedPhotoIds: string[]; containerIds: string[] }>();
+  const rows = new Map<string, { hash: string; keyVersion: number; capitalizedOnly: boolean; derived: boolean; kinship: string[]; photoIds: string[]; taggedPhotoIds: string[]; containerIds: string[] }>();
   for (const f of forms) {
     const n = normalizedForm(f.form);
     if (!n || n.split(" ").length > MAX_WORDS) continue;
     const h = hash(w.key, n);
     const oneWord = (!CJK.test(n) && !n.includes(" ")) || Boolean(f.derived);
     // A spelling stored both ways is matched the stricter way.
-    rows.set(h, { hash: h, keyVersion: w.version, capitalizedOnly: (rows.get(h)?.capitalizedOnly ?? true) && f.capitalizedOnly, derived: (rows.get(h)?.derived ?? true) && Boolean(f.derived), photoIds: oneWord ? photoIds : [], taggedPhotoIds: oneWord ? taggedPhotoIds : [], containerIds: oneWord ? containerIds : [] });
+    rows.set(h, { hash: h, keyVersion: w.version, capitalizedOnly: (rows.get(h)?.capitalizedOnly ?? true) && f.capitalizedOnly, derived: (rows.get(h)?.derived ?? true) && Boolean(f.derived), kinship: [...new Set([...(rows.get(h)?.kinship ?? []), ...(f.kinship ?? []).map(normalizeName)])], photoIds: oneWord ? photoIds : [], taggedPhotoIds: oneWord ? taggedPhotoIds : [], containerIds: oneWord ? containerIds : [] });
   }
   if (!rows.size) return;
   // From the first name hashed under FORGET_KEY, running without that very key is noticed (see forgetKeyState).
@@ -135,11 +135,12 @@ export async function rememberForgotten(forms: { form: string; capitalizedOnly: 
   // The same name forgotten again (another Ximena, on other photographs) is looked for in both places.
   for (const r of rows.values()) {
     await db.$executeRaw`
-      INSERT INTO "ForgottenName" (hash, "keyVersion", "capitalizedOnly", derived, "photoIds", "taggedPhotoIds", "containerIds")
-      VALUES (${r.hash}, ${r.keyVersion}, ${r.capitalizedOnly}, ${r.derived}, ${r.photoIds}::text[], ${r.taggedPhotoIds}::text[], ${r.containerIds}::text[])
+      INSERT INTO "ForgottenName" (hash, "keyVersion", "capitalizedOnly", derived, kinship, "photoIds", "taggedPhotoIds", "containerIds")
+      VALUES (${r.hash}, ${r.keyVersion}, ${r.capitalizedOnly}, ${r.derived}, ${r.kinship}::text[], ${r.photoIds}::text[], ${r.taggedPhotoIds}::text[], ${r.containerIds}::text[])
       ON CONFLICT (hash) DO UPDATE SET
         "capitalizedOnly" = "ForgottenName"."capitalizedOnly" AND EXCLUDED."capitalizedOnly",
         derived = "ForgottenName".derived AND EXCLUDED.derived,
+        kinship = ARRAY(SELECT DISTINCT unnest(COALESCE("ForgottenName".kinship, '{}') || EXCLUDED.kinship)),
         "photoIds" = ARRAY(SELECT DISTINCT unnest(COALESCE("ForgottenName"."photoIds", '{}') || EXCLUDED."photoIds")),
         "taggedPhotoIds" = ARRAY(SELECT DISTINCT unnest(COALESCE("ForgottenName"."taggedPhotoIds", '{}') || EXCLUDED."taggedPhotoIds")),
         "containerIds" = ARRAY(SELECT DISTINCT unnest(COALESCE("ForgottenName"."containerIds", '{}') || EXCLUDED."containerIds"))`;
@@ -249,8 +250,8 @@ export async function tombstoneStale(ts: Tombstone): Promise<boolean> {
 export async function loadTombstone(): Promise<Tombstone> {
   const loadedAt = new Date();
   const state = await forgetKeyState();
-  const rows = await db.$queryRaw<{ hash: string; keyVersion: number; capitalizedOnly: boolean; derived: boolean; scoped: boolean }[]>`
-    SELECT hash, "keyVersion", "capitalizedOnly", derived, (cardinality(COALESCE("photoIds", '{}')) + cardinality(COALESCE("containerIds", '{}')) > 0) AS scoped
+  const rows = await db.$queryRaw<{ hash: string; keyVersion: number; capitalizedOnly: boolean; derived: boolean; kinship: string[] | null; scoped: boolean }[]>`
+    SELECT hash, "keyVersion", "capitalizedOnly", derived, kinship, (cardinality(COALESCE("photoIds", '{}')) + cardinality(COALESCE("containerIds", '{}')) > 0) AS scoped
     FROM "ForgottenName" WHERE "keyVersion" = ANY(${state.keys.map((k) => k.version)}::int[])`;
   if (!rows.length) return empty(loadedAt);
   const keys = state.keys.filter((k) => rows.some((r) => r.keyVersion === k.version));
@@ -278,12 +279,12 @@ export async function loadTombstone(): Promise<Tombstone> {
       .filter((r) => r.scoped || !current.has(`${r.keyVersion}:${r.hash}`))
       .map((r) => {
         const key = `${r.keyVersion}:${r.hash}`;
-        return [key, { key, capOnly: r.capitalizedOnly, derived: r.derived, scoped: r.scoped, people: r.scoped ? whoseForm.get(key) : undefined }] as const;
+        return [key, { key, capOnly: r.capitalizedOnly, derived: r.derived, kinship: r.kinship ?? [], scoped: r.scoped, people: r.scoped ? whoseForm.get(key) : undefined }] as const;
       }),
   );
   if (!byHash.size) return empty(loadedAt);
   /** A forgotten name this normalized run is, if any. */
-  const lookup = (norm: string): { key: string; capOnly: boolean; derived: boolean; scoped: boolean; people?: Set<string> } | undefined => {
+  const lookup = (norm: string): { key: string; capOnly: boolean; derived: boolean; kinship: string[]; scoped: boolean; people?: Set<string> } | undefined => {
     for (const k of keys) {
       const v = byHash.get(`${k.version}:${hash(k.key, norm)}`);
       if (v) return v;
@@ -312,6 +313,7 @@ export async function loadTombstone(): Promise<Tombstone> {
         if (run.some((t, j) => j > 0 && !/^[\s\-‐]+$/u.test(text.slice(run[j - 1].end, t.start)))) continue;
         const found = lookup(run.map((t) => t.norm).join(" "));
         if (!found) continue;
+        let start = run[0].start;
         if (n === 1 || found.scoped) {
           // Only where the forget found them; a row from before that was kept, nowhere.
           if (!scope?.rows.has(found.key)) continue;
@@ -324,11 +326,18 @@ export async function loadTombstone(): Promise<Tombstone> {
             const beside = [tokens[i - 1], tokens[i + 1]].filter(Boolean);
             if (beside.some((t) => isPlaceOrDateWord(t.raw) || /^\p{Lu}/u.test(t.raw))) continue;
           } else if (!guarded(text, run, found.capOnly, found)) continue;
-          // "Uncle Sam hat": a kinship word before a first name makes it somebody else (their own "Grandma Ruth" is
-          // matched whole, before this).
-          if (found.derived && i > 0 && isKinWord(tokens[i - 1].raw) && /^[\s]+$/u.test(text.slice(tokens[i - 1].end, run[0].start))) continue;
+          // A kinship word before it: on their own photograph it is them, and goes with the name ("Grandpa Sam at the
+          // lake" is "A family member at the lake") unless their name carries another ("Aunt Ruth" is not Grandma
+          // Ruth); elsewhere it is somebody else's ("Uncle Sam hat"). Their own "Grandma Ruth" is matched whole.
+          const kin = i > 0 && isKinWord(tokens[i - 1].raw) && /^[\s]+$/u.test(text.slice(tokens[i - 1].end, run[0].start)) ? tokens[i - 1] : null;
+          if (kin) {
+            const other = found.kinship.length > 0 && !found.kinship.includes(kin.norm);
+            if (other) continue;
+            if (scope.own.has(found.key)) start = kin.start;
+            else if (found.derived) continue;
+          }
         } else if (found.capOnly && !guarded(text, run, true)) continue;
-        spans.push([run[0].start, run[n - 1].end]);
+        spans.push([start, run[n - 1].end]);
         i += n - 1;
         break;
       }
@@ -340,7 +349,7 @@ export async function loadTombstone(): Promise<Tombstone> {
      */
     function placeRules(found?: { key: string; derived: boolean }): Pick<Neighbourhood, "place" | "ownPhotos" | "opening"> {
       if (!found || !scope || scope.whole) return { place: "near" };
-      if (scope.own.has(found.key)) return { place: found.derived ? "travel" : "comma", ownPhotos: true };
+      if (scope.own.has(found.key)) return { place: "travel", ownPhotos: true };
       return { place: "near", opening: "clear" };
     }
     function guarded(t: string, run: typeof tokens, capOnly: boolean, found?: { key: string; derived: boolean }): boolean {
