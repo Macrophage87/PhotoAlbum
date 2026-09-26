@@ -593,6 +593,12 @@ test("exposure warnings fire when widening and when lowering, and bulk actions a
   await expect(page.getByRole("heading", { name: "Photos without a trip" })).toBeVisible();
   await page.getByRole("button", { name: "Select photos" }).click();
   await page.locator("li button").first().click();
+  // Tabbing past the picker closes its list rather than leaving it over the buttons that follow (#129).
+  const collectionPicker = page.getByLabel("Add to collection…");
+  await collectionPicker.focus();
+  await expect(collectionPicker).toHaveAttribute("aria-expanded", "true");
+  await page.keyboard.press("Tab");
+  await expect(collectionPicker).toHaveAttribute("aria-expanded", "false");
   // The picker searches instead of listing everything; typing a couple of letters is enough.
   await page.getByLabel("Add to collection…").fill("Best of");
   await page.getByRole("option", { name: /Best of 2025/ }).click();

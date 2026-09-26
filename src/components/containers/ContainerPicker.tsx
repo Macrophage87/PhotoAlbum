@@ -11,9 +11,13 @@ const WORD = { trip: { one: "trip", many: "trips" }, collection: { one: "collect
 /** Wait this long after the last keystroke before asking the server, so typing a title is one request, not ten. */
 const DEBOUNCE_MS = 180;
 
+/** Which search a set of results answers, so results for what was typed a moment ago are never taken for these. */
+export const searchKey = (kind: ContainerKind, query: string, tripId?: string) => `${kind}\u0000${tripId ?? ""}\u0000${query}`;
+
 function useSearch(kind: ContainerKind, query: string, open: boolean, tripId?: string) {
-  const [hits, setHits] = useState<ContainerHit[]>([]);
+  const [result, setResult] = useState<{ key: string; hits: ContainerHit[] }>({ key: "", hits: [] });
   const [loading, setLoading] = useState(false);
+  const key = searchKey(kind, query, tripId);
   useEffect(() => {
     if (!open) return;
     let live = true;
@@ -21,13 +25,20 @@ function useSearch(kind: ContainerKind, query: string, open: boolean, tripId?: s
       setLoading(true);
       fetch(`/api/containers?kind=${kind}&q=${encodeURIComponent(query)}${tripId ? `&trip=${encodeURIComponent(tripId)}` : ""}`, { credentials: "same-origin" })
         .then((r) => (r.ok ? r.json() : { hits: [] }))
-        .then((j: { hits: ContainerHit[] }) => { if (live) setHits(j.hits ?? []); })
-        .catch(() => { if (live) setHits([]); })
+        .then((j: { hits: ContainerHit[] }) => { if (live) setResult({ key, hits: j.hits ?? [] }); })
+        .catch(() => { if (live) setResult({ key, hits: [] }); })
         .finally(() => { if (live) setLoading(false); });
     }, query ? DEBOUNCE_MS : 0);
     return () => { live = false; clearTimeout(timer); };
-  }, [kind, query, open, tripId]);
-  return { hits, loading };
+  }, [kind, query, open, tripId, key]);
+  // Until the answer to this query arrives, the last one is still shown but cannot be picked from with Enter.
+  const fresh = result.key === key;
+  return { hits: result.hits, loading: loading || !fresh, fresh };
+}
+
+/** Focus has gone somewhere outside the picker — tabbed past it, say — so its list should not stay open over what follows. */
+export function leftFor(box: { contains: (n: Node | null) => boolean } | null, next: EventTarget | null): boolean {
+  return !box || !next || !box.contains(next as Node);
 }
 
 function visibilityNote(v?: string): string | null {
@@ -86,7 +97,7 @@ export function ContainerPicker({ kind, value, onChange, placeholder, allowNone,
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const box = useRef<HTMLDivElement>(null);
-  const { hits, loading } = useSearch(kind, query, open, tripId);
+  const { hits, loading, fresh } = useSearch(kind, query, open, tripId);
 
   useEffect(() => {
     if (!open) return;
@@ -100,7 +111,7 @@ export function ContainerPicker({ kind, value, onChange, placeholder, allowNone,
   const options = hits.length + tail.length;
 
   return (
-    <div ref={box} className={`relative ${className ?? ""}`} data-testid={`${kind}-picker`}>
+    <div ref={box} className={`relative ${className ?? ""}`} data-testid={`${kind}-picker`} onBlur={(e) => { if (!leftFor(box.current, e.relatedTarget)) return; setOpen(false); }}>
       {name && <input type="hidden" name={name} value={value?.id ?? ""} />}
       <input
         type="text"
@@ -120,6 +131,8 @@ export function ContainerPicker({ kind, value, onChange, placeholder, allowNone,
           else if (e.key === "ArrowUp") { e.preventDefault(); setActive((a) => Math.max(a - 1, 0)); }
           else if (e.key === "Enter" && open) {
             e.preventDefault();
+            // Enter straight after typing waits for the answer to what was typed, not the list before it.
+            if (!fresh) return;
             if (active >= hits.length) choose(tail[active - hits.length] ?? null);
             else if (hits[active]) choose(hits[active]);
           } else if (e.key === "Escape") { setOpen(false); setQuery(""); }
@@ -129,7 +142,7 @@ export function ContainerPicker({ kind, value, onChange, placeholder, allowNone,
         <button type="button" className="absolute right-1 top-1 px-1.5 text-muted hover:text-foreground text-sm" aria-label={`Clear the ${WORD[kind].one}`} onClick={() => choose(null)}>×</button>
       )}
       {open && (
-        <ul id={listId} role="listbox" className="absolute z-20 mt-1 w-full max-h-64 overflow-y-auto rounded-theme border border-border bg-surface shadow-lg divide-y divide-border">
+        <ul id={listId} role="listbox" aria-busy={loading} onMouseDown={(e) => e.preventDefault()} className="absolute z-20 mt-1 w-full max-h-64 overflow-y-auto rounded-theme border border-border bg-surface shadow-lg divide-y divide-border">
           <Results hits={hits} loading={loading} kind={kind} active={active} onPick={(h) => choose({ id: h.id, title: h.title, slug: h.slug, visibility: h.visibility })} exclude={new Set()} listId={listId} />
           {tail.map((t, i) => {
             const at = hits.length + i;
@@ -164,7 +177,7 @@ export function ContainerMultiPicker({ kind, value, onChange, name, hint }: {
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const box = useRef<HTMLDivElement>(null);
-  const { hits, loading } = useSearch(kind, query, open);
+  const { hits, loading, fresh } = useSearch(kind, query, open);
   const chosen = new Set(value.map((v) => v.id));
 
   useEffect(() => {
@@ -182,7 +195,7 @@ export function ContainerMultiPicker({ kind, value, onChange, name, hint }: {
   const remaining = hits.filter((h) => !chosen.has(h.id));
 
   return (
-    <div ref={box} className="relative space-y-2" data-testid={`${kind}-multi-picker`}>
+    <div ref={box} className="relative space-y-2" data-testid={`${kind}-multi-picker`} onBlur={(e) => { if (!leftFor(box.current, e.relatedTarget)) return; setOpen(false); }}>
       {value.map((v) => <input key={v.id} type="hidden" name={name} value={v.id} />)}
       {value.length > 0 && (
         <ul className="flex flex-wrap gap-1.5" aria-label={`Chosen ${WORD[kind].many}`}>
@@ -212,12 +225,12 @@ export function ContainerMultiPicker({ kind, value, onChange, name, hint }: {
         onKeyDown={(e) => {
           if (e.key === "ArrowDown") { e.preventDefault(); setOpen(true); setActive((a) => Math.min(a + 1, remaining.length - 1)); }
           else if (e.key === "ArrowUp") { e.preventDefault(); setActive((a) => Math.max(a - 1, 0)); }
-          else if (e.key === "Enter" && open && remaining[active]) { e.preventDefault(); add(remaining[active]); }
+          else if (e.key === "Enter" && open && (remaining[active] || !fresh)) { e.preventDefault(); if (fresh) add(remaining[active]); }
           else if (e.key === "Escape") { setOpen(false); setQuery(""); }
         }}
       />
       {open && (
-        <ul id={listId} role="listbox" className="absolute z-20 w-full max-h-64 overflow-y-auto rounded-theme border border-border bg-surface shadow-lg divide-y divide-border">
+        <ul id={listId} role="listbox" aria-busy={loading} onMouseDown={(e) => e.preventDefault()} className="absolute z-20 w-full max-h-64 overflow-y-auto rounded-theme border border-border bg-surface shadow-lg divide-y divide-border">
           <Results hits={hits} loading={loading} kind={kind} active={active} onPick={add} exclude={chosen} listId={listId} emptyNote={query ? undefined : `Every ${WORD[kind].one} is already chosen.`} />
         </ul>
       )}
