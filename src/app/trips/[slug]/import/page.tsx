@@ -23,6 +23,9 @@ export default async function ImportPage({ params }: PageProps<"/trips/[slug]/im
             Google no longer offers a live connection, but you can export your Timeline as a file. On your phone open Google Maps → your profile → <em>Your Timeline</em> → <em>⋯</em> → <em>Location and privacy settings</em> → <em>Export Timeline data</em>, which produces <code>Timeline.json</code>. Older Google Takeout exports (<code>Records.json</code> or the monthly <code>Semantic Location History</code> files) also work.
             Only points between {trip.startDate.toISOString().slice(0, 10)} and {trip.endDate.toISOString().slice(0, 10)} are imported, one trace per day, so it&apos;s safe to upload the whole export.
           </p>
+          <p className="text-muted mt-2">
+            Importing the same export again replaces your earlier trace for each day instead of adding a second one. Traces imported before September 2026 placed photos only near the start or end of each place you stopped at; import the export again to place photos taken while you were there.
+          </p>
         </div>
       </Card>
     </div>

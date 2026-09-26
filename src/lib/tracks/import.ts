@@ -8,6 +8,8 @@ import { parseFit } from "./fit";
 import { parseGoogleExport, readHead } from "./google";
 import { splitByLocalDay } from "./split";
 import { persistTrack, type PersistedTrack } from "./persist";
+import { deleteTrackAndItsPositions } from "./remove";
+import { geotagPhotos } from "@/lib/jobs/handlers/geotag-photos";
 import type { ParsedTrack } from "./types";
 
 export type ImportSummary = {
@@ -45,18 +47,28 @@ export async function importTrackFile(args: ImportArgs): Promise<ImportSummary> 
       startMs: wallTimeToInstant({ year: sy, month: sm, day: sd, hour: 0, minute: 0, second: 0 }, trip.timezone).getTime(),
       endMs: wallTimeToInstant({ year: ey, month: em, day: ed, hour: 23, minute: 59, second: 59, ms: 999 }, trip.timezone).getTime(),
     };
-    const { format, points } = await parseGoogleExport(filePath, window);
+    const { format, points, recorded } = await parseGoogleExport(filePath, window);
     summary.format = format;
-    summary.pointsRead = points.length;
+    summary.pointsRead = recorded;
     if (!points.length) {
       summary.skipped.push(`No location points between ${startDay} and ${endDay} in this export.`);
       return summary;
     }
+    const replaced: string[] = [];
     for (const [day, dayPoints] of splitByLocalDay(points, trip.timezone)) {
       const parsed: ParsedTrack = { name: `Google Timeline — ${day}`, points: dayPoints, sport: null };
+      const earlier = await db.track.findMany({ where: { tripId: trip.id, uploaderId: args.userId, source: "GOOGLE", name: parsed.name }, select: { id: true } });
       const saved = await persistTrack(parsed, { tripId: trip.id, userId: args.userId, source: "GOOGLE", originalFile: args.importKey, createActivity: false });
-      if (saved) summary.tracks.push(saved);
-      else summary.skipped.push(`${day}: fewer than two usable points`);
+      if (saved) {
+        summary.tracks.push(saved);
+        // Importing an export again (a newer one, or to pick up a better reading of it) replaces this member's trace
+        // for the day rather than drawing a second one over it. Another member's trace for the day is theirs.
+        replaced.push(...earlier.map((t) => t.id));
+      } else summary.skipped.push(`${day}: fewer than two usable points`);
+    }
+    if (replaced.length) {
+      for (const id of replaced) await deleteTrackAndItsPositions(id, { placeAgain: false });
+      await geotagPhotos({ tripId: trip.id });
     }
     return summary;
   }

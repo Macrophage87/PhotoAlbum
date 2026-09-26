@@ -12,6 +12,8 @@ export type TrackPoint = {
   spd?: number; // m/s from the device
   dist?: number; // cumulative metres from the device
   temp?: number;
+  /** Not a recorded fix: filled in across a Google visit (see fillStays). */
+  stay?: true;
 };
 
 /** Summary numbers a device computed itself (FIT session). These win over our own estimates. */

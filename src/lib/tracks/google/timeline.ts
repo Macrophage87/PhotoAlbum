@@ -1,12 +1,13 @@
 import type { TrackPoint } from "../types";
-import { inWindow, parseLatLng, parseTime, point, stayPoints, type Window } from "./common";
+import { inWindow, parseLatLng, parseTime, point, type Window } from "./common";
+import { MIN_VISIT_PROBABILITY, probability, type GoogleParse, type Stay } from "./stays";
 import { streamJsonArray } from "./stream";
 
 type Segment = {
   startTime?: string;
   endTime?: string;
   timelinePath?: { point?: string; time?: string; durationMinutesOffsetFromStartTime?: string | number }[];
-  visit?: { topCandidate?: { placeLocation?: { latLng?: string } | string } };
+  visit?: { hierarchyLevel?: number | string; probability?: number | string; topCandidate?: { placeLocation?: { latLng?: string } | string } };
   activity?: { start?: { latLng?: string } | string; end?: { latLng?: string } | string };
 };
 
@@ -32,10 +33,8 @@ export function segmentToPoints(seg: Segment, window: Window): TrackPoint[] {
     }
     return out;
   }
-  if (seg.visit) {
-    const ll = latLngOf(seg.visit.topCandidate?.placeLocation);
-    return ll ? stayPoints(start, end, ll[0], ll[1], window) : out;
-  }
+  // A visit's points come from segmentToStay, filled in only where nothing recorded covers it.
+  if (seg.visit) return out;
   if (seg.activity) {
     const s = latLngOf(seg.activity.start), e = latLngOf(seg.activity.end);
     if (s && start !== null && inWindow(start, window)) out.push(point(start, s[0], s[1]));
@@ -44,11 +43,23 @@ export function segmentToPoints(seg: Segment, window: Window): TrackPoint[] {
   return out;
 }
 
+/** A Timeline visit as a stay, or null for any other segment. */
+export function segmentToStay(seg: Segment): Stay | null {
+  if (!seg.visit || seg.timelinePath?.length) return null;
+  const ll = latLngOf(seg.visit.topCandidate?.placeLocation);
+  const start = parseTime(seg.startTime);
+  if (!ll || start === null) return null;
+  const p = probability(seg.visit.probability);
+  return { start, end: parseTime(seg.endTime), lat: ll[0], lng: ll[1], level: Number(seg.visit.hierarchyLevel) || 0, fill: p === null || p >= MIN_VISIT_PROBABILITY };
+}
+
 /** Android export: { semanticSegments: [...] }. iOS export: a top-level array of the same segments. */
-export async function parseTimelineExport(filePath: string, window: Window, shape: "timeline-android" | "timeline-ios"): Promise<TrackPoint[]> {
-  const out: TrackPoint[] = [];
+export async function parseTimelineExport(filePath: string, window: Window, shape: "timeline-android" | "timeline-ios"): Promise<GoogleParse> {
+  const points: TrackPoint[] = [], stays: Stay[] = [];
   for await (const raw of streamJsonArray(filePath, shape === "timeline-android" ? "semanticSegments" : "")) {
-    out.push(...segmentToPoints(raw as Segment, window));
+    points.push(...segmentToPoints(raw as Segment, window));
+    const stay = segmentToStay(raw as Segment);
+    if (stay && stay.start <= window.endMs && (stay.end ?? stay.start) >= window.startMs) stays.push(stay);
   }
-  return out;
+  return { points, stays };
 }

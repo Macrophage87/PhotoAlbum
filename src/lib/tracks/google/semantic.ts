@@ -1,9 +1,11 @@
 import type { TrackPoint } from "../types";
-import { e7, inWindow, parseTime, point, stayPoints, type Window } from "./common";
+import { e7, inWindow, parseTime, point, type Window } from "./common";
+import { MIN_VISIT_PROBABILITY, probability, type GoogleParse, type Stay } from "./stays";
 import { streamJsonArray } from "./stream";
 
 type E7 = { latitudeE7?: number; longitudeE7?: number; latE7?: number; lngE7?: number };
 type Duration = { startTimestamp?: string; endTimestamp?: string; startTimestampMs?: string; endTimestampMs?: string };
+type PlaceVisit = { location?: E7; duration?: Duration; visitConfidence?: number | string; childVisits?: PlaceVisit[] };
 type TimelineObject = {
   activitySegment?: {
     startLocation?: E7;
@@ -12,7 +14,7 @@ type TimelineObject = {
     waypointPath?: { waypoints?: E7[] };
     simplifiedRawPath?: { points?: (E7 & { timestampMs?: string; timestamp?: string })[] };
   };
-  placeVisit?: { location?: E7; duration?: Duration };
+  placeVisit?: PlaceVisit;
 };
 
 const ll = (o: E7 | undefined): [number, number] | null => {
@@ -58,16 +60,29 @@ export function timelineObjectToPoints(obj: TimelineObject, window: Window): Tra
     }
     return out;
   }
-  if (obj.placeVisit) {
-    const c = ll(obj.placeVisit.location);
-    const { start, end } = dur(obj.placeVisit.duration);
-    if (c) out.push(...stayPoints(start, end, c[0], c[1], window));
-  }
+  // A placeVisit's points come from timelineObjectToStays, filled in only where nothing recorded covers it.
   return out;
 }
 
-export async function parseSemanticHistory(filePath: string, window: Window): Promise<TrackPoint[]> {
-  const out: TrackPoint[] = [];
-  for await (const raw of streamJsonArray(filePath, "timelineObjects")) out.push(...timelineObjectToPoints(raw as TimelineObject, window));
+/** A placeVisit and the visits nested in it (a shop inside a shopping centre) as stays. */
+export function timelineObjectToStays(obj: TimelineObject): Stay[] {
+  const out: Stay[] = [];
+  const walk = (v: PlaceVisit, level: number) => {
+    const c = ll(v.location);
+    const { start, end } = dur(v.duration);
+    const p = probability(v.visitConfidence);
+    if (c && start !== null) out.push({ start, end, lat: c[0], lng: c[1], level, fill: p === null || p >= MIN_VISIT_PROBABILITY });
+    for (const child of v.childVisits ?? []) walk(child, level + 1);
+  };
+  if (obj.placeVisit) walk(obj.placeVisit, 0);
   return out;
+}
+
+export async function parseSemanticHistory(filePath: string, window: Window): Promise<GoogleParse> {
+  const points: TrackPoint[] = [], stays: Stay[] = [];
+  for await (const raw of streamJsonArray(filePath, "timelineObjects")) {
+    points.push(...timelineObjectToPoints(raw as TimelineObject, window));
+    for (const stay of timelineObjectToStays(raw as TimelineObject)) if (stay.start <= window.endMs && (stay.end ?? stay.start) >= window.startMs) stays.push(stay);
+  }
+  return { points, stays };
 }

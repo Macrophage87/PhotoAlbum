@@ -3,8 +3,10 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { detectGoogleFormat, parseGoogleExport } from "@/lib/tracks/google";
 import { parseLatLng, parseTime } from "@/lib/tracks/google/common";
-import { timelineObjectToPoints } from "@/lib/tracks/google/semantic";
-import { segmentToPoints } from "@/lib/tracks/google/timeline";
+import { timelineObjectToPoints, timelineObjectToStays } from "@/lib/tracks/google/semantic";
+import { fillStays, STAY_STEP_MS } from "@/lib/tracks/google/stays";
+import { segmentToPoints, segmentToStay } from "@/lib/tracks/google/timeline";
+import { computeStats } from "@/lib/tracks/stats";
 import { positionAt } from "@/lib/tracks/interpolate";
 
 const fx = (n: string) => path.join(__dirname, "../../fixtures", n);
@@ -35,8 +37,10 @@ describe("google parsers", () => {
   });
   it("Android Timeline.json: paths, visits and activities", async () => {
     const { points } = await parseGoogleExport(fx("google-timeline-android.json"), window);
-    // 3 path points + the 55-minute visit filled every 5 min (12) + activity start/end = 17, NYC segment excluded
-    expect(points).toHaveLength(17);
+    // 3 path points + activity start/end, NYC segment excluded; the 55-minute visit fills the gap between them every
+    // 5 min, except within 5 min of the path's last point (11)
+    expect(points).toHaveLength(16);
+    expect(points.filter((p) => !p.stay)).toHaveLength(5);
     expect(points[1].t).toBe(Date.parse("2025-08-12T14:05:00Z"));
     expect(points.every((p) => p.lat > 44)).toBe(true);
   });
@@ -48,8 +52,8 @@ describe("google parsers", () => {
   });
   it("Semantic Location History: raw paths preferred, waypoints spread over time", async () => {
     const { points } = await parseGoogleExport(fx("google-semantic.json"), window);
-    // segment 1: start + waypoint + end = 3 spread over 10 min; visit filled every 5 min 12; raw path 2 => 17
-    expect(points).toHaveLength(17);
+    // segment 1: start + waypoint + end = 3 spread over 10 min; raw path 2; the visit fills the gap between them 11
+    expect(points).toHaveLength(16);
     expect(points[1].t).toBe(Date.parse("2025-08-12T14:05:00Z"));
     expect(points[1].lat).toBeCloseTo(44.351, 6);
   });
@@ -57,25 +61,78 @@ describe("google parsers", () => {
 
 describe("google visits", () => {
   const at = (iso: string) => Date.parse(iso);
+  type Seg = Parameters<typeof segmentToPoints>[0];
+  const parse = (segs: Seg[], w = window) => fillStays(segs.flatMap((s) => segmentToPoints(s, w)), segs.map(segmentToStay).filter((s) => s !== null), w);
+  const museum = (start: string, end: string, extra: Record<string, unknown> = {}): Seg => ({ startTime: start, endTime: end, visit: { topCandidate: { placeLocation: { latLng: "40.7794°, -73.9632°" } }, ...extra } });
+
   it("cover the whole stay, so a photo in the middle of a long visit is placed there", async () => {
-    const pts = segmentToPoints({ startTime: "2025-08-12T14:00:00Z", endTime: "2025-08-12T17:00:00Z", visit: { topCandidate: { placeLocation: { latLng: "40.7794°, -73.9632°" } } } }, window);
+    const pts = parse([museum("2025-08-12T14:00:00Z", "2025-08-12T17:00:00Z", { probability: 0.9 })]);
     expect(pts[0].t).toBe(at("2025-08-12T14:00:00Z"));
     expect(pts.at(-1)!.t).toBe(at("2025-08-12T17:00:00Z"));
+    expect(pts.every((p) => p.stay)).toBe(true);
     expect(positionAt(pts, at("2025-08-12T15:30:00Z"))).toMatchObject({ lat: 40.7794, lng: -73.9632 });
 
-    const sem = timelineObjectToPoints({ placeVisit: { location: { latitudeE7: 407794000, longitudeE7: -739632000 }, duration: { startTimestamp: "2025-08-12T14:00:00Z", endTimestamp: "2025-08-12T17:00:00Z" } } }, window);
+    const visit = { placeVisit: { location: { latitudeE7: 407794000, longitudeE7: -739632000 }, duration: { startTimestamp: "2025-08-12T14:00:00Z", endTimestamp: "2025-08-12T17:00:00Z" } } };
+    const sem = fillStays(timelineObjectToPoints(visit, window), timelineObjectToStays(visit), window);
     expect(positionAt(sem, at("2025-08-12T15:30:00Z"))).toMatchObject({ lat: 40.7794, lng: -73.9632 });
 
-    const { points } = await parseGoogleExport(fx("google-timeline-android.json"), window);
+    const { points, recorded } = await parseGoogleExport(fx("google-timeline-android.json"), window);
+    expect(recorded).toBe(5);
     expect(positionAt(points, at("2025-08-12T14:40:00Z"))).toMatchObject({ lat: 44.353, lng: -68.203 });
   });
+
+  it("leave a recorded path that covers the visit's hours exactly as it was", () => {
+    // A walk around the museum's grounds, recorded every 2 minutes, during the same hours as the visit.
+    const path = Array.from({ length: 91 }, (_, i) => ({ time: new Date(at("2025-08-12T14:00:00Z") + i * 120_000).toISOString(), point: `geo:${(40.775 + (i % 10) * 0.001).toFixed(4)},-73.96` }));
+    const walk: Seg = { startTime: "2025-08-12T14:00:00Z", endTime: "2025-08-12T17:00:00Z", timelinePath: path };
+    const alone = parse([walk]);
+    const both = parse([walk, museum("2025-08-12T14:00:00Z", "2025-08-12T17:00:00Z")]);
+    expect(both).toEqual(alone);
+    expect(computeStats(both).distanceM).toBe(computeStats(alone).distanceM);
+    expect(positionAt(both, at("2025-08-12T14:03:00Z"))!.lat).toBeCloseTo(40.7765, 4);
+  });
+
+  it("fill only the hours between recorded stretches, not within a step of them", () => {
+    const walk = (from: string, to: string): Seg => ({ startTime: from, endTime: to, timelinePath: [{ point: "geo:40.77,-73.96", time: from }, { point: "geo:40.771,-73.96", time: to }] });
+    const pts = parse([walk("2025-08-12T13:50:00Z", "2025-08-12T14:00:00Z"), museum("2025-08-12T14:00:00Z", "2025-08-12T17:00:00Z"), walk("2025-08-12T15:00:00Z", "2025-08-12T15:08:00Z")]);
+    const recorded = pts.filter((p) => !p.stay).map((p) => p.t);
+    for (const p of pts.filter((q) => q.stay)) for (const r of recorded) expect(Math.abs(p.t - r)).toBeGreaterThanOrEqual(STAY_STEP_MS);
+    // Between 14:00 and 15:00 the visit fills in; the 8-minute walk in the middle is left alone.
+    expect(positionAt(pts, at("2025-08-12T14:30:00Z"))).toMatchObject({ lat: 40.7794 });
+    expect(pts.filter((p) => p.stay && p.t > at("2025-08-12T15:00:00Z") && p.t < at("2025-08-12T15:08:00Z"))).toEqual([]);
+    expect(positionAt(pts, at("2025-08-12T16:30:00Z"))).toMatchObject({ lat: 40.7794 });
+  });
+
+  it("let a visit inside another visit fill its own hours, and the outer one the rest", () => {
+    const mall = { startTime: "2025-08-12T14:00:00Z", endTime: "2025-08-12T17:00:00Z", visit: { hierarchyLevel: 0, topCandidate: { placeLocation: "geo:40.70,-74.00" } } };
+    const shop = { startTime: "2025-08-12T15:00:00Z", endTime: "2025-08-12T16:00:00Z", visit: { hierarchyLevel: "1", topCandidate: { placeLocation: "geo:40.71,-74.01" } } };
+    const pts = parse([mall, shop]);
+    expect(pts.map((p) => p.t)).toEqual([...new Set(pts.map((p) => p.t))].sort((a, b) => a - b));
+    expect(pts.filter((p) => p.t >= at("2025-08-12T15:00:00Z") && p.t <= at("2025-08-12T16:00:00Z")).every((p) => p.lat === 40.71)).toBe(true);
+    expect(positionAt(pts, at("2025-08-12T14:30:00Z"))).toMatchObject({ lat: 40.7 });
+    expect(positionAt(pts, at("2025-08-12T15:30:00Z"))).toMatchObject({ lat: 40.71 });
+
+    const nested = { placeVisit: { location: { latE7: 407000000, lngE7: -740000000 }, duration: { startTimestamp: "2025-08-12T14:00:00Z", endTimestamp: "2025-08-12T17:00:00Z" }, childVisits: [{ location: { latE7: 407100000, lngE7: -740100000 }, duration: { startTimestamp: "2025-08-12T15:00:00Z", endTimestamp: "2025-08-12T16:00:00Z" } }] } };
+    const sem = fillStays([], timelineObjectToStays(nested), window);
+    expect(positionAt(sem, at("2025-08-12T15:30:00Z"))).toMatchObject({ lat: 40.71 });
+    expect(positionAt(sem, at("2025-08-12T16:30:00Z"))).toMatchObject({ lat: 40.7 });
+  });
+
+  it("keep only the two ends of a visit Google doubts", () => {
+    const pts = parse([museum("2025-08-12T14:00:00Z", "2025-08-12T17:00:00Z", { probability: 0.2 })]);
+    expect(pts.map((p) => p.t)).toEqual([at("2025-08-12T14:00:00Z"), at("2025-08-12T17:00:00Z")]);
+    expect(positionAt(pts, at("2025-08-12T15:30:00Z"))).toBeNull();
+    const doubted = { placeVisit: { location: { latE7: 407000000, lngE7: -740000000 }, visitConfidence: 30, duration: { startTimestamp: "2025-08-12T14:00:00Z", endTimestamp: "2025-08-12T17:00:00Z" } } };
+    expect(fillStays([], timelineObjectToStays(doubted), window)).toHaveLength(2);
+  });
+
   it("fill only the part of a stay inside the trip window", () => {
     const w = { startMs: at("2025-08-12T00:00:00Z"), endMs: at("2025-08-12T23:59:59Z") };
     // A hotel stay from the evening before: the trip's part of it starts at the window's start.
-    const pts = segmentToPoints({ startTime: "2025-08-11T20:00:00Z", endTime: "2025-08-12T08:00:00Z", visit: { topCandidate: { placeLocation: "44.35°, -68.2°" } } }, w);
+    const pts = parse([{ startTime: "2025-08-11T20:00:00Z", endTime: "2025-08-12T08:00:00Z", visit: { topCandidate: { placeLocation: "44.35°, -68.2°" } } }], w);
     expect(pts[0].t).toBe(w.startMs);
     expect(pts.at(-1)!.t).toBe(at("2025-08-12T08:00:00Z"));
     expect(pts.every((p) => p.t >= w.startMs && p.t <= w.endMs)).toBe(true);
-    expect(segmentToPoints({ startTime: "2025-08-01T20:00:00Z", endTime: "2025-08-02T08:00:00Z", visit: { topCandidate: { placeLocation: "44.35°, -68.2°" } } }, w)).toEqual([]);
+    expect(parse([{ startTime: "2025-08-01T20:00:00Z", endTime: "2025-08-02T08:00:00Z", visit: { topCandidate: { placeLocation: "44.35°, -68.2°" } } }], w)).toEqual([]);
   });
 });
