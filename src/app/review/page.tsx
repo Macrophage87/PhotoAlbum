@@ -59,7 +59,8 @@ export default async function ReviewPage({ searchParams }: PageProps<"/review">)
             {sp.google === "1" && <p className="text-sm rounded-theme bg-amber-50 border border-amber-200 text-amber-900 p-3 mt-2">Google leaves the location out of what it hands over. Add places here, or file these to a trip so they can be placed from its tracks.</p>}
             <p className="text-muted mt-1">
               {batch ? `${photos.length} item${photos.length === 1 ? "" : "s"} just uploaded. Add a note, file them, then mark them reviewed.` : `${unreviewedCount} item${unreviewedCount === 1 ? "" : "s"} ${admin ? "nobody has reviewed yet" : "of yours not reviewed yet"}.`}
-              {batch && unreviewedCount > photos.length && (
+              {/* The count is of this member's own (everyone's, for an admin), so it is set against their own here. */}
+              {batch && unreviewedCount > ownIds.length && (
                 <>
                   {" "}
                   <Link href="/review" className="text-primary hover:underline">{unreviewedCount} {admin ? "unreviewed in all" : "of yours unreviewed in all"}.</Link>
@@ -76,7 +77,14 @@ export default async function ReviewPage({ searchParams }: PageProps<"/review">)
         ) : (
           <SelectionProvider>
             {ownIds.length > 0 ? (
-              <ReviewPanel allIds={ownIds} annotation={gates.active ? { quietMinutes: env().ANNOTATION_QUIET_MINUTES, pending: photos.filter((p) => ownIds.includes(p.id) && !p.annotatedAt && !optedOut(p)).length } : null} />
+              <>
+                {ownIds.length < photos.length && (
+                  <p className="text-sm text-muted" data-testid="review-some-not-yours">
+                    {photos.length - ownIds.length} of these {photos.length - ownIds.length === 1 ? "was" : "were"} uploaded by somebody else, and {photos.length - ownIds.length === 1 ? "is" : "are"} left for them.
+                  </p>
+                )}
+                <ReviewPanel allIds={ownIds} annotation={gates.active ? { quietMinutes: env().ANNOTATION_QUIET_MINUTES, pending: photos.filter((p) => ownIds.includes(p.id) && !p.annotatedAt && !optedOut(p)).length } : null} />
+              </>
             ) : (
               <p className="text-sm text-muted" data-testid="review-not-yours">These were uploaded by somebody else. Only they, or an admin, can add notes to them or mark them reviewed.</p>
             )}
