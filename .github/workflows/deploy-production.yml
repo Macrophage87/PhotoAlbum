@@ -1,6 +1,6 @@
 # Push to `main` → once CI passes for that commit, GitHub logs into the
-# server and updates the live instance to it. Same shape as deploy-staging.yml; only the three env vars
-# differ. Details in docs/DEPLOY.md → "Continuous deployment".
+# server and updates the live instance to it. Same shape as
+# deploy-staging.yml; only APP_DIR, BRANCH and APP_PORT differ. Details in docs/DEPLOY.md → "Continuous deployment".
 #
 # Needs the same three repository secrets: DEPLOY_HOST, DEPLOY_USER,
 # DEPLOY_SSH_KEY. Until they exist — or until the live instance has been

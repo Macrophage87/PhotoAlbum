@@ -389,7 +389,9 @@ S += [P("8. Backups and upgrades", H1),
         "Back up both. The photos volume is the irreplaceable one."),
       code("""
 # database dump
-docker compose exec db pg_dump -U photoalbum photoalbum | gzip > album-db-$(date +%F).sql.gz
+# pipefail so a failed pg_dump is an error rather than a tiny .gz; the db container supplies its own user and database
+set -o pipefail
+docker compose exec -T db sh -c 'exec pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' | gzip > album-db-$(date +%F).sql.gz
 
 # photos (copy the volume contents)
 docker run --rm -v photoalbum_photos:/data -v $(pwd):/backup alpine \\

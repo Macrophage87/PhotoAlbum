@@ -10,11 +10,14 @@
 #
 # What it does, in order:
 #   1. `git fetch` as the checkout's owner and pick the commit; a DEPLOY_SHA
-#      older than what is already deployed is skipped, so CI runs finishing
-#      out of order never roll the instance back,
+#      no longer on the branch, or older than a deployed commit that still
+#      is, is skipped, so CI runs finishing out of order never roll the
+#      instance back (a rewound branch is followed back),
+#      then re-run this script as that commit has it, so a change to it
+#      takes effect in the same deploy,
 #   2. dump the database to $BACKUP_DIR (a deploy runs migrations, so keep a
 #      restore point — docs/DEPLOY.md step 10); a failed or truncated dump
-#      stops the deploy,
+#      stops the deploy and is not kept,
 #   3. `git reset --hard <commit>` (the branch is the source of truth; .env
 #      and the compose override are untracked and survive the reset),
 #   4. `docker compose up --build -d` (the container applies migrations at
@@ -39,39 +42,56 @@ echo "== $APP_DIR: updating to origin/$BRANCH =="
 
 # 1. which commit
 as_owner git fetch origin "$BRANCH"
-TARGET="origin/$BRANCH"
+TARGET=$(as_owner git rev-parse "origin/$BRANCH")
 if [ -n "${DEPLOY_SHA:-}" ]; then
-  if ! as_owner git merge-base --is-ancestor "$DEPLOY_SHA" "origin/$BRANCH"; then
-    echo "!! $DEPLOY_SHA is not on origin/$BRANCH — refusing to deploy it" >&2
-    exit 1
+  # Force-pushed away (or never fetched): a later push has its own CI run and deploy.
+  if ! as_owner git merge-base --is-ancestor "$DEPLOY_SHA" "origin/$BRANCH" 2>/dev/null; then
+    echo "== $DEPLOY_SHA is no longer on origin/$BRANCH — nothing to do =="
+    exit 0
   fi
   CURRENT=$(as_owner git rev-parse HEAD)
-  if [ "$CURRENT" != "$DEPLOY_SHA" ] && as_owner git merge-base --is-ancestor "$DEPLOY_SHA" "$CURRENT"; then
+  # Older than the deployed commit: skip, unless the branch was rewound past what is deployed.
+  if [ "$CURRENT" != "$DEPLOY_SHA" ] &&
+    as_owner git merge-base --is-ancestor "$CURRENT" "origin/$BRANCH" &&
+    as_owner git merge-base --is-ancestor "$DEPLOY_SHA" "$CURRENT"; then
     echo "== $DEPLOY_SHA is older than the deployed $CURRENT — nothing to do =="
     exit 0
   fi
   TARGET=$DEPLOY_SHA
 fi
 
+# The rest of the deploy is the target commit's own update.sh, not whatever the checkout had before; the guard
+# stops that copy from doing this again.
+if [ -z "${UPDATE_SH_REEXEC:-}" ]; then
+  SCRIPT=$(as_owner git show "$TARGET:deploy/update.sh")
+  exec env UPDATE_SH_REEXEC=1 APP_DIR="$APP_DIR" BRANCH="$BRANCH" APP_PORT="$APP_PORT" BACKUP_DIR="$BACKUP_DIR" \
+    HEALTH_TIMEOUT="$HEALTH_TIMEOUT" DEPLOY_SHA="$TARGET" bash -c "$SCRIPT" update.sh
+fi
+
 # 2. restore point (only if the stack is already running)
 if as_root docker compose ps --status running --services 2>/dev/null | grep -qx db; then
   as_root mkdir -p "$BACKUP_DIR"
   DUMP="$BACKUP_DIR/db-pre-deploy-$(date +%F-%H%M).sql.gz"
+  # Written under a temporary name and renamed once checked, so a failed dump never sits there looking like a backup.
+  PARTIAL="$DUMP.partial"
   # The container's own POSTGRES_USER/POSTGRES_DB, so a role or database renamed in .env is dumped too. pipefail
   # (set above) makes a failing pg_dump fail the pipeline instead of leaving gzip's empty file as "the backup".
-  if ! as_root docker compose exec -T db sh -c 'exec pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' | gzip | as_root tee "$DUMP" >/dev/null; then
+  if ! as_root docker compose exec -T db sh -c 'exec pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' | gzip | as_root tee "$PARTIAL" >/dev/null; then
+    as_root rm -f "$PARTIAL"
     echo "!! pg_dump failed — not deploying without a restore point" >&2
     exit 1
   fi
   # pg_dump writes this trailer last, so its presence means the dump ran to the end.
-  TRAILER=$(as_root gzip -cd "$DUMP" | tail -n 5) || TRAILER=
+  TRAILER=$(as_root gzip -cd "$PARTIAL" | tail -n 20) || TRAILER=
   case "$TRAILER" in
     *'PostgreSQL database dump complete'*) ;;
     *)
-      echo "!! $DUMP is empty or truncated — not deploying without a restore point" >&2
+      as_root rm -f "$PARTIAL"
+      echo "!! the database dump is empty or truncated — not deploying without a restore point" >&2
       exit 1
       ;;
   esac
+  as_root mv "$PARTIAL" "$DUMP"
   echo "== database dumped to $DUMP ($(as_root du -h "$DUMP" | cut -f1)) =="
 fi
 

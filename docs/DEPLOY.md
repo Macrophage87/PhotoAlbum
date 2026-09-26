@@ -274,12 +274,17 @@ Create a backup script at `~/backup-album.sh`:
 
 ```bash
 #!/bin/bash
-set -e
+# pipefail: without it a failed pg_dump still leaves a small, useless .gz and the script carries on.
+set -eo pipefail
 DEST=/home/album/backups
 mkdir -p "$DEST"
 STAMP=$(date +%F)
 cd /home/album/photoalbum
-docker compose exec -T db pg_dump -U photoalbum photoalbum | gzip > "$DEST/db-$STAMP.sql.gz"
+# The db container's own POSTGRES_USER and POSTGRES_DB, so this follows whatever .env sets.
+docker compose exec -T db sh -c 'exec pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' | gzip > "$DEST/db-$STAMP.sql.gz.partial"
+# pg_dump writes this line last; without it the dump stopped partway.
+gzip -cd "$DEST/db-$STAMP.sql.gz.partial" | tail -n 20 | grep -c 'PostgreSQL database dump complete' >/dev/null
+mv "$DEST/db-$STAMP.sql.gz.partial" "$DEST/db-$STAMP.sql.gz"
 docker run --rm -v photoalbum_photos:/data:ro -v "$DEST":/backup alpine \
   tar czf "/backup/photos-$STAMP.tgz" -C /data .
 # keep the last 14 days locally
@@ -295,7 +300,7 @@ chmod +x ~/backup-album.sh
 
 Copy the `backups` folder off the server regularly (rclone to any cloud storage, or `rsync` to another machine). A backup on the same disk as the data does not protect against disk failure.
 
-To restore on a new server: bring the stack up once so the volumes exist, stop it, extract the photo archive into the photos volume with the same `docker run ... alpine tar` pattern in reverse, and pipe the SQL dump into `docker compose exec -T db psql -U photoalbum photoalbum`.
+To restore on a new server: bring the stack up once so the volumes exist, stop it, extract the photo archive into the photos volume with the same `docker run ... alpine tar` pattern in reverse, and pipe the SQL dump into `docker compose exec -T db sh -c 'exec psql -U "$POSTGRES_USER" "$POSTGRES_DB"'`.
 
 If the photographs have been moved onto their own drive, the volume in that script is no longer what the album reads: see [MOVE-MEDIA.md](MOVE-MEDIA.md), which says what to change here.
 
@@ -370,10 +375,13 @@ commit. Each is one job with one SSH step that runs the shared
 variables (`APP_DIR`, `BRANCH`, `APP_PORT`, and `DEPLOY_SHA`, the commit
 CI tested). The script skips a commit older than the one already deployed
 (CI runs can finish out of order), dumps the database to a `backups/`
-folder next to the checkout and stops if the dump fails, resets the
-checkout to the commit (`.env` and `docker-compose.override.yml` are
+folder next to the checkout and stops if the dump fails, then carries on
+with the target commit's own copy of `update.sh`, resets the checkout to
+the commit (`.env` and `docker-compose.override.yml` are
 untracked and survive), runs `docker compose up --build -d`, waits for
-`/api/health`, and prunes old images. A deploy rebuilds the image, so expect a short
+`/api/health`, and prunes old images. A commit that is no longer on the
+branch (force-pushed away) is skipped with a note; if the branch was
+rewound past what is deployed, the older commit is deployed. A deploy rebuilds the image, so expect a short
 outage of a minute or two per push; in-flight photo processing gets 45
 seconds to finish first.
 
@@ -385,6 +393,12 @@ seconds to finish first.
 Until the three secrets below exist, or until the instance's folder exists
 on the server, a workflow prints a note and exits green. A red CI run
 means no deploy; `staging` is still the rehearsal for `main`.
+
+Staging and live deploys share one queue (one server, one small disk). A
+queue holds one running and one waiting deploy, so a newer deploy of
+either branch replaces a waiting one of the other, and that CI run shows
+as cancelled. The next push to the branch, or re-running its deploy job,
+brings it up to date.
 
 To arm it (a private repo needs two keys: one for the runner to reach the
 server, one for the server to read GitHub):
