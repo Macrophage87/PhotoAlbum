@@ -338,68 +338,104 @@ export async function annotationBatchPoll(): Promise<void> {
   await closeDeadRuns(hourAgo);
   // Cancelled rows with a live batch id still get their (already billed) results applied once the batch ends.
   const open = (await db.annotationBatch.findMany({ where: { OR: [{ status: "SUBMITTED" }, { status: "CANCELLED", endedAt: null }] } })).filter((b) => !b.anthropicBatchId.startsWith("pending-") && !b.anthropicBatchId.startsWith("empty-"));
+  // One batch that cannot be read (a reset stream, expired results) must not hold up the batches after it.
   for (const b of open) {
-    // A place-pass row has nothing to say about descriptions, so its results are read the other way round.
-    const task = taskOf(b.scope as BackfillScope);
-    const remote = await anthropic().messages.batches.retrieve(b.anthropicBatchId).catch(() => null);
-    if (!remote) continue;
-    if (remote.processing_status !== "ended") continue;
-    // While somebody is being forgotten no answer can be stored: the batch waits for the next poll rather than
-    // having every answer in it thrown away and asked again one at a time, at the full price.
-    if (await forgetRunning()) continue;
-    let succeeded = 0, errored = 0, canceled = 0;
-    // The forgotten names, read once for the batch rather than for every answer in it, and again only if somebody
-    // is forgotten meanwhile.
-    let tombstone = await loadTombstone();
-    // Every request in the run was built after its first row was created, so that is the time to judge answers by.
-    const requestedAt = b.parentId ? ((await db.annotationBatch.findUnique({ where: { id: b.parentId }, select: { createdAt: true } }))?.createdAt ?? b.createdAt) : b.createdAt;
-    for await (const result of await anthropic().messages.batches.results(b.anthropicBatchId)) {
-      const { photoId, sent } = parseAnnotationCustomId(result.custom_id);
-      // A place run never writes annotation state: an item it could not place keeps whatever description it has.
-      const fail = (reason: string, opts?: { terminal?: boolean }) => (promptFor(task) === "place" ? recordPlaceFailure(photoId, opts ?? {}) : recordFailure(photoId, reason, opts ?? {}));
-      if (result.result.type !== "succeeded") {
-        // Errored, expired or cancelled: the helper never saw the item, so leave it eligible for a later backfill.
-        if (result.result.type === "canceled") canceled++;
-        else errored++;
-        await fail(`batch:${result.result.type}`, { terminal: false });
-        continue;
+    try {
+      await applyBatch(b);
+    } catch (err) {
+      const message = err instanceof Error ? err.message.slice(0, 200) : String(err);
+      console.error(`[annotation-backfill] batch ${b.anthropicBatchId} could not be applied, will try again: ${message}`);
+      // Past Anthropic's retention nothing will ever come back; close it rather than retry it forever.
+      if (Date.now() - b.createdAt.getTime() > RESULTS_RETENTION_MS) {
+        await db.annotationBatch.update({ where: { id: b.id }, data: { status: "FAILED", endedAt: new Date() } }).catch(() => undefined);
       }
-      const message = result.result.message;
-      if (message.stop_reason === "refusal") {
-        errored++;
-        await fail(`refusal:${message.stop_details?.category ?? "unspecified"}`);
-        continue;
-      }
-      if (message.stop_reason === "max_tokens") {
-        errored++;
-        await fail("max_tokens");
-        continue;
-      }
-      if (await tombstoneStale(tombstone)) tombstone = await loadTombstone();
-      if (promptFor(task) === "place") {
-        const place = parsePlaceContent(message.content as { type: string; text?: string }[]);
-        if (place === undefined) {
-          errored++;
-          await fail("invalid_output");
-          continue;
-        }
-        if ((await applyPlaceEstimate(photoId, place, { sent, requestedAt, tombstone })) === "stale") {
-          errored++;
-          continue;
-        }
-        succeeded++;
-        continue;
-      }
-      const parsed = parseMessageContent(message.content as { type: string; text?: string }[]);
-      if (!parsed) {
+    }
+  }
+}
+
+/** Anthropic keeps a batch's results for 29 days after it was created. */
+export const RESULTS_RETENTION_MS = 29 * 86_400_000;
+
+type OpenBatch = Awaited<ReturnType<typeof db.annotationBatch.findMany>>[number];
+
+/** Read one ended batch's results and apply them; a batch still running is left for the next poll. */
+async function applyBatch(b: OpenBatch): Promise<void> {
+  // A place-pass row has nothing to say about descriptions, so its results are read the other way round.
+  const task = taskOf(b.scope as BackfillScope);
+  const remote = await anthropic().messages.batches.retrieve(b.anthropicBatchId).catch(() => null);
+  if (!remote) return;
+  if (remote.processing_status !== "ended") return;
+  if (!remote.results_url) {
+    // Ended but its results are gone (expired or archived): the items stay eligible for a later backfill.
+    console.error(`[annotation-backfill] batch ${b.anthropicBatchId} ended but its results are no longer available`);
+    await db.annotationBatch.update({ where: { id: b.id }, data: { status: "FAILED", endedAt: new Date() } });
+    return;
+  }
+  // While somebody is being forgotten no answer can be stored: the batch waits for the next poll rather than
+  // having every answer in it thrown away and asked again one at a time, at the full price.
+  if (await forgetRunning()) return;
+  // Read everything before writing anything, so a stream that breaks halfway applies nothing twice.
+  const results = [];
+  for await (const result of await anthropic().messages.batches.results(b.anthropicBatchId)) results.push(result);
+  // An item written after the batch ended was applied by an earlier poll that then failed (or has a newer answer
+  // since): its outcome still counts, but it is not written again.
+  const endedAt = remote.ended_at ? new Date(remote.ended_at) : null;
+  const newer = endedAt
+    ? new Set((await db.photo.findMany({ where: { id: { in: results.map((r) => parseAnnotationCustomId(r.custom_id).photoId) }, ...(promptFor(task) === "place" ? { placeEstimatedAt: { gt: endedAt } } : { annotatedAt: { gt: endedAt } }) }, select: { id: true } })).map((p) => p.id))
+    : new Set<string>();
+  let succeeded = 0, errored = 0, canceled = 0;
+  // The forgotten names, read once for the batch rather than for every answer in it, and again only if somebody
+  // is forgotten meanwhile.
+  let tombstone = await loadTombstone();
+  // Every request in the run was built after its first row was created, so that is the time to judge answers by.
+  const requestedAt = b.parentId ? ((await db.annotationBatch.findUnique({ where: { id: b.parentId }, select: { createdAt: true } }))?.createdAt ?? b.createdAt) : b.createdAt;
+  for (const result of results) {
+    const { photoId, sent } = parseAnnotationCustomId(result.custom_id);
+    const write = async <T>(fn: () => Promise<T>): Promise<T | undefined> => (newer.has(photoId) ? undefined : fn());
+    // A place run never writes annotation state: an item it could not place keeps whatever description it has.
+    const fail = (reason: string, opts?: { terminal?: boolean }) => write(() => (promptFor(task) === "place" ? recordPlaceFailure(photoId, opts ?? {}) : recordFailure(photoId, reason, opts ?? {})));
+    if (result.result.type !== "succeeded") {
+      // Errored, expired or cancelled: the helper never saw the item, so leave it eligible for a later backfill.
+      if (result.result.type === "canceled") canceled++;
+      else errored++;
+      await fail(`batch:${result.result.type}`, { terminal: false });
+      continue;
+    }
+    const message = result.result.message;
+    if (message.stop_reason === "refusal") {
+      errored++;
+      await fail(`refusal:${message.stop_details?.category ?? "unspecified"}`);
+      continue;
+    }
+    if (message.stop_reason === "max_tokens") {
+      errored++;
+      await fail("max_tokens");
+      continue;
+    }
+    if (await tombstoneStale(tombstone)) tombstone = await loadTombstone();
+    if (promptFor(task) === "place") {
+      const place = parsePlaceContent(message.content as { type: string; text?: string }[]);
+      if (place === undefined) {
         errored++;
         await fail("invalid_output");
         continue;
       }
-      await applyAnnotation(photoId, message.model, parsed, { content: message.content, usage: message.usage, stop_reason: message.stop_reason, batched: true }, { sent, requestedAt, tombstone });
+      if ((await write(() => applyPlaceEstimate(photoId, place, { sent, requestedAt, tombstone }))) === "stale") {
+        errored++;
+        continue;
+      }
       succeeded++;
+      continue;
     }
-    console.log(`[annotation-backfill] batch ${b.anthropicBatchId} ended: ${succeeded} ok, ${errored} failed, ${canceled} cancelled`);
-    await db.annotationBatch.update({ where: { id: b.id }, data: { status: b.status === "CANCELLED" || remote.request_counts.canceled ? "CANCELLED" : "ENDED", succeeded, errored, canceled, endedAt: new Date() } });
+    const parsed = parseMessageContent(message.content as { type: string; text?: string }[]);
+    if (!parsed) {
+      errored++;
+      await fail("invalid_output");
+      continue;
+    }
+    await write(() => applyAnnotation(photoId, message.model, parsed, { content: message.content, usage: message.usage, stop_reason: message.stop_reason, batched: true }, { sent, requestedAt, tombstone }));
+    succeeded++;
   }
+  console.log(`[annotation-backfill] batch ${b.anthropicBatchId} ended: ${succeeded} ok, ${errored} failed, ${canceled} cancelled`);
+  await db.annotationBatch.update({ where: { id: b.id }, data: { status: b.status === "CANCELLED" || remote.request_counts.canceled ? "CANCELLED" : "ENDED", succeeded, errored, canceled, endedAt: new Date() } });
 }

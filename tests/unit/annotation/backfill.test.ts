@@ -16,6 +16,8 @@ const api = vi.hoisted(() => ({
   createBehaviour: [] as (("ok" | "throw"))[],
   results: new Map<string, { custom_id: string; result: { type: string; message?: unknown } }[]>(),
   counter: 0,
+  remote: new Map<string, Record<string, unknown>>(),
+  broken: new Set<string>(),
 }));
 vi.mock("@/lib/annotation/client", () => ({
   anthropic: () => ({
@@ -29,8 +31,11 @@ vi.mock("@/lib/annotation/client", () => ({
           return { id };
         },
         cancel: async (id: string) => { api.cancelled.push(id); },
-        retrieve: async () => ({ processing_status: "ended", request_counts: { canceled: 0 } }),
-        results: async (id: string) => (async function* () { for (const r of api.results.get(id) ?? []) yield r; })(),
+        retrieve: async (id: string) => ({ processing_status: "ended", request_counts: { canceled: 0 }, results_url: `https://results.test/${id}`, ended_at: null, ...api.remote.get(id) }),
+        results: async (id: string) => (async function* () {
+          for (const r of api.results.get(id) ?? []) yield r;
+          if (api.broken.has(id)) throw new Error("stream reset");
+        })(),
       },
     },
   }),
@@ -65,6 +70,8 @@ describe("the backfill run", () => {
     api.createBehaviour.length = 0;
     api.results.clear();
     api.counter = 0;
+    api.remote.clear();
+    api.broken.clear();
   });
 
   it("submits chunks as a family, stamps the run's start and end, and keeps counts once per part", async () => {
@@ -192,5 +199,64 @@ describe("the backfill run", () => {
     expect((await db.annotationBatch.findUniqueOrThrow({ where: { id: row.id } })).status).toBe("SUBMITTED");
     await annotationBatchPoll();
     expect((await db.annotationBatch.findUniqueOrThrow({ where: { id: row.id } })).status).toBe("ENDED");
+  });
+
+  describe("the poll, when a batch cannot be read", () => {
+    const refusal = (id: string) => ({ custom_id: id, result: { type: "succeeded", message: { stop_reason: "refusal", stop_details: { category: "test" }, content: [], model: "m" } } });
+    async function twoBatches() {
+      await seed(2);
+      const admin = await db.user.findFirstOrThrow();
+      // Only the two rows made here are open: the seeded placeholder never ran.
+      await db.annotationBatch.deleteMany();
+      const ids = (await db.photo.findMany({ select: { id: true }, orderBy: { id: "asc" } })).map((p) => p.id);
+      const make = (anthropicBatchId: string, createdAt: Date) => db.annotationBatch.create({ data: { anthropicBatchId, scope: { kind: "all" }, requested: 1, createdById: admin.id, createdAt } });
+      const a = await make("msgbatch_a", new Date(Date.now() - 2 * 3_600_000));
+      const b = await make("msgbatch_b", new Date(Date.now() - 3_600_000));
+      api.results.set("msgbatch_a", [refusal(ids[0])]);
+      api.results.set("msgbatch_b", [refusal(ids[1])]);
+      return { a, b, ids };
+    }
+
+    it("still applies the batches after one whose results stream breaks, and applies nothing of the broken one", async () => {
+      const { a, b, ids } = await twoBatches();
+      api.broken.add("msgbatch_a");
+      await annotationBatchPoll();
+      expect((await db.annotationBatch.findUniqueOrThrow({ where: { id: a.id } })).status).toBe("SUBMITTED");
+      expect((await db.annotationBatch.findUniqueOrThrow({ where: { id: b.id } })).status).toBe("ENDED");
+      const [first, second] = await Promise.all(ids.map((id) => db.photo.findUniqueOrThrow({ where: { id } })));
+      expect(first.annotationError).toBeNull();
+      expect(second.annotationError).toBe("refusal:test");
+      // Once it reads again, it is applied like any other.
+      api.broken.clear();
+      await annotationBatchPoll();
+      expect((await db.annotationBatch.findUniqueOrThrow({ where: { id: a.id } })).status).toBe("ENDED");
+    });
+
+    it("closes a batch whose results are gone instead of polling it forever", async () => {
+      const { a, b } = await twoBatches();
+      api.remote.set("msgbatch_a", { results_url: null });
+      await annotationBatchPoll();
+      expect((await db.annotationBatch.findUniqueOrThrow({ where: { id: a.id } })).status).toBe("FAILED");
+      expect((await db.annotationBatch.findUniqueOrThrow({ where: { id: b.id } })).status).toBe("ENDED");
+    });
+
+    it("gives up on a batch that keeps failing once its results are past retention", async () => {
+      const { a } = await twoBatches();
+      api.broken.add("msgbatch_a");
+      await db.annotationBatch.update({ where: { id: a.id }, data: { createdAt: new Date(Date.now() - 30 * 86_400_000) } });
+      await annotationBatchPoll();
+      expect((await db.annotationBatch.findUniqueOrThrow({ where: { id: a.id } })).status).toBe("FAILED");
+    });
+
+    it("does not write an item again that was written after the batch ended, but still counts it", async () => {
+      const { a, ids } = await twoBatches();
+      api.remote.set("msgbatch_a", { ended_at: new Date(Date.now() - 3_600_000).toISOString() });
+      await db.photo.update({ where: { id: ids[0] }, data: { annotatedAt: new Date(), annotationError: null } });
+      await annotationBatchPoll();
+      const row = await db.annotationBatch.findUniqueOrThrow({ where: { id: a.id } });
+      expect(row.status).toBe("ENDED");
+      expect(row.errored).toBe(1);
+      expect((await db.photo.findUniqueOrThrow({ where: { id: ids[0] } })).annotationError).toBeNull();
+    });
   });
 });

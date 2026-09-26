@@ -16,7 +16,7 @@ import { BACKFILL_CAP, backfillCandidates, backfillExclusions, taskOf, type Back
 import { annotationSchema, toStored, type StoredAnnotation } from "@/lib/annotation/schema";
 import { anthropic } from "@/lib/annotation/client";
 import { helperText, judgeHelperText, knownNames, mentionsAnyName, pastHelperTitles, titleIsHelpers } from "@/lib/annotation/members-only";
-import { enqueueEmbedding } from "@/lib/jobs/handlers/embed-photo";
+import { enqueueEmbedding, refreshTextEmbedding } from "@/lib/jobs/handlers/embed-photo";
 import { withoutWithdrawnNames } from "@/lib/people/forget";
 
 /** The admin's half of the two gates. Recorded with who and when so the decision is auditable. */
@@ -128,6 +128,8 @@ export async function updateAnnotation(photoId: string, fd: FormData): Promise<v
       annotationTitleWords: membersOnly && titleOnly ? [...new Set([...photo.annotationTitleWords, ...(judged.titleWords ?? [])])] : [],
       annotationTitleFrom: membersOnly && titleOnly ? [...new Set([...photo.annotationTitleFrom, ...(judged.titleFrom ?? [])])] : [],
       ...(membersOnly ? { annotationSharedAt: null } : {}) } });
+  // The caption and description are part of what the item is searched by.
+  await refreshTextEmbedding(photoId);
   revalidatePath(`/photos/${photoId}`);
 }
 

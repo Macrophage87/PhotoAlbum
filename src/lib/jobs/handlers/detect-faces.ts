@@ -19,7 +19,7 @@ import { NOT_TRASHED } from "@/lib/photos/trash";
  * Detect faces on the medium rendition, store templates, and place each face in the nearest unnamed cluster
  * (or a new one). Matching against named people is a later phase. Under the heavy lock, one photo at a time.
  */
-export async function detectFacesJob(job: DetectFacesJob): Promise<void> {
+export async function detectFacesJob(job: DetectFacesJob, signal?: AbortSignal): Promise<void> {
   const gates = await faceGates();
   if (!gates.active) return;
   const photo = await db.photo.findUnique({ where: { id: job.photoId }, select: { id: true, status: true, renditions: true, facesDetectedAt: true, takenAt: true, takenAtSource: true, estimatedDate: true } });
@@ -28,9 +28,13 @@ export async function detectFacesJob(job: DetectFacesJob): Promise<void> {
   const local = medium ? storage().localPath?.(medium.key) : undefined;
   if (!local) return;
   await withHeavyLock(async () => {
-    const detected = await detectFaces(await readFile(local));
+    const detected = await detectFaces(await readFile(local), undefined, signal);
+    // Timed out while the sidecar answered: the retry owns this photo now.
+    signal?.throwIfAborted();
     // A re-scan keeps what people decided (confirmed and rejected faces) and only re-finds the rest.
-    await db.face.deleteMany({ where: { photoId: photo.id, status: { in: ["DETECTED", "PROPOSED"] } } });
+    const rescanned = { photoId: photo.id, status: { in: ["DETECTED" as const, "PROPOSED" as const] } };
+    const lightened = (await db.face.findMany({ where: { ...rescanned, clusterId: { not: null } }, select: { clusterId: true }, distinct: ["clusterId"] })).map((f) => f.clusterId!);
+    await db.face.deleteMany({ where: rescanned });
     const kept = await db.face.findMany({ where: { photoId: photo.id }, select: { id: true, box: true, personId: true, confidence: true, clusterId: true, ageAtCaptureYears: true } });
     const found = detected.filter((f) => !kept.some((k) => k.confidence > 0 && boxIou(k.box as [number, number, number, number], f.box) > 0.5));
     // Kept faces of consented people get their template back (it was nulled while recognition was off), and their
@@ -54,6 +58,8 @@ export async function detectFacesJob(job: DetectFacesJob): Promise<void> {
     // Deleted faces leave their unnamed clusters lighter; keep the counts the running mean relies on honest.
     await db.$executeRaw`UPDATE "FaceCluster" fc SET "faceCount" = (SELECT count(*) FROM "Face" f WHERE f."clusterId" = fc.id) WHERE fc."personId" IS NULL`;
     await db.faceCluster.deleteMany({ where: { personId: null, faces: { none: {} } } });
+    // Their running means still carry the deleted faces, which are about to be added again: take them back out.
+    await rebuildUnnamedCentroids(lightened);
     // Unnamed clusters only: named ones are the matcher's business.
     const clusters = (await db.$queryRaw<{ id: string; centroid: string; faceCount: number }[]>`SELECT id, centroid::text AS centroid, "faceCount" FROM "FaceCluster" WHERE "personId" IS NULL AND centroid IS NOT NULL`).map((c) => ({ id: c.id, centroid: JSON.parse(c.centroid) as number[], faceCount: c.faceCount }));
     for (const f of found) {
@@ -75,7 +81,7 @@ export async function detectFacesJob(job: DetectFacesJob): Promise<void> {
       await db.$executeRaw`UPDATE "Face" SET embedding = ${vectorLiteral(f.embedding)}::vector WHERE id = ${face.id}`;
     }
     await db.photo.update({ where: { id: photo.id }, data: { facesDetectedAt: new Date() } });
-  });
+  }, signal);
   await proposeForPhoto(photo.id);
 }
 
@@ -97,10 +103,32 @@ export async function rebuildCentroids(personId: string): Promise<void> {
   await enqueueMatchAllOpen();
 }
 
+/**
+ * Recompute these unnamed clusters' centroids and counts from the faces they still hold, the same way rebuildCentroids
+ * does for a person's eras. The count is every face in the cluster, as everywhere else; a cluster left with no
+ * templates loses its centroid rather than keep one made of faces that are gone. Named clusters are left to the matcher.
+ */
+export async function rebuildUnnamedCentroids(clusterIds: string[]): Promise<void> {
+  if (!clusterIds.length) return;
+  const rows = await db.$queryRaw<{ id: string; c: string | null; n: number }[]>`
+    SELECT fc.id, (avg(f.embedding) FILTER (WHERE f.embedding IS NOT NULL))::text AS c, count(f.id)::int AS n
+    FROM "FaceCluster" fc LEFT JOIN "Face" f ON f."clusterId" = fc.id
+    WHERE fc."personId" IS NULL AND fc.id IN (${Prisma.join(clusterIds)}) GROUP BY fc.id`;
+  for (const r of rows) {
+    if (r.c === null) {
+      await db.$executeRaw`UPDATE "FaceCluster" SET centroid = NULL, "faceCount" = ${r.n}, "updatedAt" = now() WHERE id = ${r.id}`;
+      continue;
+    }
+    const centroid = normalise(JSON.parse(r.c) as number[]);
+    await db.$executeRaw`UPDATE "FaceCluster" SET centroid = ${vectorLiteral(centroid)}::vector, "faceCount" = ${r.n}, "updatedAt" = now() WHERE id = ${r.id}`;
+  }
+}
+
+/** Debounced like enqueueEmbedding: a second edit within the minute re-scans in the next one instead of being dropped. */
 export async function enqueueFaceDetection(...photoIds: string[]): Promise<void> {
   const gates = await faceGates();
   if (!gates.active) return;
-  for (const photoId of photoIds) await enqueue(QUEUES.detectFaces, { photoId }, { singletonKey: `faces:${photoId}`, singletonSeconds: 60 });
+  for (const photoId of photoIds) await enqueue(QUEUES.detectFaces, { photoId }, { singletonKey: `faces:${photoId}`, singletonSeconds: 60, singletonNextSlot: true });
 }
 
 /** Catch-up: ready photos not yet scanned (photos and posters; clips use their poster). */

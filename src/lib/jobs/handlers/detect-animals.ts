@@ -17,7 +17,7 @@ import { NOT_TRASHED } from "@/lib/photos/trash";
  * Confirmed and rejected rows survive a re-scan (a confirmed row without an embedding, as the seed writes, gets one
  * back from the matching detection). Under the heavy lock, one photo at a time.
  */
-export async function detectAnimalsJob(job: DetectAnimalsJob): Promise<void> {
+export async function detectAnimalsJob(job: DetectAnimalsJob, signal?: AbortSignal): Promise<void> {
   if (!petGates().active) return;
   const photo = await db.photo.findUnique({ where: { id: job.photoId }, select: { id: true, status: true, renditions: true } });
   if (!photo || photo.status !== "READY") return;
@@ -27,7 +27,7 @@ export async function detectAnimalsJob(job: DetectAnimalsJob): Promise<void> {
   await withHeavyLock(async () => {
     let detected;
     try {
-      detected = await detectAnimals(await readFile(local));
+      detected = await detectAnimals(await readFile(local), undefined, signal);
     } catch (err) {
       if (err instanceof MlError && err.status === 503) {
         // No detector weights on the sidecar: note it once per photo rather than retrying forever.
@@ -37,6 +37,8 @@ export async function detectAnimalsJob(job: DetectAnimalsJob): Promise<void> {
       }
       throw err;
     }
+    // Timed out while the sidecar answered: the retry owns this photo now.
+    signal?.throwIfAborted();
     await db.animalDetection.deleteMany({ where: { photoId: photo.id, status: { in: ["DETECTED", "PROPOSED"] } } });
     const kept = await db.$queryRaw<{ id: string; box: number[]; hasEmbedding: boolean }[]>`SELECT id, box, embedding IS NOT NULL AS "hasEmbedding" FROM "AnimalDetection" WHERE "photoId" = ${photo.id}`;
     for (const a of detected) {
@@ -49,13 +51,14 @@ export async function detectAnimalsJob(job: DetectAnimalsJob): Promise<void> {
       await setAnimalEmbedding(row.id, a.embedding);
     }
     await db.photo.update({ where: { id: photo.id }, data: { animalsDetectedAt: new Date() } });
-  });
+  }, signal);
   await proposeAnimalsForPhoto(photo.id);
 }
 
+/** Debounced like enqueueEmbedding: a second edit within the minute re-scans in the next one instead of being dropped. */
 export async function enqueueAnimalDetection(...photoIds: string[]): Promise<void> {
   if (!petGates().active) return;
-  for (const photoId of photoIds) await enqueue(QUEUES.detectAnimals, { photoId }, { singletonKey: `animals:${photoId}`, singletonSeconds: 60 });
+  for (const photoId of photoIds) await enqueue(QUEUES.detectAnimals, { photoId }, { singletonKey: `animals:${photoId}`, singletonSeconds: 60, singletonNextSlot: true });
 }
 
 /** Catch-up: ready items not yet scanned for animals. */

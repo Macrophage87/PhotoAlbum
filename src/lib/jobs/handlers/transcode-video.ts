@@ -11,6 +11,7 @@ import { pickTripByDay, whoWasThere } from "@/lib/photos/assign";
 import { activityFor } from "@/lib/activities/reassign";
 import { localDayFromOffset, offsetMinutesInZone } from "@/lib/time/local-day";
 import { withHeavyLock } from "../heavy-lock";
+import { workerStopping } from "../shutdown";
 import type { TranscodeVideoJob } from "../queues";
 import { enqueueEmbedding } from "./embed-photo";
 import { enqueueFaceDetection } from "./detect-faces";
@@ -24,28 +25,34 @@ export function tooLongMessage(durationS: number, limit: number): string {
 
 /**
  * Turn an uploaded clip into a web-playable MP4 with a poster and thumbnails. The duration limit is enforced here
- * as the authority, even though the browser checks first. Runs under the heavy-work lock.
+ * as the authority, even though the browser checks first. Runs under the heavy-work lock. `signal` is pg-boss's,
+ * fired when the job times out: ffmpeg is killed and nothing more is written, so the retry never overlaps it.
  */
-export async function transcodeVideo(job: TranscodeVideoJob): Promise<void> {
+export async function transcodeVideo(job: TranscodeVideoJob, signal?: AbortSignal): Promise<void> {
   const photo = await db.photo.findUnique({ where: { id: job.photoId } });
   if (!photo) return;
-  await db.photo.update({ where: { id: photo.id }, data: { status: "PROCESSING", error: null } });
   const store = storage();
-  const input = store.localPath?.(photo.originalPath);
-  if (!input) throw new Error("transcode-video requires a storage driver with local paths");
-  const work = await mkdtemp(path.join(tmpdir(), "clip-"));
+  let work: string | null = null;
+  // The stamp marks the row as this run's: a retry of a timed-out run stamps it again.
+  let claimedAt: Date | null = null;
+  // Everything after the row turns PROCESSING is inside the try, so no failure can leave it spinning.
   try {
+    claimedAt = (await db.photo.update({ where: { id: photo.id }, data: { status: "PROCESSING", error: null }, select: { updatedAt: true } })).updatedAt;
+    const input = store.localPath?.(photo.originalPath);
+    if (!input) throw new Error("transcode-video requires a storage driver with local paths");
+    const dir = (work = await mkdtemp(path.join(tmpdir(), "clip-")));
     await withHeavyLock(async () => {
-      const info = await probe(input);
+      const info = await probe(input, signal);
       const limit = env().MAX_CLIP_SECONDS;
       // A clip already accepted is not refused on a Re-process because the limit has since been lowered.
       if (!photo.videoRenditions && info.durationS !== null && info.durationS > limit) throw new Error(tooLongMessage(info.durationS, limit));
 
-      const mp4 = path.join(work, "video.mp4");
-      const poster = path.join(work, "poster.jpg");
-      await ffmpeg(transcodeArgs(input, mp4, info));
-      await ffmpeg(posterArgs(mp4, poster, info.durationS));
-      const out = await probe(mp4);
+      const mp4 = path.join(dir, "video.mp4");
+      const poster = path.join(dir, "poster.jpg");
+      await ffmpeg(transcodeArgs(input, mp4, info), signal);
+      await ffmpeg(posterArgs(mp4, poster, info.durationS), signal);
+      const out = await probe(mp4, signal);
+      signal?.throwIfAborted();
       const mp4Key = `${photo.storageKey}/video.mp4`;
       const posterKey = `${photo.storageKey}/poster.jpg`;
       await store.putBuffer(mp4Key, await readFile(mp4));
@@ -96,17 +103,25 @@ export async function transcodeVideo(job: TranscodeVideoJob): Promise<void> {
           camera: info.videoCodec ? `${info.videoCodec}${info.hdr ? " HDR" : ""}` : null,
         },
       });
-    });
+    }, signal);
     // Follow-up jobs are best-effort here; the sweeps pick up anything the queue refused.
     await enqueueEmbedding(photo.id).catch(() => undefined);
     await enqueueFaceDetection(photo.id).catch(() => undefined);
     await enqueueAnimalDetection(photo.id).catch(() => undefined);
   } catch (err) {
+    // Cut short by a shutdown: the job is retried once the worker is back, so the row is left for that run.
+    if (signal?.aborted && workerStopping()) throw err;
+    if (signal?.aborted) {
+      // Timed out: the retry may already have the row, so fail it only while it is still this run's.
+      console.error(`[transcode-video] ${photo.id} timed out`);
+      if (claimedAt) await db.photo.updateMany({ where: { id: photo.id, status: "PROCESSING", updatedAt: claimedAt }, data: { status: "FAILED", error: "Transcoding took too long and was stopped." } });
+      throw err;
+    }
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[transcode-video] ${photo.id} failed:`, message);
     await db.photo.update({ where: { id: photo.id }, data: { status: "FAILED", error: message.slice(0, 500) } });
     throw err;
   } finally {
-    await rm(work, { recursive: true, force: true });
+    if (work) await rm(work, { recursive: true, force: true });
   }
 }

@@ -1,16 +1,19 @@
 import { db } from "@/lib/db";
-import { getBoss, JOB_EXPIRE_SECONDS } from "./boss";
+import { getBoss, HEAVY_HEARTBEAT_REFRESH_SECONDS, HEAVY_JOB_EXPIRE_SECONDS, JOB_EXPIRE_SECONDS } from "./boss";
 import { QUEUES } from "./queues";
 
 /**
  * A photo left in PROCESSING longer than the job expiry plus all retries can no longer have a live job
  * (the process that owned it died). Mark it FAILED so the uploader stops spinning and "Re-process" is offered.
- * PENDING rows are left alone: they may simply be queued behind a long backlog.
+ * PENDING rows are left alone: they may simply be queued behind a long backlog. Runs at startup and every quarter
+ * hour, since a worker that keeps crashing on one item restarts too soon for the startup pass to see it.
  */
 export async function reconcileStalePhotos(now = new Date()): Promise<number> {
   const cutoff = new Date(now.getTime() - JOB_EXPIRE_SECONDS * 4 * 1000);
+  // Clips are transcoded on a heavy queue, whose jobs may run (and wait for the lock) for longer.
+  const clipCutoff = new Date(now.getTime() - HEAVY_JOB_EXPIRE_SECONDS * 4 * 1000);
   const res = await db.photo.updateMany({
-    where: { status: "PROCESSING", updatedAt: { lt: cutoff } },
+    where: { status: "PROCESSING", OR: [{ kind: { not: "VIDEO" }, updatedAt: { lt: cutoff } }, { kind: "VIDEO", updatedAt: { lt: clipCutoff } }] },
     data: { status: "FAILED", error: "Processing was interrupted by a restart. Use Re-process to try again." },
   });
   if (res.count) console.warn(`[worker] marked ${res.count} stale photo(s) as FAILED`);
@@ -54,7 +57,7 @@ export async function startWorker(): Promise<void> {
   const { sweepStrandedUploads } = await import("@/lib/media/stranded");
 
   await boss.work(QUEUES.processPhoto, { batchSize: 1, localConcurrency: 2, pollingIntervalSeconds: 2 }, async ([job]) =>
-    processPhoto(job.data as never),
+    processPhoto(job.data as never, job.signal),
   );
   await boss.work(QUEUES.importTrack, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 2 }, async ([job]) =>
     importTrack(job.data as never),
@@ -66,21 +69,24 @@ export async function startWorker(): Promise<void> {
     deletePhoto(job.data as never),
   );
   // One clip at a time; the handler also takes the heavy-work lock so it never overlaps other heavy jobs.
-  await boss.work(QUEUES.transcodeVideo, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 2 }, async ([job]) => transcodeVideo(job.data as never));
+  await boss.work(QUEUES.transcodeVideo, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 2, heartbeatRefreshSeconds: HEAVY_HEARTBEAT_REFRESH_SECONDS }, async ([job]) => transcodeVideo(job.data as never, job.signal));
   await boss.work(QUEUES.checkExternalVideos, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 30 }, async () => checkExternalVideos());
   await boss.work(QUEUES.annotatePhoto, { batchSize: 1, localConcurrency: 2, pollingIntervalSeconds: 3 }, async ([job]) => annotatePhoto(job.data as never));
   await boss.work(QUEUES.annotationSweep, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 30 }, async () => void (await annotationSweep()));
   await boss.work(QUEUES.annotationBackfill, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 5 }, async ([job]) => annotationBackfill(job.data as never));
   await boss.work(QUEUES.annotationBatchPoll, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 30 }, async () => annotationBatchPoll());
-  // Sidecar calls: one at a time and under the heavy lock, so they never overlap a transcode.
-  await boss.work(QUEUES.embedPhoto, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 3 }, async ([job]) => embedPhoto(job.data as never));
+  // Sidecar calls: one at a time and under the heavy lock, so they never overlap a transcode. The heavy handlers take
+  // the job's signal, which pg-boss fires when it times a job out, so a late run stops instead of racing its retry.
+  await boss.work(QUEUES.embedPhoto, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 3, heartbeatRefreshSeconds: HEAVY_HEARTBEAT_REFRESH_SECONDS }, async ([job]) => embedPhoto(job.data as never, job.signal));
   await boss.work(QUEUES.embedSweep, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 30 }, async () => void (await embedSweep()));
-  await boss.work(QUEUES.detectFaces, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 3 }, async ([job]) => detectFacesJob(job.data as never));
+  await boss.work(QUEUES.detectFaces, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 3, heartbeatRefreshSeconds: HEAVY_HEARTBEAT_REFRESH_SECONDS }, async ([job]) => detectFacesJob(job.data as never, job.signal));
   await boss.work(QUEUES.takeoutImport, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 5 }, async ([job]) => importTakeoutArchive((job.data as { importId: string }).importId));
-  await boss.work(QUEUES.detectAnimals, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 3 }, async ([job]) => detectAnimalsJob(job.data as never));
+  await boss.work(QUEUES.detectAnimals, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 3, heartbeatRefreshSeconds: HEAVY_HEARTBEAT_REFRESH_SECONDS }, async ([job]) => detectAnimalsJob(job.data as never, job.signal));
   await boss.work(QUEUES.animalSweep, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 30 }, async () => void (await animalSweep()));
   await boss.work(QUEUES.matchAnimals, { batchSize: 1, localConcurrency: 2, pollingIntervalSeconds: 2 }, async ([job]) => void (await proposeAnimalsForPhoto((job.data as { photoId: string }).photoId)));
-  await boss.work(QUEUES.googlePickerImport, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 2 }, async ([job]) => googlePickerImport(job.data as never, job.signal));
+  await boss.work(QUEUES.googlePickerImport, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 2, includeMetadata: true }, async ([job]) =>
+    googlePickerImport(job.data as never, job.signal, { finalAttempt: job.retryCount >= job.retryLimit }),
+  );
   await boss.work(QUEUES.matchPhoto, { batchSize: 1, localConcurrency: 2, pollingIntervalSeconds: 2 }, async ([job]) => matchPhoto(job.data as never));
   await boss.work(QUEUES.faceSweep, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 30 }, async () => void (await faceSweep()));
   // The nightly people job also takes out of the helper's text the names of people whose naming the album switched
@@ -98,7 +104,9 @@ export async function startWorker(): Promise<void> {
   await boss.work(QUEUES.purgeVisits, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60 }, async () => void (await purgeVisits()));
   await boss.work(QUEUES.purgeMagicLinks, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60 }, async () => void (await purgeExpiredMagicLinks({ db })));
   await boss.work(QUEUES.sweepStrandedUploads, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60 }, async () => void (await sweepStrandedUploads()));
-  // Schedules (idempotent): weekly video re-check, the annotation quiet-period sweep, batch polling, raw-response purge.
+  await boss.work(QUEUES.reconcilePhotos, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60 }, async () => void (await reconcileStalePhotos()));
+  // Schedules (idempotent): weekly video re-check, the annotation quiet-period sweep, batch polling, raw-response purge,
+  // and the stale-photo reconciliation.
   await boss.schedule(QUEUES.checkExternalVideos, "0 4 * * 1", {}, { retryLimit: 1 });
   await boss.schedule(QUEUES.annotationSweep, "*/5 * * * *", {}, { retryLimit: 0 });
   await boss.schedule(QUEUES.annotationBatchPoll, "*/5 * * * *", {}, { retryLimit: 0 });
@@ -115,6 +123,7 @@ export async function startWorker(): Promise<void> {
   await scrubWithdrawnNames().catch((err) => console.error("[worker] withdrawn-name scrub failed", err));
   await completePendingForgets().catch((err) => console.error("[worker] pending forgets failed", err));
   await boss.schedule(QUEUES.sweepStrandedUploads, "40 * * * *", {}, { retryLimit: 0 });
+  await boss.schedule(QUEUES.reconcilePhotos, "*/15 * * * *", {}, { retryLimit: 0 });
   console.log("[worker] pg-boss handlers registered");
   // Before the reconciliation below, so a Picker download lost in the restart is told to be picked again rather
   // than re-processed (it has no file to process).

@@ -31,7 +31,7 @@ const tokenFailure = (err: unknown) => (err instanceof GoogleAuthError && err.ne
  * works for about an hour after it was listed. Only a refresh Google turns down means the member has to connect
  * again; a refused download on its own fails that item and nothing else.
  */
-export async function googlePickerImport(job: GooglePickerImportJob, signal?: AbortSignal): Promise<void> {
+export async function googlePickerImport(job: GooglePickerImportJob, signal?: AbortSignal, opts: { finalAttempt?: boolean } = {}): Promise<void> {
   // Its own rows still waiting, and any a crashed run of this job left half-taken (its retry picks them up).
   const rows = await db.photo.findMany({ where: { id: { in: job.photoIds }, sourceKind: "GOOGLE_PICKER", ...takeableDownload() } });
   if (rows.length === 0) return;
@@ -74,9 +74,14 @@ export async function googlePickerImport(job: GooglePickerImportJob, signal?: Ab
   };
 
   const store = storage();
-  for (const row of rows) {
+  for (const [i, row] of rows.entries()) {
+    // Timed out (or shutting down): the retry picks up every row still pending, the picker session included. With no
+    // retry left, the rest are failed instead of waiting for ever.
+    if (signal?.aborted) {
+      if (opts.finalAttempt) await db.photo.updateMany({ where: { id: { in: rows.slice(i).map((r) => r.id) }, originalPath: "pending", status: "PENDING" }, data: { status: "FAILED", error: "Download from Google Photos took too long." } });
+      return;
+    }
     if (!items.has(row.id)) continue;
-    if (signal?.aborted) break;
     const isVideo = row.kind === "VIDEO";
     const storageKey = `photos/${row.id}`;
     // A name of this download's own, in the photo's folder, and written onto the row in the same guarded write that
