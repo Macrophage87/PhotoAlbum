@@ -13,6 +13,7 @@ import { permittedNames } from "@/lib/people/gates";
 import { canEditContainer, NOT_YOUR_CONTAINER } from "@/lib/auth/ownership";
 import { activityInputFromForm, localInputToInstant } from "@/lib/activities/validation";
 import { reassignPhotosForActivity } from "@/lib/activities/reassign";
+import { deleteTrackAndItsPositions } from "@/lib/tracks/remove";
 import { fieldErrors, participantsFromForm } from "@/lib/trips/validation";
 import type { ActivityType } from "@/generated/prisma/enums";
 import type { ActivityFormState } from "@/components/activities/ActivityForm";
@@ -81,7 +82,7 @@ export async function deleteActivity(slug: string, id: string, fd: FormData): Pr
   if (!activity) return;
   const deleteTrack = fd.get("deleteTrack") === "on";
   await db.activity.delete({ where: { id } });
-  if (deleteTrack && activity.trackId) await db.track.delete({ where: { id: activity.trackId } }).catch(() => {});
+  if (deleteTrack && activity.trackId) await deleteTrackAndItsPositions(activity.trackId);
   revalidatePath(`/trips/${slug}`, "layout");
   redirect(`/trips/${slug}/activities`);
 }
