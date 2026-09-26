@@ -18,7 +18,7 @@ export default async function ForgottenPage({ searchParams }: PageProps<"/people
   const viewer = await getViewer();
   const sp = await searchParams;
   const [photos, trips, collections, activities] = await Promise.all([
-    db.photo.findMany({ where: { id: { in: list(sp.p) } }, select: { id: true, title: true, caption: true, originalName: true } }),
+    db.photo.findMany({ where: { id: { in: list(sp.p) }, trashedAt: null }, select: { id: true, title: true, caption: true, originalName: true } }),
     db.trip.findMany({ where: { slug: { in: list(sp.t) } }, select: { slug: true, title: true } }),
     db.collection.findMany({ where: { slug: { in: list(sp.c) } }, select: { slug: true, title: true } }),
     db.activity.findMany({ where: { id: { in: list(sp.a) } }, select: { id: true, title: true, trip: { select: { slug: true } } } }),
@@ -37,11 +37,11 @@ export default async function ForgottenPage({ searchParams }: PageProps<"/people
         <p className="text-muted">Their face data, their tags and their person page are gone, and their name is out of everything the AI helper wrote and out of the name search.</p>
         {any ? (
           <>
-            <p>What members wrote by hand is left as they wrote it. These still mention the name; open each to edit it, or ask the member who wrote it:</p>
+            <p>What members wrote themselves is left as they wrote it. These still mention the name — written by members, or before the album kept track of who wrote them; open each to edit it, or ask whoever wrote it:</p>
             <MemberTextList text={text} />
           </>
         ) : (
-          <p>Nothing a member wrote by hand mentions the name.</p>
+          <p>Nothing left mentions the name.</p>
         )}
         <p><Link className="underline" href="/people">Back to People</Link></p>
       </Container>

@@ -8,8 +8,9 @@ import { AppShell, Container } from "@/components/layout/AppShell";
 import { PhotoGrid } from "@/components/photos/PhotoGrid";
 import { toGridPhoto } from "@/components/photos/toGrid";
 import { Badge, Button, Card, ConfirmSubmitButton, Input, Label } from "@/components/ui";
-import { decideIndexing, deletePerson, optOutPerson, recordAdultAndName, setNameInDescriptions, updatePerson } from "../actions";
-import { matcherFor, memberTextMentioning } from "@/lib/people/forget";
+import { decideIndexing, deletePerson, optOutPerson, recordAdultAndName, scrubWithdrawnNow, setNameInDescriptions, updatePerson } from "../actions";
+import { matcherFor, memberTextMentioning, taggedPhotoIds, WITHDRAWN_GRACE_DAYS } from "@/lib/people/forget";
+import { nameMayLeaveServer } from "@/lib/people/consent";
 import { MemberTextList } from "@/components/people/MemberTextList";
 import { PetForm } from "@/components/people/PetForm";
 import { dateColumnToDay } from "@/lib/time/local-day";
@@ -37,7 +38,10 @@ export default async function PersonPage({ params }: PageProps<"/people/[id]">) 
   const creator = await db.user.findUnique({ where: { id: person.createdById }, select: { name: true } });
   const askWhom = creator?.name?.trim() ? `${creator.name.trim()} (who added them) or an admin` : "an admin";
   // What members wrote by hand that forgetting would leave as it is, shown before anybody presses the button.
-  const memberText = person.kind === "HUMAN" && canChange ? await memberTextMentioning(await matcherFor(person)) : null;
+  const memberText = person.kind === "HUMAN" && canChange ? await memberTextMentioning(await matcherFor(person), await taggedPhotoIds(person.id)) : null;
+  // Turning something off that is all that lets the helper use their name takes it out of what was written, too.
+  const unNames = `This also takes ${person.name} out of descriptions already written; turning it back on means describing them again.`;
+  const withdrawnUntil = person.namingWithdrawnAt ? new Date(person.namingWithdrawnAt.getTime() + WITHDRAWN_GRACE_DAYS * 86_400_000) : null;
   // Descriptions of this person written before the album could name them, and the one press that redoes them.
   const waiting = await namesWaitingFor(id);
   const refresh = async () => {
@@ -139,7 +143,11 @@ export default async function PersonPage({ params }: PageProps<"/people/[id]">) 
                       <span className="block text-muted">Turning it off drops the face templates now. Without a birthday showing an adult or the attestation the templates are dropped as well{minor ? ", and a minor is never recognized unless a parent has asked" : ""}. Only admins change this; the decision is recorded{person.faceIndexingSetAt ? ` (last set ${person.faceIndexingSetAt.toLocaleDateString("en-US")})` : ""}.</span>
                     </span>
                   </label>
-                  <Button type="submit" size="sm" variant="secondary">Save recognition setting</Button>
+                  {person.faceIndexing && !person.nameInDescriptions && nameMayLeaveServer(person) ? (
+                    <ConfirmSubmitButton size="sm" variant="secondary" confirmMessage={`Save the recognition setting? If it turns recognition off: ${unNames}`}>Save recognition setting</ConfirmSubmitButton>
+                  ) : (
+                    <Button type="submit" size="sm" variant="secondary">Save recognition setting</Button>
+                  )}
                 </form>
               ) : (
                 <p className="text-muted">{person.faceIndexing ? "An admin turned recognition on for this person." : "Recognition is off. An admin can turn it on with the person's agreement."}</p>
@@ -150,12 +158,23 @@ export default async function PersonPage({ params }: PageProps<"/people/[id]">) 
                   keep a template of anybody, and is what a relative usually means by "I would rather be tagged". */}
               <div className="border-t border-border pt-3 space-y-2">
                 <p className="font-medium">Named in descriptions</p>
+                {/* Switched off by the album itself, not by anybody's decision: say so, and what happens next. */}
+                {withdrawnUntil && (
+                  <div className="rounded-theme border border-amber-300 bg-amber-50 p-2 text-amber-900 space-y-1" data-testid="naming-withdrawn">
+                    <p>The album stopped using {person.name}&apos;s name because it can&apos;t be sure they are over 18. Record a birthday or an adult confirmation below to keep using it; otherwise their name is taken out of descriptions already written on {withdrawnUntil.toLocaleDateString("en-US")}.</p>
+                    {isAdmin && (
+                      <form action={scrubWithdrawnNow.bind(null, id)}>
+                        <ConfirmSubmitButton size="sm" variant="secondary" confirmMessage={`Take ${person.name}'s name out of descriptions already written, now?`}>Take it out now</ConfirmSubmitButton>
+                      </form>
+                    )}
+                  </div>
+                )}
                 {minor ? (
                   <p className="text-muted">A child is never named in a description, whatever else is set.</p>
                 ) : !knownAdult(person) ? (
                   // No birthday and no attestation could be a child as easily as an adult, and a child is never named.
                   <div className="space-y-2" data-testid="name-needs-age">
-                    <p className="text-muted">Not named: with no birthday showing an adult and no confirmation that they are one, {person.name} is treated as a child. {isAdmin ? "Record either here to use their name; this says nothing about recognition, which stays its own decision." : "An admin can record either."}</p>
+                    <p className="text-muted">Not named: the album can&apos;t be sure {person.name} is over 18, so it doesn&apos;t name them. {isAdmin ? "Record a birthday or confirm they are an adult here to use their name; this says nothing about recognition, which stays its own decision." : "An admin can record a birthday or confirm they are an adult."}</p>
                     {isAdmin && (
                       <form action={recordAdultAndName.bind(null, id)} className="space-y-2">
                         {!person.birthday && (
@@ -176,7 +195,7 @@ export default async function PersonPage({ params }: PageProps<"/people/[id]">) 
                     {/* Agreed before the album asked for evidence: the agreement no longer counts, and can be cleared. */}
                     {isAdmin && person.nameInDescriptions && (
                       <form action={nameInDescriptions.bind(null, id, false)}>
-                        <Button type="submit" size="sm" variant="secondary">Stop using their name</Button>
+                        <ConfirmSubmitButton size="sm" variant="secondary" confirmMessage={`Stop using ${person.name}'s name? ${unNames}`}>Stop using their name</ConfirmSubmitButton>
                       </form>
                     )}
                   </div>
@@ -188,9 +207,15 @@ export default async function PersonPage({ params }: PageProps<"/people/[id]">) 
                         : `The helper is not told ${person.name}'s name, so descriptions of photographs they are in say "a man", "an older couple" and the like.`}
                       {" "}Nothing is recognized either way, and no template is kept for it{person.nameInDescriptionsSetAt ? ` (last set ${person.nameInDescriptionsSetAt.toLocaleDateString("en-US")})` : ""}.
                     </p>
-                    <Button type="submit" size="sm" variant="secondary" data-testid="name-in-descriptions">
-                      {person.nameInDescriptions ? "Stop using their name" : "Use their name in descriptions"}
-                    </Button>
+                    {person.nameInDescriptions && nameMayLeaveServer(person) && !person.faceIndexing ? (
+                      <ConfirmSubmitButton size="sm" variant="secondary" data-testid="name-in-descriptions" confirmMessage={`Stop using ${person.name}'s name? ${unNames}`}>
+                        Stop using their name
+                      </ConfirmSubmitButton>
+                    ) : (
+                      <Button type="submit" size="sm" variant="secondary" data-testid="name-in-descriptions">
+                        {person.nameInDescriptions ? "Stop using their name" : "Use their name in descriptions"}
+                      </Button>
+                    )}
                   </form>
                 ) : (
                   <p className="text-muted">{person.nameInDescriptions ? `Descriptions may use ${person.name}'s name.` : "Descriptions do not use their name. An admin can change that with their agreement."}</p>
@@ -200,10 +225,11 @@ export default async function PersonPage({ params }: PageProps<"/people/[id]">) 
               {canChange ? (
               <form action={optOut} className="space-y-2 border-t border-border pt-3">
                 <p className="font-medium">Forget this person&apos;s face</p>
-                <p className="text-muted">Deletes every face template, group and match for {person.name}, takes the name out of everything the AI helper wrote (descriptions, titles, and the trip, collection and activity descriptions it wrote) and out of the name search, and stops the name reaching the AI helper. What members wrote by hand — titles, captions, notes, descriptions — is left exactly as they wrote it.</p>
+                <p>The album stops recognizing {person.name} and takes their name out of everything the AI wrote; what members wrote themselves is left as it is.</p>
+                <p className="text-muted">In detail: deletes every face template, group and match for {person.name}; takes the name out of the AI helper&apos;s descriptions and titles (including descriptions a member has since corrected) and the trip, collection and activity descriptions it wrote, and out of the name search; and stops the name reaching the AI helper. Titles, captions, notes and descriptions members wrote by hand are left exactly as they wrote them.</p>
                 {memberText && memberText.photos.length + memberText.trips.length + memberText.collections.length + memberText.activities.length > 0 && (
                   <div className="rounded-theme border border-border bg-surface-alt p-3 space-y-1">
-                    <p>These were written by members and still mention {person.name}; forgetting leaves them as they are, so edit them by hand (or ask whoever wrote them):</p>
+                    <p>These still mention {person.name} and were written by members, or before the album kept track of who wrote them; forgetting leaves them as they are, so edit them by hand (or ask whoever wrote them):</p>
                     <MemberTextList text={memberText} />
                   </div>
                 )}

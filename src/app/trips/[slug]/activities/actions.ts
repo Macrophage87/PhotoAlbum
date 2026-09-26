@@ -19,6 +19,7 @@ import type { ActivityFormState } from "@/components/activities/ActivityForm";
 import { descriptionFromMembersOnly, handWrittenMembersOnly } from "@/lib/annotation/members-only";
 import { descriptionStaysHelpers } from "@/lib/annotation/helper-text";
 import { namesChangedSince } from "@/lib/people/names-changed";
+import { withoutUnpermittedNames } from "@/lib/annotation/container";
 
 /** An activity is part of the shape of a trip, so it is the trip's maker (and admins) who arrange them. */
 async function loadTrip(slug: string) {
@@ -186,7 +187,7 @@ export async function describeActivityWithAi(slug: string, id: string, note?: st
 
   const requestedAt = new Date();
   const names = [...new Set((await Promise.all(activity.photos.map((p) => permittedNames(p.id)))).flat())];
-  const request = await buildActivityRequest(activity, gates.model, names, DESCRIPTION_TEXT.parse(note ?? "").trim() || undefined);
+  const request = await buildActivityRequest(await withoutUnpermittedNames(activity), gates.model, names, DESCRIPTION_TEXT.parse(note ?? "").trim() || undefined);
   const notes = activity.photos.some((p) => p.context?.trim());
   const response = await anthropic().messages.create(request);
   console.log(`[annotate-activity] ${activity.id} model=${response.model} stop=${response.stop_reason} in=${response.usage.input_tokens} out=${response.usage.output_tokens}`);

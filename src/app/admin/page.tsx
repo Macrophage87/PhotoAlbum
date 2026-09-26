@@ -16,6 +16,7 @@ import { actualSpend } from "@/lib/annotation/pricing";
 import { faceGates } from "@/lib/people/gates";
 import { petGates } from "@/lib/pets/gates";
 import { faceCounts, needsDecision } from "@/lib/people/queries";
+import { WITHDRAWN_GRACE_DAYS } from "@/lib/people/forget";
 import { FacesAdmin } from "@/components/people/FacesAdmin";
 import { decideIndexing } from "@/app/people/actions";
 import { isMinor } from "@/lib/people/consent";
@@ -42,7 +43,12 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
   const fg = await faceGates();
   const pg = petGates();
   const animalCounts = { sightings: await db.animalDetection.count(), confirmed: await db.animalDetection.count({ where: { status: "CONFIRMED" } }) };
-  const [counts, decisions] = await Promise.all([faceCounts(fg.retentionDays), needsDecision()]);
+  const [counts, decisions, withdrawn] = await Promise.all([
+    faceCounts(fg.retentionDays),
+    needsDecision(),
+    // Whose naming the album switched off by itself, for want of evidence they are adults: admins decide what next.
+    db.person.findMany({ where: { namingWithdrawnAt: { not: null } }, orderBy: { name: "asc" }, select: { id: true, name: true, namingWithdrawnAt: true } }),
+  ]);
   const [gates, batches] = await Promise.all([
     annotationGates(),
     db.annotationBatch.findMany({ where: { parentId: null }, orderBy: { createdAt: "desc" }, take: 8 }),
@@ -131,6 +137,20 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
           <p className="text-sm text-muted mb-3">Face detection runs on this server through the ML sidecar. It is off until both the operator flag and your opt-in here are set.</p>
           <FacesAdmin gates={{ sidecar: fg.sidecar, envEnabled: fg.envEnabled, optedInAt: fg.optedInAt?.toISOString() ?? null, active: fg.active, retentionDays: fg.retentionDays }} counts={{ ...counts, nextPurge: counts.nextPurge?.toISOString() ?? null }} />
           <p className="text-sm text-muted mt-3" data-testid="pet-gates">Pet spotting (animals, not faces; no opt-in needed): {pg.active ? `on, ${animalCounts.sightings} sighting${animalCounts.sightings === 1 ? "" : "s"} kept, ${animalCounts.confirmed} confirmed` : pg.sidecar ? "off (PET_MATCHING_ENABLED is false)" : "off (needs the ML sidecar)"}.</p>
+          {withdrawn.length > 0 && (
+            <div className="mt-4 space-y-2 rounded-theme border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900" data-testid="naming-withdrawn">
+              <h3 className="font-medium">Names no longer used</h3>
+              <p>The album stopped using these names because it can&apos;t be sure these people are over 18 (or their naming was turned off before that took the name back out). Nothing more is sent to the AI helper with their names. Record a birthday or adult confirmation on their page to keep using their names; otherwise each name is taken out of descriptions already written on the date shown.</p>
+              <ul className="space-y-1">
+                {withdrawn.map((p) => (
+                  <li key={p.id}>
+                    <Link href={`/people/${p.id}`} className="font-medium underline">{p.name}</Link>{" "}
+                    <span className="text-amber-800">— taken out on {new Date(p.namingWithdrawnAt!.getTime() + WITHDRAWN_GRACE_DAYS * 86_400_000).toLocaleDateString("en-US")}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
           {decisions.length > 0 && (
             <div className="mt-4 space-y-3">
               <h3 className="font-medium">Needs a decision</h3>
