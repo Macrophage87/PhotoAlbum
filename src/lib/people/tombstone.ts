@@ -307,7 +307,13 @@ export async function loadTombstone(): Promise<Tombstone> {
     });
     // A tag that is a one-word name, or its possessive: "ximena", "ximena's".
     const wholeTag = mode === "tag" && tokens.length === 1 && /^[\s]*[\p{L}\p{M}\p{N}'’.-]+[\s]*$/u.test(text);
+    const titlePrefix = (t: { raw: string }) => /^(?:great|step|half|grand)$/iu.test(t.raw);
     for (let i = 0; i < tokens.length; i++) {
+      // Not inside a title: "Great-Grandma Ruth" and "Great Grandma Ruth" are not Grandma Ruth.
+      if (i > 0 && isKinWord(tokens[i].raw) && isKinWord(tokens[i - 1].raw)) {
+        const sep = text.slice(tokens[i - 1].end, tokens[i].start);
+        if (/^[-‐]$/u.test(sep) || (/^[ \t]+$/u.test(sep) && titlePrefix(tokens[i - 1]))) continue;
+      }
       for (let n = Math.min(MAX_WORDS, tokens.length - i); n >= 1; n--) {
         const run = tokens.slice(i, i + n);
         // Only words next to each other: a run broken by anything but a hyphen or a space is not a name.
@@ -332,7 +338,7 @@ export async function loadTombstone(): Promise<Tombstone> {
           // Ruth); elsewhere it is somebody else's ("Uncle Sam hat"). Their own "Grandma Ruth" is matched whole.
           let k = i > 0 && isKinWord(tokens[i - 1].raw) && /^[\s]+$/u.test(text.slice(tokens[i - 1].end, run[0].start)) ? i - 1 : -1;
           // All of a hyphenated one: "Great-Aunt", "Step-Mom".
-          while (k > 0 && isKinWord(tokens[k - 1].raw) && /^[-‐]$/u.test(text.slice(tokens[k - 1].end, tokens[k].start))) k--;
+          while (k > 0 && isKinWord(tokens[k - 1].raw) && (/^[-‐]$/u.test(text.slice(tokens[k - 1].end, tokens[k].start)) || (titlePrefix(tokens[k - 1]) && /^[ \t]+$/u.test(text.slice(tokens[k - 1].end, tokens[k].start))))) k--;
           if (k >= 0) {
             // Kept hashed like the names ("Tia", "Nan" and "Oma" are names too), under the row's own key.
             const kinRun = hash(keyOf(found.key), `kin:${kinshipKey(tokens.slice(k, i).map((t) => t.raw).join(" "))}`);

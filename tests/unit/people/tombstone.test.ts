@@ -526,10 +526,30 @@ describe("names that are also words", () => {
     expect(ts3.scrub("Aunt Rosa waves", await sc(greatAunt))).toBe("Aunt Rosa waves");
     expect(ts3.scrub("Step-Mom Rosa waves", await sc(greatAunt))).toBe("Step-Mom Rosa waves");
     expect(ts3.scrub("Great-Aunt Rosa waves", await sc(greatAunt))).toBe("A family member waves");
+    // A title of several words is one title, hyphenated or not, in both scrubs.
+    for (const [text, want] of [["Great-Grandma Ruth smiled.", "Great-Grandma Ruth smiled."], ["Great Grandma Ruth smiled.", "Great Grandma Ruth smiled."], ["Grandma Ruth smiled.", "A family member smiled."]]) {
+      expect(ts.scrub(text, await sc(ruth))).toBe(want);
+      expect(nameMatcher(["Grandma Ruth"]).scrub(text, { tagged: true })).toBe(want);
+    }
+    for (const text of ["Great Aunt Ada swam.", "Great-Aunt Ada swam."]) {
+      expect(ts2.scrub(text, await sc(ada))).toBe("A family member swam.");
+      expect(nameMatcher(["Ada Byron"]).scrub(text, { tagged: true })).toBe("A family member swam.");
+    }
+    expect(ts3.scrub("Great Aunt Rosa waves", await sc(greatAunt))).toBe("A family member waves");
     expect(ts.scrub("Nana Ruth bakes", await sc(ruth))).toBe("A family member bakes");
     // Elsewhere, "Grandpa Sam" is somebody else's, and "Uncle Sam" the saying.
     expect(ts.scrub("Uncle Sam hat on Ben", await sc(await photo()))).toBe("Uncle Sam hat on Ben");
     expect(ts.scrub("Grandpa Sam at the lake", await sc(await photo()))).toBe("Grandpa Sam at the lake");
+  });
+
+  it("visits a place only with a real place after it, on her own photograph", async () => {
+    const on = await forget("Charlotte Brown");
+    const ts = await loadTombstone();
+    const m = nameMatcher(["Charlotte Brown"]);
+    for (const [text, want] of [["Visiting Charlotte and Ben.", "Visiting a family member and Ben."], ["Visiting Charlotte and Raleigh.", "Visiting Charlotte and Raleigh."], ["Visiting Charlotte, NC.", "Visiting Charlotte, NC."], ["Visiting Charlotte 2020", "Visiting Charlotte 2020"]]) {
+      expect(ts.scrub(text, await sc(on))).toBe(want);
+      expect(m.scrub(text, { tagged: true })).toBe(want);
+    }
   });
 
   it("travels to a place-named person's city on her own photograph", async () => {

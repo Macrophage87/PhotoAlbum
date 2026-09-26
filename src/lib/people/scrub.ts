@@ -80,7 +80,7 @@ const STARTERS = new Set([
   "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "january", "february", "march", "april", "may", "june", "july", "august",
   "september", "october", "november", "december", "christmas", "easter", "thanksgiving", "halloween", "hanukkah", "new", "year", "years",
   "then", "when", "on", "in", "at", "after", "before", "today", "yesterday", "tomorrow", "tonight", "here", "there", "later", "now", "while", "with", "and", "but",
-  "so", "as", "since", "meanwhile", "finally", "also", "even", "only", "just", "maybe", "perhaps", "dear", "happy", "love", "hi", "hello", "thanks", "by",
+  "visiting", "visited", "visit", "so", "as", "since", "meanwhile", "finally", "also", "even", "only", "just", "maybe", "perhaps", "dear", "happy", "love", "hi", "hello", "thanks", "by",
   "for", "from", "to", "of", "into", "is", "was", "the", "a", "an", "this", "that", "look", "see", "meet", "oh", "yes", "no", "our", "my", "little", "baby",
 ]);
 
@@ -220,6 +220,13 @@ const PLACE_OPENING_CLEAR = /^[ \t]+(?:trip|trips|holiday|holidays|vacation|visi
 const TRANSPORT = "flew|fly|flying|flies|drove|drive|driving|train|trains|flight|flights|ferry|bus|road[ \\t]+trip|sailed|sail|sailing|cruise|cruised|cruising";
 /** Going there by some means: "flew to", "drove from", "the train to", "a road trip to". */
 const TRAVEL_BEFORE = new RegExp(`(?<![\\p{L}\\p{M}])(?:${TRANSPORT})[ \\t]+(?:to|from|into)[ \\t]+$`, "iu");
+/** Another place the album knows joined to it ("Charlotte and Raleigh"); checked word by word below. */
+const JOINED_PLACE_AFTER = {
+  test: (after: string) => {
+    const w = after.match(/^[ \t]+(?:and|&|or|vs\.?|to)[ \t]+(\p{Lu}[\p{L}\p{M}'’.-]*)/u)?.[1];
+    return Boolean(w && PLACE_NAMES.has(bare(w)));
+  },
+};
 /** Visiting a place, which counts only with a clear place after it ("visited Florence, Italy", "visiting Florence 2019"). */
 const VISIT_BEFORE = /(?<![\p{L}\p{M}])(?:visit|visits|visited|visiting)[ \t]+$/iu;
 /** Staying or arriving somewhere, earlier in the sentence than "in <place>": "we stayed a week in Florence." */
@@ -297,7 +304,7 @@ export function notThePerson(text: string, start: number, end: number, n: Neighb
     // Madison" and "Ben visited Madison in hospital" are her).
     if (place === "travel" && !possessive) {
       if (TRAVEL_BEFORE.test(before)) return true;
-      if (VISIT_BEFORE.test(before) && PLACE_OPENING_CLEAR.test(after)) return true;
+      if (VISIT_BEFORE.test(before) && (PLACE_OPENING_CLEAR.test(after) || JOINED_PLACE_AFTER.test(after))) return true;
       if (p === "in" && (PLACE_OPENING_CLEAR.test(after) || (/^[ \t]*(?:$|[\n.!?;,])/u.test(after) && STAY_BEFORE.test(before)))) return true;
     }
     // "Atlanta, Georgia": the region after a city the album knows.
@@ -368,6 +375,11 @@ export function kinshipKey(run: string): string {
     .map((w) => KIN_CANON.get(w) ?? w)
     .join(" ");
 }
+
+/** The kinship title right before a name, "Great Aunt" and "Step-Mom" as one. */
+const KIN_BEFORE = /(?<![\p{L}\p{M}])((?:(?:great|step|half|grand)[ \t]+)*\p{L}[\p{L}\p{M}'’.-]*)[ \t]+$/iu;
+/** Words that make the kinship word after them another title: "Great Grandma" is not Grandma. */
+const TITLE_PREFIX = /(?<![\p{L}\p{M}])(?:great|step|half|grand)[ \t]+$/iu;
 
 /** Marks a stand-in whose kinship word goes with it (see nameMatcher). */
 const KIN_MARK = "\u0001";
@@ -573,7 +585,8 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
       let k = 0;
       while (k < tokens.length - 1 && isKin(tokens[k])) k++;
       const core = tokens.slice(k);
-      const kinship = tokens.slice(0, k).map(kinshipKey);
+      // Their title as one: "Great Aunt" and "Great-Aunt" alike.
+      const kinship = k ? [kinshipKey(tokens.slice(0, k).join(" "))] : [];
       for (const w of kinship) ownKin.add(w);
       // "June", "Grace", "Will": remembered, they would take every month and every question with them.
       if (ni === 0 && tokens.length === 1 && letters(s) >= 3 && !isKin(s) && !NOT_SAFE.has(bare(s)) && !MONTHS.has(bare(s))) oneWord.push(s);
@@ -640,7 +653,11 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
   };
 
   const scrubText = (text: string, where: Where): string => {
-    const put = (m: string, offset: number, whole: string) => standInFor(m, whole.slice(0, offset), whole.slice(offset + m.length), titleCaseAt(whole, offset, own));
+    const put = (m: string, offset: number, whole: string) => {
+      // "Great Grandma Ruth" is somebody else than Grandma Ruth.
+      if (isKin(m.split(/[ \t]+/u)[0]) && TITLE_PREFIX.test(whole.slice(0, offset))) return m;
+      return standInFor(m, whole.slice(0, offset), whole.slice(offset + m.length), titleCaseAt(whole, offset, own));
+    };
     let out = longAnyRx ? text.replace(longAnyRx, put) : text;
     if (longCapRx) out = out.replace(longCapRx, put);
     if (where.tagged && longTagged.length) {
@@ -678,8 +695,8 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
         const before = whole.slice(0, offset);
         // On their own photograph, a kinship word before their name is them too: "Grandpa Sam at the lake" is "A
         // family member at the lake" — unless their name carries another one ("Aunt Ruth" is not Grandma Ruth).
-        const kin = before.match(/(?<![\p{L}\p{M}])(\p{L}[\p{L}\p{M}'’.-]*)[ \t]+$/u);
-        if (kin && isKin(kin[1].replace(/\.$/u, ""))) {
+        const kin = before.match(KIN_BEFORE);
+        if (kin && kin[1].split(/[ \t]+/u).every((w) => isKin(w.replace(/\.$/u, "")))) {
           if (ownKin.size && !ownKin.has(kinshipKey(kin[1]))) return m;
           if (where.tagged && where.onPhoto !== false) {
             const rest = before.slice(0, before.length - kin[0].length);
@@ -689,7 +706,7 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
         return standInFor(m, before, whole.slice(offset + m.length), title);
       });
       // The kinship word goes with the name it was part of.
-      if (out.includes(KIN_MARK)) out = out.replace(new RegExp(`(?<![\\p{L}\\p{M}])\\p{L}[\\p{L}\\p{M}'’.-]*[ \\t]+${KIN_MARK}`, "gu"), "").replaceAll(KIN_MARK, "");
+      if (out.includes(KIN_MARK)) out = out.replace(new RegExp(`${KIN_BEFORE.source.slice(0, -1)}${KIN_MARK}`, "giu"), "").replaceAll(KIN_MARK, "");
     }
     return out === text ? out : withoutDoubledArticle(out);
   };
