@@ -33,7 +33,11 @@ export async function importTrackFile(args: ImportArgs): Promise<ImportSummary> 
   if (!trip) throw new Error("Trip not found");
   // The job trusts its payload, so the rule the route applied is asked again here: an import arranges the trip.
   const user = await db.user.findUnique({ where: { id: args.userId }, select: { id: true, role: true } });
-  if (!canEditContainer(user, trip)) throw new Error(NOT_YOUR_CONTAINER);
+  if (!canEditContainer(user, trip)) {
+    // Refused, the file has no use: nothing of it is kept.
+    await store.delete(args.importKey).catch(() => {});
+    throw new Error(NOT_YOUR_CONTAINER);
+  }
 
   const head = await readHead(filePath, 4096);
   const kind = detectTrackKind(args.originalName, head, args.sourceHint);

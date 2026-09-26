@@ -76,6 +76,8 @@ describe("importing tracks is arranging the trip", () => {
     await expect(importTrackFile({ importKey, tripId, userId: other, sourceHint: "auto", originalName: "walk.gpx" })).rejects.toThrow(/made this/);
     expect(await db.track.count()).toBe(0);
     expect(await db.activity.count()).toBe(0);
+    // And the file it was sent with is not kept.
+    expect(await storage().exists(importKey)).toBe(false);
   });
 });
 
