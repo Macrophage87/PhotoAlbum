@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import sharp from "sharp";
 import { createReadStream, createWriteStream } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -12,6 +13,7 @@ import { enqueue } from "@/lib/jobs/boss";
 import { QUEUES } from "@/lib/jobs/queues";
 import { EXT_BY_MIME, EXT_MIME } from "@/lib/media/mime";
 import { claimContentHash } from "@/lib/media/content-hash";
+import { processAgainIfStuck } from "@/lib/media/requeue";
 import { safeArchivePath } from "./inbox";
 import { albumFolderOf, captionFromTitle, isMediaName, isVideoName, pairSidecars, parseSidecar, type SidecarData } from "./sidecar";
 import { readStreamToString, walkZip } from "./zip";
@@ -20,7 +22,7 @@ import { pickActivityByTime, pickTripByDay, whoWasThere } from "@/lib/photos/ass
 import { localDayFromOffset, offsetMinutesInZone } from "@/lib/time/local-day";
 import { timezoneForCoords } from "@/lib/geo/tz";
 
-export type ImportReport = { albums: { title: string; items: number; created: boolean }[]; duplicates: number; unsupported: number; failures: { file: string; reason: string }[]; noSidecar: number; repairs?: string[] };
+export type ImportReport = { albums: { title: string; items: number; created: boolean }[]; duplicates: number; unsupported: number; failures: { file: string; reason: string }[]; noSidecar: number; repairs?: string[]; inTrash?: number };
 
 const IGNORED_JSON = new Set(["metadata.json", "print-subscriptions.json", "shared_album_comments.json", "user-generated-memory-titles.json"]);
 
@@ -32,7 +34,7 @@ const IGNORED_JSON = new Set(["metadata.json", "print-subscriptions.json", "shar
 export async function importTakeoutArchive(importId: string): Promise<void> {
   const run = await db.takeoutImport.findUnique({ where: { id: importId } });
   if (!run || run.status !== "RUNNING") return;
-  const report: ImportReport = { albums: [], duplicates: 0, unsupported: 0, failures: [], noSidecar: 0, repairs: [] };
+  const report: ImportReport = { albums: [], duplicates: 0, unsupported: 0, failures: [], noSidecar: 0, repairs: [], inTrash: 0 };
   let imported = 0, skipped = 0, failed = 0, collectionsCreated = 0, repaired = 0;
   const work = await mkdtemp(path.join(tmpdir(), "takeout-"));
   // A live run refreshes heartbeatAt every half minute; closeDeadImports() fails runs whose worker stopped doing so.
@@ -87,6 +89,11 @@ export async function importTakeoutArchive(importId: string): Promise<void> {
       await db.collectionItem.create({ data: { collectionId: album.id, photoId, position, addedById: run.startedById } }).catch(() => undefined);
       album.items++;
     };
+    /** Undo joinAlbum's count for a row that is then thrown away (its membership goes with the row). */
+    const unjoinAlbum = async (entryPath: string, photoId: string): Promise<void> => {
+      const album = albums.get(albumFolderOf(entryPath) ?? "");
+      if (album && (await db.collectionItem.findFirst({ where: { collectionId: album.id, photoId }, select: { id: true } }))) album.items--;
+    };
 
     // Pass two: the media itself.
     await walkZip(archive, async (entry, open) => {
@@ -112,16 +119,21 @@ export async function importTakeoutArchive(importId: string): Promise<void> {
           await store.deletePrefix(`photos/${o.id}`).catch(() => undefined);
           await db.photo.delete({ where: { id: o.id } }).catch(() => undefined);
         }
-        let dupe = await db.photo.findFirst({
-          // Nothing in the trash counts: whatever is there is on its way out, and the export may be how it comes back.
-          where: { trashedAt: null, originalPath: { not: "pending" }, OR: [{ contentHash }, ...(meta?.googleId ? [{ sourceKind: "TAKEOUT" as const, sourceId: meta.googleId }] : [])] },
-          select: dupeSelect,
-        });
+        const sameFile = { originalPath: { not: "pending" }, OR: [{ contentHash }, ...(meta?.googleId ? [{ sourceKind: "TAKEOUT" as const, sourceId: meta.googleId }] : [])] };
+        let dupe = await db.photo.findFirst({ where: { trashedAt: null, ...sameFile }, select: dupeSelect });
+        // Somebody put this one in the trash. The import neither brings it back (it was deleted on purpose) nor
+        // repairs or files it where nobody can see it; the report says how many were passed over so.
+        if (!dupe && (await db.photo.findFirst({ where: { trashedAt: { not: null }, ...sameFile }, select: { id: true } }))) {
+          report.inTrash = (report.inTrash ?? 0) + 1;
+          skipped++;
+          await rm(tmp, { force: true });
+          return;
+        }
         if (!dupe) {
           // The same bytes again later in the archive (an album folder's copy, under another name) are that same
           // Picker photo, found by name and time the first time round.
           const known = pickedByHash.get(contentHash);
-          dupe = known ? await db.photo.findFirst({ where: { id: known, trashedAt: null }, select: dupeSelect }) : await pickedCopyOf(file, meta);
+          dupe = known ? await db.photo.findFirst({ where: { id: known, trashedAt: null }, select: dupeSelect }) : await pickedCopyOf(file, meta, run.startedById, isVideoName(file) ? null : tmp);
           if (dupe) pickedByHash.set(contentHash, dupe.id);
         }
         if (dupe) {
@@ -138,6 +150,8 @@ export async function importTakeoutArchive(importId: string): Promise<void> {
             if (report.repairs!.length < 200) report.repairs!.push(describeRepair(dupe.originalName, plan.filled));
           }
           await joinAlbum(entry.path, dupe.id);
+          // Its file is here but it never became a picture (a restart between storing and queueing it): queue it now.
+          await processAgainIfStuck(dupe);
           return;
         }
         const isVideo = isVideoName(file);
@@ -167,27 +181,38 @@ export async function importTakeoutArchive(importId: string): Promise<void> {
         });
         const storageKey = `photos/${photo.id}`;
         const originalPath = `${storageKey}/original.${EXT_BY_MIME[mime]}`;
+        let raced: { id: string } | null;
         try {
           const { bytes } = await store.putStream(originalPath, createReadStream(tmp));
           await rm(tmp, { force: true });
-          // The same bytes may have arrived by upload while this one was being stored.
-          const raced = await claimContentHash(photo.id, contentHash, { storageKey, originalPath, sizeBytes: bytes });
-          if (raced) {
-            await store.deletePrefix(storageKey).catch(() => undefined);
-            await db.photo.delete({ where: { id: photo.id } }).catch(() => undefined);
-            report.duplicates++;
-            skipped++;
-            await joinAlbum(entry.path, raced.id);
-            return;
-          }
+          // Into its album before it takes the hash, so everything that can still fail leaves only this unclaimed row.
           await joinAlbum(entry.path, photo.id);
-          if (isVideo) await enqueue(QUEUES.transcodeVideo, { photoId: photo.id, tripId: null });
-          else await enqueue(QUEUES.processPhoto, { photoId: photo.id, tripId: null });
+          // The same bytes may have arrived by upload while this one was being stored.
+          raced = await claimContentHash(photo.id, contentHash, { storageKey, originalPath, sizeBytes: bytes });
         } catch (err) {
           // Nothing half-done is left: no row that looks imported and no bytes nobody will process. Importing the
           // archive again then imports this one afresh.
+          await unjoinAlbum(entry.path, photo.id).catch(() => undefined);
           await store.deletePrefix(storageKey).catch(() => undefined);
           await db.photo.delete({ where: { id: photo.id } }).catch(() => undefined);
+          throw err;
+        }
+        if (raced) {
+          await unjoinAlbum(entry.path, photo.id).catch(() => undefined);
+          await store.deletePrefix(storageKey).catch(() => undefined);
+          await db.photo.delete({ where: { id: photo.id } }).catch(() => undefined);
+          report.duplicates++;
+          skipped++;
+          await joinAlbum(entry.path, raced.id);
+          return;
+        }
+        // From here the row has its hash and another upload may already have been matched to it, so it is kept
+        // whatever happens and says what went wrong.
+        try {
+          if (isVideo) await enqueue(QUEUES.transcodeVideo, { photoId: photo.id, tripId: null });
+          else await enqueue(QUEUES.processPhoto, { photoId: photo.id, tripId: null });
+        } catch (err) {
+          await db.photo.update({ where: { id: photo.id }, data: { status: "FAILED", error: "Could not queue processing; use Re-process on the photo page." } }).catch(() => undefined);
           throw err;
         }
         imported++;
@@ -210,7 +235,7 @@ export async function importTakeoutArchive(importId: string): Promise<void> {
   }
 }
 
-const dupeSelect = { id: true, lat: true, lng: true, gpsSource: true, takenAt: true, takenAtSource: true, context: true, caption: true, sourceId: true, originalName: true, tripId: true } as const;
+const dupeSelect = { id: true, lat: true, lng: true, gpsSource: true, takenAt: true, takenAtSource: true, context: true, caption: true, sourceId: true, originalName: true, tripId: true, kind: true, status: true, originalPath: true, updatedAt: true } as const;
 
 /** Time zones are whole quarter hours apart, so the same moment read in two zones differs by a multiple of this. */
 const QUARTER_HOUR_MS = 15 * 60_000;
@@ -223,19 +248,24 @@ const WIDEST_ZONE_GAP_MS = 26 * 3600_000;
  * the file name and the capture time do. The time is compared to the second but allowed any whole number of quarter
  * hours apart, because the Picker copy's date came from its EXIF and may have been read in another zone.
  */
-async function pickedCopyOf(file: string, meta: SidecarData | null) {
+async function pickedCopyOf(file: string, meta: SidecarData | null, importerId: string, imagePath: string | null) {
   if (!meta?.takenAt) return null;
   const at = meta.takenAt.getTime();
+  // Its pixel size, when it can be read, must be the Picker copy's too (either way round: one may be rotated).
+  const size = imagePath ? await sharp(imagePath).metadata().catch(() => null) : null;
+  const sameSize = (c: { width: number | null; height: number | null }) =>
+    !size?.width || !size.height || c.width === null || c.height === null || [size.width, size.height].sort().join("x") === [c.width, c.height].sort().join("x");
   const candidates = await db.photo.findMany({
-    where: { sourceKind: "GOOGLE_PICKER", trashedAt: null, originalName: { equals: file, mode: "insensitive" }, takenAt: { gte: new Date(at - WIDEST_ZONE_GAP_MS), lte: new Date(at + WIDEST_ZONE_GAP_MS) } },
-    select: dupeSelect,
+    // Only the importer's own: a name and a time are not enough to say another member's photo is this one.
+    where: { sourceKind: "GOOGLE_PICKER", uploaderId: importerId, trashedAt: null, originalName: { equals: file, mode: "insensitive" }, takenAt: { gte: new Date(at - WIDEST_ZONE_GAP_MS), lte: new Date(at + WIDEST_ZONE_GAP_MS) } },
+    select: { ...dupeSelect, width: true, height: true },
   });
   const offBy = (t: Date | null) => {
     const d = Math.abs((t?.getTime() ?? Infinity) - at);
     const rest = d % QUARTER_HOUR_MS;
     return Math.min(rest, QUARTER_HOUR_MS - rest) <= 1000 ? d : Infinity;
   };
-  return candidates.filter((c) => offBy(c.takenAt) < Infinity).sort((a, b) => offBy(a.takenAt) - offBy(b.takenAt))[0] ?? null;
+  return candidates.filter((c) => sameSize(c) && offBy(c.takenAt) < Infinity).sort((a, b) => offBy(a.takenAt) - offBy(b.takenAt))[0] ?? null;
 }
 
 const HEARTBEAT_MS = 30_000;

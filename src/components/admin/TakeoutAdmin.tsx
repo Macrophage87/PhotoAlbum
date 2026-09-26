@@ -5,7 +5,7 @@ import { Button, Card } from "@/components/ui";
 import { deleteTakeoutArchive, startTakeoutImport } from "@/app/admin/actions";
 
 export type ArchiveRow = { name: string; bytes: number; modifiedAt: string };
-export type ImportRow = { id: string; archiveName: string; status: "RUNNING" | "ENDED" | "FAILED"; imported: number; skipped: number; failed: number; repaired: number; collectionsCreated: number; startedAt: string; endedAt: string | null; report: { albums?: { title: string; items: number; created: boolean }[]; duplicates?: number; unsupported?: number; noSidecar?: number; failures?: { file: string; reason: string }[]; repairs?: string[] } | null };
+export type ImportRow = { id: string; archiveName: string; status: "RUNNING" | "ENDED" | "FAILED"; imported: number; skipped: number; failed: number; repaired: number; collectionsCreated: number; startedAt: string; endedAt: string | null; report: { albums?: { title: string; items: number; created: boolean }[]; duplicates?: number; unsupported?: number; noSidecar?: number; inTrash?: number; failures?: { file: string; reason: string }[]; repairs?: string[] } | null };
 
 function size(bytes: number): string {
   if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(1)} GB`;
@@ -65,7 +65,7 @@ export function TakeoutAdmin({ configured, dir, archives, imports }: { configure
                   <span className="text-muted">{i.status === "RUNNING" ? "in progress" : i.status === "ENDED" ? "done" : "failed"} · started {new Date(i.startedAt).toLocaleString("en-US")}</span>
                 </div>
                 <div className="text-muted">
-                  {i.imported} imported · {i.skipped} skipped{i.report?.duplicates ? ` (${i.report.duplicates} already in the album)` : ""} · {i.repaired} repaired · {i.failed} failed · {i.collectionsCreated} private collection{i.collectionsCreated === 1 ? "" : "s"} created
+                  {i.imported} imported · {i.skipped} skipped{i.report?.duplicates ? ` (${i.report.duplicates} already in the album)` : ""}{i.report?.inTrash ? ` (${i.report.inTrash} in the trash, left there)` : ""} · {i.repaired} repaired · {i.failed} failed · {i.collectionsCreated} private collection{i.collectionsCreated === 1 ? "" : "s"} created
                   {i.report?.noSidecar ? ` · ${i.report.noSidecar} without Google metadata` : ""}
                 </div>
                 {i.report?.albums && i.report.albums.length > 0 && <div className="text-muted">Albums: {i.report.albums.map((a) => `${a.title} (${a.items}${a.created ? "" : ", existing"})`).join(", ")}</div>}
