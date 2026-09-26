@@ -86,6 +86,8 @@ export async function startTakeoutImport(archiveName: string): Promise<void> {
  */
 export async function deleteTakeoutArchive(archiveName: string): Promise<string | null> {
   await requireAdminOrThrow();
+  await closeDeadImports();
+  if (await db.takeoutImport.count({ where: { archiveName, status: "RUNNING" } })) return `${archiveName} is being imported; delete it once the import has finished.`;
   try {
     await deleteArchive(archiveName);
   } catch (err) {
