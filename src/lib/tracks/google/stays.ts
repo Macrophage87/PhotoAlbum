@@ -82,7 +82,7 @@ export function fillStays(points: TrackPoint[], stays: Stay[], window: Window, c
       if (next && next.t - t < STAY_STEP_MS && !openBefore) continue;
       // Recorded points on both sides within the visit say more about where in it the person was than its centre.
       const at = within(prev) && within(next) ? (t - prev.t <= next.t - t ? prev : next) : s;
-      filler.push({ t, lat: at.lat, lng: at.lng, filled: true });
+      filler.push({ t, lat: at.lat, lng: at.lng, filled: at === s ? "visit" : "interpolated" });
     }
     // Local midnights inside the stay always get a point, so each day's trace reaches its end: at the nearer recorded
     // point when one is close enough to interpolate from, otherwise at the visit.
@@ -91,7 +91,7 @@ export function fillStays(points: TrackPoint[], stays: Stay[], window: Window, c
       const i = after(t);
       const near = [real[i - 1], real[i]].filter((p): p is TrackPoint => !!p && Math.abs(p.t - t) <= MAX_INTERPOLATION_GAP_MS);
       const at = near.length ? near.reduce((a, b) => (Math.abs(a.t - t) <= Math.abs(b.t - t) ? a : b)) : s;
-      filler.push({ t, lat: at.lat, lng: at.lng, filled: true });
+      filler.push({ t, lat: at.lat, lng: at.lng, filled: at === s ? "visit" : "interpolated" });
     }
     // A gap just over the interpolation limit that reaches into the visit can fall between the steps (and between
     // the visit's end and the next recorded point): wherever a stretch of it is still too long to interpolate across,
@@ -108,7 +108,7 @@ export function fillStays(points: TrackPoint[], stays: Stay[], window: Window, c
           if (lo >= hi) continue;
           const mid = Math.round((lo + hi) / 2);
           if (mid < window.startMs || mid > window.endMs || claimed.some(([x, y]) => mid >= x && mid <= y)) continue;
-          filler.push({ t: mid, lat: at.lat, lng: at.lng, filled: true });
+          filler.push({ t: mid, lat: at.lat, lng: at.lng, filled: at === s ? "visit" : "interpolated" });
         }
       }
       claimed.push([s.start, end]);

@@ -137,10 +137,18 @@ describe("geotagPhotos", () => {
 
     it("keeps the activity track when the trace there is only filled in across a visit (B)", async () => {
       // A big park recorded as a visit: filler every 5 minutes at its centre, 2 km off the trail.
-      await makeTrack(tripId, userId, Array.from({ length: 7 }, (_, i) => ({ t: T0 + i * 5 * 60_000, lat: 44.02, lng: -68, filled: true as const })), "GOOGLE");
+      await makeTrack(tripId, userId, Array.from({ length: 7 }, (_, i) => ({ t: T0 + i * 5 * 60_000, lat: 44.02, lng: -68, filled: "visit" as const })), "GOOGLE");
       const mine = await makePhoto(tripId, userId, new Date(T0 + 12 * 60_000));
       await geotagPhotos({ tripId });
       expect(await latOf(mine.id)).toBeCloseTo(44.012, 5);
+    });
+
+    it("follows the uploader's own visit when it is kilometres from the activity track (museum)", async () => {
+      // Three hours in a museum, nothing recorded but the visit, 9 km from Dad's ride.
+      await makeTrack(tripId, userId, Array.from({ length: 37 }, (_, i) => ({ t: T0 + i * 5 * 60_000, lat: 44.081, lng: -68, filled: "visit" as const })), "GOOGLE");
+      const mine = await makePhoto(tripId, userId, new Date(T0 + 12 * 60_000));
+      await geotagPhotos({ tripId });
+      expect(await latOf(mine.id)).toBe(44.081);
     });
 
     it("chooses the member she was with when two others' activity tracks cover the moment (C)", async () => {

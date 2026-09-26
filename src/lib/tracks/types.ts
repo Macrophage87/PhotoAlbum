@@ -12,8 +12,11 @@ export type TrackPoint = {
   spd?: number; // m/s from the device
   dist?: number; // cumulative metres from the device
   temp?: number;
-  /** Not a recorded fix: filled in by the importer, across a Google visit (see fillStays) or at a local midnight. */
-  filled?: true;
+  /**
+   * Not a recorded fix but filled in by the importer: "visit" at a Google visit's own place (see fillStays),
+   * "interpolated" where it was worked out from recorded points (a local midnight, the middle of a gap).
+   */
+  filled?: "visit" | "interpolated";
 };
 
 /** Summary numbers a device computed itself (FIT session). These win over our own estimates. */
@@ -76,6 +79,6 @@ export type ColumnarPoints = {
   pwr?: number[];
   spd?: number[];
   dist?: number[];
-  /** 1 where the point was filled in rather than recorded (see TrackPoint.filled); absent in older blobs. */
-  filled?: (0 | 1)[];
+  /** 0 recorded, 1 filled at a visit, 2 interpolated (see TrackPoint.filled); absent in older blobs. */
+  filled?: (0 | 1 | 2)[];
 };

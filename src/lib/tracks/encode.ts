@@ -36,7 +36,7 @@ export function encodePoints(points: TrackPoint[]): { blob: Buffer; startTime: D
     if (col.pwr) col.pwr.push(p.pwr === undefined ? null! : Math.round(p.pwr));
     if (col.spd) col.spd.push(p.spd === undefined ? null! : Math.round(p.spd * 100) / 100);
     if (col.dist) col.dist.push(p.dist === undefined ? null! : r1(p.dist));
-    if (col.filled) col.filled.push(p.filled ? 1 : 0);
+    if (col.filled) col.filled.push(p.filled === "visit" ? 1 : p.filled === "interpolated" ? 2 : 0);
   }
   return { blob: gzipSync(Buffer.from(JSON.stringify(col)), { level: 6 }), startTime: new Date(t0), endTime: new Date(points[points.length - 1].t), flags: { ele: has.ele, hr: has.hr, cad: has.cad, pwr: has.pwr } };
 }
@@ -57,7 +57,7 @@ export function columnarToPoints(col: ColumnarPoints, startTime: Date): TrackPoi
     if (col.pwr && col.pwr[i] !== null) p.pwr = col.pwr[i];
     if (col.spd && col.spd[i] !== null) p.spd = col.spd[i];
     if (col.dist && col.dist[i] !== null) p.dist = col.dist[i];
-    if (col.filled?.[i]) p.filled = true;
+    if (col.filled?.[i]) p.filled = col.filled[i] === 1 ? "visit" : "interpolated";
     out[i] = p;
   }
   return out;

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { simplifyLine } from "@/lib/tracks/simplify";
 import { columnarToPoints, decodePoints, encodePoints } from "@/lib/tracks/encode";
 import { splitByLocalDay } from "@/lib/tracks/split";
-import { isFirmAt, positionAt } from "@/lib/tracks/interpolate";
+import { positionAt, positionKindAt } from "@/lib/tracks/interpolate";
 import { detectTrackKind } from "@/lib/tracks/detect";
 import { cleanPoints } from "@/lib/tracks/clean";
 import type { TrackPoint } from "@/lib/tracks/types";
@@ -128,19 +128,29 @@ describe("splitByLocalDay across a midnight", () => {
 });
 
 describe("filled points in the stored blob", () => {
-  it("round-trip, and older blobs without the column read as recorded", () => {
-    const pts: TrackPoint[] = [{ t: 0, lat: 44, lng: -68 }, { t: 60_000, lat: 44.001, lng: -68, filled: true }];
+  it("round-trip with their kind, and older blobs without the column read as recorded", () => {
+    const pts: TrackPoint[] = [{ t: 0, lat: 44, lng: -68 }, { t: 60_000, lat: 44.001, lng: -68, filled: "visit" }, { t: 120_000, lat: 44.002, lng: -68, filled: "interpolated" }];
     const { blob, startTime } = encodePoints(pts);
-    expect(columnarToPoints(decodePoints(blob), startTime).map((p) => !!p.filled)).toEqual([false, true]);
+    expect(columnarToPoints(decodePoints(blob), startTime).map((p) => p.filled)).toEqual([undefined, "visit", "interpolated"]);
     const old = encodePoints([{ t: 0, lat: 44, lng: -68 }, { t: 60_000, lat: 44.001, lng: -68 }]);
     expect(decodePoints(old.blob).filled).toBeUndefined();
     expect(columnarToPoints(decodePoints(old.blob), old.startTime).some((p) => p.filled)).toBe(false);
   });
-  it("isFirmAt trusts only recorded fixes close either side", () => {
-    const pts: TrackPoint[] = [{ t: 0, lat: 0, lng: 0 }, { t: 240_000, lat: 0, lng: 0 }, { t: 1_800_000, lat: 0, lng: 0 }, { t: 2_000_000, lat: 0, lng: 0, filled: true }];
-    expect(isFirmAt(pts, 120_000)).toBe(true);
-    expect(isFirmAt(pts, 240_000)).toBe(true);
-    expect(isFirmAt(pts, 300_000)).toBe(false); // snapped across a 26-minute gap
-    expect(isFirmAt(pts, 1_900_000)).toBe(false); // next to a filled point
+  it("positionKindAt tells recorded, visit and guessed positions apart", () => {
+    const M = 60_000;
+    const pts: TrackPoint[] = [
+      { t: 0, lat: 0, lng: 0 },
+      { t: 8 * M, lat: 0, lng: 0 }, // 8 minutes after the first: still interpolated between recorded fixes
+      { t: 40 * M, lat: 0, lng: 0 }, // a 32-minute signal gap before this one
+      { t: 45 * M, lat: 0, lng: 0, filled: "visit" },
+      { t: 50 * M, lat: 0, lng: 0, filled: "visit" },
+      { t: 55 * M, lat: 0, lng: 0, filled: "interpolated" },
+    ];
+    expect(positionKindAt(pts, 4 * M)).toBe("firm");
+    expect(positionKindAt(pts, 8 * M)).toBe("firm");
+    expect(positionKindAt(pts, 11 * M)).toBe("soft"); // snapped across the gap
+    expect(positionKindAt(pts, 24 * M)).toBeNull();
+    expect(positionKindAt(pts, 47 * M)).toBe("visit");
+    expect(positionKindAt(pts, 52 * M)).toBe("soft");
   });
 });

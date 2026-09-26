@@ -1,6 +1,6 @@
 import { db } from "@/lib/db";
 import { columnarToPoints, decodePoints } from "@/lib/tracks/encode";
-import { isFirmAt, positionAt } from "@/lib/tracks/interpolate";
+import { positionAt, positionKindAt, type PositionKind } from "@/lib/tracks/interpolate";
 import type { TrackPoint } from "@/lib/tracks/types";
 import type { GeotagPhotosJob } from "../queues";
 import type { TakenAtSource } from "@/generated/prisma/enums";
@@ -9,18 +9,22 @@ import { haversine } from "@/lib/geo/haversine";
 
 /** Within this, the uploader's own Google trace and another member's activity track put them in the same place. */
 const TOGETHER_M = 300;
+/** A visit's filler sits at the place's centre, which can be well inside somewhere big but not this far from a trail. */
+const VISIT_APART_M = 3_000;
 
 type Position = { lat: number; lng: number; ele?: number };
-type Fix<T> = { track: T; pos: Position; firm: boolean };
+type Fix<T> = { track: T; pos: Position; kind: PositionKind };
 
 /**
  * The track to place a photo from, and where. The uploader's own GPX/FIT comes first. Then, where the uploader's own
- * Google trace and other members' GPX/FIT cover the moment, they are compared. Within TOGETHER_M of any of them the
- * uploader was with that member, and the nearest such activity track is the more precise record of where. Farther
- * from all of them, the uploader was elsewhere (Mom in the museum while Dad was out on his bike), but only if the
- * trace's position there rests on recorded fixes close either side: one snapped across a signal gap, or drawn from
- * points filled in across a visit, is no evidence of being apart, and the activity track is kept. After that, the
- * uploader's own Google trace, others' GPX/FIT, others' Google traces. Within each, start-time order.
+ * Google trace and other members' GPX/FIT cover the moment, the trace is weighed against the nearest of them:
+ * - a recorded position more than TOGETHER_M away says the uploader was elsewhere (Mom in the museum while Dad was
+ *   out on his bike), so the trace places the photo;
+ * - a position at a visit's place says so only beyond VISIT_APART_M, since the centre of a big park can be far from
+ *   the trail through it;
+ * - a position snapped across a signal gap, or interpolated by the importer, says nothing, and neither does being
+ *   close: then the nearest activity track, the more precise record, places it.
+ * After that, the uploader's own Google trace, others' GPX/FIT, others' Google traces. Within each, start-time order.
  */
 function choose<T extends { source: string; uploaderId: string }>(tracks: T[], uploaderId: string, at: (t: T) => Omit<Fix<T>, "track"> | null): Fix<T> | null {
   const all = (own: boolean, google: boolean, one = false) => {
@@ -40,7 +44,8 @@ function choose<T extends { source: string; uploaderId: string }>(tracks: T[], u
   if (ownGoogle && others.length) {
     const away = (f: Fix<T>) => haversine(ownGoogle.pos.lat, ownGoogle.pos.lng, f.pos.lat, f.pos.lng);
     const nearest = others.reduce((a, b) => (away(b) < away(a) ? b : a));
-    return away(nearest) <= TOGETHER_M || !ownGoogle.firm ? nearest : ownGoogle;
+    const apart = ownGoogle.kind === "firm" ? TOGETHER_M : ownGoogle.kind === "visit" ? VISIT_APART_M : Infinity;
+    return away(nearest) > apart ? ownGoogle : nearest;
   }
   return ownGoogle ?? others[0] ?? all(false, true, true)[0] ?? null;
 }
@@ -103,7 +108,7 @@ export async function geotagPhotos(job: GeotagPhotosJob): Promise<{ updated: num
     const chosen = choose(tracks, photo.uploaderId, (track) => {
       if (t < track.startTime.getTime() || t > track.endTime.getTime()) return null;
       const pts = pointsOf(track), pos = positionAt(pts, t);
-      return pos && { pos, firm: isFirmAt(pts, t) };
+      return pos && { pos, kind: positionKindAt(pts, t) ?? "soft" };
     });
     if (chosen) {
       const { track, pos } = chosen;
