@@ -43,6 +43,13 @@ export function unchangedSince(since: Date) {
 /** The advisory lock a forget holds from start to finish (see `withForgetLock`). */
 const FORGET_LOCK = 0x666f7267; // "forg"
 
+/** A forget that could not have the lock in time: another person is being forgotten. */
+export class ForgetBusyError extends Error {
+  constructor() {
+    super("Another person is being forgotten; try again in a few minutes.");
+  }
+}
+
 export type ForgetLockHeld = {
   /** Throws unless the lock is still held (its connection may have dropped): no forget finishes unlocked. */
   assertHeld(): Promise<void>;
@@ -55,20 +62,24 @@ export type ForgetLockHeld = {
  *
  * Held by a connection of its own, outside the pool and outside any transaction: a forget waiting its turn ties up
  * none of the pool the running one needs, nothing sits idle in a transaction however long a forget takes, and the
- * lock goes with the connection however the forget ends, a crash included. A forget that cannot have it within a
- * couple of minutes is refused.
+ * lock goes with the connection however the forget ends, a crash included. Not had within a couple of minutes (another
+ * forget is taking long), it is refused (`ForgetBusyError`).
  */
-export async function withForgetLock<T>(fn: (held: ForgetLockHeld) => Promise<T>, wait: { ms: number; step: number } = { ms: 120_000, step: 1_000 }): Promise<T> {
+export async function withForgetLock<T>(fn: (held: ForgetLockHeld) => Promise<T>, wait: { ms: number } = { ms: 120_000 }): Promise<T> {
   const client = new Client({ connectionString: env().DATABASE_URL });
   let lost = false;
   client.on("error", () => void (lost = true));
   await client.connect();
   try {
-    const until = Date.now() + wait.ms;
-    while (!(await client.query<{ got: boolean }>("SELECT pg_try_advisory_lock($1::bigint) AS got", [FORGET_LOCK])).rows[0].got) {
-      if (Date.now() >= until) throw new Error("Another person is being forgotten; try again in a minute.");
-      await new Promise((r) => setTimeout(r, wait.step));
+    // Waited for in line, not polled: once a forget is queued for it, new shared holds (answers being stored) step
+    // aside, so it cannot be starved; given up after a couple of minutes, when another forget is taking long.
+    await client.query(`SET lock_timeout = '${Math.max(1, Math.round(wait.ms))}ms'`);
+    try {
+      await client.query("SELECT pg_advisory_lock($1::bigint)", [FORGET_LOCK]);
+    } catch {
+      throw new ForgetBusyError();
     }
+    await client.query("SET lock_timeout = 0");
     const held: ForgetLockHeld = {
       async assertHeld() {
         const ok = !lost && (await client.query<{ n: number }>("SELECT count(*)::int AS n FROM pg_locks WHERE locktype = 'advisory' AND pid = pg_backend_pid() AND mode = 'ExclusiveLock' AND granted AND classid = 0 AND objid = $1 AND objsubid = 1", [FORGET_LOCK]).then((r) => r.rows[0].n > 0, () => false));

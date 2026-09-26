@@ -2,7 +2,7 @@ import { createHash, createHmac, hkdfSync, randomBytes } from "node:crypto";
 import { env } from "@/lib/env";
 import { db } from "@/lib/db";
 import type { StoredAnnotation } from "@/lib/annotation/schema";
-import { inTitleCase, isEverydayWord, normalizeName, notThePerson, replaceSpans } from "./scrub";
+import { inTitleCase, isEverydayWord, isPlaceOrDateWord, normalizeName, notThePerson, replaceSpans } from "./scrub";
 
 /**
  * What the album remembers of somebody it has forgotten: keyed hashes of their names, never the names.
@@ -13,9 +13,9 @@ import { inTitleCase, isEverydayWord, normalizeName, notThePerson, replaceSpans 
  * "Grace", "Sage" or "Will", and never a first name taken from a full one), are kept as HMACs, and text going to or
  * coming from the helper is checked against them a run of one to four words at a time. A full name counts anywhere
  * (one made of everyday words only as a name is written). A one-word name counts only in text about a photograph they
- * were tagged on — kept with it as ids — capitalized, and not where the words around it make it something else
+ * were tagged on or that named them (kept with it as ids) — capitalized, and not where the words around it make it something else
  * ("Florence Nightingale", "Florence, Italy"; see `notThePerson`); in tags there only as the whole tag or its
- * possessive ("ximena's pool"), and never in a search summary. A name somebody the album knows now also answers to is
+ * possessive ("ximena's pool"), and in a search summary only as a word of its own, not beside a place or a date. A name somebody the album knows now also answers to is
  * not treated as forgotten: that is their name, not the forgotten person's.
  *
  * The key is derived from FORGET_KEY, a secret kept with the environment, salted with a random value kept in the
@@ -107,27 +107,39 @@ function normalizedForm(f: string): string {
 }
 
 /**
- * Remember these names of somebody being forgotten. A one-word name is kept with the photographs they were tagged on
- * (ids only), and only ever looked for there: "Florence" anywhere else is a city.
+ * Remember these names of somebody being forgotten. A one-word name is kept with the photographs whose text the
+ * forget went through (they were tagged on it, or it or its trip, collection or activity named them) and those
+ * trips, collections and activities (see `containerKey`) — ids only — and is only ever looked for there: "Florence"
+ * anywhere else is a city.
  */
-export async function rememberForgotten(forms: { form: string; capitalizedOnly: boolean }[], taggedOn: Iterable<string> = []): Promise<void> {
-  const photoIds = [...new Set(taggedOn)];
+export async function rememberForgotten(forms: { form: string; capitalizedOnly: boolean }[], where: { photoIds?: Iterable<string>; containerIds?: Iterable<string> } = {}): Promise<void> {
+  const photoIds = [...new Set(where.photoIds ?? [])];
+  const containerIds = [...new Set(where.containerIds ?? [])];
   const state = await forgetKeyState();
   const w = state.write;
   if (!w) throw new Error(`Forgetting is paused: ${state.problem ?? "no key"}`);
-  const rows = new Map<string, { hash: string; keyVersion: number; capitalizedOnly: boolean; photoIds: string[] }>();
+  const rows = new Map<string, { hash: string; keyVersion: number; capitalizedOnly: boolean; photoIds: string[]; containerIds: string[] }>();
   for (const f of forms) {
     const n = normalizedForm(f.form);
     if (!n || n.split(" ").length > MAX_WORDS) continue;
     const h = hash(w.key, n);
     const oneWord = !CJK.test(n) && !n.includes(" ");
     // A spelling stored both ways is matched the stricter way.
-    rows.set(h, { hash: h, keyVersion: w.version, capitalizedOnly: (rows.get(h)?.capitalizedOnly ?? true) && f.capitalizedOnly, photoIds: oneWord ? photoIds : [] });
+    rows.set(h, { hash: h, keyVersion: w.version, capitalizedOnly: (rows.get(h)?.capitalizedOnly ?? true) && f.capitalizedOnly, photoIds: oneWord ? photoIds : [], containerIds: oneWord ? containerIds : [] });
   }
   if (!rows.size) return;
   // From the first name hashed under FORGET_KEY, running without that very key is noticed (see forgetKeyState).
   if (w.version === 1) await db.appSetting.updateMany({ where: { id: "app", OR: [{ forgetKeyFingerprint: null }, { NOT: { forgetKeyFingerprint: { startsWith: "1:" } } }] }, data: { forgetKeyFingerprint: `1:${fingerprint(w.key)}` } });
-  await db.forgottenName.createMany({ data: [...rows.values()], skipDuplicates: true });
+  // The same name forgotten again (another Ximena, on other photographs) is looked for in both places.
+  for (const r of rows.values()) {
+    await db.$executeRaw`
+      INSERT INTO "ForgottenName" (hash, "keyVersion", "capitalizedOnly", "photoIds", "containerIds")
+      VALUES (${r.hash}, ${r.keyVersion}, ${r.capitalizedOnly}, ${r.photoIds}::text[], ${r.containerIds}::text[])
+      ON CONFLICT (hash) DO UPDATE SET
+        "capitalizedOnly" = "ForgottenName"."capitalizedOnly" AND EXCLUDED."capitalizedOnly",
+        "photoIds" = ARRAY(SELECT DISTINCT unnest(COALESCE("ForgottenName"."photoIds", '{}') || EXCLUDED."photoIds")),
+        "containerIds" = ARRAY(SELECT DISTINCT unnest(COALESCE("ForgottenName"."containerIds", '{}') || EXCLUDED."containerIds"))`;
+  }
 }
 
 /** Forgotten names an admin may allow again: when each was added, and nothing that says what it was. */
@@ -142,20 +154,54 @@ export async function forgottenHashesOf(name: string): Promise<string[]> {
   return n ? state.keys.map((k) => hash(k.key, n)) : [];
 }
 
+/** How a trip, collection or activity is kept with a one-word forgotten name. */
+export function containerKey(kind: "trip" | "collection" | "activity", id: string): string {
+  return `${kind}:${id}`;
+}
+
+/** The one-word forgotten names in play for a text (see `forgottenScope`), as `${keyVersion}:${hash}`. */
+export type Scope = ReadonlySet<string>;
+
 /**
- * `on`: the photographs a text is about (an answer's item, a request's photographs). A one-word forgotten name is
- * only looked for in text about a photograph its owner was tagged on; elsewhere only full names are.
+ * Which one-word forgotten names count in text about these photographs (theirs, and their trips', collections' and
+ * activities'), or about these trips, collections and activities (all their photographs, found in the database, not
+ * only the few a request shows).
+ */
+export async function forgottenScope(where: { photoIds?: string[]; containers?: { kind: "trip" | "collection" | "activity"; id: string }[] }): Promise<Scope> {
+  const photoIds = where.photoIds ?? [];
+  const containers = where.containers ?? [];
+  if (!photoIds.length && !containers.length) return new Set();
+  const around = photoIds.length ? await db.photo.findMany({ where: { id: { in: photoIds } }, select: { tripId: true, activityId: true, collections: { select: { collectionId: true } } } }) : [];
+  const keys = [
+    ...containers.map((c) => containerKey(c.kind, c.id)),
+    ...around.flatMap((p) => [p.tripId ? containerKey("trip", p.tripId) : null, p.activityId ? containerKey("activity", p.activityId) : null, ...p.collections.map((c) => containerKey("collection", c.collectionId))]).filter((k): k is string => Boolean(k)),
+  ];
+  const of = (kind: string) => containers.filter((c) => c.kind === kind).map((c) => c.id);
+  const rows = await db.$queryRaw<{ keyVersion: number; hash: string }[]>`
+    SELECT "keyVersion", hash FROM "ForgottenName"
+    WHERE "photoIds" && ${photoIds}::text[]
+       OR "containerIds" && ${keys}::text[]
+       OR "photoIds" && ARRAY(
+         SELECT p.id FROM "Photo" p
+         WHERE p."tripId" = ANY(${of("trip")}::text[]) OR p."activityId" = ANY(${of("activity")}::text[])
+            OR p.id IN (SELECT ci."photoId" FROM "CollectionItem" ci WHERE ci."collectionId" = ANY(${of("collection")}::text[])))`;
+  return new Set(rows.map((r) => `${r.keyVersion}:${r.hash}`));
+}
+
+/**
+ * `scope`: the one-word forgotten names in play for the text (see `forgottenScope`); elsewhere only full names are
+ * looked for.
  */
 export type Tombstone = {
   empty: boolean;
   /** When it was read: a forget since then may have added names (see `tombstoneStale`). */
   loadedAt: Date;
-  scrub(text: string, on?: Iterable<string>): string;
-  mentions(text: string, on?: Iterable<string>): boolean;
-  /** The helper's search summary: full names only, never a one-word name ("florence duomo italy"). */
-  scrubSummary(text: string, on?: Iterable<string>): string;
+  scrub(text: string, scope?: Scope): string;
+  mentions(text: string, scope?: Scope): boolean;
+  /** The helper's search summary: a one-word name only as a word of its own, not beside a place, a date or a name. */
+  scrubSummary(text: string, scope?: Scope): string;
   /** Whether a tag or object names them: a full name in it, or a one-word name as the whole tag or its possessive. */
-  namesTag(tag: string, on?: Iterable<string>): boolean;
+  namesTag(tag: string, scope?: Scope): boolean;
 };
 
 const empty = (loadedAt: Date): Tombstone => ({ empty: true, loadedAt, scrub: (t) => t, mentions: () => false, scrubSummary: (t) => t, namesTag: () => false });
@@ -170,7 +216,7 @@ export async function tombstoneStale(ts: Tombstone): Promise<boolean> {
 export async function loadTombstone(): Promise<Tombstone> {
   const loadedAt = new Date();
   const state = await forgetKeyState();
-  const rows = await db.forgottenName.findMany({ where: { keyVersion: { in: state.keys.map((k) => k.version) } }, select: { hash: true, keyVersion: true, capitalizedOnly: true, photoIds: true } });
+  const rows = await db.forgottenName.findMany({ where: { keyVersion: { in: state.keys.map((k) => k.version) } }, select: { hash: true, keyVersion: true, capitalizedOnly: true } });
   if (!rows.length) return empty(loadedAt);
   const keys = state.keys.filter((k) => rows.some((r) => r.keyVersion === k.version));
   // Anybody the album knows now keeps their own name, whole or word by word.
@@ -184,10 +230,10 @@ export async function loadTombstone(): Promise<Tombstone> {
     if (CJK.test(n)) currentForms.add(n.replace(/\s+/g, ""));
   }
   const current = new Set(keys.flatMap((k) => [...currentForms].map((f) => `${k.version}:${hash(k.key, f)}`)));
-  const byHash = new Map(rows.filter((r) => !current.has(`${r.keyVersion}:${r.hash}`)).map((r) => [`${r.keyVersion}:${r.hash}`, { capOnly: r.capitalizedOnly, photos: new Set(r.photoIds) }]));
+  const byHash = new Map(rows.filter((r) => !current.has(`${r.keyVersion}:${r.hash}`)).map((r) => [`${r.keyVersion}:${r.hash}`, { key: `${r.keyVersion}:${r.hash}`, capOnly: r.capitalizedOnly }]));
   if (!byHash.size) return empty(loadedAt);
   /** A forgotten name this normalized run is, if any. */
-  const lookup = (norm: string): { capOnly: boolean; photos: Set<string> } | undefined => {
+  const lookup = (norm: string): { key: string; capOnly: boolean } | undefined => {
     for (const k of keys) {
       const v = byHash.get(`${k.version}:${hash(k.key, norm)}`);
       if (v) return v;
@@ -199,12 +245,8 @@ export async function loadTombstone(): Promise<Tombstone> {
     const n = normalizeName(w);
     return currentForms.has(n) || lookup(n) !== undefined;
   };
-  // Only where its owner was tagged; a row from before photographs were kept with it, nowhere.
-  const theirs = (photos: Set<string>, on: Set<string>) => [...on].some((id) => photos.has(id));
-
   type Mode = "prose" | "summary" | "tag";
-  const spansIn = (text: string, onIds: Iterable<string> | undefined, mode: Mode): [number, number][] => {
-    const on = new Set(onIds ?? []);
+  const spansIn = (text: string, scope: Scope | undefined, mode: Mode): [number, number][] => {
     const spans: [number, number][] = [];
     const tokens = [...text.matchAll(/[\p{L}\p{M}\p{N}][\p{L}\p{M}\p{N}'’.]*/gu)].map((m) => {
       // A possessive and a sentence's full stop stay outside the name.
@@ -222,9 +264,14 @@ export async function loadTombstone(): Promise<Tombstone> {
         const found = lookup(run.map((t) => t.norm).join(" "));
         if (!found) continue;
         if (n === 1) {
-          if (mode === "summary" || !theirs(found.photos, on)) continue;
+          // Only where the forget found them; a row from before that was kept, nowhere.
+          if (!scope?.has(found.key)) continue;
           if (mode === "tag") {
             if (!wholeTag) continue;
+          } else if (mode === "summary") {
+            // Keywords: a word of its own, in any case, but not "florence duomo" or "may 2019".
+            const beside = [tokens[i - 1], tokens[i + 1]].filter(Boolean);
+            if (isPlaceOrDateWord(run[0].raw) || beside.some((t) => isPlaceOrDateWord(t.raw) || /^\p{Lu}/u.test(t.raw))) continue;
           } else if (!guarded(text, run, found.capOnly)) continue;
         } else if (found.capOnly && !guarded(text, run, true)) continue;
         spans.push([run[0].start, run[n - 1].end]);
@@ -256,20 +303,20 @@ export async function loadTombstone(): Promise<Tombstone> {
   return {
     empty: false,
     loadedAt,
-    scrub: (text, on) => (typeof text === "string" && text ? replaceSpans(text, spansIn(text, on, "prose")) : text),
-    mentions: (text, on) => typeof text === "string" && spansIn(text, on, "prose").length > 0,
-    scrubSummary: (text, on) => (typeof text === "string" && text ? replaceSpans(text, spansIn(text, on, "summary")) : text),
-    namesTag: (tag, on) => typeof tag === "string" && spansIn(tag, on, "tag").length > 0,
+    scrub: (text, scope) => (typeof text === "string" && text ? replaceSpans(text, spansIn(text, scope, "prose")) : text),
+    mentions: (text, scope) => typeof text === "string" && spansIn(text, scope, "prose").length > 0,
+    scrubSummary: (text, scope) => (typeof text === "string" && text ? replaceSpans(text, spansIn(text, scope, "summary")) : text),
+    namesTag: (tag, scope) => typeof tag === "string" && spansIn(tag, scope, "tag").length > 0,
   };
 }
 
 /**
- * The helper's record about the photographs `on` with every forgotten name taken out of its prose, and every tag or
- * object naming one dropped.
+ * The helper's record with every forgotten name in play (`scope`, see `forgottenScope`) taken out of its prose, and
+ * every tag or object naming one dropped.
  */
-export function scrubRecord<T extends Partial<StoredAnnotation>>(a: T, ts: Tombstone, on: Iterable<string> = []): T {
+export function scrubRecord<T extends Partial<StoredAnnotation>>(a: T, ts: Tombstone, scope?: Scope): T {
   if (ts.empty) return a;
-  const ids = [...on];
+  const ids = scope;
   const prose = (v: unknown) => (typeof v === "string" ? ts.scrub(v, ids) : v);
   const list = (v: unknown) => (Array.isArray(v) ? v.filter((t) => typeof t !== "string" || !ts.namesTag(t, ids)) : v);
   return {

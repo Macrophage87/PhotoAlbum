@@ -1,7 +1,7 @@
 import { db } from "@/lib/db";
 import { nameMatcher, type NameMatcher } from "./scrub";
 import { nameMayLeaveServer } from "./consent";
-import { loadTombstone, type Tombstone } from "./tombstone";
+import { forgottenScope, loadTombstone, type Scope, type Tombstone } from "./tombstone";
 
 export type NameScrub = (text: string | null | undefined) => string | null;
 
@@ -16,7 +16,9 @@ export type NameScrub = (text: string | null | undefined) => string | null;
  * where its owner is, or was, tagged on one of them. Elsewhere only their full names go: a first name alone on
  * somebody else's photograph identifies nobody, and is as often a place in a member's title.
  */
-export type NameScrubber = { forPhotos(photoIds: string[]): Promise<NameScrub> };
+/** `containers`: a trip, collection or activity the request is about as a whole (all its photographs count). */
+export type NameScrubber = { forPhotos(photoIds: string[], containers?: Containers): Promise<NameScrub> };
+type Containers = { kind: "trip" | "collection" | "activity"; id: string }[];
 
 export async function nameScrubber(): Promise<NameScrubber> {
   const [people, users, tombstone] = await Promise.all([
@@ -32,9 +34,10 @@ export async function nameScrubber(): Promise<NameScrubber> {
       return { id: p.id, m: nameMatcher([...own], everybody.filter((n) => !own.has(n))) };
     });
   return {
-    async forPhotos(photoIds) {
+    async forPhotos(photoIds, containers = []) {
       const tagged = photoIds.length && matchers.length ? await taggedOn(photoIds) : new Set<string>();
-      return scrubWith(matchers, tagged, tombstone, photoIds);
+      const scope = tombstone.empty ? new Set<string>() : await forgottenScope({ photoIds, containers });
+      return scrubWith(matchers, tagged, tombstone, scope);
     },
   };
 }
@@ -47,16 +50,16 @@ async function taggedOn(photoIds: string[]): Promise<Set<string>> {
   return new Set([...f, ...a].flatMap((r) => [r.personId, r.proposedPersonId]).filter((x): x is string => Boolean(x)));
 }
 
-function scrubWith(matchers: { id: string; m: NameMatcher }[], tagged: Set<string>, tombstone: Tombstone, photoIds: string[]): NameScrub {
+function scrubWith(matchers: { id: string; m: NameMatcher }[], tagged: Set<string>, tombstone: Tombstone, scope: Scope): NameScrub {
   return (text) => {
     if (typeof text !== "string" || !text) return text ?? null;
     const named = matchers.reduce((t, { id, m }) => m.scrub(t, { tagged: tagged.has(id), fullOnly: true }), text);
     // A one-word forgotten name only where its owner was tagged (see tombstone.ts).
-    return tombstone.scrub(named, photoIds);
+    return tombstone.scrub(named, scope);
   };
 }
 
 /** For a single request: build, and ask about these photographs. */
-export async function unpermittedNameScrub(photoIds: string[], scrubber?: NameScrubber): Promise<NameScrub> {
-  return (scrubber ?? (await nameScrubber())).forPhotos(photoIds);
+export async function unpermittedNameScrub(photoIds: string[], scrubber?: NameScrubber, containers?: Containers): Promise<NameScrub> {
+  return (scrubber ?? (await nameScrubber())).forPhotos(photoIds, containers);
 }

@@ -164,7 +164,7 @@ function startsSentence(before: string): boolean {
 }
 
 /** Words that put a place after them in the text the helper writes: "a trip to Florence", "the Duomo in Florence". */
-const PLACE_NEAR = new Set(["to", "in", "from", "near", "at", "visiting", "visit", "via", "into", "toward", "towards"]);
+const PLACE_NEAR = new Set(["to", "in", "from", "near", "at", "visiting", "visit", "via", "into", "toward", "towards", "through", "across", "around"]);
 /** Words after "May" that make it the day or the pole, not her. */
 const DAY_AFTER = new Set(["day", "days", "pole", "poles", "queen", "fair", "fayre", "time"]);
 
@@ -242,6 +242,14 @@ export function notThePerson(text: string, start: number, end: number, n: Neighb
     if (prev && /^\p{Lu}/u.test(prev) && !isKin(prev.replace(/\.$/u, "")) && !STARTERS.has(p!) && !n.own?.has(p!)) return true;
   }
   return false;
+}
+
+const WHEN_WORDS = new Set([...MONTHS, ...DATE_BEFORE, "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "spring", "summer", "autumn", "fall", "winter", "christmas", "easter", "today", "yesterday"]);
+
+/** Whether a keyword beside a name makes it a place or a date: "florence duomo italy", "may 2019". */
+export function isPlaceOrDateWord(word: string): boolean {
+  const w = bare(word);
+  return /^\d/u.test(w) || PLACE_NAMES.has(w) || WHEN_WORDS.has(w);
 }
 
 /** Whether a word is an everyday word or a month ("may", "grace", "summer"): a name made of them is written as one. */
@@ -344,7 +352,8 @@ export type NameMatcher = {
   tombstoneForms: { form: string; capitalizedOnly: boolean }[];
 };
 
-type Short = { form: string; word: string; everyday: boolean };
+/** `whole`: all of their name ("Florence"), not the first name of a full one ("Florence" of Florence Adams). */
+type Short = { form: string; word: string; everyday: boolean; whole?: boolean };
 
 /**
  * A matcher for one person: every name they have gone by (`names`), and the names of everybody else the album
@@ -380,7 +389,7 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
   const addShort = (w: string, isWhole: boolean) => {
     const word = bare(w);
     if (letters(w) < 2 || isKin(w)) return;
-    const short = { form: capitalized(w), word, everyday: EVERYDAY_WORDS.has(word) };
+    const short = { form: capitalized(w), word, everyday: EVERYDAY_WORDS.has(word), whole: isWhole };
     if (letters(w) >= 3 && !NOT_SAFE.has(word) && !shared.has(word)) {
       safe.push(short);
       if (isWhole) whole.push(w);
@@ -504,7 +513,8 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
           // Away from their photographs a first name that is also a place is one after "to", "in", "near" ("to
           // Florence"), and one before a number is a date or a thing ("Florence 2019"); on them, only a place written
           // as one ("Florence, Italy").
-          place: where.tagged ? "comma" : "wide",
+          // A first name taken from a full one is the place after "to" even there ("We flew to Florence.").
+          place: !where.tagged ? "wide" : short?.whole ? "comma" : "near",
           number: !where.tagged,
         });
         return somebodyElse ? m : standInFor(m, whole.slice(0, offset), whole.slice(offset + m.length), title);

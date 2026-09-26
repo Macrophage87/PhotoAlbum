@@ -7,7 +7,7 @@ import { applyPlaceEstimate, needsPlaceEstimate } from "./place";
 import { isWeakDate } from "@/lib/photos/date-from-neighbours";
 import { judgeHelperText, knownNames, mentionsAnyName, pastHelperTitles, titleIsHelpers } from "./members-only";
 import { forgetState, unchangedSince } from "@/lib/people/names-changed";
-import { loadTombstone, scrubRecord, type Tombstone } from "@/lib/people/tombstone";
+import { forgottenScope, loadTombstone, scrubRecord, type Tombstone } from "@/lib/people/tombstone";
 
 export type ApplyResult = { ok: true } | { ok: false; reason: "refusal" | "invalid" | "max_tokens" };
 
@@ -58,7 +58,8 @@ export async function applyAnnotation(photoId: string, model: string, parsed: An
   if (!current) return;
   // Nobody forgotten comes back by way of a new answer, whoever it is about: their names are taken out first.
   const tombstone = opts.tombstone ?? (await loadTombstone());
-  const stored = scrubRecord(toStored(parsed), tombstone, [photoId]);
+  const scope = tombstone.empty ? undefined : await forgottenScope({ photoIds: [photoId] });
+  const stored = scrubRecord(toStored(parsed), tombstone, scope);
   // Written from names or notes, it is the family's to read: kept off the item's own title and out of public view.
   const judgement = await judgeHelperText(photoId, stored, current.context, opts.sent);
   const membersOnly = judgement.membersOnly;
@@ -114,7 +115,7 @@ export async function applyAnnotation(photoId: string, model: string, parsed: An
         annotationOutputTokens: raw.usage?.output_tokens ?? null,
         annotationBatched: raw.batched ?? false,
         ...(est && noReliableDate && !keepMemberEstimate
-          ? { estimatedDate: new Date(Date.UTC(Math.round((est.from + est.to) / 2), 6, 1)), estimatedDateConfidence: est.confidence, estimatedDateSource: "MODEL", estimatedDateNote: `${est.from}–${est.to}: ${tombstone.scrub(est.evidence, [photoId])}` }
+          ? { estimatedDate: new Date(Date.UTC(Math.round((est.from + est.to) / 2), 6, 1)), estimatedDateConfidence: est.confidence, estimatedDateSource: "MODEL", estimatedDateNote: `${est.from}–${est.to}: ${tombstone.scrub(est.evidence, scope)}` }
           : {}),
       },
     });

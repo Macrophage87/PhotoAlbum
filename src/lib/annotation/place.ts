@@ -3,7 +3,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { db } from "@/lib/db";
 import { forgetState, unchangedSince } from "@/lib/people/names-changed";
-import { loadTombstone, type Tombstone } from "@/lib/people/tombstone";
+import { forgottenScope, loadTombstone, type Tombstone } from "@/lib/people/tombstone";
 import { thinkingParams } from "./client";
 import { placeFromMembersOnly } from "./members-only";
 
@@ -157,7 +157,8 @@ export async function applyPlaceEstimate(photoId: string, estimate: PlaceEstimat
   // forgotten comes back by way of its name or evidence.
   const tombstone = opts.tombstone ?? (await loadTombstone());
   const coarse = estimate && estimate.confidence >= MIN_PLACE_CONFIDENCE ? scrubCoarsePlace(estimate) : null;
-  let place = coarse ? { ...coarse, name: tombstone.scrub(coarse.name, [photoId]), evidence: tombstone.scrub(coarse.evidence, [photoId]) } : null;
+  const scope = await forgottenScope({ photoIds: [photoId] });
+  let place = coarse ? { ...coarse, name: tombstone.scrub(coarse.name, scope), evidence: tombstone.scrub(coarse.evidence, scope) } : null;
   const free = current.lat === null && (current.gpsSource === null || current.gpsSource === "ESTIMATE");
   const membersOnly = place && free ? await placeFromMembersOnly(photoId, { name: place.name, evidence: place.evidence }, current.context, opts.sent) : false;
   // Asked before a forgotten name was taken out of this item, before anybody was forgotten, or before anybody on it
@@ -170,7 +171,8 @@ export async function applyPlaceEstimate(photoId: string, estimate: PlaceEstimat
     // Somebody forgotten since the forgotten names were read: read them again.
     if (forget.reload && place) {
       const fresh = await loadTombstone();
-      place = { ...place, name: fresh.scrub(place.name, [photoId]), evidence: fresh.scrub(place.evidence, [photoId]) };
+      const now = await forgottenScope({ photoIds: [photoId] });
+      place = { ...place, name: fresh.scrub(place.name, now), evidence: fresh.scrub(place.evidence, now) };
     }
     const guard = { id: photoId, ...(requestedAt ? unchangedSince(requestedAt) : {}) };
     if (!place || !free) {

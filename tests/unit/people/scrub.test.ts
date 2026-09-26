@@ -173,6 +173,8 @@ describe("words around a first name", () => {
     expect(f.scrub("Florence, Italy in spring.", { tagged: true })).toBe("Florence, Italy in spring.");
     // Not a place and its region when the word after the comma is somebody's name.
     expect(nameMatcher(["Florence Adams"], ["Ben Ortiz"]).scrub("Left to right: Florence, Ben.", { tagged: true })).toBe("Left to right: a family member, Ben.");
+    // A first name taken from a full one is the listed place after "to" even on their photographs.
+    expect(f.scrub("We flew to Florence. Florence waved; a walk through Florence", { tagged: true })).toBe("We flew to Florence. A family member waved; a walk through Florence");
     // For somebody merely not to be named, a first name alone away from their photographs is left.
     expect(f.scrub("Train to Florence; Florence waved", { fullOnly: true })).toBe("Train to Florence; Florence waved");
   });

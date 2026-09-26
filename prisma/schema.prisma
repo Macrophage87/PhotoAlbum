@@ -952,8 +952,10 @@ model ForgottenName {
   keyVersion      Int
   /// Matched only as a name is written (capitalized, or in capitals): a one-word name, or one of everyday words.
   capitalizedOnly Boolean  @default(false)
-  /// For a one-word name, the photographs its owner was tagged on (ids only): it is looked for nowhere else.
+  /// For a one-word name, the photographs the forget went through, and the trips, collections and activities that
+  /// named them ("trip:<id>"): ids only. It is looked for nowhere else.
   photoIds        String[] @default([])
+  containerIds    String[] @default([])
   createdAt       DateTime @default(now())
 }
 
@@ -961,8 +963,8 @@ model ForgottenName {
 /// mention them: ids and fields only, never the name. Shown until an admin dismisses it.
 model ForgetLeftover {
   id            String    @id @default(cuid())
-  /// Who forgot them: the list is for them and admins.
-  createdById   String
+  /// Who forgot them: the list is for them and admins (none for a forget finished by the album itself).
+  createdById   String?
   items         Json
   createdAt     DateTime  @default(now())
   dismissedAt   DateTime?

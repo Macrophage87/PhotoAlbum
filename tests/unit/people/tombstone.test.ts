@@ -18,7 +18,7 @@ import { applyAnnotation } from "@/lib/annotation/apply";
 import { applyPlaceEstimate } from "@/lib/annotation/place";
 import { loadItem, withoutUnpermittedNames } from "@/lib/annotation/request";
 import { withoutUnpermittedNames as withoutContainerNames } from "@/lib/annotation/container";
-import { forgetKeyState, forgottenNames, loadTombstone } from "@/lib/people/tombstone";
+import { forgetKeyState, forgottenNames, forgottenScope, loadTombstone } from "@/lib/people/tombstone";
 import { completePendingForgets } from "@/lib/people/forget-person";
 import { withForgetLock } from "@/lib/people/names-changed";
 import { Client } from "pg";
@@ -151,20 +151,35 @@ describe("forgotten names read before a forget", () => {
     const running = withForgetLock(() => new Promise<void>((r) => (release = r)));
     await new Promise((r) => setTimeout(r, 100));
     // A dozen forgets waiting their turn, and the pool still answers at once.
-    const waiting = Array.from({ length: 12 }, () => withForgetLock(async () => undefined, { ms: 5_000, step: 50 }));
+    const waiting = Array.from({ length: 12 }, () => withForgetLock(async () => undefined, { ms: 5_000 }));
     const t = Date.now();
     await db.$queryRaw`SELECT 1`;
     expect(Date.now() - t).toBeLessThan(2_000);
-    await expect(withForgetLock(async () => undefined, { ms: 200, step: 50 })).rejects.toThrow(/Another person is being forgotten/);
+    await expect(withForgetLock(async () => undefined, { ms: 200 })).rejects.toThrow(/Another person is being forgotten; try again in a few minutes/);
+    // Answers being stored hold it shared and briefly: those are waited for, not refused.
     release();
     await running;
     await Promise.all(waiting);
+    let stored!: () => void;
+    const storing = db.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT pg_try_advisory_xact_lock_shared(${0x666f7267}::bigint)`;
+      await new Promise<void>((r) => (stored = r));
+    });
+    await new Promise((r) => setTimeout(r, 100));
+    const queued = withForgetLock(async () => "after", { ms: 5_000 });
+    await new Promise((r) => setTimeout(r, 200));
+    // With a forget waiting in line, a new answer steps aside rather than starving it.
+    const late = await db.$transaction(async (tx) => (await tx.$queryRaw<{ free: boolean }[]>`SELECT pg_try_advisory_xact_lock_shared(${0x666f7267}::bigint) AS free`)[0].free);
+    expect(late).toBe(false);
+    stored();
+    await expect(queued).resolves.toBe("after");
+    await storing;
     // A connection holding the lock that dies (a crashed worker) takes the lock with it.
     const crashed = new Client({ connectionString: process.env.DATABASE_URL });
     await crashed.connect();
     await crashed.query("SELECT pg_advisory_lock($1::bigint)", [0x666f7267]);
     await crashed.end();
-    await expect(withForgetLock(async () => "done", { ms: 2_000, step: 50 })).resolves.toBe("done");
+    await expect(withForgetLock(async () => "done", { ms: 2_000 })).resolves.toBe("done");
   });
 
   it("are never forgotten two at a time", async () => {
@@ -197,17 +212,18 @@ describe("names that are also words", () => {
     await optOutPerson(p.id, new FormData());
     return on;
   };
+  const sc = (id: string) => forgottenScope({ photoIds: [id] });
 
   it("keeps a one-word name to the photographs they were on, as a name is written", async () => {
     const on = await forget("Ximena");
     const ts = await loadTombstone();
-    expect(ts.scrub("Ximena waved; ximena waved", [on])).toBe("A family member waved; ximena waved");
-    expect(ts.scrub("HAPPY BIRTHDAY XIMENA", [on])).toBe("HAPPY BIRTHDAY A FAMILY MEMBER");
+    expect(ts.scrub("Ximena waved; ximena waved", await sc(on))).toBe("A family member waved; ximena waved");
+    expect(ts.scrub("HAPPY BIRTHDAY XIMENA", await sc(on))).toBe("HAPPY BIRTHDAY A FAMILY MEMBER");
     // Anywhere else only full names count.
-    expect(ts.scrub("Ximena waved", [await photo()])).toBe("Ximena waved");
+    expect(ts.scrub("Ximena waved", await sc(await photo()))).toBe("Ximena waved");
     expect(ts.scrub("Ximena waved")).toBe("Ximena waved");
     // No "a a family member": the article goes with the name.
-    expect(ts.scrub("We met a Ximena at the fair", [on])).toBe("We met a family member at the fair");
+    expect(ts.scrub("We met a Ximena at the fair", await sc(on))).toBe("We met a family member at the fair");
   });
 
   it("never keeps a one-word name that is a month, an everyday word, a herb or a bird", async () => {
@@ -225,38 +241,67 @@ describe("names that are also words", () => {
   it("leaves a place alone, even on their photographs", async () => {
     const on = await forget("Florence");
     const ts = await loadTombstone();
-    for (const t of ["Florence, Italy in spring.", "A trip to Florence, Italy", "Florence Nightingale statue", "The Duomo in Florence", "Florence 2019"]) expect(ts.scrub(t, [on])).toBe(t);
+    for (const t of ["Florence, Italy in spring.", "A trip to Florence, Italy", "Florence Nightingale statue", "The Duomo in Florence", "Florence 2019"]) expect(ts.scrub(t, await sc(on))).toBe(t);
     // Elsewhere, not at all.
     const elsewhere = await photo();
-    expect(ts.scrub("Florence in spring", [elsewhere])).toBe("Florence in spring");
-    expect(ts.namesTag("florence", [elsewhere])).toBe(false);
+    expect(ts.scrub("Florence in spring", await sc(elsewhere))).toBe("Florence in spring");
+    expect(ts.namesTag("florence", await sc(elsewhere))).toBe(false);
     // Hers where it is her: after a capitalized word that ended the sentence before, and "Left to right: Florence, Ben".
-    expect(ts.scrub("We drove to Maine. Florence swam.", [on])).toBe("We drove to Maine. A family member swam.");
+    expect(ts.scrub("We drove to Maine. Florence swam.", await sc(on))).toBe("We drove to Maine. A family member swam.");
   });
 
   it("is a person after 'to', 'at', 'from' or 'near' unless it is a place", async () => {
     const on = await forget("Ximena");
     await db.person.create({ data: { name: "Ben Ortiz", createdById: admin } });
     const ts = await loadTombstone();
-    expect(ts.scrub("Grandpa smiling at Ximena, waving to Ximena, a gift from Ximena, sitting near Ximena", [on])).toBe("Grandpa smiling at a family member, waving to a family member, a gift from a family member, sitting near a family member");
-    expect(ts.scrub("Left to right: Ximena, Ben.", [on])).toBe("Left to right: a family member, Ben.");
+    expect(ts.scrub("Grandpa smiling at Ximena, waving to Ximena, a gift from Ximena, sitting near Ximena", await sc(on))).toBe("Grandpa smiling at a family member, waving to a family member, a gift from a family member, sitting near a family member");
+    expect(ts.scrub("Left to right: Ximena, Ben.", await sc(on))).toBe("Left to right: a family member, Ben.");
   });
 
-  it("counts a one-word name in tags only as the whole tag or its possessive, and never in a search summary", async () => {
+  it("counts a one-word name in tags only as the whole tag or its possessive, and in a search summary only on its own", async () => {
     const on = await forget("Ximena");
     const ts = await loadTombstone();
-    expect(ts.namesTag("ximena", [on])).toBe(true);
-    expect(ts.namesTag("ximena's", [on])).toBe(true);
-    expect(ts.namesTag("ximena pool", [on])).toBe(false);
-    expect(ts.scrubSummary("Ximena fishing", [on])).toBe("Ximena fishing");
-    await applyAnnotation(on, "m", record({ tags: ["ximena", "Ximena's", "pool"], searchSummary: "ximena fishing pool" }), { content: [] }, { requestedAt: new Date() });
-    expect((await db.photo.findUniqueOrThrow({ where: { id: on } })).annotation).toMatchObject({ tags: ["pool"], searchSummary: "ximena fishing pool" });
+    expect(ts.namesTag("ximena", await sc(on))).toBe(true);
+    expect(ts.namesTag("ximena's", await sc(on))).toBe(true);
+    expect(ts.namesTag("ximena pool", await sc(on))).toBe(false);
+    expect(ts.scrubSummary("fishing, ximena may 2019; ximena florence", await sc(on))).toBe("fishing, ximena may 2019; ximena florence");
+    expect(ts.scrubSummary("ximena fishing", await sc(await photo()))).toBe("ximena fishing");
+    await applyAnnotation(on, "m", record({ tags: ["ximena", "Ximena's", "pool"], searchSummary: "ximena fishing trout" }), { content: [] }, { requestedAt: new Date() });
+    expect((await db.photo.findUniqueOrThrow({ where: { id: on } })).annotation).toMatchObject({ tags: ["pool"], searchSummary: "A family member fishing trout" });
+  });
+
+  it("is looked for on every photograph the forget went through: tagged, named in notes, or in a trip that names them", async () => {
+    const p = await db.person.create({ data: { name: "Ximena", createdById: admin } });
+    const tagged = await photo();
+    await db.face.create({ data: { photoId: tagged, personId: p.id, status: "CONFIRMED", box: [0, 0, 1, 1], confidence: 0 } });
+    const noted = (await db.photo.create({ data: { uploaderId: admin, originalName: "n.jpg", mimeType: "image/jpeg", storageKey: "n", originalPath: "n/o.jpg", sizeBytes: 1, status: "READY", context: "Ximena caught a trout" } })).id;
+    const trip = await db.trip.create({ data: { slug: "x", title: "Ximena's birthday", startDate: new Date("2026-07-01"), endDate: new Date("2026-07-01"), createdById: admin } });
+    const inTrip = (await db.photo.create({ data: { uploaderId: admin, originalName: "t.jpg", mimeType: "image/jpeg", storageKey: "t", originalPath: "t/o.jpg", sizeBytes: 1, status: "READY", tripId: trip.id } })).id;
+    const later = (await db.photo.create({ data: { uploaderId: admin, originalName: "l.jpg", mimeType: "image/jpeg", storageKey: "l", originalPath: "l/o.jpg", sizeBytes: 1, status: "READY" } })).id;
+    await optOutPerson(p.id, new FormData());
+    // Added to the trip after the forget: the trip named her, so its photographs count too.
+    await db.photo.update({ where: { id: later }, data: { tripId: trip.id } });
+    for (const id of [tagged, noted, inTrip, later]) {
+      await applyAnnotation(id, "m", record({ caption: "Ximena with a trout" }), { content: [] }, { requestedAt: new Date() });
+      expect(((await db.photo.findUniqueOrThrow({ where: { id } })).annotation as StoredAnnotation).caption).toBe("A family member with a trout");
+    }
+    // The trip described as a whole counts by all its photographs.
+    expect((await loadTombstone()).scrub("Ximena turned five", await forgottenScope({ containers: [{ kind: "trip", id: trip.id }] }))).toBe("A family member turned five");
+    expect((await loadTombstone()).scrub("Ximena turned five", await sc(await photo()))).toBe("Ximena turned five");
+  });
+
+  it("keeps the photographs of everybody forgotten under the same one-word name", async () => {
+    const first = await forget("Ximena");
+    const second = await forget("Ximena");
+    expect(await db.forgottenName.count()).toBe(1);
+    const ts = await loadTombstone();
+    for (const on of [first, second]) expect(ts.scrub("Ximena waved", await sc(on))).toBe("A family member waved");
   });
 
   it("never keeps a first name taken from a full one", async () => {
     const on = await forget("Florence Adams");
     const ts = await loadTombstone();
-    expect(ts.scrub("Train to Florence to see the Duomo; florence adams waved", [on])).toBe("Train to Florence to see the Duomo; a family member waved");
+    expect(ts.scrub("Train to Florence to see the Duomo; florence adams waved", await sc(on))).toBe("Train to Florence to see the Duomo; a family member waved");
   });
 
   it("titles the stand-in only in a title in title case", async () => {
@@ -280,20 +325,25 @@ describe("names that are also words", () => {
 });
 
 describe("forgetting while FORGET_KEY is missing", () => {
-  it("switches them off at once and forgets them once the key is there", async () => {
+  it("switches them off and scrubs the helper's text at once, and forgets them once the key is there", async () => {
     await resetTestDb();
     const admin = (await db.user.create({ data: { email: "admin@example.com", role: "ADMIN" } })).id;
     who.role = "ADMIN";
     who.id = admin;
     const p = await db.person.create({ data: { name: "Timothy Kent", faceIndexing: true, nameInDescriptions: true, createdById: admin } });
+    const on = (await db.photo.create({ data: { uploaderId: admin, originalName: "t.jpg", mimeType: "image/jpeg", storageKey: "t", originalPath: "t/o.jpg", sizeBytes: 1, status: "READY", annotation: record({ caption: "Timothy Kent fishing" }), annotatedAt: new Date() } })).id;
+    await db.face.create({ data: { photoId: on, personId: p.id, status: "CONFIRMED", box: [0, 0, 1, 1], confidence: 0 } });
     const state = vi.spyOn(await import("@/lib/people/tombstone"), "forgetKeyState");
     state.mockResolvedValueOnce({ keys: [], write: null, problem: "FORGET_KEY is not set", paused: false, weak: 0 });
     await optOutPerson(p.id, new FormData());
     const waiting = await db.person.findUniqueOrThrow({ where: { id: p.id } });
-    expect(waiting).toMatchObject({ faceIndexing: false, nameInDescriptions: false });
+    expect(waiting).toMatchObject({ faceIndexing: false, nameInDescriptions: false, forgetPendingById: admin });
     expect(waiting.forgetPendingAt).not.toBeNull();
-    expect(waiting.optedOutAt).not.toBeNull();
+    expect(((await db.photo.findUniqueOrThrow({ where: { id: on } })).annotation as StoredAnnotation).caption).toBe("A family member fishing");
+    expect(await db.forgottenName.count()).toBe(0);
     state.mockRestore();
+    // Nobody left to list it for: an admin sees it.
+    await db.person.update({ where: { id: p.id }, data: { forgetPendingById: null } });
     expect(await completePendingForgets()).toBe(1);
     expect(await db.person.findUnique({ where: { id: p.id } })).toBeNull();
     expect((await loadTombstone()).scrub("Timothy Kent waved")).toBe("A family member waved");

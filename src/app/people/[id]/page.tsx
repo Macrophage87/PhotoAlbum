@@ -19,8 +19,9 @@ import { namesWaitingFor, refreshNamesFor } from "@/app/annotation/actions";
 export const metadata = { robots: { index: false, follow: false } };
 
 /** Members-only: one person's media over time, and their recognition settings. */
-export default async function PersonPage({ params }: PageProps<"/people/[id]">) {
+export default async function PersonPage({ params, searchParams }: PageProps<"/people/[id]">) {
   const { id } = await params;
+  const busy = (await searchParams).busy === "1";
   const user = await requireUser(`/people/${id}`);
   const viewer = await getViewer();
   const person = await db.person.findUnique({ where: { id } });
@@ -56,9 +57,10 @@ export default async function PersonPage({ params }: PageProps<"/people/[id]">) 
             <h1 className="font-display text-3xl font-semibold">{person.name}</h1>
             <p className="text-muted mt-1">{[person.relationship, person.kind === "PET" ? `${person.isFlock ? "flock of " : ""}${person.species?.toLowerCase() ?? "pet"}` : null, person.kind === "PET" && person.livedFrom ? `${person.livedFrom.getUTCFullYear()}–${person.livedTo ? person.livedTo.getUTCFullYear() : ""}` : null, person.kind === "PET" ? person.descriptors : null, `${photos.length} photo${photos.length === 1 ? "" : "s"}`].filter(Boolean).join(" · ")}</p>
           </div>
-          {person.kind === "HUMAN" && person.forgetPendingAt ? <Badge tone="warning">waiting to be forgotten: the album needs its FORGET_KEY first</Badge> : person.kind === "HUMAN" && (person.faceIndexing ? <Badge tone="success">recognized in new photos · {person.adultAttestedAt ? "attested adult" : "by birthday"}</Badge> : person.optedOutAt ? <Badge tone="warning">asked to be forgotten on {person.optedOutAt.toLocaleDateString("en-US")}</Badge> : <Badge tone="neutral">{person.pendingDecision ? "awaiting an admin's decision" : "not recognized"}</Badge>)}
+          {person.kind === "HUMAN" && person.forgetPendingAt ? <Badge tone="warning">Waiting to be forgotten — an admin needs to finish setting up the album.</Badge> : person.kind === "HUMAN" && (person.faceIndexing ? <Badge tone="success">recognized in new photos · {person.adultAttestedAt ? "attested adult" : "by birthday"}</Badge> : person.optedOutAt ? <Badge tone="warning">asked to be forgotten on {person.optedOutAt.toLocaleDateString("en-US")}</Badge> : <Badge tone="neutral">{person.pendingDecision ? "awaiting an admin's decision" : "not recognized"}</Badge>)}
         </div>
 
+        {busy && <p className="rounded-theme border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900" role="status">Another person is being forgotten; try again in a few minutes.</p>}
         <PhotoGrid photos={photos.map((p) => toGridPhoto(p, null, true))} emptyMessage="No photos you can see." />
 
         {/* Naming somebody does nothing to the descriptions already written, and hunting down the run that fixes

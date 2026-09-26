@@ -21,7 +21,7 @@ import { descriptionStaysHelpers } from "@/lib/annotation/helper-text";
 import { namesChangedSince } from "@/lib/people/names-changed";
 import { NAMES_CHANGED, withoutUnpermittedNames } from "@/lib/annotation/container";
 import { forgetState } from "@/lib/people/names-changed";
-import { loadTombstone } from "@/lib/people/tombstone";
+import { forgottenScope, loadTombstone } from "@/lib/people/tombstone";
 import { unpermittedNameScrub } from "@/lib/people/unpermitted";
 
 /** An activity is part of the shape of a trip, so it is the trip's maker (and admins) who arrange them. */
@@ -197,7 +197,9 @@ export async function describeActivityWithAi(slug: string, id: string, note?: st
   const requestedAt = new Date();
   const names = [...new Set((await Promise.all(activity.photos.map((p) => permittedNames(p.id)))).flat())];
   // The family's words go without the names the helper may not be told, the note beside the button included.
-  const scrub = await unpermittedNameScrub(activity.photos.map((p) => p.id));
+  // One-word forgotten names count by every photograph in it, not only the few it is shown.
+  const scrub = await unpermittedNameScrub(activity.photos.map((p) => p.id), undefined, [{ kind: "activity", id }]);
+  const scope = await forgottenScope({ containers: [{ kind: "activity", id }] });
   const request = await buildActivityRequest(await withoutUnpermittedNames(activity, scrub), gates.model, names, scrub(DESCRIPTION_TEXT.parse(note ?? "").trim() || null) || undefined);
   const notes = activity.photos.some((p) => p.context?.trim());
   const response = await anthropic().messages.create(request);
@@ -207,7 +209,7 @@ export async function describeActivityWithAi(slug: string, id: string, note?: st
   if (!parsed) throw new Error("The helper's answer could not be read; try again");
   // Nobody forgotten comes back by way of the answer.
   const tombstone = await loadTombstone();
-  parsed.description = tombstone.scrub(parsed.description, activity.photos.map((p) => p.id));
+  parsed.description = tombstone.scrub(parsed.description, scope);
   // Written from names or notes, it is read by members only; see `descriptionFromMembersOnly`.
   const judged = await judgeDescription(parsed.description, {
     names,
@@ -223,7 +225,7 @@ export async function describeActivityWithAi(slug: string, id: string, note?: st
     const forget = await forgetState(tx, tombstone.loadedAt);
     if (forget.underWay || (await namesChangedSince(activity.photos.map((p) => p.id), requestedAt))) throw new Error(NAMES_CHANGED);
     // Somebody forgotten since the forgotten names were read: read them again.
-    if (forget.reload) parsed.description = (await loadTombstone()).scrub(parsed.description, activity.photos.map((p) => p.id));
+    if (forget.reload) parsed.description = (await loadTombstone()).scrub(parsed.description, await forgottenScope({ containers: [{ kind: "activity", id }] }));
     await tx.activity.update({ where: { id }, data: { description: parsed.description, descriptionMembersOnly: judged.membersOnly, descriptionTitleOnly: judged.titleOnly, descriptionTitleWords: judged.titleOnly ? (judged.titleWords ?? []) : [], descriptionSharedAt: null, descriptionByHelper: true } });
   });
   revalidatePath(`/trips/${slug}/activities/${id}`);

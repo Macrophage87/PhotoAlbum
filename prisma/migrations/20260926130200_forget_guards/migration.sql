@@ -38,13 +38,14 @@ CREATE TABLE "ForgottenName" (
   "keyVersion" INTEGER NOT NULL,
   "capitalizedOnly" BOOLEAN NOT NULL DEFAULT false,
   "photoIds" TEXT[] DEFAULT ARRAY[]::TEXT[],
+  "containerIds" TEXT[] DEFAULT ARRAY[]::TEXT[],
   "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT "ForgottenName_pkey" PRIMARY KEY ("hash")
 );
 
 CREATE TABLE "ForgetLeftover" (
   "id" TEXT NOT NULL,
-  "createdById" TEXT NOT NULL,
+  "createdById" TEXT,
   "items" JSONB NOT NULL,
   "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   "dismissedAt" TIMESTAMP(3),

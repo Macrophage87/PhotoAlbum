@@ -11,7 +11,8 @@ import { canChangePerson, canEditMedia, NOT_YOUR_PERSON, NOT_YOURS } from "@/lib
 import { knownAdult, nameMayLeaveServer, namingOutcome } from "@/lib/people/consent";
 import { forgetNameEverywhere, forgetOnPhoto } from "@/lib/people/forget";
 import { forgetKeyState, forgottenHashesOf } from "@/lib/people/tombstone";
-import { forgetLater, forgetPerson } from "@/lib/people/forget-person";
+import { forgetPerson } from "@/lib/people/forget-person";
+import { ForgetBusyError } from "@/lib/people/names-changed";
 import { enqueueFaceDetection } from "@/lib/jobs/handlers/detect-faces";
 import { confirmFaceAs, rejectProposal } from "@/lib/people/matching";
 import { rejudgeFromAction } from "@/lib/annotation/rejudge-notice";
@@ -225,16 +226,17 @@ export async function optOutPerson(personId: string, fd: FormData): Promise<void
   if (person.kind === "PET") throw new Error("A pet is removed, not forgotten");
   // Without a key to remember their names under, forgetting them would let the names come straight back: they are
   // switched off at once, and forgotten as soon as the key is set.
-  if (!keepName && !(await forgetKeyState()).write) {
-    await forgetLater(personId, user.id);
-    revalidatePath("/people", "layout");
-    revalidatePath("/admin");
-    return;
+  const later = !keepName && !(await forgetKeyState()).write;
+  try {
+    await forgetPerson(personId, { keepName, byUserId: user.id, later });
+  } catch (err) {
+    // Another forget held the lock for too long: said plainly on the page, not as an error.
+    if (err instanceof ForgetBusyError) redirect(`/people/${personId}?busy=1`);
+    throw err;
   }
-  await forgetPerson(personId, { keepName, byUserId: user.id });
   revalidatePath("/people", "layout");
   revalidatePath("/admin");
-  if (!keepName) redirect("/people/forgotten");
+  if (!keepName && !later) redirect("/people/forgotten");
 }
 
 /**

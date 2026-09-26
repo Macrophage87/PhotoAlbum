@@ -17,7 +17,7 @@ import { unpermittedNameScrub, type NameScrub } from "@/lib/people/unpermitted";
 /** What a describe says when somebody on its photographs changed while the helper was writing. */
 export const NAMES_CHANGED = "Somebody on these photographs changed while the helper was writing; try again";
 import { forgetState, namesChangedSince } from "@/lib/people/names-changed";
-import { loadTombstone } from "@/lib/people/tombstone";
+import { forgottenScope, loadTombstone } from "@/lib/people/tombstone";
 import { anthropic, thinkingParams } from "./client";
 import { activityDescriptionSchema, parseActivityDescription, type ActivityDescription } from "./activity";
 
@@ -190,7 +190,9 @@ export async function writeContainerDescription(kind: ContainerKind, id: string,
   const names = [...new Set((await Promise.all(container.photos.map((p) => permittedNames(p.id)))).flat())];
   // The family's words go without the names the helper may not be told: the photographs', the container's own, and
   // the note typed beside the button.
-  const scrub = await unpermittedNameScrub(container.photos.map((p) => p.id));
+  // One-word forgotten names count by every photograph in it, not only the few it is shown.
+  const scrub = await unpermittedNameScrub(container.photos.map((p) => p.id), undefined, [{ kind, id }]);
+  const scope = await forgottenScope({ containers: [{ kind, id }] });
   const request = await buildContainerRequest(await withoutUnpermittedNames(container, scrub), gates.model, names, scrub(note?.trim() || null) || undefined);
   const response = await anthropic().messages.create(request);
   console.log(`[annotate-${kind}] ${container.id} model=${response.model} stop=${response.stop_reason} in=${response.usage.input_tokens} out=${response.usage.output_tokens}`);
@@ -199,7 +201,7 @@ export async function writeContainerDescription(kind: ContainerKind, id: string,
   if (!parsed) throw new Error("The helper's answer could not be read; try again");
   // Nobody forgotten comes back by way of the answer.
   const tombstone = await loadTombstone();
-  parsed.description = tombstone.scrub(parsed.description, container.photos.map((p) => p.id));
+  parsed.description = tombstone.scrub(parsed.description, scope);
   // Written from names or notes, it is read by members only; see `descriptionFromMembersOnly`.
   // The description it replaces goes with the request, so a members-only one keeps what is written from it members-only.
   const membersOnly = await descriptionFromMembersOnly(parsed.description, { names, notes: container.photos.some((p) => p.context?.trim()), previous: Boolean(container.description && !container.descriptionByHelper && container.descriptionMembersOnly) });
@@ -210,7 +212,7 @@ export async function writeContainerDescription(kind: ContainerKind, id: string,
     const forget = await forgetState(tx, tombstone.loadedAt);
     if (forget.underWay || (await namesChangedSince(container.photos.map((p) => p.id), requestedAt))) throw new Error(NAMES_CHANGED);
     // Somebody forgotten since the forgotten names were read: read them again.
-    if (forget.reload) data.description = (await loadTombstone()).scrub(data.description, container.photos.map((p) => p.id));
+    if (forget.reload) data.description = (await loadTombstone()).scrub(data.description, await forgottenScope({ containers: [{ kind, id }] }));
     if (kind === "trip") await tx.trip.update({ where: { id }, data });
     else await tx.collection.update({ where: { id }, data });
   });
