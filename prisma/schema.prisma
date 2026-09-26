@@ -875,6 +875,8 @@ model Track {
   minLng       Float
   maxLng       Float
   simplified   Json
+  /// At most a few hundred points of the line, for the map of every trip at once. Null until worked out.
+  overview     Json?
   pointsBlob   Bytes
   hasElevation Boolean     @default(false)
   hasHeartRate Boolean     @default(false)

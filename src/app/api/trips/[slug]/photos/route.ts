@@ -6,6 +6,7 @@ import { tripPhotoPage, type PhotoOrder } from "@/lib/photos/page";
 import { toGridPhoto } from "@/components/photos/toGrid";
 import { parseGalleryFilter } from "@/lib/photos/filters";
 import { photoFavourites } from "@/lib/favourites/queries";
+import { searchParamsObject } from "@/lib/search-params";
 
 /** How many photos one re-read may name: short enough for an address. The gallery asks in pieces this size. */
 const REREAD_MAX = 200;
@@ -20,7 +21,7 @@ export async function GET(request: NextRequest, { params }: RouteContext<"/api/t
   // A share page draws its first page as any visitor sees it, members included; its later pages must match.
   const member = viewer.kind === "user" && sp.get("view") !== "share";
   // The next page of a narrowed gallery is the next page of that same narrowing, read the same way the page reads it.
-  const filter = parseGalleryFilter(Object.fromEntries(sp.entries()), { member, inTrip: true });
+  const filter = parseGalleryFilter(searchParamsObject(sp), { member, inTrip: true });
   // The same order the page was built in, or the next page would continue a different list.
   const asked = sp.get("order");
   const order: PhotoOrder = asked === "oldest" ? "taken" : asked === "newest" ? "newest" : "favorites";

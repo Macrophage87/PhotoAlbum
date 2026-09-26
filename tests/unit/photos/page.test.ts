@@ -87,7 +87,8 @@ describe("candidate photos for a collection", () => {
     expect((await candidatePhotoPage({ kind: "collection", id: collection.id }, { ...NO_PICKER_FILTER, from: "2025-08-13", to: "2025-08-13" })).photos.map((p) => p.id)).toEqual([loose.id]);
     expect((await candidatePhotoPage({ kind: "collection", id: collection.id }, { ...NO_PICKER_FILTER, to: "2025-08-12" })).photos.map((p) => p.id)).toEqual([inTrip.id]);
     const first = await candidatePhotoPage({ kind: "collection", id: collection.id }, NO_PICKER_FILTER, { take: 1 });
-    expect(first.nextCursor).toBe(loose.id);
+    // The cursor is where the page ended, written out, so it ends with the last photo's id.
+    expect(first.nextCursor?.endsWith(`.${loose.id}`)).toBe(true);
     expect((await candidatePhotoPage({ kind: "collection", id: collection.id }, NO_PICKER_FILTER, { take: 1, cursor: first.nextCursor })).photos.map((p) => p.id)).toEqual([inTrip.id]);
   });
 });

@@ -13,6 +13,7 @@ import { idsInLocalYear, idsMatching, intersectIds, type MatchScope } from "@/li
 import { idsWithPerson } from "@/lib/people/in-photos";
 import { localDayFromOffset, localDayInZone } from "@/lib/time/local-day";
 import { uploaderLabel } from "@/components/photos/toGrid";
+import { overviewLines } from "./overview";
 
 /**
  * What the map needs to colour a photograph by: its local day, its activity, and who uploaded it. Who uploaded it is
@@ -101,13 +102,15 @@ export async function buildMapPayload(viewer: Viewer, tripId?: string, given: Ga
         }),
     db.track.findMany({
       where: { tripId: { in: tripIds } },
-      select: { id: true, tripId: true, name: true, source: true, simplified: true, startTime: true, minLat: true, maxLat: true, minLng: true, maxLng: true, activity: { select: { id: true, title: true, type: true } }, stats: { select: { distanceM: true } }, uploader: { select: { id: true, name: true, email: true } } },
+      select: { id: true, tripId: true, name: true, source: true, simplified: Boolean(tripId), overview: !tripId, startTime: true, minLat: true, maxLat: true, minLng: true, maxLng: true, activity: { select: { id: true, title: true, type: true } }, stats: { select: { distanceM: true } }, uploader: { select: { id: true, name: true, email: true } } },
       orderBy: { startTime: "asc" },
     }),
   ]);
   // Narrowed, a track stays only while a photograph inside its activity does, which is the rule the timeline keeps.
   const withPhotos = new Set(found.map((p) => p.activityId).filter(Boolean) as string[]);
   const tracks = active ? allTracks.filter((t) => t.activity && withPhotos.has(t.activity.id)) : allTracks;
+  // Across every trip each line is a thinned copy; one trip's map draws its lines whole.
+  const overview = tripId ? null : await overviewLines(tracks);
 
   const tripBounds = new Map<string, Bounds | null>();
   const add = (id: string, b: Bounds) => tripBounds.set(id, mergeBounds(tripBounds.get(id) ?? null, b));
@@ -143,7 +146,8 @@ export async function buildMapPayload(viewer: Viewer, tripId?: string, given: Ga
   const trackFeatures = tracks.map((t) => {
     const trip = tripById.get(t.tripId)!;
     add(trip.id, { minLat: t.minLat, maxLat: t.maxLat, minLng: t.minLng, maxLng: t.maxLng });
-    const line = (t.simplified as [number, number][]).map(([lat, lng]) => [lng, lat]);
+    const stored = (overview ? overview.get(t.id) : t.simplified) as [number, number][] | undefined;
+    const line = (stored ?? []).map(([lat, lng]) => [lng, lat]);
     return {
       type: "Feature" as const,
       geometry: { type: "LineString" as const, coordinates: line },
