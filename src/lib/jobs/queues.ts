@@ -24,6 +24,7 @@ export const QUEUES = {
   matchAnimals: "match-animals",
   googlePickerImport: "google-picker-import",
   purgeVisits: "purge-visits",
+  rejudgeText: "rejudge-text",
 } as const;
 
 export type QueueName = (typeof QUEUES)[keyof typeof QUEUES];

@@ -31,7 +31,7 @@ export function TripHeader({ trip, shareUrl, save, describe, share }: { trip: { 
               reader when there is none to read: an empty box belongs to whoever may fill it. */}
           {(save || trip.description) && (
             <div className="mt-3">
-              <DescriptionEditor what="trip" description={trip.description} save={save} describe={describe} membersOnly={trip.descriptionMembersOnly} share={share} className="text-text/90" />
+              <DescriptionEditor what="trip" description={trip.description} save={save} describe={describe} membersOnly={trip.descriptionMembersOnly} share={share} strangersCanOpen={trip.visibility !== "PRIVATE"} className="text-text/90" />
             </div>
           )}
         </div>

@@ -155,7 +155,7 @@ export async function writeContainerDescription(kind: ContainerKind, id: string,
   // Written from names or notes, it is read by members only; see `descriptionFromMembersOnly`.
   // The description it replaces goes with the request, so a members-only one keeps what is written from it members-only.
   const membersOnly = await descriptionFromMembersOnly(parsed.description, { names, notes: container.photos.some((p) => p.context?.trim()), previous: Boolean(container.description && container.descriptionMembersOnly) });
-  const data = { description: parsed.description, descriptionMembersOnly: membersOnly };
+  const data = { description: parsed.description, descriptionMembersOnly: membersOnly, descriptionSharedAt: null };
   if (kind === "trip") await db.trip.update({ where: { id }, data });
   else await db.collection.update({ where: { id }, data });
   return parsed.description;

@@ -16,7 +16,7 @@ import { reassignPhotosForActivity } from "@/lib/activities/reassign";
 import { fieldErrors, participantsFromForm } from "@/lib/trips/validation";
 import type { ActivityType } from "@/generated/prisma/enums";
 import type { ActivityFormState } from "@/components/activities/ActivityForm";
-import { descriptionFromMembersOnly, handWrittenMembersOnly } from "@/lib/annotation/members-only";
+import { handWrittenDescription, handWrittenMembersOnly, judgeDescription } from "@/lib/annotation/members-only";
 
 /** An activity is part of the shape of a trip, so it is the trip's maker (and admins) who arrange them. */
 async function loadTrip(slug: string) {
@@ -56,7 +56,7 @@ export async function updateActivity(slug: string, id: string, _prev: ActivityFo
   const parsed = activityInputFromForm(fd);
   if (!parsed.success) return { status: "error", fieldErrors: fieldErrors(parsed.error) };
   const v = parsed.data;
-  const existing = await db.activity.findFirst({ where: { id, tripId: trip.id }, select: { id: true, description: true, descriptionMembersOnly: true } });
+  const existing = await db.activity.findFirst({ where: { id, tripId: trip.id }, select: { id: true, description: true, descriptionMembersOnly: true, descriptionTitleOnly: true, descriptionSharedAt: true } });
   if (!existing) return { status: "error", message: "Activity not found" };
   // `set` reconciles to exactly what was ticked, so unticking somebody removes them; a form that never carried the
   // control at all leaves the list as it was.
@@ -69,7 +69,7 @@ export async function updateActivity(slug: string, id: string, _prev: ActivityFo
       startTime: localInputToInstant(v.start, trip.timezone),
       endTime: localInputToInstant(v.end, trip.timezone),
       description: v.description,
-      descriptionMembersOnly: await handWrittenMembersOnly(existing, v.description),
+      ...(await activityHandWritten(existing, v.description)),
       ...(there ? { participants: { set: there.map((pid) => ({ id: pid })) } } : {}),
     },
   });
@@ -131,6 +131,12 @@ export async function setActivityCover(slug: string, id: string, photoId: string
   revalidatePath(`/trips/${slug}/activities/${id}`);
 }
 
+
+/** A description saved by hand, as stored; one held only for its trip's title keeps that reason while unchanged. */
+async function activityHandWritten(before: { description: string | null; descriptionMembersOnly: boolean; descriptionTitleOnly: boolean; descriptionSharedAt: Date | null } | null, text: string | null | undefined) {
+  const { descriptionMembersOnly, descriptionSharedAt, unchanged } = await handWrittenDescription(before, text);
+  return { descriptionMembersOnly, descriptionSharedAt, descriptionTitleOnly: Boolean(unchanged && before?.descriptionTitleOnly && descriptionMembersOnly) };
+}
 /** What somebody may type into the box: a note for the helper, or the description itself. Long enough for either. */
 const DESCRIPTION_TEXT = z.string().max(4000);
 
@@ -144,9 +150,9 @@ const DESCRIPTION_TEXT = z.string().max(4000);
 export async function setActivityDescription(slug: string, id: string, text: string): Promise<void> {
   const trip = await loadTrip(slug);
   const description = DESCRIPTION_TEXT.parse(text).trim();
-  const activity = await db.activity.findFirst({ where: { id, tripId: trip.id }, select: { id: true, description: true, descriptionMembersOnly: true } });
+  const activity = await db.activity.findFirst({ where: { id, tripId: trip.id }, select: { id: true, description: true, descriptionMembersOnly: true, descriptionTitleOnly: true, descriptionSharedAt: true } });
   if (!activity) throw new Error("Activity not found");
-  await db.activity.update({ where: { id }, data: { description: description || null, descriptionMembersOnly: await handWrittenMembersOnly(activity, description) } });
+  await db.activity.update({ where: { id }, data: { description: description || null, ...(await activityHandWritten(activity, description)) } });
   revalidatePath(`/trips/${slug}/activities/${id}`);
 }
 
@@ -155,7 +161,7 @@ export async function setActivityDescriptionShared(slug: string, id: string, eve
   const trip = await loadTrip(slug);
   const activity = await db.activity.findFirst({ where: { id, tripId: trip.id }, select: { id: true } });
   if (!activity) throw new Error("Activity not found");
-  await db.activity.update({ where: { id }, data: { descriptionMembersOnly: !everyone } });
+  await db.activity.update({ where: { id }, data: { descriptionMembersOnly: !everyone, descriptionTitleOnly: false, descriptionSharedAt: everyone ? new Date() : null } });
   revalidatePath(`/trips/${slug}/activities/${id}`);
 }
 
@@ -190,7 +196,7 @@ export async function describeActivityWithAi(slug: string, id: string, note?: st
   const parsed = parseActivityDescription(response.content as { type: string; text?: string }[]);
   if (!parsed) throw new Error("The helper's answer could not be read; try again");
   // Written from names or notes, it is read by members only; see `descriptionFromMembersOnly`.
-  const membersOnly = await descriptionFromMembersOnly(parsed.description, {
+  const judged = await judgeDescription(parsed.description, {
     names,
     notes,
     // The description it replaces goes with the request, and so does the trip's title, which a link to the activity
@@ -198,7 +204,7 @@ export async function describeActivityWithAi(slug: string, id: string, note?: st
     previous: Boolean(activity.description && activity.descriptionMembersOnly),
     privateTitles: activity.trip.visibility === "PUBLIC" ? [] : [activity.trip.title],
   });
-  await db.activity.update({ where: { id }, data: { description: parsed.description, descriptionMembersOnly: membersOnly } });
+  await db.activity.update({ where: { id }, data: { description: parsed.description, descriptionMembersOnly: judged.membersOnly, descriptionTitleOnly: judged.titleOnly, descriptionSharedAt: null } });
   revalidatePath(`/trips/${slug}/activities/${id}`);
   return parsed.description;
 }

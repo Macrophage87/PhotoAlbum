@@ -2,11 +2,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { db } from "@/lib/db";
 import { resetTestDb } from "../helpers/reset";
 
-const who = vi.hoisted(() => ({ id: "", reply: "" }));
+const who = vi.hoisted(() => ({ id: "", reply: "", queued: [] as { queue: string; data: unknown }[] }));
 vi.mock("@/lib/auth/viewer", () => ({ requireUserOrThrow: async () => ({ id: who.id, email: "dana@example.com", name: "Dana", role: "MEMBER" }) }));
 vi.mock("next/cache", () => ({ revalidatePath: () => undefined }));
 vi.mock("next/navigation", () => ({ redirect: (to: string) => { throw new Error(`REDIRECT:${to}`); } }));
-vi.mock("@/lib/jobs/boss", () => ({ enqueue: async () => {} }));
+vi.mock("@/lib/jobs/boss", () => ({ enqueue: async (queue: string, data: unknown) => void who.queued.push({ queue, data }) }));
 vi.mock("@/lib/annotation/eligibility", async (original) => ({ ...(await original<typeof import("@/lib/annotation/eligibility")>()), annotationGates: async () => ({ active: true, model: "m" }) }));
 vi.mock("@/lib/annotation/client", async (original) => ({
   ...(await original<typeof import("@/lib/annotation/client")>()),
@@ -16,9 +16,12 @@ vi.mock("@/lib/annotation/client", async (original) => ({
 import { writeContainerDescription } from "@/lib/annotation/container";
 import { describeActivityWithAi, setActivityDescription } from "@/app/trips/[slug]/activities/actions";
 import { setTripDescription, setTripDescriptionShared } from "@/app/trips/[slug]/actions";
-import { updateAnnotation } from "@/app/annotation/actions";
+import { setAnnotationShared, updateAnnotation } from "@/app/annotation/actions";
+import { confirmPlaceEstimate } from "@/app/photos/[id]/actions";
+import { updatePerson } from "@/app/people/actions";
 import { tripTimeline } from "@/lib/timeline/queries";
 import { NO_FILTER } from "@/lib/photos/filters";
+import { rejudgeNames } from "@/lib/annotation/rejudge";
 
 /**
  * A trip's, a collection's or an activity's description, when the helper wrote it or a member typed it: members-only
@@ -81,6 +84,19 @@ describe("descriptions that stay in the family", () => {
     expect((await db.trip.findUniqueOrThrow({ where: { id: tripId } })).descriptionMembersOnly).toBe(true);
   });
 
+  it("keeps a description a member showed to everyone shown while its words are the same, even when a name arrives", async () => {
+    await db.trip.update({ where: { id: tripId }, data: { description: "A week with Nana.\nAnd the dog.", descriptionMembersOnly: true } });
+    await setTripDescriptionShared("acadia", true);
+    await setTripDescription("acadia", "A week with Nana.\r\nAnd the dog.");
+    expect((await db.trip.findUniqueOrThrow({ where: { id: tripId } })).descriptionMembersOnly).toBe(false);
+    await db.person.create({ data: { name: "Nana", createdById: who.id } });
+    await rejudgeNames(["Nana"]);
+    expect((await db.trip.findUniqueOrThrow({ where: { id: tripId } })).descriptionMembersOnly).toBe(false);
+    // New words are judged afresh.
+    await setTripDescription("acadia", "A week with Nana and the dog.");
+    expect(await db.trip.findUniqueOrThrow({ where: { id: tripId } })).toMatchObject({ descriptionMembersOnly: true, descriptionSharedAt: null });
+  });
+
   it("starts a hand-written description that names somebody members-only", async () => {
     await setActivityDescription("acadia", activityId, "Dana led the way.");
     expect((await db.activity.findUniqueOrThrow({ where: { id: activityId } })).descriptionMembersOnly).toBe(true);
@@ -105,5 +121,40 @@ describe("descriptions that stay in the family", () => {
     expect((await db.photo.findUniqueOrThrow({ where: { id: p.id } })).annotationMembersOnly).toBe(true);
     await updateAnnotation(p.id, fd("A day on the boat."));
     expect((await db.photo.findUniqueOrThrow({ where: { id: p.id } })).annotationMembersOnly).toBe(true);
+  });
+
+  it("lets the uploader show the helper's description and title to everyone, and take it back", async () => {
+    const p = await photo({ context: "Nana's boat", annotation: { title: "Nana on the boat", caption: "On the boat", description: "Nana steers.", tags: [], searchSummary: "" }, annotationMembersOnly: true, membersTitle: "Nana on the boat" });
+    await setAnnotationShared(p.id, true);
+    const shown = await db.photo.findUniqueOrThrow({ where: { id: p.id } });
+    expect(shown).toMatchObject({ annotationMembersOnly: false, title: "Nana on the boat", membersTitle: null });
+    expect(shown.annotationSharedAt).not.toBeNull();
+    await setAnnotationShared(p.id, false);
+    expect(await db.photo.findUniqueOrThrow({ where: { id: p.id } })).toMatchObject({ annotationMembersOnly: true, title: null, membersTitle: "Nana on the boat", annotationSharedAt: null });
+    // Somebody else's photograph is not theirs to publish.
+    const other = await db.user.create({ data: { email: "o@example.com" } });
+    const theirs = await db.photo.create({ data: { uploaderId: other.id, originalName: "x.jpg", mimeType: "image/jpeg", storageKey: "k", originalPath: "k/o.jpg", sizeBytes: 1, status: "READY", annotationMembersOnly: true } });
+    await expect(setAnnotationShared(theirs.id, true)).rejects.toThrow();
+  });
+
+  it("accepts a guessed place without publishing a name that is the family's", async () => {
+    const guess = { lat: 39.4, lng: -76.6, gpsSource: "ESTIMATE" as const, placeEstimateName: "Towson, Maryland", placeEstimateNote: "the notes say Nana's", placeEstimateConfidence: 0.8 };
+    const family = await photo({ ...guess, placeEstimateMembersOnly: true });
+    const res = await confirmPlaceEstimate(family.id);
+    expect(res).toMatchObject({ ok: true, placeName: null });
+    expect(await db.photo.findUniqueOrThrow({ where: { id: family.id } })).toMatchObject({ gpsSource: "MANUAL", placeName: null, lat: 39.4 });
+    const anyone = await photo({ ...guess, placeEstimateMembersOnly: false });
+    expect(await confirmPlaceEstimate(anyone.id)).toMatchObject({ ok: true, placeName: "Towson, Maryland" });
+  });
+
+  it("queues the judging of a new name instead of doing it in the request", async () => {
+    const pet = await db.person.create({ data: { name: "Rex", kind: "HUMAN", createdById: who.id } });
+    const p = await photo({ annotation: { title: "Biscuit asleep", caption: "Biscuit asleep", description: "", tags: [], searchSummary: "" } });
+    who.queued.length = 0;
+    const fd = new FormData();
+    fd.set("name", "Biscuit");
+    await updatePerson(pet.id, fd);
+    expect(who.queued).toEqual([{ queue: "rejudge-text", data: { names: ["Biscuit"] } }]);
+    expect((await db.photo.findUniqueOrThrow({ where: { id: p.id } })).annotationMembersOnly).toBe(false);
   });
 });

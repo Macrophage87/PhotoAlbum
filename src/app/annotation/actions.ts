@@ -14,7 +14,7 @@ import { estimateCost, TOKENS_PER_PLACE, type Estimate } from "@/lib/annotation/
 import { BACKFILL_CAP, backfillCandidates, backfillExclusions, taskOf, type BackfillScope, type BackfillTask } from "@/lib/jobs/handlers/annotation-batch";
 import { annotationSchema, toStored, type StoredAnnotation } from "@/lib/annotation/schema";
 import { anthropic } from "@/lib/annotation/client";
-import { writtenFromMembersOnly } from "@/lib/annotation/members-only";
+import { helperText, judgeHelperText, knownNames, mentionsAnyName } from "@/lib/annotation/members-only";
 
 /** The admin's half of the two gates. Recorded with who and when so the decision is auditable. */
 export async function setAnnotationOptIn(on: boolean): Promise<void> {
@@ -74,7 +74,7 @@ export async function updateAnnotation(photoId: string, fd: FormData): Promise<v
   const owner = await db.photo.findUnique({ where: { id: photoId }, select: { uploaderId: true } });
   if (!owner) return;
   if (!canEditMedia(user, owner)) throw new Error(NOT_YOURS);
-  const photo = await db.photo.findUnique({ where: { id: photoId }, select: { annotation: true, annotationMembersOnly: true, context: true } });
+  const photo = await db.photo.findUnique({ where: { id: photoId }, select: { annotation: true, annotationMembersOnly: true, annotationTitleOnly: true, annotationSharedAt: true, context: true } });
   if (!photo) return;
   const current = (photo.annotation ?? {}) as Partial<StoredAnnotation>;
   const list = (v: FormDataEntryValue | null) => String(v ?? "").split(",").map((t) => t.trim()).filter(Boolean);
@@ -104,9 +104,37 @@ export async function updateAnnotation(photoId: string, fd: FormData): Promise<v
     estimatedYear: null,
     estimatedPlace: null,
   });
-  // An edit can add a name as easily as take one out, and never makes members-only text public again.
-  const membersOnly = photo.annotationMembersOnly || (await writtenFromMembersOnly(photoId, merged, photo.context));
-  await db.photo.update({ where: { id: photoId }, data: { annotation: merged, annotationSource: "EDITED", annotationMembersOnly: membersOnly } });
+  // An edit can add a name as easily as take one out, and never makes members-only text public again; that takes
+  // "show it to everyone". Text somebody has shown to everyone is theirs, and is held again only if it now names
+  // somebody.
+  const judged = photo.annotationSharedAt
+    ? { membersOnly: mentionsAnyName(helperText(merged), await knownNames()), titleOnly: false }
+    : await judgeHelperText(photoId, merged, photo.context);
+  const membersOnly = photo.annotationMembersOnly || judged.membersOnly;
+  // Held only for a private title's word before, and nothing stronger now: publishing that trip still lifts it.
+  const hard = judged.membersOnly && !judged.titleOnly;
+  const titleOnly = photo.annotationMembersOnly ? photo.annotationTitleOnly && !hard : judged.titleOnly;
+  await db.photo.update({ where: { id: photoId }, data: { annotation: merged, annotationSource: "EDITED", annotationMembersOnly: membersOnly, annotationTitleOnly: membersOnly && titleOnly, ...(membersOnly ? { annotationSharedAt: null } : {}) } });
+  revalidatePath(`/photos/${photoId}`);
+}
+
+/**
+ * Show the helper's text for an item (and the title it wrote) to everyone who may see the item, or keep it for the
+ * family again. The uploader's or an admin's decision, made after reading it: from then on nothing re-flags it until
+ * it is written again.
+ */
+export async function setAnnotationShared(photoId: string, everyone: boolean): Promise<void> {
+  const user = await requireUserOrThrow();
+  const photo = await db.photo.findUnique({ where: { id: photoId }, select: { uploaderId: true, kind: true, title: true, membersTitle: true, annotation: true } });
+  if (!photo) return;
+  if (!canEditMedia(user, photo)) throw new Error(NOT_YOURS);
+  const ai = photo.kind === "EXTERNAL_VIDEO" ? null : ((photo.annotation as Partial<StoredAnnotation> | null)?.title ?? "").trim() || null;
+  const own = photo.title?.trim() || null;
+  const data = everyone
+    ? // The helper's title goes back on the item if it has none of its own.
+      { annotationMembersOnly: false, annotationTitleOnly: false, annotationSharedAt: new Date(), ...(ai && !own && photo.membersTitle?.trim() === ai ? { title: ai, membersTitle: null } : {}) }
+    : { annotationMembersOnly: true, annotationTitleOnly: false, annotationSharedAt: null, ...(ai && own === ai ? { title: null, membersTitle: ai } : ai && !photo.membersTitle?.trim() ? { membersTitle: ai } : {}) };
+  await db.photo.update({ where: { id: photoId }, data });
   revalidatePath(`/photos/${photoId}`);
 }
 

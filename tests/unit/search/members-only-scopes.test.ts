@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { db } from "@/lib/db";
 import { searchMedia } from "@/lib/search/query";
 import { idsMatching } from "@/lib/photos/page";
@@ -6,6 +6,7 @@ import { applyAnnotation } from "@/lib/annotation/apply";
 import { applyPlaceEstimate } from "@/lib/annotation/place";
 import { annotationSchema } from "@/lib/annotation/schema";
 import { writtenFromMembersOnly } from "@/lib/annotation/members-only";
+import { rejudgeNames, rejudgeTitles } from "@/lib/annotation/rejudge";
 import type { Viewer } from "@/lib/auth/viewer";
 import { resetTestDb } from "../helpers/reset";
 
@@ -112,21 +113,69 @@ describe("what strangers may search, container by container, and the words' scop
     expect((await db.photo.findUniqueOrThrow({ where: { id: named.id } })).placeEstimateMembersOnly).toBe(true);
   });
 
-  it("re-judges what was written before a name was known, when somebody is added or renamed", async () => {
+  it("re-judges what was written before a name was known, in the background, moving only the helper's own title", async () => {
     const trip = await db.trip.create({ data: { slug: "t", title: "Coast", visibility: "PUBLIC", description: "A week with Biscuit.", startDate: new Date("2025-01-01"), endDate: new Date("2025-01-02"), createdById: dana } });
     const p = await photo({ tripId: trip.id });
     await applyAnnotation(p.id, "m", record({ title: "Biscuit on the boat", caption: "Biscuit on the deck" }), {});
-    expect(await db.photo.findUniqueOrThrow({ where: { id: p.id } })).toMatchObject({ annotationMembersOnly: false, title: "Biscuit on the boat" });
+    const typed = await photo({ tripId: trip.id, title: "Biscuit's birthday" });
+    await applyAnnotation(typed.id, "m", record({ caption: "Biscuit and a cake" }), {});
+    // Adding somebody changes nothing by itself: the request that added them does not rewrite the album.
     await db.person.create({ data: { name: "Biscuit", kind: "PET", createdById: dana } });
+    expect((await db.photo.findUniqueOrThrow({ where: { id: p.id } })).annotationMembersOnly).toBe(false);
+    const r = await rejudgeNames(["Biscuit"]);
+    expect(r).toMatchObject({ photos: 2, descriptions: 1, broad: [] });
     expect(await db.photo.findUniqueOrThrow({ where: { id: p.id } })).toMatchObject({ annotationMembersOnly: true, title: null, membersTitle: "Biscuit on the boat" });
+    // A title the family typed stays theirs to publish, names and all.
+    expect(await db.photo.findUniqueOrThrow({ where: { id: typed.id } })).toMatchObject({ annotationMembersOnly: true, title: "Biscuit's birthday" });
     expect((await db.trip.findUniqueOrThrow({ where: { id: trip.id } })).descriptionMembersOnly).toBe(true);
-    expect(await searchMedia(anon, { q: "biscuit" }, 120, null)).toEqual([]);
+    // Strangers find only what the family published themselves.
+    expect((await searchMedia(anon, { q: "biscuit" }, 120, null)).map((h) => h.id)).toEqual([typed.id]);
+    // Asked again, nothing more happens.
+    expect((await rejudgeNames(["Biscuit"])).photos).toBe(0);
+  });
 
-    // A rename is judged the same way: "Rex" was a word nobody was called until now.
-    const q = await photo({ tripId: trip.id });
-    await applyAnnotation(q.id, "m", record({ caption: "Rex asleep on the deck" }), {});
-    expect((await db.photo.findUniqueOrThrow({ where: { id: q.id } })).annotationMembersOnly).toBe(false);
-    await db.user.update({ where: { id: dana }, data: { name: "Rex" } });
+  it("leaves alone what a member chose to show to everyone", async () => {
+    const p = await photo({});
+    await applyAnnotation(p.id, "m", record({ caption: "Rex asleep on the deck" }), {});
+    await db.photo.update({ where: { id: p.id }, data: { annotationSharedAt: new Date() } });
+    await db.person.create({ data: { name: "Rex", kind: "PET", createdById: dana } });
+    expect((await rejudgeNames(["Rex"])).photos).toBe(0);
+    expect((await db.photo.findUniqueOrThrow({ where: { id: p.id } })).annotationMembersOnly).toBe(false);
+  });
+
+  it("skips a name that is really a word across the album, and says so without the name", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    for (let i = 0; i < 30; i++) await photo({ annotation: { title: "", caption: "Walker boots on the path", description: "", tags: [], searchSummary: "" } });
+    const r = await rejudgeNames(["Rose Walker"]);
+    expect(r.broad).toEqual(["walker"]);
+    expect(r.photos).toBe(0);
+    expect(warn.mock.calls.flat().join(" ")).not.toMatch(/walker/i);
+    warn.mockRestore();
+  });
+
+  it("lifts a flag that was only for a private trip's title once the trip is public, and puts it back when it is not", async () => {
+    const trip = await db.trip.create({ data: { slug: "h", title: "Hopkins weekend", startDate: new Date("2025-01-01"), endDate: new Date("2025-01-02"), createdById: dana } });
+    const p = await photo({ tripId: trip.id });
+    await applyAnnotation(p.id, "m", record({ title: "Hopkins lobby", description: "Coffee at Hopkins." }), {});
+    expect(await db.photo.findUniqueOrThrow({ where: { id: p.id } })).toMatchObject({ annotationMembersOnly: true, annotationTitleOnly: true, title: null, membersTitle: "Hopkins lobby" });
+    const activity = await db.activity.create({ data: { tripId: trip.id, title: "Walk", startTime: new Date("2025-01-01T10:00:00Z"), endTime: new Date("2025-01-01T11:00:00Z"), description: "Out of Hopkins for an hour." } });
+    await rejudgeTitles({ tripId: trip.id });
+    expect(await db.activity.findUniqueOrThrow({ where: { id: activity.id } })).toMatchObject({ descriptionMembersOnly: true, descriptionTitleOnly: true });
+
+    await db.trip.update({ where: { id: trip.id }, data: { visibility: "PUBLIC" } });
+    const lifted = await rejudgeTitles({ tripId: trip.id });
+    expect(lifted.unflagged).toBe(1);
+    expect(await db.photo.findUniqueOrThrow({ where: { id: p.id } })).toMatchObject({ annotationMembersOnly: false, annotationTitleOnly: false, title: "Hopkins lobby", membersTitle: null });
+    expect(await db.activity.findUniqueOrThrow({ where: { id: activity.id } })).toMatchObject({ descriptionMembersOnly: false, descriptionTitleOnly: false });
+
+    await db.trip.update({ where: { id: trip.id }, data: { visibility: "PRIVATE" } });
+    await rejudgeTitles({ tripId: trip.id });
+    expect(await db.photo.findUniqueOrThrow({ where: { id: p.id } })).toMatchObject({ annotationMembersOnly: true, annotationTitleOnly: true, title: null });
+    // A name outranks a title word: that one stays when the trip goes public.
+    const q = await photo({ tripId: trip.id, context: "Nana's appointment" });
+    await applyAnnotation(q.id, "m", record({ description: "Coffee at Hopkins." }), {});
+    await db.trip.update({ where: { id: trip.id }, data: { visibility: "PUBLIC" } });
+    await rejudgeTitles({ tripId: trip.id });
     expect((await db.photo.findUniqueOrThrow({ where: { id: q.id } })).annotationMembersOnly).toBe(true);
   });
 });

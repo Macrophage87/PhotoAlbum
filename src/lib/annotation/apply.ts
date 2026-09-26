@@ -3,7 +3,7 @@ import { annotationSchema, clampAnnotation, toStored, type Annotation } from "./
 import { enqueueEmbedding } from "@/lib/jobs/handlers/embed-photo";
 import { applyPlaceEstimate, needsPlaceEstimate } from "./place";
 import { isWeakDate } from "@/lib/photos/date-from-neighbours";
-import { writtenFromMembersOnly } from "./members-only";
+import { judgeHelperText } from "./members-only";
 
 export type ApplyResult = { ok: true } | { ok: false; reason: "refusal" | "invalid" | "max_tokens" };
 
@@ -33,7 +33,8 @@ export async function applyAnnotation(photoId: string, model: string, parsed: An
   if (!current) return;
   const stored = toStored(parsed);
   // Written from names or notes, it is the family's to read: kept off the item's own title and out of public view.
-  const membersOnly = await writtenFromMembersOnly(photoId, stored, current.context, opts.sent);
+  const judgement = await judgeHelperText(photoId, stored, current.context, opts.sent);
+  const membersOnly = judgement.membersOnly;
   const aiTitle = current.kind !== "EXTERNAL_VIDEO" ? stored.title.trim() : "";
   const titles = titlesAfter({ title: current.title, membersTitle: current.membersTitle, previousAiTitle: (current.annotation as { title?: string } | null)?.title ?? null }, aiTitle, membersOnly);
   const est = parsed.estimatedYear;
@@ -50,6 +51,9 @@ export async function applyAnnotation(photoId: string, model: string, parsed: An
         annotationSource: current.annotationSource === "EDITED" ? "EDITED" : "MACHINE",
         annotationError: null,
         annotationMembersOnly: membersOnly,
+        annotationTitleOnly: judgement.titleOnly,
+        // New words: whatever a member chose to show was the old text, and this one is judged afresh.
+        annotationSharedAt: null,
         // Embedded videos keep YouTube's title; see `titlesAfter` for everything else.
         title: titles.title,
         membersTitle: titles.membersTitle,

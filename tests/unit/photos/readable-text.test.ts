@@ -53,17 +53,45 @@ describe("what a viewer may read of a photograph", () => {
 });
 
 describe("spotting a name the album knows", () => {
-  it("matches the whole name, or its first word when that is a given name of three letters or more", () => {
+  it("matches the whole name, and each word of it that can only be a name", () => {
     expect(mentionsAnyName("Ada and Ben on the porch", ["Ada Lovelace"])).toBe(true);
+    // A surname on its own is a mention too: "the Lovelace house" is theirs.
+    expect(mentionsAnyName("The Lovelace house", ["Ada Lovelace"])).toBe(true);
     expect(mentionsAnyName("Coffee with grandma jo", ["Grandma Jo"])).toBe(true);
-    expect(mentionsAnyName("Coffee with Grandma", ["Grandma Jo"])).toBe(true);
-    // "Jo" on its own is too short to tell from a word, and a surname on its own is not how anybody is written.
+    // "Grandma" is everybody's, and "Jo" on its own too short to tell from a word.
+    expect(mentionsAnyName("Coffee with Grandma", ["Grandma Jo"])).toBe(false);
     expect(mentionsAnyName("Jo and the dog", ["Grandma Jo"])).toBe(false);
-    expect(mentionsAnyName("The Lovelace house", ["Ada Lovelace"])).toBe(false);
+    expect(mentionsAnyName("Bob at the grill", ["Uncle Bob"])).toBe(true);
+    expect(mentionsAnyName("Uncle at the grill", ["Uncle Bob"])).toBe(false);
+    expect(mentionsAnyName("Ada reads", ["Aunt Ada"])).toBe(true);
+    expect(mentionsAnyName("Tea at the Smiths'", ["Mrs. Smith"])).toBe(true);
+    expect(mentionsAnyName("Mrs. Jones waves", ["Mrs. Smith"])).toBe(false);
+    // Two letters in it: only the whole name is safe.
+    expect(mentionsAnyName("Li Wei by the river", ["Li Wei"])).toBe(true);
+    expect(mentionsAnyName("Wei by the river", ["Li Wei"])).toBe(false);
     expect(mentionsAnyName("Lunch with Pat O'Brien", ["Pat O'Brien"])).toBe(true);
     // "van" begins a name without being one.
     expect(mentionsAnyName("Loading the van", ["van Gogh"])).toBe(false);
     expect(mentionsAnyName("A van Gogh print", ["van Gogh"])).toBe(true);
+  });
+
+  it("matches a name that is also an everyday word only as a name is written", () => {
+    expect(mentionsAnyName("Sand digging a hole", ["Sand"])).toBe(true);
+    expect(mentionsAnyName("Castles in the sand", ["Sand"])).toBe(false);
+    expect(mentionsAnyName("Rose Walker on the porch", ["Rose Walker"])).toBe(true);
+    expect(mentionsAnyName("rose walker", ["Rose Walker"])).toBe(true);
+    expect(mentionsAnyName("Rose by the gate", ["Rose Walker"])).toBe(true);
+    expect(mentionsAnyName("A rose bush by the gate", ["Rose Walker"])).toBe(false);
+    expect(mentionsAnyName("The Hens scratching in the yard", ["The Hens"])).toBe(true);
+    expect(mentionsAnyName("the hens scratching in the yard", ["The Hens"])).toBe(false);
+  });
+
+  it("matches a name in Chinese, Japanese or Korean characters exactly", () => {
+    expect(mentionsAnyName("王伟 at the beach", ["王伟"])).toBe(true);
+    expect(mentionsAnyName("王伟和李娜在海边", ["王伟"])).toBe(true);
+    // One character is a name only standing on its own, not inside a longer word.
+    expect(mentionsAnyName("伟 at the beach", ["伟"])).toBe(true);
+    expect(mentionsAnyName("伟大的一天", ["伟"])).toBe(false);
   });
 
   it("reads possessives, plurals and accents, and only whole words", () => {
