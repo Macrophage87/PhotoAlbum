@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { simplifyLine } from "@/lib/tracks/simplify";
 import { columnarToPoints, decodePoints, encodePoints } from "@/lib/tracks/encode";
 import { splitByLocalDay } from "@/lib/tracks/split";
-import { positionAt } from "@/lib/tracks/interpolate";
+import { positionAt, positionKindAt } from "@/lib/tracks/interpolate";
 import { detectTrackKind } from "@/lib/tracks/detect";
 import { cleanPoints } from "@/lib/tracks/clean";
 import type { TrackPoint } from "@/lib/tracks/types";
@@ -134,5 +134,67 @@ describe("detectTrackKind / cleanPoints", () => {
       { t: NaN, lat: 1, lng: 1 },
     ]);
     expect(out.map((p) => p.t)).toEqual([1, 2]);
+  });
+});
+
+describe("splitByLocalDay across a midnight", () => {
+  it("ends the day on the last instant before midnight and starts the next at midnight, when close enough", () => {
+    const pts: TrackPoint[] = [
+      { t: Date.parse("2025-08-13T03:55:00Z"), lat: 44, lng: -68 }, // 23:55 in New York
+      { t: Date.parse("2025-08-13T04:05:00Z"), lat: 44.01, lng: -68 }, // 00:05
+    ];
+    const m = splitByLocalDay(pts, "America/New_York");
+    const day1 = m.get("2025-08-12")!, day2 = m.get("2025-08-13")!;
+    const midnight = Date.parse("2025-08-13T04:00:00Z");
+    expect(day1.map((p) => p.t)).toEqual([pts[0].t, midnight - 1]);
+    expect(day2.map((p) => p.t)).toEqual([midnight, pts[1].t]);
+    expect(day2[0].lat).toBeCloseTo(44.005, 6);
+    expect(positionAt(day1, midnight - 1000)).not.toBeNull();
+  });
+  it("leaves a long gap across midnight as it is", () => {
+    const pts: TrackPoint[] = [
+      { t: Date.parse("2025-08-13T03:30:00Z"), lat: 44, lng: -68 },
+      { t: Date.parse("2025-08-13T04:30:00Z"), lat: 44, lng: -68 },
+    ];
+    const m = splitByLocalDay(pts, "America/New_York");
+    expect([...m.values()].map((d) => d.length)).toEqual([1, 1]);
+  });
+});
+
+describe("filled points in the stored blob", () => {
+  it("round-trip with their kind, and older blobs without the column read as recorded", () => {
+    const pts: TrackPoint[] = [{ t: 0, lat: 44, lng: -68 }, { t: 60_000, lat: 44.001, lng: -68, filled: "visit" }, { t: 120_000, lat: 44.002, lng: -68, filled: "interpolated" }];
+    const { blob, startTime } = encodePoints(pts);
+    expect(columnarToPoints(decodePoints(blob), startTime).map((p) => p.filled)).toEqual([undefined, "visit", "interpolated"]);
+    const old = encodePoints([{ t: 0, lat: 44, lng: -68 }, { t: 60_000, lat: 44.001, lng: -68 }]);
+    expect(decodePoints(old.blob).filled).toBeUndefined();
+    expect(columnarToPoints(decodePoints(old.blob), old.startTime).some((p) => p.filled)).toBe(false);
+  });
+  it("positionKindAt tells recorded, visit and guessed positions apart", () => {
+    const M = 60_000;
+    const pts: TrackPoint[] = [
+      { t: 0, lat: 0, lng: 0 },
+      { t: 8 * M, lat: 0, lng: 0 }, // 8 minutes after the first: still interpolated between recorded fixes
+      { t: 40 * M, lat: 0, lng: 0 }, // a 32-minute signal gap before this one
+      { t: 45 * M, lat: 0, lng: 0, filled: "visit" },
+      { t: 50 * M, lat: 0, lng: 0, filled: "visit" },
+      { t: 55 * M, lat: 0, lng: 0, filled: "interpolated" },
+    ];
+    expect(positionKindAt(pts, 4 * M)).toBe("firm");
+    expect(positionKindAt(pts, 8 * M)).toBe("firm");
+    expect(positionKindAt(pts, 11 * M)).toBe("soft"); // snapped across the gap
+    expect(positionKindAt(pts, 24 * M)).toBeNull();
+    expect(positionKindAt(pts, 47 * M)).toBe("visit");
+    expect(positionKindAt(pts, 52 * M)).toBe("soft");
+  });
+});
+
+describe("splitByLocalDay labels its midnight points", () => {
+  it("as the visit between two visit points, and as the importer's own guess anywhere else", () => {
+    const at = (iso: string, filled?: "visit") => ({ t: Date.parse(iso), lat: 44, lng: -68, ...(filled ? { filled } : {}) });
+    const inVisit = [...splitByLocalDay([at("2025-08-13T03:57:00Z", "visit"), at("2025-08-13T04:02:00Z", "visit")], "America/New_York").values()].flat();
+    expect(inVisit.filter((p) => p.t === Date.parse("2025-08-13T04:00:00Z")).map((p) => p.filled)).toEqual(["visit"]);
+    const recorded = [...splitByLocalDay([at("2025-08-13T03:57:00Z"), at("2025-08-13T04:02:00Z")], "America/New_York").values()].flat();
+    expect(recorded.filter((p) => p.t === Date.parse("2025-08-13T04:00:00Z")).map((p) => p.filled)).toEqual(["interpolated"]);
   });
 });

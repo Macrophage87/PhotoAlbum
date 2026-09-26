@@ -1,4 +1,5 @@
 import { db } from "@/lib/db";
+import type { Prisma } from "@/generated/prisma/client";
 import type { ActivityType, TrackSource } from "@/generated/prisma/enums";
 import { boundsOf } from "@/lib/geo/bounds";
 import { cleanPoints } from "./clean";
@@ -6,7 +7,7 @@ import { encodePoints } from "./encode";
 import { simplifyLine } from "./simplify";
 import { computeStats, mergeStats } from "./stats";
 import type { ParsedTrack } from "./types";
-import { guessTypeFromSpeed } from "./sport";
+import { fallbackActivityType } from "./sport";
 import { reassignPhotosForActivity } from "@/lib/activities/reassign";
 
 export type PersistOptions = {
@@ -17,6 +18,8 @@ export type PersistOptions = {
   /** Create a linked Activity (GPX/FIT). Google traces stay bare tracks. */
   createActivity: boolean;
   activityType?: ActivityType | null;
+  /** Save inside the caller's transaction. Bare traces only: an activity is filed against committed photos. */
+  client?: Prisma.TransactionClient;
 };
 
 export type PersistedTrack = { trackId: string; activityId: string | null; name: string; pointCount: number; distanceM: number; type: ActivityType | null };
@@ -32,7 +35,8 @@ export async function persistTrack(parsed: ParsedTrack, opts: PersistOptions): P
   const { blob, startTime, endTime, flags } = encodePoints(points);
   const b = boundsOf(points)!;
 
-  const track = await db.track.create({
+  if (opts.client && opts.createActivity) throw new Error("persistTrack: activities cannot be created inside a transaction");
+  const track = await (opts.client ?? db).track.create({
     data: {
       tripId: opts.tripId,
       uploaderId: opts.userId,
@@ -59,12 +63,13 @@ export async function persistTrack(parsed: ParsedTrack, opts: PersistOptions): P
   let activityId: string | null = null;
   let type: ActivityType | null = opts.activityType ?? parsed.sport ?? null;
   if (opts.createActivity) {
-    type = type ?? guessTypeFromSpeed(stats.avgSpeedMs);
+    type = type ?? fallbackActivityType(parsed.sportRaw, stats.avgSpeedMs, opts.source === "FIT");
     const activity = await db.activity.create({
       data: { tripId: opts.tripId, title: parsed.name, type, startTime: parsed.session?.startTime ?? startTime, endTime: parsed.session?.endTime ?? endTime, trackId: track.id },
     });
     activityId = activity.id;
     await reassignPhotosForActivity(activity.id);
   }
-  return { trackId: track.id, activityId, name: parsed.name, pointCount: points.length, distanceM: stats.distanceM, type };
+  // Points filled in across a Google visit are not counted as read from the file.
+  return { trackId: track.id, activityId, name: parsed.name, pointCount: points.filter((p) => !p.filled).length, distanceM: stats.distanceM, type };
 }

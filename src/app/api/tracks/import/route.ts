@@ -48,9 +48,10 @@ export async function POST(request: Request) {
     console.error("[import]", err);
     return Response.json({ error: "Upload failed" }, { status: 500 });
   }
+  const replaceGoogle = request.headers.get("x-replace-google") === "1";
   let jobId: string | null;
   try {
-    jobId = await enqueue(QUEUES.importTrack, { importKey, tripId, userId: viewer.user.id, sourceHint, originalName: parsed.data.fileName }, { retryLimit: 0, expireInSeconds: 3600 });
+    jobId = await enqueue(QUEUES.importTrack, { importKey, tripId, userId: viewer.user.id, sourceHint, originalName: parsed.data.fileName, replaceGoogle }, { retryLimit: 0, expireInSeconds: 3600 });
   } catch (err) {
     // No job will ever read it, so it is not kept (it may be somebody's whole location history).
     await storage().delete(importKey).catch(() => {});

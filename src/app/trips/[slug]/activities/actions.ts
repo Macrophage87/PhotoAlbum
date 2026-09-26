@@ -13,6 +13,7 @@ import { permittedNames } from "@/lib/people/gates";
 import { canEditContainer, NOT_YOUR_CONTAINER } from "@/lib/auth/ownership";
 import { activityInputFromForm, keepSeconds, localInputToInstant } from "@/lib/activities/validation";
 import { deleteActivityAndRefile, reassignPhotosForActivity } from "@/lib/activities/reassign";
+import { deleteTrackAndItsPositions } from "@/lib/tracks/remove";
 import { fieldErrors, participantsFromForm } from "@/lib/trips/validation";
 import type { ActivityType } from "@/generated/prisma/enums";
 import type { ActivityFormState } from "@/components/activities/ActivityForm";
@@ -95,7 +96,9 @@ export async function deleteActivity(slug: string, id: string, fd: FormData): Pr
   // What was on it goes to whatever else covers its time, rather than being left loose.
   await deleteActivityAndRefile(id);
   if (deleteTrack && activity.trackId) {
-    await db.track.delete({ where: { id: activity.trackId } }).catch(() => {});
+    // Takes back the positions the track gave and places those photos again from the trip's other tracks.
+    await deleteTrackAndItsPositions(activity.trackId);
+    // The uploaded file goes only once no track refers to it: a multisport file's other legs still do.
     await forgetTrackFiles([activity.track?.originalFile]);
   }
   revalidatePath(`/trips/${slug}`, "layout");

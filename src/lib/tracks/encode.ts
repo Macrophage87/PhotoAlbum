@@ -9,7 +9,7 @@ export function encodePoints(points: TrackPoint[]): { blob: Buffer; startTime: D
   if (!points.length) throw new Error("encodePoints: no points");
   const t0 = points[0].t;
   const col: ColumnarPoints = { t: [], lat: [], lng: [] };
-  const has = { ele: false, hr: false, cad: false, pwr: false, spd: false, dist: false };
+  const has = { ele: false, hr: false, cad: false, pwr: false, spd: false, dist: false, filled: false };
   for (const p of points) {
     if (p.ele !== undefined) has.ele = true;
     if (p.hr !== undefined) has.hr = true;
@@ -17,6 +17,7 @@ export function encodePoints(points: TrackPoint[]): { blob: Buffer; startTime: D
     if (p.pwr !== undefined) has.pwr = true;
     if (p.spd !== undefined) has.spd = true;
     if (p.dist !== undefined) has.dist = true;
+    if (p.filled) has.filled = true;
   }
   if (has.ele) col.ele = [];
   if (has.hr) col.hr = [];
@@ -24,6 +25,7 @@ export function encodePoints(points: TrackPoint[]): { blob: Buffer; startTime: D
   if (has.pwr) col.pwr = [];
   if (has.spd) col.spd = [];
   if (has.dist) col.dist = [];
+  if (has.filled) col.filled = [];
   for (const p of points) {
     col.t.push(Math.round((p.t - t0) / 100) / 10);
     col.lat.push(r6(p.lat));
@@ -34,6 +36,7 @@ export function encodePoints(points: TrackPoint[]): { blob: Buffer; startTime: D
     if (col.pwr) col.pwr.push(p.pwr === undefined ? null! : Math.round(p.pwr));
     if (col.spd) col.spd.push(p.spd === undefined ? null! : Math.round(p.spd * 100) / 100);
     if (col.dist) col.dist.push(p.dist === undefined ? null! : r1(p.dist));
+    if (col.filled) col.filled.push(p.filled === "visit" ? 1 : p.filled === "interpolated" ? 2 : 0);
   }
   return { blob: gzipSync(Buffer.from(JSON.stringify(col)), { level: 6 }), startTime: new Date(t0), endTime: new Date(points[points.length - 1].t), flags: { ele: has.ele, hr: has.hr, cad: has.cad, pwr: has.pwr } };
 }
@@ -54,6 +57,7 @@ export function columnarToPoints(col: ColumnarPoints, startTime: Date): TrackPoi
     if (col.pwr && col.pwr[i] !== null) p.pwr = col.pwr[i];
     if (col.spd && col.spd[i] !== null) p.spd = col.spd[i];
     if (col.dist && col.dist[i] !== null) p.dist = col.dist[i];
+    if (col.filled?.[i]) p.filled = col.filled[i] === 1 ? "visit" : "interpolated";
     out[i] = p;
   }
   return out;

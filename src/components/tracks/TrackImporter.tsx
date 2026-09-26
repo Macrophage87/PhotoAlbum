@@ -8,13 +8,14 @@ import { formatDistance } from "@/lib/time/format";
 type Summary = { kind: string; format?: string; tracks: { trackId: string; activityId: string | null; name: string; pointCount: number; distanceM: number; type: string | null }[]; skipped: string[]; pointsRead: number };
 type Item = { id: string; name: string; status: "uploading" | "importing" | "done" | "failed"; progress: number; jobId?: string; summary?: Summary; error?: string };
 
-function upload(file: File, tripId: string, hint: string, onProgress: (p: number) => void): Promise<{ jobId: string }> {
+function upload(file: File, tripId: string, hint: string, replaceGoogle: boolean, onProgress: (p: number) => void): Promise<{ jobId: string }> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", "/api/tracks/import");
     xhr.setRequestHeader("x-file-name", encodeURIComponent(file.name));
     xhr.setRequestHeader("x-trip-id", tripId);
     xhr.setRequestHeader("x-source-hint", hint);
+    if (replaceGoogle) xhr.setRequestHeader("x-replace-google", "1");
     xhr.setRequestHeader("content-type", "application/octet-stream");
     xhr.upload.onprogress = (e) => e.lengthComputable && onProgress(e.loaded / e.total);
     xhr.onload = () => {
@@ -46,6 +47,7 @@ async function waitForJob(jobId: string): Promise<Summary> {
 export function TrackImporter({ tripId, tripSlug }: { tripId: string; tripSlug: string }) {
   const [items, setItems] = useState<Item[]>([]);
   const [hint, setHint] = useState("auto");
+  const [replaceGoogle, setReplaceGoogle] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const patch = (id: string, p: Partial<Item>) => setItems((prev) => prev.map((it) => (it.id === id ? { ...it, ...p } : it)));
 
@@ -54,7 +56,7 @@ export function TrackImporter({ tripId, tripSlug }: { tripId: string; tripSlug: 
       const id = `${file.name}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
       setItems((prev) => [...prev, { id, name: file.name, status: "uploading", progress: 0 }]);
       try {
-        const { jobId } = await upload(file, tripId, hint, (p) => patch(id, { progress: p }));
+        const { jobId } = await upload(file, tripId, hint, replaceGoogle, (p) => patch(id, { progress: p }));
         patch(id, { status: "importing", jobId, progress: 1 });
         const summary = await waitForJob(jobId);
         patch(id, { status: "done", summary });
@@ -79,6 +81,15 @@ export function TrackImporter({ tripId, tripSlug }: { tripId: string; tripSlug: 
         <Button onClick={() => inputRef.current?.click()}>Choose files…</Button>
         <input ref={inputRef} type="file" multiple accept=".gpx,.fit,.json,application/gpx+xml,application/json" className="hidden" onChange={(e) => e.target.files && start(e.target.files)} />
       </div>
+      {hint !== "gpx" && hint !== "fit" && (
+        <label className="flex items-start gap-2 text-sm">
+          <input type="checkbox" className="mt-1" checked={replaceGoogle} onChange={(e) => setReplaceGoogle(e.target.checked)} />
+          <span>
+            Replace my earlier Google traces for these days
+            <span className="block text-muted">Leave this off when importing someone else&apos;s export under your account, so their traces are kept alongside yours.</span>
+          </span>
+        </label>
+      )}
 
       {items.length > 0 && (
         <ul className="space-y-3">

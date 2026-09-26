@@ -9,6 +9,8 @@ import { parseFit } from "./fit";
 import { parseGoogleExport, readHead } from "./google";
 import { splitByLocalDay } from "./split";
 import { persistTrack, type PersistedTrack } from "./persist";
+import { placeAgain, takeBackTrack } from "./remove";
+import type { Prisma } from "@/generated/prisma/client";
 import type { ParsedTrack } from "./types";
 
 export type ImportSummary = {
@@ -22,7 +24,7 @@ export type ImportSummary = {
 /** GPX and FIT files are parsed from memory; anything bigger than this is not a real activity file. */
 export const MAX_PARSED_TRACK_BYTES = 256 * 1024 * 1024;
 
-export type ImportArgs = { importKey: string; tripId: string; userId: string; sourceHint: "auto" | TrackFileKind; originalName: string };
+export type ImportArgs = { importKey: string; tripId: string; userId: string; sourceHint: "auto" | TrackFileKind; originalName: string; replaceGoogle?: boolean };
 
 /** Parse an uploaded track file and store whatever tracks/activities it yields. */
 export async function importTrackFile(args: ImportArgs): Promise<ImportSummary> {
@@ -53,20 +55,47 @@ export async function importTrackFile(args: ImportArgs): Promise<ImportSummary> 
       startMs: wallTimeToInstant({ year: sy, month: sm, day: sd, hour: 0, minute: 0, second: 0 }, trip.timezone).getTime(),
       endMs: wallTimeToInstant({ year: ey, month: em, day: ed, hour: 23, minute: 59, second: 59, ms: 999 }, trip.timezone).getTime(),
     };
-    const { format, points } = await parseGoogleExport(filePath, window);
+    // Local midnights inside the trip, where the trace is split into days: a stay across one gets a point there.
+    const midnights: number[] = [];
+    for (let k = 1; ; k++) {
+      const d = new Date(Date.UTC(sy, sm - 1, sd + k));
+      const t = wallTimeToInstant({ year: d.getUTCFullYear(), month: d.getUTCMonth() + 1, day: d.getUTCDate(), hour: 0, minute: 0, second: 0 }, trip.timezone).getTime();
+      if (t > window.endMs) break;
+      // Midnight itself starts the next day's trace; the instant before it ends this one, so the day reaches 23:59:59.
+      midnights.push(t - 1, t);
+    }
+    const { format, points, recorded } = await parseGoogleExport(filePath, window, midnights);
     summary.format = format;
-    summary.pointsRead = points.length;
+    summary.pointsRead = recorded;
     if (!points.length) {
       summary.skipped.push(`No location points between ${startDay} and ${endDay} in this export.`);
       return summary;
     }
-    for (const [day, dayPoints] of splitByLocalDay(points, trip.timezone)) {
-      const parsed: ParsedTrack = { name: `Google Timeline — ${day}`, points: dayPoints, sport: null };
-      // No originalFile: the export is deleted once read (the import-track job), so there is nothing to point at.
-      const saved = await persistTrack(parsed, { tripId: trip.id, userId: args.userId, source: "GOOGLE", createActivity: false });
-      if (saved) summary.tracks.push(saved);
-      else summary.skipped.push(`${day}: fewer than two usable points`);
-    }
+    // One account often imports the whole family's exports, so an earlier trace for the same day is only replaced
+    // when the member asks for that; otherwise both are kept. Replacing saves the new days and drops the old ones in
+    // one transaction, so a failure part-way leaves the earlier traces as they were.
+    const days = [...splitByLocalDay(points, trip.timezone)].map(([day, dayPoints]) => ({ day, parsed: { name: `Google Timeline — ${day}`, points: dayPoints, sport: null } as ParsedTrack }));
+    const save = async (client?: Prisma.TransactionClient) => {
+      const saved: PersistedTrack[] = [];
+      let replaced = 0;
+      for (const { day, parsed } of days) {
+        const earlier = args.replaceGoogle
+          ? await (client ?? db).track.findMany({ where: { tripId: trip.id, uploaderId: args.userId, source: "GOOGLE", name: parsed.name }, select: { id: true, tripId: true, startTime: true, endTime: true } })
+          : [];
+        // No originalFile: the export is deleted once read (the import-track job), so there is nothing to point at.
+        const track = await persistTrack(parsed, { tripId: trip.id, userId: args.userId, source: "GOOGLE", createActivity: false, client });
+        if (!track) {
+          summary.skipped.push(`${day}: fewer than two usable points`);
+          continue;
+        }
+        saved.push(track);
+        for (const old of earlier) if (await takeBackTrack(client!, old)) replaced++;
+      }
+      return { saved, replaced };
+    };
+    const { saved, replaced } = args.replaceGoogle ? await db.$transaction((tx) => save(tx), { timeout: 120_000 }) : await save();
+    summary.tracks.push(...saved);
+    if (replaced) await placeAgain(trip.id);
     return summary;
   }
 

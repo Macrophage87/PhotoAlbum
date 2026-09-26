@@ -4,6 +4,18 @@ import type { DeviceSession, TrackPoint, TrackStatsResult } from "./types";
 export const MOVING_SPEED_MS = 0.5;
 export const MAX_GAP_S = 30;
 export const TELEPORT_SPEED_MS = 50;
+/** A run of fast segments must be longer than this to be travel rather than a glitch. */
+const MIN_TRAVEL_SEGMENTS = 5;
+/** Fast runs separated by at most this many slower segments are judged as one run. */
+const MAX_SLOW_INSIDE_RUN = 2;
+/** A turn sharper than this is the track doubling back on itself. */
+const REVERSAL_RAD = (2 * Math.PI) / 3;
+/** Steps at least this long say little about how a vehicle got up to speed. */
+const SPARSE_STEP_S = 30;
+/** A fast run this long is travel even if it ends near where it began (a sightseeing flight's loop). */
+const LONG_RUN_SEGMENTS = 30;
+/** A segment's moving-time gap limit looks at the intervals within this many segments either side. */
+const GAP_WINDOW = 15;
 export const ELEVATION_THRESHOLD_M = 3;
 
 function median3(a: number, b: number, c: number) {
@@ -64,6 +76,117 @@ export function normalizedPower(points: TrackPoint[]): number | null {
   return n ? Math.round(Math.pow(sum4 / n, 0.25)) : null;
 }
 
+/**
+ * Which segments (points[i - 1] to points[i], flagged at i) are GPS jumps rather than travel. A segment faster than
+ * TELEPORT_SPEED_MS is travel only as part of a sustained, steady run of fast segments that gets somewhere: a train
+ * or a plane keeps going sample after sample at much the same speed and heading, while a glitch is a lone leap, a
+ * spike, a few fast steps out that pause and come back, or a receiver's first fixes converging from kilometres off.
+ * A fixed speed limit alone would throw away every segment of a flight or a high-speed train.
+ */
+function teleportSegments(points: TrackPoint[], dist: number[]): boolean[] {
+  const n = points.length;
+  const speed = new Array<number>(n).fill(0);
+  for (let i = 1; i < n; i++) {
+    const dt = (points[i].t - points[i - 1].t) / 1000;
+    speed[i] = dt > 0 ? dist[i] / dt : 0;
+  }
+  const fast = (i: number) => speed[i] > TELEPORT_SPEED_MS;
+  // The first segment beside a run (in direction `dir`) that moves in time is at a speed the run could have grown
+  // out of: a vehicle's, and not a third of the run's own. A sparse step says less about acceleration, so it need
+  // only be moving at more than a walk.
+  const atSpeed = (edge: number, dir: 1 | -1, runSpeed: number) => {
+    for (let i = edge + dir; i >= 1 && i < n; i += dir) {
+      const dt = (points[i].t - points[i - 1].t) / 1000;
+      if (dt <= 0) continue;
+      if (dt >= SPARSE_STEP_S) return speed[i] >= TELEPORT_SPEED_MS / 10;
+      return speed[i] >= TELEPORT_SPEED_MS / 3 && runSpeed <= 3 * speed[i];
+    }
+    return false;
+  };
+  const out = new Array<boolean>(n).fill(false);
+  for (let s = 1; s < n; s++) {
+    if (!fast(s)) continue;
+    // A pause of a sample or two out there does not split an excursion into two runs that each look like travel.
+    let e = s;
+    for (;;) {
+      while (e + 1 < n && fast(e + 1)) e++;
+      let k = e + 1;
+      while (k < n && k - e <= MAX_SLOW_INSIDE_RUN && !fast(k)) k++;
+      if (k < n && k - e <= MAX_SLOW_INSIDE_RUN + 1 && fast(k)) e = k;
+      else break;
+    }
+    const len = e - s + 1;
+    let path = 0;
+    for (let i = s; i <= e; i++) path += dist[i];
+    const net = haversine(points[s - 1].lat, points[s - 1].lng, points[e].lat, points[e].lng);
+    // A run at either end of the track has nothing before or after it to agree with: most often a cold start.
+    const atEdge = s === 1 || e === n - 1;
+    // A long run is travel unless it keeps doubling back: flights climb and descend and trains repeat a stale fix,
+    // but bad GPS spikes out and back, and a phone flapping between its own fix and a Wi-Fi one reverses every step.
+    // A shorter run must be steady, get somewhere, and be entered or left at a speed it could have grown out of; one
+    // that leaps off a walk (or off a drive at three times its speed) is a glitch whether it comes back or not.
+    const runSpeed = median(speed.slice(s, e + 1).filter((v) => v > TELEPORT_SPEED_MS));
+    const travel =
+      (len >= LONG_RUN_SEGMENTS && turns(points, dist, s, e, REVERSAL_RAD, fast) * 10 <= len) ||
+      (len > MIN_TRAVEL_SEGMENTS && !atEdge && net >= path / 2 && steady(points, dist, speed, s, e) && (atSpeed(s, -1, runSpeed) || atSpeed(e, 1, runSpeed)));
+    if (!travel) for (let i = s; i <= e; i++) if (fast(i)) out[i] = true;
+    s = e;
+  }
+  return out;
+}
+
+function median(values: number[]): number {
+  const sorted = [...values].sort((x, y) => x - y);
+  return sorted[sorted.length >> 1];
+}
+
+/** Every segment of the run within a factor of three of its median speed, and no turn sharper than a right angle. */
+function steady(points: TrackPoint[], dist: number[], speed: number[], s: number, e: number): boolean {
+  const run = speed.slice(s, e + 1);
+  const m = median(run);
+  return run.every((v) => v >= m / 3 && v <= m * 3) && turns(points, dist, s, e, Math.PI / 2) === 0;
+}
+
+/**
+ * How many times the heading turns by more than `limit` radians between consecutive segments of the run, counting
+ * only the segments `only` accepts: a slow step between an out-jump and a back-jump (or a stale fix's jitter) would
+ * otherwise split one reversal into two quarter turns, or add one of its own.
+ */
+function turns(points: TrackPoint[], dist: number[], s: number, e: number, limit: number, only: (i: number) => boolean = () => true): number {
+  let last: number | null = null, count = 0;
+  for (let i = s; i <= e; i++) {
+    if (dist[i] < 1 || !only(i)) continue;
+    const a = points[i - 1], b = points[i];
+    const heading = Math.atan2((b.lng - a.lng) * Math.cos((a.lat * Math.PI) / 180), b.lat - a.lat);
+    if (last !== null && Math.abs(((heading - last + 3 * Math.PI) % (2 * Math.PI)) - Math.PI) > limit) count++;
+    last = heading;
+  }
+  return count;
+}
+
+/**
+ * The longest step between samples still counted as moving, for each segment. Phones on battery saver and satellite
+ * trackers log once a minute or less often, so the limit grows with the usual interval around that segment: a watch
+ * that switches to sparse logging halfway through gets each part judged by its own rate. "Usual" is the median of
+ * the neighbouring intervals by count, leaving out the segment's own, so long gaps (pauses) cannot vouch for
+ * themselves or each other.
+ */
+function gapLimits(points: TrackPoint[]): number[] {
+  const n = points.length;
+  const dt = new Array<number>(n).fill(0);
+  for (let i = 1; i < n; i++) dt[i] = (points[i].t - points[i - 1].t) / 1000;
+  const out = new Array<number>(n).fill(MAX_GAP_S);
+  const around: number[] = [];
+  for (let i = 1; i < n; i++) {
+    around.length = 0;
+    for (let j = Math.max(1, i - GAP_WINDOW); j <= Math.min(n - 1, i + GAP_WINDOW); j++) if (j !== i && dt[j] > 0) around.push(dt[j]);
+    if (!around.length) continue;
+    around.sort((x, y) => x - y);
+    out[i] = Math.max(MAX_GAP_S, 3 * around[around.length >> 1]);
+  }
+  return out;
+}
+
 export type StatsOptions = { skipElevation?: boolean; elevationWindow?: number; cyclingCadence?: boolean };
 
 export function computeStats(points: TrackPoint[], opts: StatsOptions = {}): TrackStatsResult {
@@ -81,18 +204,28 @@ export function computeStats(points: TrackPoint[], opts: StatsOptions = {}): Tra
   let cadSum = 0, cadT = 0, cadMax = 0;
   let pwrSum = 0, pwrT = 0, pwrMax = 0;
 
+  const dist = new Array<number>(n).fill(0);
+  for (let i = 1; i < n; i++) dist[i] = haversine(points[i - 1].lat, points[i - 1].lng, points[i].lat, points[i].lng);
+  const teleports = teleportSegments(points, dist);
+  const maxGaps = gapLimits(points);
+  let movingDistance = 0;
+
   for (let i = 1; i < n; i++) {
     const a = points[i - 1], b = points[i];
     const dt = (b.t - a.t) / 1000;
     if (dt <= 0) continue;
-    const dd = haversine(a.lat, a.lng, b.lat, b.lng);
+    const dd = dist[i];
     const v = b.spd !== undefined ? b.spd : dd / dt;
-    const teleport = dd / dt > TELEPORT_SPEED_MS;
+    const teleport = teleports[i];
     if (!teleport) distance += dd;
     speeds.push(teleport ? 0 : v);
-    if (v >= MOVING_SPEED_MS && dt <= MAX_GAP_S && !teleport) moving += dt;
+    const maxGap = maxGaps[i];
+    if (v >= MOVING_SPEED_MS && dt <= maxGap && !teleport) {
+      moving += dt;
+      movingDistance += dd;
+    }
     // Sensor samples are time-weighted, but a sample after a long pause only counts once.
-    const w = dt <= MAX_GAP_S ? dt : 1;
+    const w = dt <= maxGap ? dt : 1;
     if (b.hr !== undefined && b.hr > 0) { hrSum += b.hr * w; hrT += w; if (b.hr > hrMax) hrMax = b.hr; }
     if (b.cad !== undefined && (b.cad > 0 || !opts.cyclingCadence)) { cadSum += b.cad * w; cadT += w; if (b.cad > cadMax) cadMax = b.cad; }
     if (b.pwr !== undefined) { pwrSum += b.pwr * w; pwrT += w; if (b.pwr > pwrMax) pwrMax = b.pwr; }
@@ -130,7 +263,8 @@ export function computeStats(points: TrackPoint[], opts: StatsOptions = {}): Tra
     elevLossM: elevLoss,
     minEleM: minEle,
     maxEleM: maxEle,
-    avgSpeedMs: moving > 0 ? distance / moving : null,
+    // Over the moving stretches only: distance covered across a gap is real but its time is not moving time.
+    avgSpeedMs: moving > 0 ? movingDistance / moving : null,
     maxSpeedMs: maxSpeed > 0 ? maxSpeed : null,
     avgHr: hrT > 0 ? Math.round(hrSum / hrT) : null,
     maxHr: hrMax > 0 ? hrMax : null,

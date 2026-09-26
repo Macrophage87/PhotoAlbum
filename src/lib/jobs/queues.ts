@@ -42,6 +42,8 @@ export type ImportTrackJob = {
   userId: string;
   sourceHint: "auto" | "gpx" | "fit" | "google";
   originalName: string;
+  /** Google exports: replace the importing member's earlier traces for the same days rather than keep both. */
+  replaceGoogle?: boolean;
 };
 export type GeotagPhotosJob = { tripId: string; trackIds?: string[] };
 export type DeletePhotoJob = { storageKey: string };
