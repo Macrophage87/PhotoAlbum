@@ -31,9 +31,22 @@ export async function magicLinkFor(email: string): Promise<string> {
   return `/auth/verify?token=${token}`;
 }
 
+/** Mint a pending invite, as an admin's "Invite" does, so an address that is not yet a member may be given an account. */
+export async function inviteFor(email: string, role: "ADMIN" | "MEMBER" = "MEMBER") {
+  const hash = createHash("sha256").update(randomBytes(32)).digest("hex");
+  await withDb((c) =>
+    c.query(
+      'INSERT INTO "Invite" (id, email, "tokenHash", role, "invitedById", "expiresAt") SELECT $1, $2, $3, $4::"Role", id, now() + interval \'14 days\' FROM "User" WHERE role = \'ADMIN\' LIMIT 1',
+      [randomBytes(12).toString("hex"), email.toLowerCase(), hash, role],
+    ),
+  );
+}
+
+/** Open the emailed link and press its "Sign in" button: opening the link alone does not use it up. */
 export async function signIn(context: BrowserContext, email: string) {
   const page = await context.newPage();
   await page.goto(await magicLinkFor(email));
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await page.waitForURL("**/");
   await page.close();
 }

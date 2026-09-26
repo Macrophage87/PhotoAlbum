@@ -26,7 +26,8 @@
             "Go to the album's web address. Somebody in the family will have sent it to you.",
             "Type your email address and press the button.",
             "Look in your email. There will be a message with a link in it.",
-            "Press that link. You are in."
+            "Press that link. The album opens with one big **Sign in** button.",
+            "Press **Sign in**. You are in."
           ]
         },
         {
@@ -35,11 +36,11 @@
         },
         {
           "kind": "note",
-          "text": "**No email arrived?** Only people the family has invited can get in, so the album will not send a link to an address it does not know. Ask whoever runs the album to invite you. Also look in your junk folder."
+          "text": "**No email arrived?** Only people the family has invited can get in, so the album will not send a link to an address it does not know. Ask whoever runs the album to invite you. Also look in your junk folder. If the album says too many links were asked for, wait ten minutes and try again."
         },
         {
           "kind": "p",
-          "text": "Once you are in, it remembers you on that phone or computer for a few months. You will not have to do this often."
+          "text": "Once you are in, it remembers you on that phone or computer. As long as you look in at least every few months, you will not have to do this again."
         }
       ]
     },

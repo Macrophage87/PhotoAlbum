@@ -21,6 +21,8 @@ async function magicLink() {
 const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_PATH || undefined });
 const page = await browser.newPage();
 await page.goto(await magicLink());
+// The link's page only offers the sign-in; pressing the button is what uses the token.
+await page.getByRole("button", { name: "Sign in", exact: true }).click();
 await page.waitForURL("**/");
 for (const path of ["/trips/perf-3000/photos", "/trips/perf-3000/timeline", "/trips/perf-3000/photos", "/trips/perf-3000/timeline"]) {
   const t0 = Date.now();
