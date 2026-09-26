@@ -65,8 +65,12 @@ export async function geotagPhotos(job: GeotagPhotosJob): Promise<{ updated: num
       if (!pos) continue;
       const same = photo.gpsSource === "TRACK" && photo.lat === pos.lat && photo.lng === pos.lng && (photo.altitude ?? null) === (pos.ele ?? null);
       if (same) break;
-      await db.photo.update({ where: { id: photo.id }, data: { lat: pos.lat, lng: pos.lng, altitude: pos.ele ?? null, gpsSource: "TRACK" } });
-      updated++;
+      // Only while the track still exists: one deleted during this run has had its positions taken back already.
+      const r = await db.photo.updateMany({
+        where: { id: photo.id, trip: { tracks: { some: { id: track.id } } } },
+        data: { lat: pos.lat, lng: pos.lng, altitude: pos.ele ?? null, gpsSource: "TRACK" },
+      });
+      updated += r.count;
       break;
     }
   }

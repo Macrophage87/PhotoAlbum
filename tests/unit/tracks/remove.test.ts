@@ -7,7 +7,6 @@ import { db } from "@/lib/db";
 import { encodePoints } from "@/lib/tracks/encode";
 import { deleteTrackAndItsPositions } from "@/lib/tracks/remove";
 import { geotagPhotos } from "@/lib/jobs/handlers/geotag-photos";
-import { QUEUES } from "@/lib/jobs/queues";
 import type { TrackPoint } from "@/lib/tracks/types";
 import { resetTestDb } from "../helpers/reset";
 
@@ -46,15 +45,40 @@ describe("deleteTrackAndItsPositions", () => {
 
     await deleteTrackAndItsPositions(wrong.id);
     expect(await db.track.findUnique({ where: { id: wrong.id } })).toBeNull();
-    const cleared = await db.photo.findUniqueOrThrow({ where: { id: placed.id } });
-    expect([cleared.lat, cleared.gpsSource]).toEqual([null, null]);
+    // Placed again straight away from the Google trace that still covers the moment.
+    const moved = await db.photo.findUniqueOrThrow({ where: { id: placed.id } });
+    expect([moved.gpsSource, moved.lat]).toEqual(["TRACK", expect.closeTo(50.003, 5)]);
     // A camera's own position, and a track position from outside the deleted track's hours, are left alone.
     expect((await db.photo.findUniqueOrThrow({ where: { id: exif.id } })).gpsSource).toBe("EXIF");
     expect((await db.photo.findUniqueOrThrow({ where: { id: later.id } })).lat).toBe(7);
-    expect(enqueued).toEqual([{ queue: QUEUES.geotagPhotos, data: { tripId } }]);
+    expect(enqueued).toEqual([]);
+  });
 
+  it("clears a position no remaining track covers, and leaves other trips alone", async () => {
+    const wrong = await track(line(10, 44), "GPX");
+    const placed = await photo(3);
+    const otherTrip = await db.trip.create({ data: { slug: "o", title: "O", startDate: new Date("2025-08-10"), endDate: new Date("2025-08-16"), createdById: userId } });
+    const elsewhere = await photo(3, { tripId: otherTrip.id, lat: 30, lng: 31, gpsSource: "TRACK" });
     await geotagPhotos({ tripId });
-    expect((await db.photo.findUniqueOrThrow({ where: { id: placed.id } })).lat).toBeCloseTo(50.003, 5);
+
+    await deleteTrackAndItsPositions(wrong.id);
+    const cleared = await db.photo.findUniqueOrThrow({ where: { id: placed.id } });
+    expect([cleared.lat, cleared.gpsSource]).toEqual([null, null]);
+    expect((await db.photo.findUniqueOrThrow({ where: { id: elsewhere.id } })).lat).toBe(30);
+  });
+
+  it("a geotag run that read the track before it was deleted writes nothing from it", async () => {
+    await track(line(10, 44), "GPX");
+    const stale = await db.track.findMany({ where: { tripId } });
+    const p = await photo(3);
+    await db.track.deleteMany({ where: { tripId } });
+    const spy = vi.spyOn(db.track, "findMany").mockResolvedValueOnce(stale as never);
+    try {
+      expect((await geotagPhotos({ tripId })).updated).toBe(0);
+    } finally {
+      spy.mockRestore();
+    }
+    expect((await db.photo.findUniqueOrThrow({ where: { id: p.id } })).lat).toBeNull();
   });
 
   it("does nothing for a track that is already gone", async () => {
