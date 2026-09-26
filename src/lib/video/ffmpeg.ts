@@ -42,8 +42,8 @@ export function parseProbe(json: FfprobeJson): Probe {
   };
 }
 
-export async function probe(file: string): Promise<Probe> {
-  const { stdout } = await run("ffprobe", ["-v", "error", "-print_format", "json", "-show_format", "-show_streams", file], { maxBuffer: 4 * 1024 * 1024 });
+export async function probe(file: string, signal?: AbortSignal): Promise<Probe> {
+  const { stdout } = await run("ffprobe", ["-v", "error", "-print_format", "json", "-show_format", "-show_streams", file], { maxBuffer: 4 * 1024 * 1024, signal });
   return parseProbe(JSON.parse(stdout) as FfprobeJson);
 }
 
@@ -77,6 +77,7 @@ export function posterArgs(input: string, output: string, durationS: number | nu
 /** No single ffmpeg call may hang a worker: a poster or frame takes seconds, a 90-second transcode a few minutes. */
 export const FFMPEG_TIMEOUT_MS = 10 * 60_000;
 
-export async function ffmpeg(args: string[]): Promise<void> {
-  await run("ffmpeg", args, { maxBuffer: 4 * 1024 * 1024, timeout: FFMPEG_TIMEOUT_MS, killSignal: "SIGKILL" });
+/** `signal` kills the process as well: a job pg-boss has timed out must not keep transcoding beside its retry. */
+export async function ffmpeg(args: string[], signal?: AbortSignal): Promise<void> {
+  await run("ffmpeg", args, { maxBuffer: 4 * 1024 * 1024, timeout: FFMPEG_TIMEOUT_MS, killSignal: "SIGKILL", signal });
 }

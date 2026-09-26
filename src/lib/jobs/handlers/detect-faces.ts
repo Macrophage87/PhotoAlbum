@@ -19,7 +19,7 @@ import { NOT_TRASHED } from "@/lib/photos/trash";
  * Detect faces on the medium rendition, store templates, and place each face in the nearest unnamed cluster
  * (or a new one). Matching against named people is a later phase. Under the heavy lock, one photo at a time.
  */
-export async function detectFacesJob(job: DetectFacesJob): Promise<void> {
+export async function detectFacesJob(job: DetectFacesJob, signal?: AbortSignal): Promise<void> {
   const gates = await faceGates();
   if (!gates.active) return;
   const photo = await db.photo.findUnique({ where: { id: job.photoId }, select: { id: true, status: true, renditions: true, facesDetectedAt: true, takenAt: true, takenAtSource: true, estimatedDate: true } });
@@ -28,7 +28,9 @@ export async function detectFacesJob(job: DetectFacesJob): Promise<void> {
   const local = medium ? storage().localPath?.(medium.key) : undefined;
   if (!local) return;
   await withHeavyLock(async () => {
-    const detected = await detectFaces(await readFile(local));
+    const detected = await detectFaces(await readFile(local), undefined, signal);
+    // Timed out while the sidecar answered: the retry owns this photo now.
+    signal?.throwIfAborted();
     // A re-scan keeps what people decided (confirmed and rejected faces) and only re-finds the rest.
     const rescanned = { photoId: photo.id, status: { in: ["DETECTED" as const, "PROPOSED" as const] } };
     const lightened = (await db.face.findMany({ where: { ...rescanned, clusterId: { not: null } }, select: { clusterId: true }, distinct: ["clusterId"] })).map((f) => f.clusterId!);
@@ -79,7 +81,7 @@ export async function detectFacesJob(job: DetectFacesJob): Promise<void> {
       await db.$executeRaw`UPDATE "Face" SET embedding = ${vectorLiteral(f.embedding)}::vector WHERE id = ${face.id}`;
     }
     await db.photo.update({ where: { id: photo.id }, data: { facesDetectedAt: new Date() } });
-  });
+  }, signal);
   await proposeForPhoto(photo.id);
 }
 

@@ -1,6 +1,7 @@
 import { PgBoss } from "pg-boss";
 import { env } from "@/lib/env";
 import { QUEUES, type QueueName } from "./queues";
+import { FFMPEG_TIMEOUT_MS } from "@/lib/video/ffmpeg";
 
 const globalForBoss = globalThis as unknown as { boss?: Promise<PgBoss> };
 
@@ -9,7 +10,18 @@ const globalForBoss = globalThis as unknown as { boss?: Promise<PgBoss> };
  * photo whose worker died mid-job is retried within minutes rather than an hour.
  */
 export const JOB_EXPIRE_SECONDS = 15 * 60;
+/**
+ * The heavy queues share one lock, so their clock also runs while they wait behind a transcode: two ffmpeg runs of
+ * up to FFMPEG_TIMEOUT_MS each, plus the lock wait and the uploads. A job that still overruns is told so through its
+ * signal and stops, so its retry never runs beside it.
+ */
+export const HEAVY_JOB_EXPIRE_SECONDS = (2 * FFMPEG_TIMEOUT_MS) / 1000 + 20 * 60;
+const HEAVY_QUEUES: readonly QueueName[] = [QUEUES.transcodeVideo, QUEUES.embedPhoto, QUEUES.detectFaces, QUEUES.detectAnimals];
 const QUEUE_OPTIONS = { retryLimit: 2, retryDelay: 30, retryBackoff: true, expireInSeconds: JOB_EXPIRE_SECONDS };
+
+export function queueOptions(name: QueueName) {
+  return HEAVY_QUEUES.includes(name) ? { ...QUEUE_OPTIONS, expireInSeconds: HEAVY_JOB_EXPIRE_SECONDS } : QUEUE_OPTIONS;
+}
 
 async function create(): Promise<PgBoss> {
   const boss = new PgBoss({ connectionString: env().DATABASE_URL, schema: "pgboss" });
@@ -17,8 +29,8 @@ async function create(): Promise<PgBoss> {
   await boss.start();
   for (const name of Object.values(QUEUES)) {
     // createQueue is a no-op for an existing queue, so apply the options explicitly as well.
-    await boss.createQueue(name, QUEUE_OPTIONS);
-    await boss.updateQueue(name, QUEUE_OPTIONS);
+    await boss.createQueue(name, queueOptions(name));
+    await boss.updateQueue(name, queueOptions(name));
   }
   return boss;
 }

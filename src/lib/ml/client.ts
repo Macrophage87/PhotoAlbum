@@ -19,9 +19,11 @@ function base(): { url: string; token: string } {
   return { url: e.ML_URL.replace(/\/$/, ""), token: e.ML_TOKEN };
 }
 
-async function call<T>(path: string, init: RequestInit, timeoutMs: number): Promise<T> {
+/** `signal` is the calling job's own: a job pg-boss has timed out stops waiting on the sidecar. */
+async function call<T>(path: string, init: RequestInit, timeoutMs: number, signal?: AbortSignal): Promise<T> {
   const { url, token } = base();
-  const res = await fetch(`${url}${path}`, { ...init, headers: { ...(init.headers as Record<string, string> | undefined), "X-ML-Token": token }, signal: AbortSignal.timeout(timeoutMs) }).catch((err) => {
+  const timeout = AbortSignal.timeout(timeoutMs);
+  const res = await fetch(`${url}${path}`, { ...init, headers: { ...(init.headers as Record<string, string> | undefined), "X-ML-Token": token }, signal: signal ? AbortSignal.any([timeout, signal]) : timeout }).catch((err) => {
     throw new MlError(`ML sidecar unreachable: ${err instanceof Error ? err.message : String(err)}`);
   });
   if (!res.ok) throw new MlError(`ML sidecar answered ${res.status}`, res.status);
@@ -35,21 +37,21 @@ function imageForm(bytes: Buffer, mediaType: string): FormData {
 }
 
 /** 512-d OpenCLIP embedding of an image. */
-export async function embedImage(bytes: Buffer, mediaType = "image/webp"): Promise<number[]> {
-  const r = await call<{ embedding: number[] }>("/embed/image", { method: "POST", body: imageForm(bytes, mediaType) }, 60_000);
+export async function embedImage(bytes: Buffer, mediaType = "image/webp", signal?: AbortSignal): Promise<number[]> {
+  const r = await call<{ embedding: number[] }>("/embed/image", { method: "POST", body: imageForm(bytes, mediaType) }, 60_000, signal);
   return r.embedding;
 }
 
 /** 384-d sentence embeddings, one per input. */
-export async function embedText(texts: string[]): Promise<number[][]> {
+export async function embedText(texts: string[], signal?: AbortSignal): Promise<number[][]> {
   if (!texts.length) return [];
-  const r = await call<{ embeddings: number[][] }>("/embed/text", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ texts }) }, 30_000);
+  const r = await call<{ embeddings: number[][] }>("/embed/text", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ texts }) }, 30_000, signal);
   return r.embeddings;
 }
 
 /** Faces with 512-d templates. Nothing about the image persists in the sidecar. */
-export async function detectFaces(bytes: Buffer, mediaType = "image/webp"): Promise<FaceResult[]> {
-  const r = await call<{ faces: FaceResult[] }>("/faces", { method: "POST", body: imageForm(bytes, mediaType) }, 60_000);
+export async function detectFaces(bytes: Buffer, mediaType = "image/webp", signal?: AbortSignal): Promise<FaceResult[]> {
+  const r = await call<{ faces: FaceResult[] }>("/faces", { method: "POST", body: imageForm(bytes, mediaType) }, 60_000, signal);
   return r.faces;
 }
 
@@ -57,8 +59,8 @@ export type AnimalSpecies = "DOG" | "CAT" | "CHICKEN" | "HORSE" | "OTHER";
 export type AnimalResult = { box: [number, number, number, number]; species: AnimalSpecies; confidence: number; embedding: number[] };
 
 /** Animals with a species and a 512-d crop embedding. A 503 means the detector weights are missing on the sidecar. */
-export async function detectAnimals(bytes: Buffer, mediaType = "image/webp"): Promise<AnimalResult[]> {
-  const r = await call<{ animals: AnimalResult[] }>("/animals", { method: "POST", body: imageForm(bytes, mediaType) }, 90_000);
+export async function detectAnimals(bytes: Buffer, mediaType = "image/webp", signal?: AbortSignal): Promise<AnimalResult[]> {
+  const r = await call<{ animals: AnimalResult[] }>("/animals", { method: "POST", body: imageForm(bytes, mediaType) }, 90_000, signal);
   return r.animals;
 }
 

@@ -23,9 +23,10 @@ export function tooLongMessage(durationS: number, limit: number): string {
 
 /**
  * Turn an uploaded clip into a web-playable MP4 with a poster and thumbnails. The duration limit is enforced here
- * as the authority, even though the browser checks first. Runs under the heavy-work lock.
+ * as the authority, even though the browser checks first. Runs under the heavy-work lock. `signal` is pg-boss's,
+ * fired when the job times out: ffmpeg is killed and nothing more is written, so the retry never overlaps it.
  */
-export async function transcodeVideo(job: TranscodeVideoJob): Promise<void> {
+export async function transcodeVideo(job: TranscodeVideoJob, signal?: AbortSignal): Promise<void> {
   const photo = await db.photo.findUnique({ where: { id: job.photoId } });
   if (!photo) return;
   const store = storage();
@@ -37,15 +38,16 @@ export async function transcodeVideo(job: TranscodeVideoJob): Promise<void> {
     if (!input) throw new Error("transcode-video requires a storage driver with local paths");
     const dir = (work = await mkdtemp(path.join(tmpdir(), "clip-")));
     await withHeavyLock(async () => {
-      const info = await probe(input);
+      const info = await probe(input, signal);
       const limit = env().MAX_CLIP_SECONDS;
       if (info.durationS !== null && info.durationS > limit) throw new Error(tooLongMessage(info.durationS, limit));
 
       const mp4 = path.join(dir, "video.mp4");
       const poster = path.join(dir, "poster.jpg");
-      await ffmpeg(transcodeArgs(input, mp4, info));
-      await ffmpeg(posterArgs(mp4, poster, info.durationS));
-      const out = await probe(mp4);
+      await ffmpeg(transcodeArgs(input, mp4, info), signal);
+      await ffmpeg(posterArgs(mp4, poster, info.durationS), signal);
+      const out = await probe(mp4, signal);
+      signal?.throwIfAborted();
       const mp4Key = `${photo.storageKey}/video.mp4`;
       const posterKey = `${photo.storageKey}/poster.jpg`;
       await store.putBuffer(mp4Key, await readFile(mp4));
@@ -96,13 +98,13 @@ export async function transcodeVideo(job: TranscodeVideoJob): Promise<void> {
           camera: info.videoCodec ? `${info.videoCodec}${info.hdr ? " HDR" : ""}` : null,
         },
       });
-    });
+    }, signal);
     // Follow-up jobs are best-effort here; the sweeps pick up anything the queue refused.
     await enqueueEmbedding(photo.id).catch(() => undefined);
     await enqueueFaceDetection(photo.id).catch(() => undefined);
     await enqueueAnimalDetection(photo.id).catch(() => undefined);
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = signal?.aborted ? "Transcoding took too long and was stopped." : err instanceof Error ? err.message : String(err);
     console.error(`[transcode-video] ${photo.id} failed:`, message);
     await db.photo.update({ where: { id: photo.id }, data: { status: "FAILED", error: message.slice(0, 500) } });
     throw err;

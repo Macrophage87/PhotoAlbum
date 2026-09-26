@@ -16,17 +16,21 @@ export function textForEmbedding(p: { caption: string | null; context: string | 
   return [p.title, p.caption, a?.caption, a?.searchSummary, a?.description, p.context].filter(Boolean).join(". ").slice(0, 2000);
 }
 
-/** Image embedding from the medium rendition and a text embedding from the description. Under the heavy lock. */
-export async function embedPhoto(job: EmbedPhotoJob): Promise<void> {
+/**
+ * Image embedding from the medium rendition and a text embedding from the description. Under the heavy lock;
+ * `signal` is pg-boss's, fired when the job times out, so a late run gives up rather than racing its retry.
+ */
+export async function embedPhoto(job: EmbedPhotoJob, signal?: AbortSignal): Promise<void> {
   if (!mlConfigured()) return;
   const photo = await db.photo.findUnique({ where: { id: job.photoId }, select: { id: true, status: true, renditions: true, caption: true, context: true, title: true, annotation: true } });
   if (!photo || photo.status !== "READY") return;
   const medium = (photo.renditions as Renditions | null)?.medium;
   const local = medium ? storage().localPath?.(medium.key) : undefined;
   await withHeavyLock(async () => {
-    const image = local && !job.textOnly ? await embedImage(await readFile(local)) : null;
+    const image = local && !job.textOnly ? await embedImage(await readFile(local), undefined, signal) : null;
     const text = textForEmbedding(photo);
-    const [textVec] = text ? await embedText([text]) : [null];
+    const [textVec] = text ? await embedText([text], signal) : [null];
+    signal?.throwIfAborted();
     const sets: Prisma.Sql[] = [Prisma.sql`"embeddedAt" = now()`];
     if (image) sets.push(Prisma.sql`"embedding" = ${vectorLiteral(image)}::vector`);
     if (textVec) sets.push(Prisma.sql`"textEmbedding" = ${vectorLiteral(textVec)}::vector`);
@@ -34,7 +38,7 @@ export async function embedPhoto(job: EmbedPhotoJob): Promise<void> {
     else if (!text) sets.push(Prisma.sql`"textEmbedding" = NULL`);
     await db.$executeRaw`UPDATE "Photo" SET ${Prisma.join(sets, ", ")} WHERE id = ${photo.id}`;
     if (image) await upsertNeighbours(photo.id);
-  });
+  }, signal);
 }
 
 /**
