@@ -240,6 +240,26 @@ describe("the backfill run", () => {
       expect((await db.annotationBatch.findUniqueOrThrow({ where: { id: b.id } })).status).toBe("ENDED");
     });
 
+    it("leaves a batch whose results are gone open while somebody is being forgotten, and closes it after", async () => {
+      const { a, b } = await twoBatches();
+      api.remote.set("msgbatch_a", { results_url: null });
+      await withForgetLock(() => annotationBatchPoll());
+      // Deferred like any other batch during a forget, not failed.
+      expect((await db.annotationBatch.findUniqueOrThrow({ where: { id: a.id } })).status).toBe("SUBMITTED");
+      expect((await db.annotationBatch.findUniqueOrThrow({ where: { id: b.id } })).status).toBe("SUBMITTED");
+      await annotationBatchPoll();
+      expect((await db.annotationBatch.findUniqueOrThrow({ where: { id: a.id } })).status).toBe("FAILED");
+      expect((await db.annotationBatch.findUniqueOrThrow({ where: { id: b.id } })).status).toBe("ENDED");
+    });
+
+    it("does not give up on a batch past retention while somebody is being forgotten", async () => {
+      const { a } = await twoBatches();
+      api.broken.add("msgbatch_a");
+      await db.annotationBatch.update({ where: { id: a.id }, data: { createdAt: new Date(Date.now() - 30 * 86_400_000) } });
+      await withForgetLock(() => annotationBatchPoll());
+      expect((await db.annotationBatch.findUniqueOrThrow({ where: { id: a.id } })).status).toBe("SUBMITTED");
+    });
+
     it("gives up on a batch that keeps failing once its results are past retention", async () => {
       const { a } = await twoBatches();
       api.broken.add("msgbatch_a");

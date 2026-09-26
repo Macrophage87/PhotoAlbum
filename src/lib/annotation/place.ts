@@ -146,6 +146,12 @@ export async function recordPlaceFailure(photoId: string, opts: { terminal?: boo
 }
 
 /**
+ * What `applyPlaceEstimate` reads as free for a guess, as a filter its write carries: no position, nobody's choice
+ * (a place a member took away keeps who took it), and nothing but an earlier guess as its source.
+ */
+const FREE_FOR_A_GUESS = { lat: null, placeSetById: null, OR: [{ gpsSource: null }, { gpsSource: "ESTIMATE" as const }] };
+
+/**
  * Record a guess. It is only ever written where the album has no position of its own, so a place a member set, one
  * from the camera, from a track or from a Google sidecar always wins; a track imported afterwards replaces it in
  * turn (see geotag-photos). placeEstimatedAt is stamped either way, so a declined item is not asked about again.
@@ -182,8 +188,11 @@ export async function applyPlaceEstimate(photoId: string, estimate: PlaceEstimat
       if (n.count === 0) throw stale;
       return place ? ("skipped" as const) : ("declined" as const);
     }
+    // The state `free` was read from goes into the write as well: a place a member cleared (or set) by hand after the
+    // read must not be covered by the guess. Nothing matching means exactly that, so it is recorded as asked and
+    // skipped, as a place that was never free is; the stamp alone still honors the staleness guard.
     const n = await tx.photo.updateMany({
-      where: guard,
+      where: { AND: [guard, FREE_FOR_A_GUESS] },
       data: {
         lat: place.lat,
         lng: place.lng,
@@ -198,7 +207,11 @@ export async function applyPlaceEstimate(photoId: string, estimate: PlaceEstimat
         placeEstimatedAt: new Date(),
       },
     });
-    if (n.count === 0) throw stale;
+    if (n.count === 0) {
+      const asked = await tx.photo.updateMany({ where: guard, data: { placeEstimatedAt: new Date() } });
+      if (asked.count === 0) throw stale;
+      return "skipped" as const;
+    }
     return "placed" as const;
   }).catch((err: unknown) => {
     if (err === stale) return "stale" as const;

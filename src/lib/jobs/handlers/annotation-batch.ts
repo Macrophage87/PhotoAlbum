@@ -362,6 +362,11 @@ type OpenBatch = Awaited<ReturnType<typeof db.annotationBatch.findMany>>[number]
 async function applyBatch(b: OpenBatch): Promise<void> {
   // A place-pass row has nothing to say about descriptions, so its results are read the other way round.
   const task = taskOf(b.scope as BackfillScope);
+  // While somebody is being forgotten no answer can be stored: the batch waits for the next poll rather than
+  // having every answer in it thrown away and asked again one at a time, at the full price. Checked before anything
+  // else, so a forget only ever defers a batch: nothing about it is judged (closed for expired results included)
+  // until the forget is over.
+  if (await forgetRunning()) return;
   const remote = await anthropic().messages.batches.retrieve(b.anthropicBatchId).catch(() => null);
   if (!remote) return;
   if (remote.processing_status !== "ended") return;
@@ -371,9 +376,6 @@ async function applyBatch(b: OpenBatch): Promise<void> {
     await db.annotationBatch.update({ where: { id: b.id }, data: { status: "FAILED", endedAt: new Date() } });
     return;
   }
-  // While somebody is being forgotten no answer can be stored: the batch waits for the next poll rather than
-  // having every answer in it thrown away and asked again one at a time, at the full price.
-  if (await forgetRunning()) return;
   // Read everything before writing anything, so a stream that breaks halfway applies nothing twice.
   const results = [];
   for await (const result of await anthropic().messages.batches.results(b.anthropicBatchId)) results.push(result);
