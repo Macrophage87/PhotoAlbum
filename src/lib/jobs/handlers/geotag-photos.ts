@@ -5,10 +5,36 @@ import type { TrackPoint } from "@/lib/tracks/types";
 import type { GeotagPhotosJob } from "../queues";
 import type { TakenAtSource } from "@/generated/prisma/enums";
 import { NOT_TRASHED } from "@/lib/photos/trash";
+import { haversine } from "@/lib/geo/haversine";
 
-/** Own GPX/FIT, own Google, others' GPX/FIT, others' Google; ties keep start-time order (the sort is stable). */
-function rank(track: { source: string; uploaderId: string }, uploaderId: string): number {
-  return (track.uploaderId === uploaderId ? 0 : 2) + (track.source === "GOOGLE" ? 1 : 0);
+/** Within this, the uploader's own Google trace and another member's activity track put them in the same place. */
+const TOGETHER_M = 300;
+
+type Position = { lat: number; lng: number; ele?: number };
+
+/**
+ * The track to place a photo from, and where. The uploader's own GPX/FIT comes first. Then, where the uploader's own
+ * Google trace and another member's GPX/FIT both cover the moment, the two are compared: within TOGETHER_M they were
+ * together and the activity track is the more precise record of where; farther apart they were not, and the
+ * uploader's own trace says where the photo was taken (Mom in the museum while Dad was out on his bike). After that,
+ * the uploader's own Google trace, others' GPX/FIT, others' Google traces. Within each, start-time order.
+ */
+function choose<T extends { source: string; uploaderId: string }>(tracks: T[], uploaderId: string, at: (t: T) => Position | null): { track: T; pos: Position } | null {
+  const first = (own: boolean, google: boolean) => {
+    for (const track of tracks) {
+      if ((track.uploaderId === uploaderId) !== own || (track.source === "GOOGLE") !== google) continue;
+      const pos = at(track);
+      if (pos) return { track, pos };
+    }
+    return null;
+  };
+  const ownPrecise = first(true, false);
+  if (ownPrecise) return ownPrecise;
+  const ownGoogle = first(true, true), otherPrecise = first(false, false);
+  if (ownGoogle && otherPrecise) {
+    return haversine(ownGoogle.pos.lat, ownGoogle.pos.lng, otherPrecise.pos.lat, otherPrecise.pos.lng) <= TOGETHER_M ? otherPrecise : ownGoogle;
+  }
+  return ownGoogle ?? otherPrecise ?? first(false, true);
 }
 
 /** Only timestamps that came from the camera (or were set by hand) are trustworthy enough to place a photo on a track. */
@@ -66,15 +92,11 @@ export async function geotagPhotos(job: GeotagPhotosJob): Promise<{ updated: num
   let updated = 0;
   for (const photo of photos) {
     const t = photo.takenAt!.getTime();
-    // The uploader's own tracks come first, activity tracks before Google traces, then everyone else's in the
-    // same order: several members' tracks can cover the same hour, and a photo was most likely taken where its uploader was.
-    const candidates = [...tracks].sort((a, b) => rank(a, photo.uploaderId) - rank(b, photo.uploaderId));
-    for (const track of candidates) {
-      if (t < track.startTime.getTime() || t > track.endTime.getTime()) continue;
-      const pos = positionAt(pointsOf(track), t);
-      if (!pos) continue;
+    const chosen = choose(tracks, photo.uploaderId, (track) => (t < track.startTime.getTime() || t > track.endTime.getTime() ? null : positionAt(pointsOf(track), t)));
+    if (chosen) {
+      const { track, pos } = chosen;
       const same = photo.gpsSource === "TRACK" && photo.lat === pos.lat && photo.lng === pos.lng && (photo.altitude ?? null) === (pos.ele ?? null);
-      if (same) break;
+      if (same) continue;
       // Only while the track still exists: one deleted during this run has had its positions taken back already.
       const r = await db.photo.updateMany({
         // And only while the photo is as it was read: a member may have placed it by hand while this ran.
@@ -82,7 +104,6 @@ export async function geotagPhotos(job: GeotagPhotosJob): Promise<{ updated: num
         data: { lat: pos.lat, lng: pos.lng, altitude: pos.ele ?? null, gpsSource: "TRACK" },
       });
       updated += r.count;
-      break;
     }
   }
   if (updated) console.log(`[geotag-photos] positioned ${updated} photo(s) on trip ${job.tripId}`);

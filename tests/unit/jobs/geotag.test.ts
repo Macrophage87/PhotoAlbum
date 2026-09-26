@@ -94,6 +94,31 @@ describe("geotagPhotos", () => {
     expect((await db.photo.findUniqueOrThrow({ where: { id: his.id } })).lat).toBeCloseTo(44.003, 5);
   });
 
+  it("keeps a photo on another member's activity track when the uploader's own trace puts them together", async () => {
+    const dad = await db.user.create({ data: { email: "dad2@example.com", role: "MEMBER" } });
+    await makeTrack(tripId, dad.id, line(10), "GPX");
+    const mine = await makePhoto(tripId, userId, new Date(T0 + 3 * 60_000));
+    await geotagPhotos({ tripId });
+    expect((await db.photo.findUniqueOrThrow({ where: { id: mine.id } })).lat).toBeCloseTo(44.003, 5);
+    // Her own coarse trace, about 110 m off his: they were walking together, and his track is the precise one.
+    const own = await makeTrack(tripId, userId, line(10).map((p) => ({ ...p, lat: p.lat + 0.001 })), "GOOGLE");
+    await geotagPhotos({ tripId, trackIds: [own.id] });
+    expect((await db.photo.findUniqueOrThrow({ where: { id: mine.id } })).lat).toBeCloseTo(44.003, 5);
+    await geotagPhotos({ tripId });
+    expect((await db.photo.findUniqueOrThrow({ where: { id: mine.id } })).lat).toBeCloseTo(44.003, 5);
+  });
+
+  it("moves a photo onto the uploader's own trace when it puts them apart from another member's activity track", async () => {
+    const dad = await db.user.create({ data: { email: "dad3@example.com", role: "MEMBER" } });
+    await makeTrack(tripId, dad.id, line(10), "GPX");
+    const mine = await makePhoto(tripId, userId, new Date(T0 + 3 * 60_000));
+    await geotagPhotos({ tripId });
+    // Her own trace is a few kilometres away: she was not on his ride.
+    const own = await makeTrack(tripId, userId, line(10).map((p) => ({ ...p, lat: p.lat + 0.05 })), "GOOGLE");
+    await geotagPhotos({ tripId, trackIds: [own.id] });
+    expect((await db.photo.findUniqueOrThrow({ where: { id: mine.id } })).lat).toBeCloseTo(44.053, 5);
+  });
+
   it("moves a photo onto its photographer's own Google trace imported after someone else's", async () => {
     const other = await db.user.create({ data: { email: "o2@example.com", role: "MEMBER" } });
     await makeTrack(tripId, other.id, line(10).map((p) => ({ ...p, lat: 60 })), "GOOGLE");
