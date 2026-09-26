@@ -1,20 +1,26 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { buildCsp, CSP_HEADER, CSP_REPORT_ONLY_HEADER } from "@/lib/security/csp";
+import { HSTS_HEADER, hstsValue } from "@/lib/security/hsts";
+import { looksLikeSessionToken, SESSION_COOKIE, SESSION_TTL_MS, sessionCookieOptions } from "@/lib/auth/session-cookie";
 
 /** Paths that always need a member: anonymous requests are bounced to sign-in. Real authorization happens per page/action/route. */
 const PROTECTED = [/^\/upload$/, /^\/admin(\/|$)/, /^\/trips\/new$/, /^\/trips\/[^/]+\/(settings|import|place)$/, /^\/photos(\/|$)/, /^\/collections\/new$/, /^\/collections\/[^/]+\/settings$/, /^\/privacy$/, /^\/review$/, /^\/people(\/|$)/, /^\/graph$/, /^\/favorites$/];
 
 /**
- * Two jobs on every page request: the optimistic sign-in redirect for member-only paths, and a per-request nonce
- * for the Content Security Policy (Next picks the nonce up from the request header for its own scripts).
+ * The jobs on every page request: the optimistic sign-in redirect for member-only paths, a per-request nonce
+ * for the Content Security Policy (Next picks the nonce up from the request header for its own scripts), HSTS on
+ * an https album, and keeping the session cookie's expiry sliding along with the session itself.
  */
 export function proxy(request: NextRequest) {
   const path = request.nextUrl.pathname;
-  const hasSession = Boolean(request.cookies.get("session")?.value);
-  if (!hasSession && PROTECTED.some((re) => re.test(path))) {
+  const session = request.cookies.get(SESSION_COOKIE)?.value;
+  const hsts = hstsValue(process.env.APP_URL);
+  if (!session && PROTECTED.some((re) => re.test(path))) {
     const url = new URL("/auth/signin", request.url);
     url.searchParams.set("next", path + request.nextUrl.search);
-    return NextResponse.redirect(url);
+    const redirect = NextResponse.redirect(url);
+    if (hsts) redirect.headers.set(HSTS_HEADER, hsts);
+    return redirect;
   }
   const nonce = Buffer.from(crypto.randomUUID()).toString("base64");
   const csp = buildCsp({ nonce, dev: process.env.NODE_ENV === "development", tileUrl: process.env.NEXT_PUBLIC_TILE_URL, styleUrl: process.env.NEXT_PUBLIC_MAP_STYLE_URL, glyphsUrl: process.env.NEXT_PUBLIC_MAP_GLYPHS_URL });
@@ -24,6 +30,13 @@ export function proxy(request: NextRequest) {
   requestHeaders.set(CSP_HEADER, csp);
   const response = NextResponse.next({ request: { headers: requestHeaders } });
   response.headers.set(headerName, csp);
+  if (hsts) response.headers.set(HSTS_HEADER, hsts);
+  // The database slides a session's expiry while it is used, but only a response can move the cookie's, and pages
+  // cannot set cookies: so each page visit re-issues the same cookie for another 90 days. The database stays the
+  // judge of whether it is still good. Only on GET: a POST may be the sign-out or sign-in that replaces this cookie.
+  if (request.method === "GET" && looksLikeSessionToken(session)) {
+    response.cookies.set(SESSION_COOKIE, session, sessionCookieOptions(new Date(Date.now() + SESSION_TTL_MS)));
+  }
   return response;
 }
 

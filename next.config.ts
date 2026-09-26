@@ -18,6 +18,9 @@ const nextConfig: NextConfig = {
         headers: [
           // Cross-origin requests (tiles, YouTube, link previews) get only our origin, never a path that could carry a share token.
           { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+          // Every response is taken as the type it says it is, so an uploaded file can never be sniffed into HTML.
+          // (HSTS depends on APP_URL, which is only known when the server starts, so src/proxy.ts sends it.)
+          { key: "X-Content-Type-Options", value: "nosniff" },
           // Frame-related directives only for everything the proxy does not cover (API routes, static files);
           // pages get the full nonce-based policy from src/proxy.ts. Browsers enforce the intersection of both.
           { key: "Content-Security-Policy", value: "frame-src https://www.youtube-nocookie.com; frame-ancestors 'none'; object-src 'none'; base-uri 'self'" },
