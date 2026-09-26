@@ -10,16 +10,19 @@ import { withHeavyLock } from "../heavy-lock";
 import { enqueue } from "../boss";
 import { QUEUES, type EmbedPhotoJob } from "../queues";
 
-/** Text the semantic index is built from: the helper's summary and caption, plus the family's own words. */
-export function textForEmbedding(p: { caption: string | null; context: string | null; title: string | null; annotation: unknown }): string {
+/**
+ * Text the semantic index is built from: the helper's summary and caption, plus the family's own words. Notes and
+ * names included, which is why only members' searches are compared against it.
+ */
+export function textForEmbedding(p: { caption: string | null; context: string | null; title: string | null; membersTitle?: string | null; annotation: unknown }): string {
   const a = p.annotation as StoredAnnotation | null;
-  return [p.title, p.caption, a?.caption, a?.searchSummary, a?.description, p.context].filter(Boolean).join(". ").slice(0, 2000);
+  return [p.title?.trim() || p.membersTitle, p.caption, a?.caption, a?.searchSummary, a?.description, p.context].filter(Boolean).join(". ").slice(0, 2000);
 }
 
 /** Image embedding from the medium rendition and a text embedding from the description. Under the heavy lock. */
 export async function embedPhoto(job: EmbedPhotoJob): Promise<void> {
   if (!mlConfigured()) return;
-  const photo = await db.photo.findUnique({ where: { id: job.photoId }, select: { id: true, status: true, renditions: true, caption: true, context: true, title: true, annotation: true } });
+  const photo = await db.photo.findUnique({ where: { id: job.photoId }, select: { id: true, status: true, renditions: true, caption: true, context: true, title: true, membersTitle: true, annotation: true } });
   if (!photo || photo.status !== "READY") return;
   const medium = (photo.renditions as Renditions | null)?.medium;
   const local = medium ? storage().localPath?.(medium.key) : undefined;

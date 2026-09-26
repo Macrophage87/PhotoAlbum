@@ -33,8 +33,8 @@ export default async function GlobalTimelinePage({ searchParams }: PageProps<"/t
   const order = await timelineOrderFor(sp, "newest");
   const trips = filter ? [] : (await listVisibleTrips(viewer)).sort((a, b) => (order === "newest" ? b.startDate.getTime() - a.startDate.getTime() : a.startDate.getTime() - b.startDate.getTime()));
   const [all, collectionGroups] = await Promise.all([
-    Promise.all(trips.map((t) => tripTimeline(t.id, t.timezone, narrow, editable))),
-    filter ? collectionTimeline(filter.id, narrow, editable) : Promise.resolve(null),
+    Promise.all(trips.map((t) => tripTimeline(t.id, t.timezone, narrow))),
+    filter ? collectionTimeline(filter.id, narrow) : Promise.resolve(null),
   ]);
   // A search across everything is a short answer from a few trips, so the ones with nothing in them drop out.
   const shown = trips.map((trip, i) => ({ trip, result: all[i] })).filter(({ result }) => !searching || result.matched > 0);

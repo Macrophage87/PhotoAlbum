@@ -40,7 +40,9 @@ describe("keyword search", () => {
   });
 
   it("anonymous visitors see only public content, including private-trip photos in a public collection", async () => {
-    expect((await searchMedia(anon, { q: "lobster" })).map((h) => h.caption)).toEqual(["Lunch on the Ranger"]);
+    expect((await searchMedia(anon, { q: "ranger" })).map((h) => h.caption)).toEqual(["Lunch on the Ranger"]);
+    // "lobster" is only in the uploader's notes on the public photograph, and notes are the family's.
+    expect(await searchMedia(anon, { q: "lobster" })).toEqual([]);
     expect((await searchMedia(anon, { q: "dock" })).map((h) => h.title)).toEqual(["Dock at Bar Harbor"]);
     expect((await searchMedia(anon, { q: "harbor" }))[0].uploaderName).toBeNull();
   });

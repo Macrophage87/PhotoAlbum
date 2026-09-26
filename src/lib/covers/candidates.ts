@@ -13,9 +13,9 @@ import { NOT_TRASHED } from "@/lib/photos/trash";
 /** A page of candidates. Kept small on purpose: this is a page of choices, not a gallery. */
 export const COVER_PAGE = 60;
 
-export type CoverCandidate = { id: string; updatedAt: Date; caption: string | null; title: string | null; originalName: string };
+export type CoverCandidate = { id: string; updatedAt: Date; caption: string | null; title: string | null; membersTitle: string | null; originalName: string };
 
-const select = { id: true, updatedAt: true, caption: true, title: true, originalName: true } as const;
+const select = { id: true, updatedAt: true, caption: true, title: true, membersTitle: true, originalName: true } as const;
 
 export async function tripCoverCandidates(tripId: string, cursor?: string | null, take = COVER_PAGE): Promise<{ photos: CoverCandidate[]; nextCursor: string | null; total: number }> {
   const where = { tripId, status: "READY" as const, ...NOT_TRASHED };

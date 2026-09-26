@@ -9,6 +9,6 @@ export async function GET(req: Request, { params }: { params: Promise<{ slug: st
   const viewer = await getViewer();
   const trip = await db.trip.findUnique({ where: { slug }, select: { id: true, visibility: true, shareToken: true } });
   if (!trip || !canViewTrip(viewer, trip)) return Response.json({ error: "Not found" }, { status: 404 });
-  const filter = parseGalleryFilter(Object.fromEntries(new URL(req.url).searchParams), { member: viewer.kind === "user" });
+  const filter = parseGalleryFilter(Object.fromEntries(new URL(req.url).searchParams), { member: viewer.kind === "user", inTrip: true });
   return Response.json(await buildMapPayload(viewer, trip.id, filter), { headers: { "Cache-Control": "private, no-store" } });
 }

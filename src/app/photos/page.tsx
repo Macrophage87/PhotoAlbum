@@ -20,7 +20,7 @@ export default async function UnassignedPhotosPage({ searchParams }: PageProps<"
   const sp = await searchParams;
   const filter = parseGalleryFilter(sp, { member: true });
   const [{ photos, total }, members, people, years] = await Promise.all([
-    listUnassignedPhotos(filter, true),
+    listUnassignedPhotos(filter),
     db.user.findMany({ where: { photos: { some: { tripId: null, ...NOT_TRASHED } } }, orderBy: { name: "asc" }, select: { id: true, name: true, email: true } }),
     peopleInPhotos(),
     // The years these actually cover, so the list offers nothing that would come back empty.

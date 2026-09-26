@@ -21,6 +21,7 @@ import { readExif, resolveTakenAt } from "@/lib/images/exif";
 import { parseLatLng, placeNameOf } from "@/lib/geo/parse";
 import { uploaderLabel } from "@/components/photos/toGrid";
 import { addToCollection, removeFromCollection } from "@/app/collections/actions";
+import { rejudgeFromAction } from "@/lib/annotation/rejudge-notice";
 
 /**
  * The member making this change, where the item is theirs to change. Someone else's photograph carries their
@@ -88,7 +89,9 @@ export async function updatePhoto(id: string, fd: FormData): Promise<void> {
     for (const cid of wanted) if (!held.has(cid)) await addToCollection(cid, [id]);
     for (const cid of held) if (!wanted.has(cid)) await removeFromCollection(cid, [id]);
   }
-  await db.photo.update({ where: { id }, data: { title, caption: v.caption, context: v.context, ...(v.context !== photo.context ? { contextUpdatedAt: new Date(), annotationError: null } : {}), tripId: v.tripId, activityId, activitySetById: activitySetter(activityId, chosenByHand, user.id, photo) } });
+  // A title typed here is the member's; one left as it was keeps whoever wrote it.
+  await db.photo.update({ where: { id }, data: { title, ...(title !== photo.title ? { titleByHelper: title ? false : null } : {}), caption: v.caption, context: v.context, ...(v.context !== photo.context ? { contextUpdatedAt: new Date(), annotationError: null } : {}), tripId: v.tripId, activityId, activitySetById: activitySetter(activityId, chosenByHand, user.id, photo) } });
+  if (v.tripId && v.tripId !== photo.tripId) await rejudgeFromAction({ tripId: v.tripId });
   revalidatePath(`/photos/${id}`);
   if (photo.tripId) revalidatePath(`/trips`, "layout");
 }
@@ -224,11 +227,13 @@ export async function setPhotoPlace(id: string, fd: FormData): Promise<PlaceResu
 export async function confirmPlaceEstimate(id: string): Promise<PlaceResult> {
   const user = await editorOrNull(id);
   if (!user) return { ok: false, message: NOT_YOURS };
-  const photo = await db.photo.findUnique({ where: { id }, select: { lat: true, lng: true, gpsSource: true, placeName: true, placeEstimateName: true } });
+  const photo = await db.photo.findUnique({ where: { id }, select: { lat: true, lng: true, gpsSource: true, placeName: true, placeEstimateName: true, placeEstimateMembersOnly: true } });
   if (!photo) return { ok: false, message: "Photo not found" };
   if (photo.gpsSource !== "ESTIMATE" || photo.lat === null || photo.lng === null) return { ok: false, message: "There is no estimated place to accept" };
-  // The helper's name for the place becomes the item's own, so accepting a guess does not turn it back into coordinates.
-  const name = photo.placeName ?? photo.placeEstimateName;
+  // The helper's name for the place becomes the item's own, so accepting a guess does not turn it back into
+  // coordinates — unless the name is the family's (it came from the notes, or names somebody): the place name is
+  // shown to anybody who may see the item, so that one is left for a member to write or look up themselves.
+  const name = photo.placeName ?? (photo.placeEstimateMembersOnly ? null : photo.placeEstimateName);
   await db.photo.update({ where: { id }, data: { gpsSource: "MANUAL", placeSetById: user.id, placeName: name } });
   revalidatePath(`/photos/${id}`);
   revalidatePath("/trips", "layout");
@@ -244,7 +249,7 @@ export async function clearPhotoPlace(id: string): Promise<PlaceResult> {
   if (!(await editorOrNull(id))) return { ok: false, message: NOT_YOURS };
   const photo = await db.photo.findUnique({ where: { id }, select: { tripId: true } });
   if (!photo) return { ok: false, message: "Photo not found" };
-  await db.photo.update({ where: { id }, data: { lat: null, lng: null, altitude: null, gpsSource: null, placeSetById: null, placeName: null, placeEstimateName: null, placeEstimateConfidence: null, placeEstimateRadiusM: null, placeEstimatePrecision: null, placeEstimateNote: null } });
+  await db.photo.update({ where: { id }, data: { lat: null, lng: null, altitude: null, gpsSource: null, placeSetById: null, placeName: null, placeEstimateName: null, placeEstimateConfidence: null, placeEstimateRadiusM: null, placeEstimatePrecision: null, placeEstimateNote: null, placeEstimateMembersOnly: false } });
   if (photo.tripId) await enqueue(QUEUES.geotagPhotos, { tripId: photo.tripId }, { singletonKey: `geotag:${photo.tripId}`, singletonSeconds: 10, singletonNextSlot: true });
   revalidatePath(`/photos/${id}`);
   revalidatePath("/trips", "layout");

@@ -11,6 +11,7 @@ export const tripCardSelect = {
   slug: true,
   title: true,
   description: true,
+  descriptionMembersOnly: true,
   startDate: true,
   endDate: true,
   timezone: true,

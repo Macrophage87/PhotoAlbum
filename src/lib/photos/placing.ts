@@ -7,6 +7,7 @@ import { photoUrl } from "@/lib/photos/urls";
 import { narrowing } from "@/lib/map/geojson";
 import { localDayFromOffset, localDayInZone } from "@/lib/time/local-day";
 import type { GalleryFilter } from "@/lib/photos/filters";
+import { readableTitle } from "@/lib/photos/readable-text";
 
 /**
  * The photographs of one trip, laid out for putting on the map.
@@ -59,23 +60,29 @@ export async function photosForPlacing(
   filter: GalleryFilter,
   show: PlacingShow,
 ): Promise<{ photos: PlacingPhoto[]; total: number }> {
-  const narrowed = await narrowing(filter, trip.id, true);
+  const narrowed = await narrowing(filter, { tripId: trip.id });
   if (narrowed.nothing) return { photos: [], total: 0 };
+  // The narrowing is asked alongside, never spread over, what this list is: a `?uploader=` or `?kind=` in the
+  // address would otherwise replace "yours" and "things with a picture to place" instead of narrowing them.
   const where: Prisma.PhotoWhereInput = {
-    ...NOT_TRASHED,
-    status: "READY",
-    kind: { in: ["PHOTO", "VIDEO"] },
-    tripId: trip.id,
-    ...(isAdmin(user) ? {} : { uploaderId: user.id }),
-    ...narrowed.where,
-    ...(show === "unplaced" ? { OR: [{ lat: null }, { gpsSource: "ESTIMATE" as const }] } : {}),
+    AND: [
+      narrowed.where,
+      {
+        ...NOT_TRASHED,
+        status: "READY",
+        kind: { in: ["PHOTO", "VIDEO"] },
+        tripId: trip.id,
+        ...(isAdmin(user) ? {} : { uploaderId: user.id }),
+        ...(show === "unplaced" ? { OR: [{ lat: null }, { gpsSource: "ESTIMATE" as const }] } : {}),
+      },
+    ],
   };
   const [rows, total] = await Promise.all([
     db.photo.findMany({
       where,
       orderBy: [{ takenAt: { sort: "asc", nulls: "last" } }, { createdAt: "asc" }, { id: "asc" }],
       take: PLACING_LIMIT,
-      select: { id: true, updatedAt: true, caption: true, title: true, originalName: true, takenAt: true, tzOffsetMin: true, lat: true, lng: true, gpsSource: true, placeEstimateName: true },
+      select: { id: true, updatedAt: true, caption: true, title: true, membersTitle: true, originalName: true, takenAt: true, tzOffsetMin: true, lat: true, lng: true, gpsSource: true, placeEstimateName: true },
     }),
     db.photo.count({ where }),
   ]);
@@ -86,7 +93,7 @@ export async function photosForPlacing(
       return {
         id: p.id,
         thumbUrl: photoUrl(p, "thumb"),
-        label: p.caption ?? p.title ?? p.originalName,
+        label: p.caption ?? readableTitle(p, true) ?? p.originalName,
         takenAt: p.takenAt?.toISOString() ?? null,
         day: p.takenAt ? (p.tzOffsetMin !== null ? localDayFromOffset(p.takenAt, p.tzOffsetMin) : localDayInZone(p.takenAt, trip.timezone)) : null,
         lat: p.lat,

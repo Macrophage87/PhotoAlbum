@@ -16,6 +16,7 @@ import { reassignPhotosForActivity } from "@/lib/activities/reassign";
 import { fieldErrors, participantsFromForm } from "@/lib/trips/validation";
 import type { ActivityType } from "@/generated/prisma/enums";
 import type { ActivityFormState } from "@/components/activities/ActivityForm";
+import { handWrittenDescription, handWrittenMembersOnly, judgeDescription } from "@/lib/annotation/members-only";
 
 /** An activity is part of the shape of a trip, so it is the trip's maker (and admins) who arrange them. */
 async function loadTrip(slug: string) {
@@ -40,6 +41,7 @@ export async function createActivity(slug: string, _prev: ActivityFormState, fd:
       startTime: localInputToInstant(v.start, trip.timezone),
       endTime: localInputToInstant(v.end, trip.timezone),
       description: v.description,
+      descriptionMembersOnly: await handWrittenMembersOnly(null, v.description),
       // Nobody named means everybody, which is what an empty list already says.
       ...(there?.length ? { participants: { connect: there.map((id) => ({ id })) } } : {}),
     },
@@ -54,7 +56,7 @@ export async function updateActivity(slug: string, id: string, _prev: ActivityFo
   const parsed = activityInputFromForm(fd);
   if (!parsed.success) return { status: "error", fieldErrors: fieldErrors(parsed.error) };
   const v = parsed.data;
-  const existing = await db.activity.findFirst({ where: { id, tripId: trip.id }, select: { id: true } });
+  const existing = await db.activity.findFirst({ where: { id, tripId: trip.id }, select: { id: true, description: true, descriptionMembersOnly: true, descriptionTitleOnly: true, descriptionSharedAt: true } });
   if (!existing) return { status: "error", message: "Activity not found" };
   // `set` reconciles to exactly what was ticked, so unticking somebody removes them; a form that never carried the
   // control at all leaves the list as it was.
@@ -67,6 +69,7 @@ export async function updateActivity(slug: string, id: string, _prev: ActivityFo
       startTime: localInputToInstant(v.start, trip.timezone),
       endTime: localInputToInstant(v.end, trip.timezone),
       description: v.description,
+      ...(await activityHandWritten(existing, v.description)),
       ...(there ? { participants: { set: there.map((pid) => ({ id: pid })) } } : {}),
     },
   });
@@ -128,6 +131,12 @@ export async function setActivityCover(slug: string, id: string, photoId: string
   revalidatePath(`/trips/${slug}/activities/${id}`);
 }
 
+
+/** A description saved by hand, as stored; one held only for its trip's title keeps that reason while unchanged. */
+async function activityHandWritten(before: { description: string | null; descriptionMembersOnly: boolean; descriptionTitleOnly: boolean; descriptionSharedAt: Date | null } | null, text: string | null | undefined) {
+  const { descriptionMembersOnly, descriptionSharedAt, unchanged } = await handWrittenDescription(before, text);
+  return { descriptionMembersOnly, descriptionSharedAt, descriptionTitleOnly: Boolean(unchanged && before?.descriptionTitleOnly && descriptionMembersOnly) };
+}
 /** What somebody may type into the box: a note for the helper, or the description itself. Long enough for either. */
 const DESCRIPTION_TEXT = z.string().max(4000);
 
@@ -141,9 +150,18 @@ const DESCRIPTION_TEXT = z.string().max(4000);
 export async function setActivityDescription(slug: string, id: string, text: string): Promise<void> {
   const trip = await loadTrip(slug);
   const description = DESCRIPTION_TEXT.parse(text).trim();
+  const activity = await db.activity.findFirst({ where: { id, tripId: trip.id }, select: { id: true, description: true, descriptionMembersOnly: true, descriptionTitleOnly: true, descriptionSharedAt: true } });
+  if (!activity) throw new Error("Activity not found");
+  await db.activity.update({ where: { id }, data: { description: description || null, ...(await activityHandWritten(activity, description)) } });
+  revalidatePath(`/trips/${slug}/activities/${id}`);
+}
+
+/** Show the activity's description to everyone who may open it (its link included), or keep it for the family. */
+export async function setActivityDescriptionShared(slug: string, id: string, everyone: boolean): Promise<void> {
+  const trip = await loadTrip(slug);
   const activity = await db.activity.findFirst({ where: { id, tripId: trip.id }, select: { id: true } });
   if (!activity) throw new Error("Activity not found");
-  await db.activity.update({ where: { id }, data: { description: description || null } });
+  await db.activity.update({ where: { id }, data: { descriptionMembersOnly: !everyone, descriptionTitleOnly: false, descriptionSharedAt: everyone ? new Date() : null } });
   revalidatePath(`/trips/${slug}/activities/${id}`);
 }
 
@@ -171,12 +189,22 @@ export async function describeActivityWithAi(slug: string, id: string, note?: st
 
   const names = [...new Set((await Promise.all(activity.photos.map((p) => permittedNames(p.id)))).flat())];
   const request = await buildActivityRequest(activity, gates.model, names, DESCRIPTION_TEXT.parse(note ?? "").trim() || undefined);
+  const notes = activity.photos.some((p) => p.context?.trim());
   const response = await anthropic().messages.create(request);
   console.log(`[annotate-activity] ${activity.id} model=${response.model} stop=${response.stop_reason} in=${response.usage.input_tokens} out=${response.usage.output_tokens}`);
   if (response.stop_reason === "refusal") throw new Error("The helper declined to describe this one");
   const parsed = parseActivityDescription(response.content as { type: string; text?: string }[]);
   if (!parsed) throw new Error("The helper's answer could not be read; try again");
-  await db.activity.update({ where: { id }, data: { description: parsed.description } });
+  // Written from names or notes, it is read by members only; see `descriptionFromMembersOnly`.
+  const judged = await judgeDescription(parsed.description, {
+    names,
+    notes,
+    // The description it replaces goes with the request, and so does the trip's title, which a link to the activity
+    // alone does not open.
+    previous: Boolean(activity.description && activity.descriptionMembersOnly),
+    privateTitles: activity.trip.visibility === "PUBLIC" ? [] : [activity.trip.title],
+  });
+  await db.activity.update({ where: { id }, data: { description: parsed.description, descriptionMembersOnly: judged.membersOnly, descriptionTitleOnly: judged.titleOnly, descriptionTitleWords: judged.titleOnly ? (judged.titleWords ?? []) : [], descriptionSharedAt: null } });
   revalidatePath(`/trips/${slug}/activities/${id}`);
   return parsed.description;
 }

@@ -59,7 +59,8 @@ export async function loadActivityForDescription(activityId: string) {
       startTime: true,
       endTime: true,
       description: true,
-      trip: { select: { id: true, title: true, timezone: true, annotationOptOut: true } },
+      descriptionMembersOnly: true,
+      trip: { select: { id: true, title: true, timezone: true, annotationOptOut: true, visibility: true } },
       track: { select: { stats: true } },
     },
   });

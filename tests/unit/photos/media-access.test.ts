@@ -17,6 +17,17 @@ describe("media bytes with a share token in the query", () => {
     expect(mediaBytesAllowed(anon, { trip: linkTrip, collections: [] }, { token: "old", kind: "trip" })).toBe(false);
     expect(mediaBytesAllowed(anon, { trip: { ...linkTrip, visibility: "PRIVATE" }, collections: [] }, { token: "tok", kind: "trip" })).toBe(false);
   });
+  it("refuses a trashed item whatever token is in the address, and still serves it to members", () => {
+    const trashedAt = new Date();
+    const activity = { id: "a1", shareToken: "atok" };
+    expect(mediaBytesAllowed(anon, { trip: linkTrip, collections: [], trashedAt }, { token: "tok", kind: "trip" })).toBe(false);
+    expect(mediaBytesAllowed(anon, { trip: null, collections: [linkCol], trashedAt }, { token: "ctok", kind: "collection" })).toBe(false);
+    expect(mediaBytesAllowed(anon, { trip: null, collections: [], activity, trashedAt }, { token: "atok", kind: "activity" })).toBe(false);
+    // The same item out of the trash is served on each of those tokens, so it is the trash that refuses it.
+    expect(mediaBytesAllowed(anon, { trip: null, collections: [], activity }, { token: "atok", kind: "activity" })).toBe(true);
+    const member: Viewer = { kind: "user", user: { id: "u", email: "u@example.com", name: null, role: "MEMBER" }, shareTokens: new Map() };
+    expect(mediaBytesAllowed(member, { trip: linkTrip, collections: [], trashedAt })).toBe(true);
+  });
 });
 
 describe("cache headers", () => {

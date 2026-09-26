@@ -3,6 +3,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { db } from "@/lib/db";
 import { thinkingParams } from "./client";
+import { placeFromMembersOnly } from "./members-only";
 
 /**
  * What the helper may guess at, and what it must leave alone. Shared word for word by the full description request
@@ -146,8 +147,8 @@ export async function recordPlaceFailure(photoId: string, opts: { terminal?: boo
  * from the camera, from a track or from a Google sidecar always wins; a track imported afterwards replaces it in
  * turn (see geotag-photos). placeEstimatedAt is stamped either way, so a declined item is not asked about again.
  */
-export async function applyPlaceEstimate(photoId: string, estimate: PlaceEstimate): Promise<"placed" | "declined" | "skipped"> {
-  const current = await db.photo.findUnique({ where: { id: photoId }, select: { lat: true, gpsSource: true } });
+export async function applyPlaceEstimate(photoId: string, estimate: PlaceEstimate, opts: { sent?: boolean | null } = {}): Promise<"placed" | "declined" | "skipped"> {
+  const current = await db.photo.findUnique({ where: { id: photoId }, select: { lat: true, gpsSource: true, context: true } });
   if (!current) return "skipped";
   // A town-level answer is held to the town before anything is written, name and evidence alike.
   const place = estimate && estimate.confidence >= MIN_PLACE_CONFIDENCE ? scrubCoarsePlace(estimate) : null;
@@ -167,6 +168,8 @@ export async function applyPlaceEstimate(photoId: string, estimate: PlaceEstimat
       placeEstimateRadiusM: place.radiusM,
       placeEstimatePrecision: place.precision === "city" ? "CITY" : place.precision === "region" ? "REGION" : "EXACT",
       placeEstimateNote: place.evidence,
+      // Its name and evidence are shown beside the pin, and may have come from the notes; see `placeFromMembersOnly`.
+      placeEstimateMembersOnly: await placeFromMembersOnly(photoId, { name: place.name, evidence: place.evidence }, current.context, opts.sent),
       placeEstimatedAt: new Date(),
     },
   });

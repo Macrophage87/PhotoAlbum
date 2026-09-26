@@ -7,6 +7,7 @@ import { NOT_TRASHED } from "@/lib/photos/trash";
 import { filterIsActive, NO_FILTER, type GalleryFilter } from "@/lib/photos/filters";
 import { idsInLocalYear, idsMatching, intersectIds } from "@/lib/photos/page";
 import { idsWithPerson } from "@/lib/people/in-photos";
+import { withReadableDescription } from "@/lib/photos/readable-text";
 
 export type TimelineResult = { groups: TimelineGroups; matched: number; total: number; active: boolean };
 
@@ -23,8 +24,11 @@ export type TimelineResult = { groups: TimelineGroups; matched: number; total: n
  * point: the answer keeps the dates around it, so "the one with the lighthouse" comes back still sitting in the
  * afternoon it was taken. An activity is kept only while something inside it still matches, so a narrowed timeline
  * is the matches and nothing else.
+ *
+ * Who is looking is part of the filter (`filter.member`): it decides what the words may match and which activity
+ * descriptions are read out.
  */
-export async function tripTimeline(tripId: string, timezone: string, filter: GalleryFilter = NO_FILTER, member = false): Promise<TimelineResult> {
+export async function tripTimeline(tripId: string, timezone: string, filter: GalleryFilter = NO_FILTER): Promise<TimelineResult> {
   const active = filterIsActive(filter);
   const total = await db.photo.count({ where: { tripId, ...NOT_TRASHED, status: "READY" } });
   if (!active) {
@@ -33,13 +37,13 @@ export async function tripTimeline(tripId: string, timezone: string, filter: Gal
       db.photo.findMany({ where: { tripId, ...NOT_TRASHED, status: "READY", takenAt: null }, orderBy: { createdAt: "asc" }, select: photoCardSelect }),
       db.activity.findMany({ where: { tripId }, orderBy: { startTime: "asc" }, include: { track: { select: { simplified: true, stats: true } } } }),
     ]);
-    const groups = buildTimeline([...dated, ...undated], activities, timezone);
+    const groups = buildTimeline([...dated, ...undated], activities.map((a) => withReadableDescription(a, filter.member)), timezone);
     return { groups, matched: dated.length + undated.length, total, active };
   }
 
   // Words and years are answered as id lists, the same ones the gallery uses, so the two agree about what matches.
   const lists: string[][] = [];
-  if (filter.q) lists.push(await idsMatching(filter.q, member));
+  if (filter.q) lists.push(await idsMatching(filter.q, { member: filter.member, scope: { tripId } }));
   if (filter.year) lists.push(await idsInLocalYear(tripId, filter.year));
   // One list per name, so two names means the photographs they are both on rather than either.
   for (const id of filter.personIds) lists.push(await idsWithPerson(id));
@@ -62,6 +66,6 @@ export async function tripTimeline(tripId: string, timezone: string, filter: Gal
   ]);
   const photos = [...dated, ...undated];
   const kept = new Set(photos.map((p) => p.activityId).filter(Boolean) as string[]);
-  const groups = buildTimeline(photos, activities.filter((a) => kept.has(a.id)), timezone);
+  const groups = buildTimeline(photos, activities.filter((a) => kept.has(a.id)).map((a) => withReadableDescription(a, filter.member)), timezone);
   return { groups, matched: photos.length, total, active };
 }

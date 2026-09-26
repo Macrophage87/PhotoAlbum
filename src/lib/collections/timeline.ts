@@ -12,13 +12,13 @@ import { idsWithPerson } from "@/lib/people/in-photos";
  * A collection's items grouped by the day each was taken (each photo carries its own offset; UTC otherwise),
  * narrowed to whatever is being looked for — the same question the trip timeline answers, asked of a gathering.
  */
-export async function collectionTimeline(collectionId: string, filter: GalleryFilter = NO_FILTER, member = false): Promise<TimelineResult> {
+export async function collectionTimeline(collectionId: string, filter: GalleryFilter = NO_FILTER): Promise<TimelineResult> {
   const active = filterIsActive(filter);
   const mine: Prisma.PhotoWhereInput = { ...NOT_TRASHED, status: "READY", collections: { some: { collectionId } } };
   const total = await db.photo.count({ where: mine });
 
   const lists: string[][] = [];
-  if (filter.q) lists.push(await idsMatching(filter.q, member));
+  if (filter.q) lists.push(await idsMatching(filter.q, { member: filter.member, scope: { collectionId } }));
   // A collection gathers photographs from any number of trips, so the year is asked of the whole album.
   if (filter.year) lists.push(await idsInLocalYear(null, filter.year));
   // One list per name, so two names means the photographs they are both on rather than either.

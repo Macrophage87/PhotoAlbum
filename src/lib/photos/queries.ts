@@ -31,6 +31,8 @@ export const photoCardSelect = {
   renditions: true,
   externalId: true,
   title: true,
+  /** Read through `readableTitle`: members only. */
+  membersTitle: true,
   durationS: true,
   externalStatus: true,
   /** Only to choose which full-size file to link to; the instructions themselves are never rendered on a card. */
@@ -47,9 +49,9 @@ export async function listTripPhotos(tripId: string, uploaderId?: string): Promi
   });
 }
 
-export async function listUnassignedPhotos(filter: GalleryFilter = NO_FILTER, member = false): Promise<{ photos: PhotoCard[]; total: number }> {
+export async function listUnassignedPhotos(filter: GalleryFilter = NO_FILTER): Promise<{ photos: PhotoCard[]; total: number }> {
   const lists: string[][] = [];
-  if (filter.q) lists.push(await idsMatching(filter.q, member));
+  if (filter.q) lists.push(await idsMatching(filter.q, { member: filter.member, scope: { tripId: null } }));
   if (filter.year) lists.push(await idsInLocalYear(null, filter.year));
   // One list per name, so two names means the photographs they are both on rather than either.
   for (const id of filter.personIds) lists.push(await idsWithPerson(id));

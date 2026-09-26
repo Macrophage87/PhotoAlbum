@@ -20,7 +20,7 @@ export async function GET(request: NextRequest, { params }: RouteContext<"/api/t
   // A share page draws its first page as any visitor sees it, members included; its later pages must match.
   const member = viewer.kind === "user" && sp.get("view") !== "share";
   // The next page of a narrowed gallery is the next page of that same narrowing, read the same way the page reads it.
-  const filter = parseGalleryFilter(Object.fromEntries(sp.entries()), { member });
+  const filter = parseGalleryFilter(Object.fromEntries(sp.entries()), { member, inTrip: true });
   // The same order the page was built in, or the next page would continue a different list.
   const asked = sp.get("order");
   const order: PhotoOrder = asked === "oldest" ? "taken" : asked === "newest" ? "newest" : "favorites";
@@ -29,7 +29,7 @@ export async function GET(request: NextRequest, { params }: RouteContext<"/api/t
   const viewerId = member && viewer.kind === "user" ? viewer.user.id : null;
   // A visitor's gallery (and a share page's, whoever is looking) shows only finished items, as its first page does;
   // their words never match names.
-  const common = { filter, order, viewerId, member, readyOnly: !member };
+  const common = { filter, order, viewerId, readyOnly: !member };
   const page = await tripPhotoPage(trip.id, ids ? { ...common, ids, take: Math.max(ids.length, 1) } : { ...common, cursor: sp.get("cursor") });
   // Hearts as the page draws them, so a tile from a later page has one too.
   const favourites = member ? await photoFavourites(page.photos.map((p) => p.id), viewer) : new Map();

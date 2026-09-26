@@ -14,6 +14,7 @@ import { estimateCost, TOKENS_PER_PLACE, type Estimate } from "@/lib/annotation/
 import { BACKFILL_CAP, backfillCandidates, backfillExclusions, taskOf, type BackfillScope, type BackfillTask } from "@/lib/jobs/handlers/annotation-batch";
 import { annotationSchema, toStored, type StoredAnnotation } from "@/lib/annotation/schema";
 import { anthropic } from "@/lib/annotation/client";
+import { helperText, judgeHelperText, knownNames, mentionsAnyName, pastHelperTitles, titleIsHelpers } from "@/lib/annotation/members-only";
 
 /** The admin's half of the two gates. Recorded with who and when so the decision is auditable. */
 export async function setAnnotationOptIn(on: boolean): Promise<void> {
@@ -73,7 +74,7 @@ export async function updateAnnotation(photoId: string, fd: FormData): Promise<v
   const owner = await db.photo.findUnique({ where: { id: photoId }, select: { uploaderId: true } });
   if (!owner) return;
   if (!canEditMedia(user, owner)) throw new Error(NOT_YOURS);
-  const photo = await db.photo.findUnique({ where: { id: photoId }, select: { annotation: true } });
+  const photo = await db.photo.findUnique({ where: { id: photoId }, select: { annotation: true, annotationMembersOnly: true, annotationTitleOnly: true, annotationTitleWords: true, annotationTitleFrom: true, annotationSharedAt: true, context: true } });
   if (!photo) return;
   const current = (photo.annotation ?? {}) as Partial<StoredAnnotation>;
   const list = (v: FormDataEntryValue | null) => String(v ?? "").split(",").map((t) => t.trim()).filter(Boolean);
@@ -103,8 +104,56 @@ export async function updateAnnotation(photoId: string, fd: FormData): Promise<v
     estimatedYear: null,
     estimatedPlace: null,
   });
-  await db.photo.update({ where: { id: photoId }, data: { annotation: merged, annotationSource: "EDITED" } });
+  // An edit can add a name as easily as take one out, and never makes members-only text public again; that takes
+  // "show it to everyone". Text somebody has shown to everyone is theirs, and is held again only if it now names
+  // somebody.
+  const judged = photo.annotationSharedAt
+    ? { membersOnly: mentionsAnyName(helperText(merged), await knownNames()), titleOnly: false }
+    : await judgeHelperText(photoId, merged, photo.context);
+  const membersOnly = photo.annotationMembersOnly || judged.membersOnly;
+  // Held only for a private title's word before, and nothing stronger now: publishing that trip still lifts it.
+  const hard = judged.membersOnly && !judged.titleOnly;
+  const titleOnly = photo.annotationMembersOnly ? photo.annotationTitleOnly && !hard : judged.titleOnly;
+  await db.photo.update({ where: { id: photoId }, data: { annotation: merged, annotationSource: "EDITED", annotationMembersOnly: membersOnly, annotationTitleOnly: membersOnly && titleOnly,
+      // A title-word flag remembers every word and container that ever caused it, so lifting it asks about all of them.
+      annotationTitleWords: membersOnly && titleOnly ? [...new Set([...photo.annotationTitleWords, ...(judged.titleWords ?? [])])] : [],
+      annotationTitleFrom: membersOnly && titleOnly ? [...new Set([...photo.annotationTitleFrom, ...(judged.titleFrom ?? [])])] : [],
+      ...(membersOnly ? { annotationSharedAt: null } : {}) } });
   revalidatePath(`/photos/${photoId}`);
+}
+
+const DESCRIPTION_CHANGED = "The description changed; have a look at the new one first.";
+
+/**
+ * Show the helper's text for an item (and the title it wrote) to everyone who may see the item, or keep it for the
+ * family again. The uploader's or an admin's decision, made after reading it: from then on nothing re-flags it until
+ * it is written again.
+ */
+export async function setAnnotationShared(photoId: string, seenRevision: number, everyone: boolean): Promise<void> {
+  const user = await requireUserOrThrow();
+  const photo = await db.photo.findUnique({ where: { id: photoId }, select: { uploaderId: true, kind: true, title: true, titleByHelper: true, membersTitle: true, annotation: true, annotationRevision: true } });
+  if (!photo) return;
+  if (!canEditMedia(user, photo)) throw new Error(NOT_YOURS);
+  // What is shown is what was read: a description written again, or edited, since the page was opened has to be read
+  // first. Every change to the text moves its revision on (a database trigger), whoever makes it.
+  if (photo.annotationRevision !== seenRevision) throw new Error(DESCRIPTION_CHANGED);
+  const ai = photo.kind === "EXTERNAL_VIDEO" ? null : ((photo.annotation as Partial<StoredAnnotation> | null)?.title ?? "").trim() || null;
+  const own = photo.title?.trim() || null;
+  const kept = photo.membersTitle?.trim() || null;
+  let data;
+  if (everyone) {
+    // The helper's title goes back on the item if it has none of its own.
+    data = { annotationMembersOnly: false, annotationTitleOnly: false, annotationTitleWords: [], annotationTitleFrom: [], annotationSharedAt: new Date(), ...(ai && !own && kept === ai ? { title: ai, titleByHelper: true, membersTitle: null } : {}) };
+  } else {
+    const unknown = own && photo.titleByHelper === null && own !== ai;
+    const helpers = photo.kind !== "EXTERNAL_VIDEO" && titleIsHelpers({ title: photo.title, titleByHelper: photo.titleByHelper, aiTitle: ai, ...(unknown ? { pastTitles: await pastHelperTitles(photoId), namesSomebody: mentionsAnyName(own!, await knownNames()) } : {}) });
+    data = { annotationMembersOnly: true, annotationTitleOnly: false, annotationTitleWords: [], annotationTitleFrom: [], annotationSharedAt: null, ...(helpers ? { title: null, titleByHelper: null, membersTitle: kept ?? ai ?? own } : ai && !kept ? { membersTitle: ai } : {}) };
+  }
+  const done = await db.photo.updateMany({ where: { id: photoId, annotationRevision: seenRevision }, data });
+  if (!done.count) throw new Error(DESCRIPTION_CHANGED);
+  revalidatePath(`/photos/${photoId}`);
+  // The title and the words show in galleries, timelines, maps and search results too.
+  revalidatePath("/", "layout");
 }
 
 /** Turn the helper's estimate (or the member's own) into the item's real date. */

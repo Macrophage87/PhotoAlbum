@@ -6,6 +6,7 @@ import { requireUserOrThrow } from "@/lib/auth/viewer";
 import { uniqueSlug } from "@/lib/trips/slug";
 import { fieldErrors, participantsFromForm, tripInputFromForm } from "@/lib/trips/validation";
 import { dayToDateColumn } from "@/lib/time/local-day";
+import { handWrittenMembersOnly } from "@/lib/annotation/members-only";
 
 export type TripFormState = { status: "idle" } | { status: "error"; message?: string; fieldErrors?: Record<string, string> };
 
@@ -21,6 +22,7 @@ export async function createTrip(_prev: TripFormState, fd: FormData): Promise<Tr
       slug,
       title: v.title,
       description: v.description,
+      descriptionMembersOnly: await handWrittenMembersOnly(null, v.description),
       startDate: dayToDateColumn(v.startDate),
       endDate: dayToDateColumn(v.endDate),
       timezone: v.timezone,
