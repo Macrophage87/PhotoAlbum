@@ -17,6 +17,8 @@ export async function annotatePhoto(job: AnnotatePhotoJob): Promise<void> {
   if (!item || item.status !== "READY") return;
   const reason = await optOutReason(item.id);
   if (reason) return;
+  // Taken before the names are read: an answer to a request older than a forget or a consent change is not stored.
+  const requestedAt = new Date();
   // Names go to the helper only for confirmed people whose indexing is on and who are not minors; pets always.
   const names = await permittedNames(item.id);
   const request = await buildRequest(item, gates.model, names);
@@ -40,7 +42,7 @@ export async function annotatePhoto(job: AnnotatePhotoJob): Promise<void> {
       await recordFailure(item.id, "invalid_output");
       return;
     }
-    await applyAnnotation(item.id, response.model, parsed, { content: response.content, usage: response.usage, stop_reason: response.stop_reason }, { sent });
+    await applyAnnotation(item.id, response.model, parsed, { content: response.content, usage: response.usage, stop_reason: response.stop_reason }, { sent, requestedAt });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[annotate] ${item.id} failed: ${message.slice(0, 200)}`);

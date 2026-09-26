@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { nameMayLeaveServer } from "@/lib/people/consent";
 import { permittedNames } from "@/lib/people/gates";
 import { describedBeforeTheirNames } from "@/lib/jobs/handlers/annotation-batch";
+import { confirmFaceAs } from "@/lib/people/matching";
 import { resetTestDb } from "../helpers/reset";
 
 const who = vi.hoisted(() => ({ role: "ADMIN" as "MEMBER" | "ADMIN", id: "" }));
@@ -116,6 +117,24 @@ describe("tagging somebody on a photograph", () => {
     expect(await permittedNames(photoId)).toEqual(["Biscuit"]);
   });
 
+  it("will not name somebody the album cannot show to be an adult", async () => {
+    // Tagged by hand, so no birthday: could be the family's six-year-old.
+    await tag({ name: "Sam" });
+    const sam = await db.person.findFirstOrThrow({ where: { name: "Sam" } });
+    await expect(setNameInDescriptions(sam.id, true)).rejects.toThrow(/birthday/);
+    expect((await db.person.findUniqueOrThrow({ where: { id: sam.id } })).nameInDescriptions).toBe(false);
+    // Even set some other way, the name never reaches the helper, and brings nothing into the names run.
+    await db.person.update({ where: { id: sam.id }, data: { nameInDescriptions: true, nameInDescriptionsSetAt: new Date() } });
+    await db.photo.update({ where: { id: photoId }, data: { annotatedAt: new Date("2026-01-01T00:00:00Z") } });
+    expect(await permittedNames(photoId)).toEqual([]);
+    expect(await describedBeforeTheirNames()).toEqual([]);
+    // Once an admin attests they are an adult, they may be named.
+    await db.person.update({ where: { id: sam.id }, data: { adultAttestedAt: new Date(), adultAttestedById: me } });
+    await setNameInDescriptions(sam.id, true);
+    expect(await permittedNames(photoId)).toEqual(["Sam"]);
+    expect(await describedBeforeTheirNames()).toEqual([photoId]);
+  });
+
   it("will not record an agreement for somebody who asked to be forgotten", async () => {
     const gone = await db.person.create({ data: { name: "Gone", optedOutAt: new Date(), createdById: me } });
     await expect(setNameInDescriptions(gone.id, true)).rejects.toThrow(/forgotten/);
@@ -185,6 +204,30 @@ describe("which items were described before the album knew who was in them", () 
     await db.animalDetection.create({ data: { photoId: item, personId: biscuit.id, species: "DOG", status: "CONFIRMED", box: { x: 0, y: 0, w: 1, h: 1 }, confidence: 0.9 } });
     expect(await describedBeforeTheirNames()).toEqual([item]);
     expect(await describedBeforeTheirNames(biscuit.id)).toEqual([item]);
+  });
+
+  it("counts a face the detector found before the description and somebody confirmed after it", async () => {
+    // The usual order: found while processing, described after the quiet period, confirmed days later.
+    const found = new Date("2026-07-01T00:00:00Z");
+    const item = await photo("described.jpg", new Date("2026-07-02T00:00:00Z"));
+    const ada = await db.person.create({ data: { name: "Ada", birthday: new Date("1950-01-01"), nameInDescriptions: true, nameInDescriptionsSetById: me, nameInDescriptionsSetAt: new Date("2026-06-01T00:00:00Z"), createdById: me } });
+    const face = await db.face.create({ data: { photoId: item, status: "PROPOSED", proposedPersonId: ada.id, box: [0.1, 0.1, 0.2, 0.2], confidence: 0.9, createdAt: found } });
+    expect(await describedBeforeTheirNames()).toEqual([]);
+    await confirmFaceAs(face.id, ada.id);
+    expect((await db.face.findUniqueOrThrow({ where: { id: face.id } })).confirmedAt!.getTime()).toBeGreaterThan(found.getTime());
+    expect(await describedBeforeTheirNames(ada.id)).toEqual([item]);
+    // Describing it again clears it.
+    await db.photo.update({ where: { id: item }, data: { annotatedAt: new Date(Date.now() + 1000) } });
+    expect(await describedBeforeTheirNames()).toEqual([]);
+  });
+
+  it("counts a pet match somebody agreed with after the description", async () => {
+    const item = await photo("described.jpg", new Date("2026-07-02T00:00:00Z"));
+    const biscuit = await db.person.create({ data: { name: "Biscuit", kind: "PET", species: "DOG", createdById: me } });
+    const spotted = await db.animalDetection.create({ data: { photoId: item, species: "DOG", status: "PROPOSED", proposedPersonId: biscuit.id, box: { x: 0, y: 0, w: 1, h: 1 }, confidence: 0.9, createdAt: new Date("2026-07-01T00:00:00Z") } });
+    expect(await describedBeforeTheirNames()).toEqual([]);
+    await db.animalDetection.update({ where: { id: spotted.id }, data: { status: "CONFIRMED", personId: biscuit.id, proposedPersonId: null } });
+    expect(await describedBeforeTheirNames()).toEqual([item]);
   });
 
   it("leaves a child out of it", async () => {

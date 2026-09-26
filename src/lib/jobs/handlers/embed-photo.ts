@@ -22,7 +22,7 @@ export function textForEmbedding(p: { caption: string | null; context: string | 
 /** Image embedding from the medium rendition and a text embedding from the description. Under the heavy lock. */
 export async function embedPhoto(job: EmbedPhotoJob): Promise<void> {
   if (!mlConfigured()) return;
-  const photo = await db.photo.findUnique({ where: { id: job.photoId }, select: { id: true, status: true, renditions: true, caption: true, context: true, title: true, membersTitle: true, annotation: true } });
+  const photo = await db.photo.findUnique({ where: { id: job.photoId }, select: { id: true, status: true, renditions: true, caption: true, context: true, title: true, membersTitle: true, annotation: true, updatedAt: true } });
   if (!photo || photo.status !== "READY") return;
   const medium = (photo.renditions as Renditions | null)?.medium;
   const local = medium ? storage().localPath?.(medium.key) : undefined;
@@ -32,7 +32,8 @@ export async function embedPhoto(job: EmbedPhotoJob): Promise<void> {
     const [textVec] = text ? await embedText([text]) : [null];
     const sets: Prisma.Sql[] = [Prisma.sql`"embeddedAt" = now()`];
     if (image) sets.push(Prisma.sql`"embedding" = ${vectorLiteral(image)}::vector`);
-    if (textVec) sets.push(Prisma.sql`"textEmbedding" = ${vectorLiteral(textVec)}::vector`);
+    // Only while the text is still what was read: a forgotten name scrubbed meanwhile must not come back as a vector.
+    if (textVec) sets.push(Prisma.sql`"textEmbedding" = CASE WHEN "updatedAt" = ${photo.updatedAt} THEN ${vectorLiteral(textVec)}::vector ELSE "textEmbedding" END`);
     await db.$executeRaw`UPDATE "Photo" SET ${Prisma.join(sets, ", ")} WHERE id = ${photo.id}`;
     if (image) await upsertNeighbours(photo.id);
   });
@@ -51,7 +52,9 @@ export async function embedSweep(): Promise<number> {
     SELECT id, ("embedding" IS NOT NULL) AS "textOnly" FROM "Photo"
     -- A scan's only picture is a still the album drew of a shape; searching by what it looks like means nothing.
     WHERE status = 'READY' AND renditions IS NOT NULL AND "trashedAt" IS NULL AND kind <> 'SCAN' 
-      AND ("embedding" IS NULL OR ("annotatedAt" IS NOT NULL AND ("embeddedAt" IS NULL OR "annotatedAt" > "embeddedAt")))
+      AND ("embedding" IS NULL OR ("annotatedAt" IS NOT NULL AND ("embeddedAt" IS NULL OR "annotatedAt" > "embeddedAt"))
+        -- Emptied when a forgotten name was scrubbed, and not refilled if that job raced the scrub.
+        OR ("textEmbedding" IS NULL AND annotation IS NOT NULL))
     ORDER BY "createdAt" DESC LIMIT 100`;
   for (const r of rows) await enqueueEmbedding(r.id, r.textOnly);
   return rows.length;

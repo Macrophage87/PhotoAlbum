@@ -42,6 +42,7 @@ vi.mock("@/lib/annotation/request", () => ({
 }));
 
 import { db } from "@/lib/db";
+import { withForgetLock } from "@/lib/people/names-changed";
 import { annotationBackfill, annotationBatchPoll, BATCH_CHUNK, closeDeadRuns, familyCancelled, RUN_IDLE_MS } from "@/lib/jobs/handlers/annotation-batch";
 import { resetTestDb } from "../helpers/reset";
 
@@ -179,5 +180,17 @@ describe("the backfill run", () => {
     const placeholder = await db.annotationBatch.findFirst({ where: { parentId: stale.id } });
     expect(placeholder?.status).toBe("FAILED");
     expect((await db.annotationBatch.findUniqueOrThrow({ where: { id: stale.id } })).runEndedAt).not.toBeNull();
+  });
+
+  it("leaves an ended batch for the next poll while somebody is being forgotten", async () => {
+    const originId = await seed(1);
+    await annotationBackfill({ batchId: originId });
+    const [row] = await family(originId);
+    const ids = (await db.photo.findMany({ select: { id: true } })).map((p) => p.id);
+    api.results.set(row.anthropicBatchId, [{ custom_id: ids[0], result: { type: "errored" } }]);
+    await withForgetLock(() => annotationBatchPoll());
+    expect((await db.annotationBatch.findUniqueOrThrow({ where: { id: row.id } })).status).toBe("SUBMITTED");
+    await annotationBatchPoll();
+    expect((await db.annotationBatch.findUniqueOrThrow({ where: { id: row.id } })).status).toBe("ENDED");
   });
 });

@@ -16,6 +16,7 @@ import { canEditContainer, editableMediaIds, NOT_YOUR_CONTAINER } from "@/lib/au
 import { writeContainerDescription } from "@/lib/annotation/container";
 import { handWrittenDescription } from "@/lib/annotation/members-only";
 import { rejudgeFromAction } from "@/lib/annotation/rejudge-notice";
+import { descriptionStaysHelpers } from "@/lib/annotation/helper-text";
 
 /** The trip, where this member may change it: whoever made it, and admins. */
 async function loadEditableTrip(slug: string) {
@@ -51,6 +52,7 @@ export async function updateTrip(slug: string, _prev: TripFormState, fd: FormDat
       title: v.title,
       description: v.description,
       ...(await handWrittenStored(trip, v.description)),
+      descriptionByHelper: descriptionStaysHelpers(trip, v.description),
       startDate: dayToDateColumn(v.startDate),
       endDate: dayToDateColumn(v.endDate),
       timezone: v.timezone,
@@ -167,7 +169,7 @@ const DESCRIPTION_TEXT = z.string().max(4000);
 export async function setTripDescription(slug: string, text: string): Promise<void> {
   const trip = await loadEditableTrip(slug);
   const description = DESCRIPTION_TEXT.parse(text).trim();
-  await db.trip.update({ where: { id: trip.id }, data: { description: description || null, ...(await handWrittenStored(trip, description)) } });
+  await db.trip.update({ where: { id: trip.id }, data: { description: description || null, ...(await handWrittenStored(trip, description)), descriptionByHelper: descriptionStaysHelpers(trip, description) } });
   revalidatePath(`/trips/${slug}`, "layout");
 }
 

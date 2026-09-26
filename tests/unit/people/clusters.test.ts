@@ -187,4 +187,25 @@ describe("joining a group to somebody already named", () => {
     await db.$executeRaw`UPDATE "FaceCluster" SET centroid = ${vectorLiteral(unlike)}::vector WHERE id = ${clusterId}`;
     expect((await listUnnamedClusters())[0].looksLike).toBeNull();
   });
+
+  it("never offers somebody whose recognition is not on", async () => {
+    // A member named a group "Lily": her templates wait for an admin's decision, and are not to be matched meanwhile.
+    const lily = await db.person.create({ data: { name: "Lily", faceIndexing: false, pendingDecision: true, createdById: me } });
+    const hers = await db.faceCluster.create({ data: { personId: lily.id, label: "Lily", faceCount: 1 } });
+    const like = Array.from({ length: 512 }, (_, i) => (i === 0 ? 1 : 0));
+    await db.$executeRaw`UPDATE "FaceCluster" SET centroid = ${vectorLiteral(like)}::vector WHERE id = ${hers.id}`;
+    await db.$executeRaw`UPDATE "FaceCluster" SET centroid = ${vectorLiteral(like)}::vector WHERE id = ${clusterId}`;
+    expect((await listUnnamedClusters())[0].looksLike).toBeNull();
+
+    // A consented person further away is still offered: the nearest eligible one, not the nearest of anyone.
+    const jo = await db.person.create({ data: { name: "Grandma Jo", faceIndexing: true, adultAttestedAt: new Date(), adultAttestedById: me, createdById: me } });
+    const joCluster = await db.faceCluster.create({ data: { personId: jo.id, label: "Grandma Jo", faceCount: 1 } });
+    const near = Array.from({ length: 512 }, (_, i) => (i === 0 ? 0.95 : i === 1 ? 0.31 : 0));
+    await db.$executeRaw`UPDATE "FaceCluster" SET centroid = ${vectorLiteral(near)}::vector WHERE id = ${joCluster.id}`;
+    expect((await listUnnamedClusters())[0].looksLike).toMatchObject({ id: jo.id });
+
+    // Once an admin turns Lily's recognition on, she is the one offered.
+    await db.person.update({ where: { id: lily.id }, data: { faceIndexing: true, pendingDecision: false } });
+    expect((await listUnnamedClusters())[0].looksLike).toMatchObject({ id: lily.id });
+  });
 });

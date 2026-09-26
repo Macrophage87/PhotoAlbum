@@ -1,9 +1,14 @@
 import { db } from "@/lib/db";
 import { annotationSchema, clampAnnotation, toStored, type Annotation } from "./schema";
 import { enqueueEmbedding } from "@/lib/jobs/handlers/embed-photo";
+import { enqueue } from "@/lib/jobs/boss";
+import { QUEUES } from "@/lib/jobs/queues";
 import { applyPlaceEstimate, needsPlaceEstimate } from "./place";
 import { isWeakDate } from "@/lib/photos/date-from-neighbours";
 import { judgeHelperText, knownNames, mentionsAnyName, pastHelperTitles, titleIsHelpers } from "./members-only";
+import { forgetState, unchangedSince } from "@/lib/people/names-changed";
+import { withoutOptedOutNames } from "@/lib/people/unpermitted";
+import { forgottenScope, loadTombstone, scrubRecord, type Tombstone } from "@/lib/people/tombstone";
 
 export type ApplyResult = { ok: true } | { ok: false; reason: "refusal" | "invalid" | "max_tokens" };
 
@@ -42,11 +47,21 @@ export function titlesAfter(
 /**
  * `sent` is whether the request that produced this answer carried anything members-only, as recorded when it was
  * built (see `requestCarriesMembersOnly`); null when that was not recorded.
+ *
+ * `requestedAt` is when the request was built (for a batch, when its run was started). An answer that comes back
+ * after a forgotten person's name was scrubbed from the item, or after anybody on it was renamed, untagged or
+ * changed their mind about being named, is not stored: it may name them again. Nothing is kept of it, not even the
+ * raw row, and the item stays due to be described again with the names as they are now.
  */
-export async function applyAnnotation(photoId: string, model: string, parsed: Annotation, raw: { usage?: Usage; batched?: boolean } & Record<string, unknown>, opts: { sent?: boolean | null } = {}): Promise<void> {
+export async function applyAnnotation(photoId: string, model: string, parsed: Annotation, raw: { usage?: Usage; batched?: boolean } & Record<string, unknown>, opts: { sent?: boolean | null; requestedAt?: Date; tombstone?: Tombstone; attempts?: number } = {}): Promise<void> {
+  const requestedAt = opts.requestedAt;
   const current = await db.photo.findUnique({ where: { id: photoId }, select: { takenAt: true, takenAtSource: true, estimatedDateSource: true, annotationSource: true, title: true, membersTitle: true, titleByHelper: true, annotation: true, kind: true, lat: true, placeEstimatedAt: true, context: true } });
   if (!current) return;
-  const stored = toStored(parsed);
+  // Nobody forgotten comes back by way of a new answer, whoever it is about: their names are taken out first.
+  const tombstone = opts.tombstone ?? (await loadTombstone());
+  const scope = tombstone.empty ? undefined : await forgottenScope({ photoIds: [photoId] }, tombstone);
+  // Nor anybody opted out, or waiting to be forgotten, whose record is still there.
+  const stored = await withoutOptedOutNames(scrubRecord(toStored(parsed), tombstone, scope), photoId);
   // Written from names or notes, it is the family's to read: kept off the item's own title and out of public view.
   const judgement = await judgeHelperText(photoId, stored, current.context, opts.sent);
   const membersOnly = judgement.membersOnly;
@@ -68,9 +83,17 @@ export async function applyAnnotation(photoId: string, model: string, parsed: An
   const est = parsed.estimatedYear;
   const noReliableDate = isWeakDate(current.takenAtSource, current.takenAt);
   const keepMemberEstimate = current.estimatedDateSource === "MEMBER";
-  await db.$transaction([
-    db.photo.update({
-      where: { id: photoId },
+  // Stored only if nothing about who may be named on it changed since the request was built, checked in the write
+  // itself; otherwise nothing of it is kept, the raw answer included.
+  const stale = Symbol("stale");
+  const reload = Symbol("reload");
+  const kept = await db.$transaction(async (tx) => {
+    const forget = await forgetState(tx, tombstone.loadedAt);
+    if (forget.underWay) throw stale;
+    // Somebody was forgotten since the forgotten names were read: read them again, and judge the answer afresh.
+    if (forget.reload) throw reload;
+    const written = await tx.photo.updateMany({
+      where: { id: photoId, ...(requestedAt ? unchangedSince(requestedAt) : {}) },
       data: {
         annotation: stored,
         annotationModel: model,
@@ -94,16 +117,32 @@ export async function applyAnnotation(photoId: string, model: string, parsed: An
         annotationOutputTokens: raw.usage?.output_tokens ?? null,
         annotationBatched: raw.batched ?? false,
         ...(est && noReliableDate && !keepMemberEstimate
-          ? { estimatedDate: new Date(Date.UTC(Math.round((est.from + est.to) / 2), 6, 1)), estimatedDateConfidence: est.confidence, estimatedDateSource: "MODEL", estimatedDateNote: `${est.from}–${est.to}: ${est.evidence}` }
+          ? { estimatedDate: new Date(Date.UTC(Math.round((est.from + est.to) / 2), 6, 1)), estimatedDateConfidence: est.confidence, estimatedDateSource: "MODEL", estimatedDateNote: `${est.from}–${est.to}: ${tombstone.scrub(est.evidence, scope)}` }
           : {}),
       },
-    }),
-    db.mediaAnnotationRaw.create({ data: { photoId, model, response: raw as object } }),
-  ]);
+    });
+    if (written.count === 0) throw stale;
+    await tx.mediaAnnotationRaw.create({ data: { photoId, model, response: raw as object } });
+    return true;
+  }).catch((err: unknown) => {
+    if (err === stale) return false;
+    if (err === reload) return "reload" as const;
+    throw err;
+  });
+  if (kept === "reload") {
+    const attempts = opts.attempts ?? 0;
+    if (attempts < 3) return applyAnnotation(photoId, model, parsed, raw, { ...opts, tombstone: await loadTombstone(), attempts: attempts + 1 });
+  }
+  if (kept !== true) {
+    await recordFailure(photoId, "names_changed", { terminal: false });
+    // Asked again once the change has settled, so no item is left undescribed for it.
+    await enqueue(QUEUES.annotatePhoto, { photoId }, { singletonKey: `annotate:${photoId}`, singletonSeconds: 60, startAfter: 60 });
+    return;
+  }
   // The place guess is only ever recorded for an item that was actually asked, so clearing a position later still
   // leaves it eligible for the backfill.
   // Asked in the same request, so it was written from the same things.
-  if (needsPlaceEstimate(current)) await applyPlaceEstimate(photoId, parsed.estimatedPlace, { sent: membersOnly || opts.sent });
+  if (needsPlaceEstimate(current)) await applyPlaceEstimate(photoId, parsed.estimatedPlace, { sent: membersOnly || opts.sent, requestedAt, tombstone });
   // The description changed, so the semantic index for this item is stale.
   await enqueueEmbedding(photoId, true);
 }

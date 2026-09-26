@@ -2,6 +2,9 @@ import { db } from "@/lib/db";
 import { anthropic } from "@/lib/annotation/client";
 import { annotationGates, notOptedOutWhere } from "@/lib/annotation/eligibility";
 import { buildPlaceRequest, buildRequest, loadItem } from "@/lib/annotation/request";
+import { nameScrubber } from "@/lib/people/unpermitted";
+import { loadTombstone, tombstoneStale } from "@/lib/people/tombstone";
+import { forgetRunning } from "@/lib/people/names-changed";
 import { applyAnnotation, parseMessageContent, recordFailure } from "@/lib/annotation/apply";
 import { applyPlaceEstimate, parsePlaceContent, recordPlaceFailure } from "@/lib/annotation/place";
 import { enqueue } from "../boss";
@@ -48,7 +51,8 @@ export function pendingWhere(task: BackfillTask) {
  * confirmed in it and either the tag or their permission to be named is newer than the description — which makes
  * the run self-clearing, since describing it again moves the description past both.
  *
- * A minor is never named and so never brings an item into this run; a pet always may be.
+ * A minor is never named and so never brings an item into this run, nor does anybody with no birthday or
+ * attestation; a pet always may be.
  */
 export async function describedBeforeTheirNames(personId?: string): Promise<string[]> {
   const only = personId ? Prisma.sql`AND pe.id = ${personId}` : Prisma.empty;
@@ -61,10 +65,13 @@ export async function describedBeforeTheirNames(personId?: string): Promise<stri
         ${only}
         AND (
           pe.kind = 'PET'
-          OR ((pe."faceIndexing" OR pe."nameInDescriptions") AND (pe.birthday IS NULL OR pe.birthday <= (now() - interval '18 years')))
+          -- The same rule as nameMayLeaveServer: an adult by birthday or by attestation, never a birthday nobody knows.
+          OR ((pe."faceIndexing" OR pe."nameInDescriptions") AND (pe.birthday <= (now() - interval '18 years') OR (pe.birthday IS NULL AND (pe."adultAttestedAt" IS NOT NULL OR pe."adultConfirmedAt" IS NOT NULL))))
         )
         AND (
-          f."createdAt" > p."annotatedAt"
+          -- When the face became theirs, not when the detector found it: that is usually before the description,
+          -- and the member's "yes, that is Ada" days after it.
+          COALESCE(f."confirmedAt", f."createdAt") > p."annotatedAt"
           OR pe."nameInDescriptionsSetAt" > p."annotatedAt"
           OR pe."faceIndexingSetAt" > p."annotatedAt"
         )
@@ -73,7 +80,7 @@ export async function describedBeforeTheirNames(personId?: string): Promise<stri
       SELECT 1 FROM "AnimalDetection" a JOIN "Person" ape ON ape.id = a."personId"
       WHERE a."photoId" = p.id AND a.status = 'CONFIRMED' AND ape."optedOutAt" IS NULL AND ape.kind = 'PET'
         ${onlyAnimal}
-        AND a."createdAt" > p."annotatedAt"
+        AND COALESCE(a."confirmedAt", a."createdAt") > p."annotatedAt"
     ))`;
   return rows.map((r) => r.id);
 }
@@ -204,6 +211,8 @@ export async function annotationBackfill(job: AnnotationBackfillJob): Promise<vo
   await heartbeat();
   const task = taskOf(batch.scope as BackfillScope);
   const candidates = await backfillCandidates(batch.scope as BackfillScope);
+  // Everybody's names, and which may not go to the helper, read once for the whole run rather than per item.
+  const scrubber = await nameScrubber();
   let rowId = batch.id;
   let rowLive = false; // whether rowId already carries a real batch id (its results must never be lost)
   let unclaimed: string | null = null; // a batch created at Anthropic whose row claim has not landed yet
@@ -226,7 +235,7 @@ export async function annotationBackfill(job: AnnotationBackfillJob): Promise<vo
         try {
           // The place pass is sent the notes but never names.
           const names = promptFor(task) === "place" ? [] : await permittedNames(item.id);
-          const params = promptFor(task) === "place" ? await buildPlaceRequest(item, gates.model) : await buildRequest(item, gates.model, names);
+          const params = promptFor(task) === "place" ? await buildPlaceRequest(item, gates.model, scrubber) : await buildRequest(item, gates.model, names, scrubber);
           // What the request carries rides on its id, so the answer is judged by what was sent, not by what is true when it lands.
           built.push({ custom_id: annotationCustomId(c.id, requestCarriesMembersOnly(item, names)), params, bytes: imageBytes(params) });
         } catch {
@@ -334,7 +343,15 @@ export async function annotationBatchPoll(): Promise<void> {
     const remote = await anthropic().messages.batches.retrieve(b.anthropicBatchId).catch(() => null);
     if (!remote) continue;
     if (remote.processing_status !== "ended") continue;
+    // While somebody is being forgotten no answer can be stored: the batch waits for the next poll rather than
+    // having every answer in it thrown away and asked again one at a time, at the full price.
+    if (await forgetRunning()) continue;
     let succeeded = 0, errored = 0, canceled = 0;
+    // The forgotten names, read once for the batch rather than for every answer in it, and again only if somebody
+    // is forgotten meanwhile.
+    let tombstone = await loadTombstone();
+    // Every request in the run was built after its first row was created, so that is the time to judge answers by.
+    const requestedAt = b.parentId ? ((await db.annotationBatch.findUnique({ where: { id: b.parentId }, select: { createdAt: true } }))?.createdAt ?? b.createdAt) : b.createdAt;
     for await (const result of await anthropic().messages.batches.results(b.anthropicBatchId)) {
       const { photoId, sent } = parseAnnotationCustomId(result.custom_id);
       // A place run never writes annotation state: an item it could not place keeps whatever description it has.
@@ -357,6 +374,7 @@ export async function annotationBatchPoll(): Promise<void> {
         await fail("max_tokens");
         continue;
       }
+      if (await tombstoneStale(tombstone)) tombstone = await loadTombstone();
       if (promptFor(task) === "place") {
         const place = parsePlaceContent(message.content as { type: string; text?: string }[]);
         if (place === undefined) {
@@ -364,7 +382,10 @@ export async function annotationBatchPoll(): Promise<void> {
           await fail("invalid_output");
           continue;
         }
-        await applyPlaceEstimate(photoId, place, { sent });
+        if ((await applyPlaceEstimate(photoId, place, { sent, requestedAt, tombstone })) === "stale") {
+          errored++;
+          continue;
+        }
         succeeded++;
         continue;
       }
@@ -374,7 +395,7 @@ export async function annotationBatchPoll(): Promise<void> {
         await fail("invalid_output");
         continue;
       }
-      await applyAnnotation(photoId, message.model, parsed, { content: message.content, usage: message.usage, stop_reason: message.stop_reason, batched: true }, { sent });
+      await applyAnnotation(photoId, message.model, parsed, { content: message.content, usage: message.usage, stop_reason: message.stop_reason, batched: true }, { sent, requestedAt, tombstone });
       succeeded++;
     }
     console.log(`[annotation-backfill] batch ${b.anthropicBatchId} ended: ${succeeded} ok, ${errored} failed, ${canceled} cancelled`);

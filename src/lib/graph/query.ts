@@ -71,7 +71,7 @@ export async function graphPayload(viewer: Viewer, scope: GraphScope, minScore: 
     where: { ...visibleMediaWhere(viewer), ...scopeWhere, embeddedAt: { not: null }, status: "READY" },
     orderBy: { createdAt: "desc" },
     take: MAX_NODES + 1,
-    select: { id: true, updatedAt: true, caption: true, title: true, membersTitle: true, originalName: true, kind: true, takenAt: true, tripId: true, trip: { select: { title: true } }, uploader: { select: { name: true, email: true } }, collections: { select: { collectionId: true } }, faces: { where: { status: "CONFIRMED", personId: { not: null } }, select: { personId: true } } },
+    select: { id: true, updatedAt: true, caption: true, title: true, membersTitle: true, originalName: true, kind: true, takenAt: true, tripId: true, trip: { select: { title: true } }, uploader: { select: { name: true, email: true } }, collections: { select: { collectionId: true } }, faces: { where: { status: "CONFIRMED", personId: { not: null }, person: { optedOutAt: null } }, select: { personId: true } } },
   });
   const capped = photos.length > MAX_NODES;
   const kept = capped ? photos.slice(0, MAX_NODES) : photos;
@@ -85,7 +85,8 @@ export async function graphPayload(viewer: Viewer, scope: GraphScope, minScore: 
   const [trips, collections, people] = await Promise.all([
     db.trip.findMany({ where: { id: { in: [...tripIds] } }, select: { id: true, title: true }, orderBy: { startDate: "desc" } }),
     db.collection.findMany({ where: { id: { in: [...collectionIds] } }, select: { id: true, title: true }, orderBy: { title: "asc" } }),
-    db.person.findMany({ where: { id: { in: [...personIds] } }, select: { id: true, name: true }, orderBy: { name: "asc" } }),
+    // Somebody who asked to be forgotten is in nobody's legend.
+    db.person.findMany({ where: { id: { in: [...personIds] }, optedOutAt: null }, select: { id: true, name: true }, orderBy: { name: "asc" } }),
   ]);
   return {
     nodes: kept.map((p) => ({ id: p.id, thumb: photoUrl(p, "thumb"), medium: photoUrl(p, "medium"), alt: p.caption ?? readableTitle(p, true) ?? p.originalName, caption: p.caption ?? readableTitle(p, true), tripId: p.tripId, tripTitle: p.trip?.title ?? null, collectionIds: p.collections.map((c) => c.collectionId), personIds: [...new Set(p.faces.map((f) => f.personId!))], uploader: uploaderLabel(p.uploader?.name, p.uploader?.email), takenAt: p.takenAt?.toISOString() ?? null, kind: p.kind })),

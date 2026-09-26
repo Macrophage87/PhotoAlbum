@@ -5,7 +5,7 @@
  * only an admin can turn on, and which passes the minors check: a birthday showing 18 or older, or an adult
  * attestation. Anyone else ends up with their templates nulled.
  */
-export type ConsentFields = { birthday: Date | null; adultAttestedAt: Date | null; faceIndexing: boolean; nameInDescriptions?: boolean };
+export type ConsentFields = { birthday: Date | null; adultAttestedAt: Date | null; adultConfirmedAt?: Date | null; faceIndexing: boolean; nameInDescriptions?: boolean };
 
 export function ageOn(birthday: Date, on = new Date()): number {
   let age = on.getUTCFullYear() - birthday.getUTCFullYear();
@@ -22,6 +22,17 @@ export function isMinor(p: Pick<ConsentFields, "birthday">, now = new Date()): b
 export function minorsCheckPasses(p: Pick<ConsentFields, "birthday" | "adultAttestedAt">, now = new Date()): boolean {
   if (p.adultAttestedAt) return true;
   return Boolean(p.birthday) && !isMinor(p, now);
+}
+
+/**
+ * An adult on the album's own evidence, for naming: a birthday showing 18 or older, or — with no birthday — an
+ * admin's word, either the recognition attestation or the naming confirmation (`adultConfirmedAt`). A birthday
+ * recorded later showing a child outranks both. Recognition asks more (minorsCheckPasses): the naming confirmation
+ * says nothing about agreeing to be recognised.
+ */
+export function knownAdult(p: Pick<ConsentFields, "birthday" | "adultAttestedAt" | "adultConfirmedAt">, now = new Date()): boolean {
+  if (p.birthday) return !isMinor(p, now);
+  return Boolean(p.adultAttestedAt || p.adultConfirmedAt);
 }
 
 export type NamingInput = { byAdmin: boolean; wantIndexing: boolean; parentInstruction: boolean; birthday: Date | null; attest: boolean; isChildFlag: boolean };
@@ -53,8 +64,11 @@ export function namingOutcome(input: NamingInput, now = new Date()): NamingOutco
  * is in a photograph it is already being shown. A relative who would rather be named than called "an older couple"
  * can say so without being recognised, which is the narrower of the two.
  *
- * A minor is never named, under either.
+ * A minor is never named, under either — and neither is somebody the album cannot show to be an adult. A person
+ * tagged by hand has no birthday at all, and a child with no birthday on record is still a child, so a name leaves
+ * only on the same evidence recognition needs: a birthday showing 18 or older, or the adult attestation. (A minor
+ * recognised on a parent's instruction is recognised, never named.)
  */
 export function nameMayLeaveServer(p: ConsentFields, now = new Date()): boolean {
-  return (p.faceIndexing || Boolean(p.nameInDescriptions)) && !isMinor(p, now);
+  return (p.faceIndexing || Boolean(p.nameInDescriptions)) && knownAdult(p, now);
 }

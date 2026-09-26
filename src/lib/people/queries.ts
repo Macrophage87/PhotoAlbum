@@ -10,13 +10,28 @@ import { readableTitle } from "@/lib/photos/readable-text";
 export type PersonCard = { id: string; name: string; kind: "HUMAN" | "PET"; species: string | null; isFlock: boolean; relationship: string | null; faceIndexing: boolean; pendingDecision: boolean; optedOut: boolean; basis: "birthday" | "attestation" | "none"; minor: boolean; photoCount: number; sample: { id: string; updatedAt: Date } | null };
 
 export async function listPeople(): Promise<PersonCard[]> {
+  // Counted in the database rather than by loading every face: a person on thousands of photographs is one row here.
   // A face on a photograph in the trash is not a face the album still has: it counts for nothing and is never the
   // picture shown for somebody, which is how a trashed photograph used to go on looking out of the People page.
-  const people = await db.person.findMany({ orderBy: { name: "asc" }, include: { faces: { where: { status: "CONFIRMED", photo: NOT_TRASHED }, select: { photoId: true, photo: { select: { id: true, updatedAt: true, status: true } } } } } });
+  // A pet the animal matcher found and somebody agreed with is on those photographs as surely as a tagged one.
+  const [people, counts] = await Promise.all([
+    db.person.findMany({ orderBy: { name: "asc" } }),
+    db.$queryRaw<{ personId: string; n: number; sampleId: string | null; sampleUpdatedAt: Date | null }[]>`
+      WITH seen AS (
+        SELECT "personId", "photoId" FROM "Face" WHERE status = 'CONFIRMED' AND "personId" IS NOT NULL
+        UNION
+        SELECT "personId", "photoId" FROM "AnimalDetection" WHERE status = 'CONFIRMED' AND "personId" IS NOT NULL
+      )
+      SELECT s."personId", count(*)::int AS n,
+        (array_agg(p.id ORDER BY p."takenAt" NULLS LAST, p.id) FILTER (WHERE p.status = 'READY'))[1] AS "sampleId",
+        (array_agg(p."updatedAt" ORDER BY p."takenAt" NULLS LAST, p.id) FILTER (WHERE p.status = 'READY'))[1] AS "sampleUpdatedAt"
+      FROM seen s JOIN "Photo" p ON p.id = s."photoId" AND p."trashedAt" IS NULL
+      GROUP BY s."personId"`,
+  ]);
+  const byPerson = new Map(counts.map((c) => [c.personId, c]));
   return people.map((p) => {
-    const photoIds = new Set(p.faces.map((f) => f.photoId));
-    const sample = p.faces.find((f) => f.photo.status === "READY")?.photo ?? null;
-    return { id: p.id, name: p.name, kind: p.kind, species: p.species, isFlock: p.isFlock, relationship: p.relationship, faceIndexing: p.faceIndexing, pendingDecision: p.pendingDecision, optedOut: Boolean(p.optedOutAt), basis: p.adultAttestedAt ? "attestation" : p.birthday && minorsCheckPasses(p) ? "birthday" : "none", minor: isMinor(p), photoCount: photoIds.size, sample: sample ? { id: sample.id, updatedAt: sample.updatedAt } : null };
+    const c = byPerson.get(p.id);
+    return { id: p.id, name: p.name, kind: p.kind, species: p.species, isFlock: p.isFlock, relationship: p.relationship, faceIndexing: p.faceIndexing, pendingDecision: p.pendingDecision, optedOut: Boolean(p.optedOutAt), basis: p.adultAttestedAt ? "attestation" : p.birthday && minorsCheckPasses(p) ? "birthday" : "none", minor: isMinor(p), photoCount: c?.n ?? 0, sample: c?.sampleId && c.sampleUpdatedAt ? { id: c.sampleId, updatedAt: c.sampleUpdatedAt } : null };
   });
 }
 
@@ -82,20 +97,24 @@ async function suggestedPeople(clusterIds: string[]): Promise<Map<string, { id: 
     FROM "FaceCluster" u
     CROSS JOIN LATERAL (
       SELECT fc."personId", 1 - (fc.centroid <=> u.centroid) AS similarity
-      FROM "FaceCluster" fc
-      WHERE fc."personId" IS NOT NULL AND fc.centroid IS NOT NULL
+      FROM "FaceCluster" fc JOIN "Person" cand ON cand.id = fc."personId"
+      -- Recognising somebody is the same act whether it ends in a proposal or in "Looks like": only people an admin
+      -- has turned recognition on for, as the matcher does. A member-named group keeps its templates while it waits
+      -- for that decision, and they are not to be matched against anything meanwhile.
+      WHERE cand."faceIndexing" AND cand.kind = 'HUMAN' AND cand."optedOutAt" IS NULL AND fc.centroid IS NOT NULL
       ORDER BY fc.centroid <=> u.centroid
       LIMIT 1
     ) best
     JOIN "Person" p ON p.id = best."personId"
-    WHERE u.id IN (${Prisma.join(clusterIds)}) AND u.centroid IS NOT NULL AND p."optedOutAt" IS NULL AND best.similarity >= ${SUGGEST_THRESHOLD}`;
+    WHERE u.id IN (${Prisma.join(clusterIds)}) AND u.centroid IS NOT NULL AND best.similarity >= ${SUGGEST_THRESHOLD}`;
   for (const r of rows) out.set(r.clusterId, { id: r.id, name: r.name, kind: r.kind, similarity: Number(r.similarity) });
   return out;
 }
 
 /** Media a person appears in, over time, restricted to what the viewer may see. */
 export async function personMedia(viewer: Viewer, personId: string) {
-  return db.photo.findMany({ where: { ...visibleMediaWhere(viewer), faces: { some: { personId, status: "CONFIRMED" } } }, orderBy: [{ takenAt: "asc" }], select: photoCardSelect });
+  // Both routes to a photograph count, as in idsWithPerson: a tag or confirmed face, or a confirmed animal match.
+  return db.photo.findMany({ where: { AND: [visibleMediaWhere(viewer), { OR: [{ faces: { some: { personId, status: "CONFIRMED" } } }, { animals: { some: { personId, status: "CONFIRMED" } } }] }] }, orderBy: [{ takenAt: "asc" }], select: photoCardSelect });
 }
 
 export type FaceCounts = { templates: number; unnamed: number; people: number; nextPurge: Date | null };

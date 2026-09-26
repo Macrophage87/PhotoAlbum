@@ -7,12 +7,14 @@ import { db } from "@/lib/db";
 import { claimAnimalsForPet, confirmAnimalAs, rejectAnimal, releaseAnimalsForPet } from "@/lib/pets/proposals";
 import { enqueueAnimalMatchAllOpen } from "@/lib/jobs/handlers/detect-animals";
 import { requireUserOrThrow } from "@/lib/auth/viewer";
-import { canEditMedia, NOT_YOURS } from "@/lib/auth/ownership";
-import { namingOutcome } from "@/lib/people/consent";
-import { enqueueEmbedding } from "@/lib/jobs/handlers/embed-photo";
+import { canChangePerson, canEditMedia, NOT_YOUR_PERSON, NOT_YOURS } from "@/lib/auth/ownership";
+import { knownAdult, nameMayLeaveServer, namingOutcome } from "@/lib/people/consent";
+import { forgetNameEverywhere, forgetOnPhoto } from "@/lib/people/forget";
+import { forgetKeyState, forgottenHashesOf } from "@/lib/people/tombstone";
+import { forgetPerson } from "@/lib/people/forget-person";
+import { ForgetBusyError } from "@/lib/people/names-changed";
 import { enqueueFaceDetection } from "@/lib/jobs/handlers/detect-faces";
 import { confirmFaceAs, rejectProposal } from "@/lib/people/matching";
-import type { StoredAnnotation } from "@/lib/annotation/schema";
 import { rejudgeFromAction } from "@/lib/annotation/rejudge-notice";
 
 async function requireAdmin() {
@@ -169,7 +171,8 @@ export async function decideIndexing(personId: string, fd: FormData): Promise<vo
   const wantIndexing = fd.get("faceIndexing") === "on" && (!person.optedOutAt || agreedAgain);
   const outcome = namingOutcome({ byAdmin: true, wantIndexing, parentInstruction: fd.get("parentInstruction") === "on", birthday, attest, isChildFlag: false });
   const now = new Date();
-  await db.person.update({
+  const named = nameMayLeaveServer(person);
+  const after = await db.person.update({
     where: { id: personId },
     data: {
       birthday,
@@ -181,6 +184,13 @@ export async function decideIndexing(personId: string, fd: FormData): Promise<vo
       pendingDecision: false,
     },
   });
+  // No longer to be named (recognition off, or a birthday showing a child): what the helper wrote with the name goes.
+  if (named && !nameMayLeaveServer(after)) await forgetNameEverywhere(after);
+  // Evidence they are an adult, however it was recorded: a withdrawal the album made by itself for want of it no
+  // longer needs to scrub anything. Naming stays off until an admin turns it back on.
+  // Only evidence that was missing counts: a Recognition save for somebody whose naming was turned off before, with
+  // evidence already on record, is no decision about naming, which only turning it back on is.
+  if (!knownAdult(person) && knownAdult(after) && after.namingWithdrawnAt) await db.person.update({ where: { id: personId }, data: { namingWithdrawnAt: null } });
   if (outcome.nullTemplates) await nullTemplatesFor(personId);
   else {
     // Enabling later: templates of confirmed faces are recomputed by re-scanning their photos, then open faces are re-matched.
@@ -195,65 +205,82 @@ export async function decideIndexing(personId: string, fd: FormData): Promise<vo
 }
 
 /**
- * Opt a person out of recognition. Deletes their templates, clusters, proposals and negative examples, removes their
- * name from descriptions and the search index, and stops names reaching the helper. By default their confirmed
- * appearances go too; "keep my name on photos" keeps the non-biometric record only.
+ * Opt a person out of recognition. Deletes their templates, clusters, proposals and negative examples, takes their
+ * name out of everything the helper wrote and out of the members' name index, and stops names reaching the helper.
+ * By default their confirmed appearances go too; "keep my name on photos" keeps the non-biometric record only.
+ * What members wrote by hand is left as they wrote it, and listed for them.
+ *
+ * Whoever added the person, or an admin: either way it rewrites text on other members' photographs, and the default
+ * takes every tag of them off the album for good.
+ *
+ * In an order that is safe to repeat: they are marked opted out first (so nothing proposes, names or indexes them
+ * from that moment), then the text is scrubbed, and only then does anything get deleted — so a run cut short leaves
+ * the faces that say where to scrub, and running it again finds the same photographs.
  */
 export async function optOutPerson(personId: string, fd: FormData): Promise<void> {
-  await requireUserOrThrow();
+  const user = await requireUserOrThrow();
   const keepName = fd.get("mode") === "keep-name";
   const person = await db.person.findUniqueOrThrow({ where: { id: personId } });
-  const photos = await db.face.findMany({ where: { OR: [{ personId }, { proposedPersonId: personId }] }, select: { photoId: true }, distinct: ["photoId"] });
-  await db.faceCluster.deleteMany({ where: { personId } });
-  await db.face.deleteMany({ where: { proposedPersonId: personId } });
-  if (keepName) {
-    await db.$executeRaw`UPDATE "Face" SET embedding = NULL, "clusterId" = NULL WHERE "personId" = ${personId}`;
-    await db.person.update({ where: { id: personId }, data: { faceIndexing: false, pendingDecision: false, keepNameOnPhotos: true, optedOutAt: new Date(), faceIndexingSetAt: new Date() } });
-  } else {
-    await db.face.deleteMany({ where: { personId } });
+  if (!canChangePerson(user, person)) throw new Error(NOT_YOUR_PERSON);
+  // A pet has no face data to forget; it is removed with deletePerson, which gives its detections back.
+  if (person.kind === "PET") throw new Error("A pet is removed, not forgotten");
+  // Without a key to remember their names under, forgetting them would let the names come straight back: they are
+  // switched off at once, and forgotten as soon as the key is set.
+  const later = !keepName && !(await forgetKeyState()).write;
+  try {
+    await forgetPerson(personId, { keepName, byUserId: user.id, later });
+  } catch (err) {
+    // Another forget held the lock for too long: said plainly on the page, not as an error.
+    if (err instanceof ForgetBusyError) redirect(`/people/${personId}?busy=1`);
+    throw err;
   }
-  // Scrub the name from the helper's text on affected items so neither the keyword nor the semantic index carries it.
-  // Two regexes: a global one for replacing, and a non-global one for testing (a global regex's lastIndex would skip tags).
-  const escaped = person.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const replaceAll = new RegExp(escaped, "gi");
-  const mentions = new RegExp(escaped, "i");
-  const scrub = (v: string | null | undefined) => (v ? v.replace(replaceAll, "a family member") : v ?? null);
-  for (const { photoId } of photos) {
-    const p = await db.photo.findUnique({ where: { id: photoId }, select: { annotation: true } });
-    const a = p?.annotation as StoredAnnotation | null;
-    if (a) {
-      const next: StoredAnnotation = {
-        ...a,
-        caption: scrub(a.caption) ?? "",
-        description: scrub(a.description) ?? "",
-        searchSummary: scrub(a.searchSummary) ?? "",
-        place: scrub(a.place),
-        activity: scrub(a.activity),
-        visibleText: scrub(a.visibleText),
-        mood: scrub(a.mood),
-        tags: a.tags.filter((t) => !mentions.test(t)),
-        objects: a.objects.filter((t) => !mentions.test(t)),
-      };
-      await db.photo.update({ where: { id: photoId }, data: { annotation: next } });
-    } else {
-      await db.photo.update({ where: { id: photoId }, data: { updatedAt: new Date() } });
-    }
-    await enqueueEmbedding(photoId, true);
-  }
-  // Forgetting entirely also removes the person page; the record of who is in which photo went with the faces.
-  if (!keepName) await db.person.delete({ where: { id: personId } });
   revalidatePath("/people", "layout");
   revalidatePath("/admin");
-  if (!keepName) redirect("/people");
+  if (!keepName && !later) redirect("/people/forgotten");
+}
+
+/**
+ * Allow a forgotten name again: one entry by its place in the list (nothing shown says what it is), or whichever
+ * entry a name an admin types would be. For a name that turned out to be somebody else's too, or an everyday word.
+ */
+export async function allowForgottenName(hash: string): Promise<void> {
+  await requireAdmin();
+  await db.forgottenName.deleteMany({ where: { hash } });
+  revalidatePath("/admin");
+}
+
+export async function allowForgottenNameTyped(fd: FormData): Promise<void> {
+  await requireAdmin();
+  const name = String(fd.get("name") ?? "").trim();
+  const hashes = name ? await forgottenHashesOf(name) : [];
+  if (hashes.length) await db.forgottenName.deleteMany({ where: { hash: { in: hashes } } });
+  revalidatePath("/admin");
+}
+
+/** An admin has seen to a forget's leftovers list. */
+export async function dismissForgetLeftover(id: string): Promise<void> {
+  const user = await requireUserOrThrow();
+  // Admins, or the member who forgot them: the list is theirs.
+  const mine = user.role === "ADMIN" ? {} : { createdById: user.id };
+  await db.forgetLeftover.updateMany({ where: { id, dismissedAt: null, ...mine }, data: { dismissedAt: new Date(), dismissedById: user.id } });
+  revalidatePath("/people/forgotten");
+  revalidatePath("/admin");
+}
+
+/** A rename keeps the old name on record: text the helper wrote under it still names them, and forgetting finds it. */
+function withFormerName(person: { name: string; formerNames: string[] }, next: string): string[] {
+  if (person.name === next) return person.formerNames;
+  return [...new Set([...person.formerNames, person.name])].filter((n) => n !== next);
 }
 
 export async function updatePerson(personId: string, fd: FormData): Promise<void> {
-  await requireUserOrThrow();
+  const user = await requireUserOrThrow();
+  const person = await db.person.findUniqueOrThrow({ where: { id: personId }, select: { createdById: true, name: true, formerNames: true } });
+  if (!canChangePerson(user, person)) throw new Error(NOT_YOUR_PERSON);
   const v = z.object({ name: z.string().trim().min(1).max(80), relationship: z.string().trim().max(80).transform((x) => x || null) }).parse({ name: fd.get("name"), relationship: fd.get("relationship") ?? "" });
-  const before = await db.person.findUnique({ where: { id: personId }, select: { name: true } });
-  await db.person.update({ where: { id: personId }, data: { name: v.name, relationship: v.relationship } });
+  await db.person.update({ where: { id: personId }, data: { name: v.name, relationship: v.relationship, formerNames: withFormerName(person, v.name) } });
   // The old name as well: text written with it is still about them.
-  if (before?.name !== v.name) await rejudgeFromAction({ names: before ? [v.name, before.name] : [v.name] });
+  if (person.name !== v.name) await rejudgeFromAction({ names: [v.name, person.name] });
   revalidatePath("/people", "layout");
 }
 
@@ -374,22 +401,83 @@ export async function tagPersonAt(photoId: string, fd: FormData): Promise<void> 
 /** Take a hand tag off a photograph, leaving anything the detector found alone. */
 export async function untagPersonAt(faceId: string): Promise<void> {
   const user = await requireUserOrThrow();
-  const face = await db.face.findUniqueOrThrow({ where: { id: faceId }, select: { photoId: true, confidence: true, photo: { select: { uploaderId: true } } } });
+  const face = await db.face.findUniqueOrThrow({ where: { id: faceId }, select: { photoId: true, personId: true, confidence: true, photo: { select: { uploaderId: true } } } });
   if (!canEditMedia(user, face.photo)) throw new Error(NOT_YOURS);
   if (face.confidence !== 0) throw new Error("That one was found by the album; remove the name from the chip instead");
   await db.face.delete({ where: { id: faceId } });
+  if (face.personId) await forgetIfNoLongerOn(face.photoId, face.personId);
   revalidatePath(`/photos/${face.photoId}`);
   revalidatePath("/people", "layout");
 }
 
-/** An admin records that this person is happy to be named in the descriptions the helper writes. */
+/**
+ * An admin records that this person is happy to be named in the descriptions the helper writes.
+ *
+ * Only for somebody the album knows to be an adult — a birthday showing 18 or older, or the adult attestation —
+ * because a child is never named, and a person with no birthday on record may well be one: tagging a six-year-old
+ * by hand records no birthday at all.
+ */
 export async function setNameInDescriptions(personId: string, on: boolean): Promise<void> {
   const admin = await requireAdmin();
-  const person = await db.person.findUniqueOrThrow({ where: { id: personId }, select: { optedOutAt: true } });
+  const person = await db.person.findUniqueOrThrow({ where: { id: personId } });
   if (on && person.optedOutAt) throw new Error("This person asked to be forgotten");
-  await db.person.update({ where: { id: personId }, data: { nameInDescriptions: on, nameInDescriptionsSetById: admin.id, nameInDescriptionsSetAt: new Date() } });
+  if (on && !knownAdult(person)) throw new Error("Record a birthday showing an adult, or the adult attestation, before naming them");
+  const after = await db.person.update({ where: { id: personId }, data: { nameInDescriptions: on, nameInDescriptionsSetById: admin.id, nameInDescriptionsSetAt: new Date(), ...(on ? { namingWithdrawnAt: null } : {}) } });
+  // Withdrawn: what the helper already wrote with the name goes too, not only what it will write.
+  if (nameMayLeaveServer(person) && !nameMayLeaveServer(after)) await forgetNameEverywhere(after);
   revalidatePath("/people", "layout");
   revalidatePath("/privacy");
+}
+
+/**
+ * The evidence naming needs, recorded where naming is decided: a birthday, or an admin's word that this person is
+ * an adult. Separate from recognition, whose own switch is still an admin's separate decision; this only says how
+ * old they are. With it in place, naming is turned on in the same step.
+ */
+export async function recordAdultAndName(personId: string, fd: FormData): Promise<void> {
+  const admin = await requireAdmin();
+  const person = await db.person.findUniqueOrThrow({ where: { id: personId } });
+  if (person.optedOutAt) throw new Error("This person asked to be forgotten");
+  const birthday = day.parse(fd.get("birthday") || undefined) ?? person.birthday;
+  const attest = !birthday && fd.get("attestAdult") === "on";
+  const now = new Date();
+  const evidence = { birthday, adultAttestedAt: person.adultAttestedAt, adultConfirmedAt: attest ? now : person.adultConfirmedAt };
+  if (!knownAdult(evidence)) throw new Error("A birthday showing 18 or older, or the confirmation that they are an adult, is needed to name them");
+  await db.person.update({
+    where: { id: personId },
+    data: { birthday, ...(attest ? { adultConfirmedAt: now, adultConfirmedById: admin.id } : {}), nameInDescriptions: true, nameInDescriptionsSetById: admin.id, nameInDescriptionsSetAt: now, namingWithdrawnAt: null },
+  });
+  revalidatePath("/people", "layout");
+  revalidatePath("/privacy");
+}
+
+/**
+ * An admin's answer to a naming the album switched off by itself: take the names out of the helper's text now
+ * rather than at the end of the fortnight. (The other answer is to record a birthday or an adult confirmation.)
+ */
+export async function scrubWithdrawnNow(personId: string): Promise<void> {
+  await requireAdmin();
+  const person = await db.person.findUniqueOrThrow({ where: { id: personId }, select: { id: true, name: true, formerNames: true, namingWithdrawnAt: true } });
+  if (!person.namingWithdrawnAt) return;
+  await forgetNameEverywhere(person);
+  await db.person.update({ where: { id: personId }, data: { namingWithdrawnAt: null } });
+  revalidatePath("/people", "layout");
+  revalidatePath("/admin");
+}
+
+/**
+ * Somebody taken off a photograph was named in what the helper wrote about it because they were on it; the name
+ * goes from that one item's machine-written text, unless they are still on it some other way.
+ */
+async function forgetIfNoLongerOn(photoId: string, personId: string): Promise<void> {
+  const [face, animal] = await Promise.all([
+    db.face.findFirst({ where: { photoId, personId, status: "CONFIRMED" }, select: { id: true } }),
+    db.animalDetection.findFirst({ where: { photoId, personId, status: "CONFIRMED" }, select: { id: true } }),
+  ]);
+  if (face || animal) return;
+  const person = await db.person.findUnique({ where: { id: personId }, select: { id: true, name: true, formerNames: true } });
+  if (person) await forgetOnPhoto(photoId, person);
+  else await db.photo.update({ where: { id: photoId }, data: { namesScrubbedAt: new Date() } });
 }
 
 const petSchema = z.object({
@@ -411,12 +499,13 @@ export async function createPet(fd: FormData): Promise<void> {
 }
 
 export async function updatePet(personId: string, fd: FormData): Promise<void> {
-  await requireUserOrThrow();
+  const user = await requireUserOrThrow();
+  const pet = await db.person.findUniqueOrThrow({ where: { id: personId }, select: { createdById: true, name: true, formerNames: true } });
+  if (!canChangePerson(user, pet)) throw new Error(NOT_YOUR_PERSON);
   const v = petSchema.parse({ name: fd.get("name"), species: fd.get("species"), livedFrom: fd.get("livedFrom") || undefined, livedTo: fd.get("livedTo") || undefined, isFlock: fd.get("isFlock") === "on", descriptors: fd.get("descriptors") ?? undefined });
-  const before = await db.person.findUnique({ where: { id: personId }, select: { name: true } });
-  await db.person.update({ where: { id: personId, kind: "PET" }, data: { name: v.name, species: v.species, livedFrom: v.livedFrom, livedTo: v.livedTo, isFlock: v.isFlock, descriptors: v.descriptors } });
+  await db.person.update({ where: { id: personId, kind: "PET" }, data: { name: v.name, formerNames: withFormerName(pet, v.name), species: v.species, livedFrom: v.livedFrom, livedTo: v.livedTo, isFlock: v.isFlock, descriptors: v.descriptors } });
   // The old name as well: text written with it is still about them.
-  if (before?.name !== v.name) await rejudgeFromAction({ names: before ? [v.name, before.name] : [v.name] });
+  if (pet.name !== v.name) await rejudgeFromAction({ names: [v.name, pet.name] });
   revalidatePath("/people", "layout");
 }
 
@@ -449,6 +538,7 @@ export async function untagPerson(photoId: string, personId: string): Promise<vo
   await db.face.deleteMany({ where: { photoId, personId, confidence: 0 } });
   await db.face.updateMany({ where: { photoId, personId, confidence: { gt: 0 } }, data: { personId: null, status: "REJECTED", proposedPersonId: personId, clusterId: null } });
   await releaseAnimalsForPet(photoId, personId);
+  await forgetIfNoLongerOn(photoId, personId);
   revalidatePath(`/photos/${photoId}`);
   revalidatePath("/people", "layout");
 }

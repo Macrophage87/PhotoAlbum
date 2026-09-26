@@ -7,7 +7,7 @@ import { env } from "@/lib/env";
 import { getViewer, requireAdmin } from "@/lib/auth/viewer";
 import { AppShell, Container } from "@/components/layout/AppShell";
 import { InviteForm } from "@/components/admin/InviteForm";
-import { Badge, Button, Card } from "@/components/ui";
+import { Badge, Button, Card, ConfirmSubmitButton } from "@/components/ui";
 import { removeMember, revokeInvite, setRole } from "./actions";
 import { setMemberName } from "@/app/account/actions";
 import { AnnotationAdmin } from "@/components/annotation/AnnotationAdmin";
@@ -16,8 +16,10 @@ import { actualSpend } from "@/lib/annotation/pricing";
 import { faceGates } from "@/lib/people/gates";
 import { petGates } from "@/lib/pets/gates";
 import { faceCounts, needsDecision } from "@/lib/people/queries";
+import { withdrawalDue, withdrawalNotice, withdrawalReason } from "@/lib/people/forget";
 import { FacesAdmin } from "@/components/people/FacesAdmin";
-import { decideIndexing } from "@/app/people/actions";
+import { allowForgottenName, allowForgottenNameTyped, decideIndexing } from "@/app/people/actions";
+import { forgetKeyState, forgottenNames } from "@/lib/people/tombstone";
 import { isMinor } from "@/lib/people/consent";
 import { TakeoutAdmin } from "@/components/admin/TakeoutAdmin";
 import { inboxDir, listArchives } from "@/lib/takeout/inbox";
@@ -42,7 +44,13 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
   const fg = await faceGates();
   const pg = petGates();
   const animalCounts = { sightings: await db.animalDetection.count(), confirmed: await db.animalDetection.count({ where: { status: "CONFIRMED" } }) };
-  const [counts, decisions] = await Promise.all([faceCounts(fg.retentionDays), needsDecision()]);
+  const [counts, decisions, withdrawn] = await Promise.all([
+    faceCounts(fg.retentionDays),
+    needsDecision(),
+    // Whose naming the album switched off by itself, for want of evidence they are adults: admins decide what next.
+    db.person.findMany({ where: { namingWithdrawnAt: { not: null } }, orderBy: { name: "asc" }, select: { id: true, name: true, namingWithdrawnAt: true, birthday: true, adultAttestedAt: true, adultConfirmedAt: true } }),
+  ]);
+  const [forgetKey, forgotten, pendingForgets] = await Promise.all([forgetKeyState(), forgottenNames(), db.person.count({ where: { forgetPendingAt: { not: null } } })]);
   const [gates, batches] = await Promise.all([
     annotationGates(),
     db.annotationBatch.findMany({ where: { parentId: null }, orderBy: { createdAt: "desc" }, take: 8 }),
@@ -131,6 +139,52 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
           <p className="text-sm text-muted mb-3">Face detection runs on this server through the ML sidecar. It is off until both the operator flag and your opt-in here are set.</p>
           <FacesAdmin gates={{ sidecar: fg.sidecar, envEnabled: fg.envEnabled, optedInAt: fg.optedInAt?.toISOString() ?? null, active: fg.active, retentionDays: fg.retentionDays }} counts={{ ...counts, nextPurge: counts.nextPurge?.toISOString() ?? null }} />
           <p className="text-sm text-muted mt-3" data-testid="pet-gates">Pet spotting (animals, not faces; no opt-in needed): {pg.active ? `on, ${animalCounts.sightings} sighting${animalCounts.sightings === 1 ? "" : "s"} kept, ${animalCounts.confirmed} confirmed` : pg.sidecar ? "off (PET_MATCHING_ENABLED is false)" : "off (needs the ML sidecar)"}.</p>
+          {forgetKey.problem && (
+            <div className="mt-4 rounded-theme border border-red-300 bg-red-50 p-3 text-sm text-red-900" data-testid="forget-key-problem">
+              <p className="font-medium">{forgetKey.paused ? "Forgetting and the AI helper are paused" : "Forgotten names are not protected properly"}</p>
+              <p>{forgetKey.problem} {forgetKey.paused ? "Nobody can be forgotten, and nothing is sent to the AI helper, until it is put right." : ""} See FORGET_KEY in the deployment guide.</p>
+            </div>
+          )}
+          {pendingForgets > 0 && (
+            <div className="mt-4 rounded-theme border border-red-300 bg-red-50 p-3 text-sm text-red-900" data-testid="forgets-waiting">
+              <p className="font-medium">{pendingForgets === 1 ? "1 person is" : `${pendingForgets} people are`} waiting to be forgotten</p>
+              <p>They were switched off at once, but their names can only be forgotten for good once FORGET_KEY is set. It happens by itself when the worker next starts, or overnight.</p>
+            </div>
+          )}
+          {forgotten.length > 0 && (
+            <div className="mt-4 space-y-2 text-sm" data-testid="forgotten-names">
+              <h3 className="font-medium">Forgotten names</h3>
+              <p className="text-muted">The album keeps each forgotten name only as a code, and takes it out of anything sent to or written by the AI helper. If one turns out to be somebody else&apos;s too, or an everyday word, allow it again.</p>
+              <ul className="space-y-1">
+                {forgotten.map((f) => (
+                  <li key={f.hash} className="flex items-center gap-2">
+                    <span>A forgotten name, added {f.createdAt.toLocaleDateString("en-US")}</span>
+                    <form action={allowForgottenName.bind(null, f.hash)}>
+                      <ConfirmSubmitButton size="sm" variant="secondary" confirmMessage="Allow this forgotten name again? The AI helper may then be told it and write it.">Allow this name again</ConfirmSubmitButton>
+                    </form>
+                  </li>
+                ))}
+              </ul>
+              <form action={allowForgottenNameTyped} className="flex flex-wrap items-center gap-2">
+                <label className="flex items-center gap-1">Or type the name <input name="name" className="h-8 rounded-theme border border-border bg-surface text-text [color-scheme:light] px-2" autoComplete="off" /></label>
+                <ConfirmSubmitButton size="sm" variant="secondary" confirmMessage="Allow this name again if it is a forgotten one? The AI helper may then be told it and write it.">Allow it again if it is forgotten</ConfirmSubmitButton>
+              </form>
+            </div>
+          )}
+          {withdrawn.length > 0 && (
+            <div className="mt-4 space-y-2 rounded-theme border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900" data-testid="naming-withdrawn">
+              <h3 className="font-medium">Names no longer used</h3>
+              <p>Nothing more is sent to the AI helper with these names, and what anybody outside the family can read has already lost them.</p>
+              <ul className="space-y-1">
+                {withdrawn.map((p) => (
+                  <li key={p.id}>
+                    <Link href={`/people/${p.id}`} className="font-medium underline">{p.name}</Link>{" "}
+                    <span className="text-amber-800">— {withdrawalNotice(p.name, withdrawalReason(p), withdrawalDue(p.namingWithdrawnAt!))}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
           {decisions.length > 0 && (
             <div className="mt-4 space-y-3">
               <h3 className="font-medium">Needs a decision</h3>

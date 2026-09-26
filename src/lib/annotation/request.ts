@@ -12,6 +12,8 @@ import { ffmpeg } from "@/lib/video/ffmpeg";
 import { formatDateTime } from "@/lib/time/format";
 import { SYSTEM_INSTRUCTIONS } from "./prompt";
 import { annotationSchema } from "./schema";
+import { memberTitle } from "./helper-text";
+import { unpermittedNameScrub, type NameScrubber } from "@/lib/people/unpermitted";
 import { thinkingParams } from "./client";
 import { needsPlaceEstimate, placeRequestParams } from "./place";
 import { isWeakDate } from "@/lib/photos/date-from-neighbours";
@@ -22,7 +24,7 @@ export async function loadItem(photoId: string) {
   return db.photo.findUnique({
     where: { id: photoId },
     select: {
-      id: true, kind: true, status: true, storageKey: true, renditions: true, videoRenditions: true, takenAt: true, takenAtSource: true, tzOffsetMin: true, camera: true, lat: true, lng: true, placeEstimatedAt: true, context: true, caption: true, title: true, durationS: true,
+      id: true, kind: true, status: true, storageKey: true, renditions: true, videoRenditions: true, takenAt: true, takenAtSource: true, tzOffsetMin: true, camera: true, lat: true, lng: true, placeEstimatedAt: true, context: true, caption: true, title: true, titleByHelper: true, annotation: true, durationS: true,
       trip: { select: { title: true, timezone: true } },
       collections: { select: { collection: { select: { title: true } } } },
     },
@@ -62,7 +64,9 @@ export function describeItem(item: ItemForAnnotation, permittedNames: string[], 
   lines.push(item.kind === "VIDEO" ? "Item: a short video clip, shown as frames in time order." : item.kind === "EXTERNAL_VIDEO" ? "Item: the poster frame of a longer video." : "Item: a photo.");
   if (item.context) lines.push(`Notes from the person who uploaded it: ${item.context}`);
   if (item.caption) lines.push(`Existing caption: ${item.caption}`);
-  if (item.title) lines.push(`Title: ${item.title}`);
+  // A title the helper gave it last time is not the family's word, and may name somebody no longer to be named.
+  const title = memberTitle(item.title, item.annotation, item.titleByHelper);
+  if (title) lines.push(`Title: ${title}`);
   if (item.takenAt && !askForDate) lines.push(`Taken: ${formatDateTime(item.takenAt, item.trip?.timezone ?? "UTC", "EEEE, MMMM d, yyyy")}`);
   if (item.camera) lines.push(`Camera: ${item.camera}`);
   if (item.trip) lines.push(`Trip: ${item.trip.title}`);
@@ -97,15 +101,35 @@ async function itemImages(item: ItemForAnnotation): Promise<ImageBlock[]> {
 }
 
 /** Build the Messages request for one item. Images come from local renditions; nothing else is fetched. */
-export async function buildRequest(item: ItemForAnnotation, model: string, permittedNames: string[]): Promise<Anthropic.MessageCreateParamsNonStreaming> {
+export async function buildRequest(item: ItemForAnnotation, model: string, permittedNames: string[], scrubber?: NameScrubber): Promise<Anthropic.MessageCreateParamsNonStreaming> {
   const images = await itemImages(item);
-  return requestParams(model, images, describeItem(item, permittedNames, needsDateEstimate(item), needsPlaceEstimate(item)));
+  const safe = await withoutUnpermittedNames(item, scrubber);
+  return requestParams(model, images, describeItem(safe, permittedNames, needsDateEstimate(item), needsPlaceEstimate(item)));
+}
+
+/**
+ * The item as it may be described to the helper: its title only if a member gave it, and its title, caption, notes
+ * and the titles of its trip and collections without the name of anybody the helper may not be told (see
+ * `nameScrubber`).
+ */
+export async function withoutUnpermittedNames(item: ItemForAnnotation, scrubber?: NameScrubber): Promise<ItemForAnnotation> {
+  const scrub = await unpermittedNameScrub([item.id], scrubber);
+  return {
+    ...item,
+    title: scrub(memberTitle(item.title, item.annotation, item.titleByHelper)),
+    titleByHelper: false,
+    annotation: null,
+    caption: scrub(item.caption),
+    context: scrub(item.context),
+    trip: item.trip ? { ...item.trip, title: scrub(item.trip.title) ?? "" } : item.trip,
+    collections: item.collections.map((c) => ({ ...c, collection: { ...c.collection, title: scrub(c.collection.title) ?? "" } })),
+  };
 }
 
 /** The place-only pass: the same frames, a much smaller question, for items described before places were estimated. */
-export async function buildPlaceRequest(item: ItemForAnnotation, model: string): Promise<Anthropic.MessageCreateParamsNonStreaming> {
+export async function buildPlaceRequest(item: ItemForAnnotation, model: string, scrubber?: NameScrubber): Promise<Anthropic.MessageCreateParamsNonStreaming> {
   const images = await itemImages(item);
-  return placeRequestParams(model, images, describePlaceItem(item));
+  return placeRequestParams(model, images, describePlaceItem(await withoutUnpermittedNames(item, scrubber)));
 }
 
 /** The text block for the place-only pass: what the family wrote, with no mention of people. */
@@ -114,7 +138,9 @@ export function describePlaceItem(item: ItemForAnnotation): string {
   lines.push(item.kind === "VIDEO" ? "Item: a short video clip, shown as frames in time order." : item.kind === "EXTERNAL_VIDEO" ? "Item: the poster frame of a longer video." : "Item: a photo.");
   if (item.context) lines.push(`Notes from the person who uploaded it: ${item.context}`);
   if (item.caption) lines.push(`Existing caption: ${item.caption}`);
-  if (item.title) lines.push(`Title: ${item.title}`);
+  // A title the helper gave it last time is not the family's word, and may name somebody no longer to be named.
+  const title = memberTitle(item.title, item.annotation, item.titleByHelper);
+  if (title) lines.push(`Title: ${title}`);
   if (item.takenAt) lines.push(`Taken: ${formatDateTime(item.takenAt, item.trip?.timezone ?? "UTC", "EEEE, MMMM d, yyyy")}`);
   if (item.trip) lines.push(`Trip: ${item.trip.title}`);
   if (item.collections.length) lines.push(`Collections: ${item.collections.map((c) => c.collection.title).join(", ")}`);
