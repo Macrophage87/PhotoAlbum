@@ -82,10 +82,6 @@ describe("a place cleared by hand", () => {
     // The browser cannot name somebody else: the entry carries no setter at all, and a forged one is ignored.
     await restorePlaces([{ ...before[0], placeSetById: cousin } as never], undo);
     expect(await row()).toMatchObject({ lat: 5, gpsSource: "MANUAL", placeSetById: aunt });
-    // With the note, the browser's list only names the photographs: a position it sends is not what is put back.
-    const third = await placePhotos([photoId], 10, 20);
-    await restorePlaces([{ ...third.before[0], lat: 50, lng: 50, gpsSource: "EXIF", placeName: "Somewhere else" }], third.undo);
-    expect(await row()).toMatchObject({ lat: 5, lng: 6, gpsSource: "MANUAL", placeSetById: aunt, placeName: null });
     // Without the server's note (a restart), the member pressing Undo is recorded.
     const again = await placePhotos([photoId], 10, 20);
     await restorePlaces(again.before, "no-such-token");

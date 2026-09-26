@@ -9,7 +9,7 @@ import { enqueue } from "@/lib/jobs/boss";
 import { QUEUES } from "@/lib/jobs/queues";
 import { applyPhotoInstant, requestGeotag } from "@/lib/photos/apply-date";
 import { onActivity, refileByClock } from "@/lib/activities/reassign";
-import { placesFor, rememberPlaces } from "@/lib/photos/place-undo";
+import { rememberSetters, settersFor } from "@/lib/photos/place-undo";
 import { datePlanSchema, isEmptyPlan, planDate } from "@/lib/photos/bulk-date";
 import { offsetMinutesInZone } from "@/lib/time/local-day";
 import { editableMediaIds } from "@/lib/auth/ownership";
@@ -107,32 +107,37 @@ export async function placePhotos(photoIds: string[], lat: number, lng: number, 
   const list = await editableMediaIds(user, ids.parse(photoIds));
   if (!list.length) return { count: 0, before: [], undo: null };
   if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) throw new Error("That is not a place on the map");
-  const rows = await db.photo.findMany({ where: { id: { in: list } }, select: { id: true, lat: true, lng: true, altitude: true, gpsSource: true, placeName: true, placeSetById: true } });
+  const rows = await db.photo.findMany({ where: { id: { in: list } }, select: { id: true, lat: true, lng: true, gpsSource: true, placeName: true, placeSetById: true } });
   const r = await db.photo.updateMany({ where: { id: { in: list } }, data: { lat, lng, altitude: null, gpsSource: "MANUAL", placeSetById: user.id, placeName: typeof name === "string" && name.trim() ? name.trim().slice(0, 200) : null } });
-  const before = rows.map((p) => ({ id: p.id, lat: p.lat, lng: p.lng, gpsSource: p.gpsSource, placeName: p.placeName, removedByHand: p.lat === null && p.placeSetById !== null }));
-  return { count: r.count, before, undo: rememberPlaces(user.id, rows) };
+  const before = rows.map(({ placeSetById, ...p }) => ({ ...p, removedByHand: p.lat === null && placeSetById !== null }));
+  return { count: r.count, before, undo: rememberSetters(user.id, rows) };
 }
 
 /**
  * Take a move back: each photograph returns to exactly where it was, whoever or whatever had put it there —
  * including "nowhere, because somebody removed it", which must stay removed rather than become a gap the album
- * fills in. Where the server noted the places when the move was made (`undo`), that note is what is put back —
- * position, height, source, name and who set it — and the browser's list only says which photographs. Without it
- * (a restart, or an hour gone) the browser's list is used, and the member pressing Undo is recorded as the setter.
+ * fills in. Who had set each place comes from what the server noted when the move was made (`undo`), never from
+ * the browser; without that note (a restart, or an hour gone), the member pressing Undo is recorded instead.
  */
 export async function restorePlaces(entries: PlaceBefore[], undo?: string | null): Promise<number> {
   const user = await requireUserOrThrow();
   const all = beforeSchema.parse(entries);
   const mine = new Set(await editableMediaIds(user, all.map((e) => e.id)));
   const allowed = all.filter((e) => mine.has(e.id));
-  const noted = placesFor(undo, user.id);
-  const restore = (e: (typeof allowed)[number]) => {
-    const was = noted?.get(e.id);
-    if (was) return { ...was, lng: was.lat === null ? null : was.lng, gpsSource: was.lat === null ? null : was.gpsSource };
-    const byHand = e.gpsSource === "MANUAL" || (e.lat === null && Boolean(e.removedByHand));
-    return { lat: e.lat, lng: e.lat === null ? null : e.lng, altitude: null, gpsSource: e.lat === null ? null : e.gpsSource, placeName: e.placeName, placeSetById: byHand ? user.id : null };
+  const noted = settersFor(undo, user.id);
+  const setter = (e: (typeof allowed)[number]) => {
+    const was = noted?.has(e.id) ? noted.get(e.id)! : undefined;
+    const byHand = e.gpsSource === "MANUAL" || (e.lat === null && (noted ? Boolean(was) : Boolean(e.removedByHand)));
+    return byHand ? was ?? user.id : null;
   };
-  await db.$transaction(allowed.map((e) => db.photo.update({ where: { id: e.id }, data: restore(e) })));
+  await db.$transaction(
+    allowed.map((e) =>
+      db.photo.update({
+        where: { id: e.id },
+        data: { lat: e.lat, lng: e.lat === null ? null : e.lng, gpsSource: e.lat === null ? null : e.gpsSource, placeName: e.placeName, placeSetById: setter(e) },
+      }),
+    ),
+  );
   return allowed.length;
 }
 
