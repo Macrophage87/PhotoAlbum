@@ -88,7 +88,7 @@ describe("a collection's saved order", () => {
 
   describe("recognising collections arranged before the date was kept", () => {
     const backfill = () => {
-      const migration = readFileSync("prisma/migrations/20260926100100_collection_arranged_at/migration.sql", "utf8");
+      const migration = readFileSync("prisma/migrations/20260926150300_collection_arranged_at/migration.sql", "utf8");
       return db.$executeRawUnsafe(migration.slice(migration.indexOf("UPDATE")));
     };
     const collection = async (slug: string) => (await db.collection.create({ data: { slug, title: slug, createdById: who.id } })).id;
