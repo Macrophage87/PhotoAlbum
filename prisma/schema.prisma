@@ -703,6 +703,10 @@ model Person {
   /// When what strangers can read last lost this person's name after the album withdrew their naming by itself;
   /// the nightly pass only looks at what the helper wrote since.
   namingPublicScrubbedAt DateTime?
+  /// Asked to be forgotten while forgetting was paused for want of FORGET_KEY: switched off at once, and forgotten
+  /// as soon as the key is set (at start-up or overnight).
+  forgetPendingAt        DateTime?
+  forgetPendingById      String?
   /// An admin's word that this person is an adult, recorded to name them in descriptions. Evidence for naming only:
   /// recognition still needs its own attestation (adultAttestedAt), which also says they agreed to it.
   adultConfirmedAt    DateTime?
@@ -948,6 +952,8 @@ model ForgottenName {
   keyVersion      Int
   /// Matched only as a name is written (capitalized, or in capitals): a one-word name, or one of everyday words.
   capitalizedOnly Boolean  @default(false)
+  /// For a one-word name, the photographs its owner was tagged on (ids only): it is looked for nowhere else.
+  photoIds        String[] @default([])
   createdAt       DateTime @default(now())
 }
 

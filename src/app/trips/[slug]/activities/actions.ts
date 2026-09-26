@@ -207,7 +207,7 @@ export async function describeActivityWithAi(slug: string, id: string, note?: st
   if (!parsed) throw new Error("The helper's answer could not be read; try again");
   // Nobody forgotten comes back by way of the answer.
   const tombstone = await loadTombstone();
-  parsed.description = tombstone.scrub(parsed.description);
+  parsed.description = tombstone.scrub(parsed.description, activity.photos.map((p) => p.id));
   // Written from names or notes, it is read by members only; see `descriptionFromMembersOnly`.
   const judged = await judgeDescription(parsed.description, {
     names,
@@ -223,7 +223,7 @@ export async function describeActivityWithAi(slug: string, id: string, note?: st
     const forget = await forgetState(tx, tombstone.loadedAt);
     if (forget.underWay || (await namesChangedSince(activity.photos.map((p) => p.id), requestedAt))) throw new Error(NAMES_CHANGED);
     // Somebody forgotten since the forgotten names were read: read them again.
-    if (forget.reload) parsed.description = (await loadTombstone()).scrub(parsed.description);
+    if (forget.reload) parsed.description = (await loadTombstone()).scrub(parsed.description, activity.photos.map((p) => p.id));
     await tx.activity.update({ where: { id }, data: { description: parsed.description, descriptionMembersOnly: judged.membersOnly, descriptionTitleOnly: judged.titleOnly, descriptionTitleWords: judged.titleOnly ? (judged.titleWords ?? []) : [], descriptionSharedAt: null, descriptionByHelper: true } });
   });
   revalidatePath(`/trips/${slug}/activities/${id}`);

@@ -9,9 +9,9 @@ import { enqueueAnimalMatchAllOpen } from "@/lib/jobs/handlers/detect-animals";
 import { requireUserOrThrow } from "@/lib/auth/viewer";
 import { canChangePerson, canEditMedia, NOT_YOUR_PERSON, NOT_YOURS } from "@/lib/auth/ownership";
 import { knownAdult, nameMayLeaveServer, namingOutcome } from "@/lib/people/consent";
-import { forgetNameEverywhere, forgetNameInText, forgetOnPhoto, matcherFor, memberTextMentioning, photosInContainers, photosMentioning, taggedPhotoIds } from "@/lib/people/forget";
-import { assertCanForget, forgottenHashesOf, rememberForgotten } from "@/lib/people/tombstone";
-import { withForgetLock } from "@/lib/people/names-changed";
+import { forgetNameEverywhere, forgetOnPhoto } from "@/lib/people/forget";
+import { forgetKeyState, forgottenHashesOf } from "@/lib/people/tombstone";
+import { forgetLater, forgetPerson } from "@/lib/people/forget-person";
 import { enqueueFaceDetection } from "@/lib/jobs/handlers/detect-faces";
 import { confirmFaceAs, rejectProposal } from "@/lib/people/matching";
 import { rejudgeFromAction } from "@/lib/annotation/rejudge-notice";
@@ -223,50 +223,15 @@ export async function optOutPerson(personId: string, fd: FormData): Promise<void
   if (!canChangePerson(user, person)) throw new Error(NOT_YOUR_PERSON);
   // A pet has no face data to forget; it is removed with deletePerson, which gives its detections back.
   if (person.kind === "PET") throw new Error("A pet is removed, not forgotten");
-  // Without a key to remember their names under, forgetting them would let the names come straight back.
-  await assertCanForget();
-  // One forget at a time, and while it runs no answer from the helper is stored at all (see withForgetLock), so none
-  // can bring the name back while the photographs to scrub are still being found.
-  const left = await withForgetLock(async () => {
-    const now = new Date();
-    await db.appSetting.upsert({ where: { id: "app" }, create: { id: "app", lastForgetAt: now }, update: { lastForgetAt: now } });
-    const m = await matcherFor(person);
-    const tagged = await taggedPhotoIds(personId);
-    // Photographs whose members' words name them too — their own, or their trip's, collection's or activity's: what
-    // the helper wrote there was written from those words.
-    const before = await memberTextMentioning(m, tagged, personId, Infinity);
-    const photoIds = [...new Set([...tagged, ...(await photosMentioning(m)), ...before.photos.map((p) => p.id), ...(await photosInContainers(before))])];
-    await db.person.update({ where: { id: personId }, data: { faceIndexing: false, nameInDescriptions: false, pendingDecision: false, keepNameOnPhotos: keepName, optedOutAt: person.optedOutAt ?? now, faceIndexingSetAt: now, namingWithdrawnAt: null } });
-    // Their names, hashed, outlive their record: see tombstone.ts. Stamped again once they are remembered, so names
-    // read before are read again.
-    if (!keepName) await rememberForgotten(m.tombstoneForms);
-    await db.appSetting.update({ where: { id: "app" }, data: { lastForgetAt: new Date() } });
-    await forgetNameInText(photoIds, m, { tagged, personId });
-    // What is left mentioning them is what members wrote (or the helper's trip descriptions, where only a name that
-    // is also a word is left); it is listed so it can be edited by hand.
-    const after = await memberTextMentioning(m, tagged, personId);
-    await db.faceCluster.deleteMany({ where: { personId } });
-    await db.face.deleteMany({ where: { proposedPersonId: personId } });
-    if (keepName) {
-      await db.$executeRaw`UPDATE "Face" SET embedding = NULL, "clusterId" = NULL WHERE "personId" = ${personId}`;
-    } else {
-      await db.face.deleteMany({ where: { personId } });
-      // Forgetting entirely also removes the person page; the record of who is in which photo went with the faces.
-      await db.person.delete({ where: { id: personId } });
-    }
-    // Until the record was gone the remembered names still counted as somebody's: an answer asked for before now
-    // about any of these photographs is thrown away, and names read before now are read again.
-    const settled = new Date();
-    await db.photo.updateMany({ where: { id: { in: photoIds } }, data: { namesScrubbedAt: settled } });
-    await db.appSetting.update({ where: { id: "app" }, data: { lastForgetAt: settled } });
-    return after;
-  });
-  // The list stays until an admin (or whoever forgot them) has seen to it: ids and fields, never the name.
-  const count = left.photos.length + left.trips.length + left.collections.length + left.activities.length;
-  if (!keepName && count) {
-    const items = { photos: left.photos.map((p) => ({ id: p.id, fields: p.fields })), trips: left.trips.map((t) => ({ slug: t.slug })), collections: left.collections.map((c) => ({ slug: c.slug })), activities: left.activities.map((x) => ({ id: x.id })) };
-    await db.forgetLeftover.create({ data: { items, createdById: user.id } });
+  // Without a key to remember their names under, forgetting them would let the names come straight back: they are
+  // switched off at once, and forgotten as soon as the key is set.
+  if (!keepName && !(await forgetKeyState()).write) {
+    await forgetLater(personId, user.id);
+    revalidatePath("/people", "layout");
+    revalidatePath("/admin");
+    return;
   }
+  await forgetPerson(personId, { keepName, byUserId: user.id });
   revalidatePath("/people", "layout");
   revalidatePath("/admin");
   if (!keepName) redirect("/people/forgotten");

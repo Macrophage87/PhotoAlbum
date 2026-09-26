@@ -1,4 +1,6 @@
+import { Client } from "pg";
 import { db } from "@/lib/db";
+import { env } from "@/lib/env";
 import type { Prisma } from "@/generated/prisma/client";
 
 /**
@@ -41,20 +43,46 @@ export function unchangedSince(since: Date) {
 /** The advisory lock a forget holds from start to finish (see `withForgetLock`). */
 const FORGET_LOCK = 0x666f7267; // "forg"
 
+export type ForgetLockHeld = {
+  /** Throws unless the lock is still held (its connection may have dropped): no forget finishes unlocked. */
+  assertHeld(): Promise<void>;
+};
+
 /**
  * Run a forget holding the forget lock, so no two forgets overlap and no answer is stored while one runs: every write
  * that stores an answer takes the lock shared (see `forgetState`), so a forget waits for writes already under way,
- * and a write that starts after it sees it held. Held by a transaction of its own, it is let go however the forget
- * ends, a crash included.
+ * and a write that starts after it sees it held.
+ *
+ * Held by a connection of its own, outside the pool and outside any transaction: a forget waiting its turn ties up
+ * none of the pool the running one needs, nothing sits idle in a transaction however long a forget takes, and the
+ * lock goes with the connection however the forget ends, a crash included. A forget that cannot have it within a
+ * couple of minutes is refused.
  */
-export async function withForgetLock<T>(fn: () => Promise<T>): Promise<T> {
-  return db.$transaction(
-    async (tx) => {
-      await tx.$executeRaw`SELECT pg_advisory_xact_lock(${FORGET_LOCK}::bigint)`;
-      return fn();
-    },
-    { timeout: 60 * 60_000, maxWait: 10 * 60_000 },
-  );
+export async function withForgetLock<T>(fn: (held: ForgetLockHeld) => Promise<T>, wait: { ms: number; step: number } = { ms: 120_000, step: 1_000 }): Promise<T> {
+  const client = new Client({ connectionString: env().DATABASE_URL });
+  let lost = false;
+  client.on("error", () => void (lost = true));
+  await client.connect();
+  try {
+    const until = Date.now() + wait.ms;
+    while (!(await client.query<{ got: boolean }>("SELECT pg_try_advisory_lock($1::bigint) AS got", [FORGET_LOCK])).rows[0].got) {
+      if (Date.now() >= until) throw new Error("Another person is being forgotten; try again in a minute.");
+      await new Promise((r) => setTimeout(r, wait.step));
+    }
+    const held: ForgetLockHeld = {
+      async assertHeld() {
+        const ok = !lost && (await client.query<{ n: number }>("SELECT count(*)::int AS n FROM pg_locks WHERE locktype = 'advisory' AND pid = pg_backend_pid() AND mode = 'ExclusiveLock' AND granted AND classid = 0 AND objid = $1 AND objsubid = 1", [FORGET_LOCK]).then((r) => r.rows[0].n > 0, () => false));
+        if (!ok) throw new Error("The forget lock was lost before forgetting finished; run it again to finish");
+      },
+    };
+    try {
+      return await fn(held);
+    } finally {
+      await client.query("SELECT pg_advisory_unlock($1::bigint)", [FORGET_LOCK]).catch(() => undefined);
+    }
+  } finally {
+    await client.end().catch(() => undefined);
+  }
 }
 
 /**

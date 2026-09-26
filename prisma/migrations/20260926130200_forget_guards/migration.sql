@@ -12,7 +12,9 @@
 -- under (with FORGET_KEY from the environment, never stored here), and a fingerprint of that key once a name has been
 -- hashed under it.
 -- ForgottenName: keyed hashes of a forgotten person's names — never the names — so a name nobody may use any more
--- is recognised in an answer, or in a member's words sent to the helper, after the person's record is gone.
+-- is recognised in an answer, or in a member's words sent to the helper, after the person's record is gone; a
+-- one-word name with the ids of the photographs its owner was tagged on, the only place it is looked for.
+-- Person.forgetPendingAt: a forget asked for while it was paused for want of FORGET_KEY, done once the key is set.
 -- ForgetLeftover: after a forget, the places whose words still mention the name (ids and fields only), kept until an
 -- admin has seen to them.
 ALTER TABLE "Photo" ADD COLUMN "namesScrubbedAt" TIMESTAMP(3);
@@ -21,7 +23,9 @@ ALTER TABLE "Person" ADD COLUMN "formerNames" TEXT[] DEFAULT ARRAY[]::TEXT[],
   ADD COLUMN "namesChangedAt" TIMESTAMP(3),
   ADD COLUMN "adultConfirmedAt" TIMESTAMP(3),
   ADD COLUMN "adultConfirmedById" TEXT,
-  ADD COLUMN "namingPublicScrubbedAt" TIMESTAMP(3);
+  ADD COLUMN "namingPublicScrubbedAt" TIMESTAMP(3),
+  ADD COLUMN "forgetPendingAt" TIMESTAMP(3),
+  ADD COLUMN "forgetPendingById" TEXT;
 ALTER TABLE "AppSetting" ADD COLUMN "lastForgetAt" TIMESTAMP(3),
   ADD COLUMN "forgetKey" TEXT,
   ADD COLUMN "forgetKeyFingerprint" TEXT;
@@ -33,6 +37,7 @@ CREATE TABLE "ForgottenName" (
   "hash" TEXT NOT NULL,
   "keyVersion" INTEGER NOT NULL,
   "capitalizedOnly" BOOLEAN NOT NULL DEFAULT false,
+  "photoIds" TEXT[] DEFAULT ARRAY[]::TEXT[],
   "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT "ForgottenName_pkey" PRIMARY KEY ("hash")
 );

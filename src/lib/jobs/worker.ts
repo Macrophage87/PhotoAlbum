@@ -84,9 +84,12 @@ export async function startWorker(): Promise<void> {
   // The nightly people job also takes out of the helper's text the names of people whose naming the album switched
   // off by itself, once admins have had their fortnight to keep them (see Person.namingWithdrawnAt).
   const { scrubWithdrawnNames } = await import("@/lib/people/forget");
+  // And forgets asked for while FORGET_KEY was missing, once it is set.
+  const { completePendingForgets } = await import("@/lib/people/forget-person");
   await boss.work(QUEUES.flagNewAdults, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60 }, async () => {
     await flagNewAdults();
     await scrubWithdrawnNames();
+    await completePendingForgets();
   });
   await boss.work(QUEUES.purgeUnnamedFaces, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60 }, async () => void (await purgeUnnamedFaces()));
   await boss.work(QUEUES.purgeAnnotationRaw, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60 }, async () => void (await purgeAnnotationRaw()));
@@ -104,6 +107,7 @@ export async function startWorker(): Promise<void> {
   await boss.schedule(QUEUES.purgeVisits, "15 3 * * *", {}, { retryLimit: 0 });
   // A naming the album withdrew by itself: what strangers can read loses the name at once, not at the next night.
   await scrubWithdrawnNames().catch((err) => console.error("[worker] withdrawn-name scrub failed", err));
+  await completePendingForgets().catch((err) => console.error("[worker] pending forgets failed", err));
   console.log("[worker] pg-boss handlers registered");
   await reconcileStalePhotos().catch((err) => console.error("[worker] stale-photo reconciliation failed", err));
 }

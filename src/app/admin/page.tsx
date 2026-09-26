@@ -50,7 +50,7 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
     // Whose naming the album switched off by itself, for want of evidence they are adults: admins decide what next.
     db.person.findMany({ where: { namingWithdrawnAt: { not: null } }, orderBy: { name: "asc" }, select: { id: true, name: true, namingWithdrawnAt: true, birthday: true, adultAttestedAt: true, adultConfirmedAt: true } }),
   ]);
-  const [forgetKey, forgotten] = await Promise.all([forgetKeyState(), forgottenNames()]);
+  const [forgetKey, forgotten, pendingForgets] = await Promise.all([forgetKeyState(), forgottenNames(), db.person.count({ where: { forgetPendingAt: { not: null } } })]);
   const [gates, batches] = await Promise.all([
     annotationGates(),
     db.annotationBatch.findMany({ where: { parentId: null }, orderBy: { createdAt: "desc" }, take: 8 }),
@@ -143,6 +143,12 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
             <div className="mt-4 rounded-theme border border-red-300 bg-red-50 p-3 text-sm text-red-900" data-testid="forget-key-problem">
               <p className="font-medium">{forgetKey.paused ? "Forgetting and the AI helper are paused" : "Forgotten names are not protected properly"}</p>
               <p>{forgetKey.problem} {forgetKey.paused ? "Nobody can be forgotten, and nothing is sent to the AI helper, until it is put right." : ""} See FORGET_KEY in the deployment guide.</p>
+            </div>
+          )}
+          {pendingForgets > 0 && (
+            <div className="mt-4 rounded-theme border border-red-300 bg-red-50 p-3 text-sm text-red-900" data-testid="forgets-waiting">
+              <p className="font-medium">{pendingForgets === 1 ? "1 person is" : `${pendingForgets} people are`} waiting to be forgotten</p>
+              <p>They were switched off at once, but their names can only be forgotten for good once FORGET_KEY is set. It happens by itself when the worker next starts, or overnight.</p>
             </div>
           )}
           {forgotten.length > 0 && (

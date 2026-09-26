@@ -164,6 +164,29 @@ describe("where a first name is also a place", () => {
   });
 });
 
+describe("words around a first name", () => {
+  it("make it a place only if it is one the album knows", () => {
+    const m = nameMatcher(["Ximena Ortiz"]);
+    expect(m.scrub("Grandpa waving to Ximena at the lake; a gift from Ximena; smiling at Ximena; near Ximena")).toBe("Grandpa waving to a family member at the lake; a gift from a family member; smiling at a family member; near a family member");
+    expect(m.scrub("Ximena, Italy", { tagged: true })).toBe("A family member, Italy");
+    const f = nameMatcher(["Florence Adams"]);
+    expect(f.scrub("Florence, Italy in spring.", { tagged: true })).toBe("Florence, Italy in spring.");
+    // Not a place and its region when the word after the comma is somebody's name.
+    expect(nameMatcher(["Florence Adams"], ["Ben Ortiz"]).scrub("Left to right: Florence, Ben.", { tagged: true })).toBe("Left to right: a family member, Ben.");
+    // For somebody merely not to be named, a first name alone away from their photographs is left.
+    expect(f.scrub("Train to Florence; Florence waved", { fullOnly: true })).toBe("Train to Florence; Florence waved");
+  });
+
+  it("are theirs when they are words of their own name", () => {
+    const m = nameMatcher(["Mary Ann Smith"]);
+    expect(m.scrub("Mary Ann swam; Mary Smith dived")).toBe("A family member swam; a family member dived");
+  });
+
+  it("titles the stand-in only where the rest is title case", () => {
+    expect(scrub("Ada Byron", "Trip: Ada Byron, 2019")).toBe("Trip: a family member, 2019");
+  });
+});
+
 describe("a name at the start of a sentence", () => {
   it("is theirs whatever capitalized word ended the sentence before", () => {
     expect(scrub("Ada Byron", "We drove to Maine. Ada swam.")).toBe("We drove to Maine. A family member swam.");

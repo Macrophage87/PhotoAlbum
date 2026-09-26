@@ -10,12 +10,13 @@ import { inTitleCase, isEverydayWord, normalizeName, notThePerson, replaceSpans 
  * Forgetting deletes the person's record, and with it everything that knew their name — so a batch answer still on
  * its way, or a member's title about to be sent to the helper, would bring the name straight back with nobody left
  * to forget. Their full names, and a one-word name that is all of their name and no word ("Ximena", never "June",
- * "Grace" or "Will", and never a first name taken from a full one), are kept as HMACs, and text going to or coming
- * from the helper is checked against them a run of one to four words at a time. A one-word name, or a full name made
- * of everyday words, counts only as a name is written — "Sage", not "a sage green dress" — and not where the words
- * around it make it something else: "Florence Nightingale", "a trip to Florence", "Robin Hood" (see `notThePerson`).
- * In the helper's keywords a one-word name counts in any case: "ximena's pool". A name somebody the album knows now
- * also answers to is not treated as forgotten: that is their name, not the forgotten person's.
+ * "Grace", "Sage" or "Will", and never a first name taken from a full one), are kept as HMACs, and text going to or
+ * coming from the helper is checked against them a run of one to four words at a time. A full name counts anywhere
+ * (one made of everyday words only as a name is written). A one-word name counts only in text about a photograph they
+ * were tagged on — kept with it as ids — capitalized, and not where the words around it make it something else
+ * ("Florence Nightingale", "Florence, Italy"; see `notThePerson`); in tags there only as the whole tag or its
+ * possessive ("ximena's pool"), and never in a search summary. A name somebody the album knows now also answers to is
+ * not treated as forgotten: that is their name, not the forgotten person's.
  *
  * The key is derived from FORGET_KEY, a secret kept with the environment, salted with a random value kept in the
  * database, so neither a copy of the database nor the secret alone is enough to test names against the hashes
@@ -50,8 +51,8 @@ function fingerprint(key: Buffer): string {
 
 /** This install's random salt, made once and kept in the database. */
 async function installSalt(): Promise<Buffer> {
-  await db.appSetting.upsert({ where: { id: "app" }, create: { id: "app", forgetKey: randomBytes(32).toString("base64") }, update: {} });
-  // Two first uses at once must agree on one salt: only an empty one is filled.
+  // Two first uses at once must agree on one salt: whichever insert or fill comes first wins, and both read it back.
+  await db.$executeRaw`INSERT INTO "AppSetting" (id, "forgetKey", "updatedAt") VALUES ('app', ${randomBytes(32).toString("base64")}, now()) ON CONFLICT (id) DO NOTHING`;
   await db.appSetting.updateMany({ where: { id: "app", forgetKey: null }, data: { forgetKey: randomBytes(32).toString("base64") } });
   return Buffer.from((await db.appSetting.findUniqueOrThrow({ where: { id: "app" }, select: { forgetKey: true } })).forgetKey!, "base64");
 }
@@ -105,18 +106,23 @@ function normalizedForm(f: string): string {
   return CJK.test(f) ? f.replace(/\s+/g, "") : normalizeName(f);
 }
 
-/** Remember these names of somebody being forgotten. */
-export async function rememberForgotten(forms: { form: string; capitalizedOnly: boolean }[]): Promise<void> {
+/**
+ * Remember these names of somebody being forgotten. A one-word name is kept with the photographs they were tagged on
+ * (ids only), and only ever looked for there: "Florence" anywhere else is a city.
+ */
+export async function rememberForgotten(forms: { form: string; capitalizedOnly: boolean }[], taggedOn: Iterable<string> = []): Promise<void> {
+  const photoIds = [...new Set(taggedOn)];
   const state = await forgetKeyState();
   const w = state.write;
   if (!w) throw new Error(`Forgetting is paused: ${state.problem ?? "no key"}`);
-  const rows = new Map<string, { hash: string; keyVersion: number; capitalizedOnly: boolean }>();
+  const rows = new Map<string, { hash: string; keyVersion: number; capitalizedOnly: boolean; photoIds: string[] }>();
   for (const f of forms) {
     const n = normalizedForm(f.form);
     if (!n || n.split(" ").length > MAX_WORDS) continue;
     const h = hash(w.key, n);
+    const oneWord = !CJK.test(n) && !n.includes(" ");
     // A spelling stored both ways is matched the stricter way.
-    rows.set(h, { hash: h, keyVersion: w.version, capitalizedOnly: (rows.get(h)?.capitalizedOnly ?? true) && f.capitalizedOnly });
+    rows.set(h, { hash: h, keyVersion: w.version, capitalizedOnly: (rows.get(h)?.capitalizedOnly ?? true) && f.capitalizedOnly, photoIds: oneWord ? photoIds : [] });
   }
   if (!rows.size) return;
   // From the first name hashed under FORGET_KEY, running without that very key is noticed (see forgetKeyState).
@@ -136,19 +142,23 @@ export async function forgottenHashesOf(name: string): Promise<string[]> {
   return n ? state.keys.map((k) => hash(k.key, n)) : [];
 }
 
+/**
+ * `on`: the photographs a text is about (an answer's item, a request's photographs). A one-word forgotten name is
+ * only looked for in text about a photograph its owner was tagged on; elsewhere only full names are.
+ */
 export type Tombstone = {
   empty: boolean;
-  /** When it was read: a forget since then may have added names (see `stale`). */
+  /** When it was read: a forget since then may have added names (see `tombstoneStale`). */
   loadedAt: Date;
-  scrub(text: string): string;
-  mentions(text: string): boolean;
-  /** The helper's keywords: a one-word name counts in any case there ("ximena fishing"). */
-  scrubKeywords(text: string): string;
-  /** Whether a tag or object is one of them: the whole tag, its possessive, or a word of it. */
-  namesTag(tag: string): boolean;
+  scrub(text: string, on?: Iterable<string>): string;
+  mentions(text: string, on?: Iterable<string>): boolean;
+  /** The helper's search summary: full names only, never a one-word name ("florence duomo italy"). */
+  scrubSummary(text: string, on?: Iterable<string>): string;
+  /** Whether a tag or object names them: a full name in it, or a one-word name as the whole tag or its possessive. */
+  namesTag(tag: string, on?: Iterable<string>): boolean;
 };
 
-const empty = (loadedAt: Date): Tombstone => ({ empty: true, loadedAt, scrub: (t) => t, mentions: () => false, scrubKeywords: (t) => t, namesTag: () => false });
+const empty = (loadedAt: Date): Tombstone => ({ empty: true, loadedAt, scrub: (t) => t, mentions: () => false, scrubSummary: (t) => t, namesTag: () => false });
 
 /** Whether a forget has begun since this was read: its names may be missing from it. */
 export async function tombstoneStale(ts: Tombstone): Promise<boolean> {
@@ -160,7 +170,7 @@ export async function tombstoneStale(ts: Tombstone): Promise<boolean> {
 export async function loadTombstone(): Promise<Tombstone> {
   const loadedAt = new Date();
   const state = await forgetKeyState();
-  const rows = await db.forgottenName.findMany({ where: { keyVersion: { in: state.keys.map((k) => k.version) } }, select: { hash: true, keyVersion: true, capitalizedOnly: true } });
+  const rows = await db.forgottenName.findMany({ where: { keyVersion: { in: state.keys.map((k) => k.version) } }, select: { hash: true, keyVersion: true, capitalizedOnly: true, photoIds: true } });
   if (!rows.length) return empty(loadedAt);
   const keys = state.keys.filter((k) => rows.some((r) => r.keyVersion === k.version));
   // Anybody the album knows now keeps their own name, whole or word by word.
@@ -174,48 +184,59 @@ export async function loadTombstone(): Promise<Tombstone> {
     if (CJK.test(n)) currentForms.add(n.replace(/\s+/g, ""));
   }
   const current = new Set(keys.flatMap((k) => [...currentForms].map((f) => `${k.version}:${hash(k.key, f)}`)));
-  const byHash = new Map(rows.filter((r) => !current.has(`${r.keyVersion}:${r.hash}`)).map((r) => [`${r.keyVersion}:${r.hash}`, r.capitalizedOnly]));
+  const byHash = new Map(rows.filter((r) => !current.has(`${r.keyVersion}:${r.hash}`)).map((r) => [`${r.keyVersion}:${r.hash}`, { capOnly: r.capitalizedOnly, photos: new Set(r.photoIds) }]));
   if (!byHash.size) return empty(loadedAt);
-  /** Whether a normalized run is forgotten: undefined if not, else whether only capitalized. */
-  const lookup = (norm: string): boolean | undefined => {
+  /** A forgotten name this normalized run is, if any. */
+  const lookup = (norm: string): { capOnly: boolean; photos: Set<string> } | undefined => {
     for (const k of keys) {
       const v = byHash.get(`${k.version}:${hash(k.key, norm)}`);
-      if (v !== undefined) return v;
+      if (v) return v;
     }
     return undefined;
   };
   const capital = (raw: string) => /^\p{Lu}/u.test(raw);
+  const isNameWord = (w: string) => {
+    const n = normalizeName(w);
+    return currentForms.has(n) || lookup(n) !== undefined;
+  };
+  // Only where its owner was tagged; a row from before photographs were kept with it, nowhere.
+  const theirs = (photos: Set<string>, on: Set<string>) => [...on].some((id) => photos.has(id));
 
-  const spansIn = (text: string, keywords: boolean): [number, number][] => {
+  type Mode = "prose" | "summary" | "tag";
+  const spansIn = (text: string, onIds: Iterable<string> | undefined, mode: Mode): [number, number][] => {
+    const on = new Set(onIds ?? []);
     const spans: [number, number][] = [];
     const tokens = [...text.matchAll(/[\p{L}\p{M}\p{N}][\p{L}\p{M}\p{N}'’.]*/gu)].map((m) => {
       // A possessive and a sentence's full stop stay outside the name.
       const raw = m[0].replace(/['’]s$/u, "").replace(/\.$/u, (d) => (/^\p{L}\.(\p{L}\.)*$/u.test(m[0]) ? d : ""));
       return { start: m.index!, end: m.index! + raw.length, raw, norm: normalizeName(raw) };
     });
+    // A tag that is a one-word name, or its possessive: "ximena", "ximena's".
+    const wholeTag = mode === "tag" && tokens.length === 1 && /^[\s]*[\p{L}\p{M}\p{N}'’.-]+[\s]*$/u.test(text);
     let title: boolean | null = null;
     for (let i = 0; i < tokens.length; i++) {
       for (let n = Math.min(MAX_WORDS, tokens.length - i); n >= 1; n--) {
         const run = tokens.slice(i, i + n);
         // Only words next to each other: a run broken by anything but a hyphen or a space is not a name.
         if (run.some((t, j) => j > 0 && !/^[\s\-‐]+$/u.test(text.slice(run[j - 1].end, t.start)))) continue;
-        const capOnly = lookup(run.map((t) => t.norm).join(" "));
-        if (capOnly === undefined) continue;
-        if (capOnly) {
-          // A one-word name is no word (see scrub.ts), so in keywords it is them in any case: "ximena fishing".
-          const anyCase = keywords && n === 1;
-          if (!anyCase) {
-            if (!run.every((t) => capital(t.raw))) continue;
-            title ??= inTitleCase(text, run.map((t) => t.raw));
-            const start = run[0].start;
-            const end = run[n - 1].end;
-            if (notThePerson(text, start, end, { title, date: isEverydayWord(run[0].raw), place: "near", number: true })) continue;
-          }
-        }
+        const found = lookup(run.map((t) => t.norm).join(" "));
+        if (!found) continue;
+        if (n === 1) {
+          if (mode === "summary" || !theirs(found.photos, on)) continue;
+          if (mode === "tag") {
+            if (!wholeTag) continue;
+          } else if (!guarded(text, run, found.capOnly)) continue;
+        } else if (found.capOnly && !guarded(text, run, true)) continue;
         spans.push([run[0].start, run[n - 1].end]);
         i += n - 1;
         break;
       }
+    }
+    function guarded(t: string, run: typeof tokens, capOnly: boolean): boolean {
+      if (!capOnly) return true;
+      if (!run.every((x) => capital(x.raw))) return false;
+      title ??= inTitleCase(t, run.map((x) => x.raw));
+      return !notThePerson(t, run[0].start, run[run.length - 1].end, { title, date: isEverydayWord(run[0].raw), place: "near", number: true, own: new Set(run.map((x) => x.norm)), isNameWord });
     }
     for (const m of text.matchAll(CJK_RUN)) {
       const chars = [...m[0]];
@@ -235,21 +256,25 @@ export async function loadTombstone(): Promise<Tombstone> {
   return {
     empty: false,
     loadedAt,
-    scrub: (text) => (typeof text === "string" && text ? replaceSpans(text, spansIn(text, false)) : text),
-    mentions: (text) => typeof text === "string" && spansIn(text, false).length > 0,
-    scrubKeywords: (text) => (typeof text === "string" && text ? replaceSpans(text, spansIn(text, true)) : text),
-    namesTag: (tag) => typeof tag === "string" && spansIn(tag, true).length > 0,
+    scrub: (text, on) => (typeof text === "string" && text ? replaceSpans(text, spansIn(text, on, "prose")) : text),
+    mentions: (text, on) => typeof text === "string" && spansIn(text, on, "prose").length > 0,
+    scrubSummary: (text, on) => (typeof text === "string" && text ? replaceSpans(text, spansIn(text, on, "summary")) : text),
+    namesTag: (tag, on) => typeof tag === "string" && spansIn(tag, on, "tag").length > 0,
   };
 }
 
-/** The helper's record with every forgotten name taken out of its prose, and every tag or object naming one dropped. */
-export function scrubRecord<T extends Partial<StoredAnnotation>>(a: T, ts: Tombstone): T {
+/**
+ * The helper's record about the photographs `on` with every forgotten name taken out of its prose, and every tag or
+ * object naming one dropped.
+ */
+export function scrubRecord<T extends Partial<StoredAnnotation>>(a: T, ts: Tombstone, on: Iterable<string> = []): T {
   if (ts.empty) return a;
-  const prose = (v: unknown) => (typeof v === "string" ? ts.scrub(v) : v);
-  const list = (v: unknown) => (Array.isArray(v) ? v.filter((t) => typeof t !== "string" || !ts.namesTag(t)) : v);
+  const ids = [...on];
+  const prose = (v: unknown) => (typeof v === "string" ? ts.scrub(v, ids) : v);
+  const list = (v: unknown) => (Array.isArray(v) ? v.filter((t) => typeof t !== "string" || !ts.namesTag(t, ids)) : v);
   return {
     ...a,
-    ...("searchSummary" in a ? { searchSummary: typeof a.searchSummary === "string" ? ts.scrubKeywords(a.searchSummary) : a.searchSummary } : {}),
+    ...("searchSummary" in a ? { searchSummary: typeof a.searchSummary === "string" ? ts.scrubSummary(a.searchSummary, ids) : a.searchSummary } : {}),
     ...Object.fromEntries((["title", "caption", "description", "place", "activity", "visibleText", "mood"] as const).filter((k) => k in a).map((k) => [k, prose(a[k])])),
     ...("tags" in a ? { tags: list(a.tags) } : {}),
     ...("objects" in a ? { objects: list(a.objects) } : {}),

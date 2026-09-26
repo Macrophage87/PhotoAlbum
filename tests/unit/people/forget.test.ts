@@ -226,11 +226,13 @@ describe("forgetting somebody", () => {
     expect((await withoutContainerNames({ ...container, descriptionByHelper: true })).description).toBeNull();
   });
 
-  it("takes a first name nobody else has out of notes on photographs they are not on, before the helper sees them", async () => {
+  it("away from their photographs, takes only full names out of what the helper is sent", async () => {
     await db.person.update({ where: { id: adaId }, data: { faceIndexing: false, nameInDescriptions: false } });
-    const elsewhere = (await db.photo.create({ data: { uploaderId: admin, originalName: "e.jpg", mimeType: "image/jpeg", storageKey: "e", originalPath: "e/o.jpg", sizeBytes: 1, status: "READY", context: "Ada waved from the boat on a trip to Florence, Italy" } })).id;
+    await db.person.create({ data: { name: "Florence Adams", createdById: admin } });
+    const elsewhere = (await db.photo.create({ data: { uploaderId: admin, originalName: "e.jpg", mimeType: "image/jpeg", storageKey: "e", originalPath: "e/o.jpg", sizeBytes: 1, status: "READY", title: "Train to Florence", context: "Ada waved; then Ada Byron laughed" } })).id;
     const safe = await withoutUnpermittedNames((await loadItem(elsewhere))!);
-    expect(safe.context).toBe("A family member waved from the boat on a trip to Florence, Italy");
+    expect(safe.title).toBe("Train to Florence");
+    expect(safe.context).toBe("Ada waved; then a family member laughed");
   });
 
   it("takes the name off one photograph's text when its tag is taken off", async () => {

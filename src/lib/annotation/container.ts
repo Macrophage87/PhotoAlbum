@@ -199,7 +199,7 @@ export async function writeContainerDescription(kind: ContainerKind, id: string,
   if (!parsed) throw new Error("The helper's answer could not be read; try again");
   // Nobody forgotten comes back by way of the answer.
   const tombstone = await loadTombstone();
-  parsed.description = tombstone.scrub(parsed.description);
+  parsed.description = tombstone.scrub(parsed.description, container.photos.map((p) => p.id));
   // Written from names or notes, it is read by members only; see `descriptionFromMembersOnly`.
   // The description it replaces goes with the request, so a members-only one keeps what is written from it members-only.
   const membersOnly = await descriptionFromMembersOnly(parsed.description, { names, notes: container.photos.some((p) => p.context?.trim()), previous: Boolean(container.description && !container.descriptionByHelper && container.descriptionMembersOnly) });
@@ -210,7 +210,7 @@ export async function writeContainerDescription(kind: ContainerKind, id: string,
     const forget = await forgetState(tx, tombstone.loadedAt);
     if (forget.underWay || (await namesChangedSince(container.photos.map((p) => p.id), requestedAt))) throw new Error(NAMES_CHANGED);
     // Somebody forgotten since the forgotten names were read: read them again.
-    if (forget.reload) data.description = (await loadTombstone()).scrub(data.description);
+    if (forget.reload) data.description = (await loadTombstone()).scrub(data.description, container.photos.map((p) => p.id));
     if (kind === "trip") await tx.trip.update({ where: { id }, data });
     else await tx.collection.update({ where: { id }, data });
   });

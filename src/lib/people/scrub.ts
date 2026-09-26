@@ -25,6 +25,7 @@
  */
 import type { StoredAnnotation } from "@/lib/annotation/schema";
 import { COMMON_WORD_NAMES, KINSHIP_WORDS, NAME_PARTICLES } from "@/lib/annotation/names";
+import { PLACE_NAMES } from "./places";
 
 export const STAND_IN = "a family member";
 
@@ -50,6 +51,10 @@ const EVERYDAY = [
   "nguyen", "nguyễn", "tran", "trần", "lê", "pham", "phạm", "hoang", "hoàng", "huynh", "huỳnh", "vo", "võ", "dang", "đặng", "bui", "bùi", "do", "đỗ", "ngo", "ngô",
   "duong", "dương", "ly", "lý", "kim", "lee", "park", "choi", "jung", "kang", "cho", "yoon", "wang", "li", "zhang", "liu", "chen", "yang", "zhao", "huang", "zhou", "wu", "sun",
   "berry", "hill", "brook", "wood", "field", "stone", "rivers", "woods", "banks",
+  // Herbs, birds, trees and plants: "Sage green walls", "a robin on the fence".
+  "sage", "basil", "robin", "rosemary", "thyme", "wren", "jay", "lark", "rowan", "laurel", "willow", "aspen", "birch", "cedar", "linden", "juniper",
+  "myrtle", "clover", "sorrel", "saffron", "cinnamon", "pepper", "mint", "parsley", "fennel", "finch", "raven", "sparrow", "dove", "hawk", "falcon",
+  "heath", "blossom", "marigold", "primrose", "bryony", "tansy", "yarrow", "acacia", "magnolia", "dahlia", "lavender", "posy",
 ];
 // The members-only matcher's lists (src/lib/annotation/names.ts) are part of the same judgement: whatever it treats
 // as an everyday word, a particle or a kinship word, so does this.
@@ -172,8 +177,8 @@ function neighbours(before: string, after: string) {
   return { prev, next, possessive: /^['’]s(?![\p{L}\p{M}])/u.test(after) };
 }
 
-/** "Florence, Italy", "Paris, TX": a place, then the larger place it is in, ending the clause. */
-const PLACE_COMMA = /^,[ \t]*\p{Lu}[\p{L}\p{M}'’.-]*(?:[ \t]+\p{Lu}[\p{L}\p{M}'’.-]*)?[ \t]*(?:$|[\n.;:!?)\]]|,[ \t]*\d)/u;
+/** "Florence, Italy", "Paris, TX": a place, then the larger place it is in. */
+const PLACE_COMMA = /^,[ \t]*(\p{Lu}[\p{L}\p{M}'’.-]*)/u;
 
 export type Neighbourhood = {
   /** Words of other people's names (not theirs): beside one, a match is that person ("Ada Lovelace"). */
@@ -190,6 +195,10 @@ export type Neighbourhood = {
   place?: "wide" | "near" | "comma" | "none";
   /** Directly before a number: "Florence 2019". */
   number?: boolean;
+  /** Words of their own name: beside one, a match is still them ("Mary Ann swam" for Mary Ann Smith). */
+  own?: Set<string>;
+  /** Whether a word is somebody's name the album knows: "Left to right: Ada, Ben" is no place and its region. */
+  isNameWord?: (word: string) => boolean;
 };
 
 /**
@@ -214,19 +223,23 @@ export function notThePerson(text: string, start: number, end: number, n: Neighb
     if (next && isUpperWord(match.replace(/[^\p{L}]/gu, "")) && isUpperWord(next)) return true;
   }
   if (n.number && /^[ \t]+\d/u.test(after)) return true;
+  // Only a place the album knows is one ("a train to Florence", "Florence, Italy"); anybody else after "to" or "at"
+  // is a person: "waving to Ximena".
   const place = n.place ?? "none";
-  if (place !== "none") {
+  if (place !== "none" && PLACE_NAMES.has(bare(match).replace(/[-‐]/g, " "))) {
     const words = place === "wide" ? PLACE_BEFORE : PLACE_NEAR;
     const afterPlaceWord = Boolean(p && words.has(p) && !possessive);
-    if (PLACE_COMMA.test(after)) return true;
-    if (place === "comma" ? afterPlaceWord && /^,[ \t]*\p{Lu}/u.test(after) : afterPlaceWord) return true;
+    const region = after.match(PLACE_COMMA)?.[1] ?? null;
+    const comma = Boolean(region && !n.own?.has(bare(region)) && !n.isNameWord?.(region));
+    if (comma) return true;
+    if (place !== "comma" && afterPlaceWord) return true;
   }
   const caps = isUpperWord(match.replace(/[^\p{L}]/gu, ""));
   if (!n.title && !caps) {
-    // "Ann Jones", "Robin Hood", "Florence Nightingale"...
-    if (next && /^\p{Lu}/u.test(next)) return true;
+    // "Ann Jones", "Robin Hood", "Florence Nightingale" (but "Mary Ann swam" is Mary Ann Smith)...
+    if (next && /^\p{Lu}/u.test(next) && !n.own?.has(bare(next))) return true;
     // ..."Mary Ann" and "Union Jack", unless the word before only says when or who she is to them.
-    if (prev && /^\p{Lu}/u.test(prev) && !isKin(prev.replace(/\.$/u, "")) && !STARTERS.has(p!)) return true;
+    if (prev && /^\p{Lu}/u.test(prev) && !isKin(prev.replace(/\.$/u, "")) && !STARTERS.has(p!) && !n.own?.has(p!)) return true;
   }
   return false;
 }
@@ -257,7 +270,15 @@ function standIn(match: string, before: string, after: string): string {
  */
 export function replaceSpans(text: string, spans: [number, number][]): string {
   if (!spans.length) return text;
-  const title = titleCase(text, new Set());
+  // Judged on the words around the names, not the names, which are capitalized anyway: "Trip: Ada Byron, 2019" is
+  // no title in title case.
+  let rest = "";
+  let from = 0;
+  for (const [a, b] of spans) {
+    rest += `${text.slice(from, a)} `;
+    from = b;
+  }
+  const title = titleCase(rest + text.slice(from), new Set());
   let out = "";
   let at = 0;
   for (const [a, b] of spans) {
@@ -292,6 +313,12 @@ export function normalizeName(s: string): string {
 export type Where = {
   tagged?: boolean;
   others?: string[];
+  /**
+   * Away from their photographs, only their full names — never a first name, however unusual. For somebody who is
+   * merely not to be named (not forgotten): a first name alone on somebody else's photograph identifies nobody, and
+   * is as often a place in a member's title ("Florence and Tuscany 2019").
+   */
+  fullOnly?: boolean;
 };
 
 export type NameMatcher = {
@@ -359,6 +386,13 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
       if (isWhole) whole.push(w);
     } else taggedOnly.push(short);
   };
+  /** A first name of two words ("Mary Ann"): theirs anywhere unless either word is an everyday one. */
+  const addPair = (a: string, b: string) => {
+    if (letters(a) < 2 || letters(b) < 2 || isKin(a) || isKin(b) || NOT_A_NAME_WORD.has(bare(b))) return;
+    const short = { form: `${capitalized(a)} ${capitalized(b)}`, word: `${bare(a)} ${bare(b)}`, everyday: false };
+    if ([a, b].some((w) => NOT_SAFE.has(bare(w)))) taggedOnly.push(short);
+    else safe.push(short);
+  };
   for (const n of list) {
     const { name, nicknames } = splitNickname(n.trim().replace(/\s+/g, " "));
     for (const [ni, s] of [name, ...nicknames].entries()) {
@@ -395,7 +429,9 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
           else weak.add(part);
         }
       });
-      const fulls = [...new Set([tokens.length >= 2 ? s : null, core.length >= 2 ? core.join(" ") : null].filter((f): f is string => Boolean(f)))];
+      // "Mary Ann Smith" is also "Mary Smith"; and "Mary Ann", written as a name, is her first name (below).
+      const firstLast = core.length >= 3 ? `${core[0]} ${core[core.length - 1]}` : null;
+      const fulls = [...new Set([tokens.length >= 2 ? s : null, core.length >= 2 ? core.join(" ") : null, firstLast].filter((f): f is string => Boolean(f)))];
       for (const f of fulls) {
         const ws = f.split(" ");
         if (!ws.some((w) => letters(w) >= 2 && !NOT_A_NAME_WORD.has(bare(w)))) longTagged.push(ws.map(capitalized).join(" "));
@@ -403,6 +439,7 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
         else longAny.push(f);
       }
       addShort(core[0], core.length === 1);
+      if (core.length >= 3) addPair(core[0], core[1]);
     }
   }
   const variants = (forms: string[]) => [...new Set(forms.flatMap((f) => [f.normalize("NFC"), f.normalize("NFD"), unaccented(f)]))].sort((a, b) => b.length - a.length);
@@ -426,7 +463,7 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
   const shortsFor = (where: Where) => {
     const there = new Set((where.others ?? []).flatMap((o) => wordsOf(splitNickname(o).name).map(bare)));
     const extra = where.tagged ? taggedOnly.filter((x) => !there.has(x.word)) : [];
-    const all = [...safe, ...extra];
+    const all = [...(where.tagged || !where.fullOnly ? safe : []), ...extra];
     const byForm = new Map<string, Short>([...all.map((x) => [x.form, x] as const)]);
     return { rx: rx(bounded(withCaps(all.map((x) => x.form))), "gu"), byForm, there, tagged: new Set(extra.map((x) => x.word)) };
   };
@@ -459,12 +496,14 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
         const everyday = Boolean(short?.everyday && shorts.tagged.has(short.word));
         const somebodyElse = notThePerson(whole, offset, offset + m.length, {
           otherWords,
+          own,
+          isNameWord: (w) => shared.has(bare(w)) || own.has(bare(w)),
           title,
           // A month or an everyday word in a date, on their own photographs: "in May", "May 5", "May Day".
           date: everyday,
-          // Away from their photographs a first name after "to", "in", "near" is as likely a place ("to Florence"),
-          // and one before a number a date or a thing ("Florence 2019"); on them, only a place written as one
-          // ("to Florence, Italy").
+          // Away from their photographs a first name that is also a place is one after "to", "in", "near" ("to
+          // Florence"), and one before a number is a date or a thing ("Florence 2019"); on them, only a place written
+          // as one ("Florence, Italy").
           place: where.tagged ? "comma" : "wide",
           number: !where.tagged,
         });
