@@ -5,7 +5,8 @@ import { QUEUES } from "./queues";
 /**
  * A photo left in PROCESSING longer than the job expiry plus all retries can no longer have a live job
  * (the process that owned it died). Mark it FAILED so the uploader stops spinning and "Re-process" is offered.
- * PENDING rows are left alone: they may simply be queued behind a long backlog.
+ * PENDING rows are left alone: they may simply be queued behind a long backlog. Runs at startup and every quarter
+ * hour, since a worker that keeps crashing on one item restarts too soon for the startup pass to see it.
  */
 export async function reconcileStalePhotos(now = new Date()): Promise<number> {
   const cutoff = new Date(now.getTime() - JOB_EXPIRE_SECONDS * 4 * 1000);
@@ -73,7 +74,9 @@ export async function startWorker(): Promise<void> {
   await boss.work(QUEUES.purgeUnnamedFaces, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60 }, async () => void (await purgeUnnamedFaces()));
   await boss.work(QUEUES.purgeAnnotationRaw, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60 }, async () => void (await purgeAnnotationRaw()));
   await boss.work(QUEUES.purgeVisits, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60 }, async () => void (await purgeVisits()));
-  // Schedules (idempotent): weekly video re-check, the annotation quiet-period sweep, batch polling, raw-response purge.
+  await boss.work(QUEUES.reconcilePhotos, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60 }, async () => void (await reconcileStalePhotos()));
+  // Schedules (idempotent): weekly video re-check, the annotation quiet-period sweep, batch polling, raw-response purge,
+  // and the stale-photo reconciliation.
   await boss.schedule(QUEUES.checkExternalVideos, "0 4 * * 1", {}, { retryLimit: 1 });
   await boss.schedule(QUEUES.annotationSweep, "*/5 * * * *", {}, { retryLimit: 0 });
   await boss.schedule(QUEUES.annotationBatchPoll, "*/5 * * * *", {}, { retryLimit: 0 });
@@ -84,6 +87,7 @@ export async function startWorker(): Promise<void> {
   await boss.schedule(QUEUES.purgeUnnamedFaces, "45 3 * * *", {}, { retryLimit: 0 });
   await boss.schedule(QUEUES.flagNewAdults, "50 3 * * *", {}, { retryLimit: 0 });
   await boss.schedule(QUEUES.purgeVisits, "15 3 * * *", {}, { retryLimit: 0 });
+  await boss.schedule(QUEUES.reconcilePhotos, "*/15 * * * *", {}, { retryLimit: 0 });
   console.log("[worker] pg-boss handlers registered");
   await reconcileStalePhotos().catch((err) => console.error("[worker] stale-photo reconciliation failed", err));
 }

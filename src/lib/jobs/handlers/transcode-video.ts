@@ -28,19 +28,21 @@ export function tooLongMessage(durationS: number, limit: number): string {
 export async function transcodeVideo(job: TranscodeVideoJob): Promise<void> {
   const photo = await db.photo.findUnique({ where: { id: job.photoId } });
   if (!photo) return;
-  await db.photo.update({ where: { id: photo.id }, data: { status: "PROCESSING", error: null } });
   const store = storage();
-  const input = store.localPath?.(photo.originalPath);
-  if (!input) throw new Error("transcode-video requires a storage driver with local paths");
-  const work = await mkdtemp(path.join(tmpdir(), "clip-"));
+  let work: string | null = null;
+  // Everything after the row turns PROCESSING is inside the try, so no failure can leave it spinning.
   try {
+    await db.photo.update({ where: { id: photo.id }, data: { status: "PROCESSING", error: null } });
+    const input = store.localPath?.(photo.originalPath);
+    if (!input) throw new Error("transcode-video requires a storage driver with local paths");
+    const dir = (work = await mkdtemp(path.join(tmpdir(), "clip-")));
     await withHeavyLock(async () => {
       const info = await probe(input);
       const limit = env().MAX_CLIP_SECONDS;
       if (info.durationS !== null && info.durationS > limit) throw new Error(tooLongMessage(info.durationS, limit));
 
-      const mp4 = path.join(work, "video.mp4");
-      const poster = path.join(work, "poster.jpg");
+      const mp4 = path.join(dir, "video.mp4");
+      const poster = path.join(dir, "poster.jpg");
       await ffmpeg(transcodeArgs(input, mp4, info));
       await ffmpeg(posterArgs(mp4, poster, info.durationS));
       const out = await probe(mp4);
@@ -105,6 +107,6 @@ export async function transcodeVideo(job: TranscodeVideoJob): Promise<void> {
     await db.photo.update({ where: { id: photo.id }, data: { status: "FAILED", error: message.slice(0, 500) } });
     throw err;
   } finally {
-    await rm(work, { recursive: true, force: true });
+    if (work) await rm(work, { recursive: true, force: true });
   }
 }
