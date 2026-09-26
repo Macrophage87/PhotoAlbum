@@ -315,4 +315,37 @@ describe("what strangers may search, container by container, and the words' scop
     expect((await db.photo.findUniqueOrThrow({ where: { id: p.id } })).annotationMembersOnly).toBe(true);
     expect(await searchMedia(anon, { q: "nana" }, 120, null)).toEqual([]);
   });
+
+  it("keeps a flag for words of a private collection the photograph passed through and left", async () => {
+    const trip = await db.trip.create({ data: { slug: "tw", title: "Tahoe weekend", startDate: new Date("2025-01-01"), endDate: new Date("2025-01-02"), createdById: dana } });
+    const p = await photo({ tripId: trip.id });
+    await applyAnnotation(p.id, "m", record({ title: "Ward window", caption: "Tahoe from the oncology ward window" }), {});
+    expect(await db.photo.findUniqueOrThrow({ where: { id: p.id } })).toMatchObject({ annotationTitleOnly: true, annotationTitleWords: ["tahoe"] });
+    const ward = await db.collection.create({ data: { slug: "ward", title: "Oncology ward", createdById: dana } });
+    await db.collectionItem.create({ data: { collectionId: ward.id, photoId: p.id, addedById: dana } });
+    await rejudgeTitles({ collectionId: ward.id });
+    // Picked up while it was there: the new words and where they came from are remembered.
+    const merged = await db.photo.findUniqueOrThrow({ where: { id: p.id } });
+    expect(merged.annotationTitleWords.sort()).toEqual(["oncology", "tahoe", "ward"]);
+    expect(merged.annotationTitleFrom).toContain(`collection:${ward.id}`);
+    await db.collectionItem.deleteMany({ where: { photoId: p.id } });
+    await db.trip.update({ where: { id: trip.id }, data: { visibility: "PUBLIC" } });
+    expect((await rejudgeTitles({ tripId: trip.id })).unflagged).toBe(0);
+    expect(await searchMedia(anon, { q: "oncology" }, 120, null)).toEqual([]);
+
+    // And even had it not been recorded, the text is checked against every private title in the album.
+    await db.photo.update({ where: { id: p.id }, data: { annotationTitleWords: ["tahoe"], annotationTitleFrom: [`trip:${trip.id}`] } });
+    expect((await rejudgeTitles({ tripId: trip.id })).unflagged).toBe(0);
+    expect((await db.photo.findUniqueOrThrow({ where: { id: p.id } })).annotationMembersOnly).toBe(true);
+  });
+
+  it("looks for somebody's old name as well as the new one when the rename was never judged", async () => {
+    const pet = await db.person.create({ data: { name: "Rex", kind: "PET", createdById: dana } });
+    await rejudgeSweep();
+    const p = await photo({ annotation: { title: "", caption: "Rex asleep on the rug", description: "", tags: [], searchSummary: "" } });
+    // Renamed, and the rename's job never ran; a photograph described with the old name since is still about him.
+    await db.person.update({ where: { id: pet.id }, data: { name: "Rexy" } });
+    await rejudgeSweep();
+    expect((await db.photo.findUniqueOrThrow({ where: { id: p.id } })).annotationMembersOnly).toBe(true);
+  });
 });

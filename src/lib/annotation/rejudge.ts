@@ -4,7 +4,7 @@ import { enqueue } from "@/lib/jobs/boss";
 import { QUEUES } from "@/lib/jobs/queues";
 import type { StoredAnnotation } from "./schema";
 import { helperText, knownNameEntries, knownNames, pastHelperTitles, titleHits, titleIsHelpers, type PrivateContainer } from "./members-only";
-import { nameMatcher, namePatterns, titleWords } from "./names";
+import { nameMatcher, namePatterns, spokenWords, titleWords } from "./names";
 
 /**
  * Judging again what was written before something changed.
@@ -28,12 +28,16 @@ import { nameMatcher, namePatterns, titleWords } from "./names";
 export type RejudgeJob = { names?: string[]; tripId?: string; collectionId?: string; sweep?: boolean };
 
 /** `missed`: writes that could not land after judging again; while there are any, nothing is recorded as judged. */
-export type RejudgeResult = { photos: number; titles: number; unflagged: number; places: number; descriptions: number; missed: number };
+export type RejudgeResult = { photos: number; titles: number; unflagged: number; places: number; descriptions: number; missed: number; /** Which rows missed, for the log. */ missedIds?: string[] };
 
-const empty = (): RejudgeResult => ({ photos: 0, titles: 0, unflagged: 0, places: 0, descriptions: 0, missed: 0 });
+const empty = (): RejudgeResult => ({ photos: 0, titles: 0, unflagged: 0, places: 0, descriptions: 0, missed: 0, missedIds: [] });
+const miss = (result: RejudgeResult, id: string) => {
+  result.missed++;
+  result.missedIds = [...(result.missedIds ?? []), id];
+};
 
 /** Bump when the rules in names.ts or the ones here change: the next sweep then judges the whole album again. */
-export const MATCHER_VERSION = "2026-09-26.5";
+export const MATCHER_VERSION = "2026-09-26.6";
 
 const BATCH = 200;
 /** How many rows are judged between yields to the event loop. */
@@ -129,13 +133,17 @@ export async function flagPhoto(r: Row, hits: { words: string[]; from: string[] 
  * Judge one photograph, and write what that decides; when the write misses because the row changed, read it again
  * and judge it again. `decide` returns what to write for a row, or null for nothing.
  */
-async function settle(first: Row, decide: (r: Row) => Promise<"flag" | "hits" | "title" | null>, names: ((text: string) => boolean) | null, result: RejudgeResult, hitsOf?: (r: Row) => { words: string[]; from: string[] }): Promise<void> {
+async function settle(first: Row, decide: (r: Row) => Promise<"flag" | "hits" | "merge" | "title" | null>, names: ((text: string) => boolean) | null, result: RejudgeResult, hitsOf?: (r: Row) => { words: string[]; from: string[] }): Promise<void> {
   let r: Row | null = first;
   for (let attempt = 0; attempt < ATTEMPTS && r; attempt++) {
     const what = await decide(r);
     if (!what) return;
     let landed: boolean;
-    if (what === "title") {
+    if (what === "merge") {
+      // Already held for title words: remember the new ones too, so lifting it later asks about them as well.
+      const hits = hitsOf!(r);
+      landed = (await db.photo.updateMany({ where: asJudged(r), data: { annotationTitleWords: [...new Set([...r.annotationTitleWords, ...hits.words])], annotationTitleFrom: [...new Set([...r.annotationTitleFrom, ...hits.from])] } })).count > 0;
+    } else if (what === "title") {
       const data = await titleData(r, names);
       if (!("title" in data)) return;
       landed = (await db.photo.updateMany({ where: asJudged(r), data })).count > 0;
@@ -147,7 +155,7 @@ async function settle(first: Row, decide: (r: Row) => Promise<"flag" | "hits" | 
     if (landed) return;
     r = await reread(r.id);
   }
-  if (r) result.missed++;
+  if (r) miss(result, r.id);
 }
 
 /**
@@ -181,7 +189,7 @@ export async function rejudgeNames(names?: string[]): Promise<RejudgeResult> {
         if (done.count) { result.places++; settled = true; break; }
         g = await db.photo.findFirst({ where: { id: g.id, gpsSource: "ESTIMATE", placeEstimateMembersOnly: false }, select: { id: true, placeEstimateName: true, placeEstimateNote: true } });
       }
-      if (!settled) result.missed++;
+      if (!settled) miss(result, first.id);
       await pace();
     }
     cursor = guesses[guesses.length - 1].id;
@@ -197,7 +205,7 @@ export async function rejudgeNames(names?: string[]): Promise<RejudgeResult> {
         if ((await write(d)) > 0) { result.descriptions++; settled = true; break; }
         d = await reload(d.id);
       }
-      if (!settled) result.missed++;
+      if (!settled) miss(result, first.id);
       await pace();
     }
   };
@@ -276,13 +284,24 @@ export async function rejudgeTitles(scope: { tripId?: string; collectionId?: str
   const privateWords = await privateTitleWords();
   const names = nameMatcher((await knownNames()).flatMap(namePatterns));
   const hitsOf = (r: Row) => titleHits(textOf(r), privateContainers(r));
-  const decide = async (r: Row) => (!r.annotationSharedAt && !r.annotationMembersOnly && hitsOf(r).from.length ? ("hits" as const) : null);
+  const decide = async (r: Row) => {
+    if (r.annotationSharedAt) return null;
+    const hits = hitsOf(r);
+    if (!hits.from.length) return null;
+    if (!r.annotationMembersOnly) return "hits" as const;
+    const known = new Set(r.annotationTitleWords);
+    const from = new Set(r.annotationTitleFrom);
+    return r.annotationTitleOnly && (hits.words.some((w) => !known.has(w)) || hits.from.some((k) => !from.has(k))) ? ("merge" as const) : null;
+  };
   for await (const r of annotated(where)) {
     await settle(r, decide, null, result, hitsOf);
     if (r.annotationSharedAt || !r.annotationMembersOnly || !r.annotationTitleOnly) continue;
     if (hitsOf(r).from.length || !(await titleWordsArePublic(r.annotationTitleWords, r.annotationTitleFrom, privateWords))) continue;
-    // Lifting is the one thing that shows text to strangers, so it asks everything else first.
+    // Lifting is the one thing that shows text to strangers, so it asks everything else first — the whole text
+    // against every title strangers cannot read (a private collection it passed through and left is not recorded
+    // on it), any name the album knows, the notes, anybody tagged.
     const text = textOf(r);
+    if ([...spokenWords(text)].some((w) => privateWords.has(w))) continue;
     if (r.context?.trim() || names?.(text) || (await tagged(r.id))) {
       await db.photo.updateMany({ where: { id: r.id, updatedAt: r.updatedAt, annotationTitleOnly: true }, data: { annotationTitleOnly: false, annotationTitleWords: [], annotationTitleFrom: [] } });
       continue;
@@ -301,7 +320,7 @@ export async function rejudgeTitles(scope: { tripId?: string; collectionId?: str
     const words = a.trip.visibility !== "PUBLIC" ? titleHits(a.description!, [{ key: `trip:${a.tripId}`, title: a.trip.title }]).words : [];
     if (words.length && !a.descriptionMembersOnly) {
       result.descriptions += (await db.activity.updateMany({ where: { id: a.id, description: a.description, descriptionMembersOnly: false, descriptionSharedAt: null }, data: { descriptionMembersOnly: true, descriptionTitleOnly: true, descriptionTitleWords: words } })).count;
-    } else if (!words.length && a.descriptionTitleOnly && (await titleWordsArePublic(a.descriptionTitleWords, [`trip:${a.tripId}`], privateWords))) {
+    } else if (!words.length && a.descriptionTitleOnly && (await titleWordsArePublic(a.descriptionTitleWords, [`trip:${a.tripId}`], privateWords)) && ![...spokenWords(a.description!)].some((w) => privateWords.has(w))) {
       const named = Boolean(names?.(a.description!));
       result.descriptions += (await db.activity.updateMany({ where: { id: a.id, updatedAt: a.updatedAt, descriptionTitleOnly: true }, data: named ? { descriptionTitleOnly: false, descriptionTitleWords: [] } : { descriptionMembersOnly: false, descriptionTitleOnly: false, descriptionTitleWords: [] } })).count;
     }
@@ -309,7 +328,11 @@ export async function rejudgeTitles(scope: { tripId?: string; collectionId?: str
   return result;
 }
 
-const add = (a: RejudgeResult, b: RejudgeResult): RejudgeResult => ({ photos: a.photos + b.photos, titles: a.titles + b.titles, unflagged: a.unflagged + b.unflagged, places: a.places + b.places, descriptions: a.descriptions + b.descriptions, missed: a.missed + b.missed });
+const add = (a: RejudgeResult, b: RejudgeResult): RejudgeResult => ({ photos: a.photos + b.photos, titles: a.titles + b.titles, unflagged: a.unflagged + b.unflagged, places: a.places + b.places, descriptions: a.descriptions + b.descriptions, missed: a.missed + b.missed, missedIds: [...(a.missedIds ?? []), ...(b.missedIds ?? [])] });
+
+/** `person:<id>:<name>` → `person:<id>`, and → `<name>`. */
+const keyOwner = (key: string) => key.split(":").slice(0, 2).join(":");
+const keyName = (key: string) => key.split(":").slice(2).join(":");
 
 /** Record names as judged: merged with what is recorded now, and only for people and members still in the album. */
 async function recordJudged(keys: string[], extra: { membersOnlyMatcher?: string; membersOnlyJudgedAt?: Date } = {}): Promise<void> {
@@ -337,7 +360,11 @@ export async function rejudgeSweep(): Promise<RejudgeResult> {
     result = add(await rejudgeNames(entries.map((e) => e.name)), await rejudgeTitles());
   } else {
     const fresh = entries.filter((e) => !judged.has(e.key));
-    if (fresh.length) result = await rejudgeNames(fresh.map((e) => e.name));
+    // Somebody renamed since: their old name is looked for too, in case the rename's own job never ran.
+    const current = new Set(entries.map((e) => e.key));
+    const previous = [...judged].filter((k) => !current.has(k) && entries.some((e) => keyOwner(e.key) === keyOwner(k))).map(keyName);
+    const names = [...new Set([...fresh.map((e) => e.name), ...previous])];
+    if (names.length) result = await rejudgeNames(names);
     const since = setting?.membersOnlyJudgedAt ?? new Date(0);
     const [trips, collections, moved] = await Promise.all([
       db.trip.findMany({ where: { updatedAt: { gt: since } }, select: { id: true } }),
@@ -349,7 +376,7 @@ export async function rejudgeSweep(): Promise<RejudgeResult> {
     for (let i = 0; i < moved.length; i += BATCH) result = add(result, await rejudgeTitles({ photoIds: moved.slice(i, i + BATCH).map((p) => p.id) }));
   }
   if (!result.missed) await recordJudged(entries.map((e) => e.key), { membersOnlyMatcher: MATCHER_VERSION, membersOnlyJudgedAt: started });
-  else console.warn(`[rejudge] ${result.missed} write(s) kept missing; the next sweep judges them again`);
+  else console.warn(`[rejudge] ${result.missed} write(s) kept missing (${(result.missedIds ?? []).slice(0, 50).join(", ")}); the next sweep judges them again`);
   return result;
 }
 

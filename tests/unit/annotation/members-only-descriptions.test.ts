@@ -164,7 +164,8 @@ describe("descriptions that stay in the family", () => {
     const fd = new FormData();
     fd.set("name", "Biscuit");
     await updatePerson(pet.id, fd);
-    expect(who.queued).toEqual([{ queue: "rejudge-text", data: { names: ["Biscuit"] } }]);
+    // The old name too: what was written with it is still about them.
+    expect(who.queued).toEqual([{ queue: "rejudge-text", data: { names: ["Biscuit", "Rex"] } }]);
     expect((await db.photo.findUniqueOrThrow({ where: { id: p.id } })).annotationMembersOnly).toBe(false);
   });
 });

@@ -98,6 +98,8 @@ describe("spotting a name the album knows", () => {
     expect(mentionsAnyName("Ada's first swim", ["Ada"])).toBe(true);
     expect(mentionsAnyName("Ada’s first swim", ["Ada"])).toBe(true);
     expect(mentionsAnyName("Dinner at the Smiths", ["Smith"])).toBe(true);
+    expect(mentionsAnyName("EMMAS BIRTHDAY", ["Emma"])).toBe(true);
+    expect(mentionsAnyName("ADA'S CAKE", ["Ada"])).toBe(true);
     expect(mentionsAnyName("Jose on the dock", ["José"])).toBe(true);
     expect(mentionsAnyName("José on the dock", ["Jose"])).toBe(true);
     expect(mentionsAnyName("A canada goose", ["Ada"])).toBe(false);

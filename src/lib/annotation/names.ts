@@ -107,7 +107,8 @@ export function nameMatcher(patterns: NamePattern[]): ((text: string) => boolean
     const tried = new Set<string>();
     for (const w of folded.split(/[^\p{L}\p{N}]+/u)) {
       if (!w) continue;
-      for (const exact of w.endsWith("s") ? [w, w.slice(0, -1)] : [w]) {
+      // A plural or possessive "s" in any case: "EMMAS" is Emma's too.
+      for (const exact of /s$/i.test(w) ? [w, w.slice(0, -1)] : [w]) {
         const alts = cs.get(exact);
         if (alts && !tried.has(`cs:${exact}`)) {
           tried.add(`cs:${exact}`);
@@ -139,11 +140,16 @@ export function titleWords(titles: string[]): string[] {
   return [...new Set(titles.flatMap((t) => tokens(t).map((w) => w.toLowerCase())).filter((w) => w.length >= 3 && !TITLE_STOPWORDS.has(w) && !/^\d+$/.test(w)))];
 }
 
+/** The words of a text as title words are compared with: folded, lower case, each also without a final "s". */
+export function spokenWords(text: string): Set<string> {
+  return new Set(foldForNames(text).split(/[^\p{L}\p{N}]+/u).filter(Boolean).flatMap((w) => [w, w.replace(/s$/, "")]));
+}
+
 /** Which words of these titles appear in the text (as `titleWords` has them). */
 export function titleWordsIn(text: string, titles: string[]): string[] {
   const words = titleWords(titles);
   if (!words.length || !text) return [];
-  const said = new Set(foldForNames(text).split(/[^\p{L}\p{N}]+/u).flatMap((w) => [w, w.replace(/s$/, "")]));
+  const said = spokenWords(text);
   return words.filter((w) => said.has(w));
 }
 

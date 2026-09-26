@@ -162,6 +162,9 @@ BEGIN
     helper, titles, places;
 END $$;
 
+-- The nightly sweep asks which photographs joined a trip or collection since it last ran; most never have.
+CREATE INDEX IF NOT EXISTS "Photo_containersChangedAt_idx" ON "Photo"("containersChangedAt") WHERE "containersChangedAt" IS NOT NULL;
+
 -- Rebuilding the two text indexes afterwards is several times quicker than keeping them up to date through a write
 -- to every row, and this has to finish well inside a deploy's health check.
 CREATE INDEX IF NOT EXISTS "Photo_searchVector_idx" ON "Photo" USING GIN ("searchVector");
