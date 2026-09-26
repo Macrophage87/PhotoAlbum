@@ -24,6 +24,14 @@ export function minorsCheckPasses(p: Pick<ConsentFields, "birthday" | "adultAtte
   return Boolean(p.birthday) && !isMinor(p, now);
 }
 
+/**
+ * An adult on the album's own evidence: the minors check passes and no birthday says otherwise. The attestation is
+ * for a birthday nobody knows, so a birthday recorded later showing a child outranks it.
+ */
+export function knownAdult(p: Pick<ConsentFields, "birthday" | "adultAttestedAt">, now = new Date()): boolean {
+  return minorsCheckPasses(p, now) && !isMinor(p, now);
+}
+
 export type NamingInput = { byAdmin: boolean; wantIndexing: boolean; parentInstruction: boolean; birthday: Date | null; attest: boolean; isChildFlag: boolean };
 export type NamingOutcome = { faceIndexing: boolean; nullTemplates: boolean; pendingDecision: boolean; attested: boolean };
 
@@ -53,8 +61,11 @@ export function namingOutcome(input: NamingInput, now = new Date()): NamingOutco
  * is in a photograph it is already being shown. A relative who would rather be named than called "an older couple"
  * can say so without being recognised, which is the narrower of the two.
  *
- * A minor is never named, under either.
+ * A minor is never named, under either — and neither is somebody the album cannot show to be an adult. A person
+ * tagged by hand has no birthday at all, and a child with no birthday on record is still a child, so a name leaves
+ * only on the same evidence recognition needs: a birthday showing 18 or older, or the adult attestation. (A minor
+ * recognised on a parent's instruction is recognised, never named.)
  */
 export function nameMayLeaveServer(p: ConsentFields, now = new Date()): boolean {
-  return (p.faceIndexing || Boolean(p.nameInDescriptions)) && !isMinor(p, now);
+  return (p.faceIndexing || Boolean(p.nameInDescriptions)) && knownAdult(p, now);
 }

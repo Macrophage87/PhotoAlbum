@@ -2,7 +2,8 @@ import { notFound } from "next/navigation";
 import { db } from "@/lib/db";
 import { getViewer, requireUser } from "@/lib/auth/viewer";
 import { personMedia } from "@/lib/people/queries";
-import { isMinor, minorsCheckPasses } from "@/lib/people/consent";
+import { isMinor, knownAdult, minorsCheckPasses } from "@/lib/people/consent";
+import { canChangePerson } from "@/lib/auth/ownership";
 import { AppShell, Container } from "@/components/layout/AppShell";
 import { PhotoGrid } from "@/components/photos/PhotoGrid";
 import { toGridPhoto } from "@/components/photos/toGrid";
@@ -28,6 +29,8 @@ export default async function PersonPage({ params }: PageProps<"/people/[id]">) 
   const nameInDescriptions = setNameInDescriptions;
   const optOut = optOutPerson.bind(null, id);
   const minor = isMinor(person);
+  // Renaming and forgetting belong to whoever added this person, and to admins; consent stays with admins.
+  const canChange = canChangePerson(user, person);
   // Descriptions of this person written before the album could name them, and the one press that redoes them.
   const waiting = await namesWaitingFor(id);
   const refresh = async () => {
@@ -68,7 +71,7 @@ export default async function PersonPage({ params }: PageProps<"/people/[id]">) 
         <div className="grid md:grid-cols-2 gap-6">
           {person.kind === "PET" ? (
             <Card className="p-4 space-y-3">
-              <PetForm pet={person} />
+              {canChange ? <PetForm pet={person} /> : <p className="text-sm text-muted">Only the family member who added {person.name}, or an admin, can change these details.</p>}
               {isAdmin && (
                 <form action={deletePerson.bind(null, id)}>
                   <ConfirmSubmitButton variant="danger" size="sm" confirmMessage={`Remove ${person.name} and every tag of them?`}>Remove this pet</ConfirmSubmitButton>
@@ -77,6 +80,7 @@ export default async function PersonPage({ params }: PageProps<"/people/[id]">) 
             </Card>
           ) : (
           <Card className="p-4">
+            {canChange ? (
             <form action={update} className="space-y-3 text-sm">
               <div>
                 <Label htmlFor="name">Name</Label>
@@ -88,6 +92,9 @@ export default async function PersonPage({ params }: PageProps<"/people/[id]">) 
               </div>
               <Button type="submit" size="sm">Save</Button>
             </form>
+            ) : (
+              <p className="text-sm text-muted">Only the family member who added {person.name}, or an admin, can rename them.</p>
+            )}
           </Card>
           )}
 
@@ -138,6 +145,9 @@ export default async function PersonPage({ params }: PageProps<"/people/[id]">) 
                 <p className="font-medium">Named in descriptions</p>
                 {minor ? (
                   <p className="text-muted">A child is never named in a description, whatever else is set.</p>
+                ) : !knownAdult(person) ? (
+                  // No birthday and no attestation could be a child as easily as an adult, and a child is never named.
+                  <p className="text-muted" data-testid="name-needs-age">Not named: with no birthday showing an adult and no adult attestation, {person.name} is treated as a child. {isAdmin ? "Record either under Recognition first." : "An admin can record either."}</p>
                 ) : isAdmin ? (
                   <form action={nameInDescriptions.bind(null, id, !person.nameInDescriptions)} className="space-y-2">
                     <p className="text-muted">
@@ -155,13 +165,20 @@ export default async function PersonPage({ params }: PageProps<"/people/[id]">) 
                 )}
               </div>
 
+              {canChange ? (
               <form action={optOut} className="space-y-2 border-t border-border pt-3">
                 <p className="font-medium">Forget this person&apos;s face</p>
-                <p className="text-muted">Deletes every face template, group and match for {person.name}, removes the name from AI descriptions and search, and stops the name reaching the AI helper.</p>
+                <p className="text-muted">Deletes every face template, group and match for {person.name}, removes the name from AI descriptions and titles (and from the trips, collections and activities described from their photos) and from the name search, and stops the name reaching the AI helper. Captions and notes a member wrote by hand are left as they wrote them.</p>
                 <label className="flex items-center gap-2"><input type="radio" name="mode" value="remove-all" defaultChecked /> Also remove the record of which photos they appear in</label>
                 <label className="flex items-center gap-2"><input type="radio" name="mode" value="keep-name" /> Keep the name on the photos already confirmed (no face data)</label>
                 <ConfirmSubmitButton variant="danger" size="sm" confirmMessage={`Forget ${person.name}'s face data? This cannot be undone.`}>Forget face data</ConfirmSubmitButton>
               </form>
+              ) : (
+                <div className="space-y-1 border-t border-border pt-3">
+                  <p className="font-medium">Forget this person&apos;s face</p>
+                  <p className="text-muted">If {person.name} wants to be forgotten, ask an admin or the family member who added them: it takes every tag of them off the album and cannot be undone.</p>
+                </div>
+              )}
             </Card>
           )}
         </div>

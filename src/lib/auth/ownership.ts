@@ -34,9 +34,20 @@ export function canEditContainer(user: Pick<ViewerUser, "id" | "role"> | null, c
   return Boolean(user) && (isAdmin(user!) || (container.createdById !== null && container.createdById === user!.id));
 }
 
+/**
+ * The person who added somebody (or a pet) to the album, and admins. Renaming them changes what every photograph of
+ * them says and what the helper is told, and forgetting them takes their tags off everybody's photographs for good,
+ * so neither is a thing any relative can do to any record. Consent itself (recognition, naming in descriptions)
+ * stays with admins alone.
+ */
+export function canChangePerson(user: Pick<ViewerUser, "id" | "role"> | null, person: Made): boolean {
+  return canEditContainer(user, person);
+}
+
 /** What to say when someone is turned away, in the words of the rule rather than of the code. */
 export const NOT_YOURS = "Only the family member who uploaded this, or an admin, can change it.";
 export const NOT_YOUR_CONTAINER = "Only the family member who made this, or an admin, can change it.";
+export const NOT_YOUR_PERSON = "Only the family member who added them, or an admin, can change this.";
 
 /** Load an item for editing, or throw. Returns the member making the change alongside it. */
 export async function requireMediaEditor<T extends Owned>(id: string, select?: unknown): Promise<{ user: ViewerUser; media: T }> {
