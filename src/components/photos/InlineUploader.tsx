@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui";
 import { Uploader } from "@/components/photos/Uploader";
+import type { UploadByteLimits } from "@/lib/media/limits";
 
 /**
  * Adding photos from the page of the thing they belong to — an activity, a collection — rather than from the upload
@@ -15,7 +16,7 @@ import { Uploader } from "@/components/photos/Uploader";
  * sending everything to `target`; ones already in the album go to the picker, with the whole album to search. Where
  * there is a time to go by, a third choice takes everything from then in one press.
  */
-export function InlineUploader({ target, openLabel, note, testId, maxClipSeconds, annotationActive, pickHref, takeAll }: {
+export function InlineUploader({ target, openLabel, note, testId, maxClipSeconds, maxBytes, annotationActive, pickHref, takeAll }: {
   target: { activityId?: string; collectionId?: string };
   /** What the closed button says: "Add photos to this activity". */
   openLabel: string;
@@ -24,6 +25,7 @@ export function InlineUploader({ target, openLabel, note, testId, maxClipSeconds
   /** `${testId}-open` for the button, `testId` for the open panel. */
   testId: string;
   maxClipSeconds: number;
+  maxBytes?: UploadByteLimits;
   annotationActive: boolean;
   /** The picker for photographs already in the album. */
   pickHref?: string;
@@ -62,7 +64,7 @@ export function InlineUploader({ target, openLabel, note, testId, maxClipSeconds
       {uploading && (
         <>
           <p className="text-sm text-muted">{note}</p>
-          <Uploader activityId={target.activityId} collectionId={target.collectionId} maxClipSeconds={maxClipSeconds} annotationActive={annotationActive} onDone={() => router.refresh()} />
+          <Uploader activityId={target.activityId} collectionId={target.collectionId} maxClipSeconds={maxClipSeconds} maxBytes={maxBytes} annotationActive={annotationActive} onDone={() => router.refresh()} />
         </>
       )}
     </div>

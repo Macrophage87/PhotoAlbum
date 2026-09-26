@@ -1,4 +1,5 @@
 import { InlineUploader } from "@/components/photos/InlineUploader";
+import type { UploadByteLimits } from "@/lib/media/limits";
 
 /**
  * Uploading straight into a collection from the collection's own page.
@@ -7,7 +8,7 @@ import { InlineUploader } from "@/components/photos/InlineUploader";
  * never had a trip to arrive through: a box of scans, a picture somebody emailed. They go into the collection as
  * they arrive, and onto a trip too if their dates match one, since a collection is a label rather than a place.
  */
-export function CollectionUploader({ collectionId, slug, maxClipSeconds, annotationActive }: { collectionId: string; slug: string; maxClipSeconds: number; annotationActive: boolean }) {
+export function CollectionUploader({ collectionId, slug, maxClipSeconds, maxBytes, annotationActive }: { collectionId: string; slug: string; maxClipSeconds: number; maxBytes?: UploadByteLimits; annotationActive: boolean }) {
   return (
     <InlineUploader
       target={{ collectionId }}
@@ -16,6 +17,7 @@ export function CollectionUploader({ collectionId, slug, maxClipSeconds, annotat
       testId="collection-upload"
       pickHref={`/collections/${slug}/add`}
       maxClipSeconds={maxClipSeconds}
+      maxBytes={maxBytes}
       annotationActive={annotationActive}
     />
   );

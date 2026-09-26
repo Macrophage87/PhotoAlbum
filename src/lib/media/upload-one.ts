@@ -18,9 +18,21 @@ export class AttemptError extends Error {
  */
 /** What the album did with a file it already had, when it was sent to a particular trip, activity or collection. */
 export type FiledAnswer = { trip: boolean; activity: boolean; collection: boolean; movedFrom: string | null; notYours: boolean };
-export type UploadAnswer = { photoId: string; duplicate?: boolean; filed?: FiledAnswer; owner?: string | null };
+/** `status` comes with a file the album already had: how far along that one is. */
+export type UploadAnswer = { photoId: string; duplicate?: boolean; status?: string; filed?: FiledAnswer; owner?: string | null };
+export type UploadTarget = { tripId?: string; activityId?: string; collectionId?: string };
 
-export function attemptUpload(file: File, target: { tripId?: string; activityId?: string; collectionId?: string }, optOut: boolean, onProgress: (p: number) => void, register: (abort: () => void) => void): Promise<UploadAnswer> {
+/**
+ * What a tile shows once its file has arrived. A new one is being processed. A file the album already had is ready
+ * only when that one is: matched to a copy still being processed, or one that failed, it is watched like any other,
+ * so its tile ends up saying what actually became of it.
+ */
+export function statusAfterUpload(answer: Pick<UploadAnswer, "duplicate" | "status">): "processing" | "ready" {
+  return answer.duplicate && (answer.status === undefined || answer.status === "READY") ? "ready" : "processing";
+}
+
+/** `attempt` is which go this is at the same file, so the album can tell a retry from the same file sent again. */
+export function attemptUpload(file: File, target: UploadTarget, optOut: boolean, onProgress: (p: number) => void, register: (abort: () => void) => void, attempt = 1): Promise<UploadAnswer> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     let settled = false;
@@ -46,6 +58,7 @@ export function attemptUpload(file: File, target: { tripId?: string; activityId?
     if (target.activityId) xhr.setRequestHeader("x-activity-id", target.activityId);
     if (target.collectionId) xhr.setRequestHeader("x-collection-id", target.collectionId);
     if (optOut) xhr.setRequestHeader("x-annotation-opt-out", "1");
+    if (attempt > 1) xhr.setRequestHeader("x-upload-attempt", String(attempt));
     xhr.upload.onprogress = (e) => {
       touch();
       if (e.lengthComputable) onProgress(e.loaded / e.total);
@@ -58,7 +71,7 @@ export function attemptUpload(file: File, target: { tripId?: string; activityId?
         } catch {
           // An answer that is not JSON is usually something in front of the album, not the album itself.
         }
-        if (xhr.status >= 200 && xhr.status < 300 && body.photoId) return resolve({ photoId: body.photoId, duplicate: body.duplicate, filed: body.filed, owner: body.owner });
+        if (xhr.status >= 200 && xhr.status < 300 && body.photoId) return resolve({ photoId: body.photoId, duplicate: body.duplicate, status: body.status, filed: body.filed, owner: body.owner });
         reject(new AttemptError(failureForStatus(xhr.status, body.error)));
       });
     xhr.onerror = () => finish(() => reject(new AttemptError({ kind: "network", message: "The connection dropped." })));

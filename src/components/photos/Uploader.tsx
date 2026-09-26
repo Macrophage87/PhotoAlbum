@@ -3,9 +3,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Button, buttonClasses } from "@/components/ui";
-import { albumTakes, isScanPick, isVideoPick, refusalFor } from "@/lib/media/picker";
+import { albumTakes, isScanPick, isVideoPick, mimeOfPicked, refusalFor } from "@/lib/media/picker";
+import { maxUploadBytes, tooBigMessage, type UploadByteLimits } from "@/lib/media/limits";
 import { backoffMs, isRetryable, MAX_ATTEMPTS, MAX_BATCH, overCapMessage, progressLine, STATUS_NOTICE_AFTER, statusRetryMs } from "@/lib/media/upload-retry";
-import { AttemptError, attemptUpload, type FiledAnswer } from "@/lib/media/upload-one";
+import { AttemptError, attemptUpload, statusAfterUpload, type FiledAnswer, type UploadTarget } from "@/lib/media/upload-one";
 
 type Item = {
   localId: string;
@@ -26,6 +27,10 @@ type Item = {
   owner?: string | null;
   thumbUrl?: string | null;
   trip?: { slug: string; title: string } | null;
+  /** Where it was sent and whether it may go to the AI helper, fixed when it was added: choosing another trip part-way
+   * through a batch changes where the files added after that go, not the ones already on their way. */
+  target: UploadTarget;
+  optOut: boolean;
 };
 
 const CONCURRENCY = 3;
@@ -81,7 +86,7 @@ export function tooLongMessage(durationS: number, limit: number): string {
   return `This video is ${Math.round(durationS)} seconds long; clips uploaded here are limited to ${limit} seconds. Upload longer videos to YouTube as Unlisted and add the link instead.`;
 }
 
-export function Uploader({ tripId, activityId, collectionId, onDone, maxClipSeconds = 90, annotationActive = false }: { tripId?: string; /** Put what is uploaded straight into this activity, and on its trip. */ activityId?: string; /** Put what is uploaded into this collection as well. */ collectionId?: string; onDone?: (photoIds: string[]) => void; maxClipSeconds?: number; /** Whether the AI helper is on, so the opt-out checkbox is worth showing. */ annotationActive?: boolean }) {
+export function Uploader({ tripId, activityId, collectionId, onDone, maxClipSeconds = 90, maxBytes, annotationActive = false }: { tripId?: string; /** Put what is uploaded straight into this activity, and on its trip. */ activityId?: string; /** Put what is uploaded into this collection as well. */ collectionId?: string; onDone?: (photoIds: string[]) => void; maxClipSeconds?: number; /** The server's size limits, so an oversized file is refused before any of it is sent. */ maxBytes?: UploadByteLimits; /** Whether the AI helper is on, so the opt-out checkbox is worth showing. */ annotationActive?: boolean }) {
   const [optOut, setOptOut] = useState(false);
   const optOutRef = useRef(false);
   const [items, setItems] = useState<Item[]>([]);
@@ -118,25 +123,30 @@ export function Uploader({ tripId, activityId, collectionId, onDone, maxClipSeco
   }, [optOut]);
   // The queue runner lives in a ref so async completions can re-enter it without stale closures.
   useEffect(() => {
+    /** Cleared when the uploader goes away, so nothing carries on sending from a page nobody can see. */
+    let alive = true;
     /**
      * Send one file, waiting out anything that was the connection's fault rather than the album's. Whatever
      * happens, this returns — the slot it holds is given back in the caller's `finally`, and a slot that is never
      * given back is what used to stop a long batch in its tracks.
      */
     const send = async (item: Item) => {
-      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
+      for (let attempt = 1; attempt <= MAX_ATTEMPTS && alive; attempt += 1) {
         update(item.localId, { status: "uploading", attempts: attempt, retrying: false, error: undefined });
         try {
-          const { photoId, duplicate, filed, owner } = await attemptUpload(
+          const answer = await attemptUpload(
             item.file,
-            targetRef.current,
-            optOutRef.current,
+            item.target,
+            item.optOut,
             (p) => update(item.localId, { progress: p }),
             (abort) => inFlight.current.set(item.localId, abort),
+            attempt,
           );
+          const { photoId, duplicate, filed, owner } = answer;
           // The album already holds these bytes: nothing was added, and the tile points at the one it has rather
-          // than pretending a second copy went up.
-          update(item.localId, { photoId, status: duplicate ? "ready" : "processing", progress: 1, retrying: false, duplicate, filed, owner });
+          // than pretending a second copy went up. Only one that is finished is ready; one still being processed (or
+          // this member's own, whose first answer was lost on the way back) is watched like any other.
+          update(item.localId, { photoId, status: statusAfterUpload(answer), progress: 1, retrying: false, duplicate, filed, owner });
           return;
         } catch (err) {
           const failure = err instanceof AttemptError ? err.failure : { kind: "network" as const, message: err instanceof Error ? err.message : "Upload failed" };
@@ -155,7 +165,7 @@ export function Uploader({ tripId, activityId, collectionId, onDone, maxClipSeco
     };
 
     pumpRef.current = () => {
-      while (active.current < CONCURRENCY && queue.current.length) {
+      while (alive && active.current < CONCURRENCY && queue.current.length) {
         const item = queue.current.shift()!;
         active.current += 1;
         void send(item).finally(() => {
@@ -163,6 +173,14 @@ export function Uploader({ tripId, activityId, collectionId, onDone, maxClipSeco
           pumpRef.current();
         });
       }
+    };
+    const sending = inFlight.current;
+    return () => {
+      // Leaving stops what is in the air and what is waiting, rather than letting it go on unseen.
+      alive = false;
+      queue.current = [];
+      for (const abort of sending.values()) abort();
+      sending.clear();
     };
   }, [update]);
 
@@ -177,6 +195,11 @@ export function Uploader({ tripId, activityId, collectionId, onDone, maxClipSeco
           refused.push({ key, name: file.name, why: refusalFor(file) });
           continue;
         }
+        const limit = maxBytes ? maxUploadBytes(mimeOfPicked(file) ?? "", maxBytes) : null;
+        if (limit !== null && file.size > limit) {
+          refused.push({ key, name: file.name, why: tooBigMessage(file.size, limit) });
+          continue;
+        }
         if (isVideoPick(file) && !isScanPick(file)) {
           const d = await readDuration(file);
           if (d !== null && d > maxClipSeconds) {
@@ -184,7 +207,7 @@ export function Uploader({ tripId, activityId, collectionId, onDone, maxClipSeco
             continue;
           }
         }
-        fresh.push({ localId: key, file, progress: 0, status: "queued" });
+        fresh.push({ localId: key, file, progress: 0, status: "queued", target: { ...targetRef.current }, optOut: optOutRef.current });
       }
       // What is still going counts against the cap too, so adding a hundred, then another hundred, then another
       // before the first have finished is the same as adding three hundred at once.
@@ -200,7 +223,7 @@ export function Uploader({ tripId, activityId, collectionId, onDone, maxClipSeco
       queue.current.push(...fresh);
       pumpRef.current();
     },
-    [maxClipSeconds],
+    [maxClipSeconds, maxBytes],
   );
 
   /**

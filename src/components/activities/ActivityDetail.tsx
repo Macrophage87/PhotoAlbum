@@ -18,6 +18,7 @@ import { Button, Card, ConfirmSubmitButton } from "@/components/ui";
 import { ActivityUploader } from "./ActivityUploader";
 import { ShareBar } from "@/components/share/ShareBar";
 import { TakeWindow } from "@/components/photos/TakeWindow";
+import type { UploadByteLimits } from "@/lib/media/limits";
 
 export type ActivityDetailData = {
   id: string;
@@ -48,7 +49,7 @@ type ReadOnlyProps = { editable: false };
 export type ActivityShare = { url: string | null; enable: () => Promise<void>; disable: () => Promise<void>; cover?: { href: string; thumbUrl: string | null } };
 
 /** Shared body of the activity page for members (editable) and shared/public viewers. */
-export function ActivityDetail({ trip, activity, photos, upload, share, save, describe, ...mode }: { trip: { slug: string; timezone: string; themeKey: string }; activity: ActivityDetailData; photos: PhotoCard[]; /** Members only: what adding photos straight to this activity needs — the uploader's limits, and everything taken during it. */ upload?: { maxClipSeconds: number; annotationActive: boolean; added?: number | null; during?: { count: number; elsewhere: number; when: string; take: () => Promise<{ added: number; elsewhere: number }> } }; /** Whoever arranges the trip: the link to this activity, and the means to make or withdraw it. */ share?: ActivityShare; /** Write the description by hand. Absent for anyone who may not arrange the trip; they read what is there. */ save?: (text: string) => Promise<void>; /** Ask the helper to write it, with whatever is in the box as a note. Absent when the helper is off, or for anyone who may not arrange the trip. */ describe?: (note: string) => Promise<string>; } & (EditProps | ReadOnlyProps)) {
+export function ActivityDetail({ trip, activity, photos, upload, share, save, describe, ...mode }: { trip: { slug: string; timezone: string; themeKey: string }; activity: ActivityDetailData; photos: PhotoCard[]; /** Members only: what adding photos straight to this activity needs — the uploader's limits, and everything taken during it. */ upload?: { maxClipSeconds: number; maxBytes?: UploadByteLimits; annotationActive: boolean; added?: number | null; during?: { count: number; elsewhere: number; when: string; take: () => Promise<{ added: number; elsewhere: number }> } }; /** Whoever arranges the trip: the link to this activity, and the means to make or withdraw it. */ share?: ActivityShare; /** Write the description by hand. Absent for anyone who may not arrange the trip; they read what is there. */ save?: (text: string) => Promise<void>; /** Ask the helper to write it, with whatever is in the box as a note. Absent when the helper is off, or for anyone who may not arrange the trip. */ describe?: (note: string) => Promise<string>; } & (EditProps | ReadOnlyProps)) {
   const toLocalInput = (d: Date) => format(new TZDate(d, trip.timezone), "yyyy-MM-dd'T'HH:mm");
   const editing = mode.editable && mode.editing;
   return (
@@ -145,6 +146,7 @@ export function ActivityDetail({ trip, activity, photos, upload, share, save, de
               key={`added-${upload.added ?? "none"}`}
               activityId={activity.id}
               maxClipSeconds={upload.maxClipSeconds}
+              maxBytes={upload.maxBytes}
               annotationActive={upload.annotationActive}
               pickHref={`/trips/${trip.slug}/activities/${activity.id}/add`}
               takeAll={
