@@ -66,9 +66,10 @@ const many = (v: string | string[] | undefined): string[] => {
  * Read a filter off the address bar. `member` is false for anonymous visitors, who see neither who uploaded what
  * nor who is in the picture, and must not be able to narrow by either: a stranger who could ask a public trip for
  * "photographs with Ada in them" would be told which of them she is on, which is the whole of what the album keeps
- * from them. The same goes for the words: theirs are matched only against what they may read.
+ * from them. The same goes for the words: theirs are matched only against what they may read. `inTrip` is for a
+ * trip's own pages, where its activities may be asked about by whoever may open the trip.
  */
-export function parseGalleryFilter(sp: Params, opts: { member: boolean }): GalleryFilter {
+export function parseGalleryFilter(sp: Params, opts: { member: boolean; inTrip?: boolean }): GalleryFilter {
   const rawQ = one(sp.q);
   const kind = one(sp.kind);
   const year = Number(one(sp.year));
@@ -78,7 +79,9 @@ export function parseGalleryFilter(sp: Params, opts: { member: boolean }): Galle
     personIds: opts.member ? many(sp.person) : [],
     kind: kind && (KINDS as string[]).includes(kind) ? (kind as MediaKind) : null,
     year: Number.isInteger(year) && year >= FIRST_PHOTOGRAPH && year <= 2200 ? year : null,
-    activityId: one(sp.activity),
+    // An activity is asked about inside its trip. Anywhere else a stranger could use one to learn which public
+    // photographs came from an outing on a trip they may not open.
+    activityId: opts.member || opts.inTrip ? one(sp.activity) : null,
     member: opts.member,
   };
 }

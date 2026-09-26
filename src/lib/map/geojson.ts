@@ -77,7 +77,7 @@ export async function buildMapPayload(viewer: Viewer, tripId?: string, given: Ga
   const filter = { ...given, member: given.member && member };
   const active = filterIsActive(filter);
   // Across every trip, the words are asked of what this viewer may see, so the limit on matches is spent there.
-  const narrowed = await narrowing(filter, tripId ? { tripId } : { publicOnly: !member });
+  const narrowed = await narrowing(filter, tripId ? { tripId, placed: true } : { publicOnly: !member, placed: true });
   const tripWhere = tripId ? { id: tripId } : visibleTripsWhere(viewer);
   const trips = await db.trip.findMany({ where: tripWhere, select: { id: true, slug: true, title: true, themeKey: true, timezone: true }, orderBy: { startDate: "desc" } });
   const tripIds = trips.map((t) => t.id);
@@ -178,7 +178,7 @@ export async function buildMapPayload(viewer: Viewer, tripId?: string, given: Ga
 
 /** Photos in a collection (no tracks). The caller has already checked the viewer may open the collection; a photo's trip is named only when the viewer may open that trip too. */
 export async function buildCollectionMapPayload(viewer: Viewer, collectionId: string, filter: GalleryFilter = NO_FILTER): Promise<MapPayload> {
-  const narrowed = await narrowing({ ...filter, member: filter.member && viewer.kind === "user" }, { collectionId });
+  const narrowed = await narrowing({ ...filter, member: filter.member && viewer.kind === "user" }, { collectionId, placed: true });
   const found = narrowed.nothing ? [] : await db.photo.findMany({
     where: { ...NOT_TRASHED, status: "READY", lat: { not: null }, lng: { not: null }, collections: { some: { collectionId } }, ...narrowed.where },
     select: { id: true, lat: true, lng: true, caption: true, takenAt: true, tzOffsetMin: true, updatedAt: true, activityId: true, gpsSource: true, activity: { select: { title: true } }, uploader: { select: { id: true, name: true, email: true } }, trip: { select: { id: true, slug: true, title: true, visibility: true, shareToken: true, timezone: true } } },

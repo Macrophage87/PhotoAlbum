@@ -23,7 +23,7 @@ export default async function TripTimelinePage({ params, searchParams }: PagePro
   const sp = await searchParams;
   const { trip, editable } = await loadViewableTrip(slug);
   // Who uploaded what is members-only, so an anonymous visitor never sees the member list nor narrows by it.
-  const filter = parseGalleryFilter(sp, { member: editable });
+  const filter = parseGalleryFilter(sp, { member: editable, inTrip: true });
   // A trip reads from its first morning unless this person has asked for the latest day first.
   const order = await timelineOrderFor(sp, "oldest");
   const [{ groups, matched, total, active }, activities, members, people] = await Promise.all([

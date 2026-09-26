@@ -215,7 +215,7 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
             <div className="mt-3">
               <FavouriteButton kind="photo" id={photo.id} initial={(await favouritesFor("photo", [photo.id], viewer)).get(photo.id) ?? { mine: false, count: 0 }} withLabel />
             </div>
-            {photo.title && <h1 className="mt-3 text-xl font-semibold font-display">{photo.title}</h1>}
+            {readableTitle(photo, true) && <h1 className="mt-3 text-xl font-semibold font-display" data-testid="photo-title">{readableTitle(photo, true)}</h1>}
             {isClip && photo.durationS && <p className="mt-2 text-sm text-muted">{Math.round(photo.durationS)} second clip{photo.status === "READY" ? " · original kept" : ""}</p>}
             {isVideo && photo.externalStatus === "UNAVAILABLE" && <p className="mt-1 text-sm text-amber-800">This video is no longer available on YouTube (deleted or made private). Replace the link below or delete the item.</p>}
             {photo.caption && <p className="mt-3 text-lg">{photo.caption}</p>}
@@ -256,8 +256,14 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
                 {!isVideo && (
                   <div>
                     <Label htmlFor="photo-title">Title</Label>
-                    <Input id="photo-title" name="title" defaultValue={photo.title ?? ""} placeholder="Mail boat lunch" />
-                    <p className="text-xs text-muted mt-1">Shown when the item is listed or shared. Left empty, the AI helper writes one when it describes the item.</p>
+                    <Input id="photo-title" name="title" defaultValue={photo.title ?? ""} placeholder={photo.membersTitle?.trim() || "Mail boat lunch"} />
+                    {photo.membersTitle?.trim() && !photo.title?.trim() ? (
+                      <p className="text-xs text-muted mt-1" data-testid="photo-members-title">
+                        The helper&apos;s title (shown to the family only): {photo.membersTitle}. It names somebody, or came from notes, so anyone else sees no title until you write one here.
+                      </p>
+                    ) : (
+                      <p className="text-xs text-muted mt-1">Shown when the item is listed or shared. Left empty, the AI helper writes one when it describes the item — shown to the family only when it names somebody or comes from notes.</p>
+                    )}
                   </div>
                 )}
                 <div>

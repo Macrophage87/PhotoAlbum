@@ -18,7 +18,7 @@ export default async function TripMapPage({ params, searchParams }: PageProps<"/
   // A member is told what this trip is still missing from the map, and taken to where it can be put on.
   const waiting = editable ? (await unplacedForTray(await requireUser(`/trips/${slug}/map`), { tripId: trip.id, take: 1 })).total : 0;
   // The same question the timeline and the gallery take, asked of where things happened instead of when.
-  const filter = parseGalleryFilter(sp, { member: editable });
+  const filter = parseGalleryFilter(sp, { member: editable, inTrip: true });
   const query = filterQuery(filter);
   const [activities, members, people] = await Promise.all([
     db.activity.findMany({ where: { tripId: trip.id }, orderBy: { startTime: "asc" }, select: { id: true, title: true } }),

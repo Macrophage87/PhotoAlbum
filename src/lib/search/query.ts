@@ -56,7 +56,15 @@ export function normalizeQuery(q: string): string {
  * nothing in the trash is searchable by anyone. */
 export function visibilitySql(viewer: Viewer): Prisma.Sql {
   if (viewer.kind === "user") return Prisma.sql`p."trashedAt" IS NULL`;
-  return Prisma.sql`p."trashedAt" IS NULL AND (t.visibility = 'PUBLIC' OR EXISTS (SELECT 1 FROM "CollectionItem" ci JOIN "Collection" c ON c.id = ci."collectionId" WHERE ci."photoId" = p.id AND c.visibility = 'PUBLIC'))`;
+  return Prisma.sql`p."trashedAt" IS NULL AND ${publicMediaSql()}`;
+}
+
+/**
+ * Items in a PUBLIC trip or a PUBLIC collection, as `p`. Written as two IN lists rather than correlated EXISTS
+ * clauses joined by OR, which the planner runs once per photograph (and hands to the JIT on a large album).
+ */
+export function publicMediaSql(): Prisma.Sql {
+  return Prisma.sql`(p."tripId" IN (SELECT pt.id FROM "Trip" pt WHERE pt.visibility = 'PUBLIC') OR p.id IN (SELECT pci."photoId" FROM "CollectionItem" pci JOIN "Collection" pc ON pc.id = pci."collectionId" WHERE pc.visibility = 'PUBLIC'))`;
 }
 
 /**

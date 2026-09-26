@@ -29,7 +29,7 @@ export async function activityCoverCandidates(activityId: string, cursor?: strin
     db.photo.findMany({
       where,
       orderBy: [{ takenAt: { sort: "asc", nulls: "last" } }, { createdAt: "asc" }, { id: "asc" }],
-      select: { id: true, updatedAt: true, caption: true, title: true, originalName: true },
+      select: { id: true, updatedAt: true, caption: true, title: true, membersTitle: true, originalName: true },
       take: take + 1,
       ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
     }),
