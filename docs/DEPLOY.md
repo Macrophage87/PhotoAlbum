@@ -99,7 +99,7 @@ Set at least these values:
 | Variable | Set to |
 |---|---|
 | `APP_URL` | `https://album.example.com` (your real hostname, with https). This appears in every sign-in email. |
-| `ADMIN_EMAIL` | Your own email address. Only this address can create the first admin account. |
+| `ADMIN_EMAIL` | Your own email address. Only this address can create the first admin account, and only while there is no admin: once one exists it is an ordinary address, so removing that account from the Admin page sticks. |
 | `POSTGRES_PASSWORD` | A long random password, for example the output of `openssl rand -base64 24`. |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM` | Your mail provider's settings. Leave `SMTP_HOST` empty to print links to the log instead. |
 | `APP_PORT` | Leave at `3000`. The reverse proxy in the next step talks to it locally. |
@@ -142,7 +142,7 @@ The body limit matters: photos are accepted up to 100 MB, short video clips up t
 sudo systemctl reload caddy
 ```
 
-If you prefer nginx, the equivalent needs `client_max_body_size 2g;`, `proxy_read_timeout 600s;` and the usual `proxy_set_header Host`, `X-Forwarded-Proto` and `X-Forwarded-For` lines pointing at `http://127.0.0.1:3000`, plus certbot for certificates.
+If you prefer nginx, the equivalent needs `client_max_body_size 2g;`, `proxy_read_timeout 600s;` and the usual `proxy_set_header Host`, `X-Forwarded-Proto` and `X-Forwarded-For $proxy_add_x_forwarded_for` lines pointing at `http://127.0.0.1:3000` (the app trusts only the last `X-Forwarded-For` entry, the one your proxy adds), plus certbot for certificates.
 
 ### Keep the app off the public interface
 
@@ -252,7 +252,7 @@ The heavy-work lock (transcoding, embeddings, faces, animals one at a time) is h
 
 1. Open `https://album.example.com` in a browser.
 2. Enter the address you set as `ADMIN_EMAIL` and submit.
-3. Open the emailed link. If SMTP is not configured, read it from the log instead:
+3. Open the emailed link and press **Sign in**. If SMTP is not configured, read the link from the log instead:
 
    ```bash
    docker compose logs app | grep "auth/verify"

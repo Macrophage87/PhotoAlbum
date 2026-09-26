@@ -173,7 +173,7 @@ S += [P("4. Configuration reference (.env)", H1),
       table([
         ["Variable", "Default", "Purpose"],
         ["APP_URL", "http://localhost:3000", "Public URL of the site. Used in every emailed link and in redirects. Set it to your real address (with https) when behind a proxy."],
-        ["ADMIN_EMAIL", "you@example.com", "The first person to sign in with this address becomes an admin. Also allowed to sign in before any invites exist."],
+        ["ADMIN_EMAIL", "you@example.com", "The first person to sign in with this address becomes an admin. Allowed to sign in without an invite only while the album has no admin."],
         ["SMTP_HOST", "(empty)", "Mail server hostname. Leave empty to log links instead of sending mail."],
         ["SMTP_PORT", "587", "587 for STARTTLS, 465 for implicit TLS."],
         ["SMTP_USER / SMTP_PASS", "(empty)", "Mail server credentials."],
@@ -219,10 +219,12 @@ S += [P("4. Configuration reference (.env)", H1),
 # ---------- 5 ----------
 S += [P("5. Signing in and inviting family", H1),
       P("There are no passwords. A person types their email on the sign-in page and receives a link that is valid for 15 minutes "
-        "and can be used once. The resulting session lasts 90 days on that browser."),
+        "and can be used once: opening it shows a Sign in button, and pressing that is what signs them in (so a mail "
+        "scanner that opens links first does not use it up). They then stay signed in on that browser as long as they "
+        "visit at least once every 90 days."),
       P("Who can sign in", H2),
       bullets([
-        "The address in ADMIN_EMAIL, always. The first sign-in with it creates the admin account.",
+        "The address in ADMIN_EMAIL, while the album has no admin yet. The first sign-in with it creates the admin account; once an admin exists it is an ordinary address, so removing that account sticks.",
         "Anyone who already has an account.",
         "Anyone with a pending invite for their address.",
         "Everyone else sees the same 'check your email' message but no email is sent and no account is created, so the site never reveals who is a member.",

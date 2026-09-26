@@ -177,7 +177,7 @@ See `.env.example` for every variable. The important ones:
 |---|---|
 | `DATABASE_URL` | Postgres connection string |
 | `APP_URL` | Public URL of the site |
-| `ADMIN_EMAIL` | This address becomes an admin when it first signs in |
+| `ADMIN_EMAIL` | This address becomes an admin when it first signs in (only while the album has no admin yet) |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM` | Outgoing email; leave `SMTP_HOST` empty to log links instead |
 | `PHOTO_STORAGE_ROOT` | Where originals and renditions are stored |
 | `MAX_UPLOAD_BYTES`, `MAX_IMPORT_BYTES` | Upload limits |
