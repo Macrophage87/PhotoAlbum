@@ -53,7 +53,11 @@ export async function setContainerAnnotationOptOut(kind: "trip" | "collection", 
   revalidatePath("/", "layout");
 }
 
-export async function reannotate(photoId: string): Promise<void> {
+/**
+ * Ask for a new description now. On one the family edited, `replace` is the member's confirmed "yes, throw ours
+ * away": without it the new answer only refreshes the helper's own fields, as every automatic pass does.
+ */
+export async function reannotate(photoId: string, replace = false): Promise<void> {
   const user = await requireUserOrThrow();
   const owner = await db.photo.findUnique({ where: { id: photoId }, select: { uploaderId: true } });
   if (!owner) return;
@@ -61,7 +65,9 @@ export async function reannotate(photoId: string): Promise<void> {
   const gates = await annotationGates();
   if (!gates.active) throw new Error("Annotation is off");
   await db.photo.update({ where: { id: photoId }, data: { annotatedAt: null, annotationError: null } });
-  await enqueue(QUEUES.annotatePhoto, { photoId }, { singletonKey: `annotate:${photoId}`, singletonSeconds: 60 });
+  // Its own singleton key, so a pass already queued by the sweep does not swallow the member's request.
+  if (replace === true) await enqueue(QUEUES.annotatePhoto, { photoId, replace: true }, { singletonKey: `annotate-replace:${photoId}`, singletonSeconds: 60 });
+  else await enqueue(QUEUES.annotatePhoto, { photoId }, { singletonKey: `annotate:${photoId}`, singletonSeconds: 60 });
   revalidatePath(`/photos/${photoId}`);
 }
 

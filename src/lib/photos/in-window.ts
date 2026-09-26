@@ -23,11 +23,18 @@ type User = Pick<ViewerUser, "id" | "role">;
 
 const mine = (user: User): Prisma.PhotoWhereInput => (isAdmin(user) ? {} : { uploaderId: user.id });
 
-/** Only the photographs of the people a trip or an activity names, where it names anybody. */
+/**
+ * Only the photographs of the people a trip or an activity names, where it names anybody. An activity that names
+ * nobody was everybody on its trip, so the trip's list holds for it.
+ */
 async function wasThere(where: { tripId: string } | { activityId: string }): Promise<Prisma.PhotoWhereInput> {
-  const there = "tripId" in where
-    ? (await db.trip.findUnique({ where: { id: where.tripId }, select: { participants: { select: { id: true } } } }))?.participants ?? []
-    : (await db.activity.findUnique({ where: { id: where.activityId }, select: { participants: { select: { id: true } } } }))?.participants ?? [];
+  const people = { select: { id: true } } as const;
+  let there: { id: string }[];
+  if ("tripId" in where) there = (await db.trip.findUnique({ where: { id: where.tripId }, select: { participants: people } }))?.participants ?? [];
+  else {
+    const activity = await db.activity.findUnique({ where: { id: where.activityId }, select: { participants: people, trip: { select: { participants: people } } } });
+    there = activity?.participants.length ? activity.participants : activity?.trip.participants ?? [];
+  }
   return there.length ? { uploaderId: { in: there.map((p) => p.id) } } : {};
 }
 

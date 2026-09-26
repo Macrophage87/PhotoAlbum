@@ -71,7 +71,7 @@ export async function updateActivity(slug: string, id: string, _prev: ActivityFo
       ...(there ? { participants: { set: there.map((pid) => ({ id: pid })) } } : {}),
     },
   });
-  await reassignPhotosForActivity(id, existing);
+  await reassignPhotosForActivity(id);
   revalidatePath(`/trips/${slug}`, "layout");
   redirect(`/trips/${slug}/activities/${id}`);
 }

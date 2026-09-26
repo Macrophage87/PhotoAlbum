@@ -74,7 +74,7 @@ export async function bulkSetPlace(photoIds: string[], lat: number, lng: number,
 }
 
 /** Where a photograph was before it was moved, so the move can be taken back. */
-export type PlaceBefore = { id: string; lat: number | null; lng: number | null; gpsSource: "EXIF" | "TRACK" | "MANUAL" | "SIDECAR" | "ESTIMATE" | null; placeName: string | null };
+export type PlaceBefore = { id: string; lat: number | null; lng: number | null; gpsSource: "EXIF" | "TRACK" | "MANUAL" | "SIDECAR" | "ESTIMATE" | null; placeName: string | null; placeSetById: string | null };
 
 const beforeSchema = z
   .array(
@@ -84,6 +84,7 @@ const beforeSchema = z
       lng: z.number().min(-180).max(180).nullable(),
       gpsSource: z.enum(["EXIF", "TRACK", "MANUAL", "SIDECAR", "ESTIMATE"]).nullable(),
       placeName: z.string().max(200).nullable(),
+      placeSetById: z.string().min(1).nullable().optional(),
     }),
   )
   .min(1)
@@ -102,22 +103,34 @@ export async function placePhotos(photoIds: string[], lat: number, lng: number, 
   const list = await editableMediaIds(user, ids.parse(photoIds));
   if (!list.length) return { count: 0, before: [] };
   if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) throw new Error("That is not a place on the map");
-  const before = await db.photo.findMany({ where: { id: { in: list } }, select: { id: true, lat: true, lng: true, gpsSource: true, placeName: true } });
+  const before = await db.photo.findMany({ where: { id: { in: list } }, select: { id: true, lat: true, lng: true, gpsSource: true, placeName: true, placeSetById: true } });
   const r = await db.photo.updateMany({ where: { id: { in: list } }, data: { lat, lng, altitude: null, gpsSource: "MANUAL", placeSetById: user.id, placeName: typeof name === "string" && name.trim() ? name.trim().slice(0, 200) : null } });
   return { count: r.count, before };
 }
 
-/** Take a move back: each photograph returns to exactly where it was, whoever or whatever had put it there. */
+/**
+ * Take a move back: each photograph returns to exactly where it was, whoever or whatever had put it there —
+ * including "nowhere, because somebody removed it", which must stay removed rather than become a gap the album
+ * fills in. The list comes back from the browser, so who is named as having set a place is only taken where that
+ * is a real member; otherwise it is the member pressing Undo, who is the one putting it back.
+ */
 export async function restorePlaces(entries: PlaceBefore[]): Promise<number> {
   const user = await requireUserOrThrow();
   const all = beforeSchema.parse(entries);
   const mine = new Set(await editableMediaIds(user, all.map((e) => e.id)));
   const allowed = all.filter((e) => mine.has(e.id));
+  const named = [...new Set(allowed.map((e) => e.placeSetById).filter((v): v is string => Boolean(v)))];
+  const members = new Set((await db.user.findMany({ where: { id: { in: named } }, select: { id: true } })).map((u) => u.id));
+  const setter = (e: (typeof allowed)[number]) => {
+    const byHand = e.gpsSource === "MANUAL" || (e.lat === null && Boolean(e.placeSetById));
+    if (!byHand) return null;
+    return e.placeSetById && members.has(e.placeSetById) ? e.placeSetById : user.id;
+  };
   await db.$transaction(
     allowed.map((e) =>
       db.photo.update({
         where: { id: e.id },
-        data: { lat: e.lat, lng: e.lng, gpsSource: e.lat === null ? null : e.gpsSource, placeName: e.placeName, ...(e.gpsSource === "MANUAL" ? {} : { placeSetById: null }) },
+        data: { lat: e.lat, lng: e.lat === null ? null : e.lng, gpsSource: e.lat === null ? null : e.gpsSource, placeName: e.placeName, placeSetById: setter(e) },
       }),
     ),
   );
@@ -179,7 +192,7 @@ export async function bulkSetDate(photoIds: string[], plan: unknown): Promise<{ 
   const { rows, skipped, notYours } = await planSelection(user, photoIds, plan);
   const trips = new Set<string>();
   for (const row of rows) {
-    const tripId = await applyPhotoInstant(row.photo, new Date(row.after.at), row.after.tzOffsetMin, "MANUAL", user.id, { geotag: false });
+    const tripId = await applyPhotoInstant(row.photo, new Date(row.after.at), row.after.tzOffsetMin, "MANUAL", user.id, { geotag: false, byMember: true });
     if (tripId) trips.add(tripId);
   }
   // One re-geotag per trip rather than one per photo: the job walks the whole trip anyway.

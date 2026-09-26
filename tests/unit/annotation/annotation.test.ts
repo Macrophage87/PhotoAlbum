@@ -65,7 +65,7 @@ describe("annotation schema and pricing", () => {
 });
 
 describe("the text block", () => {
-  const base = { id: "p", kind: "PHOTO" as const, status: "READY" as const, storageKey: "k", renditions: null, videoRenditions: null, takenAt: new Date("2025-08-12T12:00:00Z"), takenAtSource: "EXIF_OFFSET" as const, tzOffsetMin: -240, camera: "iPhone 15", lat: null, lng: null, placeEstimatedAt: null, context: "lobster rolls on the mail boat", caption: null, title: null, durationS: null, trip: { title: "Acadia", timezone: "America/New_York" }, collections: [{ collection: { title: "Summer" } }] };
+  const base = { id: "p", kind: "PHOTO" as const, status: "READY" as const, storageKey: "k", renditions: null, videoRenditions: null, takenAt: new Date("2025-08-12T12:00:00Z"), takenAtSource: "EXIF_OFFSET" as const, tzOffsetMin: -240, camera: "iPhone 15", lat: null, lng: null, placeSetById: null, placeEstimatedAt: null, context: "lobster rolls on the mail boat", caption: null, title: null, durationS: null, trip: { title: "Acadia", timezone: "America/New_York" }, collections: [{ collection: { title: "Summer" } }] };
   it("includes notes, containers and the names rule, and asks for a date only when needed", () => {
     const text = describeItem(base, ["Sam"], false);
     expect(text).toContain("Notes from the person who uploaded it: lobster rolls");
@@ -141,6 +141,11 @@ describe("applying a record", () => {
     await applyAnnotation(photoId, "claude-opus-5", annotationSchema.parse({ ...fixture, caption: "An older woman at a beach", searchSummary: "new summary" }), {});
     const a = (await db.photo.findUniqueOrThrow({ where: { id: photoId } })).annotation as { caption: string; description: string; tags: string[]; searchSummary: string };
     expect(a).toMatchObject({ caption: "Grandma at Lake Tahoe", description: "Grandma Jo on the dock at Tahoe", tags: ["grandma", "tahoe"], searchSummary: "new summary" });
+    // Unless a member pressed "Describe again" and agreed to lose theirs.
+    await applyAnnotation(photoId, "claude-opus-5", annotationSchema.parse({ ...fixture, caption: "An older woman at a beach" }), {}, { replaceEdited: true });
+    const replaced = await db.photo.findUniqueOrThrow({ where: { id: photoId } });
+    expect((replaced.annotation as { caption: string }).caption).toBe("An older woman at a beach");
+    expect(replaced.annotationSource).toBe("MACHINE");
   });
 });
 

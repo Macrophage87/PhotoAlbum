@@ -39,18 +39,30 @@ export async function activityFor(
  * now covers it, and one left over when an outing is shortened or deleted goes to whatever else still covers it.
  */
 export async function refileByClock(tripId: string, scope: Prisma.PhotoWhereInput = {}): Promise<void> {
+  try {
+    await refileOnce(tripId, scope);
+  } catch (err) {
+    // An activity deleted between reading the list and writing to it: read again, once, without it.
+    if ((err as { code?: string }).code !== "P2003") throw err;
+    await refileOnce(tripId, scope);
+  }
+}
+
+async function refileOnce(tripId: string, scope: Prisma.PhotoWhereInput): Promise<void> {
   const [activities, photos] = await Promise.all([
     db.activity.findMany({ where: { tripId }, select: { id: true, startTime: true, endTime: true, participants: { select: { id: true } } } }),
     db.photo.findMany({ where: { AND: [{ tripId, activitySetById: null }, scope] }, select: { id: true, takenAt: true, uploaderId: true, activityId: true } }),
   ]);
-  const moves = new Map<string | null, string[]>();
+  const moves: { photo: (typeof photos)[number]; to: string | null }[] = [];
   for (const p of photos) {
     const to = p.takenAt ? pickActivityByTime(openTo(activities, p.uploaderId), p.takenAt)?.id ?? null : null;
-    if (to === p.activityId) continue;
-    moves.set(to, [...(moves.get(to) ?? []), p.id]);
+    if (to !== p.activityId) moves.push({ photo: p, to });
   }
-  // Written only where nobody has chosen in the meantime: a member filing one by hand while this runs wins.
-  for (const [activityId, ids] of moves) await db.photo.updateMany({ where: { id: { in: ids }, tripId, activitySetById: null }, data: { activityId } });
+  // Each written only if it is still as it was read: a member filing it by hand, or correcting its date, while this
+  // runs wins, and the change of date files it again on its own.
+  for (const { photo: p, to } of moves) {
+    await db.photo.updateMany({ where: { id: p.id, tripId, activitySetById: null, activityId: p.activityId, takenAt: p.takenAt }, data: { activityId: to } });
+  }
 }
 
 type Window = { startTime: Date; endTime: Date };
@@ -60,8 +72,8 @@ const during = (w: Window): Prisma.PhotoWhereInput => ({ takenAt: { gte: w.start
 /**
  * Keep photo <-> activity links consistent after an activity is made or its hours or people change: what the clock
  * filed on it that no longer fits goes wherever else it fits, and what the clock can now put on it comes over —
- * from the trip's loose photographs and from longer outings alike. `before` is the window it had until now, so
- * photographs only the old hours covered are looked at too.
+ * from the trip's loose photographs and from longer outings alike. (What only the old hours covered was either on
+ * it, and so is looked at, or on a shorter outing, which this change does not affect.)
  *
  * An item a member put in the activity themselves — uploaded into it, or filed there on its own page — is left
  * alone in both directions, as is one a member took off an activity. Otherwise a scan with no date, or a
@@ -72,10 +84,10 @@ const during = (w: Window): Prisma.PhotoWhereInput => ({ takenAt: { gte: w.start
  * somebody who was not there goes back to the trip. That last part is the point of naming them after the fact: a
  * list added this evening tidies up what the hours collected this afternoon.
  */
-export async function reassignPhotosForActivity(activityId: string, before?: Window): Promise<void> {
+export async function reassignPhotosForActivity(activityId: string): Promise<void> {
   const activity = await db.activity.findUnique({ where: { id: activityId }, select: { id: true, tripId: true, startTime: true, endTime: true } });
   if (!activity) return;
-  await refileByClock(activity.tripId, { OR: [{ activityId: activity.id }, during(activity), ...(before ? [during(before)] : [])] });
+  await refileByClock(activity.tripId, { OR: [{ activityId: activity.id }, during(activity)] });
 }
 
 /**
@@ -83,13 +95,18 @@ export async function reassignPhotosForActivity(activityId: string, before?: Win
  * put on, so it goes back to the clock like the rest; each lands on whatever other outing covers its time.
  */
 export async function deleteActivityAndRefile(activityId: string): Promise<void> {
-  const activity = await db.activity.findUnique({ where: { id: activityId }, select: { id: true, tripId: true, startTime: true, endTime: true } });
-  if (!activity) return;
-  const on = (await db.photo.findMany({ where: { activityId: activity.id }, select: { id: true } })).map((p) => p.id);
-  await db.$transaction([
+  const gone = await db.$transaction(async (tx) => {
+    // The row is locked first, so a photograph filed on it by hand in the meantime is either seen here and cleared,
+    // or refused because the activity is already gone — never left with a setter pointing at nothing.
+    const locked = await tx.$queryRaw<{ id: string; tripId: string; startTime: Date; endTime: Date }[]>`SELECT id, "tripId", "startTime", "endTime" FROM "Activity" WHERE id = ${activityId} FOR UPDATE`;
+    const activity = locked[0];
+    if (!activity) return null;
+    const on = (await tx.photo.findMany({ where: { activityId: activity.id }, select: { id: true } })).map((p) => p.id);
     // Cleared first: left to the foreign key, a hand-filed photograph would keep its setter and read as taken off by hand.
-    db.photo.updateMany({ where: { activityId: activity.id }, data: { activityId: null, activitySetById: null } }),
-    db.activity.delete({ where: { id: activity.id } }),
-  ]);
-  await refileByClock(activity.tripId, { OR: [{ id: { in: on } }, during(activity)] });
+    await tx.photo.updateMany({ where: { activityId: activity.id }, data: { activityId: null, activitySetById: null } });
+    await tx.activity.deleteMany({ where: { id: activity.id } });
+    return { activity, on };
+  });
+  if (!gone) return;
+  await refileByClock(gone.activity.tripId, { OR: [{ id: { in: gone.on } }, during(gone.activity)] });
 }

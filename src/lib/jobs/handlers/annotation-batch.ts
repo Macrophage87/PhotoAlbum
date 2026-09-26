@@ -34,7 +34,8 @@ export function promptFor(task: BackfillTask): "describe" | "place" {
  * between two tables and so cannot be said here.
  */
 export function pendingWhere(task: BackfillTask) {
-  if (task === "place") return { lat: null, placeEstimatedAt: null };
+  // A member who cleared a place (placeSetById with no position) meant it; the helper does not guess it back.
+  if (task === "place") return { lat: null, placeSetById: null, placeEstimatedAt: null };
   if (task === "names") return { annotatedAt: { not: null } };
   return { annotatedAt: null };
 }

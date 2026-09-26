@@ -8,7 +8,8 @@ import { resetTestDb } from "../helpers/reset";
 const photoRoot = mkdtempSync(path.join(tmpdir(), "process-photos-"));
 process.env.PHOTO_STORAGE_ROOT = photoRoot;
 const enqueued = vi.hoisted(() => [] as { queue: string; data: unknown }[]);
-vi.mock("@/lib/jobs/boss", () => ({ enqueue: async (queue: string, data: unknown) => { enqueued.push({ queue, data }); } }));
+const enqueuedOpts = vi.hoisted(() => [] as unknown[]);
+vi.mock("@/lib/jobs/boss", () => ({ enqueue: async (queue: string, data: unknown, opts?: unknown) => { enqueued.push({ queue, data }); if (queue === "transcode-video") enqueuedOpts.push(opts); } }));
 
 import { processPhoto } from "@/lib/jobs/handlers/process-photo";
 import { transcodeVideo } from "@/lib/jobs/handlers/transcode-video";
@@ -59,6 +60,7 @@ describe("re-processing keeps what a member chose", () => {
   beforeEach(async () => {
     await resetTestDb();
     enqueued.length = 0;
+    enqueuedOpts.length = 0;
     userId = (await db.user.create({ data: { email: "pp@example.com", role: "ADMIN" } })).id;
   });
   async function stage(fixture: string, data: Record<string, unknown>, file = "original.jpg") {
@@ -105,6 +107,7 @@ describe("re-processing keeps what a member chose", () => {
     await processPhoto({ photoId: id });
     expect((await db.photo.findUniqueOrThrow({ where: { id } })).status).toBe("READY");
     expect(enqueued).toEqual([{ queue: "transcode-video", data: { photoId: id, tripId: null } }]);
+    expect(enqueuedOpts).toEqual([{ singletonKey: `transcode:${id}` }]);
   });
 
   it("keeps a clip on the activity it was uploaded into, whatever its clock says (#55)", async () => {
@@ -114,6 +117,12 @@ describe("re-processing keeps what a member chose", () => {
     await transcodeVideo({ photoId: id, tripId: trip.id });
     expect(await db.photo.findUniqueOrThrow({ where: { id } })).toMatchObject({ status: "READY", activityId: beach.id, activitySetById: userId });
   });
+
+  it("re-transcodes a clip it already accepted, though it is over today's length limit (#42)", async () => {
+    const id = await stage("long-clip.mp4", { kind: "VIDEO", status: "READY", videoRenditions: { mp4: { key: "k", w: 1, h: 1, bytes: 1 }, poster: { key: "p" } } }, "original.mp4");
+    await transcodeVideo({ photoId: id });
+    expect((await db.photo.findUniqueOrThrow({ where: { id } })).status).toBe("READY");
+  }, 120_000);
 
   it("keeps a clip's hand-set date through a transcode (#56)", async () => {
     const id = await stage("clip.mp4", { kind: "VIDEO", takenAt: new Date("1999-12-31T23:00:00Z"), takenAtSource: "MANUAL", tzOffsetMin: 60 }, "original.mp4");

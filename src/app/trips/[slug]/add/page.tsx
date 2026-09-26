@@ -47,6 +47,7 @@ export default async function AddToTripPage({ params, searchParams }: PageProps<
       initial={{ photos: page.photos.map((p) => toGridPhoto(p, null, true)), nextCursor: page.nextCursor, total: page.total }}
       extra={
         <TakeWindow
+          kind="trip"
           count={n}
           elsewhere={during.elsewhere}
           label={`Add all ${n} photo${n === 1 ? "" : "s"} taken during the trip (${days}) that ${n === 1 ? "is" : "are"} on no trip`}

@@ -20,7 +20,7 @@ export async function applyPhotoInstant(
   tzOffsetMin: number,
   source: TakenAtSource,
   dateSetById: string | null,
-  opts: { geotag?: boolean } = {},
+  opts: { geotag?: boolean; byMember?: boolean } = {},
 ): Promise<string | null> {
   let tripId = photo.tripId;
   if (!tripId) {
@@ -28,9 +28,11 @@ export async function applyPhotoInstant(
     const trips = await db.trip.findMany({ where: whoWasThere(photo.uploaderId), select: { id: true, startDate: true, endDate: true } });
     tripId = pickTripByDay(trips, localDayFromOffset(takenAt, tzOffsetMin))?.id ?? null;
   }
-  // An activity a member chose stays chosen, and so does one they took it off: a corrected date does not move a
-  // photo out of the walk it was on, or back onto one somebody said it was not on.
-  const { activityId, activitySetById } = await activityFor(photo, tripId, takenAt);
+  // An activity a member chose stays chosen: a corrected date does not move a photo out of the walk it was on. One
+  // kept off every activity stays off through the album's own re-reading of the date, but a member giving it a new
+  // date by hand is saying when it really was, so that time decides again.
+  const keptOff = !photo.activityId && photo.activitySetById !== null;
+  const { activityId, activitySetById } = await activityFor(opts.byMember && keptOff ? { ...photo, activitySetById: null } : photo, tripId, takenAt);
   await db.photo.update({
     where: { id: photo.id },
     data: {

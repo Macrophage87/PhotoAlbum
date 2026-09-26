@@ -23,11 +23,12 @@ export function keepMemberText(fresh: StoredAnnotation, current: unknown, edited
   return kept as StoredAnnotation;
 }
 
-export async function applyAnnotation(photoId: string, model: string, parsed: Annotation, raw: { usage?: Usage; batched?: boolean } & Record<string, unknown>): Promise<void> {
-  const current = await db.photo.findUnique({ where: { id: photoId }, select: { takenAt: true, takenAtSource: true, estimatedDateSource: true, annotation: true, annotationSource: true, title: true, kind: true, lat: true, placeEstimatedAt: true } });
+export async function applyAnnotation(photoId: string, model: string, parsed: Annotation, raw: { usage?: Usage; batched?: boolean } & Record<string, unknown>, opts: { replaceEdited?: boolean } = {}): Promise<void> {
+  const current = await db.photo.findUnique({ where: { id: photoId }, select: { takenAt: true, takenAtSource: true, estimatedDateSource: true, annotation: true, annotationSource: true, title: true, kind: true, lat: true, placeSetById: true, placeEstimatedAt: true } });
   if (!current) return;
-  // A member's edits are never overwritten, by the notes sweep, the names backfill or a press of Reannotate alike.
-  const edited = current.annotationSource === "EDITED";
+  // A member's edits are never overwritten by the notes sweep or the names backfill; only a member pressing
+  // "Describe again" and agreeing to lose them replaces them.
+  const edited = current.annotationSource === "EDITED" && !opts.replaceEdited;
   const stored = keepMemberText(toStored(parsed), current.annotation, edited);
   const est = parsed.estimatedYear;
   const noReliableDate = isWeakDate(current.takenAtSource, current.takenAt);

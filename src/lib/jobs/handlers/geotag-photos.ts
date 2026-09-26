@@ -11,7 +11,7 @@ const TRUSTED_TIME_SOURCES: TakenAtSource[] = ["EXIF_OFFSET", "EXIF_TZLOOKUP", "
 
 /**
  * Give GPS-less photos a position by interpolating along any track that covers the moment they were taken.
- * Never overwrites EXIF or manual positions; a place the AI helper guessed at is replaced, since a track is a
+ * Never overwrites EXIF or manual positions, nor fills one a member cleared by hand; a place the AI helper guessed at is replaced, since a track is a
  * record and the guess is not. Activity tracks (GPX/FIT) are preferred over Google traces, and when a GPX/FIT
  * track is imported later, photos previously placed from a coarser trace inside its time window are
  * re-positioned from it.
@@ -27,7 +27,8 @@ export async function geotagPhotos(job: GeotagPhotosJob): Promise<{ updated: num
   tracks.sort((a, b) => (a.source === "GOOGLE" ? 1 : 0) - (b.source === "GOOGLE" ? 1 : 0));
   const precise = tracks.filter((t) => t.source !== "GOOGLE");
 
-  const trusted = { takenAt: { not: null }, takenAtSource: { in: TRUSTED_TIME_SOURCES } };
+  // A place a member cleared by hand (placeSetById with no position) stays cleared: it is not a gap to fill.
+  const trusted = { takenAt: { not: null }, takenAtSource: { in: TRUSTED_TIME_SOURCES }, placeSetById: null };
   const photos = await db.photo.findMany({
     where: {
       tripId: job.tripId,
@@ -67,7 +68,7 @@ export async function geotagPhotos(job: GeotagPhotosJob): Promise<{ updated: num
       if (same) break;
       // Written only if it is still in the state it was chosen in: a member may have pinned it while this ran.
       const r = await db.photo.updateMany({
-        where: { id: photo.id, ...(photo.gpsSource === null ? { lat: null, gpsSource: null } : { gpsSource: photo.gpsSource }) },
+        where: { id: photo.id, takenAt: photo.takenAt, placeSetById: null, ...(photo.gpsSource === null ? { lat: null, gpsSource: null } : { gpsSource: photo.gpsSource }) },
         data: { lat: pos.lat, lng: pos.lng, altitude: pos.ele ?? null, gpsSource: "TRACK" },
       });
       updated += r.count;

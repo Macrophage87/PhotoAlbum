@@ -43,7 +43,7 @@ export async function processPhoto(job: ProcessPhotoJob): Promise<void> {
   if (!photo) return;
   // A clip is made by the transcoder; sharp cannot read a frame of it, so the photo path would only mark it failed.
   if (photo.kind === "VIDEO") {
-    await enqueue(QUEUES.transcodeVideo, { photoId: photo.id, tripId: job.tripId ?? photo.tripId });
+    await enqueue(QUEUES.transcodeVideo, { photoId: photo.id, tripId: job.tripId ?? photo.tripId }, { singletonKey: `transcode:${photo.id}` });
     return;
   }
   await db.photo.update({ where: { id: photo.id }, data: { status: "PROCESSING", error: null } });

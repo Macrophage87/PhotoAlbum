@@ -150,6 +150,7 @@ export function ActivityDetail({ trip, activity, photos, upload, share, save, de
               takeAll={
                 upload.during && (
                   <TakeWindow
+                    kind="activity"
                     count={upload.during.count}
                     elsewhere={upload.during.elsewhere}
                     label={`Add all ${upload.during.count} photo${upload.during.count === 1 ? "" : "s"} taken during it (${upload.during.when})`}

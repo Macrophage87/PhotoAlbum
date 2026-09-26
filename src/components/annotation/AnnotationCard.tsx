@@ -1,12 +1,12 @@
 import { Badge, Button, Card, Input, Label, Textarea } from "@/components/ui";
 import type { StoredAnnotation } from "@/lib/annotation/schema";
-import { reannotate, updateAnnotation } from "@/app/annotation/actions";
+import { updateAnnotation } from "@/app/annotation/actions";
+import { DescribeAgain } from "./DescribeAgain";
 import { OptOutToggle } from "./OptOutToggle";
 
 /** The helper's description on the item page: read for everyone who may see the item, editable for members. */
 export function AnnotationCard({ photoId, annotation, source, model, error, optOut, optOutReason, active, editable }: { photoId: string; annotation: StoredAnnotation | null; source: string | null; model: string | null; error: string | null; optOut: boolean; /** Why the item will not be sent (its own flag, or an opted-out trip or collection), or null. */ optOutReason: string | null; active: boolean; editable: boolean }) {
   const update = updateAnnotation.bind(null, photoId);
-  const again = reannotate.bind(null, photoId);
   return (
     <Card className="p-4 space-y-3">
       <div className="flex items-center justify-between gap-2">
@@ -71,9 +71,7 @@ export function AnnotationCard({ photoId, annotation, source, model, error, optO
       {editable && (
         <div className="space-y-2 pt-2 border-t border-border">
           {active && !optOutReason && (
-            <form action={again}>
-              <Button type="submit" variant="secondary" size="sm">{annotation ? "Describe again" : "Describe now"}</Button>
-            </form>
+            <DescribeAgain photoId={photoId} hasDescription={Boolean(annotation)} edited={source === "EDITED"} />
           )}
           <OptOutToggle target={{ kind: "photo", id: photoId }} initial={optOut} />
         </div>

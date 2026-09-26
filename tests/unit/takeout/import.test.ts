@@ -80,13 +80,25 @@ describe("importing a Takeout archive", () => {
   it("a repaired date keeps an activity a member chose, and drops a pin a track gave the wrong time (#104)", async () => {
     await run();
     const gps = await db.photo.findFirstOrThrow({ where: { originalName: "photo-with-gps.jpg" } });
-    const trip = await db.trip.create({ data: { slug: "maine", title: "Maine", startDate: new Date("2025-08-01"), endDate: new Date("2025-09-30"), createdById: userId } });
+    const trip = await db.trip.create({ data: { slug: "maine", title: "Maine", startDate: new Date("2025-08-01"), endDate: new Date("2025-09-30"), timezone: "America/New_York", createdById: userId } });
     const summit = await db.activity.create({ data: { tripId: trip.id, title: "Cadillac summit hike", startTime: new Date("2025-09-01T00:00:00Z"), endTime: new Date("2025-09-01T01:00:00Z") } });
     // Dragged onto the hike by hand while it carried only the upload time; the sidecar's real date is outside the hike.
-    await db.photo.update({ where: { id: gps.id }, data: { tripId: trip.id, activityId: summit.id, activitySetById: userId, takenAt: new Date("2025-09-01T00:30:00Z"), takenAtSource: "UPLOAD_TIME" } });
+    // Its position was interpolated from a track at that wrong time, so it is wrong too.
+    await db.photo.update({ where: { id: gps.id }, data: { tripId: trip.id, activityId: summit.id, activitySetById: userId, takenAt: new Date("2025-09-01T00:30:00Z"), takenAtSource: "UPLOAD_TIME", lat: 44.35, lng: -68.22, gpsSource: "TRACK" } });
     await run();
     const fixed = await db.photo.findUniqueOrThrow({ where: { id: gps.id } });
-    expect(fixed).toMatchObject({ takenAtSource: "SIDECAR", tripId: trip.id, activityId: summit.id, activitySetById: userId });
+    // The sidecar's own position fills the place; the stale pin is not kept.
+    expect(fixed).toMatchObject({ takenAtSource: "SIDECAR", tripId: trip.id, activityId: summit.id, activitySetById: userId, gpsSource: "SIDECAR", lat: 44.3186 });
+    expect(fixed.takenAt?.toISOString()).toBe("2025-08-12T13:30:00.000Z");
+  });
+  it("a repaired date drops a track pin from the wrong time and takes the trip's zone when there is no other position (#104)", async () => {
+    await run();
+    const lake = await db.photo.findFirstOrThrow({ where: { originalName: "photo-no-gps.jpg" } });
+    const trip = await db.trip.create({ data: { slug: "lake", title: "Lake", startDate: new Date("2019-06-01"), endDate: new Date("2019-07-31"), timezone: "America/New_York", createdById: userId } });
+    await db.photo.update({ where: { id: lake.id }, data: { tripId: trip.id, takenAt: new Date("2019-07-20T00:00:00Z"), takenAtSource: "FILE_MTIME", tzOffsetMin: 0, lat: 44.9, lng: -68.9, gpsSource: "TRACK" } });
+    await run();
+    const fixed = await db.photo.findUniqueOrThrow({ where: { id: lake.id } });
+    expect(fixed).toMatchObject({ takenAtSource: "SIDECAR", lat: null, lng: null, gpsSource: null, tzOffsetMin: -240 });
   });
   it("does not give back a place a member deliberately cleared (#72)", async () => {
     await run();

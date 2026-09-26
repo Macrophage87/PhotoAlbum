@@ -7,6 +7,7 @@ import { requireUserOrThrow } from "@/lib/auth/viewer";
 import { canEditMedia, editableMediaIds, NOT_YOURS } from "@/lib/auth/ownership";
 import { applyPhotoInstant } from "@/lib/photos/apply-date";
 import { planDate } from "@/lib/photos/bulk-date";
+import { refileByClock } from "@/lib/activities/reassign";
 import { offsetMinutesInZone } from "@/lib/time/local-day";
 
 export type MoveResult = { ok: true; where: string } | { ok: false; message: string };
@@ -67,7 +68,7 @@ export async function moveToDay(photoId: string, day: string): Promise<MoveResul
   const fallbackOffsetMin = photo.trip ? offsetMinutesInZone(photo.takenAt ?? new Date(), photo.trip.timezone) : 0;
   const next = planDate(photo, { mode: "day", day: parsed.data, keepTime: true }, { index: 0, fallbackOffsetMin });
   if (!next) return { ok: false, message: "That date is out of range" };
-  await applyPhotoInstant(photo, next.takenAt, next.tzOffsetMin, "MANUAL", user.id);
+  await applyPhotoInstant(photo, next.takenAt, next.tzOffsetMin, "MANUAL", user.id, { byMember: true });
   revalidatePath("/trips", "layout");
   revalidatePath("/timeline");
   return { ok: true, where: parsed.data };
@@ -106,6 +107,22 @@ export async function bulkTakeOffActivity(photoIds: string[]): Promise<{ n: numb
   revalidatePath("/trips", "layout");
   revalidatePath("/timeline");
   return { n: r.count, notYours: asked.length - list.length };
+}
+
+/**
+ * Hand a selection back to the clock: forget whatever a member chose about its activities — filed on one, or kept
+ * off them all — and file each by the time it was taken, as an upload would be. The way back from a choice.
+ */
+export async function bulkFollowTime(photoIds: string[]): Promise<{ n: number; notYours: number }> {
+  const user = await requireUserOrThrow();
+  const asked = z.array(z.string().min(1)).min(1).max(500).parse(photoIds);
+  const list = await editableMediaIds(user, asked);
+  const rows = await db.photo.findMany({ where: { id: { in: list }, tripId: { not: null } }, select: { id: true, tripId: true } });
+  await db.photo.updateMany({ where: { id: { in: rows.map((r) => r.id) } }, data: { activitySetById: null } });
+  for (const tripId of new Set(rows.map((r) => r.tripId!))) await refileByClock(tripId, { id: { in: rows.filter((r) => r.tripId === tripId).map((r) => r.id) } });
+  revalidatePath("/trips", "layout");
+  revalidatePath("/timeline");
+  return { n: rows.length, notYours: asked.length - list.length };
 }
 
 /** The one trip a selection is on, when it is on one: what the activity picker needs to offer the right activities. */

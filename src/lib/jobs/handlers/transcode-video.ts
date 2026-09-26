@@ -38,7 +38,8 @@ export async function transcodeVideo(job: TranscodeVideoJob): Promise<void> {
     await withHeavyLock(async () => {
       const info = await probe(input);
       const limit = env().MAX_CLIP_SECONDS;
-      if (info.durationS !== null && info.durationS > limit) throw new Error(tooLongMessage(info.durationS, limit));
+      // A clip already accepted is not refused on a Re-process because the limit has since been lowered.
+      if (!photo.videoRenditions && info.durationS !== null && info.durationS > limit) throw new Error(tooLongMessage(info.durationS, limit));
 
       const mp4 = path.join(work, "video.mp4");
       const poster = path.join(work, "poster.jpg");

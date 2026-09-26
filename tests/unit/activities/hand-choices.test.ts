@@ -7,14 +7,19 @@ vi.mock("@/lib/auth/viewer", () => ({ requireUserOrThrow: async () => ({ id: who
 vi.mock("next/cache", () => ({ revalidatePath: () => undefined }));
 vi.mock("next/navigation", () => ({ redirect: (to: string) => { throw new Error(`REDIRECT:${to}`); } }));
 vi.mock("@/lib/jobs/boss", () => ({ enqueue: async () => {} }));
+vi.mock("@/lib/google/account", () => ({ disconnectGoogleAccount: async () => {} }));
 
-import { bulkTakeOffActivity, putInActivity } from "@/app/photos/activity-actions";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { bulkFollowTime, bulkTakeOffActivity, putInActivity } from "@/app/photos/activity-actions";
+import { removeMember } from "@/app/admin/actions";
+import { fileExisting } from "@/lib/photos/file-existing";
 import { bulkAssignActivity, bulkMoveToTrip } from "@/app/photos/bulk-actions";
 import { createActivity, deleteActivity, updateActivity } from "@/app/trips/[slug]/activities/actions";
 import { updatePhoto } from "@/app/photos/[id]/actions";
-import { activityWindow } from "@/lib/photos/in-window";
+import { activityWindow, tripWindow } from "@/lib/photos/in-window";
 import { applyPhotoInstant } from "@/lib/photos/apply-date";
-import { reassignPhotosForActivity } from "@/lib/activities/reassign";
+import { deleteActivityAndRefile, reassignPhotosForActivity, refileByClock } from "@/lib/activities/reassign";
 import { keepSeconds } from "@/lib/activities/validation";
 
 const at = (h: number, m = 0, s = 0) => new Date(Date.UTC(2025, 7, 12, h, m, s));
@@ -56,7 +61,7 @@ describe("filing photographs on activities", () => {
       expect((await row(p.id)).activityId).toBeNull();
     });
 
-    it("stays off after Take off activity from the selection bar, and after a corrected date", async () => {
+    it("stays off after Take off activity from the selection bar, and after the album re-reads its date", async () => {
       const p = await photo(at(10), { activityId: walk });
       expect((await bulkTakeOffActivity([p.id])).n).toBe(1);
       await reassignPhotosForActivity(walk);
@@ -71,7 +76,8 @@ describe("filing photographs on activities", () => {
       await updatePhoto(p.id, form({ caption: "", context: "", tripId, activityId: "" }));
       expect(await row(p.id)).toMatchObject({ activityId: null, activitySetById: me });
       const clock = await photo(at(11), { activityId: walk });
-      await updatePhoto(clock.id, form({ caption: "Hi", context: "", tripId, activityId: walk }));
+      // The form shows a clock filing as Automatic, so that is what a plain save sends.
+      await updatePhoto(clock.id, form({ caption: "Hi", context: "", tripId, activityId: "auto" }));
       expect(await row(clock.id)).toMatchObject({ activityId: walk, activitySetById: null });
     });
 
@@ -207,6 +213,122 @@ describe("filing photographs on activities", () => {
       await photo(at(10), { uploaderId: cousin });
       const w = await db.activity.findUniqueOrThrow({ where: { id: walk } });
       expect((await activityWindow({ id: cousin, role: "ADMIN" }, w)).ids).toEqual([mine.id]);
+    });
+  });
+
+  describe("the way back from a hand choice (review)", () => {
+    it("Automatic on the photo page forgets the choice and files it by its time", async () => {
+      const boat = (await db.activity.create({ data: { tripId, title: "Boat", type: "BOAT", startTime: at(18), endTime: at(19) } })).id;
+      const p = await photo(at(10), { activityId: boat, activitySetById: me });
+      await updatePhoto(p.id, form({ caption: "", context: "", tripId, activityId: "auto" }));
+      expect(await row(p.id)).toMatchObject({ activityId: walk, activitySetById: null });
+      const off = await photo(at(10), { activityId: null, activitySetById: me });
+      await updatePhoto(off.id, form({ caption: "", context: "", tripId, activityId: "auto" }));
+      expect(await row(off.id)).toMatchObject({ activityId: walk, activitySetById: null });
+    });
+
+    it("saving the page without touching Activity keeps whoever chose before", async () => {
+      const p = await photo(at(10), { activityId: null, activitySetById: cousin });
+      await updatePhoto(p.id, form({ caption: "Hi", context: "", tripId, activityId: "" }));
+      expect(await row(p.id)).toMatchObject({ activityId: null, activitySetById: cousin });
+      const q = await photo(at(10), { activityId: walk, activitySetById: cousin });
+      await updatePhoto(q.id, form({ caption: "Hi", context: "", tripId, activityId: walk }));
+      expect(await row(q.id)).toMatchObject({ activityId: walk, activitySetById: cousin });
+    });
+
+    it("Follow the time does the same for a whole selection", async () => {
+      const a = await photo(at(10), { activityId: null, activitySetById: me });
+      const b = await photo(at(20), { activityId: walk, activitySetById: me });
+      expect((await bulkFollowTime([a.id, b.id])).n).toBe(2);
+      expect(await row(a.id)).toMatchObject({ activityId: walk, activitySetById: null });
+      expect(await row(b.id)).toMatchObject({ activityId: null, activitySetById: null });
+    });
+
+    it("a date a member gives by hand lets the time decide again for one kept off every activity", async () => {
+      const p = await photo(at(20), { activityId: null, activitySetById: me });
+      await applyPhotoInstant(await row(p.id), at(10), 0, "MANUAL", me, { geotag: false, byMember: true });
+      expect(await row(p.id)).toMatchObject({ activityId: walk, activitySetById: null });
+      // A photo filed on an activity by hand keeps it, though.
+      const boat = (await db.activity.create({ data: { tripId, title: "Boat", type: "BOAT", startTime: at(18), endTime: at(19) } })).id;
+      const q = await photo(at(18, 30), { activityId: boat, activitySetById: me });
+      await applyPhotoInstant(await row(q.id), at(10), 0, "MANUAL", me, { geotag: false, byMember: true });
+      expect(await row(q.id)).toMatchObject({ activityId: boat, activitySetById: me });
+    });
+
+    it("moving to a trip where no activity covers it leaves it loose, with nobody's choice on it", async () => {
+      const p = await photo(at(10), { activityId: walk, activitySetById: me });
+      const other = (await db.trip.create({ data: { slug: "maine", title: "Maine", startDate: new Date("2025-08-10"), endDate: new Date("2025-08-16"), createdById: me } })).id;
+      await updatePhoto(p.id, form({ caption: "", context: "", tripId: other, activityId: walk }));
+      expect(await row(p.id)).toMatchObject({ tripId: other, activityId: null, activitySetById: null });
+    });
+  });
+
+  describe("more filing paths (review)", () => {
+    it("fileExisting files a photo sent again to a trip by its time", async () => {
+      const p = await db.photo.create({ data: { uploaderId: me, originalName: "p.jpg", mimeType: "image/jpeg", storageKey: "k", originalPath: "k/o.jpg", sizeBytes: 1, status: "READY", takenAt: at(10), tzOffsetMin: 0 }, select: { id: true } });
+      await fileExisting({ id: me, role: "MEMBER" }, p.id, { tripId });
+      expect(await row(p.id)).toMatchObject({ tripId, activityId: walk, activitySetById: null });
+    });
+
+    it("tripWindow offers an admin only the photographs of the people the trip names", async () => {
+      await db.trip.update({ where: { id: tripId }, data: { participants: { connect: [{ id: me }] } } });
+      const loose = (uploaderId: string) => db.photo.create({ data: { uploaderId, originalName: "p.jpg", mimeType: "image/jpeg", storageKey: "k", originalPath: "k/o.jpg", sizeBytes: 1, status: "READY", takenAt: at(10), tzOffsetMin: 0 }, select: { id: true } });
+      const mine = await loose(me);
+      await loose(cousin);
+      const trip = await db.trip.findUniqueOrThrow({ where: { id: tripId } });
+      expect((await tripWindow({ id: cousin, role: "ADMIN" }, trip)).ids).toEqual([mine.id]);
+    });
+
+    it("activityWindow falls back to the trip's people when the activity names nobody", async () => {
+      await db.trip.update({ where: { id: tripId }, data: { participants: { connect: [{ id: me }] } } });
+      const mine = await photo(at(10));
+      await photo(at(10), { uploaderId: cousin });
+      const w = await db.activity.findUniqueOrThrow({ where: { id: walk } });
+      expect((await activityWindow({ id: cousin, role: "ADMIN" }, w)).ids).toEqual([mine.id]);
+    });
+
+    it("deleting the same activity twice at once is not an error, and files its photos once", async () => {
+      const boat = (await db.activity.create({ data: { tripId, title: "Boat", type: "BOAT", startTime: at(13), endTime: at(14) } })).id;
+      const p = await photo(at(13, 30), { activityId: boat, activitySetById: me });
+      await Promise.all([deleteActivityAndRefile(boat), deleteActivityAndRefile(boat)]);
+      expect(await row(p.id)).toMatchObject({ activityId: walk, activitySetById: null });
+    });
+
+    it("refileByClock does not write over a photo whose date changed after it was read", async () => {
+      const p = await photo(at(10), { activityId: null });
+      const real = db.photo.findMany.bind(db.photo);
+      const spy = vi.spyOn(db.photo, "findMany").mockImplementationOnce((async (args: Parameters<typeof real>[0]) => {
+        const rows = await real(args);
+        await db.photo.update({ where: { id: p.id }, data: { takenAt: at(20) } });
+        return rows;
+      }) as unknown as typeof db.photo.findMany);
+      await refileByClock(tripId, { id: p.id });
+      spy.mockRestore();
+      expect((await row(p.id)).activityId).toBeNull();
+    });
+  });
+
+  describe("upgrading an album made before 'kept off by hand' existed", () => {
+    it("forgets the setter left on photos with no activity, which never meant 'kept off'", async () => {
+      const stale = await photo(at(10), { activityId: null, activitySetById: me });
+      const tripless = await photo(at(10), { tripId: null, activityId: null, activitySetById: me });
+      const chosen = await photo(at(10), { activityId: walk, activitySetById: me });
+      const dir = path.join(process.cwd(), "prisma/migrations/20260926140000_forget_stale_activity_setter/migration.sql");
+      await db.$executeRawUnsafe(readFileSync(dir, "utf8"));
+      expect((await row(stale.id)).activitySetById).toBeNull();
+      expect((await row(tripless.id)).activitySetById).toBeNull();
+      expect((await row(chosen.id)).activitySetById).toBe(me);
+    });
+  });
+
+  describe("removing a member", () => {
+    it("hands their choices to the admin rather than emptying them", async () => {
+      const admin = (await db.user.create({ data: { email: "admin@example.com", role: "ADMIN" } })).id;
+      const p = await photo(at(10), { uploaderId: cousin, activityId: null, activitySetById: cousin, placeSetById: cousin, dateSetById: cousin, takenAtSource: "MANUAL" });
+      who.id = admin;
+      who.role = "ADMIN";
+      await removeMember(cousin);
+      expect(await row(p.id)).toMatchObject({ uploaderId: admin, activityId: null, activitySetById: admin, placeSetById: admin, dateSetById: admin });
     });
   });
 });

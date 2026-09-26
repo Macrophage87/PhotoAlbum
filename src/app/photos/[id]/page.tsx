@@ -283,18 +283,20 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
                 {photo.tripId && (
                   <div>
                     <Label htmlFor="activityId">Activity</Label>
-                    <Select id="activityId" name="activityId" defaultValue={photo.activityId ?? ""}>
-                      <option value="">None</option>
+                    {/* "auto" hands the question back to the clock; "" is a member saying it was on no activity at all. */}
+                    <Select id="activityId" name="activityId" defaultValue={photo.activitySetById ? photo.activityId ?? "" : "auto"}>
+                      <option value="auto">Automatic (by the time it was taken){!photo.activitySetById && photo.activity ? ` — now ${photo.activity.title}` : ""}</option>
+                      <option value="">None — keep it off every activity</option>
                       {activities.map((a) => (
                         <option key={a.id} value={a.id}>{a.title}</option>
                       ))}
                     </Select>
                     <p className="text-xs text-muted mt-1">
                       {photo.activitySetBy && photo.activityId
-                        ? `Put here by ${uploaderLabel(photo.activitySetBy.name, photo.activitySetBy.email)}, so the activity's hours leave it alone.`
+                        ? `Put here by ${uploaderLabel(photo.activitySetBy.name, photo.activitySetBy.email)}, so the activity's hours leave it alone. Choose Automatic to let its time decide again.`
                         : photo.activitySetBy
-                        ? `Taken off its activity by ${uploaderLabel(photo.activitySetBy.name, photo.activitySetBy.email)}, so no activity's hours put it back.`
-                        : "Left alone, this follows the time it was taken. Choosing one keeps it there whatever its date says."}
+                        ? `Kept off every activity by ${uploaderLabel(photo.activitySetBy.name, photo.activitySetBy.email)}, so no activity's hours put it back. Choose Automatic, or change its date, to let its time decide again.`
+                        : "Automatic follows the time it was taken. Choosing an activity, or None, keeps it that way whatever its date says."}
                     </p>
                   </div>
                 )}

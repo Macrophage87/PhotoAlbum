@@ -17,7 +17,8 @@ export function DateTakenForm({ photoId, initial, hint }: { photoId: string; ini
   const run = (act: () => ReturnType<typeof setPhotoDate>) =>
     start(async () => {
       setMessage(null);
-      const r = await act();
+      // Anything thrown (signed out in another tab, say) is said here too, not left to the page's error screen.
+      const r = await act().catch(() => ({ ok: false as const, message: "That did not save. Reload the page and try again." }));
       if (!r.ok) { setMessage(r.message); return; }
       router.refresh();
     });
