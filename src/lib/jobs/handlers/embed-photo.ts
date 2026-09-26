@@ -35,10 +35,14 @@ export async function embedPhoto(job: EmbedPhotoJob): Promise<void> {
   });
 }
 
-/** Queue an embedding for one item (idempotent within a minute). */
+/**
+ * Queue an embedding for one item: at most one a minute, and a second request within the minute is deferred to the
+ * next one rather than dropped (pg-boss keeps a finished job in its slot, so a plain throttle would lose an edit
+ * made just after the first run).
+ */
 export async function enqueueEmbedding(photoId: string, textOnly = false): Promise<void> {
   if (!mlConfigured()) return;
-  await enqueue(QUEUES.embedPhoto, { photoId, textOnly }, { singletonKey: `embed:${photoId}:${textOnly ? "t" : "i"}`, singletonSeconds: 60 });
+  await enqueue(QUEUES.embedPhoto, { photoId, textOnly }, { singletonKey: `embed:${photoId}:${textOnly ? "t" : "i"}`, singletonSeconds: 60, singletonNextSlot: true });
 }
 
 /** Catch-up sweep: ready items with no embedding yet, or described since they were last embedded. */

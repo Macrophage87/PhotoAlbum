@@ -53,9 +53,10 @@ export async function detectAnimalsJob(job: DetectAnimalsJob): Promise<void> {
   await proposeAnimalsForPhoto(photo.id);
 }
 
+/** Debounced like enqueueEmbedding: a second edit within the minute re-scans in the next one instead of being dropped. */
 export async function enqueueAnimalDetection(...photoIds: string[]): Promise<void> {
   if (!petGates().active) return;
-  for (const photoId of photoIds) await enqueue(QUEUES.detectAnimals, { photoId }, { singletonKey: `animals:${photoId}`, singletonSeconds: 60 });
+  for (const photoId of photoIds) await enqueue(QUEUES.detectAnimals, { photoId }, { singletonKey: `animals:${photoId}`, singletonSeconds: 60, singletonNextSlot: true });
 }
 
 /** Catch-up: ready items not yet scanned for animals. */

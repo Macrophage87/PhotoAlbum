@@ -97,10 +97,11 @@ export async function rebuildCentroids(personId: string): Promise<void> {
   await enqueueMatchAllOpen();
 }
 
+/** Debounced like enqueueEmbedding: a second edit within the minute re-scans in the next one instead of being dropped. */
 export async function enqueueFaceDetection(...photoIds: string[]): Promise<void> {
   const gates = await faceGates();
   if (!gates.active) return;
-  for (const photoId of photoIds) await enqueue(QUEUES.detectFaces, { photoId }, { singletonKey: `faces:${photoId}`, singletonSeconds: 60 });
+  for (const photoId of photoIds) await enqueue(QUEUES.detectFaces, { photoId }, { singletonKey: `faces:${photoId}`, singletonSeconds: 60, singletonNextSlot: true });
 }
 
 /** Catch-up: ready photos not yet scanned (photos and posters; clips use their poster). */
