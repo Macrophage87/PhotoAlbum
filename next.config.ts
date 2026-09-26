@@ -37,6 +37,7 @@ const nextConfig: NextConfig = {
         // Member-uploaded bytes: should one ever be opened as a page of its own, it runs nothing and has no origin.
         source: "/api/photos/:path*",
         headers: [
+          // Kept equal to MEDIA_CSP in src/lib/security/csp.ts (the media route sends it too; a unit test compares them).
           { key: "Content-Security-Policy", value: "default-src 'none'; style-src 'unsafe-inline'; sandbox; frame-ancestors 'none'; object-src 'none'; base-uri 'self'" },
         ],
       },

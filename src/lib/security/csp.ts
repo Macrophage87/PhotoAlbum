@@ -13,6 +13,12 @@ export function originOf(url: string | undefined): string | null {
   }
 }
 
+/**
+ * Member-uploaded bytes: should one ever be opened as a page of its own, it runs nothing and has no origin. Inline
+ * style only so a browser's own image or video viewer still lays itself out.
+ */
+export const MEDIA_CSP = "default-src 'none'; style-src 'unsafe-inline'; sandbox; frame-ancestors 'none'; object-src 'none'; base-uri 'self'";
+
 export const DEFAULT_TILE_ORIGIN = "https://tile.openstreetmap.org";
 export const DEFAULT_GLYPH_ORIGIN = "https://demotiles.maplibre.org";
 
