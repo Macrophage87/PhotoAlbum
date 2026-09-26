@@ -241,3 +241,51 @@ describe("computeStats on mixed and gappy sampling", () => {
     expect(s.avgSpeedMs).toBeCloseTo(250, 0);
   });
 });
+
+describe("computeStats keeps real flights and trains whose speed varies", () => {
+  it("a flight that climbs and descends around its cruise, logged every 10 s", () => {
+    const speeds = [...Array.from({ length: 20 }, (_, i) => 70 + i * 8), ...new Array(100).fill(230), ...Array.from({ length: 20 }, (_, i) => 230 - i * 8)];
+    const pts: TrackPoint[] = [{ t: Date.parse("2025-08-12T13:00:00Z"), lat: 44, lng: -68 }];
+    for (const v of speeds) {
+      const p = pts[pts.length - 1];
+      pts.push({ t: p.t + 10_000, lat: p.lat + (v * 10) / 111_195, lng: -68 });
+    }
+    const expected = speeds.reduce((a, v) => a + v * 10, 0);
+    const s = computeStats(pts);
+    expect(s.distanceM).toBeGreaterThan(expected * 0.99);
+    expect(s.maxSpeedMs).toBeCloseTo(230, 0);
+  });
+  it("a 1 Hz train with one stale fix", () => {
+    const pts = line(601, 80, 1);
+    pts[300] = { ...pts[300], lat: pts[299].lat };
+    expect(computeStats(pts).distanceM).toBeGreaterThan(47_500);
+  });
+  it("a 1 Hz train with a duplicated timestamp", () => {
+    const pts = line(601, 80, 1);
+    pts.splice(300, 0, { ...pts[299] });
+    expect(computeStats(pts).distanceM).toBeGreaterThan(47_500);
+  });
+  it("a train logged every 30 s with two slow samples", () => {
+    const pts = line(61, 80, 30);
+    for (const i of [20, 21]) pts[i] = { ...pts[i], lat: pts[19].lat + (i - 19) * 10 / 111_195 };
+    expect(computeStats(pts).distanceM).toBeGreaterThan(130_000);
+  });
+});
+
+describe("computeStats drops a glitch that leaps off a walk and holds there", () => {
+  const M_LNG = 1 / (111_195 * Math.cos((44 * Math.PI) / 180));
+  const clean = computeStats(syntheticWalk());
+  it("and comes back", () => {
+    const pts = syntheticWalk();
+    [100, 200, 300, 400, 500, 600, 600, 600, 600, 500, 400, 300, 200, 100].forEach((m, k) => (pts[100 + k] = { ...pts[100 + k], lng: pts[100 + k].lng + m * M_LNG }));
+    const s = computeStats(pts);
+    expect(s.distanceM).toBeLessThan(clean.distanceM + 30);
+    expect(s.maxSpeedMs).toBeLessThan(5);
+  });
+  it("and never comes back", () => {
+    const pts = syntheticWalk().map((p, i) => (i >= 100 ? { ...p, lng: p.lng + Math.min(600, (i - 99) * 100) * M_LNG } : p));
+    const s = computeStats(pts);
+    expect(s.distanceM).toBeLessThan(clean.distanceM + 30);
+    expect(s.maxSpeedMs).toBeLessThan(5);
+  });
+});

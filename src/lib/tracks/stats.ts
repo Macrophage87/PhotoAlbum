@@ -8,6 +8,8 @@ export const TELEPORT_SPEED_MS = 50;
 const MIN_TRAVEL_SEGMENTS = 5;
 /** Fast runs separated by at most this many slower segments are judged as one run. */
 const MAX_SLOW_INSIDE_RUN = 2;
+/** Steps at least this long say nothing about how a vehicle got up to speed. */
+const SPARSE_STEP_S = 30;
 /** A fast run this long is travel even if it ends near where it began (a sightseeing flight's loop). */
 const LONG_RUN_SEGMENTS = 30;
 /** A segment's moving-time gap limit looks at the intervals within this many segments either side. */
@@ -87,6 +89,14 @@ function teleportSegments(points: TrackPoint[], dist: number[]): boolean[] {
     speed[i] = dt > 0 ? dist[i] / dt : 0;
   }
   const fast = (i: number) => speed[i] > TELEPORT_SPEED_MS;
+  // The first segment beside a run (in direction `dir`) that moves in time: at vehicle speed, or too sparse to tell.
+  const atSpeed = (edge: number, dir: 1 | -1) => {
+    for (let i = edge + dir; i >= 1 && i < n; i += dir) {
+      const dt = (points[i].t - points[i - 1].t) / 1000;
+      if (dt > 0) return speed[i] >= TELEPORT_SPEED_MS / 3 || dt >= SPARSE_STEP_S;
+    }
+    return false;
+  };
   const out = new Array<boolean>(n).fill(false);
   for (let s = 1; s < n; s++) {
     if (!fast(s)) continue;
@@ -105,7 +115,12 @@ function teleportSegments(points: TrackPoint[], dist: number[]): boolean[] {
     const net = haversine(points[s - 1].lat, points[s - 1].lng, points[e].lat, points[e].lng);
     // A run at either end of the track has nothing before or after it to agree with: most often a cold start.
     const atEdge = s === 1 || e === n - 1;
-    const travel = len > MIN_TRAVEL_SEGMENTS && steady(points, dist, speed, s, e) && (len >= LONG_RUN_SEGMENTS || (!atEdge && net >= path / 2));
+    // A long run is travel whatever its shape: flights climb and descend, and trains repeat a stale fix. A shorter
+    // one must be steady, get somewhere, and be entered or left at vehicle speed; one that leaps off a walk is a
+    // glitch whether it holds out there, comes back or never does.
+    const travel =
+      len >= LONG_RUN_SEGMENTS ||
+      (len > MIN_TRAVEL_SEGMENTS && !atEdge && net >= path / 2 && steady(points, dist, speed, s, e) && (atSpeed(s, -1) || atSpeed(e, 1)));
     if (!travel) for (let i = s; i <= e; i++) if (fast(i)) out[i] = true;
     s = e;
   }
