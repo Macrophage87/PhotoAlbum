@@ -13,7 +13,9 @@ export async function reconcileStalePhotos(now = new Date()): Promise<number> {
   // Clips are transcoded on a heavy queue, whose jobs may run (and wait for the lock) for longer.
   const clipCutoff = new Date(now.getTime() - HEAVY_JOB_EXPIRE_SECONDS * 4 * 1000);
   const res = await db.photo.updateMany({
-    where: { status: "PROCESSING", OR: [{ kind: { not: "VIDEO" }, updatedAt: { lt: cutoff } }, { kind: "VIDEO", updatedAt: { lt: clipCutoff } }] },
+    // Not a Picker download that died holding its row (no file yet): sweepStrandedUploads fails that one with what to
+    // do about it, since Re-process has no file to work on.
+    where: { status: "PROCESSING", originalPath: { not: "pending" }, OR: [{ kind: { not: "VIDEO" }, updatedAt: { lt: cutoff } }, { kind: "VIDEO", updatedAt: { lt: clipCutoff } }] },
     data: { status: "FAILED", error: "Processing was interrupted by a restart. Use Re-process to try again." },
   });
   if (res.count) console.warn(`[worker] marked ${res.count} stale photo(s) as FAILED`);

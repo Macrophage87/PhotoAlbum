@@ -299,10 +299,11 @@ function UploadPill({ batch, unseen, dismiss }: { batch: UploadItem[]; unseen: U
   // Said to a screen reader at the moments that matter, not at every file.
   const announce = unseen.length && !going.length ? `${unseen.length} ${unseen.length === 1 ? "file" : "files"} didn't make it.` : going.length ? (toSend ? `Uploading ${batch.length} ${batch.length === 1 ? "file" : "files"}.` : `All ${batch.length} uploaded.`) : "";
   const shown = (going.length || unseen.length) && !pathname.endsWith("/add") ? <PillBody batch={batch} going={going} toSend={toSend} sent={sent} unseen={unseen} dismiss={dismiss} open={open} setOpen={setOpen} /> : null;
-  // The live region stays put whatever the pill shows (or whether it shows), so every change to it is read out.
+  // The live region stays put whatever the pill shows (or whether it shows), so every change to it is read out. It is
+  // on every page, so it is a plain polite live region rather than role="status": that stays the page's own message.
   return (
     <>
-      <p role="status" aria-live="polite" className="sr-only">{announce}</p>
+      <p aria-live="polite" aria-atomic="true" className="sr-only">{announce}</p>
       {/* Picking from the album has its own button where this would sit; the pill is back on the next page. */}
       {shown}
     </>

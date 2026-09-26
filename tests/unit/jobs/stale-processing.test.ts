@@ -52,6 +52,15 @@ describe("items stuck in PROCESSING", () => {
     expect(await status(fresh.id)).toBe("PROCESSING");
   });
 
+  it("leaves a Picker download that died holding its row to the stranded-upload sweep, which says to pick it again", async () => {
+    const { sweepStrandedUploads } = await import("@/lib/media/stranded");
+    const row = await db.photo.create({ data: { uploaderId: userId, kind: "PHOTO", sourceKind: "GOOGLE_PICKER", originalName: "p.jpg", mimeType: "image/jpeg", storageKey: "pending", originalPath: "pending", sizeBytes: 0, status: "PROCESSING" } });
+    await db.$executeRaw`UPDATE "Photo" SET "updatedAt" = ${new Date(Date.now() - 2 * 3_600_000)} WHERE id = ${row.id}`;
+    expect(await reconcileStalePhotos()).toBe(0);
+    await sweepStrandedUploads();
+    expect(await db.photo.findUniqueOrThrow({ where: { id: row.id } })).toMatchObject({ status: "FAILED", error: expect.stringMatching(/Pick it again/) });
+  });
+
   it("gives clips the heavy queues' longer window before calling them stale", async () => {
     const photo = (kind: "PHOTO" | "VIDEO") => db.photo.create({ data: { uploaderId: userId, kind, originalName: "a", mimeType: "video/mp4", storageKey: "a", originalPath: "a/o", sizeBytes: 1, status: "PROCESSING" } });
     const clip = await photo("VIDEO");

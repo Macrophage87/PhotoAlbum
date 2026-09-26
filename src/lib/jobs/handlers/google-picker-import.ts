@@ -78,7 +78,7 @@ export async function googlePickerImport(job: GooglePickerImportJob, signal?: Ab
     // Timed out (or shutting down): the retry picks up every row still pending, the picker session included. With no
     // retry left, the rest are failed instead of waiting for ever.
     if (signal?.aborted) {
-      if (opts.finalAttempt) await db.photo.updateMany({ where: { id: { in: rows.slice(i).map((r) => r.id) }, originalPath: "pending", status: "PENDING" }, data: { status: "FAILED", error: "Download from Google Photos took too long." } });
+      if (opts.finalAttempt) await db.photo.updateMany({ where: { id: { in: rows.slice(i).map((r) => r.id) }, originalPath: "pending", status: "PENDING" }, data: { status: "FAILED", error: `Download from Google Photos took too long. ${PICK_AGAIN}` } });
       return;
     }
     if (!items.has(row.id)) continue;

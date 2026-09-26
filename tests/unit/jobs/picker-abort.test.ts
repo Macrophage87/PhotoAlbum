@@ -59,7 +59,7 @@ describe("a timed-out Picker download", () => {
     });
     await googlePickerImport({ userId, sessionId: "s1", photoIds: ids, items }, ac.signal, { finalAttempt: true });
     const rows = await db.photo.findMany({ where: { id: { in: ids } }, select: { status: true, error: true } });
-    expect(rows.filter((r) => r.status === "FAILED")).toEqual([{ status: "FAILED", error: "Download from Google Photos took too long." }]);
+    expect(rows.filter((r) => r.status === "FAILED")).toEqual([{ status: "FAILED", error: "Download from Google Photos took too long. Pick it again in Google Photos to fetch it." }]);
     expect(await db.photo.count({ where: { id: { in: ids }, originalPath: "pending" } })).toBe(1);
   });
 });
