@@ -19,6 +19,8 @@ const schema = z.object({
   HSTS_INCLUDE_SUBDOMAINS: boolish.transform((v) => v ?? false),
   DATABASE_URL: z.string().min(1),
   ADMIN_EMAIL: z.string().email().optional().or(z.literal("").transform(() => undefined)),
+  // All sign-in emails together, per hour: past this nobody is sent a new link until the hour moves on.
+  SIGN_IN_MAIL_PER_HOUR: z.coerce.number().int().positive().default(200),
   SMTP_HOST: z.string().optional().transform((v) => (v ? v : undefined)),
   SMTP_PORT: z.coerce.number().int().positive().default(587),
   SMTP_USER: z.string().optional().transform((v) => (v ? v : undefined)),

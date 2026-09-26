@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { clientKey, forwardedClient } from "@/lib/auth/client-address";
+import { clientKey, clientNetwork, forwardedClient } from "@/lib/auth/client-address";
 import { isSameOriginRequest } from "@/lib/auth/same-origin";
 import { hstsIncludesSubdomains, hstsValue } from "@/lib/security/hsts";
 
@@ -27,6 +27,19 @@ describe("forwardedClient", () => {
     expect(clientKey("198.51.100.7")).toBe("198.51.100.7");
     expect(clientKey("198.51.100.7:51234")).toBe("198.51.100.7");
     expect(clientKey("::ffff:198.51.100.7")).toBe("198.51.100.7");
+  });
+
+  it("keys an IPv6 address that only carries an IPv4 one by that IPv4 address", () => {
+    expect(clientKey("::ffff:c633:6407")).toBe("198.51.100.7"); // mapped, in hex
+    expect(clientKey("::ffff:0:198.51.100.7")).toBe("198.51.100.7"); // translated
+    expect(clientKey("64:ff9b::198.51.100.7")).toBe("198.51.100.7"); // NAT64
+    expect(clientKey("64:ff9b::c633:6407")).toBe("198.51.100.7");
+    expect(clientKey("[::ffff:198.51.100.7]:443")).toBe("198.51.100.7");
+  });
+
+  it("widens an IPv6 /64 to its /48, and leaves an IPv4 address as it is", () => {
+    expect(clientNetwork(clientKey("2001:db8:1:2::5"))).toBe("2001:db8:1::/48");
+    expect(clientNetwork("198.51.100.7")).toBe("198.51.100.7");
   });
 });
 

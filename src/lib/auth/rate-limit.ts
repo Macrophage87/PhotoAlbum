@@ -1,3 +1,5 @@
+import { clientNetwork } from "./client-address";
+
 /**
  * Small in-memory throttle for actions that send email. One process per deployment is the
  * normal case for this app, so a Map is enough; it resets on restart, which is acceptable.
@@ -13,6 +15,12 @@ export class RateLimiter {
     private readonly now: () => number = Date.now,
     private readonly maxKeys = 10_000,
   ) {}
+
+  /** Whether the key has room for one more call, without recording anything. */
+  hasRoom(key: string): boolean {
+    const b = this.buckets.get(key);
+    return !b || this.now() - b.windowStart >= this.windowMs || b.count < this.max;
+  }
 
   /** Returns true when the call is allowed and records it; false when the key is over its limit. */
   allow(key: string): boolean {
@@ -46,26 +54,28 @@ export class RateLimiter {
 }
 
 /**
- * Sign-in links. Per client address: 20 every 10 minutes. Per address asked for: 3 from any one client. There is
- * deliberately no cap on an address as a whole: whoever reached it could lock its owner out, while the per-client
- * caps already bound how much mail any one requester can cause.
+ * Sign-in requests. Per client: 20 every 10 minutes; per wider network (an IPv6 /48, or the IPv4 address again):
+ * 60. How much mail one address can receive is bounded separately and without a lockout, by the cap on its live
+ * links (MAX_OUTSTANDING_LINKS in magic-link.ts), and all sign-in mail together by SIGN_IN_MAIL_PER_HOUR.
  */
 export const signInPerClient = new RateLimiter(20, 10 * 60 * 1000);
-export const signInPerEmailClient = new RateLimiter(3, 10 * 60 * 1000);
+export const signInPerNetwork = new RateLimiter(60, 10 * 60 * 1000);
 
-export type SignInLimits = { perClient: RateLimiter; perEmailClient: RateLimiter };
+export type SignInLimits = { perClient: RateLimiter; perNetwork: RateLimiter };
 
 /**
- * Whether one more sign-in link may go out. The client is checked first, so a requester already over its own cap
- * cannot use up anybody's address; the address then has an allowance per client, so one requester cannot exhaust
- * it for anyone else. The per-client cap is best-effort: it only applies when a proxy supplies a client address,
- * so that an install without a proxy does not put every visitor in one shared bucket.
+ * Whether this client may ask for another sign-in link. It is best-effort: it only applies when a proxy supplies a
+ * client address, so that an install without a proxy does not put every visitor in one shared bucket. Nothing here
+ * is keyed on the address asked for, so nobody's requests can use up anybody else's.
  */
-export function allowSignInRequest(
-  email: string,
-  client: string | null,
-  limits: SignInLimits = { perClient: signInPerClient, perEmailClient: signInPerEmailClient },
-): boolean {
-  if (client && !limits.perClient.allow(client)) return false;
-  return limits.perEmailClient.allow(`${email}\n${client ?? ""}`);
+export function allowSignInRequest(client: string | null, limits: SignInLimits = { perClient: signInPerClient, perNetwork: signInPerNetwork }): boolean {
+  if (!client) return true;
+  return limits.perClient.allow(client) && limits.perNetwork.allow(clientNetwork(client));
+}
+
+let mailCeiling: RateLimiter | undefined;
+/** Every sign-in email the album sends, together, per hour: a guard for the mail provider's quota. */
+export function signInMailPerHour(perHour: number): RateLimiter {
+  mailCeiling ??= new RateLimiter(perHour, 60 * 60 * 1000);
+  return mailCeiling;
 }

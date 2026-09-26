@@ -44,38 +44,29 @@ describe("RateLimiter capacity", () => {
 });
 
 describe("allowSignInRequest", () => {
-  const limits = (now = () => 0) => ({
-    perClient: new RateLimiter(20, 1000, now),
-    perEmailClient: new RateLimiter(3, 1000, now),
-  });
+  const limits = () => ({ perClient: new RateLimiter(20, 1000, () => 0), perNetwork: new RateLimiter(60, 1000, () => 0) });
 
-  it("does not let other clients use up a member's own allowance, however many there are", () => {
+  it("caps each client, and each IPv6 /48 however many /64s it spreads over", () => {
     const l = limits();
-    // One attacker spends its whole client allowance on grandma, and a crowd of others three each.
-    for (let i = 0; i < 20; i++) allowSignInRequest("grandma@example.com", "203.0.113.66", l);
-    for (let c = 0; c < 50; c++) for (let i = 0; i < 3; i++) expect(allowSignInRequest("grandma@example.com", `192.0.2.${c}`, l)).toBe(true);
-    expect(allowSignInRequest("grandma@example.com", "192.0.2.0", l)).toBe(false);
-    // Grandma, from her own address, still gets her link.
-    expect(allowSignInRequest("grandma@example.com", "198.51.100.7", l)).toBe(true);
+    for (let i = 0; i < 20; i++) expect(allowSignInRequest("203.0.113.66", l)).toBe(true);
+    expect(allowSignInRequest("203.0.113.66", l)).toBe(false);
+    let allowed = 0;
+    for (let i = 0; i < 500; i++) if (allowSignInRequest(`2001:db8:1:${i.toString(16)}::/64`, l)) allowed++;
+    expect(allowed).toBe(60);
+    // A neighbouring /48 is somebody else.
+    expect(allowSignInRequest("2001:db8:2:1::/64", l)).toBe(true);
   });
 
-  it("checks the client first, so requests refused for the client charge nobody's address", () => {
-    // The address allowance outlives the client's window: were the address charged first, the refused requests
-    // below would have used it up by the time the client may ask again.
-    let now = 0;
-    const l = { perClient: new RateLimiter(20, 1000, () => now), perEmailClient: new RateLimiter(3, 10_000, () => now) };
-    for (let i = 0; i < 20; i++) expect(allowSignInRequest(`x${i}@example.com`, "203.0.113.66", l)).toBe(true);
-    for (let i = 0; i < 5; i++) expect(allowSignInRequest("grandma@example.com", "203.0.113.66", l)).toBe(false);
-    now = 1000;
-    for (let i = 0; i < 3; i++) expect(allowSignInRequest("grandma@example.com", "203.0.113.66", l)).toBe(true);
-  });
-
-  it("caps one address per client, and per request when there is no proxy", () => {
+  it("has no per-client cap without a proxy, rather than one shared bucket for everyone", () => {
     const l = limits();
-    for (let i = 0; i < 3; i++) expect(allowSignInRequest("a@example.com", "203.0.113.1", l)).toBe(true);
-    expect(allowSignInRequest("a@example.com", "203.0.113.1", l)).toBe(false);
-    const bare = limits();
-    for (let i = 0; i < 3; i++) expect(allowSignInRequest("a@example.com", null, bare)).toBe(true);
-    expect(allowSignInRequest("a@example.com", null, bare)).toBe(false);
+    for (let i = 0; i < 100; i++) expect(allowSignInRequest(null, l)).toBe(true);
+  });
+
+  it("peeks without charging", () => {
+    const rl = new RateLimiter(1, 1000, () => 0);
+    expect(rl.hasRoom("all")).toBe(true);
+    expect(rl.hasRoom("all")).toBe(true);
+    expect(rl.allow("all")).toBe(true);
+    expect(rl.hasRoom("all")).toBe(false);
   });
 });

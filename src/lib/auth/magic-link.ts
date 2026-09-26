@@ -10,39 +10,54 @@ export type MagicLinkDeps = {
   now?: () => Date;
 };
 
+/** How many unused, unexpired links an address may hold before asking again sends nothing new. */
+export const MAX_OUTSTANDING_LINKS = 3;
+
 export type RequestResult =
   | { ok: true; token: string; email: string }
-  | { ok: false; reason: "not_invited" };
+  | { ok: false; reason: "not_invited" | "recently_sent" };
 
 /**
  * Decide whether an email may sign in and, if so, mint a single-use token.
  * Allowed when: an account exists, a pending invite exists, or the address may bootstrap the
  * admin account. When ADMIN_EMAIL is configured only that address can bootstrap, and only while the
  * album has no admin; without it, the first address to sign in on an empty database becomes the admin.
+ *
+ * However many people ask, an address never holds more than MAX_OUTSTANDING_LINKS live links: past that nothing
+ * is minted or sent ("recently_sent"), and the links already in its inbox keep working, so asking on somebody's
+ * behalf can neither flood them nor lock them out. An address that may not sign in is charged exactly the same
+ * way, with a placeholder whose raw token nobody ever sees, so the answers never tell a member from a stranger.
  */
 export async function requestMagicLink(rawEmail: string, deps: MagicLinkDeps): Promise<RequestResult> {
   const { db } = deps;
   const now = deps.now?.() ?? new Date();
   const email = normalizeEmail(rawEmail);
 
-  const [user, invite, counts] = await Promise.all([
-    db.user.findUnique({ where: { email } }),
-    db.invite.findFirst({ where: { email, acceptedAt: null, expiresAt: { gt: now } } }),
-    accountCounts(db),
-  ]);
-  const allowed = Boolean(user) || Boolean(invite) || canBootstrapAdmin(email, counts, deps.adminEmail);
-  if (!allowed) return { ok: false, reason: "not_invited" };
+  return db.$transaction(async (tx) => {
+    // One request per address at a time, so concurrent asks cannot all see room for one more.
+    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`magic-link:${email}`}))::text`;
+    await tx.magicLinkToken.deleteMany({ where: { email, expiresAt: { lte: now } } });
+    const outstanding = await tx.magicLinkToken.count({ where: { email, usedAt: null, expiresAt: { gt: now } } });
+    if (outstanding >= MAX_OUTSTANDING_LINKS) return { ok: false, reason: "recently_sent" } as const;
 
-  const token = generateToken();
-  await db.magicLinkToken.create({
-    data: { email, tokenHash: hashToken(token), expiresAt: new Date(now.getTime() + MAGIC_LINK_TTL_MS) },
+    const [user, invite, counts] = await Promise.all([
+      tx.user.findUnique({ where: { email } }),
+      tx.invite.findFirst({ where: { email, acceptedAt: null, expiresAt: { gt: now } } }),
+      accountCounts(tx),
+    ]);
+    const allowed = Boolean(user) || Boolean(invite) || canBootstrapAdmin(email, counts, deps.adminEmail);
+    const token = generateToken();
+    await tx.magicLinkToken.create({
+      // A stranger's placeholder is hashed from a token nobody is sent, so it can never be used.
+      data: { email, tokenHash: hashToken(allowed ? token : generateToken()), expiresAt: new Date(now.getTime() + MAGIC_LINK_TTL_MS) },
+    });
+    return allowed ? ({ ok: true, token, email } as const) : ({ ok: false, reason: "not_invited" } as const);
   });
-  return { ok: true, token, email };
 }
 
 export type AccountCounts = { users: number; admins: number };
 
-function accountCounts(db: Db): Promise<AccountCounts> {
+function accountCounts(db: Pick<Db, "user">): Promise<AccountCounts> {
   return Promise.all([db.user.count(), db.user.count({ where: { role: "ADMIN" } })]).then(([users, admins]) => ({ users, admins }));
 }
 
@@ -108,20 +123,41 @@ export async function verifyMagicLink(token: string, deps: MagicLinkDeps): Promi
 
   const invite = await db.invite.findFirst({ where: { email, acceptedAt: null, expiresAt: { gt: now } } });
   const bootstrap = canBootstrapAdmin(email, await accountCounts(db), deps.adminEmail);
-  if (!invite && !bootstrap) return { ok: false, reason: "invalid" };
+  if (!invite && !bootstrap) return accountMadeMeanwhile(db, email);
   const role = bootstrap ? "ADMIN" : invite?.role ?? "MEMBER";
 
   // The invite is claimed in the same transaction that creates the account, and only if it is still pending: an
   // admin revoking it at this very moment either wins (no account) or finds it already accepted.
-  const user = await db.$transaction(async (tx) => {
-    if (invite) {
-      const accepted = await tx.invite.updateMany({ where: { id: invite.id, acceptedAt: null }, data: { acceptedAt: now } });
-      if (accepted.count === 0 && !bootstrap) return null;
-    }
-    return tx.user.create({ data: { email, role } });
-  });
-  if (!user) return { ok: false, reason: "invalid" };
-  return { ok: true, userId: user.id, email, isNewUser: true };
+  const user = await db
+    .$transaction(async (tx) => {
+      if (invite) {
+        const accepted = await tx.invite.updateMany({ where: { id: invite.id, acceptedAt: null }, data: { acceptedAt: now } });
+        if (accepted.count === 0 && !bootstrap) return null;
+      }
+      return tx.user.create({ data: { email, role } });
+    })
+    .catch((err: unknown) => {
+      // Another of this address's links was pressed at the same moment and created the account first.
+      if (isUniqueViolation(err)) return null;
+      throw err;
+    });
+  if (user) return { ok: true, userId: user.id, email, isNewUser: true };
+  return accountMadeMeanwhile(db, email);
+}
+
+/**
+ * The invite or the address was taken by another of this address's links, pressed at the same moment, whose
+ * sign-in has committed by now (a claim waits on its lock): that account is this person's too. Otherwise the
+ * invite was revoked, or there never was one.
+ */
+async function accountMadeMeanwhile(db: Db, email: string): Promise<VerifyResult> {
+  const created = await db.user.findUnique({ where: { email } });
+  if (created) return { ok: true, userId: created.id, email, isNewUser: false };
+  return { ok: false, reason: "invalid" };
+}
+
+function isUniqueViolation(err: unknown): boolean {
+  return typeof err === "object" && err !== null && (err as { code?: unknown }).code === "P2002";
 }
 
 /** Create an invite and return the raw token for the email link. */

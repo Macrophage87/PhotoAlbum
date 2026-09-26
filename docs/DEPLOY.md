@@ -101,6 +101,7 @@ Set at least these values:
 | `APP_URL` | `https://album.example.com` (your real hostname, with https). This appears in every sign-in email. With https the app also sends HSTS, so browsers keep to https for a year. |
 | `HSTS_INCLUDE_SUBDOMAINS` | Leave at `false`. Set `true` only if every subdomain of the album's hostname serves https, to extend HSTS to them. |
 | `ADMIN_EMAIL` | Your own email address. Only this address can create the first admin account, and only while there is no admin: once one exists it is an ordinary address, so removing that account from the Admin page sticks. |
+| `SIGN_IN_MAIL_PER_HOUR` | Leave at `200`. The most sign-in emails sent in an hour, all addresses together, so a flood of requests cannot use up your mail provider's quota. |
 | `POSTGRES_PASSWORD` | A long random password, for example the output of `openssl rand -base64 24`. |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM` | Your mail provider's settings. Leave `SMTP_HOST` empty to print links to the log instead. |
 | `APP_PORT` | Leave at `3000`. The reverse proxy in the next step talks to it locally. |

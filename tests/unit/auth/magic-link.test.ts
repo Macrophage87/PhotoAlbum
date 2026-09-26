@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
-import { checkMagicLink, createInvite, maskEmail, requestMagicLink, verifyMagicLink } from "@/lib/auth/magic-link";
+import { checkMagicLink, createInvite, maskEmail, MAX_OUTSTANDING_LINKS, requestMagicLink, verifyMagicLink } from "@/lib/auth/magic-link";
 import type { Db } from "@/lib/db";
 import { resetTestDb } from "../helpers/reset";
 
@@ -104,6 +104,61 @@ describe("magic link", () => {
     }) as Db;
     expect(await verifyMagicLink(req.token, { db: racing, now: () => T0 })).toEqual({ ok: false, reason: "invalid" });
     expect(await db.user.count({ where: { email: "cousin@example.com" } })).toBe(0);
+  });
+
+  it("stops minting once an address holds three live links, the same for a member and a stranger", async () => {
+    await db.user.create({ data: { email: "grandma@example.com", role: "ADMIN" } });
+    const member: string[] = [];
+    const stranger: string[] = [];
+    let first: string | undefined;
+    for (let i = 0; i < 6; i++) {
+      const m = await requestMagicLink("grandma@example.com", deps());
+      if (m.ok) first ??= m.token;
+      member.push(m.ok ? "minted" : m.reason);
+      const s = await requestMagicLink("stranger@example.com", deps());
+      stranger.push(s.ok ? "minted" : s.reason === "not_invited" ? "minted" : s.reason);
+    }
+    expect(MAX_OUTSTANDING_LINKS).toBe(3);
+    expect(member).toEqual(["minted", "minted", "minted", "recently_sent", "recently_sent", "recently_sent"]);
+    expect(stranger).toEqual(member);
+    // Nobody locked grandma out: the links she was sent still work.
+    expect(await checkMagicLink(first!, deps())).toMatchObject({ ok: true });
+    expect((await verifyMagicLink(first!, deps())).ok).toBe(true);
+    // Using one makes room for one more.
+    expect((await requestMagicLink("grandma@example.com", deps())).ok).toBe(true);
+    // Once they have expired, a fresh one can be asked for.
+    const later = new Date(T0.getTime() + 16 * 60 * 1000);
+    expect((await requestMagicLink("grandma@example.com", deps(later))).ok).toBe(true);
+  });
+
+  it("counts concurrent requests for one address one at a time", async () => {
+    await db.user.create({ data: { email: "grandma@example.com", role: "ADMIN" } });
+    const results = await Promise.all(Array.from({ length: 10 }, () => requestMagicLink("grandma@example.com", deps())));
+    expect(results.filter((r) => r.ok)).toHaveLength(3);
+  });
+
+  it("gives two links pressed at once for a new admin the same account, not an error", async () => {
+    const a = await requestMagicLink("first@example.com", deps());
+    const b = await requestMagicLink("first@example.com", deps());
+    if (!a.ok || !b.ok) throw new Error();
+    const [ra, rb] = await Promise.all([verifyMagicLink(a.token, deps()), verifyMagicLink(b.token, deps())]);
+    expect(ra.ok && rb.ok).toBe(true);
+    if (!ra.ok || !rb.ok) return;
+    expect(ra.userId).toBe(rb.userId);
+    expect([ra.isNewUser, rb.isNewUser].sort()).toEqual([false, true]);
+  });
+
+  it("gives two links pressed at once for an invitee the same account", async () => {
+    const admin = await db.user.create({ data: { email: "owner@example.com", role: "ADMIN" } });
+    await createInvite("cousin@example.com", admin.id, "MEMBER", deps());
+    const a = await requestMagicLink("cousin@example.com", deps());
+    const b = await requestMagicLink("cousin@example.com", deps());
+    if (!a.ok || !b.ok) throw new Error();
+    const [ra, rb] = await Promise.all([verifyMagicLink(a.token, deps()), verifyMagicLink(b.token, deps())]);
+    expect(ra.ok && rb.ok).toBe(true);
+    if (!ra.ok || !rb.ok) return;
+    expect(ra.userId).toBe(rb.userId);
+    expect(await db.user.count({ where: { email: "cousin@example.com" } })).toBe(1);
   });
 
   it("shows only enough of an address to recognise it", () => {

@@ -31,6 +31,9 @@ export async function inviteMember(_prev: InviteState, fd: FormData): Promise<In
   const email = normalizeEmail(parsed.data.email);
   if (await db.user.findUnique({ where: { email } })) return { status: "error", message: "That person is already a member." };
   await db.invite.deleteMany({ where: { email, acceptedAt: null } });
+  // Links asked for before the invite were never sent (or were placeholders); clearing them means the invitee's
+  // first request is not told a link is already on its way.
+  await db.magicLinkToken.deleteMany({ where: { email, usedAt: null } });
   const { token } = await createInvite(email, admin.id, parsed.data.role, { db });
   const link = new URL(`/invite/${token}`, env().APP_URL).toString();
   await sendMail(inviteEmail(email, link, admin.name ?? admin.email));

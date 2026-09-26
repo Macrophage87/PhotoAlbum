@@ -1,8 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { db } from "@/lib/db";
-import { createInvite, requestMagicLink } from "@/lib/auth/magic-link";
+import { checkMagicLink, createInvite, requestMagicLink } from "@/lib/auth/magic-link";
 import { resetTestDb } from "../helpers/reset";
 
+const MAIL_PER_HOUR = vi.hoisted(() => {
+  // Read once, when the first link is asked for; the last test runs into it.
+  process.env.SIGN_IN_MAIL_PER_HOUR = "20";
+  return 20;
+});
 const who = vi.hoisted(() => ({ id: "", sessions: [] as string[], destroyed: 0, signedIn: false, headers: new Headers(), mail: [] as { to: string; text: string }[] }));
 vi.mock("@/lib/auth/viewer", () => ({
   requireUserOrThrow: async () => ({ id: who.id, email: "owner@example.com", name: null, role: "ADMIN" }),
@@ -12,14 +17,14 @@ vi.mock("@/lib/auth/session", () => ({
   createSession: async (userId: string) => void who.sessions.push(userId),
   destroySession: async () => void who.destroyed++,
 }));
-vi.mock("@/lib/auth/email", () => ({ magicLinkEmail: (to: string, link: string) => ({ to, text: link }), sendMail: async (m: { to: string; text: string }) => void who.mail.push(m) }));
+vi.mock("@/lib/auth/email", () => ({ magicLinkEmail: (to: string, link: string) => ({ to, text: link }), inviteEmail: (to: string, link: string) => ({ to, text: link }), sendMail: async (m: { to: string; text: string }) => void who.mail.push(m) }));
 vi.mock("@/lib/google/account", () => ({ disconnectGoogleAccount: async () => {} }));
 vi.mock("next/headers", () => ({ headers: async () => who.headers }));
 vi.mock("next/cache", () => ({ revalidatePath: () => undefined }));
 vi.mock("next/navigation", () => ({ redirect: (to: string) => { throw new Error(`REDIRECT:${to}`); } }));
 vi.mock("@/lib/jobs/boss", () => ({ enqueue: async () => {} }));
 
-import { removeMember, revokeInvite } from "@/app/admin/actions";
+import { inviteMember, removeMember, revokeInvite } from "@/app/admin/actions";
 import { confirmSignIn } from "@/app/auth/verify/actions";
 import { requestSignIn } from "@/app/auth/signin/actions";
 import { POST as signOut } from "@/app/auth/signout/route";
@@ -96,23 +101,46 @@ describe("sign-in links and the Admin page", () => {
     await expect(confirmSignIn(form({ token: "nope" }))).rejects.toThrow("REDIRECT:/auth/signin?error=invalid");
   });
 
-  it("the sign-in form keys its limit on the proxy's own X-Forwarded-For entry and says when it is reached", async () => {
+  const ask = (email: string, xff?: string) => {
+    who.headers = new Headers(xff ? { "x-forwarded-for": xff } : {});
+    return requestSignIn({ status: "idle" }, form({ email }));
+  };
+  const TOO_MANY = { status: "error", message: "Too many sign-in links were asked for just now. Please wait 10 minutes and try again." };
+  const RECENT = { status: "error", message: "A sign-in link was sent to this address in the last few minutes. Please use the newest one in your email." };
+
+  it("the sign-in form keys its per-client limit on the proxy's own X-Forwarded-For entry", async () => {
     // The requester varies the entries it writes itself; the last one, which the proxy appended, stays the same.
-    for (let i = 0; i < 3; i++) {
-      who.headers = new Headers({ "x-forwarded-for": `10.0.0.${i}, 203.0.113.50` });
-      expect(await requestSignIn({ status: "idle" }, form({ email: "owner@example.com" }))).toEqual({ status: "sent", email: "owner@example.com" });
-    }
-    who.headers = new Headers({ "x-forwarded-for": "10.0.0.99, 203.0.113.50" });
-    expect(await requestSignIn({ status: "idle" }, form({ email: "owner@example.com" }))).toEqual({
-      status: "error",
-      message: "Too many sign-in links were asked for just now. Please wait 10 minutes and try again.",
-    });
+    for (let i = 0; i < 20; i++) expect(await ask(`nobody${i}@example.com`, `10.0.0.${i}, 203.0.113.50`)).toEqual({ status: "sent", email: `nobody${i}@example.com` });
+    expect(await ask("nobody99@example.com", "10.0.0.99, 203.0.113.50")).toEqual(TOO_MANY);
+    // Another client is untouched.
+    expect(await ask("nobody99@example.com", "203.0.113.50, 198.51.100.7")).toEqual({ status: "sent", email: "nobody99@example.com" });
+    expect(who.mail).toHaveLength(0);
+  });
+
+  it("a flood from 2000 networks sends grandma at most three links, and she can still sign in with them", async () => {
+    await db.user.create({ data: { email: "grandma@example.com", role: "MEMBER" } });
+    const member: string[] = [];
+    for (let i = 0; i < 2000; i++) member.push(JSON.stringify(await ask("grandma@example.com", `2001:db8:${i.toString(16)}:1::1`)));
     expect(who.mail).toHaveLength(3);
-    // The owner's own address is untouched by that client's requests.
-    who.headers = new Headers({ "x-forwarded-for": "203.0.113.50, 198.51.100.7" });
-    expect(await requestSignIn({ status: "idle" }, form({ email: "owner@example.com" }))).toEqual({ status: "sent", email: "owner@example.com" });
-    expect(who.mail).toHaveLength(4);
-    expect(who.mail[3]!.text).toMatch(/\/auth\/verify\?token=/);
+    expect(who.mail.every((m) => m.to === "grandma@example.com")).toBe(true);
+    // Her own request is told to use the links she has, which work.
+    expect(await ask("grandma@example.com", "198.51.100.7")).toEqual(RECENT);
+    const token = new URL(who.mail[2]!.text).searchParams.get("token")!;
+    expect(await checkMagicLink(token, { db })).toMatchObject({ ok: true });
+    // A stranger's address is answered exactly the same way, request for request.
+    const stranger: string[] = [];
+    for (let i = 0; i < 2000; i++) stranger.push(JSON.stringify(await ask("stranger@example.com", `2001:db9:${i.toString(16)}:1::1`)).replace("stranger", "grandma"));
+    expect(stranger).toEqual(member);
+    expect(who.mail).toHaveLength(3);
+  }, 120_000);
+
+  it("without a proxy, repeat requests are told a link is on its way rather than refused", async () => {
+    await db.user.create({ data: { email: "grandma@example.com", role: "MEMBER" } });
+    const answers = [];
+    for (let i = 0; i < 10; i++) answers.push(await ask("grandma@example.com"));
+    expect(answers.slice(0, 3)).toEqual(Array(3).fill({ status: "sent", email: "grandma@example.com" }));
+    expect(answers.slice(3)).toEqual(Array(7).fill(RECENT));
+    expect(who.mail).toHaveLength(3);
   });
 
   it("sign-out refuses another site's form and keeps the cookie", async () => {
@@ -125,5 +153,31 @@ describe("sign-in links and the Admin page", () => {
     const res = await signOut(own);
     expect(res.status).toBe(303);
     expect(who.destroyed).toBe(1);
+  });
+
+  it("inviting somebody clears the placeholders their earlier requests left, so their first real ask is sent", async () => {
+    for (let i = 0; i < 3; i++) await ask("cousin@example.com");
+    expect(await ask("cousin@example.com")).toEqual(RECENT);
+    expect(await inviteMember({ status: "idle" }, form({ email: "cousin@example.com", role: "MEMBER" }))).toEqual({ status: "sent", email: "cousin@example.com" });
+    who.mail = [];
+    expect(await ask("cousin@example.com")).toEqual({ status: "sent", email: "cousin@example.com" });
+    expect(who.mail).toHaveLength(1);
+  });
+
+  // Last: it uses up the hourly allowance the whole file shares.
+  it("past the hourly ceiling nobody is sent a link, and everyone is told the same", async () => {
+    const BUSY = { status: "error", message: "The album has sent a lot of sign-in email in the last hour. Please try again a little later." };
+    let i = 0;
+    for (; i < 100; i++) {
+      const email = `member${i}@example.com`;
+      await db.user.create({ data: { email, role: "MEMBER" } });
+      const answer = await ask(email, `198.18.${i}.1`);
+      if (JSON.stringify(answer) === JSON.stringify(BUSY)) break;
+    }
+    expect(i).toBeLessThan(MAIL_PER_HOUR);
+    expect(await ask("member0@example.com", "198.19.0.1")).toEqual(BUSY);
+    expect(await ask("stranger@example.com", "198.19.0.2")).toEqual(BUSY);
+    const sentHere = who.mail.length;
+    expect(sentHere).toBe(i);
   });
 });
