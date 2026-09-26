@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { db } from "@/lib/db";
@@ -9,7 +9,8 @@ const photoRoot = mkdtempSync(path.join(tmpdir(), "picker-photos-"));
 process.env.PHOTO_STORAGE_ROOT = photoRoot;
 process.env.MAX_UPLOAD_BYTES = "1000";
 const enqueued = vi.hoisted(() => [] as { queue: string; data: unknown }[]);
-vi.mock("@/lib/jobs/boss", () => ({ enqueue: async (queue: string, data: unknown) => { enqueued.push({ queue, data }); } }));
+const refuse = vi.hoisted(() => ({ queue: null as string | null }));
+vi.mock("@/lib/jobs/boss", () => ({ enqueue: async (queue: string, data: unknown) => { if (refuse.queue === queue) throw new Error("queue unavailable"); enqueued.push({ queue, data }); } }));
 const google = vi.hoisted(() => ({ token: vi.fn(), download: vi.fn(), list: vi.fn(), deleted: [] as string[], forgotten: 0 }));
 vi.mock("@/lib/google/account", () => ({
   accessTokenFor: google.token,
@@ -28,7 +29,7 @@ describe("the Picker download job", () => {
   let ids: string[];
   beforeEach(async () => {
     await resetTestDb();
-    enqueued.length = 0; google.deleted.length = 0; google.forgotten = 0;
+    enqueued.length = 0; google.deleted.length = 0; google.forgotten = 0; refuse.queue = null;
     google.token.mockReset().mockResolvedValue("tok");
     google.download.mockReset();
     google.list.mockReset().mockResolvedValue([]);
@@ -108,6 +109,25 @@ describe("the Picker download job", () => {
     await googlePickerImport(job());
     expect((await statuses()).map((r) => r.status)).toEqual(["PENDING", "PENDING", "PENDING"]);
     expect(google.list).toHaveBeenCalledTimes(1);
+  });
+  it("passes by a row another job took while this one waited, and leaves it alone", async () => {
+    google.download.mockImplementation(async (_t: string, item: { id: string }) => {
+      // While the first item downloads, a job queued by picking again takes the second.
+      if (item.id === "gp-1") await db.photo.update({ where: { id: ids[1] }, data: { status: "PROCESSING" } });
+      return body(10);
+    });
+    await googlePickerImport(job());
+    expect(google.download).toHaveBeenCalledTimes(2);
+    const rows = await statuses();
+    expect(rows[1]).toMatchObject({ status: "PROCESSING", sizeBytes: 0 });
+  });
+  it("puts a row back to having no file when its processing cannot be queued after the download", async () => {
+    google.download.mockImplementation(async () => body(10));
+    refuse.queue = "transcode-video";
+    await googlePickerImport(job());
+    const clip = await db.photo.findUniqueOrThrow({ where: { id: ids[2] } });
+    expect(clip).toMatchObject({ status: "FAILED", originalPath: "pending", storageKey: "pending", sizeBytes: 0 });
+    expect(existsSync(path.join(photoRoot, "photos", ids[2]))).toBe(false);
   });
   it("fails every row when no access token can be had", async () => {
     google.token.mockRejectedValue(new GoogleAuthError("gone", true));

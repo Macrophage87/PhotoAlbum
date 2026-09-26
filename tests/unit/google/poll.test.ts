@@ -51,6 +51,15 @@ describe("finishing a Picker session", () => {
     expect(await db.photo.count()).toBe(3);
   });
 
+  it("makes a row of its own for an item another member picked whose file never arrived, and leaves theirs alone", async () => {
+    const other = await db.user.create({ data: { email: "o@example.com", role: "MEMBER" } });
+    const theirs = await db.photo.create({ data: { uploaderId: other.id, sourceKind: "GOOGLE_PICKER", sourceId: "gp-1", status: "FAILED", error: "x", originalName: "p1.jpg", mimeType: "image/jpeg", storageKey: "pending", originalPath: "pending", sizeBytes: 0 } });
+    const r = await pollPickerSession("s4", null);
+    expect(r).toMatchObject({ state: "queued", skipped: 0 });
+    expect(queue.sent[0].photoIds).not.toContain(theirs.id);
+    expect(queue.sent[0].photoIds).toHaveLength(2);
+    expect(await db.photo.findUniqueOrThrow({ where: { id: theirs.id } })).toMatchObject({ status: "FAILED", uploaderId: other.id });
+  });
   it("does not count an item in the trash as already in the album", async () => {
     await db.photo.create({ data: { uploaderId: who.id, sourceKind: "GOOGLE_PICKER", sourceId: "gp-1", status: "READY", originalName: "p1.jpg", mimeType: "image/jpeg", storageKey: "photos/y", originalPath: "photos/y/original.jpg", sizeBytes: 9, trashedAt: new Date(), trashReason: "OTHER" } });
     const r = await pollPickerSession("s3", null);

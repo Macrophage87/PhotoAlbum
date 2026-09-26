@@ -45,8 +45,9 @@ export async function pollPickerSession(sessionId: string, tripId: string | null
     if (!s.mediaItemsSet) return s.deadline <= Date.now() ? { state: "error", reconnect: false, message: "That picking session has ended; start again." } : { state: "picking" };
     const items = await listPickedItems(token, sessionId);
     if (tripId && !(await db.trip.findUnique({ where: { id: tripId }, select: { id: true } }))) tripId = null;
-    // Nothing in the trash counts as already in the album: picking it again is how a member gets it back.
-    const existing = new Map((await db.photo.findMany({ where: { sourceKind: "GOOGLE_PICKER", sourceId: { in: items.map((i) => i.id) }, trashedAt: null }, select: { id: true, sourceId: true, uploaderId: true, status: true, originalPath: true } })).map((r) => [r.sourceId, r]));
+    // Nothing in the trash counts as already in the album: picking it again is how a member gets it back. Nor does
+    // another member's row whose file never arrived: it is not in the album, and it is not this member's to fetch.
+    const existing = new Map((await db.photo.findMany({ where: { sourceKind: "GOOGLE_PICKER", sourceId: { in: items.map((i) => i.id) }, trashedAt: null, OR: [{ originalPath: { not: "pending" } }, { uploaderId: user.id }] }, select: { id: true, sourceId: true, uploaderId: true, status: true, originalPath: true } })).map((r) => [r.sourceId, r]));
     const photoIds: string[] = [];
     const jobItems: Record<string, unknown> = {};
     /** The rows this poll made, as against ones it picked up again. */
@@ -58,9 +59,12 @@ export async function pollPickerSession(sessionId: string, tripId: string | null
         // One of theirs whose file never arrived — its download failed, or the poll that made it failed before the
         // download was queued — is picked again to be fetched, not skipped as though it were in the album.
         if (had && had.uploaderId === user.id && had.originalPath === "pending" && (had.status === "PENDING" || had.status === "FAILED")) {
-          await db.photo.update({ where: { id: had.id }, data: { status: "PENDING", error: null, ...(tripId ? { tripId, activityId: null, activitySetById: null } : {}) } });
-          photoIds.push(had.id);
-          jobItems[had.id] = item;
+          // Conditional: a download job may be taking it this moment, and then it is on its way already.
+          const again = await db.photo.updateMany({ where: { id: had.id, originalPath: "pending", status: { in: ["PENDING", "FAILED"] } }, data: { status: "PENDING", error: null, ...(tripId ? { tripId, activityId: null, activitySetById: null } : {}) } });
+          if (again.count === 1) {
+            photoIds.push(had.id);
+            jobItems[had.id] = item;
+          }
           continue;
         }
         if (had) {

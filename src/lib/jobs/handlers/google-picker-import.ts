@@ -29,7 +29,7 @@ const tokenFailure = (err: unknown) => (err instanceof GoogleAuthError && err.ne
  * works for about an hour after it was listed. Only a refresh Google turns down means the member has to connect
  * again; a refused download on its own fails that item and nothing else.
  */
-export async function googlePickerImport(job: GooglePickerImportJob): Promise<void> {
+export async function googlePickerImport(job: GooglePickerImportJob, signal?: AbortSignal): Promise<void> {
   const rows = await db.photo.findMany({ where: { id: { in: job.photoIds }, originalPath: "pending", status: "PENDING", sourceKind: "GOOGLE_PICKER" } });
   if (rows.length === 0) return;
   const token = async () => {
@@ -60,32 +60,42 @@ export async function googlePickerImport(job: GooglePickerImportJob): Promise<vo
   };
   const download = async (rowId: string): Promise<Response> => {
     try {
-      return await openDownload(await token(), items.get(rowId)!);
+      return await openDownload(await token(), items.get(rowId)!, signal);
     } catch (err) {
       if (!(err instanceof GoogleAuthError)) throw err;
       // 401: the token went stale on the way; 403: the item's address did. Either way, one more go.
       if (err.needsReconnect) forgetAccessToken(job.userId);
       else if (!(await relist())) throw err;
-      return openDownload(await token(), items.get(rowId)!);
+      return openDownload(await token(), items.get(rowId)!, signal);
     }
   };
 
   const store = storage();
   for (const row of rows) {
     if (!items.has(row.id)) continue;
+    if (signal?.aborted) break;
     const isVideo = row.kind === "VIDEO";
     const storageKey = `photos/${row.id}`;
     const originalPath = `${storageKey}/original.${EXT_BY_MIME[row.mimeType]}`;
+    // Taken for this job, atomically: a row picked again while this job waited may have been fetched by the job that
+    // picking queued, or be being fetched by it now. Whoever takes it first has it; the other passes it by.
+    const claim = await db.photo.updateMany({ where: { id: row.id, originalPath: "pending", status: "PENDING" }, data: { status: "PROCESSING" } });
+    if (claim.count !== 1) continue;
+    /** How to recognise the row as still this job's: taken, then stored. */
+    let mine: { status: "PROCESSING" | "PENDING"; originalPath: string } = { status: "PROCESSING", originalPath: "pending" };
     try {
-      // Picked again while this job waited, and fetched by the job that picking queued: nothing left to do here.
-      if (!(await db.photo.findFirst({ where: { id: row.id, originalPath: "pending", status: "PENDING" }, select: { id: true } }))) continue;
       const res = await download(row.id);
       const { bytes } = await store.putStream(originalPath, Readable.fromWeb(res.body as never), { maxBytes: isVideo ? env().MAX_VIDEO_UPLOAD_BYTES : env().MAX_UPLOAD_BYTES });
-      await db.photo.update({ where: { id: row.id }, data: { storageKey, originalPath, sizeBytes: bytes } });
+      await db.photo.update({ where: { id: row.id }, data: { storageKey, originalPath, sizeBytes: bytes, status: "PENDING" } });
+      mine = { status: "PENDING", originalPath };
       if (isVideo) await enqueue(QUEUES.transcodeVideo, { photoId: row.id, tripId: row.tripId });
       else await enqueue(QUEUES.processPhoto, { photoId: row.id, tripId: row.tripId });
     } catch (err) {
-      await store.deletePrefix(storageKey).catch(() => undefined);
+      const reason = err instanceof NoToken ? tokenFailure(err.reason) : err instanceof StorageLimitError ? `Larger than ${Math.round(err.maxBytes / 1048576)} MB` : err instanceof GoogleAuthError ? "Google Photos refused the download." : "Download from Google Photos failed.";
+      // Back to having no file, so picking it again fetches it rather than finding a row pointing at nothing — but
+      // only while it is still this job's to put back.
+      const reset = await db.photo.updateMany({ where: { id: row.id, ...mine }, data: { status: "FAILED", error: reason, storageKey: "pending", originalPath: "pending", sizeBytes: 0 } }).catch(() => ({ count: 0 }));
+      if (reset.count === 1) await store.deletePrefix(storageKey).catch(() => undefined);
       if (err instanceof NoToken) {
         // The refresh itself failed (accessTokenFor marks the account when Google says the grant is gone), so
         // nothing else in this queue can be fetched either.
@@ -93,9 +103,6 @@ export async function googlePickerImport(job: GooglePickerImportJob): Promise<vo
         console.error(`[google] no access token for the picker import: ${err.reason instanceof Error ? err.reason.message : String(err.reason)}`);
         break;
       }
-      const reason = err instanceof StorageLimitError ? `Larger than ${Math.round(err.maxBytes / 1048576)} MB` : err instanceof GoogleAuthError ? "Google Photos refused the download." : "Download from Google Photos failed.";
-      // Back to having no file, so picking it again fetches it rather than finding a row pointing at nothing.
-      await db.photo.update({ where: { id: row.id }, data: { status: "FAILED", error: reason, storageKey: "pending", originalPath: "pending", sizeBytes: 0 } }).catch(() => undefined);
       console.error(`[google] download of ${row.originalName} failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   }

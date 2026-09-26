@@ -67,7 +67,7 @@ export async function startWorker(): Promise<void> {
   await boss.work(QUEUES.detectAnimals, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 3 }, async ([job]) => detectAnimalsJob(job.data as never));
   await boss.work(QUEUES.animalSweep, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 30 }, async () => void (await animalSweep()));
   await boss.work(QUEUES.matchAnimals, { batchSize: 1, localConcurrency: 2, pollingIntervalSeconds: 2 }, async ([job]) => void (await proposeAnimalsForPhoto((job.data as { photoId: string }).photoId)));
-  await boss.work(QUEUES.googlePickerImport, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 2 }, async ([job]) => googlePickerImport(job.data as never));
+  await boss.work(QUEUES.googlePickerImport, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 2 }, async ([job]) => googlePickerImport(job.data as never, job.signal));
   await boss.work(QUEUES.matchPhoto, { batchSize: 1, localConcurrency: 2, pollingIntervalSeconds: 2 }, async ([job]) => matchPhoto(job.data as never));
   await boss.work(QUEUES.faceSweep, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 30 }, async () => void (await faceSweep()));
   await boss.work(QUEUES.flagNewAdults, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60 }, async () => void (await flagNewAdults()));
@@ -89,4 +89,5 @@ export async function startWorker(): Promise<void> {
   await boss.schedule(QUEUES.sweepStrandedUploads, "40 * * * *", {}, { retryLimit: 0 });
   console.log("[worker] pg-boss handlers registered");
   await reconcileStalePhotos().catch((err) => console.error("[worker] stale-photo reconciliation failed", err));
+  await (await import("@/lib/tracks/files")).forgetGoogleExports().catch((err) => console.error("[worker] could not delete old Google exports", err));
 }
