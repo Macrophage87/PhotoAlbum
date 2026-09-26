@@ -16,7 +16,7 @@ import { TripHeader } from "@/components/trips/TripHeader";
 import { TripTabs } from "@/components/trips/TripTabs";
 import { previewCard } from "@/lib/share/preview";
 import { annotationGates } from "@/lib/annotation/eligibility";
-import { describeTripWithAi, setTripDescription } from "./actions";
+import { describeTripWithAi, setTripDescription, setTripDescriptionShared } from "./actions";
 import { readableContainerDescription, withReadableDescription } from "@/lib/photos/readable-text";
 
 export async function generateMetadata({ params }: LayoutProps<"/trips/[slug]">): Promise<Metadata> {
@@ -72,7 +72,7 @@ export default async function TripLayout({ params, children }: LayoutProps<"/tri
       <TripHeader
         trip={withReadableDescription(trip, viewer.kind === "user")}
         shareUrl={shareableTripUrl(trip, env().APP_URL)}
-        {...(owns ? { save: setTripDescription.bind(null, slug), ...((await annotationGates()).active ? { describe: describeTripWithAi.bind(null, slug) } : {}) } : {})}
+        {...(owns ? { save: setTripDescription.bind(null, slug), share: setTripDescriptionShared.bind(null, slug), ...((await annotationGates()).active ? { describe: describeTripWithAi.bind(null, slug) } : {}) } : {})}
       />
       <TripTabs tabs={tabs} />
       <main className="mx-auto max-w-6xl px-4 sm:px-6 py-8">{children}</main>

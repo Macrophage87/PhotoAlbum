@@ -71,11 +71,11 @@ export async function loadContainerForDescription(kind: ContainerKind, id: strin
     kind === "trip"
       ? await db.trip.findUnique({
           where: { id },
-          select: { id: true, title: true, description: true, annotationOptOut: true, startDate: true, endDate: true, _count: { select: { photos: { where: NOT_TRASHED } } }, activities: { orderBy: { startTime: "asc" }, take: 20, select: { title: true } } },
+          select: { id: true, title: true, description: true, descriptionMembersOnly: true, annotationOptOut: true, startDate: true, endDate: true, _count: { select: { photos: { where: NOT_TRASHED } } }, activities: { orderBy: { startTime: "asc" }, take: 20, select: { title: true } } },
         })
       : await db.collection.findUnique({
           where: { id },
-          select: { id: true, title: true, description: true, annotationOptOut: true, _count: { select: { items: true } } },
+          select: { id: true, title: true, description: true, descriptionMembersOnly: true, annotationOptOut: true, _count: { select: { items: true } } },
         });
   if (!container) return null;
 
@@ -87,7 +87,7 @@ export async function loadContainerForDescription(kind: ContainerKind, id: strin
   const dates = "startDate" in container ? { start: container.startDate, end: container.endDate } : null;
   const activities = "activities" in container ? container.activities.map((a) => a.title) : [];
   const count = "photos" in container._count ? container._count.photos : container._count.items;
-  return { kind, id: container.id, title: container.title, description: container.description, annotationOptOut: container.annotationOptOut, dates, activities, count, photos };
+  return { kind, id: container.id, title: container.title, description: container.description, descriptionMembersOnly: container.descriptionMembersOnly, annotationOptOut: container.annotationOptOut, dates, activities, count, photos };
 }
 
 /** The text block: what it is, when it was, how big it is, what happened in it, and what the family already wrote. */
@@ -153,7 +153,8 @@ export async function writeContainerDescription(kind: ContainerKind, id: string,
   const parsed = parseActivityDescription(response.content as { type: string; text?: string }[]);
   if (!parsed) throw new Error("The helper's answer could not be read; try again");
   // Written from names or notes, it is read by members only; see `descriptionFromMembersOnly`.
-  const membersOnly = await descriptionFromMembersOnly(parsed.description, { names, notes: container.photos.some((p) => p.context?.trim()) });
+  // The description it replaces goes with the request, so a members-only one keeps what is written from it members-only.
+  const membersOnly = await descriptionFromMembersOnly(parsed.description, { names, notes: container.photos.some((p) => p.context?.trim()), previous: Boolean(container.description && container.descriptionMembersOnly) });
   const data = { description: parsed.description, descriptionMembersOnly: membersOnly };
   if (kind === "trip") await db.trip.update({ where: { id }, data });
   else await db.collection.update({ where: { id }, data });

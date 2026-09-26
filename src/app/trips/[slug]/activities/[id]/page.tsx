@@ -3,7 +3,7 @@ import { db } from "@/lib/db";
 import { loadViewableTrip } from "@/lib/trips/access";
 import { photoCardSelect } from "@/lib/photos/queries";
 import { ActivityDetail } from "@/components/activities/ActivityDetail";
-import { deleteActivity, describeActivityWithAi, setActivityDescription, setActivityShare, updateActivity } from "../actions";
+import { deleteActivity, describeActivityWithAi, setActivityDescription, setActivityDescriptionShared, setActivityShare, updateActivity } from "../actions";
 import { shareableActivityUrl } from "@/lib/share/social";
 import { NOT_TRASHED } from "@/lib/photos/trash";
 import { env } from "@/lib/env";
@@ -66,6 +66,7 @@ export default async function ActivityPage({ params, searchParams }: PageProps<"
       share={share}
       save={save}
       describe={describe}
+      shareDescription={setActivityDescriptionShared.bind(null, slug, activity.id)}
       editable
       editing={sp.edit === "1"}
       members={await familyMembers()}
