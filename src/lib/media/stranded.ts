@@ -13,14 +13,18 @@ export const STRANDED_AFTER_MS = 24 * 3600_000;
  * They are deleted with whatever part of a file reached their folder. Nothing with a file is touched here.
  */
 export async function sweepStrandedUploads(now = new Date()): Promise<number> {
-  const gone = await db.photo.findMany({
-    where: { status: "PENDING", originalPath: "pending", createdAt: { lt: new Date(now.getTime() - STRANDED_AFTER_MS) } },
-    select: { id: true },
-  });
-  for (const p of gone) {
+  const cutoff = new Date(now.getTime() - STRANDED_AFTER_MS);
+  // updatedAt, not createdAt: a Picker row picked again is brought back to life (and touched) long after it was made.
+  const stranded = { status: "PENDING" as const, originalPath: "pending", updatedAt: { lt: cutoff } };
+  const candidates = await db.photo.findMany({ where: stranded, select: { id: true } });
+  let gone = 0;
+  for (const p of candidates) {
+    // Only if it is still stranded now: a download may have claimed it since it was listed.
+    const r = await db.photo.deleteMany({ where: { id: p.id, ...stranded } });
+    if (r.count !== 1) continue;
+    gone++;
     await storage().deletePrefix(`photos/${p.id}`).catch(() => undefined);
-    await db.photo.delete({ where: { id: p.id } }).catch(() => undefined);
   }
-  if (gone.length) console.warn(`[worker] removed ${gone.length} upload(s) whose file never arrived`);
-  return gone.length;
+  if (gone) console.warn(`[worker] removed ${gone} upload(s) whose file never arrived`);
+  return gone;
 }

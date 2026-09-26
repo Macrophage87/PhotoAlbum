@@ -21,14 +21,16 @@ describe("rows whose file never arrived", () => {
 
   it("are removed, with any part of a file, once nothing could still be bringing it; nothing else is", async () => {
     const old = new Date(Date.now() - STRANDED_AFTER_MS - 60_000);
-    const stranded = await row({ createdAt: old });
+    const stranded = await row({ createdAt: old, updatedAt: old });
     mkdirSync(path.join(root, "photos", stranded.id), { recursive: true });
     writeFileSync(path.join(root, "photos", stranded.id, "original.jpg"), "part");
     const recent = await row({});
-    const queued = await row({ createdAt: old, storageKey: "photos/q", originalPath: "photos/q/original.jpg", sizeBytes: 9 });
-    const failed = await row({ createdAt: old, status: "FAILED", sourceKind: "GOOGLE_PICKER" });
+    // Made long ago but picked again just now, so a download is on its way for it.
+    const repicked = await row({ createdAt: old, sourceKind: "GOOGLE_PICKER" });
+    const queued = await row({ createdAt: old, updatedAt: old, storageKey: "photos/q", originalPath: "photos/q/original.jpg", sizeBytes: 9 });
+    const failed = await row({ createdAt: old, updatedAt: old, status: "FAILED", sourceKind: "GOOGLE_PICKER" });
     expect(await sweepStrandedUploads()).toBe(1);
     expect(existsSync(path.join(root, "photos", stranded.id))).toBe(false);
-    expect((await db.photo.findMany({ select: { id: true } })).map((p) => p.id).sort()).toEqual([recent.id, queued.id, failed.id].sort());
+    expect((await db.photo.findMany({ select: { id: true } })).map((p) => p.id).sort()).toEqual([recent.id, repicked.id, queued.id, failed.id].sort());
   });
 });
