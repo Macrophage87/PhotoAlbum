@@ -374,10 +374,10 @@ commit. Each is one job with one SSH step that runs the shared
 [`deploy/update.sh`](../deploy/update.sh) on the server with four
 variables (`APP_DIR`, `BRANCH`, `APP_PORT`, and `DEPLOY_SHA`, the commit
 CI tested). The script skips a commit older than the one already deployed
-(CI runs can finish out of order), dumps the database to a `backups/`
-folder next to the checkout and stops if the dump fails, then carries on
-with the target commit's own copy of `update.sh`, resets the checkout to
-the commit (`.env` and `docker-compose.override.yml` are
+(CI runs can finish out of order), hands over to the target commit's own
+copy of `update.sh` (when it is new enough to take it), dumps the database
+to a `backups/` folder next to the checkout and stops if the dump fails,
+resets the checkout to the commit (`.env` and `docker-compose.override.yml` are
 untracked and survive), runs `docker compose up --build -d`, waits for
 `/api/health`, and prunes old images. A commit that is no longer on the
 branch (force-pushed away) is skipped with a note; if the branch was

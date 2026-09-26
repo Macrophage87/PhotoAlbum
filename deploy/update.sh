@@ -44,10 +44,20 @@ echo "== $APP_DIR: updating to origin/$BRANCH =="
 as_owner git fetch origin "$BRANCH"
 TARGET=$(as_owner git rev-parse "origin/$BRANCH")
 if [ -n "${DEPLOY_SHA:-}" ]; then
-  # Force-pushed away (or never fetched): a later push has its own CI run and deploy.
-  if ! as_owner git merge-base --is-ancestor "$DEPLOY_SHA" "origin/$BRANCH" 2>/dev/null; then
+  # Force-pushed away (so not in the fetch either): a later push has its own CI run and deploy. Any other git
+  # error still fails the deploy.
+  ON_BRANCH=0
+  if as_owner git cat-file -e "$DEPLOY_SHA^{commit}" 2>/dev/null; then
+    as_owner git merge-base --is-ancestor "$DEPLOY_SHA" "origin/$BRANCH" || ON_BRANCH=$?
+  else
+    ON_BRANCH=1
+  fi
+  if [ "$ON_BRANCH" = 1 ]; then
     echo "== $DEPLOY_SHA is no longer on origin/$BRANCH — nothing to do =="
     exit 0
+  elif [ "$ON_BRANCH" != 0 ]; then
+    echo "!! could not check $DEPLOY_SHA against origin/$BRANCH" >&2
+    exit 1
   fi
   CURRENT=$(as_owner git rev-parse HEAD)
   # Older than the deployed commit: skip, unless the branch was rewound past what is deployed.
@@ -61,11 +71,16 @@ if [ -n "${DEPLOY_SHA:-}" ]; then
 fi
 
 # The rest of the deploy is the target commit's own update.sh, not whatever the checkout had before; the guard
-# stops that copy from doing this again.
+# stops that copy from doing this again. A copy from before this hand-over (a rollback) would reset to the branch
+# tip and skip the dump checks, so this one carries on instead.
 if [ -z "${UPDATE_SH_REEXEC:-}" ]; then
-  SCRIPT=$(as_owner git show "$TARGET:deploy/update.sh")
-  exec env UPDATE_SH_REEXEC=1 APP_DIR="$APP_DIR" BRANCH="$BRANCH" APP_PORT="$APP_PORT" BACKUP_DIR="$BACKUP_DIR" \
-    HEALTH_TIMEOUT="$HEALTH_TIMEOUT" DEPLOY_SHA="$TARGET" bash -c "$SCRIPT" update.sh
+  SCRIPT=$(as_owner git show "$TARGET:deploy/update.sh" 2>/dev/null) || SCRIPT=
+  if [[ $SCRIPT != *UPDATE_SH_REEXEC* ]]; then
+    echo "== $TARGET's update.sh predates the hand-over — carrying on with this one =="
+  else
+    exec env UPDATE_SH_REEXEC=1 APP_DIR="$APP_DIR" BRANCH="$BRANCH" APP_PORT="$APP_PORT" BACKUP_DIR="$BACKUP_DIR" \
+      HEALTH_TIMEOUT="$HEALTH_TIMEOUT" DEPLOY_SHA="$TARGET" bash -c "$SCRIPT" update.sh
+  fi
 fi
 
 # 2. restore point (only if the stack is already running)
