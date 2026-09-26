@@ -3,7 +3,7 @@ import { env } from "@/lib/env";
 import { db } from "@/lib/db";
 import { Prisma } from "@/generated/prisma/client";
 import type { StoredAnnotation } from "@/lib/annotation/schema";
-import { inTitleCase, isEverydayWord, isPlaceOrDateWord, normalizeName, notThePerson, replaceSpans, type Neighbourhood } from "./scrub";
+import { inTitleCase, isEverydayWord, isKinWord, isPlaceOrDateWord, normalizeName, notThePerson, replaceSpans, type Neighbourhood } from "./scrub";
 
 /**
  * What the album remembers of somebody it has forgotten: keyed hashes of their names, never the names.
@@ -125,7 +125,7 @@ export async function rememberForgotten(forms: { form: string; capitalizedOnly: 
     const n = normalizedForm(f.form);
     if (!n || n.split(" ").length > MAX_WORDS) continue;
     const h = hash(w.key, n);
-    const oneWord = !CJK.test(n) && !n.includes(" ");
+    const oneWord = (!CJK.test(n) && !n.includes(" ")) || Boolean(f.derived);
     // A spelling stored both ways is matched the stricter way.
     rows.set(h, { hash: h, keyVersion: w.version, capitalizedOnly: (rows.get(h)?.capitalizedOnly ?? true) && f.capitalizedOnly, derived: (rows.get(h)?.derived ?? true) && Boolean(f.derived), photoIds: oneWord ? photoIds : [], taggedPhotoIds: oneWord ? taggedPhotoIds : [], containerIds: oneWord ? containerIds : [] });
   }
@@ -273,7 +273,9 @@ export async function loadTombstone(): Promise<Tombstone> {
   const current = new Set(keys.flatMap((k) => [...currentForms].map((f) => `${k.version}:${hash(k.key, f)}`)));
   const byHash = new Map(
     rows
-      .filter((r) => r.scoped || !current.has(`${r.keyVersion}:${r.hash}`))
+      // A first name of a forgotten full name that somebody the album knows also has ("Sam" while Sam Ortiz lives)
+      // is theirs, wherever they are.
+      .filter((r) => (r.scoped ? !(r.derived && whoseForm.has(`${r.keyVersion}:${r.hash}`)) : !current.has(`${r.keyVersion}:${r.hash}`)))
       .map((r) => {
         const key = `${r.keyVersion}:${r.hash}`;
         return [key, { key, capOnly: r.capitalizedOnly, derived: r.derived, scoped: r.scoped, people: r.scoped ? whoseForm.get(key) : undefined }] as const;
@@ -303,7 +305,6 @@ export async function loadTombstone(): Promise<Tombstone> {
     });
     // A tag that is a one-word name, or its possessive: "ximena", "ximena's".
     const wholeTag = mode === "tag" && tokens.length === 1 && /^[\s]*[\p{L}\p{M}\p{N}'’.-]+[\s]*$/u.test(text);
-    let title: boolean | null = null;
     for (let i = 0; i < tokens.length; i++) {
       for (let n = Math.min(MAX_WORDS, tokens.length - i); n >= 1; n--) {
         const run = tokens.slice(i, i + n);
@@ -311,7 +312,7 @@ export async function loadTombstone(): Promise<Tombstone> {
         if (run.some((t, j) => j > 0 && !/^[\s\-‐]+$/u.test(text.slice(run[j - 1].end, t.start)))) continue;
         const found = lookup(run.map((t) => t.norm).join(" "));
         if (!found) continue;
-        if (n === 1) {
+        if (n === 1 || found.scoped) {
           // Only where the forget found them; a row from before that was kept, nowhere.
           if (!scope?.rows.has(found.key)) continue;
           // Somebody the album knows by that name is on these photographs: it is theirs here.
@@ -323,6 +324,9 @@ export async function loadTombstone(): Promise<Tombstone> {
             const beside = [tokens[i - 1], tokens[i + 1]].filter(Boolean);
             if (beside.some((t) => isPlaceOrDateWord(t.raw) || /^\p{Lu}/u.test(t.raw))) continue;
           } else if (!guarded(text, run, found.capOnly, found)) continue;
+          // "Uncle Sam hat": a kinship word before a first name makes it somebody else (their own "Grandma Ruth" is
+          // matched whole, before this).
+          if (found.derived && i > 0 && isKinWord(tokens[i - 1].raw) && /^[\s]+$/u.test(text.slice(tokens[i - 1].end, run[0].start))) continue;
         } else if (found.capOnly && !guarded(text, run, true)) continue;
         spans.push([run[0].start, run[n - 1].end]);
         i += n - 1;
@@ -336,13 +340,13 @@ export async function loadTombstone(): Promise<Tombstone> {
      */
     function placeRules(found?: { key: string; derived: boolean }): Pick<Neighbourhood, "place" | "ownPhotos" | "opening"> {
       if (!found || !scope || scope.whole) return { place: "near" };
-      if (scope.own.has(found.key)) return { place: found.derived ? "near" : "comma", ownPhotos: true };
+      if (scope.own.has(found.key)) return { place: found.derived ? "travel" : "comma", ownPhotos: true };
       return { place: "near", opening: "clear" };
     }
     function guarded(t: string, run: typeof tokens, capOnly: boolean, found?: { key: string; derived: boolean }): boolean {
       if (!capOnly) return true;
       if (!run.every((x) => capital(x.raw))) return false;
-      title ??= inTitleCase(t, run.map((x) => x.raw));
+      const title = inTitleCase(t, run.map((x) => x.raw), run[0].start);
       return !notThePerson(t, run[0].start, run[run.length - 1].end, { title, date: isEverydayWord(run[0].raw), ...placeRules(found), number: true, own: new Set(run.map((x) => x.norm)), isNameWord });
     }
     for (const m of text.matchAll(CJK_RUN)) {

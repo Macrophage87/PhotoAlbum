@@ -397,25 +397,92 @@ describe("names that are also words", () => {
     expect(((await db.photo.findUniqueOrThrow({ where: { id: pool } })).annotation as StoredAnnotation).caption).toBe("A family member at the pool");
   });
 
-  it("keeps a forgotten full name's first name out of a trip-mate's photographs, before and after the forget", async () => {
+  it("keeps a forgotten full name's first name on their own photographs and where notes name them in full", async () => {
     const sam = await db.person.create({ data: { name: "Sam Kent", createdById: admin } });
     const trip = await db.trip.create({ data: { slug: "sam5", title: "Sam's 5th birthday", startDate: new Date("2026-07-01"), endDate: new Date("2026-07-01"), createdById: admin } });
-    const tagged = (await db.photo.create({ data: { uploaderId: admin, originalName: "k1.jpg", mimeType: "image/jpeg", storageKey: "k1", originalPath: "k1/o.jpg", sizeBytes: 1, status: "READY", tripId: trip.id } })).id;
-    const mate = (await db.photo.create({ data: { uploaderId: admin, originalName: "k2.jpg", mimeType: "image/jpeg", storageKey: "k2", originalPath: "k2/o.jpg", sizeBytes: 1, status: "READY", tripId: trip.id, caption: "Sam blew out the candles" } })).id;
+    const inTrip = async (data: { caption?: string; context?: string } = {}) => (await db.photo.create({ data: { uploaderId: admin, originalName: "k.jpg", mimeType: "image/jpeg", storageKey: "k", originalPath: "k/o.jpg", sizeBytes: 1, status: "READY", tripId: trip.id, ...data } })).id;
+    const tagged = await inTrip();
+    const mate = await inTrip({ caption: "Sam blew out the candles" });
+    const inFull = await photo();
+    await db.photo.update({ where: { id: inFull }, data: { context: "Sam Kent at the zoo" } });
+    const zoo = await photo();
+    await db.photo.update({ where: { id: zoo }, data: { context: "Sam at the zoo" } });
     await db.face.create({ data: { photoId: tagged, personId: sam.id, status: "CONFIRMED", box: [0, 0, 1, 1], confidence: 0 } });
-    const sent = async () => withoutUnpermittedNames((await loadItem(mate))!);
-    expect(await sent()).toMatchObject({ caption: "A family member blew out the candles", trip: { title: "A family member's 5th birthday" } });
+    // Not to be named yet: the trip-mate's words go without him.
+    expect(await withoutUnpermittedNames((await loadItem(mate))!)).toMatchObject({ caption: "A family member blew out the candles", trip: { title: "A family member's 5th birthday" } });
     await optOutPerson(sam.id, new FormData());
-    expect(await sent()).toMatchObject({ caption: "A family member blew out the candles", trip: { title: "A family member's 5th birthday" } });
-    await applyAnnotation(mate, "m", record({ caption: "Sam blowing out candles" }), { content: [] }, { requestedAt: new Date() });
-    expect(((await db.photo.findUniqueOrThrow({ where: { id: mate } })).annotation as StoredAnnotation).caption).toBe("A family member blowing out candles");
-    // Elsewhere, "Sam" is nobody's.
-    expect((await loadTombstone()).scrub("Sam waved", await sc(await photo()))).toBe("Sam waved");
+    const caption = async (id: string, text: string) => {
+      await applyAnnotation(id, "m", record({ caption: text }), { content: [] }, { requestedAt: new Date() });
+      return ((await db.photo.findUniqueOrThrow({ where: { id } })).annotation as StoredAnnotation).caption;
+    };
+    expect(await caption(tagged, "Sam at the lake")).toBe("A family member at the lake");
+    expect(await caption(inFull, "Sam smiling")).toBe("A family member smiling");
+    // Accepted: a trip-mate's photograph that never names him in full, or somebody else's "Sam", keeps it.
+    expect(await caption(mate, "Sam blowing out candles")).toBe("Sam blowing out candles");
+    expect(await caption(zoo, "Sam at the zoo")).toBe("Sam at the zoo");
+    // "Uncle Sam" is somebody else.
+    expect(await caption(tagged, "Uncle Sam hat on Ben")).toBe("Uncle Sam hat on Ben");
+  });
+
+  it("leaves a first name to somebody the album knows who has it too", async () => {
+    await db.person.create({ data: { name: "Sam Ortiz", createdById: admin } });
+    const on = await forget("Sam Kent");
+    expect((await loadTombstone()).scrub("Sam at the lake", await sc(on))).toBe("Sam at the lake");
+  });
+
+  it("keeps every first-name form of a forgotten full name out of their own photographs", async () => {
+    for (const [name, first] of [["Jack Byron", "Jack"], ["Grace Hill", "Grace"], ["Will Turner", "Will"], ["Grandma Ruth", "Ruth"], ["Mary Ann Smith", "Mary Ann"]]) {
+      const on = await forget(name);
+      await applyAnnotation(on, "m", record({ caption: `${first} at the lake` }), { content: [] }, { requestedAt: new Date() });
+      expect(((await db.photo.findUniqueOrThrow({ where: { id: on } })).annotation as StoredAnnotation).caption).toBe("A family member at the lake");
+    }
+    const may = await forget("May Lee");
+    await applyAnnotation(may, "m", record({ caption: "May 2020 at the lake" }), { content: [] }, { requestedAt: new Date() });
+    expect(((await db.photo.findUniqueOrThrow({ where: { id: may } })).annotation as StoredAnnotation).caption).toBe("May 2020 at the lake");
+  });
+
+  it("on her own photograph, a place-like first name is her after 'to' or 'from' unless she travels there", async () => {
+    const on = await forget("Charlotte Smith");
+    const ts = await loadTombstone();
+    const scope = await sc(on);
+    for (const [t, want] of [["Ben waved to Charlotte.", "Ben waved to a family member."], ["A gift from Charlotte.", "A gift from a family member."], ["We flew to Charlotte.", "We flew to Charlotte."], ["Charlotte, NC", "Charlotte, NC"]]) expect(ts.scrub(t, scope)).toBe(want);
+  });
+
+  it("leaves notes about the place out of a place-named person's forget", async () => {
+    const charlotte = await db.person.create({ data: { name: "Charlotte", createdById: admin } });
+    const hers = await photo();
+    await db.face.create({ data: { photoId: hers, personId: charlotte.id, status: "CONFIRMED", box: [0, 0, 1, 1], confidence: 0 } });
+    const nc = await db.trip.create({ data: { slug: "nc", title: "Charlotte, NC 2020", startDate: new Date("2020-07-01"), endDate: new Date("2020-07-01"), createdById: admin } });
+    const rain = (await db.photo.create({ data: { uploaderId: admin, originalName: "r.jpg", mimeType: "image/jpeg", storageKey: "r", originalPath: "r/o.jpg", sizeBytes: 1, status: "READY", tripId: nc.id, context: "Charlotte in the rain" } })).id;
+    await optOutPerson(charlotte.id, new FormData());
+    expect((await db.forgottenName.findFirstOrThrow()).photoIds).not.toContain(rain);
+
+    const florence = await db.person.create({ data: { name: "Florence", createdById: admin } });
+    const own = await photo();
+    await db.face.create({ data: { photoId: own, personId: florence.id, status: "CONFIRMED", box: [0, 0, 1, 1], confidence: 0 } });
+    const located = (await db.photo.create({ data: { uploaderId: admin, originalName: "l.jpg", mimeType: "image/jpeg", storageKey: "l", originalPath: "l/o.jpg", sizeBytes: 1, status: "READY", placeName: "Florence, Tuscany, Italy", context: "Florence was lovely in the rain" } })).id;
+    const trip = await db.trip.create({ data: { slug: "f19", title: "Florence 2019", startDate: new Date("2019-05-01"), endDate: new Date("2019-05-09"), createdById: admin } });
+    const notes = ["Florence at night", "Florence in the rain", "Florence from Piazzale Michelangelo", "Florence and Siena by train", "Florence by bike", "Florence, day 3", "Arrived in Florence. Florence is hot."];
+    const inTrip: string[] = [];
+    for (const context of notes) inTrip.push((await db.photo.create({ data: { uploaderId: admin, originalName: "f.jpg", mimeType: "image/jpeg", storageKey: "f", originalPath: "f/o.jpg", sizeBytes: 1, status: "READY", tripId: trip.id, context } })).id);
+    const pool = (await db.photo.create({ data: { uploaderId: admin, originalName: "p.jpg", mimeType: "image/jpeg", storageKey: "p", originalPath: "p/o.jpg", sizeBytes: 1, status: "READY", context: "Florence at the pool" } })).id;
+    await optOutPerson(florence.id, new FormData());
+    const row = (await db.forgottenName.findMany()).find((r) => r.taggedPhotoIds.includes(own))!;
+    for (const id of [located, ...inTrip]) expect(row.photoIds).not.toContain(id);
+    expect(row.photoIds).toContain(pool);
+    for (const id of [located, ...inTrip]) {
+      const item = (await loadItem(id))!;
+      expect((await withoutUnpermittedNames(item)).context).toBe(item.context);
+      await applyAnnotation(id, "m", record({ caption: "Florence at night", tags: ["florence", "night"] }), { content: [] }, { requestedAt: new Date() });
+      expect((await db.photo.findUniqueOrThrow({ where: { id } })).annotation).toMatchObject({ caption: "Florence at night", tags: ["florence", "night"] });
+    }
+    await applyAnnotation(pool, "m", record({ caption: "Florence at the pool" }), { content: [] }, { requestedAt: new Date() });
+    expect(((await db.photo.findUniqueOrThrow({ where: { id: pool } })).annotation as StoredAnnotation).caption).toBe("A family member at the pool");
   });
 
   it("looks nothing up when nothing forgotten is kept by place", async () => {
-    // A first name too short to keep ("Jo"): nothing kept by place.
-    await forget("Jo March");
+    // No first name to keep ("van" is a particle): nothing kept by place.
+    await forget("Van Gogh");
     const ts = await loadTombstone();
     expect(ts.scoped).toBe(false);
     const client = (globalThis as unknown as { prisma: { $queryRaw: (...a: unknown[]) => unknown } }).prisma;
@@ -441,13 +508,15 @@ describe("names that are also words", () => {
     await forget("Ximena");
     await forget("Robin Hood");
     const list = await forgottenNames();
-    expect(list.length).toBe(2);
+    // "Ximena", "Robin Hood", and Robin Hood's "Robin" (kept only on his photographs).
+    expect(list.length).toBe(3);
     expect(JSON.stringify(list)).not.toMatch(/ximena|robin/i);
     const fd = new FormData();
     fd.set("name", "robin  hood");
     await allowForgottenNameTyped(fd);
     expect((await loadTombstone()).scrub("Robin Hood rode")).toBe("Robin Hood rode");
-    await allowForgottenName((await forgottenNames())[0].hash);
+    expect((await forgottenNames()).length).toBe(2);
+    for (const f of await forgottenNames()) await allowForgottenName(f.hash);
     expect((await loadTombstone()).empty).toBe(true);
   });
 });

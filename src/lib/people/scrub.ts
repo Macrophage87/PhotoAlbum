@@ -156,6 +156,29 @@ function titleCase(text: string, own: Set<string>): boolean {
   return words.filter((w) => /^\p{Lu}/u.test(w)).length / words.length >= 0.75;
 }
 
+/** The sentence (or line) around a place in a text: title case is judged there, not over the whole text. */
+function sentenceAt(text: string, at: number): [number, number] {
+  let a = at;
+  while (a > 0 && text[a - 1] !== "\n" && !(/\s/u.test(text[a - 1]) && /[.!?…]/u.test(text[a - 2] ?? ""))) a--;
+  let b = at;
+  while (b < text.length && text[b] !== "\n") {
+    if (/[.!?…]/u.test(text[b]) && (b + 1 >= text.length || /\s/u.test(text[b + 1]))) {
+      b++;
+      break;
+    }
+    b++;
+  }
+  return [a, b];
+}
+
+/** Whether the sentence around `at` reads as a title in title case, without these words (the names looked for). */
+function titleCaseAt(text: string, at: number, own: Set<string>): boolean {
+  const [a, b] = sentenceAt(text, at);
+  // Two capitalized words are no title of their own ("The Union Jack."): a sentence that short is judged with the text.
+  const words = (text.slice(a, b).match(/[\p{L}][\p{L}\p{M}'’-]*/gu) ?? []).filter((w) => letters(w) >= 2 && !own.has(bare(w)));
+  return words.length >= 3 ? titleCase(text.slice(a, b), own) : words.length === 0 ? false : titleCase(text, own) && titleCase(text.slice(a, b), own);
+}
+
 /** At the start of the text, of a line, or of a sentence — after any opening quote, bracket or markdown. */
 function startsSentence(before: string): boolean {
   const lead = before.match(/[\s"'“‘(\[*_#>\-–—•]*$/u)?.[0] ?? "";
@@ -189,6 +212,9 @@ const PLACE_OPENING = /^(?:[ \t]*$|[ \t]*[\n,;:.!?)\]–—-]|[ \t]+(?:and|in|of
  */
 const PLACE_OPENING_CLEAR = /^[ \t]+(?:trip|trips|holiday|holidays|vacation|visit|getaway|weekend|skyline|\d)(?![\p{L}\p{M}])/iu;
 
+/** Going somewhere: "flew to", "drove from", "visiting", "a trip to", "the road to". */
+const TRAVEL_BEFORE = /(?<![\p{L}\p{M}])(?:(?:flew|fly|flying|flies|drove|drive|driving|went|go|going|moved|move|moving|travell?ed|travell?ing|travel|headed|heading|returned|trip|trips|road|train|flight|ferry|bus|back|way)[ \t]+(?:to|from|into)|visit|visits|visited|visiting)[ \t]+$/iu;
+
 /** "Florence, Italy", "Paris, TX": a place, then the larger place it is in. */
 const PLACE_COMMA = /^,[ \t]*(\p{Lu}[\p{L}\p{M}'’.-]*)/u;
 
@@ -204,7 +230,7 @@ export type Neighbourhood = {
    * few that usually do ("to", "in", "from", "near", "at", "visiting"), "comma" only where it is written as one
    * ("to Florence, Italy", "Florence, Italy").
    */
-  place?: "wide" | "near" | "comma" | "none";
+  place?: "wide" | "near" | "comma" | "travel" | "none";
   /** Directly before a number: "Florence 2019". */
   number?: boolean;
   /** Words of their own name: beside one, a match is still them ("Mary Ann swam" for Mary Ann Smith). */
@@ -254,10 +280,16 @@ export function notThePerson(text: string, start: number, end: number, n: Neighb
     const region = after.match(PLACE_COMMA)?.[1] ?? null;
     const comma = Boolean(region && !n.own?.has(bare(region)) && !n.isNameWord?.(region));
     if (comma) return true;
-    if (place !== "comma" && afterPlaceWord) return true;
-    // "Atlanta, Georgia": the region after its city, away from their own photographs.
+    if ((place === "wide" || place === "near") && afterPlaceWord) return true;
+    // On their own photographs, a first name taken from a full one is the place only where somebody travels: "We
+    // flew to Charlotte", "visiting Charlotte", "in Charlotte." ("Ben waved to Charlotte" is her).
+    if (place === "travel" && !possessive) {
+      if (TRAVEL_BEFORE.test(before)) return true;
+      if (p === "in" && (/^[ \t]*(?:$|[\n.!?;])/u.test(after) || PLACE_OPENING_CLEAR.test(after) || /^,[ \t]*\p{Lu}/u.test(after))) return true;
+    }
+    // "Atlanta, Georgia": the region after a city the album knows.
     const city = before.match(/(\p{Lu}[\p{L}\p{M}'’.-]*),[ \t]*$/u)?.[1] ?? null;
-    if (!n.ownPhotos && city && !n.own?.has(bare(city)) && !n.isNameWord?.(city)) return true;
+    if (city && PLACE_NAMES.has(bare(city)) && !n.own?.has(bare(city)) && !n.isNameWord?.(city)) return true;
     // Opening a sentence or a title ("Trip: Florence"), with nothing after it that a person would do.
     const opening = startsSentence(before) || /:[ \t]*$/u.test(before);
     // ("Left to right: Florence, Ben." lists people.)
@@ -289,14 +321,19 @@ export function isPlaceOrDateWord(word: string): boolean {
   return /^\d/u.test(w) || PLACE_NAMES.has(w) || WHEN_WORDS.has(w);
 }
 
+/** Whether a word is a title or kinship word ("Uncle", "Grandma", "Dr."). */
+export function isKinWord(word: string): boolean {
+  return isKin(word);
+}
+
 /** Whether a word is an everyday word or a month ("may", "grace", "summer"): a name made of them is written as one. */
 export function isEverydayWord(word: string): boolean {
   return EVERYDAY_WORDS.has(bare(word));
 }
 
-/** Whether a text reads as a title in title case, judged without these words (the name looked for). */
-export function inTitleCase(text: string, own: string[] = []): boolean {
-  return titleCase(text, new Set(own.map(bare)));
+/** Whether a text reads as a title in title case, judged without these words (the name looked for), in the sentence at `at`. */
+export function inTitleCase(text: string, own: string[] = [], at?: number): boolean {
+  return at === undefined ? titleCase(text, new Set(own.map(bare))) : titleCaseAt(text, at, new Set(own.map(bare)));
 }
 
 function standIn(match: string, before: string, after: string): string {
@@ -315,19 +352,33 @@ function standIn(match: string, before: string, after: string): string {
  */
 export function replaceSpans(text: string, spans: [number, number][]): string {
   if (!spans.length) return text;
-  // Judged on the words around the names, not the names, which are capitalized anyway: "Trip: Ada Byron, 2019" is
-  // no title in title case.
-  let rest = "";
-  let from = 0;
-  for (const [a, b] of spans) {
-    rest += `${text.slice(from, a)} `;
-    from = b;
-  }
-  const title = titleCase(rest + text.slice(from), new Set());
+  // Judged on the words around the names in the same sentence, not the names, which are capitalized anyway: "Trip:
+  // Ada Byron, 2019" is no title in title case, and neither is "Georgia waved." after two sentences of places.
+  const titleOf = (a: number): boolean => {
+    const [s0, s1] = sentenceAt(text, a);
+    let rest = "";
+    let from = s0;
+    for (const [x, y] of spans) {
+      if (y <= s0 || x >= s1) continue;
+      rest += `${text.slice(from, Math.max(from, x))} `;
+      from = Math.min(s1, y);
+    }
+    const sentence = rest + text.slice(from, s1);
+    // A sentence of two capitalized words is judged with the whole text too (see titleCaseAt).
+    if ((sentence.match(/[\p{L}][\p{L}\p{M}'’-]*/gu) ?? []).filter((w) => letters(w) >= 2).length >= 3) return titleCase(sentence, new Set());
+    let all = "";
+    let at = 0;
+    for (const [x, y] of spans) {
+      all += `${text.slice(at, x)} `;
+      at = y;
+    }
+    return titleCase(sentence, new Set()) && titleCase(all + text.slice(at), new Set());
+  };
   let out = "";
   let at = 0;
   for (const [a, b] of spans) {
     const m = text.slice(a, b);
+    const title = titleOf(a);
     const s = standIn(m, text.slice(0, a), text.slice(b));
     out += text.slice(at, a) + (title && s !== STAND_IN.toUpperCase() ? "A Family Member" : s);
     at = b;
@@ -472,8 +523,13 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
       const core = tokens.slice(k);
       // "June", "Grace", "Will": remembered, they would take every month and every question with them.
       if (ni === 0 && tokens.length === 1 && letters(s) >= 3 && !isKin(s) && !NOT_SAFE.has(bare(s)) && !MONTHS.has(bare(s))) oneWord.push(s);
-      // "Sam" of Sam Kent: on the photographs the forget went through, "Sam blew out the candles" is still him.
-      else if (core.length >= 2 && letters(core[0]) >= 3 && !isKin(core[0]) && !NOT_SAFE.has(bare(core[0])) && !MONTHS.has(bare(core[0]))) firstNames.push(capitalized(core[0]));
+      // "Sam" of Sam Kent, "Ruth" of Grandma Ruth, "Jack" and "Mary Ann": on the photographs they were tagged on,
+      // "Jack at the lake" is still him. Months stay out ("May 2020").
+      else if (ni === 0 && tokens.length >= 2) {
+        const usable = (w: string) => letters(w) >= 2 && !isKin(w) && !NOT_A_NAME_WORD.has(bare(w)) && !MONTHS.has(bare(w));
+        if (usable(core[0])) firstNames.push(capitalized(core[0]));
+        if (core.length >= 3 && usable(core[0]) && usable(core[1])) firstNames.push(`${capitalized(core[0])} ${capitalized(core[1])}`);
+      }
       // In keywords, a first name that is no everyday word counts on its own; a surname, a middle name or an
       // everyday word ("grace", "byron bay", "wood fire") only as the whole tag or beside another word of the name.
       core.forEach((w, i) => {
@@ -530,8 +586,7 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
   };
 
   const scrubText = (text: string, where: Where): string => {
-    const title = titleCase(text, own);
-    const put = (m: string, offset: number, whole: string) => standInFor(m, whole.slice(0, offset), whole.slice(offset + m.length), title);
+    const put = (m: string, offset: number, whole: string) => standInFor(m, whole.slice(0, offset), whole.slice(offset + m.length), titleCaseAt(whole, offset, own));
     let out = longAnyRx ? text.replace(longAnyRx, put) : text;
     if (longCapRx) out = out.replace(longCapRx, put);
     if (where.tagged && longTagged.length) {
@@ -549,6 +604,7 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
       out = out.replace(shorts.rx, (m: string, offset: number, whole: string) => {
         const short = shorts.byForm.get(m) ?? [...shorts.byForm.values()].find((x) => bare(x.form) === bare(m)) ?? safeByForm.get(m);
         const everyday = Boolean(short?.everyday && shorts.tagged.has(short.word));
+        const title = titleCaseAt(whole, offset, own);
         const somebodyElse = notThePerson(whole, offset, offset + m.length, {
           otherWords,
           own,
@@ -560,7 +616,7 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
           // Florence"), and one before a number is a date or a thing ("Florence 2019"); on them, only a place written
           // as one ("Florence, Italy").
           // A first name taken from a full one is the place after "to" even there ("We flew to Florence.").
-          place: !where.tagged || where.onPhoto === false ? "wide" : short?.whole ? "comma" : "near",
+          place: !where.tagged || where.onPhoto === false ? "wide" : short?.whole ? "comma" : "travel",
           ownPhotos: Boolean(where.tagged) && where.onPhoto !== false,
           number: !where.tagged,
         });

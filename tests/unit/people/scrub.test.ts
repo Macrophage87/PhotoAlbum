@@ -174,7 +174,7 @@ describe("words around a first name", () => {
     // Not a place and its region when the word after the comma is somebody's name.
     expect(nameMatcher(["Florence Adams"], ["Ben Ortiz"]).scrub("Left to right: Florence, Ben.", { tagged: true })).toBe("Left to right: a family member, Ben.");
     // A first name taken from a full one is the listed place after "to" even on their photographs.
-    expect(f.scrub("We flew to Florence. Florence waved; a walk through Florence", { tagged: true })).toBe("We flew to Florence. A family member waved; a walk through Florence");
+    expect(f.scrub("We flew to Florence. Florence waved; a gift from Florence", { tagged: true })).toBe("We flew to Florence. A family member waved; a gift from a family member");
     // For somebody merely not to be named, a first name alone away from their photographs is left.
     expect(f.scrub("Train to Florence; Florence waved", { fullOnly: true })).toBe("Train to Florence; Florence waved");
   });
@@ -201,6 +201,18 @@ describe("words around a first name", () => {
     const c = nameMatcher(["Charlotte Smith"]);
     expect(c.scrub("Charlotte in the rain", { tagged: true, onPhoto: false })).toBe("Charlotte in the rain");
     expect(c.scrub("Charlotte in the rain", { tagged: true })).toBe("A family member in the rain");
+  });
+
+  it("keep a region after a listed city everywhere, on their own photographs too", () => {
+    const g = nameMatcher(["Georgia Brown"]);
+    expect(g.scrub("We drove from Atlanta, Georgia.", { tagged: true })).toBe("We drove from Atlanta, Georgia.");
+    expect(g.scrub("Georgia and Ben swam.", { tagged: true })).toBe("A family member and Ben swam.");
+    // Not after a name: "Ada" is no city.
+    expect(g.scrub("Left to right: Ada, Georgia.")).toBe("Left to right: Ada, a family member.");
+  });
+
+  it("judge title case sentence by sentence", () => {
+    expect(nameMatcher(["Georgia Brown"]).scrub("Atlanta, Georgia. Then Savannah, Georgia. Georgia waved.")).toBe("Atlanta, Georgia. Then Savannah, Georgia. A family member waved.");
   });
 
   it("are theirs when they are words of their own name", () => {
