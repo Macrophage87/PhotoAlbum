@@ -4,8 +4,12 @@ import type { DeviceSession, TrackPoint, TrackStatsResult } from "./types";
 export const MOVING_SPEED_MS = 0.5;
 export const MAX_GAP_S = 30;
 export const TELEPORT_SPEED_MS = 50;
-/** Runs of fast samples up to this long that end near where they began are treated as one glitch. */
-const MAX_EXCURSION_SEGMENTS = 5;
+/** A run of fast segments must be longer than this to be travel rather than a glitch. */
+const MIN_TRAVEL_SEGMENTS = 5;
+/** A fast run this long is travel even if it ends near where it began (a sightseeing flight's loop). */
+const LONG_RUN_SEGMENTS = 30;
+/** A segment's moving-time gap limit looks at the intervals within this many segments either side. */
+const GAP_WINDOW = 15;
 export const ELEVATION_THRESHOLD_M = 3;
 
 function median3(a: number, b: number, c: number) {
@@ -68,49 +72,57 @@ export function normalizedPower(points: TrackPoint[]): number | null {
 
 /**
  * Which segments (points[i - 1] to points[i], flagged at i) are GPS jumps rather than travel. A segment faster than
- * TELEPORT_SPEED_MS is a jump unless a neighbouring segment carries on the same way at a comparable speed: a train
- * or a plane keeps going, while a glitch is a lone leap, an out-and-back spike, or a short excursion that comes back
- * to where it left. A fixed speed limit alone would throw away every segment of a flight or a high-speed train.
+ * TELEPORT_SPEED_MS is travel only as part of a sustained run of fast segments that gets somewhere: a train or a
+ * plane keeps going sample after sample, while a glitch is a lone leap, a spike, or a few fast steps out that pause
+ * and come back. A fixed speed limit alone would throw away every segment of a flight or a high-speed train.
  */
 function teleportSegments(points: TrackPoint[], dist: number[]): boolean[] {
   const n = points.length;
-  const speed = new Array<number>(n).fill(0);
-  for (let i = 1; i < n; i++) {
+  const fast = (i: number) => {
     const dt = (points[i].t - points[i - 1].t) / 1000;
-    speed[i] = dt > 0 ? dist[i] / dt : 0;
-  }
-  const fast = (i: number) => speed[i] > TELEPORT_SPEED_MS;
-  // Segments a and a + 1 are consecutive: comparable speeds, and the pair does not double back on itself.
-  const carriesOn = (a: number, i: number) =>
-    a >= 1 && a + 1 < n && Math.min(speed[a], speed[a + 1]) >= speed[i] / 3 &&
-    haversine(points[a - 1].lat, points[a - 1].lng, points[a + 1].lat, points[a + 1].lng) >= (dist[a] + dist[a + 1]) / 2;
+    return dt > 0 && dist[i] / dt > TELEPORT_SPEED_MS;
+  };
   const out = new Array<boolean>(n).fill(false);
-  for (let i = 1; i < n; i++) out[i] = fast(i) && !carriesOn(i - 1, i) && !carriesOn(i, i);
-  // A few fast samples that wander off and return are one glitch, even where each step looks like the next.
   for (let s = 1; s < n; s++) {
     if (!fast(s)) continue;
     let e = s, path = dist[s];
     while (e + 1 < n && fast(e + 1)) path += dist[++e];
     const net = haversine(points[s - 1].lat, points[s - 1].lng, points[e].lat, points[e].lng);
-    if (e - s < MAX_EXCURSION_SEGMENTS && net < path / 2) out.fill(true, s, e + 1);
+    const travel = e - s + 1 > MIN_TRAVEL_SEGMENTS && (net >= path / 2 || e - s + 1 >= LONG_RUN_SEGMENTS);
+    if (!travel) out.fill(true, s, e + 1);
     s = e;
   }
   return out;
 }
 
 /**
- * The longest step between samples still counted as moving. Phones on battery saver and satellite trackers log once
- * a minute or less often, so the limit grows with the track's usual interval; otherwise such a track never moves.
+ * The longest step between samples still counted as moving, for each segment. Phones on battery saver and satellite
+ * trackers log once a minute or less often, so the limit grows with the usual interval around that segment: a watch
+ * that switches to sparse logging halfway through gets each part judged by its own rate. "Usual" is the median by
+ * time of the neighbouring intervals, leaving out the segment's own, so one long gap cannot vouch for itself.
  */
-function gapLimitS(points: TrackPoint[]): number {
-  const dts: number[] = [];
-  for (let i = 1; i < points.length; i++) {
-    const dt = (points[i].t - points[i - 1].t) / 1000;
-    if (dt > 0) dts.push(dt);
+function gapLimits(points: TrackPoint[]): number[] {
+  const n = points.length;
+  const dt = new Array<number>(n).fill(0);
+  for (let i = 1; i < n; i++) dt[i] = (points[i].t - points[i - 1].t) / 1000;
+  const out = new Array<number>(n).fill(MAX_GAP_S);
+  const around: number[] = [];
+  for (let i = 1; i < n; i++) {
+    around.length = 0;
+    let total = 0;
+    for (let j = Math.max(1, i - GAP_WINDOW); j <= Math.min(n - 1, i + GAP_WINDOW); j++) {
+      if (j !== i && dt[j] > 0) {
+        around.push(dt[j]);
+        total += dt[j];
+      }
+    }
+    if (!around.length) continue;
+    around.sort((x, y) => x - y);
+    let acc = 0, k = 0;
+    while (k < around.length - 1 && (acc += around[k]) < total / 2) k++;
+    out[i] = Math.max(MAX_GAP_S, 3 * around[k]);
   }
-  if (!dts.length) return MAX_GAP_S;
-  dts.sort((a, b) => a - b);
-  return Math.max(MAX_GAP_S, 3 * dts[dts.length >> 1]);
+  return out;
 }
 
 export type StatsOptions = { skipElevation?: boolean; elevationWindow?: number; cyclingCadence?: boolean };
@@ -133,7 +145,8 @@ export function computeStats(points: TrackPoint[], opts: StatsOptions = {}): Tra
   const dist = new Array<number>(n).fill(0);
   for (let i = 1; i < n; i++) dist[i] = haversine(points[i - 1].lat, points[i - 1].lng, points[i].lat, points[i].lng);
   const teleports = teleportSegments(points, dist);
-  const maxGap = gapLimitS(points);
+  const maxGaps = gapLimits(points);
+  let movingDistance = 0;
 
   for (let i = 1; i < n; i++) {
     const a = points[i - 1], b = points[i];
@@ -144,7 +157,11 @@ export function computeStats(points: TrackPoint[], opts: StatsOptions = {}): Tra
     const teleport = teleports[i];
     if (!teleport) distance += dd;
     speeds.push(teleport ? 0 : v);
-    if (v >= MOVING_SPEED_MS && dt <= maxGap && !teleport) moving += dt;
+    const maxGap = maxGaps[i];
+    if (v >= MOVING_SPEED_MS && dt <= maxGap && !teleport) {
+      moving += dt;
+      movingDistance += dd;
+    }
     // Sensor samples are time-weighted, but a sample after a long pause only counts once.
     const w = dt <= maxGap ? dt : 1;
     if (b.hr !== undefined && b.hr > 0) { hrSum += b.hr * w; hrT += w; if (b.hr > hrMax) hrMax = b.hr; }
@@ -184,7 +201,8 @@ export function computeStats(points: TrackPoint[], opts: StatsOptions = {}): Tra
     elevLossM: elevLoss,
     minEleM: minEle,
     maxEleM: maxEle,
-    avgSpeedMs: moving > 0 ? distance / moving : null,
+    // Over the moving stretches only: distance covered across a gap is real but its time is not moving time.
+    avgSpeedMs: moving > 0 ? movingDistance / moving : null,
     maxSpeedMs: maxSpeed > 0 ? maxSpeed : null,
     avgHr: hrT > 0 ? Math.round(hrSum / hrT) : null,
     maxHr: hrMax > 0 ? hrMax : null,

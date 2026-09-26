@@ -26,6 +26,14 @@ describe("persistTrack", () => {
     expect(unnamed?.type).toBe("BIKE");
   });
 
+  it("types a ride logged once a minute, with no sport named, from its speed", async () => {
+    const points = Array.from({ length: 121 }, (_, i) => ({ t: T0 + i * 60_000, lat: 44 + (i * 60 * 6) / 111_195, lng: -68 }));
+    const ride = await persistTrack({ name: "Ride", points, sport: null }, { tripId, userId, source: "GPX", createActivity: true });
+    expect(ride?.type).toBe("BIKE");
+    const stats = await db.trackStats.findUniqueOrThrow({ where: { trackId: ride!.trackId } });
+    expect(stats.movingTimeS).toBe(7200);
+  });
+
   it("gives each leg of a multisport file an activity spanning that leg, with its own photos", async () => {
     const legs = [
       { name: "Kayaking", points: run(0, 29, 1.5), sport: "KAYAK" as const, sportRaw: "kayaking", session: { startTime: new Date(T0), endTime: new Date(T0 + 30 * MIN), distanceM: 3000 } },

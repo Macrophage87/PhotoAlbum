@@ -136,3 +136,69 @@ describe("computeStats on sparsely sampled tracks", () => {
     expect(s.avgSpeedMs).toBeCloseTo(1.2, 1);
   });
 });
+
+describe("computeStats keeps dropping GPS glitches", () => {
+  const M_LNG = 1 / (111_195 * Math.cos((44 * Math.PI) / 180)); // degrees of longitude per metre at 44°N
+  const east = (p: TrackPoint, m: number): TrackPoint => ({ ...p, lng: p.lng + m * M_LNG });
+  const offset = (p: TrackPoint, e: number, n: number): TrackPoint => ({ ...p, lng: p.lng + e * M_LNG, lat: p.lat + n / 111_195 });
+  const walkWith = (offsets: number[], at = 100) => {
+    const pts = syntheticWalk();
+    offsets.forEach((m, k) => (pts[at + k] = east(pts[at + k], m)));
+    return computeStats(pts);
+  };
+  const clean = computeStats(syntheticWalk());
+
+  it("a glitch that pauses out there before coming back", () => {
+    const s = walkWith([100, 200, 200, 100]);
+    expect(s.distanceM).toBeLessThan(clean.distanceM + 20);
+    expect(s.maxSpeedMs).toBeLessThan(5);
+  });
+  it("three steps out and three back", () => {
+    const s = walkWith([100, 200, 300, 200, 100]);
+    expect(s.distanceM).toBeLessThan(clean.distanceM + 20);
+    expect(s.maxSpeedMs).toBeLessThan(5);
+  });
+  it("a gradual excursion out and back", () => {
+    const s = walkWith([...Array.from({ length: 10 }, (_, k) => 60 * (k + 1)), ...Array.from({ length: 9 }, (_, k) => 60 * (9 - k))]);
+    expect(s.distanceM).toBeLessThan(clean.distanceM + 20);
+    expect(s.maxSpeedMs).toBeLessThan(5);
+  });
+  it("eight points scattered 300 m around a walk logged every 5 s", () => {
+    const pts = line(121, 2, 5);
+    const around = [[300, 0], [0, 300], [-300, 0], [0, -300], [300, 0], [0, 300], [-300, 0], [0, -300]];
+    around.forEach(([e, n], k) => (pts[50 + k] = offset(pts[50 + k], e, n)));
+    const s = computeStats(pts);
+    expect(s.distanceM).toBeLessThan(1_300);
+    expect(s.maxSpeedMs).toBeLessThan(5);
+  });
+  it("a one-way leap in the middle of a walk", () => {
+    const pts = syntheticWalk().map((p, i) => (i >= 250 ? east(p, 2_000) : p));
+    const s = computeStats(pts);
+    expect(s.distanceM).toBeLessThan(1_100);
+    expect(s.maxSpeedMs).toBeLessThan(5);
+  });
+});
+
+describe("computeStats on mixed and gappy sampling", () => {
+  it("judges each part of a track by its own logging rate", () => {
+    const fine = line(3601, 6, 1);
+    const sparse = line(181, 6, 60, fine[3600].t, fine[3600].lat).slice(1);
+    const s = computeStats([...fine, ...sparse]);
+    expect(s.movingTimeS).toBe(4 * 3600);
+    expect(s.avgSpeedMs).toBeCloseTo(6, 1);
+  });
+  it("time-weights sensor samples by each part's own logging rate", () => {
+    const fine = line(601, 2, 1).map((p) => ({ ...p, hr: 100 }));
+    const sparse = line(31, 2, 60, fine[600].t, fine[600].lat).slice(1).map((p) => ({ ...p, hr: 150 }));
+    // 600 s at 100 bpm and 1800 s at 150 bpm
+    expect(computeStats([...fine, ...sparse]).avgHr).toBe(138);
+  });
+  it("never reports an average speed above the maximum", () => {
+    const before = line(31, 250, 60);
+    // Twenty minutes without a fix mid-flight: the distance is real, but it is not moving time.
+    const after = line(31, 250, 60, before[30].t + 20 * 60_000, before[30].lat + (20 * 60 * 250) / 111_195).slice(1);
+    const s = computeStats([...before, ...after]);
+    expect(s.avgSpeedMs!).toBeLessThanOrEqual(s.maxSpeedMs! + 1e-9);
+    expect(s.avgSpeedMs).toBeCloseTo(250, 0);
+  });
+});
