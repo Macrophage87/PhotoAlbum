@@ -55,11 +55,16 @@ export function afterCursor(pos: { values: (Date | null)[]; id: string }, column
 /**
  * The where clause for "after this cursor". A cursor from before positions were written out is only an id: that
  * row is looked up once for its place, as it always was, and if it has gone there is nowhere to continue from.
+ *
+ * It is looked up only among what this list shows (`within`, the list's own where clause). Any id could be put in
+ * the address, and a row from somewhere the viewer may not see would otherwise lend the list its date: which page
+ * comes next would say when a private photograph was taken. A row outside the list is treated exactly as one that
+ * has gone, so the answer does not even say whether it exists.
  */
-export async function cursorWhere(cursor: string | null | undefined, columns: KeyColumn[]): Promise<Prisma.PhotoWhereInput> {
+export async function cursorWhere(cursor: string | null | undefined, columns: KeyColumn[], within: Prisma.PhotoWhereInput): Promise<Prisma.PhotoWhereInput> {
   if (!cursor) return {};
   const pos = decodeCursor(cursor, columns);
   if (pos) return afterCursor(pos, columns);
-  const row = await db.photo.findUnique({ where: { id: cursor }, select: { id: true, takenAt: true, createdAt: true } });
+  const row = await db.photo.findFirst({ where: { AND: [{ id: cursor }, within] }, select: { id: true, takenAt: true, createdAt: true } });
   return row ? afterCursor({ values: columns.map((c) => row[c.field] ?? null), id: row.id }, columns) : { id: { in: [] } };
 }

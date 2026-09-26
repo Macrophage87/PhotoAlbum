@@ -86,6 +86,16 @@ export function intersectIds(lists: string[][]): string[] {
   });
 }
 
+/**
+ * How far down a favourites-first list a cursor says we are: a whole number of rows, never less than none. Anything
+ * else in the address — a negative, a fraction, a word, a number too big to be a row — is the first page, not an
+ * error from the database.
+ */
+export function offsetCursor(cursor: string | null | undefined): number {
+  const n = Math.floor(Number(cursor ?? 0));
+  return Number.isSafeInteger(n) ? Math.min(Math.max(0, n), 2 ** 31 - 1) : 0;
+}
+
 /** By when they were taken, the undated last, then when they arrived: the order the date-ordered grids page in. */
 const takenOrder = (dir: "asc" | "desc"): KeyColumn[] => [{ field: "takenAt", dir, nullsLast: true }, { field: "createdAt", dir }];
 
@@ -117,7 +127,7 @@ export async function tripPhotoPage(tripId: string, opts: { uploaderId?: string;
   if (order === "favorites") {
     // Favourites lead, then the family's, then the order the day happened in. The cursor is how far down the list
     // we are: the sort key is computed, so there is nothing stable to key from, and a page is 240 rows.
-    const skip = Number(opts.cursor ?? 0) || 0;
+    const skip = offsetCursor(opts.cursor);
     const [ids, total] = await Promise.all([
       db.$queryRaw<{ id: string }[]>`
         SELECT p.id FROM "Photo" p
@@ -143,7 +153,7 @@ export async function tripPhotoPage(tripId: string, opts: { uploaderId?: string;
   const columns = takenOrder(dir);
   const [photos, total] = await Promise.all([
     db.photo.findMany({
-      where: { AND: [where, await cursorWhere(opts.cursor, columns)] },
+      where: { AND: [where, await cursorWhere(opts.cursor, columns, where)] },
       orderBy: [{ takenAt: { sort: dir, nulls: "last" } }, { createdAt: dir }, { id: dir }],
       select: { ...photoCardSelect, createdAt: true },
       take: take + 1,
@@ -224,7 +234,7 @@ export async function candidatePhotoPage(target: PickerTarget, filter: PickerFil
   const columns = takenOrder("desc");
   const [photos, total] = await Promise.all([
     db.photo.findMany({
-      where: { AND: [where, await cursorWhere(opts.cursor, columns)] },
+      where: { AND: [where, await cursorWhere(opts.cursor, columns, where)] },
       orderBy: [{ takenAt: { sort: "desc", nulls: "last" } }, { createdAt: "desc" }, { id: "desc" }],
       select: { ...photoCardSelect, createdAt: true },
       take: take + 1,

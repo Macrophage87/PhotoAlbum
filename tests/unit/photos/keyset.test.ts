@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { db } from "@/lib/db";
 import { unassignedPhotoPage } from "@/lib/photos/queries";
-import { candidatePhotoPage, tripPhotoPage } from "@/lib/photos/page";
+import { candidatePhotoPage, offsetCursor, tripPhotoPage } from "@/lib/photos/page";
 import { decodeCursor, encodeCursor, type KeyColumn } from "@/lib/photos/keyset";
 import { NO_FILTER } from "@/lib/photos/filters";
 import { NO_PICKER_FILTER } from "@/lib/photos/picker-filter";
@@ -127,5 +127,29 @@ describe("paging by position rather than by the row the cursor came from", () =>
     expect(decodeCursor("8640000000000001.abc", columns)).toBeNull();
     // Taken for an old id-only cursor that matches nothing, so the gallery simply has nothing more.
     await expect(unassignedPhotoPage(NO_FILTER, { cursor: huge, take: 4 })).resolves.toMatchObject({ photos: [], nextCursor: null });
+  });
+
+  it("finds an id-only cursor's place only among what the list shows, so it cannot borrow a hidden photo's date", async () => {
+    // A photograph on another trip, taken in the middle of this one's: anchoring on it would say when it was taken.
+    const hidden = await db.photo.create({ data: { ...base(), originalName: "hidden.jpg", tripId: otherTrip, takenAt: new Date(Date.UTC(2025, 7, 11, 12, 1, 30)) } });
+    const visible = await tripPhotoPage(tripId, { take: 50, order: "taken" });
+    expect(visible.photos.length).toBeGreaterThan(4);
+    // Treated as a place that has gone: nowhere to continue from, the same answer as an id that never existed.
+    expect(await tripPhotoPage(tripId, { cursor: hidden.id, take: 50, order: "taken", readyOnly: true })).toMatchObject({ photos: [], nextCursor: null });
+    expect(await tripPhotoPage(tripId, { cursor: "no-such-photo", take: 50, order: "taken", readyOnly: true })).toMatchObject({ photos: [], nextCursor: null });
+    // Nor one of the trip's own that this viewer is not shown: a visitor sees finished items only.
+    const pending = await db.photo.create({ data: { ...base(), originalName: "pending.jpg", tripId, status: "PROCESSING", takenAt: new Date(Date.UTC(2025, 7, 11, 12, 1, 30)) } });
+    expect(await tripPhotoPage(tripId, { cursor: pending.id, take: 50, order: "taken", readyOnly: true })).toMatchObject({ photos: [], nextCursor: null });
+    // One it does show still works, as it always did.
+    const at = visible.photos[1].id;
+    expect((await tripPhotoPage(tripId, { cursor: at, take: 50, order: "taken", readyOnly: true })).photos.map((p) => p.id)).toEqual(visible.photos.slice(2).map((p) => p.id));
+  });
+
+  it("reads a favourites-first cursor as a whole number of rows, and anything else as the first page", async () => {
+    expect([offsetCursor(null), offsetCursor("240"), offsetCursor("-1"), offsetCursor("0.5"), offsetCursor("2.9"), offsetCursor("abc"), offsetCursor("1e30"), offsetCursor("Infinity")]).toEqual([0, 240, 0, 0, 2, 0, 0, 0]);
+    const first = await tripPhotoPage(tripId, { take: 4 });
+    for (const cursor of ["-1", "0.5", "1e30"]) {
+      await expect(tripPhotoPage(tripId, { cursor, take: 4 })).resolves.toMatchObject({ photos: first.photos });
+    }
   });
 });

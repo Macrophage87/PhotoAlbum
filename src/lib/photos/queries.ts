@@ -79,7 +79,7 @@ export async function unassignedPhotoPage(filter: GalleryFilter = NO_FILTER, opt
   const [photos, matched, total] = await Promise.all([
     nothing
       ? Promise.resolve([])
-      : db.photo.findMany({ where: { AND: [where, await cursorWhere(opts.cursor, UNASSIGNED_ORDER)] }, orderBy: [{ createdAt: "desc" }, { id: "desc" }], select: { ...photoCardSelect, createdAt: true }, take: take + 1 }),
+      : db.photo.findMany({ where: { AND: [where, await cursorWhere(opts.cursor, UNASSIGNED_ORDER, where)] }, orderBy: [{ createdAt: "desc" }, { id: "desc" }], select: { ...photoCardSelect, createdAt: true }, take: take + 1 }),
     nothing ? Promise.resolve(0) : db.photo.count({ where }),
     db.photo.count({ where: { tripId: null, ...NOT_TRASHED } }),
   ]);
