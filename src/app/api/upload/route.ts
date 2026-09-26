@@ -8,6 +8,7 @@ import { storage, StorageLimitError } from "@/lib/storage";
 import { enqueue } from "@/lib/jobs/boss";
 import { QUEUES } from "@/lib/jobs/queues";
 import { fileExisting } from "@/lib/photos/file-existing";
+import { decodeHeaderName } from "@/lib/media/header-name";
 import { uploaderLabel } from "@/components/photos/toGrid";
 import { ALLOWED_MIMES as ALLOWED, EXT_BY_MIME, EXT_MIME, kindForMime, scanFormatOf, VIDEO_MIMES as VIDEO } from "@/lib/media/mime";
 
@@ -30,7 +31,8 @@ export async function POST(request: Request) {
   if (!request.body) return Response.json({ error: "Empty body" }, { status: 400 });
 
   const parsed = headerSchema.safeParse({
-    fileName: decodeURIComponent(request.headers.get("x-file-name") ?? ""),
+    // A name that will not decode fails the schema, and so is a bad request rather than a crash.
+    fileName: decodeHeaderName(request.headers.get("x-file-name")) ?? "",
     contentType: request.headers.get("content-type") ?? undefined,
     tripId: request.headers.get("x-trip-id") ?? undefined,
     activityId: request.headers.get("x-activity-id") ?? undefined,

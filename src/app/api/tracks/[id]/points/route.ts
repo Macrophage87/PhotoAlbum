@@ -9,8 +9,10 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   const track = await loadViewableTrack(viewer, id);
   if (!track) return Response.json({ error: "Not found" }, { status: 404 });
   const col = decodePoints(track.pointsBlob);
+  // Opened by an activity's link: a link can be withdrawn, so nothing is kept that would outlive it.
+  const cache = track.viaLink ? "private, no-store" : `${track.trip.visibility === "PUBLIC" ? "public" : "private"}, max-age=3600`;
   return Response.json(
     { id: track.id, startTime: track.startTime.toISOString(), timezone: track.trip.timezone, points: col },
-    { headers: { "Cache-Control": `${track.trip.visibility === "PUBLIC" ? "public" : "private"}, max-age=3600` } },
+    { headers: { "Cache-Control": cache } },
   );
 }

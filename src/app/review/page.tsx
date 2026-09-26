@@ -21,6 +21,7 @@ import { GooglePickerButton } from "@/components/google/GooglePickerButton";
 import { googleStatus } from "@/lib/google/account";
 import { googleConfigured } from "@/lib/google/oauth";
 import { NOT_TRASHED } from "@/lib/photos/trash";
+import { editableMediaWhere, isAdmin } from "@/lib/auth/ownership";
 
 export const metadata = { title: "Review uploads" };
 
@@ -37,10 +38,15 @@ export default async function ReviewPage({ searchParams }: PageProps<"/review">)
   const ids = typeof sp.ids === "string" ? sp.ids.split(",").filter(Boolean).slice(0, 500) : [];
   const batch = ids.length > 0;
   const gates = await annotationGates();
+  // Notes and review are the uploader's (and an admin's), so the queue a member works through is their own uploads.
+  const admin = isAdmin(me);
+  const mine = editableMediaWhere(me);
   const [photos, unreviewedCount] = await Promise.all([
-    db.photo.findMany({ where: batch ? { id: { in: ids }, ...NOT_TRASHED } : { reviewedAt: null, ...NOT_TRASHED }, orderBy: { createdAt: "desc" }, select: { ...photoCardSelect, context: true, reviewedAt: true, annotation: true, annotationOptOut: true, annotatedAt: true, estimatedDate: true, estimatedDateConfidence: true, estimatedDateNote: true, takenAtSource: true, trip: { select: { annotationOptOut: true } }, collections: { select: { collection: { select: { slug: true, title: true, annotationOptOut: true } } } } } }),
-    db.photo.count({ where: { reviewedAt: null, ...NOT_TRASHED } }),
+    db.photo.findMany({ where: batch ? { id: { in: ids }, ...NOT_TRASHED } : { reviewedAt: null, ...NOT_TRASHED, ...mine }, orderBy: { createdAt: "desc" }, select: { ...photoCardSelect, uploaderId: true, context: true, reviewedAt: true, annotation: true, annotationOptOut: true, annotatedAt: true, estimatedDate: true, estimatedDateConfidence: true, estimatedDateNote: true, takenAtSource: true, trip: { select: { annotationOptOut: true } }, collections: { select: { collection: { select: { slug: true, title: true, annotationOptOut: true } } } } } }),
+    db.photo.count({ where: { reviewedAt: null, ...NOT_TRASHED, ...mine } }),
   ]);
+  // A batch named in the address can hold somebody else's items: they are shown, but the panel acts on these alone.
+  const ownIds = photos.filter((p) => admin || p.uploaderId === me.id).map((p) => p.id);
   const allIds = photos.map((p) => p.id);
   const [suggestions, proposals, unnamedFaces] = await Promise.all([suggestionsFor(allIds), proposalsFor(allIds), db.face.count({ where: { photoId: { in: allIds }, personId: null, clusterId: { not: null }, status: { in: ["DETECTED", "REJECTED"] } } })]);
   const optedOut = (p: (typeof photos)[number]) => p.annotationOptOut || Boolean(p.trip?.annotationOptOut) || p.collections.some((c) => c.collection.annotationOptOut);
@@ -52,11 +58,12 @@ export default async function ReviewPage({ searchParams }: PageProps<"/review">)
             <h1 className="font-display text-3xl font-semibold">{batch ? (sp.google === "1" ? "Review what you picked" : "Review this upload") : "Unreviewed"}</h1>
             {sp.google === "1" && <p className="text-sm rounded-theme bg-amber-50 border border-amber-200 text-amber-900 p-3 mt-2">Google leaves the location out of what it hands over. Add places here, or file these to a trip so they can be placed from its tracks.</p>}
             <p className="text-muted mt-1">
-              {batch ? `${photos.length} item${photos.length === 1 ? "" : "s"} just uploaded. Add a note, file them, then mark them reviewed.` : `${unreviewedCount} item${unreviewedCount === 1 ? "" : "s"} nobody has reviewed yet.`}
-              {batch && unreviewedCount > photos.length && (
+              {batch ? `${photos.length} item${photos.length === 1 ? "" : "s"} just uploaded. Add a note, file them, then mark them reviewed.` : `${unreviewedCount} item${unreviewedCount === 1 ? "" : "s"} ${admin ? "nobody has reviewed yet" : "of yours not reviewed yet"}.`}
+              {/* The count is of this member's own (everyone's, for an admin), so it is set against their own here. */}
+              {batch && unreviewedCount > ownIds.length && (
                 <>
                   {" "}
-                  <Link href="/review" className="text-primary hover:underline">{unreviewedCount} unreviewed in all.</Link>
+                  <Link href="/review" className="text-primary hover:underline">{unreviewedCount} {admin ? "unreviewed in all" : "of yours unreviewed in all"}.</Link>
                 </>
               )}
             </p>
@@ -69,7 +76,18 @@ export default async function ReviewPage({ searchParams }: PageProps<"/review">)
           </div>
         ) : (
           <SelectionProvider>
-            <ReviewPanel allIds={allIds} annotation={gates.active ? { quietMinutes: env().ANNOTATION_QUIET_MINUTES, pending: photos.filter((p) => !p.annotatedAt && !optedOut(p)).length } : null} />
+            {ownIds.length > 0 ? (
+              <>
+                {ownIds.length < photos.length && (
+                  <p className="text-sm text-muted" data-testid="review-some-not-yours">
+                    {photos.length - ownIds.length} of these {photos.length - ownIds.length === 1 ? "was" : "were"} uploaded by somebody else, and {photos.length - ownIds.length === 1 ? "is" : "are"} left for them.
+                  </p>
+                )}
+                <ReviewPanel allIds={ownIds} annotation={gates.active ? { quietMinutes: env().ANNOTATION_QUIET_MINUTES, pending: photos.filter((p) => ownIds.includes(p.id) && !p.annotatedAt && !optedOut(p)).length } : null} />
+              </>
+            ) : (
+              <p className="text-sm text-muted" data-testid="review-not-yours">These were uploaded by somebody else. Only they, or an admin, can add notes to them or mark them reviewed.</p>
+            )}
             {editable && <YouTubeAddForm defaultDate={new Date().toISOString().slice(0, 10)} />}
             {google && <GooglePickerButton status={google} configured next="/review" />}
             <PhotoGrid photos={photos.map((p) => toGridPhoto(p, p.reviewedAt ? null : "unreviewed", true))} />

@@ -276,6 +276,16 @@ test("one activity can be sent on its own link, which opens it and nothing else 
   await expect(img).toBeVisible();
   await expect.poll(async () => img.evaluate((el: HTMLImageElement) => el.naturalWidth)).toBeGreaterThan(0);
 
+  // Its map and charts load from the activity alone, though the trip is private; the trip's own map stays shut.
+  const trackId = (await withDb((c) => c.query(`SELECT "trackId" FROM "Activity" WHERE id = $1`, [activityId]))).rows[0].trackId as string;
+  const map = await guest.request.get(`/api/activities/${activityId}/geojson`);
+  expect(map.status()).toBe(200);
+  const payload = await map.json();
+  expect(payload.tracks.features.map((f: { properties: { trackId: string } }) => f.properties.trackId)).toEqual([trackId]);
+  for (const f of [...payload.tracks.features, ...payload.photos.features]) expect(f.properties).toMatchObject({ activityId, tripSlug: "", tripTitle: "", uploaderName: null });
+  expect((await guest.request.get(`/api/tracks/${trackId}/points`)).status()).toBe(200);
+  expect((await guest.request.get("/api/trips/acadia/geojson")).status()).toBe(404);
+
   await withDb((c) => c.query(`UPDATE "Photo" SET "activityId" = NULL WHERE id = $1`, [photoId]));
 
   // And nothing else of the trip: the trip is private and stays private to them.
@@ -1751,6 +1761,41 @@ test("a member edits their own photos and reads everyone else's, and a trip is a
   await expect(memberPage).toHaveURL(/\/trips\/acadia$/);
   await page.goto("/trips/acadia");
   await expect(page.getByRole("link", { name: "Settings" })).toBeVisible();
+});
+
+test("a member's review queue is their own uploads, and somebody else's batch is theirs to read, not to mark", async ({ browser }) => {
+  // A member of their own, so nothing earlier tests uploaded as a member is in their queue.
+  const reviewer = "e2e-reviewer@example.com";
+  const memberContext = await browser.newContext();
+  await signIn(memberContext, reviewer);
+  const memberPage = await memberContext.newPage();
+  // One of the admin's, unreviewed for the length of this test, which the member must not be offered.
+  const admins = await withDb((c) => c.query(`SELECT p.id, p."reviewedAt" FROM "Photo" p JOIN "User" u ON u.id = p."uploaderId" WHERE u.email = $1 AND p.kind = 'PHOTO' AND p."trashedAt" IS NULL ORDER BY p."createdAt" LIMIT 1`, [ADMIN]));
+  const adminPhoto = admins.rows[0].id as string;
+  let mine: string | null = null;
+  try {
+    await withDb((c) => c.query(`UPDATE "Photo" SET "reviewedAt" = NULL WHERE id = $1`, [adminPhoto]));
+    await memberPage.goto("/upload");
+    await chooseFile(memberPage, "photo-no-gps.jpg");
+    await expect(memberPage.getByText("1 of 1 uploaded.")).toBeVisible({ timeout: 30_000 });
+    mine = (await withDb((c) => c.query(`SELECT p.id FROM "Photo" p JOIN "User" u ON u.id = p."uploaderId" WHERE u.email = $1 ORDER BY p."createdAt" DESC LIMIT 1`, [reviewer]))).rows[0].id as string;
+
+    await memberPage.goto("/review");
+    await expect(memberPage.getByText("1 item of yours not reviewed yet.")).toBeVisible();
+    await expect(memberPage.locator(`img[src*='/api/photos/${mine}/']`)).toHaveCount(1);
+    await expect(memberPage.locator(`img[src*='/api/photos/${adminPhoto}/']`)).toHaveCount(0);
+    await expect(memberPage.getByRole("button", { name: /Mark all 1 reviewed/ })).toBeVisible();
+
+    // A batch of the admin's: shown, but with the rule said plainly and nothing to press.
+    await memberPage.goto(`/review?ids=${adminPhoto}`);
+    await expect(memberPage.getByTestId("review-not-yours")).toBeVisible();
+    await expect(memberPage.getByRole("button", { name: /Mark all/ })).toHaveCount(0);
+  } finally {
+    await withDb((c) => c.query(`UPDATE "Photo" SET "reviewedAt" = $2 WHERE id = $1`, [adminPhoto, admins.rows[0].reviewedAt]));
+    // The member's upload goes to the trash, so no later count of the album or of a trip finds it.
+    if (mine) await withDb((c) => c.query(`UPDATE "Photo" SET "trashedAt" = now(), "trashReason" = 'ACCIDENT' WHERE id = $1`, [mine]));
+    await memberContext.close();
+  }
 });
 
 test("a photo is dragged onto an activity on the timeline, and a selection can be put there without dragging", async ({ context, page }) => {

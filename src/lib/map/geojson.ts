@@ -213,3 +213,84 @@ export async function buildCollectionMapPayload(viewer: Viewer, collectionId: st
     trips: [],
   };
 }
+
+/**
+ * One activity's track and its own photographs, and nothing else of the trip. The caller has already checked the
+ * viewer may open the activity; `tripOpen` says whether they may open its trip too, which is the only case the trip
+ * is named in (an activity's link can sit on a private trip, and says nothing about it).
+ */
+export async function buildActivityMapPayload(viewer: Viewer, activityId: string, tripOpen: boolean): Promise<MapPayload> {
+  const member = viewer.kind === "user";
+  const activity = await db.activity.findUniqueOrThrow({
+    where: { id: activityId },
+    select: {
+      id: true,
+      tripId: true,
+      title: true,
+      type: true,
+      trip: { select: { slug: true, title: true, themeKey: true, timezone: true } },
+      track: { select: { id: true, name: true, source: true, simplified: true, startTime: true, minLat: true, maxLat: true, minLng: true, maxLng: true, stats: { select: { distanceM: true } }, uploader: { select: { id: true, name: true, email: true } } } },
+    },
+  });
+  const trip = activity.trip;
+  const named = { tripSlug: tripOpen ? trip.slug : "", tripTitle: tripOpen ? trip.title : "" };
+  const found = await db.photo.findMany({
+    where: { activityId: activity.id, tripId: activity.tripId, ...NOT_TRASHED, status: "READY", lat: { not: null }, lng: { not: null } },
+    select: { id: true, lat: true, lng: true, caption: true, takenAt: true, tzOffsetMin: true, updatedAt: true, activityId: true, gpsSource: true, uploader: { select: { id: true, name: true, email: true } } },
+    orderBy: { takenAt: "asc" },
+  });
+  let photoBounds: Bounds | null = null;
+  const photoFeatures = spreadOverlapping(found.map((p) => ({ ...p, lat: p.lat!, lng: p.lng! }))).map((p) => {
+    photoBounds = mergeBounds(photoBounds, { minLat: p.lat, maxLat: p.lat, minLng: p.lng, maxLng: p.lng });
+    return {
+      type: "Feature" as const,
+      geometry: { type: "Point" as const, coordinates: [p.lng, p.lat] },
+      properties: {
+        id: p.id,
+        thumbUrl: photoUrl(p, "thumb"),
+        mediumUrl: photoUrl(p, "medium"),
+        caption: p.caption,
+        takenAt: p.takenAt?.toISOString() ?? null,
+        ...named,
+        activityId: p.activityId,
+        gpsSource: p.gpsSource,
+        day: dayOf(p.takenAt, p.tzOffsetMin, trip.timezone),
+        activityTitle: activity.title,
+        ...who(member, p.uploader),
+      },
+    };
+  });
+  const t = activity.track;
+  const trackFeatures = t
+    ? [
+        {
+          type: "Feature" as const,
+          geometry: { type: "LineString" as const, coordinates: (t.simplified as [number, number][]).map(([lat, lng]) => [lng, lat]) },
+          properties: {
+            trackId: t.id,
+            activityId: activity.id,
+            activityTitle: activity.title,
+            activityType: activity.type,
+            source: t.source,
+            // A track is named after the file it came from ("Jo's Acadia walk.gpx"), which can name the trip; a link
+            // holder who may not open the trip gets the activity's own title instead.
+            name: tripOpen ? t.name : activity.title,
+            ...named,
+            color: ACTIVITY_COLOR[activity.type],
+            startTime: t.startTime.toISOString(),
+            distanceM: t.stats?.distanceM ?? null,
+            day: localDayInZone(t.startTime, trip.timezone),
+            ...who(member, t.uploader),
+          },
+        },
+      ]
+    : [];
+  // The map opens on the route, as the activity page always has; with no route, on the photographs.
+  const b: Bounds | null = t ? { minLat: t.minLat, maxLat: t.maxLat, minLng: t.minLng, maxLng: t.maxLng } : photoBounds;
+  return {
+    photos: { type: "FeatureCollection", features: photoFeatures },
+    tracks: { type: "FeatureCollection", features: trackFeatures },
+    bounds: b ? [[b.minLng, b.minLat], [b.maxLng, b.maxLat]] : null,
+    trips: [],
+  };
+}

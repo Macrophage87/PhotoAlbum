@@ -1,5 +1,6 @@
 import { readFile, stat } from "node:fs/promises";
 import { db } from "@/lib/db";
+import { canEditContainer, NOT_YOUR_CONTAINER } from "@/lib/auth/ownership";
 import { storage } from "@/lib/storage";
 import { dateColumnToDay, wallTimeToInstant } from "@/lib/time/local-day";
 import { detectTrackKind, type TrackFileKind } from "./detect";
@@ -30,6 +31,13 @@ export async function importTrackFile(args: ImportArgs): Promise<ImportSummary> 
   if (!filePath) throw new Error("import requires a storage driver with local paths");
   const trip = await db.trip.findUnique({ where: { id: args.tripId } });
   if (!trip) throw new Error("Trip not found");
+  // The job trusts its payload, so the rule the route applied is asked again here: an import arranges the trip.
+  const user = await db.user.findUnique({ where: { id: args.userId }, select: { id: true, role: true } });
+  if (!canEditContainer(user, trip)) {
+    // Refused, the file has no use: nothing of it is kept.
+    await store.delete(args.importKey).catch(() => {});
+    throw new Error(NOT_YOUR_CONTAINER);
+  }
 
   const head = await readHead(filePath, 4096);
   const kind = detectTrackKind(args.originalName, head, args.sourceHint);

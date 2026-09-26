@@ -54,6 +54,11 @@ export async function editableMediaIds(user: Pick<ViewerUser, "id" | "role">, id
   return mine.map((p) => p.id);
 }
 
+/** The same rule as a query clause, for listing what this member may change: their own uploads, or anything for an admin. */
+export function editableMediaWhere(user: Pick<ViewerUser, "id" | "role">): { uploaderId?: string } {
+  return isAdmin(user) ? {} : { uploaderId: user.id };
+}
+
 /** Load a trip for editing by slug, or throw. */
 export async function requireTripEditor(slug: string): Promise<{ user: ViewerUser; trip: { id: string; slug: string; timezone: string; createdById: string | null } }> {
   const user = await requireUserOrThrow();

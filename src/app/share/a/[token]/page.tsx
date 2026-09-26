@@ -24,7 +24,8 @@ export async function generateMetadata({ params }: PageProps<"/share/a/[token]">
   const cover = await activityCover(activity);
   const card = previewCard({
     title: activity.title,
-    description: `${activity.trip.title} · ${formatDateTime(activity.startTime, activity.trip.timezone, "EEEE, MMMM d, yyyy")}`,
+    // The link is to the activity, not its trip: the trip is named only where anybody may open it anyway.
+    description: [activity.trip.visibility === "PUBLIC" ? activity.trip.title : null, formatDateTime(activity.startTime, activity.trip.timezone, "EEEE, MMMM d, yyyy")].filter(Boolean).join(" · "),
     pageUrl: new URL(`/share/a/${token}`, env().APP_URL).toString(),
     cover,
     appUrl: env().APP_URL,
