@@ -146,15 +146,26 @@ describe("geotagPhotos", () => {
       expect((await placed(photo.id)).lng).toBeCloseTo(hotel.lng, 6);
     });
 
-    it("together, within the stray limit: arrived somewhere together, and Dad rode on 6 km before the photo", async () => {
+    it("apart: arrived somewhere together, and Dad rode on 6 km before the photo", async () => {
       await dadTrack(dadId, 300, 43);
       const spot = dadAt(20, 43);
       const along = recorded(Array.from({ length: 11 }, (_, k) => [T0 + 2 * k * M, dadAt(2 * k, 43)] as [number, LL]));
       await importTimeline(userId, [along, visit(T0 + 20 * M, T0 + 170 * M, spot), move(T0 + 170 * M, T0 + 190 * M, spot, dadAt(0, 43))]);
       const photo = await makePhoto(tripId, userId, new Date(T0 + 160 * M));
       await geotagPhotos({ tripId });
-      // He was at the place during the visit and is still within 10 km of it, so they count as together.
-      expect(await placed(photo.id)).toEqual({ lat: expect.closeTo(dadAt(160, 43).lat, 6), lng: -68 });
+      // He was at the place when they arrived, but is 6 km from it now: he has left, and she has not.
+      expect(await placed(photo.id)).toEqual({ lat: expect.closeTo(spot.lat, 6), lng: expect.closeTo(spot.lng, 6) });
+    });
+
+    it("together: arrived somewhere together, and Dad is 4.5 km on at the photo, inside the stray limit", async () => {
+      await dadTrack(dadId, 300, 43);
+      const spot = dadAt(20, 43);
+      const along = recorded(Array.from({ length: 11 }, (_, k) => [T0 + 2 * k * M, dadAt(2 * k, 43)] as [number, LL]));
+      await importTimeline(userId, [along, visit(T0 + 20 * M, T0 + 170 * M, spot), move(T0 + 170 * M, T0 + 190 * M, spot, dadAt(0, 43))]);
+      const photo = await makePhoto(tripId, userId, new Date(T0 + 125 * M));
+      await geotagPhotos({ tripId });
+      // 105 minutes at 43 m a minute: about 4.5 km from the place they arrived at.
+      expect(await placed(photo.id)).toEqual({ lat: expect.closeTo(dadAt(125, 43).lat, 6), lng: -68 });
     });
 
     it("apart: her trace only snaps across a signal gap, but Dad is 50 km away", async () => {

@@ -15,8 +15,12 @@ const TOGETHER_M = 300;
  * A visit's point is the middle of the place, which can be well inside somewhere big.
  */
 const LOOSE_TOGETHER_M = 3_000;
-/** However near they came during a visit, a member this far from its place at the photo's moment had left. */
-const VISIT_STRAY_M = 10_000;
+/**
+ * However near they came during a visit, a member this far from its place at the photo's moment had left: a photo on
+ * his route that far from where she sat would be too wrong, while a park hike still wanders a few kilometres from
+ * the park's centre.
+ */
+const VISIT_STRAY_M = 5_000;
 /** A guessed position further than this in time from the uploader's nearest recorded fix is no evidence of anything. */
 const GUESS_WITHIN_MS = 10 * 60_000;
 
@@ -41,8 +45,8 @@ function lastAtOrBefore(points: TrackPoint[], tMs: number): number {
  * Google trace (position P) and other members' GPX/FIT cover the moment, the uploader was with one of them unless:
  * - P is recorded, and more than TOGETHER_M from all of them;
  * - P is at a visit's place, and no member's track came within LOOSE_TOGETHER_M of that place during the visit
- *   while still being within VISIT_STRAY_M of it at the photo's moment (Mom in the museum while Dad was out on his
- *   bike; or Dad rode far off after they arrived at the park together);
+ *   while still being within VISIT_STRAY_M (5 km) of it at the photo's moment (Mom in the museum while Dad was out
+ *   on his bike; or Dad rode more than 5 km off after they arrived somewhere together);
  * - P is a guess close in time to one of her recorded fixes, and more than LOOSE_TOGETHER_M from all of them.
  * If she was elsewhere, her own trace places the photo; otherwise the nearest activity track she was with, the more
  * precise record, does. The limits have accepted costs: a city museum Dad rode within 3 km of while she was in it
