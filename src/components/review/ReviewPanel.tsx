@@ -21,10 +21,13 @@ export function ReviewPanel({ allIds, annotation }: { allIds: string[]; /** Pres
   const target = selected.length ? selected : allIds;
   const label = selected.length ? `${selected.length} selected` : `all ${allIds.length}`;
 
+  // Notes and review belong to whoever uploaded an item; somebody else's are left for them.
+  const others = (notYours: number) => (notYours ? `, ${notYours} not yours to change` : "");
+
   const apply = (mode: "replace" | "append") =>
     start(async () => {
-      const n = await setContext(target, note, mode);
-      setStatus(`${mode === "replace" ? "Set" : "Added"} the note on ${n} item${n === 1 ? "" : "s"}.`);
+      const { n, notYours } = await setContext(target, note, mode);
+      setStatus(`${mode === "replace" ? "Set" : "Added"} the note on ${n} item${n === 1 ? "" : "s"}${others(notYours)}.`);
       router.refresh();
     });
   const optOut = () =>
@@ -35,8 +38,8 @@ export function ReviewPanel({ allIds, annotation }: { allIds: string[]; /** Pres
     });
   const done = () =>
     start(async () => {
-      const n = await markReviewed(target);
-      setStatus(`${n} item${n === 1 ? "" : "s"} marked reviewed.`);
+      const { n, notYours } = await markReviewed(target);
+      setStatus(`${n} item${n === 1 ? "" : "s"} marked reviewed${others(notYours)}.`);
       router.refresh();
     });
 
