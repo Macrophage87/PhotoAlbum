@@ -9,6 +9,7 @@ vi.mock("@/lib/auth/viewer", () => ({ getViewer: async () => who.viewer }));
 import { GET } from "@/app/api/photos/[id]/info/route";
 import type { PhotoInfo } from "@/app/api/photos/[id]/info/route";
 import { generateMetadata } from "@/app/share/a/[token]/page";
+import { getSharedActivity } from "@/lib/share/queries";
 
 const anon: Viewer = { kind: "anonymous", user: null, shareTokens: new Map() };
 
@@ -72,6 +73,9 @@ describe("the lightbox's words for a stranger", () => {
     const activity = await db.activity.create({ data: { tripId: trip.id, title: "Walk to the car park", startTime: new Date("2025-03-01T15:00:00Z"), endTime: new Date("2025-03-01T16:00:00Z"), shareToken: "acttok" } });
     const card = await generateMetadata({ params: Promise.resolve({ token: "acttok" }) } as never);
     expect(JSON.stringify(card)).not.toContain("Hopkins");
+    // Nor send its slug (made from its name) or title to the page: the map and header work without them.
+    const shared = await getSharedActivity("acttok");
+    expect(shared?.trip).toMatchObject({ slug: null, title: null });
     expect(card.openGraph?.description).toMatch(/March 1, 2025/);
     await db.trip.update({ where: { id: trip.id }, data: { visibility: "PUBLIC" } });
     expect((await generateMetadata({ params: Promise.resolve({ token: "acttok" }) } as never)).openGraph?.description).toContain("Hopkins weekend");

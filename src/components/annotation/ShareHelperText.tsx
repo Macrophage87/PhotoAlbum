@@ -7,13 +7,22 @@ import { Badge, Button } from "@/components/ui";
  * Whether the helper's description (and the title it wrote) is read by the family only, and — for the uploader or an
  * admin — the way to show it to everyone after reading it through, or to keep it for the family again.
  */
-export function ShareHelperText({ membersOnly, share }: { membersOnly: boolean; share?: (everyone: boolean) => Promise<void> }) {
+export function ShareHelperText({ membersOnly, titleOnly = false, share }: { membersOnly: boolean; /** The one reason is a word of a private trip's or collection's title. */ titleOnly?: boolean; share?: (everyone: boolean) => Promise<void> }) {
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
   return (
     <div className="space-y-1 text-sm" data-testid="helper-text-visibility">
       <p className="text-muted">
-        {membersOnly ? <><Badge>Family only</Badge> It names somebody, or was written from notes, so only the family reads it.</> : "Everyone who can see this item can read it."}
+        {membersOnly ? (
+          <>
+            <Badge>Family only</Badge>{" "}
+            {titleOnly
+              ? "It repeats a word from the title of a trip or collection only the family can open, so only the family reads it until that is made public."
+              : "It names somebody, or was written from notes, so only the family reads it."}
+          </>
+        ) : (
+          "Everyone who can see this item can read it."
+        )}
       </p>
       {share && (
         <Button

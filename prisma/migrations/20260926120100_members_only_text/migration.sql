@@ -15,7 +15,13 @@ ALTER TABLE "Photo" ADD COLUMN     "annotationMembersOnly" BOOLEAN NOT NULL DEFA
 ADD COLUMN     "membersTitle" TEXT,
 ADD COLUMN     "annotationTitleOnly" BOOLEAN NOT NULL DEFAULT false,
 ADD COLUMN     "annotationSharedAt" TIMESTAMP(3),
+ADD COLUMN     "titleByHelper" BOOLEAN,
 ADD COLUMN     "placeEstimateMembersOnly" BOOLEAN NOT NULL DEFAULT false;
+
+-- AlterTable
+ALTER TABLE "AppSetting" ADD COLUMN     "membersOnlyMatcher" TEXT,
+ADD COLUMN     "membersOnlyNames" TEXT[] DEFAULT ARRAY[]::TEXT[],
+ADD COLUMN     "membersOnlyJudgedAt" TIMESTAMP(3);
 
 -- AlterTable
 ALTER TABLE "Trip" ADD COLUMN     "descriptionMembersOnly" BOOLEAN NOT NULL DEFAULT false,
@@ -108,6 +114,9 @@ BEGIN
     "annotationMembersOnly" = j.flag,
     "membersTitle" = CASE WHEN j.flag AND p.kind <> 'EXTERNAL_VIDEO' THEN NULLIF(btrim(p.annotation->>'title'), '') END,
     title = CASE WHEN j.flag AND p.kind <> 'EXTERNAL_VIDEO' AND btrim(p.title) IS NOT DISTINCT FROM btrim(p.annotation->>'title') THEN NULL ELSE p.title END,
+    -- A title equal to the helper's is the helper's; any other title from before is of unknown origin (null), which
+    -- the application judges by the helper's past answers and by whether it names somebody.
+    "titleByHelper" = CASE WHEN p.title IS NOT NULL AND btrim(p.title) IS NOT DISTINCT FROM btrim(p.annotation->>'title') THEN true END,
     "placeEstimateMembersOnly" = p."gpsSource" IS NOT DISTINCT FROM 'ESTIMATE' AND (j.flag OR NULLIF(btrim(p.context), '') IS NOT NULL)
   FROM (
     SELECT q.id, q.annotation IS NOT NULL AND (

@@ -18,7 +18,7 @@ import { canEditContainer, editableMediaIds, NOT_YOUR_CONTAINER } from "@/lib/au
 import { writeContainerDescription } from "@/lib/annotation/container";
 import type { TripFormState } from "@/app/trips/new/actions";
 import { handWrittenDescription } from "@/lib/annotation/members-only";
-import { rejudgeLater } from "@/lib/annotation/rejudge";
+import { rejudgeFromAction } from "@/lib/annotation/rejudge-notice";
 
 export type CollectionFormState = TripFormState;
 
@@ -78,7 +78,7 @@ export async function updateCollection(slug: string, _prev: CollectionFormState,
   });
   if (changed) await bumpItemVersions(collection.id);
   // Whether a word of its title gives anything away depends on who may open it: judged again in the background.
-  if (changed || v.title !== collection.title) await rejudgeLater({ collectionId: collection.id });
+  if (changed || v.title !== collection.title) await rejudgeFromAction({ collectionId: collection.id });
   revalidatePath(`/collections/${slug}`, "layout");
   revalidatePath("/");
   redirect(`/collections/${slug}/settings?saved=1`);

@@ -15,7 +15,7 @@ import { levelOf } from "@/lib/visibility/exposure";
 import { canEditContainer, editableMediaIds, NOT_YOUR_CONTAINER } from "@/lib/auth/ownership";
 import { writeContainerDescription } from "@/lib/annotation/container";
 import { handWrittenDescription } from "@/lib/annotation/members-only";
-import { rejudgeLater } from "@/lib/annotation/rejudge";
+import { rejudgeFromAction } from "@/lib/annotation/rejudge-notice";
 
 /** The trip, where this member may change it: whoever made it, and admins. */
 async function loadEditableTrip(slug: string) {
@@ -62,7 +62,7 @@ export async function updateTrip(slug: string, _prev: TripFormState, fd: FormDat
     },
   });
   // Whether a word of its title gives anything away depends on who may open it: judged again in the background.
-  if (changed || v.title !== trip.title) await rejudgeLater({ tripId: trip.id });
+  if (changed || v.title !== trip.title) await rejudgeFromAction({ tripId: trip.id });
   if (changed) {
     // Bump photo versions so public caches stop matching after a change in exposure.
     await db.photo.updateMany({ where: { tripId: trip.id }, data: { updatedAt: new Date() } });

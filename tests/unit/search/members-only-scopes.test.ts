@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
 import { searchMedia } from "@/lib/search/query";
 import { idsMatching } from "@/lib/photos/page";
@@ -6,7 +6,7 @@ import { applyAnnotation } from "@/lib/annotation/apply";
 import { applyPlaceEstimate } from "@/lib/annotation/place";
 import { annotationSchema } from "@/lib/annotation/schema";
 import { writtenFromMembersOnly } from "@/lib/annotation/members-only";
-import { rejudgeNames, rejudgeTitles } from "@/lib/annotation/rejudge";
+import { flagPhoto, MATCHER_VERSION, rejudgeNames, rejudgeSweep, rejudgeTitles } from "@/lib/annotation/rejudge";
 import type { Viewer } from "@/lib/auth/viewer";
 import { resetTestDb } from "../helpers/reset";
 
@@ -117,13 +117,13 @@ describe("what strangers may search, container by container, and the words' scop
     const trip = await db.trip.create({ data: { slug: "t", title: "Coast", visibility: "PUBLIC", description: "A week with Biscuit.", startDate: new Date("2025-01-01"), endDate: new Date("2025-01-02"), createdById: dana } });
     const p = await photo({ tripId: trip.id });
     await applyAnnotation(p.id, "m", record({ title: "Biscuit on the boat", caption: "Biscuit on the deck" }), {});
-    const typed = await photo({ tripId: trip.id, title: "Biscuit's birthday" });
+    const typed = await photo({ tripId: trip.id, title: "Biscuit's birthday", titleByHelper: false });
     await applyAnnotation(typed.id, "m", record({ caption: "Biscuit and a cake" }), {});
     // Adding somebody changes nothing by itself: the request that added them does not rewrite the album.
     await db.person.create({ data: { name: "Biscuit", kind: "PET", createdById: dana } });
     expect((await db.photo.findUniqueOrThrow({ where: { id: p.id } })).annotationMembersOnly).toBe(false);
     const r = await rejudgeNames(["Biscuit"]);
-    expect(r).toMatchObject({ photos: 2, descriptions: 1, broad: [] });
+    expect(r).toMatchObject({ photos: 2, descriptions: 1 });
     expect(await db.photo.findUniqueOrThrow({ where: { id: p.id } })).toMatchObject({ annotationMembersOnly: true, title: null, membersTitle: "Biscuit on the boat" });
     // A title the family typed stays theirs to publish, names and all.
     expect(await db.photo.findUniqueOrThrow({ where: { id: typed.id } })).toMatchObject({ annotationMembersOnly: true, title: "Biscuit's birthday" });
@@ -143,14 +143,69 @@ describe("what strangers may search, container by container, and the words' scop
     expect((await db.photo.findUniqueOrThrow({ where: { id: p.id } })).annotationMembersOnly).toBe(false);
   });
 
-  it("skips a name that is really a word across the album, and says so without the name", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    for (let i = 0; i < 30; i++) await photo({ annotation: { title: "", caption: "Walker boots on the path", description: "", tags: [], searchSummary: "" } });
-    const r = await rejudgeNames(["Rose Walker"]);
-    expect(r.broad).toEqual(["walker"]);
-    expect(r.photos).toBe(0);
-    expect(warn.mock.calls.flat().join(" ")).not.toMatch(/walker/i);
-    warn.mockRestore();
+  it("flags the most-named of all — nothing is skipped for being everywhere", async () => {
+    const trip = await db.trip.create({ data: { slug: "sea", title: "Seaside", visibility: "PUBLIC", description: "Ada's first summer by the sea.", startDate: new Date("2025-01-01"), endDate: new Date("2025-01-02"), createdById: dana } });
+    for (let i = 0; i < 30; i++) await photo({ tripId: trip.id, annotation: { title: "", caption: "Ada and Ben build a sandcastle", description: "", tags: [], searchSummary: "" } });
+    for (let i = 0; i < 70; i++) await photo({ tripId: trip.id, annotation: { title: "", caption: "Waves", description: "", tags: [], searchSummary: "" } });
+    await db.person.create({ data: { name: "Ada", createdById: dana } });
+    const r = await rejudgeNames(["Ada"]);
+    expect(r.photos).toBe(30);
+    expect((await db.trip.findUniqueOrThrow({ where: { id: trip.id } })).descriptionMembersOnly).toBe(true);
+    // An everyday word is still only a name with a capital.
+    await photo({ annotation: { title: "", caption: "Castles in the sand", description: "", tags: [], searchSummary: "" } });
+    expect((await rejudgeNames(["Sand"])).photos).toBe(0);
+  });
+
+  it("leaves a row alone that was rewritten after it was read", async () => {
+    const p = await photo({ annotation: { title: "", caption: "Ada on the dock", description: "", tags: [], searchSummary: "" } });
+    const stale = await db.photo.findUniqueOrThrow({ where: { id: p.id }, include: { trip: true, collections: { include: { collection: true } } } });
+    await new Promise((r) => setTimeout(r, 5));
+    await db.photo.update({ where: { id: p.id }, data: { annotation: { title: "", caption: "The dock", description: "", tags: [], searchSummary: "" } } });
+    expect(await flagPhoto(stale as never, false, null)).toBe(0);
+    expect((await db.photo.findUniqueOrThrow({ where: { id: p.id } })).annotationMembersOnly).toBe(false);
+  });
+
+  it("takes an old helper title off an item that is already members-only, and leaves a typed one", async () => {
+    const trip = await db.trip.create({ data: { slug: "c", title: "Cake", visibility: "PUBLIC", startDate: new Date("2025-01-01"), endDate: new Date("2025-01-02"), createdById: dana } });
+    await db.person.create({ data: { name: "Ada", createdById: dana } });
+    // Described from notes long ago as "Ada's birthday cake" (the answer since purged), described again as "Cake table".
+    const old = await photo({ tripId: trip.id, context: "Ada turns five", title: "Ada's birthday cake", annotationMembersOnly: true, annotation: { title: "Cake table", caption: "The cake table", description: "", tags: [], searchSummary: "" } });
+    const typed = await photo({ tripId: trip.id, context: "Ada turns five", title: "Ada's day", titleByHelper: false, annotationMembersOnly: true, annotation: { title: "Cake table", caption: "The cake table", description: "", tags: [], searchSummary: "" } });
+    const r = await rejudgeNames();
+    expect(r.titles).toBe(1);
+    expect(await db.photo.findUniqueOrThrow({ where: { id: old.id } })).toMatchObject({ title: null, membersTitle: "Cake table" });
+    expect(await db.photo.findUniqueOrThrow({ where: { id: typed.id } })).toMatchObject({ title: "Ada's day" });
+  });
+
+  it("never lifts a flag from text that names somebody, or because a private trip was renamed", async () => {
+    const trip = await db.trip.create({ data: { slug: "tahoe", title: "Tahoe weekend", startDate: new Date("2025-01-01"), endDate: new Date("2025-01-02"), createdById: dana } });
+    const p = await photo({ tripId: trip.id });
+    await applyAnnotation(p.id, "m", record({ title: "Emma skiing at Tahoe", caption: "Emma skiing at Tahoe" }), {});
+    expect(await db.photo.findUniqueOrThrow({ where: { id: p.id } })).toMatchObject({ annotationMembersOnly: true, annotationTitleOnly: true });
+    // Renamed: the old title's words are still in the text, and a rename only ever adds.
+    await db.trip.update({ where: { id: trip.id }, data: { title: "Spring 2025" } });
+    await rejudgeTitles({ tripId: trip.id });
+    expect((await db.photo.findUniqueOrThrow({ where: { id: p.id } })).annotationMembersOnly).toBe(true);
+    // Emma is added; her own judging has not run when the trip is made public.
+    await db.person.create({ data: { name: "Emma", createdById: dana } });
+    await db.trip.update({ where: { id: trip.id }, data: { visibility: "PUBLIC" } });
+    const r = await rejudgeTitles({ tripId: trip.id });
+    expect(r.unflagged).toBe(0);
+    expect(await db.photo.findUniqueOrThrow({ where: { id: p.id } })).toMatchObject({ annotationMembersOnly: true, annotationTitleOnly: false });
+    expect(await searchMedia(anon, { q: "emma" }, 120, null)).toEqual([]);
+  });
+
+  it("sweeps the whole album when the matcher changes, and afterwards only names it has not judged", async () => {
+    const p = await photo({ annotation: { title: "", caption: "Rex on the rug", description: "", tags: [], searchSummary: "" } });
+    await db.person.create({ data: { name: "Rex", kind: "PET", createdById: dana } });
+    await rejudgeSweep();
+    expect((await db.photo.findUniqueOrThrow({ where: { id: p.id } })).annotationMembersOnly).toBe(true);
+    expect((await db.appSetting.findUniqueOrThrow({ where: { id: "app" } })).membersOnlyMatcher).toBe(MATCHER_VERSION);
+    // A rename whose job never ran is judged by the next sweep.
+    const q = await photo({ annotation: { title: "", caption: "Biscuit on the rug", description: "", tags: [], searchSummary: "" } });
+    await db.person.create({ data: { name: "Biscuit", kind: "PET", createdById: dana } });
+    await rejudgeSweep();
+    expect((await db.photo.findUniqueOrThrow({ where: { id: q.id } })).annotationMembersOnly).toBe(true);
   });
 
   it("lifts a flag that was only for a private trip's title once the trip is public, and puts it back when it is not", async () => {

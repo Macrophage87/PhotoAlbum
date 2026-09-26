@@ -14,7 +14,7 @@ import { estimateCost, TOKENS_PER_PLACE, type Estimate } from "@/lib/annotation/
 import { BACKFILL_CAP, backfillCandidates, backfillExclusions, taskOf, type BackfillScope, type BackfillTask } from "@/lib/jobs/handlers/annotation-batch";
 import { annotationSchema, toStored, type StoredAnnotation } from "@/lib/annotation/schema";
 import { anthropic } from "@/lib/annotation/client";
-import { helperText, judgeHelperText, knownNames, mentionsAnyName } from "@/lib/annotation/members-only";
+import { helperText, judgeHelperText, knownNames, mentionsAnyName, pastHelperTitles, titleIsHelpers } from "@/lib/annotation/members-only";
 
 /** The admin's half of the two gates. Recorded with who and when so the decision is auditable. */
 export async function setAnnotationOptIn(on: boolean): Promise<void> {
@@ -118,24 +118,37 @@ export async function updateAnnotation(photoId: string, fd: FormData): Promise<v
   revalidatePath(`/photos/${photoId}`);
 }
 
+const DESCRIPTION_CHANGED = "The description changed; have a look at the new one first.";
+
 /**
  * Show the helper's text for an item (and the title it wrote) to everyone who may see the item, or keep it for the
  * family again. The uploader's or an admin's decision, made after reading it: from then on nothing re-flags it until
  * it is written again.
  */
-export async function setAnnotationShared(photoId: string, everyone: boolean): Promise<void> {
+export async function setAnnotationShared(photoId: string, seenAnnotatedAt: string | null, everyone: boolean): Promise<void> {
   const user = await requireUserOrThrow();
-  const photo = await db.photo.findUnique({ where: { id: photoId }, select: { uploaderId: true, kind: true, title: true, membersTitle: true, annotation: true } });
+  const photo = await db.photo.findUnique({ where: { id: photoId }, select: { uploaderId: true, kind: true, title: true, titleByHelper: true, membersTitle: true, annotation: true, annotatedAt: true } });
   if (!photo) return;
   if (!canEditMedia(user, photo)) throw new Error(NOT_YOURS);
+  // What is shown is what was read: a description written again since the page was opened has to be read first.
+  if ((photo.annotatedAt?.toISOString() ?? null) !== seenAnnotatedAt) throw new Error(DESCRIPTION_CHANGED);
   const ai = photo.kind === "EXTERNAL_VIDEO" ? null : ((photo.annotation as Partial<StoredAnnotation> | null)?.title ?? "").trim() || null;
   const own = photo.title?.trim() || null;
-  const data = everyone
-    ? // The helper's title goes back on the item if it has none of its own.
-      { annotationMembersOnly: false, annotationTitleOnly: false, annotationSharedAt: new Date(), ...(ai && !own && photo.membersTitle?.trim() === ai ? { title: ai, membersTitle: null } : {}) }
-    : { annotationMembersOnly: true, annotationTitleOnly: false, annotationSharedAt: null, ...(ai && own === ai ? { title: null, membersTitle: ai } : ai && !photo.membersTitle?.trim() ? { membersTitle: ai } : {}) };
-  await db.photo.update({ where: { id: photoId }, data });
+  const kept = photo.membersTitle?.trim() || null;
+  let data;
+  if (everyone) {
+    // The helper's title goes back on the item if it has none of its own.
+    data = { annotationMembersOnly: false, annotationTitleOnly: false, annotationSharedAt: new Date(), ...(ai && !own && kept === ai ? { title: ai, titleByHelper: true, membersTitle: null } : {}) };
+  } else {
+    const unknown = own && photo.titleByHelper === null && own !== ai;
+    const helpers = photo.kind !== "EXTERNAL_VIDEO" && titleIsHelpers({ title: photo.title, titleByHelper: photo.titleByHelper, aiTitle: ai, ...(unknown ? { pastTitles: await pastHelperTitles(photoId), namesSomebody: mentionsAnyName(own!, await knownNames()) } : {}) });
+    data = { annotationMembersOnly: true, annotationTitleOnly: false, annotationSharedAt: null, ...(helpers ? { title: null, titleByHelper: null, membersTitle: kept ?? ai ?? own } : ai && !kept ? { membersTitle: ai } : {}) };
+  }
+  const done = await db.photo.updateMany({ where: { id: photoId, annotatedAt: photo.annotatedAt }, data });
+  if (!done.count) throw new Error(DESCRIPTION_CHANGED);
   revalidatePath(`/photos/${photoId}`);
+  // The title and the words show in galleries, timelines, maps and search results too.
+  revalidatePath("/", "layout");
 }
 
 /** Turn the helper's estimate (or the member's own) into the item's real date. */

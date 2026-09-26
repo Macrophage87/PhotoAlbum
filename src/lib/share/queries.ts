@@ -19,10 +19,15 @@ export async function getSharedTrip(token: string) {
  */
 export async function getSharedActivity(token: string) {
   if (!token || token.length > 128) return null;
-  return db.activity.findUnique({
+  const activity = await db.activity.findUnique({
     where: { shareToken: token },
     include: { track: { select: { id: true, simplified: true, stats: true } }, participants: { select: { id: true } }, trip: { select: { id: true, slug: true, title: true, themeKey: true, timezone: true, visibility: true } } },
   });
+  if (!activity) return null;
+  // The link opens the afternoon, not the trip: a trip strangers cannot open is not named to them, and its slug is
+  // made from its name, so neither goes to the page.
+  const open = activity.trip.visibility === "PUBLIC";
+  return { ...activity, trip: { ...activity.trip, slug: open ? activity.trip.slug : null, title: open ? activity.trip.title : null } };
 }
 
 /** Collection behind a share token, only while it is in LINK mode. */

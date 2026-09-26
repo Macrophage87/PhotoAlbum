@@ -88,7 +88,8 @@ export async function updatePhoto(id: string, fd: FormData): Promise<void> {
     for (const cid of wanted) if (!held.has(cid)) await addToCollection(cid, [id]);
     for (const cid of held) if (!wanted.has(cid)) await removeFromCollection(cid, [id]);
   }
-  await db.photo.update({ where: { id }, data: { title, caption: v.caption, context: v.context, ...(v.context !== photo.context ? { contextUpdatedAt: new Date(), annotationError: null } : {}), tripId: v.tripId, activityId, activitySetById: activitySetter(activityId, chosenByHand, user.id, photo) } });
+  // A title typed here is the member's; one left as it was keeps whoever wrote it.
+  await db.photo.update({ where: { id }, data: { title, ...(title !== photo.title ? { titleByHelper: title ? false : null } : {}), caption: v.caption, context: v.context, ...(v.context !== photo.context ? { contextUpdatedAt: new Date(), annotationError: null } : {}), tripId: v.tripId, activityId, activitySetById: activitySetter(activityId, chosenByHand, user.id, photo) } });
   revalidatePath(`/photos/${id}`);
   if (photo.tripId) revalidatePath(`/trips`, "layout");
 }

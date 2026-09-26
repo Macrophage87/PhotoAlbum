@@ -402,6 +402,9 @@ model Photo {
   /// When the uploader or an admin chose to show the helper's text to everyone. Nothing re-flags it until it is
   /// written again.
   annotationSharedAt        DateTime?
+  /// Who wrote `title`: true when the helper's title was put on the item, false when a member typed it, null for a
+  /// title from before the album kept track. A members-only item loses the helper's title, never a typed one.
+  titleByHelper             Boolean?
   /// Darkroom edits, kept as instructions rather than applied to the file: crop, straighten, brightness, contrast,
   /// colour. The original is never touched, the renditions are re-rendered from it whenever this changes, and
   /// clearing it puts the item back exactly as it arrived. Only the uploader or an admin may set it.
@@ -573,6 +576,11 @@ model AppSetting {
   faceDetectionOptInAt   DateTime?
   faceDetectionOptInById String?
   faceDataDeletedAt      DateTime?
+  /// What the last whole-album members-only judging used: the matcher's version and the names it knew, so the
+  /// daily sweep and a restart judge again only what changed (src/lib/annotation/rejudge.ts).
+  membersOnlyMatcher     String?
+  membersOnlyNames       String[]  @default([])
+  membersOnlyJudgedAt    DateTime?
   updatedAt              DateTime  @updatedAt
 }
 

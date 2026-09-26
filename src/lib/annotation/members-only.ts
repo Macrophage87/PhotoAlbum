@@ -122,6 +122,36 @@ export async function handWrittenDescription(before: DescriptionBefore, text: st
   return { descriptionMembersOnly: await handWrittenMembersOnly(before, text), descriptionSharedAt: null, unchanged };
 }
 
+/**
+ * Whether the title on an item is the helper's, so that a members-only item loses it. The album records who wrote
+ * a title (`titleByHelper`); a title from before it did is the helper's when it is one the helper gave (now or in a
+ * past answer still kept), or when it names somebody — an old helper title such as "Ada's birthday cake" that a later
+ * description did not repeat. A title the family typed since is never taken.
+ */
+export function titleIsHelpers(p: { title: string | null; titleByHelper: boolean | null; aiTitle: string | null; pastTitles?: string[]; namesSomebody?: boolean }): boolean {
+  const own = p.title?.trim();
+  if (!own || p.titleByHelper === false) return false;
+  if (p.titleByHelper === true || own === p.aiTitle?.trim()) return true;
+  return Boolean(p.pastTitles?.some((t) => t.trim() === own) || p.namesSomebody);
+}
+
+/** The titles in the helper's past answers for an item, from the raw responses still kept. */
+export async function pastHelperTitles(photoId: string): Promise<string[]> {
+  const raws = await db.mediaAnnotationRaw.findMany({ where: { photoId }, select: { response: true } });
+  const titles: string[] = [];
+  for (const r of raws) {
+    const content = (r.response as { content?: { type?: string; text?: string }[] } | null)?.content;
+    const text = Array.isArray(content) ? content.filter((b) => b?.type === "text").map((b) => b.text ?? "").join("") : "";
+    try {
+      const title = (JSON.parse(text) as { title?: unknown }).title;
+      if (typeof title === "string" && title.trim()) titles.push(title.trim());
+    } catch {
+      // Not a record: nothing to learn from it.
+    }
+  }
+  return titles;
+}
+
 async function taggedOn(photoId: string): Promise<boolean> {
   const [face, animal] = await Promise.all([
     db.face.findFirst({ where: { photoId, personId: { not: null } }, select: { id: true } }),

@@ -21,6 +21,18 @@ export async function reconcileStalePhotos(now = new Date()): Promise<number> {
 export async function startWorker(): Promise<void> {
   const boss = await getBoss();
 
+  // First, before anything else starts: the members-only sweep. After a deploy that changed the matcher, text naming
+  // somebody that is not tagged stays public until it has run; after that it judges only names the album has learned
+  // since, and again every night, so a change whose job could not be queued is judged within a day.
+  const { rejudgeText, enqueueRejudge } = await import("@/lib/annotation/rejudge");
+  await boss.work(QUEUES.rejudgeText, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 5 }, async ([job]) => {
+    const r = await rejudgeText(job.data as never);
+    console.log(`[rejudge] ${r.photos} photo(s), ${r.titles} title(s) and ${r.descriptions} description(s) kept for members, ${r.unflagged} shown again, ${r.places} place guess(es)`);
+  });
+
+  await boss.schedule(QUEUES.rejudgeText, "20 3 * * *", { sweep: true }, { retryLimit: 1 });
+  await enqueueRejudge({ sweep: true }).catch((err) => console.error("[worker] could not queue the members-only sweep", err));
+
   const { processPhoto } = await import("./handlers/process-photo");
   const { importTrack } = await import("./handlers/import-track");
   const { geotagPhotos } = await import("./handlers/geotag-photos");
@@ -38,7 +50,6 @@ export async function startWorker(): Promise<void> {
   const { detectAnimalsJob, animalSweep } = await import("./handlers/detect-animals");
   const { proposeAnimalsForPhoto } = await import("@/lib/pets/proposals");
   const { purgeVisits } = await import("@/lib/visits/record");
-  const { rejudgeText, enqueueRejudge } = await import("@/lib/annotation/rejudge");
 
   await boss.work(QUEUES.processPhoto, { batchSize: 1, localConcurrency: 2, pollingIntervalSeconds: 2 }, async ([job]) =>
     processPhoto(job.data as never),
@@ -84,15 +95,7 @@ export async function startWorker(): Promise<void> {
   await boss.schedule(QUEUES.animalSweep, "*/5 * * * *", {}, { retryLimit: 0 });
   await boss.schedule(QUEUES.purgeUnnamedFaces, "45 3 * * *", {}, { retryLimit: 0 });
   await boss.schedule(QUEUES.flagNewAdults, "50 3 * * *", {}, { retryLimit: 0 });
-  await boss.work(QUEUES.rejudgeText, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 5 }, async ([job]) => {
-    const r = await rejudgeText(job.data as never);
-    console.log(`[rejudge] ${r.photos} photo(s) and ${r.descriptions} description(s) kept for members, ${r.unflagged} shown again, ${r.places} place guess(es)`);
-  });
-
   await boss.schedule(QUEUES.purgeVisits, "15 3 * * *", {}, { retryLimit: 0 });
-  // Everything written before this version judged names and private title words differently, or not at all; one
-  // pass over the album on every start keeps it in step with the matcher as it is now.
-  await enqueueRejudge({}).catch((err) => console.error("[worker] could not queue the members-only re-judging", err));
   console.log("[worker] pg-boss handlers registered");
   await reconcileStalePhotos().catch((err) => console.error("[worker] stale-photo reconciliation failed", err));
 }
