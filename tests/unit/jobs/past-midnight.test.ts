@@ -11,6 +11,20 @@ import { resetTestDb } from "../helpers/reset";
 const photoRoot = mkdtempSync(path.join(tmpdir(), "past-midnight-"));
 process.env.PHOTO_STORAGE_ROOT = photoRoot;
 vi.mock("@/lib/jobs/boss", () => ({ enqueue: async () => null }));
+// Something done while a job renders, after it read the row and before it writes back (as in process-race.test.ts).
+const meanwhile = vi.hoisted(() => ({ run: null as null | (() => Promise<unknown>) }));
+vi.mock("@/lib/images/renditions", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/lib/images/renditions")>();
+  return {
+    ...real,
+    makeRenditions: async (...args: Parameters<typeof real.makeRenditions>) => {
+      const run = meanwhile.run;
+      meanwhile.run = null;
+      if (run) await run();
+      return real.makeRenditions(...args);
+    },
+  };
+});
 
 import { processPhoto } from "@/lib/jobs/handlers/process-photo";
 import { geotagPhotos } from "@/lib/jobs/handlers/geotag-photos";
@@ -26,6 +40,7 @@ describe("a photograph from a ride that runs past a trip's last midnight", () =>
   let userId: string, tripId: string;
   beforeEach(async () => {
     await resetTestDb();
+    meanwhile.run = null;
     userId = (await db.user.create({ data: { email: "rider@example.com", role: "ADMIN" } })).id;
     tripId = (await db.trip.create({ data: { slug: "acadia", title: "Acadia", startDate: new Date("2025-08-10"), endDate: new Date("2025-08-16"), timezone: "America/New_York", createdById: userId } })).id;
   });
@@ -99,6 +114,18 @@ describe("a photograph from a ride that runs past a trip's last midnight", () =>
     await db.photo.update({ where: { id: clip.id }, data: { storageKey: key, originalPath: `${key}/original.mp4` } });
     await transcodeVideo({ photoId: clip.id, tripId: null });
     expect(await db.photo.findUniqueOrThrow({ where: { id: clip.id } })).toMatchObject({ status: "READY", tripId, activityId: r.id });
+  });
+
+  it("goes by the trip's rides as they are when the job writes back, not when it started", async () => {
+    // The ride is saved while the photo renders: it still takes it.
+    let rideId = "";
+    meanwhile.run = async () => (rideId = (await ride(tripId, RIDE_START, RIDE_END)).id);
+    expect(await upload("2025:08:17 00:40:00")).toMatchObject({ tripId, activityId: expect.any(String) });
+    expect(rideId).not.toBe("");
+
+    // And one deleted while the next renders no longer does.
+    meanwhile.run = () => db.activity.deleteMany({ where: { id: rideId } }).then(() => db.track.deleteMany({}));
+    expect(await upload("2025:08:17 00:45:00")).toMatchObject({ tripId: null, activityId: null });
   });
 
   it("follows a date set by hand onto the trip the ride was on", async () => {

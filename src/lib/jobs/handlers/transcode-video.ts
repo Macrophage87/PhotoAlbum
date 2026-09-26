@@ -10,6 +10,7 @@ import { ffmpeg, posterArgs, probe, transcodeArgs } from "@/lib/video/ffmpeg";
 import { pickTripByDay, whoWasThere } from "@/lib/photos/assign";
 import { pickTripByCoverage } from "@/lib/photos/trip-by-coverage";
 import { activityFor } from "@/lib/activities/reassign";
+import { dateByHand, dateMovedSince, lockedPhoto } from "@/lib/photos/member-owned";
 import { localDayFromOffset, offsetMinutesInZone } from "@/lib/time/local-day";
 import { withHeavyLock } from "../heavy-lock";
 import { workerStopping } from "../shutdown";
@@ -73,39 +74,60 @@ export async function transcodeVideo(job: TranscodeVideoJob, signal?: AbortSigna
         takenAtSource = "UPLOAD_TIME";
       }
       let trip = job.tripId ? await db.trip.findUnique({ where: { id: job.tripId } }) : photo.tripId ? await db.trip.findUnique({ where: { id: photo.tripId } }) : null;
+      // On none of the uploader's trips' days (a ride on the last evening that runs past midnight): the trip out on an
+      // activity or a track at that moment is chosen once the row is locked, from what is there then.
+      let dayless: { id: string; timezone: string }[] | null = null;
       if (!trip) {
         const candidates = await db.trip.findMany({ where: whoWasThere(photo.uploaderId), select: { id: true, startDate: true, endDate: true, timezone: true } });
         const matches = candidates.filter((c) => pickTripByDay([c], localDayFromOffset(instant, offsetMinutesInZone(instant, c.timezone))));
-        // On no trip's days (a ride on the last evening that runs past midnight): the trip out on an activity or a
-        // track at that moment.
-        const match = matches.length === 1 ? matches[0] : matches.length === 0 ? await pickTripByCoverage(candidates, photo.uploaderId, () => instant) : null;
-        if (match) trip = await db.trip.findUnique({ where: { id: match.id } });
+        if (matches.length === 1) trip = await db.trip.findUnique({ where: { id: matches[0].id } });
+        if (matches.length === 0) dayless = candidates;
       }
       // A hand-set date keeps the zone it was typed in.
       const tzOffsetMin = byHand && photo.tzOffsetMin !== null ? photo.tzOffsetMin : trip ? offsetMinutesInZone(instant, trip.timezone) : 0;
-      // A clip uploaded into an activity, or filed (or taken off one) by hand, stays where the member put it.
-      const filing = await activityFor(photo, trip?.id ?? null, instant);
       const videoRenditions: VideoRenditions = { mp4: { key: mp4Key, w: out.width ?? 0, h: out.height ?? 0, bytes }, poster: { key: posterKey } };
       const contentHash = photo.contentHash ?? (await sha256File(input));
-      await db.photo.update({
-        where: { id: photo.id },
-        data: {
-          status: "READY",
-          contentHash,
-          kind: "VIDEO",
-          width: out.width,
-          height: out.height,
-          durationS: out.durationS ?? info.durationS,
-          renditions,
-          videoRenditions,
-          takenAt: instant,
-          takenAtSource,
-          tzOffsetMin,
-          tripId: trip?.id ?? null,
-          activityId: filing.activityId,
-          activitySetById: filing.activitySetById,
-          camera: info.videoCodec ? `${info.videoCodec}${info.hdr ? " HDR" : ""}` : null,
-        },
+      // The row was read before the heavy lock and ffmpeg, minutes ago: a member may have dated the clip or filed it
+      // on an activity since. So it is read again, locked, and what a member set is never written over.
+      await db.$transaction(async (tx) => {
+        const now = await lockedPhoto(tx, photo.id);
+        if (!now) return;
+        // A date given (or changed) since the job read the row stands, and so does the trip it put the clip on; a
+        // date a member set before is kept as it is too (its trip still follows from it, as the job read it).
+        const moved = dateMovedSince(photo, now);
+        const keepDate = moved || dateByHand(now);
+        const decides = !moved && now.tripId === photo.tripId;
+        let tripId = decides ? (trip?.id ?? null) : now.tripId;
+        let zoned = tzOffsetMin;
+        // On no trip's days: the single trip with an activity or a track running at the instant, as the trip's
+        // activities and tracks stand now, whose zone then gives the clip's offset (a kept date keeps its own).
+        if (decides && !tripId && dayless) {
+          const running = await pickTripByCoverage(dayless, now.uploaderId, () => (keepDate ? now.takenAt : instant), tx);
+          if (running) {
+            tripId = running.id;
+            zoned = offsetMinutesInZone(instant, running.timezone);
+          }
+        }
+        // A clip uploaded into an activity, or filed (or taken off one) by hand, stays where the member put it.
+        const filing = await activityFor(now, tripId, keepDate ? now.takenAt : instant, tx);
+        await tx.photo.update({
+          where: { id: photo.id },
+          data: {
+            status: "READY",
+            contentHash,
+            kind: "VIDEO",
+            width: out.width,
+            height: out.height,
+            durationS: out.durationS ?? info.durationS,
+            renditions,
+            videoRenditions,
+            ...(keepDate ? {} : { takenAt: instant, takenAtSource, tzOffsetMin: zoned }),
+            tripId,
+            activityId: filing.activityId,
+            activitySetById: filing.activitySetById,
+            camera: info.videoCodec ? `${info.videoCodec}${info.hdr ? " HDR" : ""}` : null,
+          },
+        });
       });
     }, signal);
     // Follow-up jobs are best-effort here; the sweeps pick up anything the queue refused.

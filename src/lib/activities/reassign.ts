@@ -22,14 +22,16 @@ export async function activityFor(
   photo: { tripId: string | null; activityId: string | null; activitySetById: string | null; uploaderId: string },
   tripId: string | null,
   takenAt: Date | null,
+  /** The transaction to read activities in, when the caller holds the photo's row locked. */
+  client: Prisma.TransactionClient = db,
 ): Promise<Filing> {
   if (photo.activitySetById && tripId) {
     if (!photo.activityId && tripId === photo.tripId) return { activityId: null, activitySetById: photo.activitySetById };
     // An activity chosen by hand holds as long as it is still one of this trip's: it may have been deleted since.
-    if (photo.activityId && (await db.activity.count({ where: { id: photo.activityId, tripId } }))) return { activityId: photo.activityId, activitySetById: photo.activitySetById };
+    if (photo.activityId && (await client.activity.count({ where: { id: photo.activityId, tripId } }))) return { activityId: photo.activityId, activitySetById: photo.activitySetById };
   }
   if (!tripId || !takenAt) return { activityId: null, activitySetById: null };
-  const activities = await db.activity.findMany({ where: { tripId, ...whoWasThere(photo.uploaderId) }, select: { id: true, startTime: true, endTime: true } });
+  const activities = await client.activity.findMany({ where: { tripId, ...whoWasThere(photo.uploaderId) }, select: { id: true, startTime: true, endTime: true } });
   return { activityId: pickActivityByTime(activities, takenAt)?.id ?? null, activitySetById: null };
 }
 

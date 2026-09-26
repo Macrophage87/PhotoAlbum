@@ -1,4 +1,5 @@
 import { db } from "@/lib/db";
+import type { Prisma } from "@/generated/prisma/client";
 import { whoWasThere } from "@/lib/photos/assign";
 
 /**
@@ -10,9 +11,10 @@ import { whoWasThere } from "@/lib/photos/assign";
  * trips are running at that moment, or none is, there is no answer.
  *
  * `instantIn` gives the instant as read in each trip's zone, for a camera clock that says no zone of its own; one
- * that does gives the same instant for every trip.
+ * that does gives the same instant for every trip. `client` is the transaction to read in, when the caller holds
+ * the photo's row locked (see member-owned).
  */
-export async function pickTripByCoverage<T extends { id: string }>(trips: T[], uploaderId: string, instantIn: (trip: T) => Date | null): Promise<T | null> {
+export async function pickTripByCoverage<T extends { id: string }>(trips: T[], uploaderId: string, instantIn: (trip: T) => Date | null, client: Prisma.TransactionClient = db): Promise<T | null> {
   const at = new Map<string, number>();
   for (const t of trips) {
     const ms = instantIn(t)?.getTime();
@@ -24,8 +26,8 @@ export async function pickTripByCoverage<T extends { id: string }>(trips: T[], u
   const window = { tripId: { in: tripIds }, startTime: { lte: to }, endTime: { gte: from } };
   const select = { tripId: true, startTime: true, endTime: true } as const;
   const [activities, tracks] = await Promise.all([
-    db.activity.findMany({ where: { ...window, ...whoWasThere(uploaderId) }, select }),
-    db.track.findMany({ where: window, select }),
+    client.activity.findMany({ where: { ...window, ...whoWasThere(uploaderId) }, select }),
+    client.track.findMany({ where: window, select }),
   ]);
   const running = new Set<string>();
   for (const w of [...activities, ...tracks]) {

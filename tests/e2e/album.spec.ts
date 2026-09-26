@@ -1824,7 +1824,11 @@ test("a member's review queue is their own uploads, and somebody else's batch is
 
     await memberPage.goto("/review");
     await expect(memberPage.getByText("1 item of yours not reviewed yet.")).toBeVisible();
-    await expect(memberPage.locator(`img[src*='/api/photos/${mine}/']`)).toHaveCount(1);
+    // The queue's own tiles, found by the item they are for: a picture of the same photo can also turn up under
+    // "Who might be in these" (a face crop) once face indexing has run, which says nothing about the queue.
+    await expect(memberPage.locator(`li[data-photo-id='${mine}']`)).toHaveCount(1);
+    await expect(memberPage.locator(`li[data-photo-id='${adminPhoto}']`)).toHaveCount(0);
+    // Nor is the admin's photo anywhere else on the page, a face crop included.
     await expect(memberPage.locator(`img[src*='/api/photos/${adminPhoto}/']`)).toHaveCount(0);
     await expect(memberPage.getByRole("button", { name: /Mark all 1 reviewed/ })).toBeVisible();
 
