@@ -3004,6 +3004,46 @@ test("a day's count includes the photographs on its activities, and its activiti
   }
 });
 
+test("a ride past midnight stays under the day it began, and the next day points back to it", async ({ context, page }) => {
+  await signIn(context, ADMIN);
+  const trip = await withDb((c) => c.query(`SELECT id FROM "Trip" WHERE slug = 'acadia'`));
+  const tripId = trip.rows[0].id as string;
+  const ids = await withDb((c) => c.query(`SELECT id FROM "Photo" WHERE "tripId" = $1 AND status = 'READY' AND "trashedAt" IS NULL ORDER BY "createdAt" LIMIT 2`, [tripId]));
+  expect(ids.rows.length).toBe(2);
+  // Two days of their own, far from the rest (New York, UTC-4): a ride from 22:30 on 20 March to 01:15 the next
+  // morning with a photograph at 00:40, and one loose at 09:00 on the 21st.
+  const activityId = `act-${randomUUID()}`;
+  const before = await withDb((c) => c.query(`SELECT id, "takenAt", "tzOffsetMin", "takenAtSource", "activityId" FROM "Photo" WHERE id = ANY($1)`, [ids.rows.map((r) => r.id)]));
+  await withDb((c) => c.query(`INSERT INTO "Activity" (id, "tripId", title, type, "startTime", "endTime", "updatedAt") VALUES ($1, $2, 'Night ride', 'BIKE', $3, $4, now())`, [activityId, tripId, new Date("2031-03-21T02:30:00Z"), new Date("2031-03-21T05:15:00Z")]));
+  await withDb((c) => c.query(`UPDATE "Photo" SET "takenAt" = $2, "tzOffsetMin" = -240, "takenAtSource" = 'EXIF_OFFSET', "activityId" = $3 WHERE id = $1`, [ids.rows[0].id, new Date("2031-03-21T04:40:00Z"), activityId]));
+  await withDb((c) => c.query(`UPDATE "Photo" SET "takenAt" = $2, "tzOffsetMin" = -240, "takenAtSource" = 'EXIF_OFFSET', "activityId" = NULL WHERE id = $1`, [ids.rows[1].id, new Date("2031-03-21T13:00:00Z")]));
+
+  try {
+    await page.goto("/trips/acadia");
+    await page.waitForLoadState("networkidle");
+    // One card, under the day the ride began, holding the photograph from after midnight.
+    await expect(page.locator(`[id$="-${activityId}"]`)).toHaveCount(1);
+    await expect(page.locator(`#day-2031-03-20-${activityId} li.tile-lazy`)).toHaveCount(1);
+    // The next day opens with a pointer to it rather than a copy, and holds only its own photograph.
+    const pointer = page.locator("#day-2031-03-21").getByTestId("activity-continued");
+    await expect(pointer).toHaveText("Continued from Thu, Mar 20: Night ride");
+    await expect(page.locator("#day-2031-03-21 li.tile-lazy")).toHaveCount(1);
+    // Each day counts its photographs once.
+    const nav = page.getByTestId("timeline-nav");
+    await expect(nav.locator('a[data-day="day-2031-03-20"] span.text-xs')).toHaveText("1");
+    await expect(nav.locator('a[data-day="day-2031-03-21"] span.text-xs')).toHaveText("1");
+    // And the pointer takes you to the card.
+    await pointer.getByRole("link", { name: "Night ride" }).click();
+    await expect(page.locator(`#day-2031-03-20-${activityId}`)).toBeInViewport({ timeout: 10_000 });
+  } finally {
+    for (const r of before.rows) {
+      await withDb((c) => c.query(`UPDATE "Photo" SET "takenAt" = $2, "tzOffsetMin" = $3, "takenAtSource" = $4, "activityId" = $5 WHERE id = $1`, [r.id, r.takenAt, r.tzOffsetMin, r.takenAtSource, r.activityId]));
+    }
+    await withDb((c) => c.query(`UPDATE "Photo" SET "activityId" = NULL WHERE "activityId" = $1`, [activityId]));
+    await withDb((c) => c.query(`DELETE FROM "Activity" WHERE id = $1`, [activityId]));
+  }
+});
+
 /**
  * Let a map finish loading in here. There is no way out to a tile server, and MapLibre does not add its own layers
  * until the first tiles have answered, so every request that would leave the machine is given a blank tile.

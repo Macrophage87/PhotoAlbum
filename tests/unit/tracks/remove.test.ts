@@ -7,6 +7,7 @@ import { db } from "@/lib/db";
 import { encodePoints } from "@/lib/tracks/encode";
 import { deleteTrackAndItsPositions } from "@/lib/tracks/remove";
 import { geotagPhotos } from "@/lib/jobs/handlers/geotag-photos";
+import { needsPlaceEstimate } from "@/lib/annotation/place";
 import type { TrackPoint } from "@/lib/tracks/types";
 import { resetTestDb } from "../helpers/reset";
 
@@ -79,6 +80,36 @@ describe("deleteTrackAndItsPositions", () => {
       spy.mockRestore();
     }
     expect((await db.photo.findUniqueOrThrow({ where: { id: p.id } })).lat).toBeNull();
+  });
+
+  it("lets the helper be asked again about a place its guess lost to the track, once no other track places it", async () => {
+    const guess = { lat: 41.9, lng: 12.45, gpsSource: "ESTIMATE", placeEstimateName: "St Peter's Square", placeEstimatedAt: new Date() };
+    const gpx = await track(line(10, 44), "GPX");
+    const alone = await photo(3, guess);
+    // Declined: asked, and nothing to give back. Placed straight from the track: never guessed at.
+    const declined = await photo(4, { placeEstimatedAt: new Date() });
+    const never = await photo(5);
+    expect((await geotagPhotos({ tripId })).updated).toBe(3);
+    // The guess gave way to the track, and the ask stays recorded while the track places it.
+    expect(await db.photo.findUniqueOrThrow({ where: { id: alone.id } })).toMatchObject({ gpsSource: "TRACK", placeEstimatedAt: expect.any(Date) });
+
+    await deleteTrackAndItsPositions(gpx.id);
+    const back = await db.photo.findUniqueOrThrow({ where: { id: alone.id } });
+    expect(back).toMatchObject({ lat: null, gpsSource: null, placeEstimatedAt: null });
+    expect(needsPlaceEstimate(back)).toBe(true);
+    expect(needsPlaceEstimate(await db.photo.findUniqueOrThrow({ where: { id: declined.id } }))).toBe(false);
+    expect(await db.photo.findUniqueOrThrow({ where: { id: never.id } })).toMatchObject({ lat: null, placeEstimatedAt: null });
+  });
+
+  it("does not ask again about a guess another track places once more", async () => {
+    await track(line(10, 50), "GOOGLE");
+    const gpx = await track(line(10, 44), "GPX");
+    const guessed = await photo(3, { lat: 41.9, lng: 12.45, gpsSource: "ESTIMATE", placeEstimateName: "St Peter's Square", placeEstimatedAt: new Date() });
+    await geotagPhotos({ tripId });
+    await deleteTrackAndItsPositions(gpx.id);
+    const p = await db.photo.findUniqueOrThrow({ where: { id: guessed.id } });
+    expect([p.gpsSource, p.lat]).toEqual(["TRACK", expect.closeTo(50.003, 5)]);
+    expect(needsPlaceEstimate(p)).toBe(false);
   });
 
   it("does nothing for a track that is already gone", async () => {

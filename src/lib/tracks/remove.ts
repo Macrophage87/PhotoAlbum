@@ -24,14 +24,19 @@ export async function deleteTrackAndItsPositions(trackId: string): Promise<void>
 /**
  * The deletion itself, inside the caller's transaction: the track goes, and the track-placed positions inside its
  * hours go with it. False when the track was already gone. The caller places photos again once it has committed.
+ *
+ * A position a track gave may have replaced the helper's guess at the place (see geotag-photos), which is not kept
+ * underneath it. Such a photo is marked as not yet asked, so that if no other track places it again, the helper is
+ * asked again rather than the photo being left with no place for good; one placed again has a position, and is not.
  */
 export async function takeBackTrack(tx: Prisma.TransactionClient, track: { id: string; tripId: string; startTime: Date; endTime: Date }): Promise<boolean> {
   const { count } = await tx.track.deleteMany({ where: { id: track.id } });
   if (!count) return false;
-  await tx.photo.updateMany({
-    where: { tripId: track.tripId, gpsSource: "TRACK", takenAt: { gte: track.startTime, lte: track.endTime } },
-    data: { lat: null, lng: null, altitude: null, gpsSource: null },
-  });
+  const placed = { tripId: track.tripId, gpsSource: "TRACK" as const, takenAt: { gte: track.startTime, lte: track.endTime } };
+  const cleared = { lat: null, lng: null, altitude: null, gpsSource: null };
+  // A guess was placed once (it has a name); the ask is recorded even where the helper declined, which has none.
+  await tx.photo.updateMany({ where: { ...placed, placeEstimateName: { not: null } }, data: { ...cleared, placeEstimatedAt: null } });
+  await tx.photo.updateMany({ where: placed, data: cleared });
   return true;
 }
 
