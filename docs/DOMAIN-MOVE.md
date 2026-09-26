@@ -25,7 +25,9 @@ The deployment layout this ends at is the one `DEPLOY.md` already describes:
 
 - [ ] **Back up.** On the server, in the current checkout:
       ```bash
-      docker compose exec -T db pg_dump -U photoalbum photoalbum | gzip > ~/album-before-move.sql.gz
+      set -o pipefail   # so a failed pg_dump is an error, not a tiny .gz
+      docker compose exec -T db sh -c 'exec pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' | gzip > ~/album-before-move.sql.gz
+      gzip -cd ~/album-before-move.sql.gz | tail -n 20 | grep -c 'PostgreSQL database dump complete'   # 1, or the dump is incomplete
       docker run --rm -v photoalbum_photos:/data:ro -v ~:/backup alpine \
         tar czf /backup/album-photos-before-move.tgz -C /data .
       ```
@@ -62,7 +64,7 @@ you just took:
 ```bash
 cd /cieply/sites/cieply.com/PhotoAlbum && docker compose stop app      # no writes during the copy
 cd ../PhotoAlbum-live && docker compose up -d db && sleep 10
-gunzip -c ~/album-before-move.sql.gz | docker compose exec -T db psql -U photoalbum photoalbum
+gunzip -c ~/album-before-move.sql.gz | docker compose exec -T db sh -c 'exec psql -U "$POSTGRES_USER" "$POSTGRES_DB"'
 docker run --rm -v photoalbum-live_photos:/data \
   -v ~:/backup alpine tar xzf /backup/album-photos-before-move.tgz -C /data
 ```

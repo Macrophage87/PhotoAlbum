@@ -1,5 +1,5 @@
-# Push to `staging` → GitHub logs into the server and updates the staging
-# instance: one job, one SSH step, one shared script (deploy/update.sh),
+# Push to `staging` → once CI passes for that commit, GitHub logs into the
+# server and updates the staging instance to it: one job, one SSH step, one shared script (deploy/update.sh),
 # which dumps the database, resets the checkout to the branch, rebuilds the
 # image with `docker compose up --build -d` and waits for /api/health.
 # Details in docs/DEPLOY.md → "Continuous deployment".
@@ -12,20 +12,21 @@
 # Until they exist the job prints a note and exits green.
 name: Deploy staging
 on:
-  push:
-    branches: [staging]
-  workflow_dispatch:
-
-# One group for BOTH deploy workflows: staging and live share one server and
-# one small root disk, and two image builds at once ran it out of space.
-concurrency:
-  group: deploy-photoalbum
-  cancel-in-progress: false # deploys queue, never overlap
+  # Called only by ci.yml, after its test and docker jobs pass for the pushed
+  # commit, so nothing reaches the server that CI has not passed. To redeploy
+  # without a commit, re-run this job from the CI run, or run CI by hand on
+  # `staging` (Actions → CI → Run workflow).
+  workflow_call:
 
 jobs:
   deploy:
     name: Update the staging instance
     runs-on: ubuntu-latest
+    # One group for BOTH deploys: staging and live share one server and one
+    # small root disk, and two image builds at once ran it out of space.
+    concurrency:
+      group: deploy-photoalbum
+      cancel-in-progress: false # deploys queue, never overlap
     env:
       ARMED: ${{ secrets.DEPLOY_SSH_KEY != '' && secrets.DEPLOY_HOST != '' && secrets.DEPLOY_USER != '' }}
     steps:
@@ -38,13 +39,15 @@ jobs:
         env:
           APP_DIR: /cieply/sites/cieply.com/PhotoAlbum
           BRANCH: staging
+          # github.sha is the caller's commit: exactly the one CI just tested.
+          DEPLOY_SHA: ${{ github.sha }}
           APP_PORT: "3005"
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           command_timeout: 30m # the image rebuild takes a few minutes
-          envs: APP_DIR,BRANCH,APP_PORT
+          envs: APP_DIR,BRANCH,APP_PORT,DEPLOY_SHA
           script: |
             set -e
             if [ ! -d "$APP_DIR/.git" ]; then

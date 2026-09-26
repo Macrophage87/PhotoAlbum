@@ -165,7 +165,7 @@ Open the album and look at a trip: thumbnails, a full-size photo, a clip, a scan
 file it believes in and check each one is really there. This covers originals, renditions and clips' posters:
 
 ```bash
-docker compose exec -T db psql -U photoalbum -At photoalbum > /tmp/album-keys.txt <<'SQL'
+docker compose exec -T db sh -c 'exec psql -U "$POSTGRES_USER" -At "$POSTGRES_DB"' > /tmp/album-keys.txt <<'SQL'
 SELECT "originalPath" AS key FROM "Photo" WHERE "originalPath" <> 'pending'
 UNION
 SELECT r.value->>'key' FROM "Photo", jsonb_each("renditions") AS r
@@ -278,14 +278,15 @@ when you like. `~/refresh-staging.sh`:
 
 ```bash
 #!/bin/bash
-set -e
+set -eo pipefail
 cd ~/photoalbum-staging
 docker compose stop app
 # The database, as it is right now.
-cd ~/photoalbum && docker compose exec -T db pg_dump -U photoalbum photoalbum > /tmp/live.sql
+cd ~/photoalbum && docker compose exec -T db sh -c 'exec pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' > /tmp/live.sql
+tail -n 20 /tmp/live.sql | grep -c 'PostgreSQL database dump complete' >/dev/null   # stop if the dump is incomplete
 cd ~/photoalbum-staging
-docker compose exec -T db psql -U photoalbum -c 'DROP SCHEMA public CASCADE; CREATE SCHEMA public;' photoalbum
-docker compose exec -T db psql -U photoalbum photoalbum < /tmp/live.sql
+docker compose exec -T db sh -c 'exec psql -U "$POSTGRES_USER" -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;" "$POSTGRES_DB"'
+docker compose exec -T db sh -c 'exec psql -U "$POSTGRES_USER" "$POSTGRES_DB"' < /tmp/live.sql
 rm /tmp/live.sql
 # The media. --delete so items deleted from the live album go from the copy too.
 sudo rsync -aH --delete /mnt/album/photos/ /mnt/album-staging/photos/

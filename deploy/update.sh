@@ -1,19 +1,28 @@
 #!/usr/bin/env bash
-# Update ONE Family Album instance to the tip of its branch and rebuild it.
-# Idempotent; the deploy workflows run it over SSH, and you can run it by
-# hand on the server:
+# Update ONE Family Album instance to a commit of its branch and rebuild it.
+# Idempotent; the deploy workflows run it over SSH once CI has passed, and
+# you can run it by hand on the server:
 #
 #   APP_DIR=/cieply/sites/cieply.com/PhotoAlbum BRANCH=staging APP_PORT=3005 bash deploy/update.sh
 #
+# DEPLOY_SHA (set by the workflows) pins the exact commit CI tested; without
+# it the script takes the tip of origin/<branch>.
+#
 # What it does, in order:
-#   1. dump the database to $BACKUP_DIR (a deploy runs migrations, so keep a
-#      restore point — docs/DEPLOY.md step 10),
-#   2. `git fetch` + `git reset --hard origin/<branch>` as the checkout's
-#      owner (the branch is the source of truth; .env and the compose
-#      override are untracked and survive the reset),
-#   3. `docker compose up --build -d` (the container applies migrations at
+#   1. `git fetch` as the checkout's owner and pick the commit; a DEPLOY_SHA
+#      no longer on the branch, or older than a deployed commit that still
+#      is, is skipped, so CI runs finishing out of order never roll the
+#      instance back (a rewound branch is followed back),
+#      then re-run this script as that commit has it, so a change to it
+#      takes effect in the same deploy,
+#   2. dump the database to $BACKUP_DIR (a deploy runs migrations, so keep a
+#      restore point — docs/DEPLOY.md step 10); a failed or truncated dump
+#      stops the deploy and is not kept,
+#   3. `git reset --hard <commit>` (the branch is the source of truth; .env
+#      and the compose override are untracked and survive the reset),
+#   4. `docker compose up --build -d` (the container applies migrations at
 #      start; in-flight photo processing gets 45 s to finish),
-#   4. wait for /api/health, then prune dangling images and day-old build cache.
+#   5. wait for /api/health, then prune dangling images and day-old build cache.
 #
 # Runs as a user with sudo (the deploy login) or as root.
 set -euo pipefail
@@ -31,23 +40,84 @@ as_owner() { if [ "$(id -un)" = "$OWNER" ]; then "$@"; else sudo -Hu "$OWNER" "$
 cd "$APP_DIR"
 echo "== $APP_DIR: updating to origin/$BRANCH =="
 
-# 1. restore point (only if the stack is already running)
-if as_root docker compose ps --status running --services 2>/dev/null | grep -qx db; then
-  as_root mkdir -p "$BACKUP_DIR"
-  STAMP=$(date +%F-%H%M)
-  as_root sh -c "docker compose exec -T db pg_dump -U photoalbum photoalbum | gzip > '$BACKUP_DIR/db-pre-deploy-$STAMP.sql.gz'"
-  echo "== database dumped to $BACKUP_DIR/db-pre-deploy-$STAMP.sql.gz =="
+# 1. which commit
+as_owner git fetch origin "$BRANCH"
+TARGET=$(as_owner git rev-parse "origin/$BRANCH")
+if [ -n "${DEPLOY_SHA:-}" ]; then
+  # Force-pushed away (so not in the fetch either): a later push has its own CI run and deploy. Any other git
+  # error still fails the deploy.
+  ON_BRANCH=0
+  if as_owner git cat-file -e "$DEPLOY_SHA^{commit}" 2>/dev/null; then
+    as_owner git merge-base --is-ancestor "$DEPLOY_SHA" "origin/$BRANCH" || ON_BRANCH=$?
+  else
+    ON_BRANCH=1
+  fi
+  if [ "$ON_BRANCH" = 1 ]; then
+    echo "== $DEPLOY_SHA is no longer on origin/$BRANCH — nothing to do =="
+    exit 0
+  elif [ "$ON_BRANCH" != 0 ]; then
+    echo "!! could not check $DEPLOY_SHA against origin/$BRANCH" >&2
+    exit 1
+  fi
+  CURRENT=$(as_owner git rev-parse HEAD)
+  # Older than the deployed commit: skip, unless the branch was rewound past what is deployed.
+  if [ "$CURRENT" != "$DEPLOY_SHA" ] &&
+    as_owner git merge-base --is-ancestor "$CURRENT" "origin/$BRANCH" &&
+    as_owner git merge-base --is-ancestor "$DEPLOY_SHA" "$CURRENT"; then
+    echo "== $DEPLOY_SHA is older than the deployed $CURRENT — nothing to do =="
+    exit 0
+  fi
+  TARGET=$DEPLOY_SHA
 fi
 
-# 2. code
-as_owner git fetch origin "$BRANCH"
-as_owner git reset --hard "origin/$BRANCH"
+# The rest of the deploy is the target commit's own update.sh, not whatever the checkout had before; the guard
+# stops that copy from doing this again. A copy from before this hand-over (a rollback) would reset to the branch
+# tip and skip the dump checks, so this one carries on instead.
+if [ -z "${UPDATE_SH_REEXEC:-}" ]; then
+  SCRIPT=$(as_owner git show "$TARGET:deploy/update.sh" 2>/dev/null) || SCRIPT=
+  if [[ $SCRIPT != *UPDATE_SH_REEXEC* ]]; then
+    echo "== $TARGET's update.sh predates the hand-over — carrying on with this one =="
+  else
+    exec env UPDATE_SH_REEXEC=1 APP_DIR="$APP_DIR" BRANCH="$BRANCH" APP_PORT="$APP_PORT" BACKUP_DIR="$BACKUP_DIR" \
+      HEALTH_TIMEOUT="$HEALTH_TIMEOUT" DEPLOY_SHA="$TARGET" bash -c "$SCRIPT" update.sh
+  fi
+fi
+
+# 2. restore point (only if the stack is already running)
+if as_root docker compose ps --status running --services 2>/dev/null | grep -qx db; then
+  as_root mkdir -p "$BACKUP_DIR"
+  DUMP="$BACKUP_DIR/db-pre-deploy-$(date +%F-%H%M).sql.gz"
+  # Written under a temporary name and renamed once checked, so a failed dump never sits there looking like a backup.
+  PARTIAL="$DUMP.partial"
+  # The container's own POSTGRES_USER/POSTGRES_DB, so a role or database renamed in .env is dumped too. pipefail
+  # (set above) makes a failing pg_dump fail the pipeline instead of leaving gzip's empty file as "the backup".
+  if ! as_root docker compose exec -T db sh -c 'exec pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' | gzip | as_root tee "$PARTIAL" >/dev/null; then
+    as_root rm -f "$PARTIAL"
+    echo "!! pg_dump failed — not deploying without a restore point" >&2
+    exit 1
+  fi
+  # pg_dump writes this trailer last, so its presence means the dump ran to the end.
+  TRAILER=$(as_root gzip -cd "$PARTIAL" | tail -n 20) || TRAILER=
+  case "$TRAILER" in
+    *'PostgreSQL database dump complete'*) ;;
+    *)
+      as_root rm -f "$PARTIAL"
+      echo "!! the database dump is empty or truncated — not deploying without a restore point" >&2
+      exit 1
+      ;;
+  esac
+  as_root mv "$PARTIAL" "$DUMP"
+  echo "== database dumped to $DUMP ($(as_root du -h "$DUMP" | cut -f1)) =="
+fi
+
+# 3. code
+as_owner git reset --hard "$TARGET"
 echo "== at $(as_owner git rev-parse --short HEAD) =="
 
-# 3. build + (re)start
+# 4. build + (re)start
 as_root docker compose up --build -d
 
-# 4. health
+# 5. health
 for ((i = 0; i < HEALTH_TIMEOUT; i += 5)); do
   if curl -fs "http://127.0.0.1:$APP_PORT/api/health" >/dev/null 2>&1; then
     as_root docker image prune -f >/dev/null
