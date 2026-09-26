@@ -14,6 +14,7 @@ import { TripTabs } from "@/components/trips/TripTabs";
 import { previewCard } from "@/lib/share/preview";
 import { annotationGates } from "@/lib/annotation/eligibility";
 import { describeCollectionWithAi, setCollectionDescription } from "@/app/collections/actions";
+import { readableContainerDescription, withReadableDescription } from "@/lib/photos/readable-text";
 
 export async function generateMetadata({ params }: LayoutProps<"/collections/[slug]">): Promise<Metadata> {
   const { slug } = await params;
@@ -32,7 +33,8 @@ export async function generateMetadata({ params }: LayoutProps<"/collections/[sl
 /** The card a link to this collection carries; `shareToken` lets a secret link's cover load without a cookie. */
 export async function collectionCard(collection: CollectionWithCounts, pageUrl: string, shareToken?: string) {
   const cover = await collectionCoverFor(collection);
-  const description = collection.description?.trim() || `${collection._count.items} photo${collection._count.items === 1 ? "" : "s"}`;
+  // A link's card is read by whoever it is posted to, so it carries only what a stranger may read.
+  const description = readableContainerDescription(collection, false)?.trim() || `${collection._count.items} photo${collection._count.items === 1 ? "" : "s"}`;
   return previewCard({ title: collection.title, description, pageUrl, cover, appUrl: env().APP_URL, shareToken, shareKind: "collection" });
 }
 
@@ -60,7 +62,7 @@ export default async function CollectionLayout({ params, children }: LayoutProps
     <TripTheme themeKey={collection.themeKey}>
       <Nav viewer={viewer} />
       <CollectionHeader
-        collection={collection}
+        collection={withReadableDescription(collection, viewer.kind === "user")}
         shareUrl={shareableCollectionUrl(collection, env().APP_URL)}
         {...(owns ? { save: setCollectionDescription.bind(null, slug), ...((await annotationGates()).active ? { describe: describeCollectionWithAi.bind(null, slug) } : {}) } : {})}
       />

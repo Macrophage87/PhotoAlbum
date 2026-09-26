@@ -10,6 +10,7 @@ import { CollectionCard } from "@/components/collections/CollectionCard";
 import { AppShell, Container } from "@/components/layout/AppShell";
 import { TripCard } from "@/components/trips/TripCard";
 import { ButtonLink } from "@/components/ui";
+import { withReadableDescription } from "@/lib/photos/readable-text";
 
 /** How many cards a page of the front page holds. Enough to browse, few enough that a long history still loads. */
 const PAGE = 24;
@@ -83,7 +84,7 @@ export default async function HomePage({ searchParams }: PageProps<"/">) {
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
                 {collections.map((c, i) => (
-                  <CollectionCard key={c.id} collection={c} cover={collectionCovers[i]} showVisibility={member} favourite={member ? collectionFavourites.get(c.id) : null} />
+                  <CollectionCard key={c.id} collection={withReadableDescription(c, member)} cover={collectionCovers[i]} showVisibility={member} favourite={member ? collectionFavourites.get(c.id) : null} />
                 ))}
               </div>
             )}

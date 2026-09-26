@@ -6,6 +6,7 @@ import { TrashTable } from "@/components/admin/TrashTable";
 import { photoUrl } from "@/lib/photos/urls";
 import { uploaderLabel } from "@/components/photos/toGrid";
 import { isRemovalRequest, trashReasonLabel } from "@/lib/photos/trash";
+import { readableTitle } from "@/lib/photos/readable-text";
 
 export const metadata = { title: "Trash" };
 
@@ -17,7 +18,7 @@ export default async function TrashPage() {
     where: { trashedAt: { not: null } },
     orderBy: { trashedAt: "desc" },
     select: {
-      id: true, title: true, caption: true, originalName: true, kind: true, updatedAt: true, takenAt: true, trashedAt: true, trashReason: true, trashNote: true,
+      id: true, title: true, membersTitle: true, caption: true, originalName: true, kind: true, updatedAt: true, takenAt: true, trashedAt: true, trashReason: true, trashNote: true,
       trashedBy: { select: { name: true, email: true } },
       uploader: { select: { name: true, email: true } },
       trip: { select: { slug: true, title: true } },
@@ -25,7 +26,7 @@ export default async function TrashPage() {
   });
   const items = rows.map((p) => ({
     id: p.id,
-    label: p.title ?? p.caption ?? p.originalName,
+    label: readableTitle(p, true) ?? p.caption ?? p.originalName,
     thumbUrl: p.kind === "EXTERNAL_VIDEO" ? null : photoUrl(p, "thumb"),
     trashedAt: p.trashedAt!.toISOString(),
     trashedBy: p.trashedBy ? uploaderLabel(p.trashedBy.name, p.trashedBy.email) : null,

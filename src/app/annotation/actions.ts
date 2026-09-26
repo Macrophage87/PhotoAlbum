@@ -14,6 +14,7 @@ import { estimateCost, TOKENS_PER_PLACE, type Estimate } from "@/lib/annotation/
 import { BACKFILL_CAP, backfillCandidates, backfillExclusions, taskOf, type BackfillScope, type BackfillTask } from "@/lib/jobs/handlers/annotation-batch";
 import { annotationSchema, toStored, type StoredAnnotation } from "@/lib/annotation/schema";
 import { anthropic } from "@/lib/annotation/client";
+import { writtenFromMembersOnly } from "@/lib/annotation/members-only";
 
 /** The admin's half of the two gates. Recorded with who and when so the decision is auditable. */
 export async function setAnnotationOptIn(on: boolean): Promise<void> {
@@ -73,7 +74,7 @@ export async function updateAnnotation(photoId: string, fd: FormData): Promise<v
   const owner = await db.photo.findUnique({ where: { id: photoId }, select: { uploaderId: true } });
   if (!owner) return;
   if (!canEditMedia(user, owner)) throw new Error(NOT_YOURS);
-  const photo = await db.photo.findUnique({ where: { id: photoId }, select: { annotation: true } });
+  const photo = await db.photo.findUnique({ where: { id: photoId }, select: { annotation: true, annotationMembersOnly: true, context: true } });
   if (!photo) return;
   const current = (photo.annotation ?? {}) as Partial<StoredAnnotation>;
   const list = (v: FormDataEntryValue | null) => String(v ?? "").split(",").map((t) => t.trim()).filter(Boolean);
@@ -103,7 +104,9 @@ export async function updateAnnotation(photoId: string, fd: FormData): Promise<v
     estimatedYear: null,
     estimatedPlace: null,
   });
-  await db.photo.update({ where: { id: photoId }, data: { annotation: merged, annotationSource: "EDITED" } });
+  // An edit can add a name as easily as take one out, and never makes members-only text public again.
+  const membersOnly = photo.annotationMembersOnly || (await writtenFromMembersOnly(photoId, merged, photo.context));
+  await db.photo.update({ where: { id: photoId }, data: { annotation: merged, annotationSource: "EDITED", annotationMembersOnly: membersOnly } });
   revalidatePath(`/photos/${photoId}`);
 }
 

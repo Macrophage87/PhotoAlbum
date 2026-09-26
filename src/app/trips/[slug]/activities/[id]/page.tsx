@@ -42,7 +42,7 @@ export default async function ActivityPage({ params, searchParams }: PageProps<"
           : undefined,
       }
     : undefined;
-  if (!owns) return <ActivityDetail trip={trip} activity={activity} photos={photos} upload={upload} editable={false} />;
+  if (!owns) return <ActivityDetail trip={trip} activity={activity} photos={photos} upload={upload} member={editable} editable={false} />;
   // Sharing an activity shapes what leaves the album, so it belongs with the rest of arranging the trip.
   const cover = await activityCover(activity);
   const share = {
@@ -58,6 +58,7 @@ export default async function ActivityPage({ params, searchParams }: PageProps<"
   const describe = gates.active && photos.length > 0 ? describeActivityWithAi.bind(null, slug, activity.id) : undefined;
   return (
     <ActivityDetail
+      member={editable}
       trip={trip}
       activity={activity}
       photos={photos}

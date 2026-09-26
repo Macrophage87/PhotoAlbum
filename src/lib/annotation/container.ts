@@ -10,6 +10,7 @@ import { dateColumnToDay } from "@/lib/time/local-day";
 import { NOT_TRASHED } from "@/lib/photos/trash";
 import { permittedNames } from "@/lib/people/gates";
 import { annotationGates, notOptedOutWhere } from "./eligibility";
+import { descriptionFromMembersOnly } from "./members-only";
 import { anthropic, thinkingParams } from "./client";
 import { activityDescriptionSchema, parseActivityDescription, type ActivityDescription } from "./activity";
 
@@ -151,7 +152,10 @@ export async function writeContainerDescription(kind: ContainerKind, id: string,
   if (response.stop_reason === "refusal") throw new Error("The helper declined to describe this one");
   const parsed = parseActivityDescription(response.content as { type: string; text?: string }[]);
   if (!parsed) throw new Error("The helper's answer could not be read; try again");
-  if (kind === "trip") await db.trip.update({ where: { id }, data: { description: parsed.description } });
-  else await db.collection.update({ where: { id }, data: { description: parsed.description } });
+  // Written from names or notes, it is read by members only; see `descriptionFromMembersOnly`.
+  const membersOnly = await descriptionFromMembersOnly(parsed.description, { names, notes: container.photos.some((p) => p.context?.trim()) });
+  const data = { description: parsed.description, descriptionMembersOnly: membersOnly };
+  if (kind === "trip") await db.trip.update({ where: { id }, data });
+  else await db.collection.update({ where: { id }, data });
   return parsed.description;
 }

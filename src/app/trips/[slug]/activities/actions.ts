@@ -16,6 +16,8 @@ import { reassignPhotosForActivity } from "@/lib/activities/reassign";
 import { fieldErrors, participantsFromForm } from "@/lib/trips/validation";
 import type { ActivityType } from "@/generated/prisma/enums";
 import type { ActivityFormState } from "@/components/activities/ActivityForm";
+import { descriptionStaysMembersOnly } from "@/lib/photos/readable-text";
+import { descriptionFromMembersOnly } from "@/lib/annotation/members-only";
 
 /** An activity is part of the shape of a trip, so it is the trip's maker (and admins) who arrange them. */
 async function loadTrip(slug: string) {
@@ -54,7 +56,7 @@ export async function updateActivity(slug: string, id: string, _prev: ActivityFo
   const parsed = activityInputFromForm(fd);
   if (!parsed.success) return { status: "error", fieldErrors: fieldErrors(parsed.error) };
   const v = parsed.data;
-  const existing = await db.activity.findFirst({ where: { id, tripId: trip.id }, select: { id: true } });
+  const existing = await db.activity.findFirst({ where: { id, tripId: trip.id }, select: { id: true, description: true, descriptionMembersOnly: true } });
   if (!existing) return { status: "error", message: "Activity not found" };
   // `set` reconciles to exactly what was ticked, so unticking somebody removes them; a form that never carried the
   // control at all leaves the list as it was.
@@ -67,6 +69,7 @@ export async function updateActivity(slug: string, id: string, _prev: ActivityFo
       startTime: localInputToInstant(v.start, trip.timezone),
       endTime: localInputToInstant(v.end, trip.timezone),
       description: v.description,
+      descriptionMembersOnly: descriptionStaysMembersOnly(existing, v.description),
       ...(there ? { participants: { set: there.map((pid) => ({ id: pid })) } } : {}),
     },
   });
@@ -141,9 +144,9 @@ const DESCRIPTION_TEXT = z.string().max(4000);
 export async function setActivityDescription(slug: string, id: string, text: string): Promise<void> {
   const trip = await loadTrip(slug);
   const description = DESCRIPTION_TEXT.parse(text).trim();
-  const activity = await db.activity.findFirst({ where: { id, tripId: trip.id }, select: { id: true } });
+  const activity = await db.activity.findFirst({ where: { id, tripId: trip.id }, select: { id: true, description: true, descriptionMembersOnly: true } });
   if (!activity) throw new Error("Activity not found");
-  await db.activity.update({ where: { id }, data: { description: description || null } });
+  await db.activity.update({ where: { id }, data: { description: description || null, descriptionMembersOnly: descriptionStaysMembersOnly(activity, description) } });
   revalidatePath(`/trips/${slug}/activities/${id}`);
 }
 
@@ -171,12 +174,15 @@ export async function describeActivityWithAi(slug: string, id: string, note?: st
 
   const names = [...new Set((await Promise.all(activity.photos.map((p) => permittedNames(p.id)))).flat())];
   const request = await buildActivityRequest(activity, gates.model, names, DESCRIPTION_TEXT.parse(note ?? "").trim() || undefined);
+  const notes = activity.photos.some((p) => p.context?.trim());
   const response = await anthropic().messages.create(request);
   console.log(`[annotate-activity] ${activity.id} model=${response.model} stop=${response.stop_reason} in=${response.usage.input_tokens} out=${response.usage.output_tokens}`);
   if (response.stop_reason === "refusal") throw new Error("The helper declined to describe this one");
   const parsed = parseActivityDescription(response.content as { type: string; text?: string }[]);
   if (!parsed) throw new Error("The helper's answer could not be read; try again");
-  await db.activity.update({ where: { id }, data: { description: parsed.description } });
+  // Written from names or notes, it is read by members only; see `descriptionFromMembersOnly`.
+  const membersOnly = await descriptionFromMembersOnly(parsed.description, { names, notes });
+  await db.activity.update({ where: { id }, data: { description: parsed.description, descriptionMembersOnly: membersOnly } });
   revalidatePath(`/trips/${slug}/activities/${id}`);
   return parsed.description;
 }

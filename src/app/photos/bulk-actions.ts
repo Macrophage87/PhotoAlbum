@@ -14,6 +14,7 @@ import { editableMediaIds } from "@/lib/auth/ownership";
 import { Prisma } from "@/generated/prisma/client";
 import { editsSchema, tidyEdits, type PhotoEdits } from "@/lib/images/edits";
 import type { AutoColourResult } from "@/lib/photos/auto-colour";
+import { readableTitle } from "@/lib/photos/readable-text";
 
 const ids = z.array(z.string().min(1)).min(1).max(500);
 
@@ -132,7 +133,7 @@ async function planSelection(user: { id: string; role: "ADMIN" | "MEMBER" }, pho
   const p = datePlanSchema.parse(plan);
   const photos = await db.photo.findMany({
     where: { id: { in: list }, trashedAt: null },
-    select: { id: true, tripId: true, gpsSource: true, activityId: true, activitySetById: true, takenAt: true, tzOffsetMin: true, caption: true, title: true, originalName: true, trip: { select: { timezone: true } } },
+    select: { id: true, tripId: true, gpsSource: true, activityId: true, activitySetById: true, takenAt: true, tzOffsetMin: true, caption: true, title: true, membersTitle: true, originalName: true, trip: { select: { timezone: true } } },
     orderBy: dateOrder,
   });
   const rows: (PlannedRow & { photo: (typeof photos)[number] })[] = [];
@@ -144,7 +145,7 @@ async function planSelection(user: { id: string; role: "ADMIN" | "MEMBER" }, pho
     rows.push({
       photo,
       id: photo.id,
-      label: photo.caption ?? photo.title ?? photo.originalName,
+      label: photo.caption ?? readableTitle(photo, true) ?? photo.originalName,
       before: photo.takenAt ? { at: photo.takenAt.toISOString(), tzOffsetMin: photo.tzOffsetMin ?? fallbackOffsetMin } : null,
       after: { at: next.takenAt.toISOString(), tzOffsetMin: next.tzOffsetMin },
     });

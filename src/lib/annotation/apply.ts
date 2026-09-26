@@ -3,6 +3,7 @@ import { annotationSchema, clampAnnotation, toStored, type Annotation } from "./
 import { enqueueEmbedding } from "@/lib/jobs/handlers/embed-photo";
 import { applyPlaceEstimate, needsPlaceEstimate } from "./place";
 import { isWeakDate } from "@/lib/photos/date-from-neighbours";
+import { writtenFromMembersOnly } from "./members-only";
 
 export type ApplyResult = { ok: true } | { ok: false; reason: "refusal" | "invalid" | "max_tokens" };
 
@@ -10,9 +11,12 @@ export type ApplyResult = { ok: true } | { ok: false; reason: "refusal" | "inval
 export type Usage = { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null };
 
 export async function applyAnnotation(photoId: string, model: string, parsed: Annotation, raw: { usage?: Usage; batched?: boolean } & Record<string, unknown>): Promise<void> {
-  const current = await db.photo.findUnique({ where: { id: photoId }, select: { takenAt: true, takenAtSource: true, estimatedDateSource: true, annotationSource: true, title: true, kind: true, lat: true, placeEstimatedAt: true } });
+  const current = await db.photo.findUnique({ where: { id: photoId }, select: { takenAt: true, takenAtSource: true, estimatedDateSource: true, annotationSource: true, title: true, kind: true, lat: true, placeEstimatedAt: true, context: true } });
   if (!current) return;
   const stored = toStored(parsed);
+  // Written from names or notes, it is the family's to read: kept off the item's own title and out of public view.
+  const membersOnly = await writtenFromMembersOnly(photoId, stored, current.context);
+  const aiTitle = current.kind !== "EXTERNAL_VIDEO" ? stored.title.trim() : "";
   const est = parsed.estimatedYear;
   const noReliableDate = isWeakDate(current.takenAtSource, current.takenAt);
   const keepMemberEstimate = current.estimatedDateSource === "MEMBER";
@@ -26,8 +30,11 @@ export async function applyAnnotation(photoId: string, model: string, parsed: An
         // A member's edits are never overwritten silently: re-annotation only refreshes machine text.
         annotationSource: current.annotationSource === "EDITED" ? "EDITED" : "MACHINE",
         annotationError: null,
-        // A title the family did not write themselves: only ever filled in where there is none (embedded videos keep YouTube's).
-        ...(!current.title?.trim() && current.kind !== "EXTERNAL_VIDEO" && stored.title.trim() ? { title: stored.title.trim() } : {}),
+        annotationMembersOnly: membersOnly,
+        // A title the family did not write themselves: only ever filled in where there is none (embedded videos keep
+        // YouTube's). One that names somebody is shown to members in its place instead, and never becomes the title.
+        membersTitle: membersOnly && aiTitle ? aiTitle : null,
+        ...(!membersOnly && !current.title?.trim() && aiTitle ? { title: aiTitle } : {}),
         annotationInputTokens: raw.usage?.input_tokens ?? null,
         annotationCacheReadTokens: raw.usage?.cache_read_input_tokens ?? null,
         annotationCacheWriteTokens: raw.usage?.cache_creation_input_tokens ?? null,

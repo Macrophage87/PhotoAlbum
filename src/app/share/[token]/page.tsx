@@ -6,6 +6,7 @@ import { PhotoGrid } from "@/components/photos/PhotoGrid";
 import { toGridPhoto } from "@/components/photos/toGrid";
 import { ActivityCard } from "@/components/activities/ActivityCard";
 import { NOT_TRASHED } from "@/lib/photos/trash";
+import { withReadableDescription } from "@/lib/photos/readable-text";
 
 export default async function SharedOverviewPage({ params }: PageProps<"/share/[token]">) {
   const { token } = await params;
@@ -26,7 +27,7 @@ export default async function SharedOverviewPage({ params }: PageProps<"/share/[
           <h2 className="font-display text-xl font-semibold mb-3">Activities</h2>
           <div className="space-y-4">
             {activities.map((a) => (
-              <ActivityCard key={a.id} activity={{ ...a, photoCount: a._count.photos }} tripSlug={trip.slug} timezone={trip.timezone} hrefBase={`/share/${token}/activities`} />
+              <ActivityCard key={a.id} activity={{ ...withReadableDescription(a, false), photoCount: a._count.photos }} tripSlug={trip.slug} timezone={trip.timezone} hrefBase={`/share/${token}/activities`} />
             ))}
           </div>
         </section>

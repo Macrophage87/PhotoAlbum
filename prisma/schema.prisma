@@ -248,6 +248,9 @@ model Trip {
   slug         String         @unique
   title        String
   description  String?
+  /// The helper wrote the description from names or notes, or it names somebody the album knows: members only.
+  /// Kept while the text is; a member writing it afresh by hand makes the words theirs to publish.
+  descriptionMembersOnly Boolean @default(false)
   startDate    DateTime       @db.Date
   endDate      DateTime       @db.Date
   timezone     String         @default("UTC")
@@ -285,6 +288,9 @@ model Activity {
   startTime   DateTime
   endTime     DateTime
   description String?
+  /// The helper wrote the description from names or notes, or it names somebody the album knows: members only.
+  /// Kept while the text is; a member writing it afresh by hand makes the words theirs to publish.
+  descriptionMembersOnly Boolean @default(false)
   trackId     String?      @unique
   track       Track?       @relation("ActivityTrack", fields: [trackId], references: [id], onDelete: SetNull)
   photos      Photo[]
@@ -378,6 +384,12 @@ model Photo {
   annotationCacheWriteTokens Int?
   annotationOutputTokens    Int?
   annotationBatched         Boolean?
+  /// The helper's text was written from something members-only — the names the family confirmed, the uploader's
+  /// notes — or names somebody the album knows. It is then read and searched by members only, like what it came from.
+  annotationMembersOnly     Boolean  @default(false)
+  /// The helper's title when it is members-only: shown to members where the item has no title of its own, never to
+  /// anybody else. `title` itself only ever holds what anybody who may see the item may read.
+  membersTitle              String?
   /// Darkroom edits, kept as instructions rather than applied to the file: crop, straighten, brightness, contrast,
   /// colour. The original is never touched, the renditions are re-rendered from it whenever this changes, and
   /// clearing it puts the item back exactly as it arrived. Only the uploader or an admin may set it.
@@ -411,9 +423,11 @@ model Photo {
   estimatedDateConfidence Float?
   estimatedDateSource     EstimatedDateSource?
   estimatedDateNote       String?
-  /// Full-text index over caption, context, title, place and container titles: the only column anonymous search queries.
+  /// Full-text index over caption, title, place, the helper's text when it is not members-only, and the titles of
+  /// public trips and collections: the only column anonymous search queries.
   searchVector        Unsupported("tsvector")?
-  /// Adds people's, pets' and the uploader's names; queried for members only.
+  /// Adds people's, pets' and the uploader's names, the notes, members-only helper text and private container
+  /// titles; queried for members only.
   searchVectorMembers Unsupported("tsvector")?
   /// OpenCLIP ViT-B/32 image embedding (cosine), for similarity, suggestions and the graph.
   embedding     Unsupported("vector(512)")?
@@ -462,6 +476,9 @@ model Collection {
   slug         String         @unique
   title        String
   description  String?
+  /// The helper wrote the description from names or notes, or it names somebody the album knows: members only.
+  /// Kept while the text is; a member writing it afresh by hand makes the words theirs to publish.
+  descriptionMembersOnly Boolean @default(false)
   themeKey     String         @default("default")
   visibility   TripVisibility @default(PRIVATE)
   shareToken   String?        @unique
