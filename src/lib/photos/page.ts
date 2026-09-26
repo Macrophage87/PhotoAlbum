@@ -56,11 +56,12 @@ export function intersectIds(lists: string[][]): string[] {
 }
 
 /** One page of a trip's gallery in capture order, with a cursor (the last item's id) for the next page. */
-export async function tripPhotoPage(tripId: string, opts: { uploaderId?: string; cursor?: string | null; take?: number; viewerId?: string | null; order?: PhotoOrder; filter?: GalleryFilter } = {}): Promise<PhotoPage> {
+export async function tripPhotoPage(tripId: string, opts: { uploaderId?: string; cursor?: string | null; take?: number; viewerId?: string | null; order?: PhotoOrder; filter?: GalleryFilter; /** Only these, for re-reading photos a gallery already holds; any that no longer belong here are left out. */ ids?: string[] } = {}): Promise<PhotoPage> {
   const take = opts.take ?? GALLERY_PAGE;
   // `uploaderId` predates the filter and still works on its own, so a link somebody kept goes on working.
   const filter: GalleryFilter = { ...NO_FILTER, ...opts.filter, uploaderId: opts.filter?.uploaderId ?? opts.uploaderId ?? null };
   const lists: string[][] = [];
+  if (opts.ids) lists.push(opts.ids);
   if (filter.q) lists.push(await idsMatching(filter.q));
   if (filter.year) lists.push(await idsInLocalYear(tripId, filter.year));
   // One list per name, so two names means the photographs they are both on rather than either.

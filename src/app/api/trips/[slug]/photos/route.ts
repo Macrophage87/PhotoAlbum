@@ -5,6 +5,10 @@ import { canViewTrip } from "@/lib/auth/access";
 import { tripPhotoPage } from "@/lib/photos/page";
 import { toGridPhoto } from "@/components/photos/toGrid";
 import { parseGalleryFilter } from "@/lib/photos/filters";
+import { photoFavourites } from "@/lib/favourites/queries";
+
+/** How many photos one re-read may name: short enough for an address. The gallery asks in pieces this size. */
+const REREAD_MAX = 200;
 
 /** The next page of a trip gallery, under the same visibility rule as the page itself; uploader names for members only. */
 export async function GET(request: NextRequest, { params }: RouteContext<"/api/trips/[slug]/photos">) {
@@ -19,6 +23,10 @@ export async function GET(request: NextRequest, { params }: RouteContext<"/api/t
   // The same order the page was built in, or the next page would continue a different list.
   const asked = sp.get("order");
   const order = asked === "oldest" ? "taken" : asked === "newest" ? "newest" : "favorites";
-  const page = await tripPhotoPage(trip.id, { cursor: sp.get("cursor"), filter, order, viewerId: member ? viewer.user.id : null });
-  return NextResponse.json({ photos: page.photos.map((p) => toGridPhoto(p, null, member)), nextCursor: page.nextCursor, total: page.total }, { headers: { "Cache-Control": "private, no-store" } });
+  // `ids` re-reads photos the gallery already shows, after an action changed them, under the same rules and filter.
+  const ids = sp.get("ids")?.split(",").filter(Boolean).slice(0, REREAD_MAX);
+  const page = await tripPhotoPage(trip.id, ids ? { ids, take: Math.max(ids.length, 1), filter, order, viewerId: member ? viewer.user.id : null } : { cursor: sp.get("cursor"), filter, order, viewerId: member ? viewer.user.id : null });
+  // Hearts as the page draws them, so a tile from a later page has one too.
+  const favourites = await photoFavourites(page.photos.map((p) => p.id), viewer);
+  return NextResponse.json({ photos: page.photos.map((p) => toGridPhoto(p, null, member, favourites.get(p.id))), nextCursor: ids ? null : page.nextCursor, total: page.total }, { headers: { "Cache-Control": "private, no-store" } });
 }
