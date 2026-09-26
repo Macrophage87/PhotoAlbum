@@ -48,6 +48,8 @@ export function scopeFor(target: UploadTarget): string {
 
 type Queue = {
   items: UploadItem[];
+  /** The first file of the batch in hand: everything added since the queue last had nothing going. */
+  batchFrom: string | null;
   add: (items: UploadItem[]) => void;
   /** Put a scope's files that never arrived back on the queue, from the top. */
   retry: (scope: string) => void;
@@ -61,10 +63,11 @@ type Queue = {
 
 const QueueContext = createContext<Queue | null>(null);
 
+/** With no provider above (it should always be there), a queue that holds nothing and does nothing, not an error page. */
+const INERT: Queue = { items: [], batchFrom: null, add: () => {}, retry: () => {}, clear: () => {}, acknowledge: () => {}, statusTrouble: null };
+
 export function useUploadQueue(): Queue {
-  const q = useContext(QueueContext);
-  if (!q) throw new Error("useUploadQueue needs an UploadQueueProvider above it");
-  return q;
+  return useContext(QueueContext) ?? INERT;
 }
 
 const CONCURRENCY = 3;
@@ -267,7 +270,7 @@ export function UploadQueueProvider({ children }: { children: ReactNode }) {
   }, [sending]);
 
   return (
-    <QueueContext.Provider value={{ items, add, retry, clear, acknowledge, statusTrouble }}>
+    <QueueContext.Provider value={{ items, batchFrom, add, retry, clear, acknowledge, statusTrouble }}>
       {children}
       <UploadPill batch={batchFrom ? items.slice(Math.max(0, items.findIndex((i) => i.localId === batchFrom))) : items} unseen={items.filter((i) => i.status === "failed" && !i.seen)} dismiss={() => acknowledge()} />
     </QueueContext.Provider>
@@ -295,16 +298,23 @@ function UploadPill({ batch, unseen, dismiss }: { batch: UploadItem[]; unseen: U
 
   // Said to a screen reader at the moments that matter, not at every file.
   const announce = unseen.length && !going.length ? `${unseen.length} ${unseen.length === 1 ? "file" : "files"} didn't make it.` : going.length ? (toSend ? `Uploading ${batch.length} ${batch.length === 1 ? "file" : "files"}.` : `All ${batch.length} uploaded.`) : "";
-  const status = <p role="status" aria-live="polite" className="sr-only">{announce}</p>;
-  // Picking from the album has its own button where this would sit; the pill is back on the next page.
-  if ((!going.length && !unseen.length) || pathname.endsWith("/add")) return status;
-  const place = "fixed z-40 left-4 sm:left-auto sm:right-4 bottom-[calc(1rem+env(safe-area-inset-bottom))] max-w-[calc(100vw-2rem)] text-sm";
+  const shown = (going.length || unseen.length) && !pathname.endsWith("/add") ? <PillBody batch={batch} going={going} toSend={toSend} sent={sent} unseen={unseen} dismiss={dismiss} open={open} setOpen={setOpen} /> : null;
+  // The live region stays put whatever the pill shows (or whether it shows), so every change to it is read out.
+  return (
+    <>
+      <p role="status" aria-live="polite" className="sr-only">{announce}</p>
+      {/* Picking from the album has its own button where this would sit; the pill is back on the next page. */}
+      {shown}
+    </>
+  );
+}
 
+function PillBody({ batch, going, toSend, sent, unseen, dismiss, open, setOpen }: { batch: UploadItem[]; going: UploadItem[]; toSend: number; sent: number; unseen: UploadItem[]; dismiss: () => void; open: boolean; setOpen: (f: (o: boolean) => boolean) => void }) {
+  const place = "fixed z-40 left-4 sm:left-auto sm:right-4 bottom-[calc(1rem+env(safe-area-inset-bottom))] max-w-[calc(100vw-2rem)] text-sm";
   if (!going.length) {
     const back = unseen[unseen.length - 1].from;
     return (
       <div className={place} data-testid="upload-pill">
-        {status}
         <div className="flex items-center gap-1 rounded-full bg-amber-100 border border-amber-300 text-amber-900 shadow-lg pl-4 pr-1 py-1">
           <Link href={back} data-testid="upload-pill-review">
             {unseen.length} {unseen.length === 1 ? "file" : "files"} didn&apos;t make it — <span className="underline underline-offset-2">Review</span>
@@ -314,11 +324,9 @@ function UploadPill({ batch, unseen, dismiss }: { batch: UploadItem[]; unseen: U
       </div>
     );
   }
-
   const back = going[going.length - 1].from;
   return (
     <div className={place} data-testid="upload-pill">
-      {status}
       {open && (
         <div id="upload-pill-panel" className="mb-2 w-72 rounded-theme border border-border bg-surface p-3 shadow-lg space-y-2">
           <p>
@@ -327,7 +335,7 @@ function UploadPill({ batch, unseen, dismiss }: { batch: UploadItem[]; unseen: U
             {unseen.length ? `; ${unseen.length} didn't make it` : ""}.
           </p>
           <p className="text-muted">You can keep using the album while these go up; don&apos;t close the tab until they&apos;re done.</p>
-          <Link href={back} className="text-primary underline underline-offset-2" onClick={() => setOpen(false)}>
+          <Link href={back} className="text-primary underline underline-offset-2" onClick={() => setOpen(() => false)}>
             See them where they were added
           </Link>
         </div>

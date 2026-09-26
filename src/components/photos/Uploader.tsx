@@ -142,14 +142,19 @@ export function Uploader({ tripId, activityId, collectionId, scope, onDone, maxC
   const filedHere = duplicates.filter((i) => i.filed && (i.filed.trip || i.filed.activity || i.filed.collection));
   const notYours = duplicates.filter((i) => i.filed?.notYours);
   const alreadyHere = duplicates.filter((i) => !filedHere.includes(i) && !notYours.includes(i));
+  // The line counts the batch in hand, as the pill does: what was added since the queue was last idle (or, when this
+  // place added nothing since then, its own last batch).
+  const from = queue.batchFrom ? queue.items.findIndex((i) => i.localId === queue.batchFrom) : -1;
+  const current = from >= 0 ? queue.items.slice(from).filter((i) => i.scope === here) : [];
+  const batch = current.length ? current : items;
   const counts = {
-    done: items.filter((i) => Boolean(i.photoId) && i.status !== "failed").length,
-    failed: items.filter((i) => i.status === "failed").length,
-    waiting: items.filter((i) => i.retrying).length,
-    inFlight: items.filter((i) => i.status === "uploading").length,
-    total: items.length,
-    ready: items.filter((i) => i.status === "ready").length,
-    processing: items.filter((i) => i.status === "processing").length,
+    done: batch.filter((i) => Boolean(i.photoId) && i.status !== "failed").length,
+    failed: batch.filter((i) => i.status === "failed").length,
+    waiting: batch.filter((i) => i.retrying).length,
+    inFlight: batch.filter((i) => i.status === "uploading").length,
+    total: batch.length,
+    ready: batch.filter((i) => i.status === "ready").length,
+    processing: batch.filter((i) => i.status === "processing").length,
   };
   /** Put the ones that did not make it back on the queue, from the top. */
   const retryFailed = () => queue.retry(here);
