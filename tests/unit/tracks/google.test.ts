@@ -159,6 +159,15 @@ describe("google visits", () => {
     expect(positionAt(pts, at("2025-08-12T14:58:24Z"))).not.toBeNull();
   });
 
+  it("fill a stretch the steps left too long, not just a gap with no filler at all", () => {
+    // Recorded at 14:02 and 14:13 inside a visit, so its steps (14:05, 14:10) fall too close to them; a cut just after
+    // 14:02 puts filler in the gap without closing it, leaving almost 11 minutes to 14:13.
+    const recorded: TrackPoint[] = [{ t: at("2025-08-12T14:02:00Z"), lat: 40.78, lng: -73.96 }, { t: at("2025-08-12T14:13:00Z"), lat: 40.78, lng: -73.96 }];
+    const cut = at("2025-08-12T14:02:10Z");
+    const pts = fillStays(recorded, [segmentToStay(museum("2025-08-12T13:00:00Z", "2025-08-12T15:00:00Z"))!], window, [cut - 1, cut]);
+    expect(positionAt(pts, at("2025-08-12T14:07:35Z"))).not.toBeNull();
+  });
+
   it("fill the middle of a gap inside a visit that falls between the steps", () => {
     const walk = (t: string): Seg => ({ startTime: t, endTime: t, timelinePath: [{ point: "geo:40.78,-73.96", time: t }] });
     const pts = parse([museum("2025-08-12T13:00:00Z", "2025-08-12T15:00:00Z"), walk("2025-08-12T14:02:00Z"), walk("2025-08-12T14:13:00Z")]);
