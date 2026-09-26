@@ -76,17 +76,19 @@ describe("the key forgotten names are hashed under", () => {
     expect((await forgetKeyState()).paused).toBe(false);
   });
 
-  it("takes a passphrase of 16 characters or more, and refuses a shorter one", async () => {
+  it("refuses a FORGET_KEY that is not 32 bytes of base64, and takes one that is", async () => {
     env.NODE_ENV = "production";
     env.FORGET_KEY = "e2e-forget-key-not-a-secret";
-    const state = await forgetKeyState();
-    expect(state.write?.version).toBe(1);
-    expect(state.problem).toBeNull();
-    await expect(assertCanForget()).resolves.toBeUndefined();
-    await resetTestDb();
-    env.FORGET_KEY = "too-short";
-    expect((await forgetKeyState()).write).toBeNull();
-    expect((await forgetKeyState()).problem).toMatch(/too short/);
+    const bad = await forgetKeyState();
+    expect(bad.write).toBeNull();
+    expect(bad.invalid).toBe(true);
+    expect(bad.problem).toMatch(/set but not valid/);
+    await expect(assertCanForget()).rejects.toThrow(/paused/);
+    env.FORGET_KEY = KEY;
+    const good = await forgetKeyState();
+    expect(good.write?.version).toBe(1);
+    expect(good.invalid).toBe(false);
+    expect(good.problem).toBeNull();
   });
 
   it("recognises a name forgotten before FORGET_KEY was set and again after, on both people's photographs", async () => {

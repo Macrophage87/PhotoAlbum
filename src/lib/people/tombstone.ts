@@ -1,6 +1,7 @@
 import { createHash, createHmac, hkdfSync, randomBytes } from "node:crypto";
 import { env } from "@/lib/env";
 import { db } from "@/lib/db";
+import { forgetKeySecret, INVALID_FORGET_KEY } from "./forget-key";
 import { Prisma } from "@/generated/prisma/client";
 import type { StoredAnnotation } from "@/lib/annotation/schema";
 import { inTitleCase, isEverydayWord, isKinWord, isTitlePrefix, kinshipKey, isPlaceOrDateWord, normalizeName, notThePerson, replaceSpans, type Neighbourhood } from "./scrub";
@@ -44,21 +45,12 @@ export type ForgetKeyState = {
   paused: boolean;
   /** Names hashed under the development stand-in, which a copy of the database is enough to test. */
   weak: number;
+  /** FORGET_KEY is set, but not to 32 bytes of base64. */
+  invalid: boolean;
 };
 
 function fingerprint(key: Buffer): string {
   return createHash("sha256").update(key).digest("hex").slice(0, 16);
-}
-
-/**
- * The secret in FORGET_KEY: 32 bytes of base64 as `openssl rand -base64 32` makes them, or else the text itself if it
- * is at least 16 characters (HKDF takes a secret of any length). Anything shorter is refused.
- */
-function secretOf(value: string): Buffer {
-  const v = value.trim();
-  const decoded = Buffer.from(v, "base64");
-  if (decoded.length === 32 && decoded.toString("base64") === v) return decoded;
-  return v.length >= 16 ? Buffer.from(v, "utf8") : Buffer.alloc(0);
 }
 
 /** This install's random salt, made once and kept in the database. */
@@ -78,10 +70,11 @@ async function installSalt(): Promise<Buffer> {
 export async function forgetKeyState(): Promise<ForgetKeyState> {
   const e = env();
   const production = e.NODE_ENV === "production";
-  const secret = e.FORGET_KEY ? secretOf(e.FORGET_KEY) : null;
+  const secret = forgetKeySecret(e.FORGET_KEY);
+  const invalid = Boolean(e.FORGET_KEY) && !secret;
   const salt = await installSalt();
   const v0: VersionKey = { version: 0, key: Buffer.from(hkdfSync("sha256", salt, Buffer.alloc(0), "forgotten-name v0", 32)) };
-  const v1: VersionKey | null = secret?.length ? { version: 1, key: Buffer.from(hkdfSync("sha256", secret, salt, "forgotten-name v1", 32)) } : null;
+  const v1: VersionKey | null = secret ? { version: 1, key: Buffer.from(hkdfSync("sha256", secret, salt, "forgotten-name v1", 32)) } : null;
   const [setting, counts] = await Promise.all([
     db.appSetting.findUniqueOrThrow({ where: { id: "app" }, select: { forgetKeyFingerprint: true } }),
     db.forgottenName.groupBy({ by: ["keyVersion"], _count: { _all: true } }),
@@ -94,13 +87,13 @@ export async function forgetKeyState(): Promise<ForgetKeyState> {
   // Names hashed under FORGET_KEY, and no FORGET_KEY (or another) to recognise them with.
   const paused = Boolean((recorded || count(1) > 0) && !matches);
   if (paused) problem = v1 ? "FORGET_KEY has changed, so names forgotten before are not recognised. Put the earlier FORGET_KEY back." : "FORGET_KEY is not set, and names were forgotten under it. Put it back.";
-  else if (e.FORGET_KEY && !v1) problem = "FORGET_KEY is too short: use 32 random bytes of base64 (openssl rand -base64 32), or at least 16 characters.";
+  else if (invalid) problem = `${INVALID_FORGET_KEY} Until it is, nobody is forgotten for good.`;
   else if (!v1 && production) problem = "FORGET_KEY is not set, so nobody can be forgotten until it is.";
   else if (!v1) problem = "FORGET_KEY is not set, so forgotten names are hashed under a key made from the database alone. Set it before this album is used for real.";
   else if (weak) problem = `${weak} forgotten ${weak === 1 ? "name was" : "names were"} kept before FORGET_KEY was set, under a key made from the database alone. They are still recognised, but a copy of the database is enough to test names against them.`;
   const keys = [v0, ...(v1 && matches ? [v1] : [])];
   const write = paused ? null : v1 && matches ? v1 : production ? null : v0;
-  return { keys, write, problem, paused, weak };
+  return { keys, write, problem, paused, weak, invalid };
 }
 
 function hash(key: Buffer, normalized: string): string {

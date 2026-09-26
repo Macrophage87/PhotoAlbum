@@ -3,6 +3,9 @@ export async function register() {
   if (process.env.NEXT_PHASE === "phase-production-build") return;
   silenceAbortedStreams();
   const { env } = await import("@/lib/env");
+  // A FORGET_KEY that is not 32 bytes of base64 is no key: say so at start, not only on the admin page.
+  const { forgetKeySecret, INVALID_FORGET_KEY } = await import("@/lib/people/forget-key");
+  if (env().NODE_ENV === "production" && env().FORGET_KEY && !forgetKeySecret(env().FORGET_KEY)) console.error(`[forget] ${INVALID_FORGET_KEY} Forgetting anybody waits until it is.`);
   if (!env().RUN_WORKER) return;
   const { startWorker } = await import("@/lib/jobs/worker");
   const { installShutdownHandlers } = await import("@/lib/jobs/boss");
