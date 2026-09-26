@@ -35,7 +35,8 @@ export function MobileNav({ links, signedIn, name }: { links: NavLink[]; signedI
         </svg>
       </button>
       {open && (
-        <div id="mobile-nav-panel" className="absolute left-0 right-0 top-14 border-b border-border bg-surface shadow-lg">
+        // The header is sticky, so the page scrolling does nothing for a panel taller than a short screen: it scrolls itself.
+        <div id="mobile-nav-panel" className="absolute left-0 right-0 top-14 max-h-[calc(100dvh-3.5rem)] overflow-y-auto overscroll-contain border-b border-border bg-surface shadow-lg">
           <nav className="mx-auto max-w-6xl px-4 py-2 flex flex-col text-base">
             {links.map((l) => (
               <Link key={l.href} href={l.href} onClick={close} className={`px-3 py-2.5 rounded-theme hover:bg-surface-alt ${pathname === l.href ? "font-medium text-primary" : ""}`}>
@@ -45,7 +46,11 @@ export function MobileNav({ links, signedIn, name }: { links: NavLink[]; signedI
             <div className="my-2 border-t border-border" />
             {signedIn ? (
               <form action="/auth/signout" method="post" className="flex items-center justify-between gap-3 px-3 py-2">
-                {name && <span className="text-sm text-muted truncate">{name}</span>}
+                {/* The only way to the account page on a phone: the laptop's is at the head of More. */}
+                <Link href="/account" onClick={close} className="min-w-0 rounded-theme hover:bg-surface-alt" data-testid="mobile-account">
+                  <span className="block text-xs text-muted">Your account</span>
+                  {name && <span className="block text-sm truncate">{name}</span>}
+                </Link>
                 <button type="submit" className="px-3 py-1.5 rounded-theme border border-border hover:bg-surface-alt text-sm">
                   Sign out
                 </button>

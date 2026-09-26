@@ -3096,3 +3096,21 @@ test("the activities list, the photos grids and the trips list can each be put i
     await withDb((c) => c.query(`DELETE FROM "Activity" WHERE id = $1`, [extra]));
   }
 });
+
+test("the phone menu reaches the account page, and scrolls to Sign out on a short screen", async ({ context, page }) => {
+  await signIn(context, ADMIN);
+  // A phone on its side: far shorter than an admin's list of places to go.
+  await page.setViewportSize({ width: 740, height: 340 });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Open menu" }).click();
+  const panel = page.locator("#mobile-nav-panel");
+  // The panel scrolls itself (#110), since the sticky header stays put however the page is scrolled.
+  const signOut = panel.getByRole("button", { name: "Sign out" });
+  await signOut.scrollIntoViewIfNeeded();
+  await expect(signOut).toBeInViewport();
+  // And the account page is a press away on a phone too (#109).
+  await panel.getByTestId("mobile-account").click();
+  await expect(page).toHaveURL(/\/account$/);
+  await expect(panel).toHaveCount(0);
+  await page.setViewportSize({ width: 1280, height: 720 });
+});
