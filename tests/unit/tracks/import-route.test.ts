@@ -1,13 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { db } from "@/lib/db";
 import { storage } from "@/lib/storage";
+import { readdir } from "node:fs/promises";
 import { resetTestDb } from "../helpers/reset";
 
 const who = vi.hoisted(() => ({ id: "", role: "MEMBER" as "MEMBER" | "ADMIN" }));
 const boss = vi.hoisted(() => ({ sent: [] as unknown[], jobs: new Map<string, { state: string; data: unknown; output: unknown }>() }));
 vi.mock("@/lib/auth/viewer", () => ({ getViewer: async () => ({ kind: "user", user: { id: who.id, email: "x@example.com", name: null, role: who.role }, shareTokens: new Map() }) }));
 vi.mock("@/lib/jobs/boss", () => ({
-  enqueue: async (_q: string, data: unknown) => { boss.sent.push(data); return "00000000-0000-4000-8000-000000000001"; },
+  enqueue: async (_q: string, data: unknown) => {
+    boss.sent.push(data);
+    const id = `00000000-0000-4000-8000-${String(boss.sent.length).padStart(12, "0")}`;
+    boss.jobs.set(id, { state: "created", data, output: null });
+    return id;
+  },
   getBoss: async () => ({
     getJobById: async (_q: string, id: string) => {
       // The real pg-boss throws on anything that is not a UUID, which is what the route must not let through.
@@ -24,6 +30,8 @@ import { importTrackFile } from "@/lib/tracks/import";
 const GPX = `<?xml version="1.0"?><gpx version="1.1" creator="t" xmlns="http://www.topografix.com/GPX/1/1"><trk><name>Walk</name><trkseg><trkpt lat="44.3" lon="-68.2"><time>2025-08-11T10:00:00Z</time></trkpt><trkpt lat="44.31" lon="-68.21"><time>2025-08-11T10:30:00Z</time></trkpt></trkseg></trk></gpx>`;
 const post = (tripId: string, name = "walk.gpx") =>
   POST(new Request("https://album.example/api/tracks/import", { method: "POST", body: GPX, headers: { "x-file-name": name, "x-trip-id": tripId, "x-source-hint": "auto" } }));
+/** What is in the import inbox on disk. */
+const stored = async () => (await readdir(storage().localPath!("imports")).catch(() => [] as string[])).length;
 const poll = (jobId: string) => GET(new Request(`https://album.example/api/tracks/import/${jobId}`), { params: Promise.resolve({ jobId }) });
 
 describe("importing tracks is arranging the trip", () => {
@@ -40,9 +48,12 @@ describe("importing tracks is arranging the trip", () => {
 
   it("refuses a member who did not make the trip, before anything is stored or queued", async () => {
     who.id = other;
+    const before = await stored();
     const res = await post(tripId);
     expect(res.status).toBe(403);
+    expect((await res.json()).error).toMatch(/import tracks/);
     expect(boss.sent).toEqual([]);
+    expect(await stored()).toBe(before);
   });
 
   it("lets the trip's maker, and an admin, import", async () => {
@@ -69,6 +80,20 @@ describe("importing tracks is arranging the trip", () => {
 });
 
 describe("an import's progress is its importer's", () => {
+  it("another member polling a job somebody else just started finds nothing", async () => {
+    await resetTestDb();
+    boss.sent = [];
+    boss.jobs.clear();
+    const maker = (await db.user.create({ data: { email: "maker@example.com" } })).id;
+    const tripId = (await db.trip.create({ data: { slug: "acadia", title: "Acadia", startDate: new Date("2025-08-10"), endDate: new Date("2025-08-16"), createdById: maker } })).id;
+    who.id = maker;
+    who.role = "MEMBER";
+    const { jobId } = await (await post(tripId)).json();
+    expect((await poll(jobId)).status).toBe(200);
+    who.id = "someone-else";
+    expect((await poll(jobId)).status).toBe(404);
+  });
+
   const mine = "11111111-1111-4111-8111-111111111111";
   beforeEach(() => {
     who.id = "me";

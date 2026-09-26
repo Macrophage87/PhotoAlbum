@@ -4,7 +4,8 @@ import { z } from "zod";
 import { db } from "@/lib/db";
 import { env } from "@/lib/env";
 import { getViewer } from "@/lib/auth/viewer";
-import { canEditContainer, NOT_YOUR_CONTAINER } from "@/lib/auth/ownership";
+import { canEditContainer } from "@/lib/auth/ownership";
+import { decodeHeaderName } from "@/lib/media/header-name";
 import { storage, StorageLimitError } from "@/lib/storage";
 import { enqueue } from "@/lib/jobs/boss";
 import { QUEUES } from "@/lib/jobs/queues";
@@ -17,24 +18,14 @@ const headerSchema = z.object({
   sourceHint: z.enum(["auto", "gpx", "fit", "google"]).default("auto"),
 });
 
-/** The file name arrives percent-encoded; a malformed one is a bad request, not a crash. */
-function decodeName(raw: string | null): string | null {
-  try {
-    return decodeURIComponent(raw ?? "");
-  } catch {
-    return null;
-  }
-}
-
 /** Streams a GPX / FIT / Google JSON file to disk and queues the import job. */
 export async function POST(request: Request) {
   const viewer = await getViewer();
   if (viewer.kind !== "user") return Response.json({ error: "Unauthorized" }, { status: 401 });
   if (!request.body) return Response.json({ error: "Empty body" }, { status: 400 });
-  const fileName = decodeName(request.headers.get("x-file-name"));
-  if (fileName === null) return Response.json({ error: "Bad import headers" }, { status: 400 });
   const parsed = headerSchema.safeParse({
-    fileName,
+    // A name that will not decode fails the schema, and so is a bad request rather than a crash.
+    fileName: decodeHeaderName(request.headers.get("x-file-name")) ?? "",
     tripId: request.headers.get("x-trip-id") ?? "",
     sourceHint: request.headers.get("x-source-hint") ?? "auto",
   });
@@ -44,7 +35,7 @@ export async function POST(request: Request) {
   if (!trip) return Response.json({ error: "Trip not found" }, { status: 404 });
   // Each file becomes an activity and re-places the trip's photographs, so this is arranging the trip: its maker's
   // (and admins') to do, as the import page already says.
-  if (!canEditContainer(viewer.user, trip)) return Response.json({ error: NOT_YOUR_CONTAINER }, { status: 403 });
+  if (!canEditContainer(viewer.user, trip)) return Response.json({ error: "Only the family member who made this trip, or an admin, can import tracks into it." }, { status: 403 });
 
   const ext = (parsed.data.fileName.toLowerCase().split(".").pop() ?? "bin").replace(/[^a-z0-9]/g, "") || "bin";
   const importKey = `imports/${randomUUID()}.${ext}`;
