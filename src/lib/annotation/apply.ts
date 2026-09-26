@@ -5,7 +5,7 @@ import { enqueue } from "@/lib/jobs/boss";
 import { QUEUES } from "@/lib/jobs/queues";
 import { applyPlaceEstimate, needsPlaceEstimate } from "./place";
 import { isWeakDate, WEAK_DATE_SOURCES } from "@/lib/photos/date-from-neighbours";
-import { judgeHelperText, knownNames, mentionsAnyName, pastHelperTitles, titleIsHelpers } from "./members-only";
+import { helperText, judgeHelperText, knownNames, mentionsAnyName, pastHelperTitles, titleIsHelpers, type Judgement } from "./members-only";
 import { forgetState, unchangedSince } from "@/lib/people/names-changed";
 import { withoutOptedOutNames } from "@/lib/people/unpermitted";
 import { forgottenScope, loadTombstone, scrubRecord, type Tombstone } from "@/lib/people/tombstone";
@@ -47,6 +47,22 @@ export function titlesAfter(
 /** The fields a member can rewrite on the item's page (see `updateAnnotation`): theirs, once they have. */
 const MEMBER_FIELDS = ["caption", "description", "tags", "place", "activity", "objects", "visibleText", "mood"] as const;
 
+/** The words of a record a member can have written (see `MEMBER_FIELDS`), as the judgement reads them. */
+function memberWords(r: StoredAnnotation): Pick<StoredAnnotation, "caption" | "description" | "place" | "tags"> {
+  return { caption: r.caption, description: r.description, place: r.place, tags: r.tags };
+}
+
+/** The words of a record only the helper writes, as the judgement reads them. */
+function helperWords(r: StoredAnnotation): Pick<StoredAnnotation, "title" | "caption" | "description" | "searchSummary" | "place" | "tags"> {
+  return { title: r.title, searchSummary: r.searchSummary, caption: "", description: "", place: null, tags: [] };
+}
+
+/** The helper's own fields of the record as it was (the title it offered, the season, the search summary). */
+function helperFieldsOf(current: unknown, fallback: StoredAnnotation): Pick<StoredAnnotation, "title" | "season" | "searchSummary"> {
+  const was = (current && typeof current === "object" ? current : {}) as Partial<StoredAnnotation>;
+  return { title: was.title ?? "", season: was.season ?? fallback.season, searchSummary: was.searchSummary ?? "" };
+}
+
 /**
  * The record to store: the fresh one, or — where a member has edited the text — theirs, with only what they cannot
  * edit (the search summary, the season, the title the helper offers) brought up to date.
@@ -80,7 +96,7 @@ const OPEN_TO_A_DATE_GUESS = {
  */
 export async function applyAnnotation(photoId: string, model: string, parsed: Annotation, raw: { usage?: Usage; batched?: boolean } & Record<string, unknown>, opts: { sent?: boolean | null; requestedAt?: Date; tombstone?: Tombstone; attempts?: number; replaceEdited?: boolean } = {}): Promise<void> {
   const requestedAt = opts.requestedAt;
-  const current = await db.photo.findUnique({ where: { id: photoId }, select: { takenAt: true, takenAtSource: true, estimatedDateSource: true, annotationSource: true, title: true, membersTitle: true, titleByHelper: true, annotation: true, annotationRevision: true, kind: true, lat: true, placeSetById: true, placeEstimatedAt: true, context: true } });
+  const current = await db.photo.findUnique({ where: { id: photoId }, select: { takenAt: true, takenAtSource: true, estimatedDateSource: true, annotationSource: true, title: true, membersTitle: true, titleByHelper: true, annotation: true, annotationRevision: true, annotationSharedAt: true, kind: true, lat: true, placeSetById: true, placeEstimatedAt: true, context: true } });
   if (!current) return;
   // Nobody forgotten comes back by way of a new answer, whoever it is about: their names are taken out first.
   const tombstone = opts.tombstone ?? (await loadTombstone());
@@ -88,10 +104,20 @@ export async function applyAnnotation(photoId: string, model: string, parsed: An
   // A member's edits are never overwritten by the notes sweep or the names backfill; only a member pressing
   // "Describe again" and agreeing to lose them replaces them.
   const edited = current.annotationSource === "EDITED" && !opts.replaceEdited;
-  // Nor anybody opted out, or waiting to be forgotten, whose record is still there.
-  const stored = await withoutOptedOutNames(scrubRecord(keepMemberText(toStored(parsed), current.annotation, edited), tombstone, scope), photoId);
+  // Nor anybody opted out, or waiting to be forgotten, whose record is still there. Deliberately so for a member's
+  // kept words as well, even ones they showed to everyone: a background pass leans toward privacy.
+  const scrub = (record: StoredAnnotation) => withoutOptedOutNames(scrubRecord(record, tombstone, scope), photoId);
+  let stored = await scrub(keepMemberText(toStored(parsed), current.annotation, edited));
+  // Words a member kept and chose to show to everyone stay shown: they are judged the way `updateAnnotation` judges
+  // shared text (held again only if they now name somebody), and only the helper's refreshed fields are judged as the
+  // helper's. Refreshed fields that are for members only are not published over the shared text; the ones the member
+  // read and shared stay instead.
+  const sharedStays = edited && current.annotationSharedAt !== null && !mentionsAnyName(helperText(memberWords(stored)), await knownNames());
+  if (sharedStays && (await judgeHelperText(photoId, helperWords(stored), current.context, opts.sent)).membersOnly) {
+    stored = await scrub({ ...stored, ...helperFieldsOf(current.annotation, stored) });
+  }
   // Written from names or notes, it is the family's to read: kept off the item's own title and out of public view.
-  const judgement = await judgeHelperText(photoId, stored, current.context, opts.sent);
+  const judgement: Judgement = sharedStays ? { membersOnly: false, titleOnly: false } : await judgeHelperText(photoId, stored, current.context, opts.sent);
   const membersOnly = judgement.membersOnly;
   const aiTitle = current.kind !== "EXTERNAL_VIDEO" ? stored.title.trim() : "";
   const previousAiTitle = (current.annotation as { title?: string } | null)?.title ?? null;
@@ -123,7 +149,7 @@ export async function applyAnnotation(photoId: string, model: string, parsed: An
     // The text as it was read, too: a member's edit (or anything else that rewrote it) after the read is newer than
     // this answer's view of it, so the answer is judged again against it rather than written over it.
     const written = await tx.photo.updateMany({
-      where: { id: photoId, annotationRevision: current.annotationRevision, annotationSource: current.annotationSource, ...(requestedAt ? unchangedSince(requestedAt) : {}) },
+      where: { id: photoId, annotationRevision: current.annotationRevision, annotationSource: current.annotationSource, annotationSharedAt: current.annotationSharedAt, ...(requestedAt ? unchangedSince(requestedAt) : {}) },
       data: {
         annotation: stored,
         annotationModel: model,
@@ -135,8 +161,9 @@ export async function applyAnnotation(photoId: string, model: string, parsed: An
         annotationTitleOnly: judgement.titleOnly,
         annotationTitleWords: judgement.titleOnly ? (judgement.titleWords ?? []) : [],
         annotationTitleFrom: judgement.titleOnly ? (judgement.titleFrom ?? []) : [],
-        // New words: whatever a member chose to show was the old text, and this one is judged afresh.
-        annotationSharedAt: null,
+        // New words: whatever a member chose to show was the old text, and this one is judged afresh — unless it is
+        // still the member's shared text (see `sharedStays`).
+        ...(sharedStays ? {} : { annotationSharedAt: null }),
         // Embedded videos keep YouTube's title; see `titlesAfter` for everything else.
         title: titles.title,
         membersTitle: titles.membersTitle,
