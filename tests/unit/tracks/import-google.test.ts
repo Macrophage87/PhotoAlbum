@@ -21,27 +21,33 @@ describe("importing a Google export", () => {
     await copyFile(path.join(__dirname, "../../fixtures/google-timeline-android.json"), file);
   });
 
-  it("counts only the points the export holds, and replaces the day's trace when imported again", async () => {
+  const args = (userId: string, replaceGoogle?: boolean) => ({ importKey: key, tripId, userId, sourceHint: "google" as const, originalName: "Timeline.json", replaceGoogle });
+
+  it("counts only the points the export holds, and keeps both traces when imported twice by default", async () => {
+    const first = await importTrackFile(args(userId));
+    expect(first.pointsRead).toBe(5);
+    expect(first.tracks.map((t) => t.pointCount)).toEqual([5]);
+    // One account importing two family members' exports keeps them both.
+    await importTrackFile(args(userId));
+    expect(await db.track.count({ where: { tripId } })).toBe(2);
+  });
+
+  it("replaces the member's earlier trace for the day when asked, and places photos from what is left", async () => {
     const photo = await db.photo.create({
       data: { tripId, uploaderId: userId, originalName: "x.jpg", mimeType: "image/jpeg", storageKey: "k", originalPath: "k/o.jpg", sizeBytes: 1, status: "READY", takenAt: new Date("2025-08-12T14:40:00Z"), takenAtSource: "EXIF_OFFSET" },
     });
-    const args = { importKey: key, tripId, userId, sourceHint: "google" as const, originalName: "Timeline.json" };
-    const first = await importTrackFile(args);
-    expect(first.pointsRead).toBe(5);
-    expect(first.tracks.map((t) => t.pointCount)).toEqual([5]);
-
-    const second = await importTrackFile(args);
+    await importTrackFile(args(userId));
+    const second = await importTrackFile(args(userId, true));
     const tracks = await db.track.findMany({ where: { tripId } });
     expect(tracks.map((t) => t.id)).toEqual([second.tracks[0].trackId]);
-    // The photo taken during the visit is placed from the trace that is left.
     const p = await db.photo.findUniqueOrThrow({ where: { id: photo.id } });
     expect([p.gpsSource, p.lat]).toEqual(["TRACK", 44.353]);
   });
 
-  it("leaves another member's trace for the same day alone", async () => {
+  it("never replaces another member's trace", async () => {
     const other = (await db.user.create({ data: { email: "o@example.com", role: "MEMBER" } })).id;
-    await importTrackFile({ importKey: key, tripId, userId: other, sourceHint: "google", originalName: "Timeline.json" });
-    await importTrackFile({ importKey: key, tripId, userId, sourceHint: "google", originalName: "Timeline.json" });
+    await importTrackFile(args(other));
+    await importTrackFile(args(userId, true));
     expect(await db.track.count({ where: { tripId } })).toBe(2);
   });
 });

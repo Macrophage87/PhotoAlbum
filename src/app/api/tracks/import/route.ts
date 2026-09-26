@@ -41,6 +41,7 @@ export async function POST(request: Request) {
     console.error("[import]", err);
     return Response.json({ error: "Upload failed" }, { status: 500 });
   }
-  const jobId = await enqueue(QUEUES.importTrack, { importKey, tripId, userId: viewer.user.id, sourceHint, originalName: fileName }, { retryLimit: 0, expireInSeconds: 3600 });
+  const replaceGoogle = request.headers.get("x-replace-google") === "1";
+  const jobId = await enqueue(QUEUES.importTrack, { importKey, tripId, userId: viewer.user.id, sourceHint, originalName: fileName, replaceGoogle }, { retryLimit: 0, expireInSeconds: 3600 });
   return Response.json({ jobId, importKey });
 }

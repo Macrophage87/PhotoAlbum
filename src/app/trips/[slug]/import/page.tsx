@@ -24,7 +24,7 @@ export default async function ImportPage({ params }: PageProps<"/trips/[slug]/im
             Only points between {trip.startDate.toISOString().slice(0, 10)} and {trip.endDate.toISOString().slice(0, 10)} are imported, one trace per day, so it&apos;s safe to upload the whole export.
           </p>
           <p className="text-muted mt-2">
-            Importing the same export again replaces your earlier trace for each day instead of adding a second one. Traces imported before September 2026 placed photos only near the start or end of each place you stopped at; import the export again to place photos taken while you were there.
+            Each import adds its own trace for each day, so several people&apos;s exports can sit side by side. To refresh a trace instead, tick <em>Replace my earlier Google traces for these days</em>: traces imported with an earlier version placed photos only near the start or end of each place you stopped at, and importing the export again that way also places photos taken while you were there.
           </p>
         </div>
       </Card>

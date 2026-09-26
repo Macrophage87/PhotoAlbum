@@ -1,4 +1,5 @@
 import { db } from "@/lib/db";
+import type { Prisma } from "@/generated/prisma/client";
 import type { ActivityType, TrackSource } from "@/generated/prisma/enums";
 import { boundsOf } from "@/lib/geo/bounds";
 import { cleanPoints } from "./clean";
@@ -17,6 +18,8 @@ export type PersistOptions = {
   /** Create a linked Activity (GPX/FIT). Google traces stay bare tracks. */
   createActivity: boolean;
   activityType?: ActivityType | null;
+  /** Save inside the caller's transaction. Bare traces only: an activity is filed against committed photos. */
+  client?: Prisma.TransactionClient;
 };
 
 export type PersistedTrack = { trackId: string; activityId: string | null; name: string; pointCount: number; distanceM: number; type: ActivityType | null };
@@ -32,7 +35,8 @@ export async function persistTrack(parsed: ParsedTrack, opts: PersistOptions): P
   const { blob, startTime, endTime, flags } = encodePoints(points);
   const b = boundsOf(points)!;
 
-  const track = await db.track.create({
+  if (opts.client && opts.createActivity) throw new Error("persistTrack: activities cannot be created inside a transaction");
+  const track = await (opts.client ?? db).track.create({
     data: {
       tripId: opts.tripId,
       uploaderId: opts.userId,
