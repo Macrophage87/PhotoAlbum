@@ -11,7 +11,7 @@ import { GET as tripPhotos } from "@/app/api/trips/[slug]/photos/route";
 import { db } from "@/lib/db";
 import { shareKey } from "@/lib/auth/access";
 import { parseGalleryFilter } from "@/lib/photos/filters";
-import { tripTimeline } from "@/lib/timeline/queries";
+import { timelineCounts, timelineIds as idsForTimeline, tripTimeline } from "@/lib/timeline/queries";
 import { collectionTimeline } from "@/lib/collections/timeline";
 import { resetTestDb } from "../helpers/reset";
 
@@ -27,7 +27,7 @@ const photoIds = async (res: Response) => ((await res.json()).photos as { id: st
  * link, must not be able to learn which photographs somebody is in by typing their name as a search (#142).
  */
 describe("a visitor's words never match names or notes", () => {
-  let tripId: string, linkTripId: string, collectionId: string, faced: string, noted: string;
+  let tripId: string, linkTripId: string, noteTripId: string, collectionId: string, faced: string, noted: string, notedPublic: string;
   beforeAll(async () => {
     await resetTestDb();
     const user = await db.user.create({ data: { email: "n@example.com", name: "N", role: "MEMBER" } });
@@ -43,6 +43,9 @@ describe("a visitor's words never match names or notes", () => {
     await db.photo.update({ where: { id: faced }, data: { updatedAt: new Date() } });
     // The name only in the uploader's members-only notes, with nobody tagged.
     noted = (await db.photo.create({ data: { ...base, tripId: linkTripId, caption: "Cake", context: "Marguerite's birthday" } })).id;
+    // The same name only in the notes of a photograph on a public trip, which any visitor may open.
+    noteTripId = (await db.trip.create({ data: { slug: "pubnote", title: "Public trip with a note", visibility: "PUBLIC", ...dates } })).id;
+    notedPublic = (await db.photo.create({ data: { ...base, tripId: noteTripId, caption: "Candles", context: "Marguerite's birthday" } })).id;
     const collection = await db.collection.create({ data: { slug: "pubc", title: "Public collection", visibility: "PUBLIC", createdById: user.id } });
     collectionId = collection.id;
     await db.collectionItem.create({ data: { collectionId, photoId: faced, addedById: user.id } });
@@ -84,5 +87,37 @@ describe("a visitor's words never match names or notes", () => {
     who.viewer = member;
     expect(await photoIds(await ask("link"))).toEqual([noted]);
     expect(await photoIds(await ask("pub"))).toEqual([faced]);
+  });
+
+  it("in a note on a public trip: a visitor finds nothing by the name on its gallery, its timeline, the timeline of everything or the maps", async () => {
+    const gallery = (q: string) => tripPhotos(new NextRequest(`http://album.test/api/trips/pubnote/photos?q=${q}`), { params: Promise.resolve({ slug: "pubnote" }) } as never);
+    const tripMap = () => tripGeojson(new Request("http://album.test/api/trips/pubnote/geojson?q=Marguerite"), { params: Promise.resolve({ slug: "pubnote" }) });
+    const albumMap = () => mapGeojson(new Request("http://album.test/api/map/geojson?q=Marguerite"));
+    const inTrip = (q: string, m: boolean) => parseGalleryFilter({ q }, { member: m, inTrip: true });
+    const album = (q: string, m: boolean) => parseGalleryFilter({ q }, { member: m });
+    // The timeline of everything asks the words once of the whole album, then counts and draws each trip from that.
+    const everything = async (q: string, m: boolean) => {
+      const restrict = await idsForTimeline(album(q, m), null);
+      const counts = await timelineCounts([noteTripId], album(q, m), restrict);
+      return { count: counts.get(noteTripId) ?? 0, ids: timelineIds(await tripTimeline(noteTripId, "UTC", album(q, m), restrict)) };
+    };
+
+    who.viewer = anon();
+    // Its public words find it, so what follows is asked of a photograph this visitor can see.
+    expect(await photoIds(await gallery("Candles"))).toEqual([notedPublic]);
+    expect(await everything("Candles", false)).toEqual({ count: 1, ids: [notedPublic] });
+    expect(await photoIds(await gallery("Marguerite"))).toEqual([]);
+    expect(timelineIds(await tripTimeline(noteTripId, "UTC", inTrip("Marguerite", false)))).toEqual([]);
+    expect(await everything("Marguerite", false)).toEqual({ count: 0, ids: [] });
+    expect(await featureIds(await tripMap())).toEqual([]);
+    expect(await featureIds(await albumMap())).toEqual([]);
+
+    // A member reads the notes, and finds it everywhere.
+    who.viewer = member;
+    expect(await photoIds(await gallery("Marguerite"))).toEqual([notedPublic]);
+    expect(timelineIds(await tripTimeline(noteTripId, "UTC", inTrip("Marguerite", true)))).toEqual([notedPublic]);
+    expect(await everything("Marguerite", true)).toEqual({ count: 1, ids: [notedPublic] });
+    expect(await featureIds(await tripMap())).toEqual([notedPublic]);
+    expect(await featureIds(await albumMap())).toContain(notedPublic);
   });
 });

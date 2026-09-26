@@ -63,7 +63,7 @@ export async function tripTimeline(tripId: string, timezone: string, filter: Gal
  */
 export async function timelineIds(filter: GalleryFilter, tripId: string | null): Promise<string[] | null> {
   const lists: string[][] = [];
-  // Who is asking decides what the words may match (see \`idsMatching\`); across the whole album a visitor's are
+  // Who is asking decides what the words may match (see `idsMatching`); across the whole album a visitor's are
   // asked only of what sits somewhere public, so the limit is spent on what they could be shown.
   if (filter.q) lists.push(await idsMatching(filter.q, { member: filter.member, scope: tripId ? { tripId } : filter.member ? {} : { publicOnly: true } }));
   if (filter.year) lists.push(await idsInLocalYear(tripId, filter.year));

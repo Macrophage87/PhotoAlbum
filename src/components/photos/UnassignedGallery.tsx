@@ -12,7 +12,7 @@ export function UnassignedGallery({ photos: initial, emptyMessage, more }: { pho
   return (
     <>
       <PhotoGrid photos={paged.photos} emptyMessage={emptyMessage} />
-      <LoadMoreSentinel hasMore={paged.hasMore} loading={paged.loading} error={paged.error} onLoad={paged.loadMore} shown={paged.photos.length} total={more.total} />
+      <LoadMoreSentinel hasMore={paged.hasMore} loading={paged.loading} error={paged.error} onLoad={paged.loadMore} pages={paged.pages} shown={paged.photos.length} total={more.total} />
     </>
   );
 }

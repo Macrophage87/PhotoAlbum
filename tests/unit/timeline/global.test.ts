@@ -30,7 +30,8 @@ describe("the timeline of everything", () => {
   });
 
   it("asks a search of the whole album once and counts only the trips it found something on", async () => {
-    const filter = { ...NO_FILTER, q: "lighthouse" };
+    // A member's search, as the admin who uploaded these would ask it: the trips are not public.
+    const filter = { ...NO_FILTER, q: "lighthouse", member: true };
     const ids = await timelineIds(filter, null);
     expect(ids).toHaveLength(2);
     const counts = await timelineCounts([a, b, c], filter, ids);
@@ -45,7 +46,7 @@ describe("the timeline of everything", () => {
   });
 
   it("says nothing matches without asking again when the search found nothing", async () => {
-    const filter = { ...NO_FILTER, q: "zzqq" };
+    const filter = { ...NO_FILTER, q: "zzqq", member: true };
     const ids = await timelineIds(filter, null);
     expect(ids).toEqual([]);
     expect((await timelineCounts([a, b, c], filter, ids)).size).toBe(0);

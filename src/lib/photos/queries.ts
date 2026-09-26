@@ -59,9 +59,10 @@ const UNASSIGNED_ORDER: KeyColumn[] = [{ field: "createdAt", dir: "desc" }];
  * meant for filing them away. `total` is how many there are with nothing asked; `matched` is how many the filter
  * keeps, so the heading can say both.
  */
-export async function unassignedPhotoPage(filter: GalleryFilter = NO_FILTER, opts: { cursor?: string | null; take?: number } = {}): Promise<{ photos: PhotoCard[]; nextCursor: string | null; matched: number; total: number }> {
+export async function unassignedPhotoPage(filter: GalleryFilter = NO_FILTER, opts: { cursor?: string | null; take?: number; /** Only these, for re-reading photos a gallery already holds; any no longer on no trip are left out. */ ids?: string[] } = {}): Promise<{ photos: PhotoCard[]; nextCursor: string | null; matched: number; total: number }> {
   const take = opts.take ?? GALLERY_PAGE;
   const lists: string[][] = [];
+  if (opts.ids) lists.push(opts.ids);
   if (filter.q) lists.push(await idsMatching(filter.q, { member: filter.member, scope: { tripId: null } }));
   if (filter.year) lists.push(await idsInLocalYear(null, filter.year));
   // One list per name, so two names means the photographs they are both on rather than either.

@@ -69,3 +69,30 @@ describe("the next page of a gallery asked for two people", () => {
     expect(picked.photos.map((p) => p.id)).toContain(both);
   });
 });
+
+describe("re-reading photos without a trip that the gallery already holds", () => {
+  let first: string, second: string, third: string, filed: string;
+  beforeEach(async () => {
+    await resetTestDb();
+    viewer.kind = "user";
+    const user = await db.user.create({ data: { email: "r@example.com", role: "ADMIN" } });
+    const trip = await db.trip.create({ data: { slug: "r", title: "R", startDate: new Date("2025-08-10"), endDate: new Date("2025-08-16"), createdById: user.id } });
+    const photo = async (caption: string) => (await db.photo.create({ data: { uploaderId: user.id, caption, originalName: "x.jpg", mimeType: "image/jpeg", storageKey: "k", originalPath: "k/o.jpg", sizeBytes: 1, status: "READY" } })).id;
+    [first, second, third, filed] = [await photo("dunes"), await photo("dunes again"), await photo("harbour"), await photo("dunes, filed")];
+    // Filed onto a trip since the gallery loaded it: it has left this list.
+    await db.photo.update({ where: { id: filed }, data: { tripId: trip.id } });
+  });
+
+  const read = async (query: string) => (await unassigned(new NextRequest(`http://album.test/api/photos/unassigned?${query}`))).json() as Promise<{ photos: { id: string }[]; nextCursor: string | null }>;
+
+  it("answers for exactly the photos asked about that are still on no trip, not with the first page", async () => {
+    const body = await read(`ids=${[first, third, filed].join(",")}`);
+    expect(body.photos.map((p) => p.id).sort()).toEqual([first, third].sort());
+    expect(body.nextCursor).toBeNull();
+  });
+
+  it("holds them to the same filter as the gallery", async () => {
+    const body = await read(`q=dunes&ids=${[first, second, third, filed].join(",")}`);
+    expect(body.photos.map((p) => p.id).sort()).toEqual([first, second].sort());
+  });
+});
