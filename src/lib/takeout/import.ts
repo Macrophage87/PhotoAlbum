@@ -79,7 +79,9 @@ export async function importTakeoutArchive(importId: string): Promise<void> {
       }
       const already = await db.collectionItem.findFirst({ where: { collectionId: album.id, photoId }, select: { id: true } });
       if (already) return;
-      const position = await db.collectionItem.count({ where: { collectionId: album.id } });
+      // After the last one, as everywhere else: a count lands on an existing place once anything has been taken out.
+      const last = await db.collectionItem.findFirst({ where: { collectionId: album.id }, orderBy: { position: "desc" }, select: { position: true } });
+      const position = (last?.position ?? -1) + 1;
       await db.collectionItem.create({ data: { collectionId: album.id, photoId, position, addedById: run.startedById } }).catch(() => undefined);
       album.items++;
     };

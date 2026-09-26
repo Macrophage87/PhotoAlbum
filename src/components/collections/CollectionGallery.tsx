@@ -18,7 +18,7 @@ export type CollectionGridPhoto = GridPhoto & { itemId: string; arranged: number
  * Read-only viewers get the plain grid.
  */
 
-export function CollectionGallery({ collectionId, slug, photos, editable, emptyMessage }: { collectionId: string; slug: string; photos: CollectionGridPhoto[]; editable: boolean; emptyMessage: string }) {
+export function CollectionGallery({ collectionId, slug, photos, editable, emptyMessage, arranged = false }: { collectionId: string; slug: string; photos: CollectionGridPhoto[]; editable: boolean; emptyMessage: string; /** Whether somebody has saved an order of their own, which sorting by date would replace. */ arranged?: boolean }) {
   const [mode, setMode] = useState<"view" | "select" | "arrange">("view");
   /** What the last tidy-up did, said out loud rather than left to be inferred from a shorter grid. */
   const [notice, setNotice] = useState<string | null>(null);
@@ -35,7 +35,7 @@ export function CollectionGallery({ collectionId, slug, photos, editable, emptyM
   const pathname = usePathname();
   /** The saved order, which is what Arrange starts from and saves over, not whichever order the grid is showing. */
   const saved = () => [...photos].sort((a, b) => a.arranged - b.arranged);
-  /** Only a finished photograph, out of the trash, has a picture to lead with. */
+  /** Only a finished photograph has a picture to lead with. (Trashed ones are never in this grid.) */
   const coverable = ids.length === 1 && photos.find((p) => p.id === ids[0])?.status === "READY";
 
   const finish = (fn: () => Promise<unknown>) =>
@@ -90,7 +90,11 @@ export function CollectionGallery({ collectionId, slug, photos, editable, emptyM
               <Button variant="secondary" size="sm" onClick={() => { setMode("select"); setNotice(null); }}>Select photos</Button>
               {notice && <span className="text-muted" role="status">{notice}</span>}
               <Button variant="secondary" size="sm" onClick={() => { setOrder(saved()); setMode("arrange"); }}>Arrange</Button>
-              <Button variant="ghost" size="sm" disabled={pending} onClick={() => arrangeAnd(() => sortCollectionByDate(slug))}>Sort by date</Button>
+              <Button variant="ghost" size="sm" disabled={pending} onClick={() => {
+                  // Unlike "Oldest first" above, this is saved, and over whatever order somebody put the items in.
+                  if (arranged && !window.confirm("Replace your saved order with date order?")) return;
+                  arrangeAnd(() => sortCollectionByDate(slug));
+                }}>Save in date order</Button>
             </>
           )}
           {mode === "select" && (
@@ -99,7 +103,8 @@ export function CollectionGallery({ collectionId, slug, photos, editable, emptyM
               <Button variant="ghost" size="sm" onClick={() => setSelected(new Set(photos.map((p) => p.id)))}>All</Button>
               <Button variant="ghost" size="sm" onClick={() => setSelected(new Set())}>None</Button>
               <span className="mx-1 text-border">|</span>
-              <Button size="sm" variant="secondary" disabled={!coverable || pending} title={ids.length === 1 && !coverable ? "Only a finished photo can be the cover" : undefined} onClick={() => finish(() => setCollectionCover(slug, ids[0]))}>Set as cover</Button>
+              <Button size="sm" variant="secondary" disabled={!coverable || pending} onClick={() => finish(() => setCollectionCover(slug, ids[0]))}>Set as cover</Button>
+              {ids.length === 1 && !coverable && <span className="text-muted" role="status">Only a finished photo can be the cover.</span>}
               <Button size="sm" variant="danger" disabled={!ids.length || pending} onClick={remove} data-testid="remove-from-collection">Remove from collection</Button>
               {(
                 <>

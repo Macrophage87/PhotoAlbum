@@ -72,21 +72,54 @@ describe("a collection's saved order", () => {
     expect(await collectionSortChoice({ order: "arranged" }, false)).toBe("favorites");
   });
 
-  it("recognises collections arranged before the date was kept", async () => {
-    const migration = readFileSync("prisma/migrations/20260926100100_collection_arranged_at/migration.sql", "utf8");
-    const backfill = migration.slice(migration.indexOf("UPDATE"));
-    const other = (await db.collection.create({ data: { slug: "untouched", title: "Untouched", createdById: who.id } })).id;
-    // Added together, at one moment, in one go: not an arrangement, whatever order the ids fall in.
-    await db.collectionItem.createMany({ data: [a, b, c].map((photoId, position) => ({ collectionId: other, photoId, addedById: who.id, position })) });
-    // Moved the last-added to the front by hand.
+  it("knows each item's place in the saved order where positions have gaps and ties", async () => {
     const items = await db.collectionItem.findMany({ where: { collectionId }, select: { id: true, photoId: true } });
     const at = (p: string) => items.find((i) => i.photoId === p)!.id;
-    await db.collectionItem.update({ where: { id: at(a) }, data: { createdAt: new Date("2025-01-01"), position: 1 } });
-    await db.collectionItem.update({ where: { id: at(b) }, data: { createdAt: new Date("2025-01-02"), position: 2 } });
-    await db.collectionItem.update({ where: { id: at(c) }, data: { createdAt: new Date("2025-01-03"), position: 0 } });
+    // Gaps from items taken out, and a tie from a fold putting the kept photograph at its copy's place.
+    await db.collectionItem.update({ where: { id: at(a) }, data: { position: 7, createdAt: new Date("2025-01-02") } });
+    await db.collectionItem.update({ where: { id: at(b) }, data: { position: 3 } });
+    await db.collectionItem.update({ where: { id: at(c) }, data: { position: 7, createdAt: new Date("2025-01-01") } });
+    const arranged = await listCollectionItems(collectionId, { order: "arranged" });
+    expect(arranged.map((i) => i.id)).toEqual([b, c, a]);
+    expect(arranged.map((i) => i.arranged)).toEqual([0, 1, 2]);
+    const newest = await listCollectionItems(collectionId, { order: "newest" });
+    expect(newest.map((i) => [i.id, i.arranged])).toEqual([[c, 1], [b, 0], [a, 2]]);
+  });
 
-    await db.$executeRawUnsafe(backfill);
-    expect(await arrangedAt()).not.toBeNull();
-    expect((await db.collection.findUniqueOrThrow({ where: { id: other } })).arrangedAt).toBeNull();
+  describe("recognising collections arranged before the date was kept", () => {
+    const backfill = () => {
+      const migration = readFileSync("prisma/migrations/20260926100100_collection_arranged_at/migration.sql", "utf8");
+      return db.$executeRawUnsafe(migration.slice(migration.indexOf("UPDATE")));
+    };
+    const collection = async (slug: string) => (await db.collection.create({ data: { slug, title: slug, createdById: who.id } })).id;
+    const arrangedOf = async (id: string) => (await db.collection.findUniqueOrThrow({ where: { id } })).arrangedAt;
+    const move = async (id: string, order: string[]) => {
+      const items = await db.collectionItem.findMany({ where: { collectionId: id }, select: { id: true, photoId: true } });
+      for (const [position, p] of order.entries()) await db.collectionItem.update({ where: { id: items.find((i) => i.photoId === p)!.id }, data: { position } });
+    };
+
+    it("leaves alone a collection added to in one go, or one by one, and never rearranged", async () => {
+      // The beforeEach collection was added to in one go, at a single moment.
+      const oneByOne = await collection("one-by-one");
+      for (const [position, photoId] of [a, b, c].entries()) await db.collectionItem.create({ data: { collectionId: oneByOne, photoId, addedById: who.id, position } });
+      await backfill();
+      expect(await arrangedOf(collectionId)).toBeNull();
+      expect(await arrangedOf(oneByOne)).toBeNull();
+    });
+
+    it("counts one added to in one go and then rearranged", async () => {
+      await move(collectionId, [c, a, b]);
+      await backfill();
+      expect(await arrangedOf(collectionId)).not.toBeNull();
+    });
+
+    it("counts one added to one by one and then rearranged", async () => {
+      const oneByOne = await collection("one-by-one");
+      for (const [position, photoId] of [a, b, c].entries()) await db.collectionItem.create({ data: { collectionId: oneByOne, photoId, addedById: who.id, position } });
+      await move(oneByOne, [b, a, c]);
+      await backfill();
+      expect(await arrangedOf(oneByOne)).not.toBeNull();
+      expect(await arrangedOf(collectionId)).toBeNull();
+    });
   });
 });

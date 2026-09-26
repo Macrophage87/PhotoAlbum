@@ -3071,3 +3071,44 @@ test("the activities list, the photos grids and the trips list can each be put i
     await withDb((c) => c.query(`DELETE FROM "Activity" WHERE id = $1`, [extra]));
   }
 });
+
+test("a collection arranged by hand opens in its saved order, for its owner and on its shared link", async ({ browser, context, page }) => {
+  await signIn(context, ADMIN);
+  const slug = `arranged-${randomUUID().slice(0, 8)}`;
+  const token = `arranged-${randomUUID()}`;
+  const photos = (await withDb((c) => c.query(`SELECT p.id FROM "Photo" p JOIN "Trip" t ON t.id = p."tripId" WHERE t.slug = 'acadia' AND p.status = 'READY' AND p."trashedAt" IS NULL AND p.kind = 'PHOTO' ORDER BY p."takenAt" ASC NULLS LAST, p.id LIMIT 3`))).rows.map((r) => r.id as string);
+  expect(photos).toHaveLength(3);
+  const col = (await withDb((c) => c.query(`INSERT INTO "Collection" (id, slug, title, "createdById", visibility, "shareToken", "updatedAt") VALUES (md5(random()::text), $1, 'Arranged by hand', (SELECT id FROM "User" WHERE email = $2), 'LINK', $3, now()) RETURNING id`, [slug, ADMIN, token]))).rows[0].id as string;
+  const ids = (loc: Locator) => loc.evaluateAll((els) => els.map((e) => (e.getAttribute("src") ?? "").split("/api/photos/")[1]?.split("/")[0]).filter(Boolean));
+  const grid = (p: Page) => ids(p.locator("li.tile-lazy img[src*='/api/photos/']"));
+  try {
+    for (const [position, id] of photos.entries()) {
+      await withDb((c) => c.query(`INSERT INTO "CollectionItem" (id, "collectionId", "photoId", position, "addedById", "createdAt") VALUES (md5(random()::text), $1, $2, $3, (SELECT id FROM "User" WHERE email = $4), now())`, [col, id, position, ADMIN]));
+    }
+    // Viewed newest first, Arrange still starts from the order the collection is kept in.
+    await page.goto(`/collections/${slug}/photos?order=newest`);
+    await page.getByRole("button", { name: "Arrange" }).click();
+    const arrange = page.getByRole("list", { name: "Arrange photos" });
+    await expect.poll(() => ids(arrange.locator("img"))).toEqual(photos);
+    await arrange.getByRole("listitem").first().getByRole("button", { name: /later$/ }).click();
+    await page.getByRole("button", { name: "Save order" }).click();
+    const saved = [photos[1], photos[0], photos[2]];
+    await expect(page).toHaveURL(/order=arranged/);
+    await expect(page.getByTestId("photos-order-arranged")).toHaveAttribute("aria-current", "true");
+    await expect.poll(() => grid(page)).toEqual(saved);
+
+    // Opened again with no order asked for, whatever this device chose on other grids, it is the saved order.
+    await page.goto(`/collections/${slug}/photos`);
+    await expect(page.getByTestId("photos-order-arranged")).toHaveAttribute("aria-current", "true");
+    await expect.poll(() => grid(page)).toEqual(saved);
+
+    // And so for somebody holding the link, who has no order to choose.
+    const anon = await browser.newContext();
+    const theirs = await anon.newPage();
+    await theirs.goto(`/share/c/${token}`);
+    await expect.poll(() => grid(theirs), { timeout: 20_000 }).toEqual(saved);
+    await anon.close();
+  } finally {
+    await withDb((c) => c.query(`DELETE FROM "Collection" WHERE id = $1`, [col]));
+  }
+});
