@@ -56,6 +56,23 @@ describe("splitByLocalDay", () => {
     expect([...m.keys()]).toEqual(["2025-08-12", "2025-08-13"]);
     expect(m.get("2025-08-13")).toHaveLength(2);
     expect([...splitByLocalDay(pts, "Asia/Kolkata").keys()]).toEqual(["2025-08-13"]);
+    expect(splitByLocalDay(pts, "Asia/Kolkata").get("2025-08-13")).toHaveLength(3);
+  });
+
+  it("ends each day on the next day's first point, so the stretch across midnight is covered (#120)", () => {
+    const pts: TrackPoint[] = [
+      { t: Date.parse("2025-08-13T03:55:00Z"), lat: 44, lng: -68 }, // 23:55 on the 12th in New York
+      { t: Date.parse("2025-08-13T04:04:00Z"), lat: 44.01, lng: -68 }, // 00:04 on the 13th
+      { t: Date.parse("2025-08-13T05:00:00Z"), lat: 44.02, lng: -68 },
+    ];
+    const m = splitByLocalDay(pts, "America/New_York");
+    const day1 = m.get("2025-08-12")!;
+    expect(day1.map((p) => p.t)).toEqual([pts[0].t, pts[1].t]);
+    expect(m.get("2025-08-13")!.map((p) => p.t)).toEqual([pts[1].t, pts[2].t]);
+    // A photograph at 23:59 now falls inside the first day's track and is interpolated across the gap.
+    const at = Date.parse("2025-08-13T03:59:00Z");
+    expect(at).toBeLessThanOrEqual(day1[day1.length - 1].t);
+    expect(positionAt(day1, at)?.lat).toBeCloseTo(44 + 0.01 * (4 / 9), 6);
   });
 });
 
