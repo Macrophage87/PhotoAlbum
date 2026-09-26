@@ -56,8 +56,11 @@ function Results({ hits, loading, kind, active, onPick, exclude, listId, emptyNo
     <>
       {shown.map((h, i) => (
         <li key={h.id} id={`${listId}-${i}`} role="option" aria-selected={i === active}>
+          {/* Out of the Tab order, as a listbox's options are: the arrows move through them while focus stays in the box,
+              so Tab leaves the picker (and closes the list) rather than stepping into it. */}
           <button
             type="button"
+            tabIndex={-1}
             className={`w-full text-left px-3 py-2 text-sm flex items-baseline gap-2 ${i === active ? "bg-surface-alt" : "hover:bg-surface-alt"}`}
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => onPick(h)}
@@ -158,7 +161,7 @@ export function ContainerPicker({ kind, value, onChange, placeholder, allowNone,
             const at = hits.length + i;
             return (
               <li key={t?.id ?? "__none"} id={`${listId}-${at}`} role="option" aria-selected={active === at}>
-                <button type="button" className={`w-full text-left px-3 py-2 text-sm ${active === at ? "bg-surface-alt" : "hover:bg-surface-alt"}`} onMouseDown={(e) => e.preventDefault()} onClick={() => choose(t)}>
+                <button type="button" tabIndex={-1} className={`w-full text-left px-3 py-2 text-sm ${active === at ? "bg-surface-alt" : "hover:bg-surface-alt"}`} onMouseDown={(e) => e.preventDefault()} onClick={() => choose(t)}>
                   {t ? t.title : noneLabel ?? `No ${WORD[kind].one}`}
                 </button>
               </li>
