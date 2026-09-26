@@ -225,6 +225,7 @@ export async function buildActivityMapPayload(viewer: Viewer, activityId: string
     where: { id: activityId },
     select: {
       id: true,
+      tripId: true,
       title: true,
       type: true,
       trip: { select: { slug: true, title: true, themeKey: true, timezone: true } },
@@ -234,7 +235,7 @@ export async function buildActivityMapPayload(viewer: Viewer, activityId: string
   const trip = activity.trip;
   const named = { tripSlug: tripOpen ? trip.slug : "", tripTitle: tripOpen ? trip.title : "" };
   const found = await db.photo.findMany({
-    where: { activityId: activity.id, ...NOT_TRASHED, status: "READY", lat: { not: null }, lng: { not: null } },
+    where: { activityId: activity.id, tripId: activity.tripId, ...NOT_TRASHED, status: "READY", lat: { not: null }, lng: { not: null } },
     select: { id: true, lat: true, lng: true, caption: true, takenAt: true, tzOffsetMin: true, updatedAt: true, activityId: true, gpsSource: true, uploader: { select: { id: true, name: true, email: true } } },
     orderBy: { takenAt: "asc" },
   });
@@ -271,7 +272,9 @@ export async function buildActivityMapPayload(viewer: Viewer, activityId: string
             activityTitle: activity.title,
             activityType: activity.type,
             source: t.source,
-            name: t.name,
+            // A track is named after the file it came from ("Jo's Acadia walk.gpx"), which can name the trip; a link
+            // holder who may not open the trip gets the activity's own title instead.
+            name: tripOpen ? t.name : activity.title,
             ...named,
             color: ACTIVITY_COLOR[activity.type],
             startTime: t.startTime.toISOString(),
