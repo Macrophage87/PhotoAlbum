@@ -140,6 +140,7 @@ export async function addToCollection(collectionId: string, photoIds: string[]):
     await db.collectionItem.createMany({ data: fresh.map((photoId) => ({ collectionId, photoId, addedById: user.id, position: position++ })) });
     await db.collection.update({ where: { id: collectionId }, data: { updatedAt: new Date() } });
     await bumpItemVersions(collectionId);
+    await rejudgeFromAction({ collectionId });
   }
   revalidatePath(`/collections/${collection.slug}`, "layout");
   revalidatePath("/", "layout");

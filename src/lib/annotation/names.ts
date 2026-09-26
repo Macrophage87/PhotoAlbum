@@ -70,26 +70,58 @@ export function namePatterns(name: string): NamePattern[] {
   return out;
 }
 
-/** A test for any of these ways of writing a name. */
+/**
+ * A test for any of these ways of writing a name.
+ *
+ * Hundreds of names in one alternation are slow to compile and slow to try at every position of every description,
+ * and the whole album is judged against all of them. So the patterns are grouped by their first word, and a text
+ * only tries the few whose first word it actually has (possessive and plural allowed), each group compiled on first
+ * use. The answer is the same as the one big pattern's.
+ */
 export function nameMatcher(patterns: NamePattern[]): ((text: string) => boolean) | null {
+  if (!patterns.length) return null;
   const sep = "[^\\p{L}\\p{N}]+";
-  const alt = (ps: NamePattern[]) => [...new Set(ps.map((p) => p.words.join(sep)))];
-  const ci = alt(patterns.filter((p) => !p.cjk && !p.exactCase));
-  const cs = alt(patterns.filter((p) => !p.cjk && p.exactCase));
-  const cjk = [...new Set(patterns.filter((p) => p.cjk).map((p) => p.words[0]))];
-  if (!ci.length && !cs.length && !cjk.length) return null;
-  // Letters and digits only in each alternative (CJK names are escaped), so nothing else needs escaping.
-  const words = (alts: string[]) => (alts.length ? new RegExp(`(?<![\\p{L}\\p{N}])(?:${alts.join("|")})(?:['’]s|s)?(?![\\p{L}\\p{N}])`, "u") : null);
-  const ciRe = words(ci);
-  const csRe = words(cs);
-  const cjkRes = cjk.map((c) => {
+  const group = (ps: NamePattern[]) => {
+    const byFirst = new Map<string, Set<string>>();
+    for (const p of ps) byFirst.set(p.words[0], (byFirst.get(p.words[0]) ?? new Set()).add(p.words.join(sep)));
+    return byFirst;
+  };
+  const ci = group(patterns.filter((p) => !p.cjk && !p.exactCase));
+  const cs = group(patterns.filter((p) => !p.cjk && p.exactCase));
+  const compiled = new Map<string, RegExp>();
+  // Letters and digits only in each alternative, so nothing needs escaping.
+  const regexFor = (key: string, alts: Set<string>) => {
+    let re = compiled.get(key);
+    if (!re) compiled.set(key, (re = new RegExp(`(?<![\\p{L}\\p{N}])(?:${[...alts].join("|")})(?:['’]s|s)?(?![\\p{L}\\p{N}])`, "u")));
+    return re;
+  };
+  const cjkRes = [...new Set(patterns.filter((p) => p.cjk).map((p) => p.words[0]))].map((c) => {
     const escaped = c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     return [...c].length === 1 ? new RegExp(`(?<![\\p{Script=Han}\\p{Script=Hiragana}\\p{Script=Katakana}\\p{Script=Hangul}])${escaped}(?![\\p{Script=Han}\\p{Script=Hiragana}\\p{Script=Katakana}\\p{Script=Hangul}])`, "u") : new RegExp(escaped, "u");
   });
   return (text: string) => {
     if (!text) return false;
+    if (cjkRes.some((r) => r.test(text))) return true;
     const folded = foldAccents(text);
-    return Boolean(ciRe?.test(folded.toLowerCase()) || csRe?.test(folded) || cjkRes.some((r) => r.test(text)));
+    const lowered = folded.toLowerCase();
+    const tried = new Set<string>();
+    for (const w of folded.split(/[^\p{L}\p{N}]+/u)) {
+      if (!w) continue;
+      for (const exact of w.endsWith("s") ? [w, w.slice(0, -1)] : [w]) {
+        const alts = cs.get(exact);
+        if (alts && !tried.has(`cs:${exact}`)) {
+          tried.add(`cs:${exact}`);
+          if (regexFor(`cs:${exact}`, alts).test(folded)) return true;
+        }
+        const lower = exact.toLowerCase();
+        const lalts = ci.get(lower);
+        if (lalts && !tried.has(`ci:${lower}`)) {
+          tried.add(`ci:${lower}`);
+          if (regexFor(`ci:${lower}`, lalts).test(lowered)) return true;
+        }
+      }
+    }
+    return false;
   };
 }
 
@@ -105,6 +137,14 @@ const TITLE_STOPWORDS = new Set(["the", "and", "our", "for", "with", "from", "th
 /** The words of these titles worth looking for: three letters or more, not a number, not a word every title has. */
 export function titleWords(titles: string[]): string[] {
   return [...new Set(titles.flatMap((t) => tokens(t).map((w) => w.toLowerCase())).filter((w) => w.length >= 3 && !TITLE_STOPWORDS.has(w) && !/^\d+$/.test(w)))];
+}
+
+/** Which words of these titles appear in the text (as `titleWords` has them). */
+export function titleWordsIn(text: string, titles: string[]): string[] {
+  const words = titleWords(titles);
+  if (!words.length || !text) return [];
+  const said = new Set(foldForNames(text).split(/[^\p{L}\p{N}]+/u).flatMap((w) => [w, w.replace(/s$/, "")]));
+  return words.filter((w) => said.has(w));
 }
 
 /** Whether any word of these titles appears in the text. */

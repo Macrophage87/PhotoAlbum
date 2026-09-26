@@ -9,6 +9,7 @@ import { enqueue } from "@/lib/jobs/boss";
 import { QUEUES } from "@/lib/jobs/queues";
 import { activityWindow, tripWindow } from "@/lib/photos/in-window";
 import { pickActivityByTime } from "@/lib/photos/assign";
+import { rejudgeFromAction } from "@/lib/annotation/rejudge-notice";
 
 const ids = z.array(z.string().min(1)).min(1).max(500);
 
@@ -30,6 +31,8 @@ export async function attachToActivity(activityId: string, photoIds: string[]): 
   if (!list.length) return 0;
   const r = await db.photo.updateMany({ where: { id: { in: list } }, data: { tripId: activity.tripId, activityId: activity.id, activitySetById: user.id } });
   await geotag(activity.tripId);
+  // A private trip's title words in what the helper wrote about them are judged again now they are on it.
+  await rejudgeFromAction({ tripId: activity.tripId });
   revalidatePath(`/trips/${activity.trip.slug}`, "layout");
   return r.count;
 }
@@ -57,6 +60,7 @@ export async function putTripWindow(tripId: string): Promise<{ added: number; el
   const { ids: found, elsewhere } = await tripWindow(user, trip);
   if (!found.length) return { added: 0, elsewhere };
   await db.photo.updateMany({ where: { id: { in: found } }, data: { tripId: trip.id, activityId: null, activitySetById: null } });
+  await rejudgeFromAction({ tripId: trip.id });
   const [activities, moved] = await Promise.all([
     db.activity.findMany({ where: { tripId: trip.id }, select: { id: true, startTime: true, endTime: true, participants: { select: { id: true } } } }),
     db.photo.findMany({ where: { id: { in: found } }, select: { id: true, takenAt: true, uploaderId: true } }),

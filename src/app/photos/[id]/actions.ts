@@ -21,6 +21,7 @@ import { readExif, resolveTakenAt } from "@/lib/images/exif";
 import { parseLatLng, placeNameOf } from "@/lib/geo/parse";
 import { uploaderLabel } from "@/components/photos/toGrid";
 import { addToCollection, removeFromCollection } from "@/app/collections/actions";
+import { rejudgeFromAction } from "@/lib/annotation/rejudge-notice";
 
 /**
  * The member making this change, where the item is theirs to change. Someone else's photograph carries their
@@ -90,6 +91,7 @@ export async function updatePhoto(id: string, fd: FormData): Promise<void> {
   }
   // A title typed here is the member's; one left as it was keeps whoever wrote it.
   await db.photo.update({ where: { id }, data: { title, ...(title !== photo.title ? { titleByHelper: title ? false : null } : {}), caption: v.caption, context: v.context, ...(v.context !== photo.context ? { contextUpdatedAt: new Date(), annotationError: null } : {}), tripId: v.tripId, activityId, activitySetById: activitySetter(activityId, chosenByHand, user.id, photo) } });
+  if (v.tripId && v.tripId !== photo.tripId) await rejudgeFromAction({ tripId: v.tripId });
   revalidatePath(`/photos/${id}`);
   if (photo.tripId) revalidatePath(`/trips`, "layout");
 }

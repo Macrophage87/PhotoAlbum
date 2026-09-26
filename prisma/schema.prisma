@@ -295,6 +295,8 @@ model Activity {
   descriptionMembersOnly Boolean @default(false)
   /// Members-only only because it repeats a word of its trip's title while the trip is not public.
   descriptionTitleOnly   Boolean @default(false)
+  /// The words of the trip's title that caused it: lifted only while the trip's own, public title still carries them.
+  descriptionTitleWords  String[] @default([])
   /// When whoever arranges it chose to show the description to everyone; nothing re-flags it until it is rewritten.
   descriptionSharedAt    DateTime?
   trackId     String?      @unique
@@ -399,6 +401,15 @@ model Photo {
   /// Members-only only because the text repeats a word from the title of a trip or collection strangers cannot
   /// open: making that trip or collection public lifts it (see src/lib/annotation/rejudge.ts).
   annotationTitleOnly       Boolean  @default(false)
+  /// For a title-word flag: the words that caused it and the trips/collections they came from (`trip:<id>`,
+  /// `collection:<id>`). It is lifted only when those are public and their titles still carry the words.
+  annotationTitleWords      String[] @default([])
+  annotationTitleFrom       String[] @default([])
+  /// Goes up with every change to `annotation` (a database trigger), so "show it to everyone" and the background
+  /// judging act only on the words that were read.
+  annotationRevision        Int      @default(0)
+  /// When the item last joined a trip or a collection (database triggers), so the nightly sweep judges it again.
+  containersChangedAt       DateTime?
   /// When the uploader or an admin chose to show the helper's text to everyone. Nothing re-flags it until it is
   /// written again.
   annotationSharedAt        DateTime?

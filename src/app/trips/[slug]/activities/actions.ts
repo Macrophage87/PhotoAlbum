@@ -204,7 +204,7 @@ export async function describeActivityWithAi(slug: string, id: string, note?: st
     previous: Boolean(activity.description && activity.descriptionMembersOnly),
     privateTitles: activity.trip.visibility === "PUBLIC" ? [] : [activity.trip.title],
   });
-  await db.activity.update({ where: { id }, data: { description: parsed.description, descriptionMembersOnly: judged.membersOnly, descriptionTitleOnly: judged.titleOnly, descriptionSharedAt: null } });
+  await db.activity.update({ where: { id }, data: { description: parsed.description, descriptionMembersOnly: judged.membersOnly, descriptionTitleOnly: judged.titleOnly, descriptionTitleWords: judged.titleOnly ? (judged.titleWords ?? []) : [], descriptionSharedAt: null } });
   revalidatePath(`/trips/${slug}/activities/${id}`);
   return parsed.description;
 }

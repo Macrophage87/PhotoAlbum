@@ -14,6 +14,10 @@
 ALTER TABLE "Photo" ADD COLUMN     "annotationMembersOnly" BOOLEAN NOT NULL DEFAULT false,
 ADD COLUMN     "membersTitle" TEXT,
 ADD COLUMN     "annotationTitleOnly" BOOLEAN NOT NULL DEFAULT false,
+ADD COLUMN     "annotationTitleWords" TEXT[] DEFAULT ARRAY[]::TEXT[],
+ADD COLUMN     "annotationTitleFrom" TEXT[] DEFAULT ARRAY[]::TEXT[],
+ADD COLUMN     "annotationRevision" INTEGER NOT NULL DEFAULT 0,
+ADD COLUMN     "containersChangedAt" TIMESTAMP(3),
 ADD COLUMN     "annotationSharedAt" TIMESTAMP(3),
 ADD COLUMN     "titleByHelper" BOOLEAN,
 ADD COLUMN     "placeEstimateMembersOnly" BOOLEAN NOT NULL DEFAULT false;
@@ -34,6 +38,7 @@ ADD COLUMN     "descriptionSharedAt" TIMESTAMP(3);
 -- AlterTable
 ALTER TABLE "Activity" ADD COLUMN     "descriptionMembersOnly" BOOLEAN NOT NULL DEFAULT false,
 ADD COLUMN     "descriptionTitleOnly" BOOLEAN NOT NULL DEFAULT false,
+ADD COLUMN     "descriptionTitleWords" TEXT[] DEFAULT ARRAY[]::TEXT[],
 ADD COLUMN     "descriptionSharedAt" TIMESTAMP(3);
 
 -- The helper's text, indexed the same way in whichever column it belongs to.
@@ -86,6 +91,30 @@ BEGIN
   IF NEW.title IS DISTINCT FROM OLD.title OR NEW.visibility IS DISTINCT FROM OLD.visibility THEN
     UPDATE "Photo" SET "updatedAt" = "updatedAt" WHERE "tripId" = NEW.id;
   END IF;
+  RETURN NULL;
+END $$;
+
+-- Every change to the helper's text moves its revision on, whoever makes it, so an action or a background pass can
+-- tell the words it read from newer ones; and a photograph joining a trip is noted for the nightly judging.
+CREATE OR REPLACE FUNCTION photo_members_only_before_update() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF NEW.annotation IS DISTINCT FROM OLD.annotation THEN
+    NEW."annotationRevision" := OLD."annotationRevision" + 1;
+  END IF;
+  IF NEW."tripId" IS DISTINCT FROM OLD."tripId" AND NEW."tripId" IS NOT NULL THEN
+    NEW."containersChangedAt" := now();
+  END IF;
+  RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS photo_members_only_trigger ON "Photo";
+CREATE TRIGGER photo_members_only_trigger BEFORE UPDATE ON "Photo"
+  FOR EACH ROW EXECUTE FUNCTION photo_members_only_before_update();
+
+-- Joining a collection is noted the same way, in the update that already re-indexes the photograph.
+CREATE OR REPLACE FUNCTION photo_search_refresh_by_collection() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  UPDATE "Photo" SET "updatedAt" = "updatedAt", "containersChangedAt" = CASE WHEN TG_OP = 'INSERT' THEN now() ELSE "containersChangedAt" END
+    WHERE id = COALESCE(NEW."photoId", OLD."photoId");
   RETURN NULL;
 END $$;
 

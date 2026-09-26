@@ -1,6 +1,6 @@
 import { db } from "@/lib/db";
 import type { StoredAnnotation } from "./schema";
-import { mentionsAnyName, mentionsAnyTitle } from "./names";
+import { mentionsAnyName, mentionsAnyTitle, titleWordsIn } from "./names";
 
 export { foldForNames, mentionsAnyName, mentionsAnyTitle, NAME_PARTICLES, namePatterns } from "./names";
 
@@ -9,9 +9,32 @@ export { foldForNames, mentionsAnyName, mentionsAnyTitle, NAME_PARTICLES, namePa
  * strangers cannot open: that reason goes away when the trip or collection is made public (see `rejudge.ts`), the
  * others never do.
  */
-export type Judgement = { membersOnly: boolean; titleOnly: boolean };
+export type Judgement = {
+  membersOnly: boolean;
+  titleOnly: boolean;
+  /** For a title-word flag: the words, and the trips and collections (`trip:<id>`, `collection:<id>`) they came from. */
+  titleWords?: string[];
+  titleFrom?: string[];
+};
 
 const judged = (hard: boolean, title: boolean): Judgement => ({ membersOnly: hard || title, titleOnly: !hard && title });
+
+/** A private trip or collection an item is in, keyed as `trip:<id>` or `collection:<id>`. */
+export type PrivateContainer = { key: string; title: string };
+
+/** Which private containers' title words the text repeats, and which words. */
+export function titleHits(text: string, containers: PrivateContainer[]): { words: string[]; from: string[] } {
+  const words = new Set<string>();
+  const from: string[] = [];
+  for (const c of containers) {
+    const hit = titleWordsIn(text, [c.title]);
+    if (hit.length) {
+      from.push(c.key);
+      for (const w of hit) words.add(w);
+    }
+  }
+  return { words: [...words], from };
+}
 
 /**
  * Whether the helper's text for an item is for members only.
@@ -32,7 +55,8 @@ const judged = (hard: boolean, title: boolean): Judgement => ({ membersOnly: har
 export async function judgeHelperText(photoId: string, text: Pick<StoredAnnotation, "title" | "caption" | "description" | "searchSummary" | "place" | "tags">, context: string | null, sent?: boolean | null): Promise<Judgement> {
   const said = helperText(text);
   const hard = Boolean(sent || context?.trim()) || (await taggedOn(photoId)) || mentionsAnyName(said, await knownNames());
-  return judged(hard, mentionsAnyTitle(said, await privateTitlesOf(photoId)));
+  const hits = titleHits(said, await privateContainersOf(photoId));
+  return { ...judged(hard, hits.from.length > 0), ...(hits.from.length ? { titleWords: hits.words, titleFrom: hits.from } : {}) };
 }
 
 /** `judgeHelperText`, as a yes or no. */
@@ -86,7 +110,8 @@ export function parseAnnotationCustomId(customId: string): { photoId: string; se
  */
 export async function judgeDescription(description: string, given: { names: string[]; notes: boolean; previous?: boolean; privateTitles?: string[] }): Promise<Judgement> {
   const hard = Boolean(given.names.length || given.notes || given.previous) || mentionsAnyName(description, await knownNames());
-  return judged(hard, mentionsAnyTitle(description, given.privateTitles ?? []));
+  const words = titleWordsIn(description, given.privateTitles ?? []);
+  return { ...judged(hard, words.length > 0), ...(words.length ? { titleWords: words } : {}) };
 }
 
 /** `judgeDescription`, as a yes or no. */
@@ -160,12 +185,34 @@ async function taggedOn(photoId: string): Promise<boolean> {
   return Boolean(face || animal);
 }
 
+/** The trip and collections an item is in that strangers cannot open. */
+export async function privateContainersOf(photoId: string): Promise<PrivateContainer[]> {
+  const p = await db.photo.findUnique({ where: { id: photoId }, select: { trip: { select: { id: true, title: true, visibility: true } }, collections: { select: { collection: { select: { id: true, title: true, visibility: true } } } } } });
+  if (!p) return [];
+  return [
+    ...(p.trip && p.trip.visibility !== "PUBLIC" ? [{ key: `trip:${p.trip.id}`, title: p.trip.title }] : []),
+    ...p.collections.flatMap(({ collection: c }) => (c.visibility !== "PUBLIC" ? [{ key: `collection:${c.id}`, title: c.title }] : [])),
+  ];
+}
+
 /** Titles of the trip and collections an item is in that strangers cannot open. */
 export async function privateTitlesOf(photoId: string): Promise<string[]> {
   const p = await db.photo.findUnique({ where: { id: photoId }, select: { trip: { select: { title: true, visibility: true } }, collections: { select: { collection: { select: { title: true, visibility: true } } } } } });
   if (!p) return [];
   const all = [p.trip, ...p.collections.map((c) => c.collection)];
   return all.flatMap((c) => (c && c.visibility !== "PUBLIC" ? [c.title] : []));
+}
+
+/**
+ * The same, each with who it belongs to (`person:<id>` or `user:<id>`), so that somebody new with an old name, or a
+ * rename, is a name the sweep has not judged yet.
+ */
+export async function knownNameEntries(): Promise<{ key: string; name: string }[]> {
+  const [people, members] = await Promise.all([
+    db.person.findMany({ select: { id: true, name: true } }),
+    db.user.findMany({ where: { name: { not: null } }, select: { id: true, name: true } }),
+  ]);
+  return [...people.map((p) => ({ key: `person:${p.id}:${p.name}`, name: p.name })), ...members.map((m) => ({ key: `user:${m.id}:${m.name}`, name: m.name ?? "" }))].filter((e) => e.name.trim());
 }
 
 /** Everybody the album has a name for: the people and pets it knows, and its members. */
