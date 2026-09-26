@@ -252,7 +252,8 @@ model Trip {
   endDate      DateTime       @db.Date
   timezone     String         @default("UTC")
   themeKey     String         @default("default")
-  coverPhotoId String?        @unique
+  /// Chosen by hand, and honoured only while it is still a finished photograph on this trip and out of the trash.
+  coverPhotoId String?
   coverPhoto   Photo?         @relation("TripCover", fields: [coverPhotoId], references: [id], onDelete: SetNull)
   visibility   TripVisibility @default(PRIVATE)
   shareToken   String?        @unique
@@ -274,6 +275,7 @@ model Trip {
 
   @@index([startDate])
   @@index([visibility])
+  @@index([coverPhotoId])
 }
 
 model Activity {
@@ -295,12 +297,13 @@ model Activity {
   participants User[]      @relation("ActivityParticipants")
   /// The photograph the activity is known by, chosen by hand: the picture a shared link unfurls with. Honoured only
   /// while it is still one of the activity's own; otherwise the activity is fronted by its first photograph.
-  coverPhotoId String?     @unique
+  coverPhotoId String?
   coverPhoto   Photo?      @relation("ActivityCover", fields: [coverPhotoId], references: [id], onDelete: SetNull)
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
 
   @@index([tripId, startTime])
+  @@index([coverPhotoId])
 }
 
 model Photo {
@@ -429,12 +432,12 @@ model Photo {
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
 
-  coverOf     Trip?            @relation("TripCover")
+  coverOf     Trip[]           @relation("TripCover")
   linksA      PhotoLink[]      @relation("LinkA")
   linksB      PhotoLink[]      @relation("LinkB")
   collections CollectionItem[]
-  coverOfCollection Collection? @relation("CollectionCover")
-  coverOfActivity   Activity?   @relation("ActivityCover")
+  coverOfCollection Collection[] @relation("CollectionCover")
+  coverOfActivity   Activity[]   @relation("ActivityCover")
   annotationRaw     MediaAnnotationRaw[]
   faces             Face[]
   animals           AnimalDetection[]
@@ -465,7 +468,8 @@ model Collection {
   themeKey     String         @default("default")
   visibility   TripVisibility @default(PRIVATE)
   shareToken   String?        @unique
-  coverPhotoId String?        @unique
+  /// One photograph may lead any number of collections, as it may sit in any number of them.
+  coverPhotoId String?
   coverPhoto   Photo?         @relation("CollectionCover", fields: [coverPhotoId], references: [id], onDelete: SetNull)
   annotationOptOut Boolean    @default(false)
   createdById  String
@@ -478,6 +482,7 @@ model Collection {
   visits Visit[]
 
   @@index([visibility])
+  @@index([coverPhotoId])
 }
 
 /// A member marking something as one of theirs. Kept per person and per thing rather than as a count on the row, so

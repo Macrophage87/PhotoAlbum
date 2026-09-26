@@ -16,6 +16,7 @@ import { fieldErrors } from "@/lib/trips/validation";
 import { collectionInputFromForm } from "@/lib/collections/validation";
 import { canEditContainer, editableMediaIds, NOT_YOUR_CONTAINER } from "@/lib/auth/ownership";
 import { writeContainerDescription } from "@/lib/annotation/container";
+import { COVERABLE } from "@/lib/photos/cover";
 import type { TripFormState } from "@/app/trips/new/actions";
 
 export type CollectionFormState = TripFormState;
@@ -81,11 +82,17 @@ export async function rotateCollectionShareToken(slug: string): Promise<void> {
   revalidatePath(`/collections/${slug}/settings`);
 }
 
+/**
+ * Choose (or forget) the picture the collection is known by: one of its own finished photographs. The same
+ * photograph may front other collections too, as it may sit in them.
+ */
 export async function setCollectionCover(slug: string, photoId: string | null): Promise<void> {
   const collection = await loadEditableCollection(slug);
   if (photoId) {
-    const item = await db.collectionItem.findFirst({ where: { collectionId: collection.id, photoId }, select: { id: true } });
+    const item = await db.collectionItem.findFirst({ where: { collectionId: collection.id, photoId }, select: { photo: { select: { status: true, trashedAt: true } } } });
     if (!item) throw new Error("Photo is not in this collection");
+    // Still processing, failed, or in the trash: there is no picture to lead with.
+    if (item.photo.status !== COVERABLE.status || item.photo.trashedAt) throw new Error("Only a finished photo can be the cover");
   }
   await db.collection.update({ where: { id: collection.id }, data: { coverPhotoId: photoId } });
   revalidatePath(`/collections/${slug}`, "layout");

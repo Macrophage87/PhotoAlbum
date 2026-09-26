@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { collectionCoverCandidates, tripCoverCandidates } from "@/lib/covers/candidates";
 import { coverFor } from "@/lib/trips/queries";
 import { collectionCoverFor } from "@/lib/collections/queries";
+import { coverPhotoSelect } from "@/lib/photos/cover";
 import { resetTestDb } from "../helpers/reset";
 
 describe("what a trip or collection can be fronted by", () => {
@@ -48,14 +49,14 @@ describe("what a trip or collection can be fronted by", () => {
   });
 
   it("falls back to the front of the list where nobody has chosen, and to the choice where somebody has", async () => {
-    const trip = await db.trip.findUniqueOrThrow({ where: { id: tripId }, include: { coverPhoto: { select: { id: true, updatedAt: true } } } });
+    const trip = await db.trip.findUniqueOrThrow({ where: { id: tripId }, include: { coverPhoto: coverPhotoSelect } });
     expect((await coverFor(trip))?.id).toBe(first);
     await db.trip.update({ where: { id: tripId }, data: { coverPhotoId: second } });
-    const chosen = await db.trip.findUniqueOrThrow({ where: { id: tripId }, include: { coverPhoto: { select: { id: true, updatedAt: true } } } });
+    const chosen = await db.trip.findUniqueOrThrow({ where: { id: tripId }, include: { coverPhoto: coverPhotoSelect } });
     expect((await coverFor(chosen))?.id).toBe(second);
 
     await db.collectionItem.createMany({ data: [{ collectionId, photoId: second, addedById: me, position: 0 }, { collectionId, photoId: first, addedById: me, position: 1 }] });
-    const collection = await db.collection.findUniqueOrThrow({ where: { id: collectionId }, include: { coverPhoto: { select: { id: true, updatedAt: true } } } });
+    const collection = await db.collection.findUniqueOrThrow({ where: { id: collectionId }, include: { coverPhoto: coverPhotoSelect } });
     expect((await collectionCoverFor(collection))?.id).toBe(second);
   });
 });

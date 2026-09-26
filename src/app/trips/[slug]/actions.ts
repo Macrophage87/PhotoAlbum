@@ -14,6 +14,7 @@ import type { TripFormState } from "@/app/trips/new/actions";
 import { levelOf } from "@/lib/visibility/exposure";
 import { canEditContainer, editableMediaIds, NOT_YOUR_CONTAINER } from "@/lib/auth/ownership";
 import { writeContainerDescription } from "@/lib/annotation/container";
+import { COVERABLE } from "@/lib/photos/cover";
 
 /** The trip, where this member may change it: whoever made it, and admins. */
 async function loadEditableTrip(slug: string) {
@@ -74,8 +75,10 @@ export async function rotateShareToken(slug: string): Promise<void> {
 export async function setCoverPhoto(slug: string, photoId: string | null): Promise<void> {
   const trip = await loadEditableTrip(slug);
   if (photoId) {
-    const photo = await db.photo.findFirst({ where: { id: photoId, tripId: trip.id }, select: { id: true } });
+    const photo = await db.photo.findFirst({ where: { id: photoId, tripId: trip.id }, select: { status: true, trashedAt: true } });
     if (!photo) throw new Error("Photo is not on this trip");
+    // Still processing, failed, or in the trash: there is no picture to lead with.
+    if (photo.status !== COVERABLE.status || photo.trashedAt) throw new Error("Only a finished photo can be the cover");
   }
   await db.trip.update({ where: { id: trip.id }, data: { coverPhotoId: photoId } });
   revalidatePath(`/trips/${slug}`, "layout");

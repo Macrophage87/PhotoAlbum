@@ -9,6 +9,7 @@ import { editsSchema, tidyEdits } from "@/lib/images/edits";
 import { requireUserOrThrow, type ViewerUser } from "@/lib/auth/viewer";
 import { canEditContainer, canEditMedia, editableMediaIds, NOT_YOURS, NOT_YOUR_CONTAINER } from "@/lib/auth/ownership";
 import { trashSchema } from "@/lib/photos/trash";
+import { COVERABLE } from "@/lib/photos/cover";
 import { guessDateFromTrip, guessDatesForTrip } from "@/lib/photos/date-guess-query";
 import { dateReport, type DateReport } from "@/lib/photos/date-report";
 import { enqueue } from "@/lib/jobs/boss";
@@ -127,9 +128,10 @@ export async function reprocessPhoto(id: string): Promise<void> {
  */
 export async function setAsCover(id: string): Promise<void> {
   const user = await requireUserOrThrow();
-  const photo = await db.photo.findUnique({ where: { id }, select: { tripId: true, trip: { select: { slug: true, createdById: true } } } });
+  const photo = await db.photo.findUnique({ where: { id }, select: { tripId: true, status: true, trashedAt: true, trip: { select: { slug: true, createdById: true } } } });
   if (!photo?.tripId || !photo.trip) return;
   if (!canEditContainer(user, photo.trip)) throw new Error(NOT_YOUR_CONTAINER);
+  if (photo.status !== COVERABLE.status || photo.trashedAt) throw new Error("Only a finished photo can be the cover");
   await db.trip.update({ where: { id: photo.tripId }, data: { coverPhotoId: id } });
   revalidatePath(`/trips/${photo.trip!.slug}`, "layout");
   revalidatePath("/");

@@ -16,6 +16,7 @@ import { reassignPhotosForActivity } from "@/lib/activities/reassign";
 import { fieldErrors, participantsFromForm } from "@/lib/trips/validation";
 import type { ActivityType } from "@/generated/prisma/enums";
 import type { ActivityFormState } from "@/components/activities/ActivityForm";
+import { COVERABLE } from "@/lib/photos/cover";
 
 /** An activity is part of the shape of a trip, so it is the trip's maker (and admins) who arrange them. */
 async function loadTrip(slug: string) {
@@ -116,8 +117,10 @@ export async function setActivityCover(slug: string, id: string, photoId: string
   const activity = await db.activity.findFirst({ where: { id, tripId: trip.id }, select: { id: true } });
   if (!activity) throw new Error("Activity not found");
   if (photoId) {
-    const photo = await db.photo.findFirst({ where: { id: photoId, activityId: id }, select: { id: true } });
+    const photo = await db.photo.findFirst({ where: { id: photoId, activityId: id }, select: { status: true, trashedAt: true } });
     if (!photo) throw new Error("Photo is not on this activity");
+    // Still processing, failed, or in the trash: there is no picture to lead with.
+    if (photo.status !== COVERABLE.status || photo.trashedAt) throw new Error("Only a finished photo can be the cover");
   }
   // A photograph fronts one activity at most. One moved here from an activity it was the cover of is released there
   // first; that activity goes back to leading with its own first photograph.

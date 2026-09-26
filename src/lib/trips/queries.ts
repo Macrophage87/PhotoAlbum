@@ -4,7 +4,7 @@ import { Prisma } from "@/generated/prisma/client";
 import type { Viewer } from "@/lib/auth/viewer";
 import { visibleTripsWhere } from "@/lib/auth/access";
 import { NOT_TRASHED } from "@/lib/photos/trash";
-import { coverUnlessTrashed } from "@/lib/photos/cover";
+import { coverPhotoSelect, standingCover } from "@/lib/photos/cover";
 
 export const tripCardSelect = {
   id: true,
@@ -17,7 +17,7 @@ export const tripCardSelect = {
   themeKey: true,
   visibility: true,
   shareToken: true,
-  coverPhoto: { select: { id: true, updatedAt: true, width: true, height: true, trashedAt: true } },
+  coverPhoto: coverPhotoSelect,
   _count: { select: { photos: { where: NOT_TRASHED }, activities: true } },
 } satisfies Prisma.TripSelect;
 
@@ -54,15 +54,27 @@ export async function countVisibleTrips(viewer: Viewer, q?: string | null): Prom
 export async function getTripBySlug(slug: string) {
   return db.trip.findUnique({
     where: { slug },
-    include: { coverPhoto: { select: { id: true, updatedAt: true, width: true, height: true, trashedAt: true } }, _count: { select: { photos: { where: NOT_TRASHED }, activities: true, tracks: true } } },
+    include: { coverPhoto: coverPhotoSelect, _count: { select: { photos: { where: NOT_TRASHED }, activities: true, tracks: true } } },
   });
 }
 
 export type TripWithCounts = NonNullable<Awaited<ReturnType<typeof getTripBySlug>>>;
 
-/** Cover photo, or the newest ready photo when no cover is set. */
-export async function coverFor(trip: { id: string; coverPhoto: { id: string; updatedAt: Date; width?: number | null; height?: number | null; trashedAt?: Date | null } | null }) {
-  const chosen = coverUnlessTrashed(trip.coverPhoto);
+type ChosenCover = { id: string; updatedAt: Date; width?: number | null; height?: number | null; trashedAt?: Date | null; status: string; tripId: string | null };
+
+/**
+ * The cover chosen by hand, while it still stands: finished, out of the trash, and still on this trip. A photograph
+ * can be moved to another trip from its own page, a bulk move, or filing, long after it was chosen, and the trip it
+ * left must not go on leading with a picture that is no longer on it (and may now be private to somebody else).
+ */
+export function chosenTripCover<T extends ChosenCover>(trip: { id: string; coverPhoto: T | null }): T | null {
+  const chosen = standingCover(trip.coverPhoto);
+  return chosen && chosen.tripId === trip.id ? chosen : null;
+}
+
+/** The chosen cover where it still stands, or else the earliest ready photo on the trip. */
+export async function coverFor(trip: { id: string; coverPhoto: ChosenCover | null }) {
+  const chosen = chosenTripCover(trip);
   if (chosen) return chosen;
   return db.photo.findFirst({
     where: { tripId: trip.id, ...NOT_TRASHED, status: "READY" },

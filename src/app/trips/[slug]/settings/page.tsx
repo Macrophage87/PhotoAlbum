@@ -7,7 +7,7 @@ import { CopyLink } from "@/components/share/CopyLink";
 import { shareableTripUrl } from "@/lib/share/social";
 import { Button, ButtonLink, Card, ConfirmSubmitButton } from "@/components/ui";
 import { photoUrl } from "@/lib/photos/urls";
-import { coverFor } from "@/lib/trips/queries";
+import { chosenTripCover, coverFor } from "@/lib/trips/queries";
 import { familyMembers } from "@/lib/people/members";
 import { deleteTrip, detachExposedFromCollections, regeotagPhotos, rotateShareToken, updateTrip } from "../actions";
 import { OptOutToggle } from "@/components/annotation/OptOutToggle";
@@ -117,7 +117,7 @@ export default async function TripSettingsPage({ params, searchParams }: PagePro
             )}
           </div>
           <div className="text-sm space-y-2">
-            <p className="text-muted">{trip.coverPhoto ? "Chosen by hand." : cover ? "Nobody has chosen one, so the album leads with the earliest photograph on the trip." : "Nothing to lead with yet."}</p>
+            <p className="text-muted">{chosenTripCover(trip) ? "Chosen by hand." : cover ? "Nobody has chosen one, so the album leads with the earliest photograph on the trip." : "Nothing to lead with yet."}</p>
             <ButtonLink href={`/trips/${slug}/cover`} size="sm" variant="secondary">Choose a cover</ButtonLink>
           </div>
         </Card>

@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { requireCollectionOwnerPage } from "@/lib/collections/access";
 import { collectionCoverFor } from "@/lib/collections/queries";
+import { standingCover } from "@/lib/photos/cover";
 import { collectionCoverCandidates } from "@/lib/covers/candidates";
 import { CoverPicker } from "@/components/covers/CoverPicker";
 import { setCollectionCover } from "@/app/collections/actions";
@@ -18,7 +19,8 @@ export default async function CollectionCoverPage({ params, searchParams }: Page
     <CoverPicker
       title={collection.title}
       backHref={`/collections/${slug}/settings`}
-      current={collection.coverPhoto}
+      // The hand-chosen one only while it still stands: a trashed cover is not what the album shows.
+      current={standingCover(collection.coverPhoto)}
       automatic={automatic}
       photos={page.photos}
       nextCursor={page.nextCursor}

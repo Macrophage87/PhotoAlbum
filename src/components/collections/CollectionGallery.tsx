@@ -29,6 +29,8 @@ export function CollectionGallery({ collectionId, slug, photos, editable, emptyM
   const confirmExposure = async (warnings: string[]) => warnings.length === 0 || window.confirm(`${warnings.join("\n")}\n\nContinue?`);
   const [pending, start] = useTransition();
   const ids = [...selected];
+  /** Only a finished photograph, out of the trash, has a picture to lead with. */
+  const coverable = ids.length === 1 && photos.find((p) => p.id === ids[0])?.status === "READY";
 
   const finish = (fn: () => Promise<unknown>) =>
     start(async () => {
@@ -85,7 +87,7 @@ export function CollectionGallery({ collectionId, slug, photos, editable, emptyM
               <Button variant="ghost" size="sm" onClick={() => setSelected(new Set(photos.map((p) => p.id)))}>All</Button>
               <Button variant="ghost" size="sm" onClick={() => setSelected(new Set())}>None</Button>
               <span className="mx-1 text-border">|</span>
-              <Button size="sm" variant="secondary" disabled={ids.length !== 1 || pending} onClick={() => finish(() => setCollectionCover(slug, ids[0]))}>Set as cover</Button>
+              <Button size="sm" variant="secondary" disabled={!coverable || pending} title={ids.length === 1 && !coverable ? "Only a finished photo can be the cover" : undefined} onClick={() => finish(() => setCollectionCover(slug, ids[0]))}>Set as cover</Button>
               <Button size="sm" variant="danger" disabled={!ids.length || pending} onClick={remove} data-testid="remove-from-collection">Remove from collection</Button>
               {(
                 <>
