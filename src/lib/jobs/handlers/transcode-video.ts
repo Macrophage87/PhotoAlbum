@@ -8,6 +8,7 @@ import { storage } from "@/lib/storage";
 import { makeRenditions } from "@/lib/images/renditions";
 import { ffmpeg, posterArgs, probe, transcodeArgs } from "@/lib/video/ffmpeg";
 import { pickTripByDay, whoWasThere } from "@/lib/photos/assign";
+import { pickTripByCoverage } from "@/lib/photos/trip-by-coverage";
 import { activityFor } from "@/lib/activities/reassign";
 import { localDayFromOffset, offsetMinutesInZone } from "@/lib/time/local-day";
 import { withHeavyLock } from "../heavy-lock";
@@ -75,7 +76,10 @@ export async function transcodeVideo(job: TranscodeVideoJob, signal?: AbortSigna
       if (!trip) {
         const candidates = await db.trip.findMany({ where: whoWasThere(photo.uploaderId), select: { id: true, startDate: true, endDate: true, timezone: true } });
         const matches = candidates.filter((c) => pickTripByDay([c], localDayFromOffset(instant, offsetMinutesInZone(instant, c.timezone))));
-        if (matches.length === 1) trip = await db.trip.findUnique({ where: { id: matches[0].id } });
+        // On no trip's days (a ride on the last evening that runs past midnight): the trip out on an activity or a
+        // track at that moment.
+        const match = matches.length === 1 ? matches[0] : matches.length === 0 ? await pickTripByCoverage(candidates, photo.uploaderId, () => instant) : null;
+        if (match) trip = await db.trip.findUnique({ where: { id: match.id } });
       }
       // A hand-set date keeps the zone it was typed in.
       const tzOffsetMin = byHand && photo.tzOffsetMin !== null ? photo.tzOffsetMin : trip ? offsetMinutesInZone(instant, trip.timezone) : 0;

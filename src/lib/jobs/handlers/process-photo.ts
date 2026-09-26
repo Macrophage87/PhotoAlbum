@@ -12,6 +12,7 @@ import { applyPhotoInstant } from "@/lib/photos/apply-date";
 import { readGPano } from "@/lib/images/panorama-read";
 import { editsSchema, hasEdits, type PhotoEdits } from "@/lib/images/edits";
 import { pickTripByDay, whoWasThere } from "@/lib/photos/assign";
+import { pickTripByCoverage } from "@/lib/photos/trip-by-coverage";
 import { activityFor } from "@/lib/activities/reassign";
 import { localDayFromOffset, offsetMinutesInZone } from "@/lib/time/local-day";
 import { enqueue } from "../boss";
@@ -108,18 +109,26 @@ export async function processPhoto(job: ProcessPhotoJob, signal?: AbortSignal): 
     // In order of how much each can be trusted: when the shutter fired, then the capture time in the file's name,
     // then DateTimeDigitized — which an editor may have rewritten to the day it exported the file, so it comes last
     // of the readable sources and is recorded under its own name rather than as the camera's word.
-    let resolved =
-      resolveTakenAt(exif, trip?.timezone ?? null) ??
-      resolveFilenameTakenAt(photo.originalName, trip?.timezone ?? null) ??
-      resolveDigitizedTakenAt(exif, trip?.timezone ?? null);
-    // A Takeout sidecar's date is authoritative (Google's own record of the capture time); EXIF supplies the zone.
-    if (photo.takenAtSource === "SIDECAR" && photo.takenAt) resolved = sidecarResolution(photo.takenAt, resolved, exif, trip?.timezone ?? null, photo.gpsSource === "SIDECAR" ? { lat: photo.lat, lng: photo.lng } : null);
-    // A date a member set by hand is their answer to "the camera was wrong": re-reading the camera does not undo it.
-    if (photo.takenAtSource === "MANUAL" && photo.takenAt) resolved = { takenAt: photo.takenAt, tzOffsetMin: photo.tzOffsetMin ?? 0, source: "MANUAL", wallDay: localDayFromOffset(photo.takenAt, photo.tzOffsetMin ?? 0) };
+    const resolveIn = (timezone: string | null) => {
+      let r =
+        resolveTakenAt(exif, timezone) ??
+        resolveFilenameTakenAt(photo.originalName, timezone) ??
+        resolveDigitizedTakenAt(exif, timezone);
+      // A Takeout sidecar's date is authoritative (Google's own record of the capture time); EXIF supplies the zone.
+      if (photo.takenAtSource === "SIDECAR" && photo.takenAt) r = sidecarResolution(photo.takenAt, r, exif, timezone, photo.gpsSource === "SIDECAR" ? { lat: photo.lat, lng: photo.lng } : null);
+      // A date a member set by hand is their answer to "the camera was wrong": re-reading the camera does not undo it.
+      if (photo.takenAtSource === "MANUAL" && photo.takenAt) r = { takenAt: photo.takenAt, tzOffsetMin: photo.tzOffsetMin ?? 0, source: "MANUAL", wallDay: localDayFromOffset(photo.takenAt, photo.tzOffsetMin ?? 0) };
+      return r;
+    };
+    let resolved = resolveIn(trip?.timezone ?? null);
     if (!trip && resolved) {
       // Only trips this member was on, where anybody said who was on them; a clock cannot tell two families apart.
       const candidates = await db.trip.findMany({ where: whoWasThere(photo.uploaderId), select: { id: true, startDate: true, endDate: true, timezone: true } });
-      const match = pickTripByDay(candidates, resolved.wallDay);
+      const day = resolved.wallDay;
+      let match = pickTripByDay(candidates, day);
+      // On no trip's days at all (a ride on the last evening that runs past midnight): the trip out on an activity or
+      // a track at that moment, reading a clock with no zone of its own in each trip's zone.
+      if (!match && !candidates.some((c) => pickTripByDay([c], day))) match = await pickTripByCoverage(candidates, photo.uploaderId, (c) => resolveIn(c.timezone)?.takenAt ?? null);
       if (match) {
         trip = await db.trip.findUnique({ where: { id: match.id } });
         // Re-resolve now that we know the trip's zone (matters when EXIF has no offset and no GPS).
@@ -149,7 +158,9 @@ export async function processPhoto(job: ProcessPhotoJob, signal?: AbortSignal): 
         const candidates = await db.trip.findMany({ where: whoWasThere(photo.uploaderId), select: { id: true, startDate: true, endDate: true, timezone: true } });
         // Each trip judges the instant in its own zone; still require exactly one match.
         const matches = candidates.filter((c) => pickTripByDay([c], localDayFromOffset(takenAt!, offsetMinutesInZone(takenAt!, c.timezone))));
-        if (matches.length === 1) trip = await db.trip.findUnique({ where: { id: matches[0].id } });
+        // On no trip's days: the trip out on an activity or a track at that moment, as above.
+        const match = matches.length === 1 ? matches[0] : matches.length === 0 ? await pickTripByCoverage(candidates, photo.uploaderId, () => takenAt) : null;
+        if (match) trip = await db.trip.findUnique({ where: { id: match.id } });
       }
       tzOffsetMin = trip ? offsetMinutesInZone(takenAt, trip.timezone) : 0;
     }
