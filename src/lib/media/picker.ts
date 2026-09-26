@@ -20,6 +20,16 @@ export function mimeOfPicked(file: PickedFile): string | null {
   return ALLOWED_MIMES.has(given) ? given : null;
 }
 
+/**
+ * The type the upload route files a sent file under: the type the browser gave, when the album takes it, else the
+ * one its name says. The uploader asks the same question to know which size limit a file will be held to.
+ */
+export function mimeAsSent(file: PickedFile): string | null {
+  const given = file.type.split(";")[0]!.trim();
+  if (ALLOWED_MIMES.has(given)) return given;
+  return EXT_MIME[extensionOf(file.name)] ?? null;
+}
+
 export const albumTakes = (file: PickedFile) => mimeOfPicked(file) !== null;
 export const isVideoPick = (file: PickedFile) => VIDEO_MIMES.has(mimeOfPicked(file) ?? "");
 export const isScanPick = (file: PickedFile) => SCAN_MIMES.has(mimeOfPicked(file) ?? "");

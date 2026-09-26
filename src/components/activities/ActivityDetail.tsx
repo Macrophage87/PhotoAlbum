@@ -19,6 +19,7 @@ import { ActivityUploader } from "./ActivityUploader";
 import { ShareBar } from "@/components/share/ShareBar";
 import { TakeWindow } from "@/components/photos/TakeWindow";
 import { readableContainerDescription } from "@/lib/photos/readable-text";
+import type { UploadByteLimits } from "@/lib/media/limits";
 
 export type ActivityDetailData = {
   id: string;
@@ -51,7 +52,7 @@ type ReadOnlyProps = { editable: false };
 export type ActivityShare = { url: string | null; enable: () => Promise<void>; disable: () => Promise<void>; cover?: { href: string; thumbUrl: string | null } };
 
 /** Shared body of the activity page for members (editable) and shared/public viewers. */
-export function ActivityDetail({ trip, activity, photos, upload, share, save, describe, shareDescription, strangersCanOpen = true, member = false, ...mode }: { /** `slug` is null on an activity's own link when its trip is not public: nothing of the trip goes to that page. */ trip: { slug: string | null; timezone: string; themeKey: string }; activity: ActivityDetailData; photos: PhotoCard[]; /** A signed-in member, who reads the members-only layer of each tile (see `toGridPhoto`). */ member?: boolean; /** Members only: what adding photos straight to this activity needs — the uploader's limits, and everything taken during it. */ upload?: { maxClipSeconds: number; annotationActive: boolean; added?: number | null; during?: { count: number; elsewhere: number; when: string; take: () => Promise<{ added: number; elsewhere: number }> } }; /** Whoever arranges the trip: the link to this activity, and the means to make or withdraw it. */ share?: ActivityShare; /** Write the description by hand. Absent for anyone who may not arrange the trip; they read what is there. */ save?: (text: string) => Promise<void>; /** Ask the helper to write it, with whatever is in the box as a note. Absent when the helper is off, or for anyone who may not arrange the trip. */ describe?: (note: string) => Promise<string>; /** Show the description to everyone who may open this activity, or keep it for the family. */ shareDescription?: (everyone: boolean) => Promise<void>; /** Whether anybody outside the family can open this activity: its trip is not private, or it has a link. */ strangersCanOpen?: boolean; } & (EditProps | ReadOnlyProps)) {
+export function ActivityDetail({ trip, activity, photos, upload, share, save, describe, shareDescription, strangersCanOpen = true, member = false, ...mode }: { /** `slug` is null on an activity's own link when its trip is not public: nothing of the trip goes to that page. */ trip: { slug: string | null; timezone: string; themeKey: string }; activity: ActivityDetailData; photos: PhotoCard[]; /** A signed-in member, who reads the members-only layer of each tile (see `toGridPhoto`). */ member?: boolean; /** Members only: what adding photos straight to this activity needs — the uploader's limits, and everything taken during it. */ upload?: { maxClipSeconds: number; maxBytes: UploadByteLimits; annotationActive: boolean; added?: number | null; during?: { count: number; elsewhere: number; when: string; take: () => Promise<{ added: number; elsewhere: number }> } }; /** Whoever arranges the trip: the link to this activity, and the means to make or withdraw it. */ share?: ActivityShare; /** Write the description by hand. Absent for anyone who may not arrange the trip; they read what is there. */ save?: (text: string) => Promise<void>; /** Ask the helper to write it, with whatever is in the box as a note. Absent when the helper is off, or for anyone who may not arrange the trip. */ describe?: (note: string) => Promise<string>; /** Show the description to everyone who may open this activity, or keep it for the family. */ shareDescription?: (everyone: boolean) => Promise<void>; /** Whether anybody outside the family can open this activity: its trip is not private, or it has a link. */ strangersCanOpen?: boolean; } & (EditProps | ReadOnlyProps)) {
   const toLocalInput = (d: Date) => format(new TZDate(d, trip.timezone), "yyyy-MM-dd'T'HH:mm");
   const editing = mode.editable && mode.editing;
   return (
@@ -148,6 +149,7 @@ export function ActivityDetail({ trip, activity, photos, upload, share, save, de
               key={`added-${upload.added ?? "none"}`}
               activityId={activity.id}
               maxClipSeconds={upload.maxClipSeconds}
+              maxBytes={upload.maxBytes}
               annotationActive={upload.annotationActive}
               pickHref={`/trips/${trip.slug ?? ""}/activities/${activity.id}/add`}
               takeAll={

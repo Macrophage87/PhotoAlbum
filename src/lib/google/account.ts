@@ -16,11 +16,13 @@ export async function storeRefreshToken(userId: string, refreshToken: string): P
 
 // Access tokens live about an hour; keep them in memory per member so a picking session refreshes once.
 const cache = new Map<string, { token: string; expiresAt: number }>();
+/** A token with less than this left is refreshed rather than handed out: a download can take minutes. */
+const TOKEN_MARGIN_MS = 5 * 60_000;
 
 /** A live access token for the member, refreshing from the stored refresh token; marks the account when Google says it is gone. */
 export async function accessTokenFor(userId: string): Promise<string> {
   const hit = cache.get(userId);
-  if (hit && hit.expiresAt > Date.now() + 60_000) return hit.token;
+  if (hit && hit.expiresAt > Date.now() + TOKEN_MARGIN_MS) return hit.token;
   const account = await db.googleAccount.findUnique({ where: { userId } });
   if (!account) throw new GoogleAuthError("Google Photos is not connected", true);
   if (account.needsReconnect) throw new GoogleAuthError("Google Photos needs to be connected again", true);
@@ -45,6 +47,15 @@ export async function noteAuthFailure(userId: string, err: unknown): Promise<boo
   cache.delete(userId);
   await db.googleAccount.updateMany({ where: { userId }, data: { needsReconnect: true } }).catch(() => undefined);
   return true;
+}
+
+/**
+ * Stop handing out the cached access token, so the next accessTokenFor refreshes. For a token Google refused (a 401)
+ * although the grant itself may be fine: an access token that expired is not a revoked grant, and only a refresh
+ * that fails says the member has to connect again.
+ */
+export function forgetAccessToken(userId: string): void {
+  cache.delete(userId);
 }
 
 /** Forget the grant here and, best effort, at Google. */

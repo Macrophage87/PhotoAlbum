@@ -14,6 +14,7 @@ import { attachActivityWindow } from "@/app/photos/attach-actions";
 import { formatLocalTime } from "@/lib/time/format";
 import { activityCover } from "@/lib/activities/cover";
 import { photoUrl } from "@/lib/photos/urls";
+import { uploadByteLimits } from "@/lib/media/upload-limits";
 
 export default async function ActivityPage({ params, searchParams }: PageProps<"/trips/[slug]/activities/[id]">) {
   const { slug, id } = await params;
@@ -30,6 +31,7 @@ export default async function ActivityPage({ params, searchParams }: PageProps<"
   const upload = editable
     ? {
         maxClipSeconds: env().MAX_CLIP_SECONDS,
+        maxBytes: uploadByteLimits(),
         annotationActive: (await annotationGates()).active,
         added,
         during: during

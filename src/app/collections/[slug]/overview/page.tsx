@@ -7,12 +7,13 @@ import { ButtonLink, Card } from "@/components/ui";
 import { CollectionUploader } from "@/components/collections/CollectionUploader";
 import { env } from "@/lib/env";
 import { annotationGates } from "@/lib/annotation/eligibility";
+import { uploadByteLimits } from "@/lib/media/upload-limits";
 
 export default async function CollectionOverviewPage({ params }: PageProps<"/collections/[slug]/overview">) {
   const { slug } = await params;
   const { collection, editable } = await loadViewableCollection(slug);
   const [items, gates] = await Promise.all([listCollectionItems(collection.id), editable ? annotationGates() : Promise.resolve(null)]);
-  const upload = editable ? <CollectionUploader collectionId={collection.id} slug={slug} maxClipSeconds={env().MAX_CLIP_SECONDS} annotationActive={Boolean(gates?.active)} /> : null;
+  const upload = editable ? <CollectionUploader collectionId={collection.id} slug={slug} maxClipSeconds={env().MAX_CLIP_SECONDS} maxBytes={uploadByteLimits()} annotationActive={Boolean(gates?.active)} /> : null;
   const ready = items.filter((i) => i.status === "READY");
   const dated = ready.filter((i) => i.takenAt).map((i) => i.takenAt!.getTime());
   const span = dated.length ? `${new Date(Math.min(...dated)).getFullYear()}–${new Date(Math.max(...dated)).getFullYear()}` : null;

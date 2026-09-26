@@ -51,6 +51,7 @@ export async function startWorker(): Promise<void> {
   const { proposeAnimalsForPhoto } = await import("@/lib/pets/proposals");
   const { purgeVisits } = await import("@/lib/visits/record");
   const { purgeExpiredMagicLinks } = await import("@/lib/auth/magic-link");
+  const { sweepStrandedUploads } = await import("@/lib/media/stranded");
 
   await boss.work(QUEUES.processPhoto, { batchSize: 1, localConcurrency: 2, pollingIntervalSeconds: 2 }, async ([job]) =>
     processPhoto(job.data as never),
@@ -79,7 +80,7 @@ export async function startWorker(): Promise<void> {
   await boss.work(QUEUES.detectAnimals, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 3 }, async ([job]) => detectAnimalsJob(job.data as never));
   await boss.work(QUEUES.animalSweep, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 30 }, async () => void (await animalSweep()));
   await boss.work(QUEUES.matchAnimals, { batchSize: 1, localConcurrency: 2, pollingIntervalSeconds: 2 }, async ([job]) => void (await proposeAnimalsForPhoto((job.data as { photoId: string }).photoId)));
-  await boss.work(QUEUES.googlePickerImport, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 2 }, async ([job]) => googlePickerImport(job.data as never));
+  await boss.work(QUEUES.googlePickerImport, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 2 }, async ([job]) => googlePickerImport(job.data as never, job.signal));
   await boss.work(QUEUES.matchPhoto, { batchSize: 1, localConcurrency: 2, pollingIntervalSeconds: 2 }, async ([job]) => matchPhoto(job.data as never));
   await boss.work(QUEUES.faceSweep, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 30 }, async () => void (await faceSweep()));
   // The nightly people job also takes out of the helper's text the names of people whose naming the album switched
@@ -96,6 +97,7 @@ export async function startWorker(): Promise<void> {
   await boss.work(QUEUES.purgeAnnotationRaw, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60 }, async () => void (await purgeAnnotationRaw()));
   await boss.work(QUEUES.purgeVisits, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60 }, async () => void (await purgeVisits()));
   await boss.work(QUEUES.purgeMagicLinks, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60 }, async () => void (await purgeExpiredMagicLinks({ db })));
+  await boss.work(QUEUES.sweepStrandedUploads, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60 }, async () => void (await sweepStrandedUploads()));
   // Schedules (idempotent): weekly video re-check, the annotation quiet-period sweep, batch polling, raw-response purge.
   await boss.schedule(QUEUES.checkExternalVideos, "0 4 * * 1", {}, { retryLimit: 1 });
   await boss.schedule(QUEUES.annotationSweep, "*/5 * * * *", {}, { retryLimit: 0 });
@@ -112,6 +114,11 @@ export async function startWorker(): Promise<void> {
   // A naming the album withdrew by itself: what strangers can read loses the name at once, not at the next night.
   await scrubWithdrawnNames().catch((err) => console.error("[worker] withdrawn-name scrub failed", err));
   await completePendingForgets().catch((err) => console.error("[worker] pending forgets failed", err));
+  await boss.schedule(QUEUES.sweepStrandedUploads, "40 * * * *", {}, { retryLimit: 0 });
   console.log("[worker] pg-boss handlers registered");
+  // Before the reconciliation below, so a Picker download lost in the restart is told to be picked again rather
+  // than re-processed (it has no file to process).
+  await (await import("@/lib/media/stranded")).sweepStrandedUploads().catch((err) => console.error("[worker] stranded-upload sweep failed", err));
   await reconcileStalePhotos().catch((err) => console.error("[worker] stale-photo reconciliation failed", err));
+  await (await import("@/lib/tracks/files")).forgetGoogleExports().catch((err) => console.error("[worker] could not delete old Google exports", err));
 }

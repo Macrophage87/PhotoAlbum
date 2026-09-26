@@ -17,6 +17,7 @@ import { writeContainerDescription } from "@/lib/annotation/container";
 import { handWrittenDescription } from "@/lib/annotation/members-only";
 import { rejudgeFromAction } from "@/lib/annotation/rejudge-notice";
 import { descriptionStaysHelpers } from "@/lib/annotation/helper-text";
+import { forgetTrackFiles } from "@/lib/tracks/files";
 
 /** The trip, where this member may change it: whoever made it, and admins. */
 async function loadEditableTrip(slug: string) {
@@ -103,15 +104,19 @@ export async function deleteTrip(slug: string): Promise<void> {
   const trip = await loadEditableTrip(slug);
   const me = await requireUserOrThrow();
   if (me.role !== "ADMIN") throw new Error("Only an admin can delete a trip");
-  await db.$transaction(async (tx) => {
+  const files = await db.$transaction(async (tx) => {
     // Locked first, so a photo filed onto one of its activities meanwhile is either cleared here or refused because
     // the trip is gone — never left behind with a setter.
     await tx.$queryRaw`SELECT id FROM "Trip" WHERE id = ${trip.id} FOR UPDATE`;
+    const files = await tx.track.findMany({ where: { tripId: trip.id }, select: { originalFile: true } });
     // Its activities go with it; a choice about them goes too, or a photo left on no trip would carry a setter that
     // reads as "kept off by hand" wherever it is filed next.
     await tx.photo.updateMany({ where: { tripId: trip.id }, data: { activityId: null, activitySetById: null } });
     await tx.trip.deleteMany({ where: { id: trip.id } });
+    return files;
   });
+  // Its tracks went with it, so the files they were read from have nothing left to belong to.
+  await forgetTrackFiles(files.map((f) => f.originalFile));
   revalidatePath("/", "layout");
   redirect("/photos");
 }

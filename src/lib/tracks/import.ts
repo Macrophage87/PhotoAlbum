@@ -62,7 +62,8 @@ export async function importTrackFile(args: ImportArgs): Promise<ImportSummary> 
     }
     for (const [day, dayPoints] of splitByLocalDay(points, trip.timezone)) {
       const parsed: ParsedTrack = { name: `Google Timeline — ${day}`, points: dayPoints, sport: null };
-      const saved = await persistTrack(parsed, { tripId: trip.id, userId: args.userId, source: "GOOGLE", originalFile: args.importKey, createActivity: false });
+      // No originalFile: the export is deleted once read (the import-track job), so there is nothing to point at.
+      const saved = await persistTrack(parsed, { tripId: trip.id, userId: args.userId, source: "GOOGLE", createActivity: false });
       if (saved) summary.tracks.push(saved);
       else summary.skipped.push(`${day}: fewer than two usable points`);
     }

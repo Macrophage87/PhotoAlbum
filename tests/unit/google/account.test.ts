@@ -13,7 +13,7 @@ vi.mock("@/lib/google/oauth", async (orig) => {
   return { ...real, refreshAccessToken: oauth.refresh, revokeToken: async (t: string) => { oauth.revoked.push(t); } };
 });
 
-import { _cacheForTests, accessTokenFor, disconnectGoogleAccount, googleStatus, noteAuthFailure, storeRefreshToken } from "@/lib/google/account";
+import { _cacheForTests, accessTokenFor, disconnectGoogleAccount, forgetAccessToken, googleStatus, noteAuthFailure, storeRefreshToken } from "@/lib/google/account";
 import { GoogleAuthError } from "@/lib/google/oauth";
 
 describe("a member's Google connection", () => {
@@ -40,6 +40,17 @@ describe("a member's Google connection", () => {
     expect(oauth.revoked).toEqual(["1//rt"]);
     expect((await googleStatus(userId)).connected).toBe(false);
     await expect(accessTokenFor(userId)).rejects.toBeInstanceOf(GoogleAuthError);
+  });
+  it("refreshes a token with only a few minutes left, and after it is forgotten, without marking the account", async () => {
+    await storeRefreshToken(userId, "1//rt");
+    oauth.refresh.mockResolvedValueOnce({ accessToken: "short", expiresIn: 180 }).mockResolvedValue({ accessToken: "long", expiresIn: 3600 });
+    expect(await accessTokenFor(userId)).toBe("short");
+    // Three minutes is not enough to hand out: a download can take longer than that.
+    expect(await accessTokenFor(userId)).toBe("long");
+    forgetAccessToken(userId);
+    expect(await accessTokenFor(userId)).toBe("long");
+    expect(oauth.refresh).toHaveBeenCalledTimes(3);
+    expect((await googleStatus(userId)).needsReconnect).toBe(false);
   });
   it("marks the account when Google says the grant is gone, and clears the mark on reconnect", async () => {
     await storeRefreshToken(userId, "1//old");

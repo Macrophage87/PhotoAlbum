@@ -1,8 +1,7 @@
 import { createHash } from "node:crypto";
-import { Readable, Transform } from "node:stream";
+import { Readable } from "node:stream";
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { env } from "@/lib/env";
 import { getViewer } from "@/lib/auth/viewer";
 import { storage, StorageLimitError } from "@/lib/storage";
 import { enqueue } from "@/lib/jobs/boss";
@@ -10,7 +9,13 @@ import { QUEUES } from "@/lib/jobs/queues";
 import { fileExisting } from "@/lib/photos/file-existing";
 import { decodeHeaderName } from "@/lib/media/header-name";
 import { uploaderLabel } from "@/components/photos/toGrid";
-import { ALLOWED_MIMES as ALLOWED, EXT_BY_MIME, EXT_MIME, kindForMime, scanFormatOf, VIDEO_MIMES as VIDEO } from "@/lib/media/mime";
+import { ALLOWED_MIMES as ALLOWED, EXT_BY_MIME, kindForMime, scanFormatOf, VIDEO_MIMES as VIDEO } from "@/lib/media/mime";
+import { claimContentHash } from "@/lib/media/content-hash";
+import { mimeAsSent } from "@/lib/media/picker";
+import { maxUploadBytes } from "@/lib/media/limits";
+import { uploadByteLimits } from "@/lib/media/upload-limits";
+import { processAgainIfStuck } from "@/lib/media/requeue";
+import { isResend } from "@/lib/media/resend";
 
 export const dynamic = "force-dynamic";
 
@@ -22,6 +27,7 @@ const headerSchema = z.object({
   collectionId: z.string().optional(),
   lastModified: z.coerce.number().optional(),
   annotationOptOut: z.string().optional(),
+  attempt: z.coerce.number().int().positive().optional(),
 });
 
 /** Streams one file to storage and queues processing. Body is the raw file; metadata rides in headers. */
@@ -39,14 +45,13 @@ export async function POST(request: Request) {
     collectionId: request.headers.get("x-collection-id") ?? undefined,
     lastModified: request.headers.get("x-last-modified") ?? undefined,
     annotationOptOut: request.headers.get("x-annotation-opt-out") ?? undefined,
+    attempt: request.headers.get("x-upload-attempt") ?? undefined,
   });
   if (!parsed.success) return Response.json({ error: "Bad upload headers" }, { status: 400 });
   const { fileName, lastModified } = parsed.data;
   let tripId = parsed.data.tripId;
 
-  const ext = fileName.toLowerCase().split(".").pop() ?? "";
-  let mime = parsed.data.contentType?.split(";")[0].trim() ?? "";
-  if (!ALLOWED.has(mime)) mime = EXT_MIME[ext] ?? "";
+  const mime = mimeAsSent({ name: fileName, type: parsed.data.contentType ?? "" }) ?? "";
   if (!ALLOWED.has(mime)) return Response.json({ error: `Unsupported file type: ${fileName}` }, { status: 415 });
 
   if (tripId) {
@@ -92,25 +97,35 @@ export async function POST(request: Request) {
   // The bytes are counted as they go past anyway, so they are weighed for sameness at the same time: an upload of a
   // file the album already holds is the same file, not another copy of it, however it came to be sent twice.
   const digest = createHash("sha256");
-  const weigh = new Transform({ transform(chunk, _enc, cb) { digest.update(chunk); cb(null, chunk); } });
-  let contentHash = "";
   try {
-    const { bytes } = await storage().putStream(originalPath, Readable.fromWeb(request.body as never).pipe(weigh), { maxBytes: isVideo ? env().MAX_VIDEO_UPLOAD_BYTES : env().MAX_UPLOAD_BYTES });
-    contentHash = digest.digest("hex");
-    const already = await db.photo.findFirst({
-      where: { contentHash, trashedAt: null, id: { not: photo.id } },
-      select: { id: true, originalName: true, trip: { select: { slug: true, title: true } }, uploader: { select: { name: true, email: true } } },
-    });
-    if (already) {
+    // The request's own signal goes with the body, so a client that goes away mid-file ends the pipeline (and this
+    // handler) instead of leaving it waiting for bytes that will never come.
+    const body = Readable.fromWeb(request.body as never, { signal: request.signal });
+    const { bytes } = await storage().putStream(originalPath, body, { maxBytes: maxUploadBytes(mime, uploadByteLimits()), onChunk: (chunk) => digest.update(chunk) });
+    const contentHash = digest.digest("hex");
+    const match = await claimContentHash(photo.id, contentHash, { storageKey, originalPath, sizeBytes: bytes });
+    if (match) {
+      const already = await db.photo.findUniqueOrThrow({
+        where: { id: match.id },
+        select: { id: true, kind: true, tripId: true, status: true, originalPath: true, updatedAt: true, originalName: true, uploaderId: true, createdAt: true, trip: { select: { slug: true, title: true } }, uploader: { select: { name: true, email: true } } },
+      });
       // Nothing is kept: neither the bytes just written nor the row that was waiting for them. The member is told
       // which one the album already has, so "it did not appear" is never the impression left behind. Sent to a
       // particular trip, activity or collection, the one the album has is put there instead of a second copy.
       await storage().deletePrefix(storageKey).catch(() => undefined);
       await db.photo.delete({ where: { id: photo.id } }).catch(() => {});
+      // The one the album has never became a picture (or its job was lost): sending it again is the moment to try.
+      // Before filing it, which changes it, so the check sees it as it was read.
+      const status = (await processAgainIfStuck(already)) ? "PENDING" : already.status;
       const filed = await fileExisting(viewer.user, already.id, { tripId: tripId ?? null, activityId: activityId ?? null, collectionId: collectionId ?? null });
       return Response.json({
         photoId: already.id,
-        duplicate: true,
+        // A retry of this very file whose earlier answer was lost (the phone locked as it came back) finds the row that
+        // earlier attempt made. That is their upload arriving, not something the album already had. The same file
+        // chosen again is a first attempt, and is told the album has it.
+        duplicate: !isResend(already, parsed.data.attempt ?? 1, viewer.user.id, fileName),
+        // How far along it is, so one still being processed is watched until it is done rather than called ready.
+        status,
         originalName: already.originalName,
         trip: already.trip ?? null,
         filed,
@@ -118,15 +133,22 @@ export async function POST(request: Request) {
         owner: filed.notYours ? uploaderLabel(already.uploader.name, already.uploader.email) : null,
       });
     }
-    await db.photo.update({ where: { id: photo.id }, data: { storageKey, originalPath, sizeBytes: bytes, contentHash } });
-    if (collectionId) await fileExisting(viewer.user, photo.id, { collectionId });
   } catch (err) {
+    // The prefix is this row's own folder, so whatever reached it — the whole original, when a later step failed —
+    // goes with the row.
+    await storage().deletePrefix(storageKey).catch(() => undefined);
     await db.photo.delete({ where: { id: photo.id } }).catch(() => {});
     if (err instanceof StorageLimitError) return Response.json({ error: `File is larger than ${Math.round(err.maxBytes / 1048576)} MB` }, { status: 413 });
+    if (request.signal.aborted) return new Response(null, { status: 499 });
     console.error("[upload]", err);
     return Response.json({ error: "Upload failed" }, { status: 500 });
   }
 
+  // From here the row has its hash, so another upload of the same bytes may already have been answered with it: it
+  // is kept whatever goes wrong now, and says what did.
+  if (collectionId) {
+    await fileExisting(viewer.user, photo.id, { collectionId }).catch((err) => console.error("[upload] could not add to the collection", err));
+  }
   try {
     // A scan goes through the photo handler too, which dates it and files it on a trip — it just has no pixels to
     // render, so nothing is made from it.

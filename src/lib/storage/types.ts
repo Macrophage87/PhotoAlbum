@@ -1,7 +1,11 @@
 import type { Readable } from "node:stream";
 
 export interface StorageProvider {
-  putStream(key: string, body: Readable, opts?: { contentType?: string; maxBytes?: number }): Promise<{ bytes: number }>;
+  /**
+   * `onChunk` sees every chunk on its way to storage (to hash it, say) inside the same pipeline, so an error or an
+   * abort anywhere in the chain settles the promise; a stage joined on with `.pipe()` would not pass one along.
+   */
+  putStream(key: string, body: Readable, opts?: { contentType?: string; maxBytes?: number; onChunk?: (chunk: Buffer) => void }): Promise<{ bytes: number }>;
   putBuffer(key: string, buf: Buffer, opts?: { contentType?: string }): Promise<void>;
   /** `range` is inclusive byte offsets, for video playback (HTTP 206). `size` is always the whole object's size. */
   getStream(key: string, range?: { start: number; end: number }): Promise<{ stream: Readable; size: number }>;

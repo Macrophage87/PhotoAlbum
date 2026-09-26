@@ -10,7 +10,7 @@ import { inviteEmail, sendMail } from "@/lib/auth/email";
 import { normalizeEmail } from "@/lib/auth/tokens";
 import { enqueue } from "@/lib/jobs/boss";
 import { QUEUES } from "@/lib/jobs/queues";
-import { deleteArchive, safeArchivePath } from "@/lib/takeout/inbox";
+import { ArchiveDeleteError, deleteArchive, safeArchivePath } from "@/lib/takeout/inbox";
 import { closeDeadImports } from "@/lib/takeout/import";
 import { stat } from "node:fs/promises";
 import { disconnectGoogleAccount } from "@/lib/google/account";
@@ -100,11 +100,22 @@ export async function startTakeoutImport(archiveName: string): Promise<void> {
   revalidatePath("/admin");
 }
 
-/** Remove an archive from the inbox once its photos are in the album (it is an unencrypted copy of the export). */
-export async function deleteTakeoutArchive(archiveName: string): Promise<void> {
+/**
+ * Remove an archive from the inbox once its photos are in the album (it is an unencrypted copy of the export).
+ * Answers with the reason when it could not, so the admin sees it rather than a generic error.
+ */
+export async function deleteTakeoutArchive(archiveName: string): Promise<string | null> {
   await requireAdminOrThrow();
-  await deleteArchive(archiveName);
+  await closeDeadImports();
+  if (await db.takeoutImport.count({ where: { archiveName, status: "RUNNING" } })) return `${archiveName} is being imported; delete it once the import has finished.`;
+  try {
+    await deleteArchive(archiveName);
+  } catch (err) {
+    if (err instanceof ArchiveDeleteError) return err.message;
+    throw err;
+  }
   revalidatePath("/admin");
+  return null;
 }
 
 /**

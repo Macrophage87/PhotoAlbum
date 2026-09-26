@@ -30,5 +30,16 @@ export async function listArchives(): Promise<Archive[]> {
 }
 
 export async function deleteArchive(name: string): Promise<void> {
-  await unlink(safeArchivePath(name));
+  try {
+    await unlink(safeArchivePath(name));
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    // An inbox volume made before the image created /data/imports belongs to root; see docs/DEPLOY.md.
+    if (code === "EACCES" || code === "EPERM") throw new ArchiveDeleteError(`The server is not allowed to delete ${name}: the inbox folder is not writable by the app. See "Takeout inbox permissions" in docs/DEPLOY.md.`);
+    if (code === "ENOENT") throw new ArchiveDeleteError(`${name} is no longer in the inbox.`);
+    throw err;
+  }
 }
+
+/** A reason to show an admin as it is, since a thrown server-action message is hidden in production. */
+export class ArchiveDeleteError extends Error {}

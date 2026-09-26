@@ -26,6 +26,7 @@ export const QUEUES = {
   purgeVisits: "purge-visits",
   purgeMagicLinks: "purge-magic-links",
   rejudgeText: "rejudge-text",
+  sweepStrandedUploads: "sweep-stranded-uploads",
 } as const;
 
 export type QueueName = (typeof QUEUES)[keyof typeof QUEUES];

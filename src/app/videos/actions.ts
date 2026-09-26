@@ -79,10 +79,23 @@ export async function addYouTubeVideo(_prev: VideoFormState, fd: FormData): Prom
   });
   const storageKey = `photos/${photo.id}`;
   const originalPath = `${storageKey}/original.jpg`;
-  await storage().putBuffer(originalPath, poster);
-  const durationS = await fetchDuration(id);
-  await db.photo.update({ where: { id: photo.id }, data: { storageKey, originalPath, durationS } });
-  await enqueue(QUEUES.processPhoto, { photoId: photo.id, tripId: trip?.id ?? null, mode: "renditions" });
+  try {
+    await storage().putBuffer(originalPath, poster);
+    const durationS = await fetchDuration(id);
+    await db.photo.update({ where: { id: photo.id }, data: { storageKey, originalPath, durationS } });
+  } catch (err) {
+    // As the upload route does: nothing is left that would sit "processing" for ever, nor a poster with no row.
+    await storage().deletePrefix(storageKey).catch(() => undefined);
+    await db.photo.delete({ where: { id: photo.id } }).catch(() => undefined);
+    console.error("[videos] could not store the poster", err);
+    return { status: "error", message: "Could not add the video just now; try again." };
+  }
+  try {
+    await enqueue(QUEUES.processPhoto, { photoId: photo.id, tripId: trip?.id ?? null, mode: "renditions" });
+  } catch (err) {
+    console.error("[videos] could not queue processing", err);
+    await db.photo.update({ where: { id: photo.id }, data: { status: "FAILED", error: "Could not queue processing; use Re-process on the photo page." } }).catch(() => undefined);
+  }
   if (collectionId) await addToCollection(collectionId, [photo.id]);
 
   revalidatePath("/", "layout");

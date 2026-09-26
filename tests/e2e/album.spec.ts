@@ -2102,6 +2102,103 @@ test("a file the album will not take is named in the summary, with a way to try 
   await expect(page.getByTestId("upload-progress")).toContainText("All 1 uploaded.", { timeout: 60_000 });
 });
 
+test("files already on their way keep the trip they were added with when the trip is changed", async ({ context, page }) => {
+  await signIn(context, ADMIN);
+  const trips = (await withDb((c) => c.query(`SELECT id, slug, title FROM "Trip" WHERE slug IN ('yosemite', 'acadia') ORDER BY slug`))).rows as { id: string; slug: string; title: string }[];
+  const [acadia, yosemite] = trips;
+  expect(trips).toHaveLength(2);
+  await page.goto(`/upload?trip=${yosemite.slug}`);
+  await page.waitForLoadState("networkidle");
+
+  // Every request is held until the trip has been changed, and then turned away, so nothing is kept: only which trip
+  // each one was sent to matters here.
+  const seen: { name: string; trip: string | null }[] = [];
+  let release!: () => void;
+  const held = new Promise<void>((r) => { release = r; });
+  await page.route("**/api/upload", async (route) => {
+    const h = route.request().headers();
+    seen.push({ name: decodeURIComponent(h["x-file-name"] ?? ""), trip: h["x-trip-id"] ?? null });
+    await held;
+    await route.fulfill({ status: 415, contentType: "application/json", body: JSON.stringify({ error: "Held for the test" }) });
+  });
+  const jpeg = fs.readFileSync(fixture("photo-no-exif.jpg"));
+  const file = (name: string) => ({ name, mimeType: "image/jpeg", buffer: jpeg });
+  await page.locator("#photo-file-input").first().setInputFiles(["first-1.jpg", "first-2.jpg", "first-3.jpg", "first-4.jpg"].map(file));
+  // Three go at once; the fourth waits its turn.
+  await expect.poll(() => seen.length).toBe(3);
+
+  const picker = page.getByTestId("trip-picker").getByRole("combobox");
+  await picker.click();
+  await picker.fill(acadia.title);
+  await page.getByRole("option", { name: acadia.title }).first().click();
+  await page.locator("#photo-file-input").first().setInputFiles(["then-1.jpg", "then-2.jpg"].map(file));
+  release();
+
+  await expect.poll(() => seen.length, { timeout: 30_000 }).toBe(6);
+  expect(seen.filter((s) => s.name.startsWith("first-")).map((s) => s.trip)).toEqual([yosemite.id, yosemite.id, yosemite.id, yosemite.id]);
+  expect(seen.filter((s) => s.name.startsWith("then-")).map((s) => s.trip)).toEqual([acadia.id, acadia.id]);
+  // And the batch stayed on the page through the change, all six of it.
+  await expect(page.getByTestId("upload-failures")).toContainText("6 files did not go up", { timeout: 30_000 });
+});
+
+test("a batch keeps going when the member leaves the page, and what did not make it is waiting for them", async ({ context, page }) => {
+  test.setTimeout(120_000);
+  await signIn(context, ADMIN);
+  await page.goto("/upload");
+  await page.waitForLoadState("networkidle");
+  const tag = randomUUID().slice(0, 8);
+  let release!: () => void;
+  const held = new Promise<void>((r) => { release = r; });
+  const answered: string[] = [];
+  await page.route("**/api/upload", async (route) => {
+    const name = decodeURIComponent(route.request().headers()["x-file-name"] ?? "");
+    await held;
+    // One of the four the album turns down, so there is something to come back to.
+    if (name.startsWith("refused-")) await route.fulfill({ status: 415, contentType: "application/json", body: JSON.stringify({ error: "Turned down for the test" }) });
+    else await route.fallback();
+    answered.push(name);
+  });
+  const jpeg = fs.readFileSync(fixture("photo-no-exif.jpg"));
+  const file = (name: string) => ({ name, mimeType: "image/jpeg", buffer: Buffer.concat([jpeg, Buffer.from(`\n<!-- ${name} ${tag} -->`)]) });
+  await page.locator("#photo-file-input").first().setInputFiles([`away-1-${tag}.jpg`, `away-2-${tag}.jpg`, `away-3-${tag}.jpg`, `refused-${tag}.jpg`].map(file));
+
+  // Off to the home page while they are still on their way.
+  await page.locator('header a[href="/"]').first().click();
+  await expect(page).toHaveURL(/\/$/);
+  await expect(page.getByTestId("upload-pill")).toBeVisible();
+  release();
+  await expect.poll(() => answered.length, { timeout: 60_000 }).toBe(4);
+  await expect.poll(async () => (await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "Photo" WHERE "originalName" LIKE $1`, [`away-%-${tag}.jpg`]))).rows[0].n, { timeout: 60_000 }).toBe(3);
+
+  // Once the rest are done, the pill stays to say one did not make it, and leads back to the list.
+  const review = page.getByTestId("upload-pill-review");
+  await expect(review).toContainText("1 file didn't make it", { timeout: 60_000 });
+  await review.click();
+  await expect(page).toHaveURL(/\/upload/);
+  await expect(page.getByTestId("upload-failures")).toContainText(`refused-${tag}.jpg`);
+  // Seen there, so the pill has nothing more to say.
+  await expect(page.getByTestId("upload-pill")).toHaveCount(0);
+});
+
+test("a file over the size limit is refused by name before any of it is sent", async ({ context, page }) => {
+  await signIn(context, ADMIN);
+  await page.goto("/upload");
+  await page.waitForLoadState("networkidle");
+  const sent: string[] = [];
+  await page.route("**/api/upload", (route) => {
+    sent.push(decodeURIComponent(route.request().headers()["x-file-name"] ?? ""));
+    return route.fulfill({ status: 415, contentType: "application/json", body: JSON.stringify({ error: "Not kept in this test" }) });
+  });
+  // The e2e server holds scans to 2 MB (MAX_SCAN_UPLOAD_BYTES), well under the photo limit a scan used to get.
+  await page.locator('input[type="file"]').first().setInputFiles({ name: "splat.ply", mimeType: "application/octet-stream", buffer: Buffer.alloc(3 * 1024 * 1024, 1) });
+  const refused = page.locator('ul[role="alert"]');
+  await expect(refused).toContainText("splat.ply");
+  await expect(refused).toContainText("up to 2 MB");
+  // A small one after it does go: once its request is seen, the big one plainly never was.
+  await page.locator('input[type="file"]').first().setInputFiles({ name: "small.ply", mimeType: "application/octet-stream", buffer: Buffer.alloc(1024, 1) });
+  await expect.poll(() => sent).toEqual(["small.ply"]);
+});
+
 test("the overview shows a handful of the trip at random, and picks again when asked", async ({ context, page }) => {
   await signIn(context, ADMIN);
   // Enough photographs on the trip that the same ten twice running would be a coincidence worth failing on. Earlier

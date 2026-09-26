@@ -16,6 +16,7 @@ import { headers } from "next/headers";
 import "./globals.css";
 import { RegisterServiceWorker } from "@/components/pwa/RegisterServiceWorker";
 import { VisitBeacon } from "@/components/visits/VisitBeacon";
+import { UploadQueueProvider } from "@/components/photos/UploadQueue";
 import { env } from "@/lib/env";
 
 // Every theme's font pair is loaded once here and referenced by CSS variable.
@@ -61,7 +62,10 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html lang="en" className={`${fontVars} h-full antialiased`}>
       <body className="min-h-full flex flex-col">
-        {children}
+        {/* Uploads carry on from page to page, so their queue lives above every page. Always mounted: a layout is not
+            rendered again on navigation, so a tab opened before signing in must already have it. Until something is
+            added it renders nothing and asks the server nothing. */}
+        <UploadQueueProvider>{children}</UploadQueueProvider>
         <RegisterServiceWorker />
         {env().VISITOR_STATS_ENABLED && <VisitBeacon />}
       </body>

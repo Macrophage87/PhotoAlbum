@@ -5,10 +5,11 @@ import { readdir } from "node:fs/promises";
 import { resetTestDb } from "../helpers/reset";
 
 const who = vi.hoisted(() => ({ id: "", role: "MEMBER" as "MEMBER" | "ADMIN" }));
-const boss = vi.hoisted(() => ({ sent: [] as unknown[], jobs: new Map<string, { state: string; data: unknown; output: unknown }>() }));
+const boss = vi.hoisted(() => ({ sent: [] as unknown[], jobs: new Map<string, { state: string; data: unknown; output: unknown }>(), fail: false }));
 vi.mock("@/lib/auth/viewer", () => ({ getViewer: async () => ({ kind: "user", user: { id: who.id, email: "x@example.com", name: null, role: who.role }, shareTokens: new Map() }) }));
 vi.mock("@/lib/jobs/boss", () => ({
   enqueue: async (_q: string, data: unknown) => {
+    if (boss.fail) throw new Error("queue unavailable");
     boss.sent.push(data);
     const id = `00000000-0000-4000-8000-${String(boss.sent.length).padStart(12, "0")}`;
     boss.jobs.set(id, { state: "created", data, output: null });
@@ -44,6 +45,7 @@ describe("importing tracks is arranging the trip", () => {
     other = (await db.user.create({ data: { email: "other@example.com" } })).id;
     tripId = (await db.trip.create({ data: { slug: "acadia", title: "Acadia", startDate: new Date("2025-08-10"), endDate: new Date("2025-08-16"), createdById: maker } })).id;
     who.role = "MEMBER";
+    boss.fail = false;
   });
 
   it("refuses a member who did not make the trip, before anything is stored or queued", async () => {
@@ -68,6 +70,15 @@ describe("importing tracks is arranging the trip", () => {
   it("answers a malformed file name with 400, not a crash", async () => {
     who.id = maker;
     expect((await post(tripId, "%E0.gpx")).status).toBe(400);
+  });
+
+  it("keeps no file when the import cannot be queued, since nothing would ever read or delete it", async () => {
+    who.id = maker;
+    boss.fail = true;
+    const before = await stored();
+    const res = await post(tripId);
+    expect(res.status).toBe(500);
+    expect(await stored()).toBe(before);
   });
 
   it("the job asks again, so a queued import from somebody who may not arrange the trip does nothing", async () => {

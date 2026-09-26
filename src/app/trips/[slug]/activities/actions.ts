@@ -23,6 +23,7 @@ import { NAMES_CHANGED, withoutUnpermittedNames } from "@/lib/annotation/contain
 import { forgetState } from "@/lib/people/names-changed";
 import { forgottenScope, loadTombstone } from "@/lib/people/tombstone";
 import { unpermittedNameScrub } from "@/lib/people/unpermitted";
+import { forgetTrackFiles } from "@/lib/tracks/files";
 
 /** An activity is part of the shape of a trip, so it is the trip's maker (and admins) who arrange them. */
 async function loadTrip(slug: string) {
@@ -88,12 +89,15 @@ export async function updateActivity(slug: string, id: string, _prev: ActivityFo
 
 export async function deleteActivity(slug: string, id: string, fd: FormData): Promise<void> {
   const trip = await loadTrip(slug);
-  const activity = await db.activity.findFirst({ where: { id, tripId: trip.id }, select: { id: true, trackId: true } });
+  const activity = await db.activity.findFirst({ where: { id, tripId: trip.id }, select: { id: true, trackId: true, track: { select: { originalFile: true } } } });
   if (!activity) return;
   const deleteTrack = fd.get("deleteTrack") === "on";
   // What was on it goes to whatever else covers its time, rather than being left loose.
   await deleteActivityAndRefile(id);
-  if (deleteTrack && activity.trackId) await db.track.delete({ where: { id: activity.trackId } }).catch(() => {});
+  if (deleteTrack && activity.trackId) {
+    await db.track.delete({ where: { id: activity.trackId } }).catch(() => {});
+    await forgetTrackFiles([activity.track?.originalFile]);
+  }
   revalidatePath(`/trips/${slug}`, "layout");
   redirect(`/trips/${slug}/activities`);
 }
