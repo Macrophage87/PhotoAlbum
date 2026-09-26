@@ -452,11 +452,23 @@ test("a photograph can be taken off an activity and stays on the trip", async ({
   await expect(page.getByRole("status")).toContainText("still on the trip");
   await expect(page.locator(`li.tile-lazy:has(img[src*='/api/photos/${onIt}/'])`)).toHaveCount(0);
 
-  // Off the outing, still in the album: the trip keeps it, under its own day.
-  const after = await withDb((c) => c.query(`SELECT "activityId", "tripId", "trashedAt" FROM "Photo" WHERE id = $1`, [onIt]));
-  expect(after.rows[0].activityId).toBeNull();
-  expect(after.rows[0].trashedAt).toBeNull();
-  expect(after.rows[0].tripId).not.toBeNull();
+  const takenAt = (await withDb((c) => c.query(`SELECT "takenAt" FROM "Photo" WHERE id = $1`, [onIt]))).rows[0].takenAt;
+  try {
+    // Off the outing, still in the album: the trip keeps it, under its own day.
+    const after = await withDb((c) => c.query(`SELECT "activityId", "tripId", "trashedAt", "activitySetById" FROM "Photo" WHERE id = $1`, [onIt]));
+    expect(after.rows[0].activityId).toBeNull();
+    expect(after.rows[0].trashedAt).toBeNull();
+    expect(after.rows[0].tripId).not.toBeNull();
+    // Recorded as somebody's choice, so saving the outing again does not put it straight back.
+    expect(after.rows[0].activitySetById).not.toBeNull();
+    await withDb((c) => c.query(`UPDATE "Photo" SET "takenAt" = a."startTime" FROM "Activity" a WHERE a.id = $2 AND "Photo".id = $1`, [onIt, activityId]));
+    await page.goto(`/trips/acadia/activities/${activityId}?edit=1`);
+    await page.getByRole("button", { name: "Save" }).click();
+    await page.waitForURL(`**/activities/${activityId}`);
+    expect((await withDb((c) => c.query(`SELECT "activityId" FROM "Photo" WHERE id = $1`, [onIt]))).rows[0].activityId).toBeNull();
+  } finally {
+    await withDb((c) => c.query(`UPDATE "Photo" SET "activityId" = NULL, "activitySetById" = NULL, "takenAt" = $2 WHERE id = $1`, [onIt, takenAt]));
+  }
 });
 
 test("the guide is a page anyone can read, with the same words available as a PDF", async ({ page }) => {
@@ -1628,7 +1640,8 @@ test("an activity takes photos already in the album: everything from its hours i
     await expect(page).toHaveURL(new RegExp(`/activities/${act.id}\\?added=1`));
     expect(await row(picked.id)).toEqual({ tripId: act.tripId, activityId: act.id });
   } finally {
-    for (const p of two) await withDb((c) => c.query(`UPDATE "Photo" SET "tripId" = $2, "activityId" = $3, "takenAt" = $4, caption = $5 WHERE id = $1`, [p.id, p.tripId, p.activityId, p.takenAt, p.caption]));
+    // "Add all" and the picker file them by hand; put back exactly as it was, with nobody's choice left on them.
+    for (const p of two) await withDb((c) => c.query(`UPDATE "Photo" SET "tripId" = $2, "activityId" = $3, "takenAt" = $4, caption = $5, "activitySetById" = NULL WHERE id = $1`, [p.id, p.tripId, p.activityId, p.takenAt, p.caption]));
   }
 });
 

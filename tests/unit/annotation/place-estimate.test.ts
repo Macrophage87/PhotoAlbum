@@ -25,9 +25,9 @@ describe("what the helper is asked for", () => {
     expect(PLACE_ONLY_INSTRUCTIONS.length).toBeGreaterThan(2048);
   });
   it("asks only about items with no position that nobody has asked about yet", () => {
-    expect(needsPlaceEstimate({ lat: null, placeEstimatedAt: null })).toBe(true);
-    expect(needsPlaceEstimate({ lat: 44.3, placeEstimatedAt: null })).toBe(false);
-    expect(needsPlaceEstimate({ lat: null, placeEstimatedAt: new Date() })).toBe(false);
+    expect(needsPlaceEstimate({ lat: null, placeSetById: null, placeEstimatedAt: null })).toBe(true);
+    expect(needsPlaceEstimate({ lat: 44.3, placeSetById: null, placeEstimatedAt: null })).toBe(false);
+    expect(needsPlaceEstimate({ lat: null, placeSetById: null, placeEstimatedAt: new Date() })).toBe(false);
   });
   it("sends the family's own words and never mentions people", () => {
     const text = describePlaceItem({ kind: "PHOTO", context: "the vatican with Nana", caption: null, title: null, takenAt: null, trip: { title: "Rome", timezone: "Europe/Rome" }, collections: [] } as unknown as Parameters<typeof describePlaceItem>[0]);
@@ -88,7 +88,7 @@ describe("what a backfill run has left to do", () => {
     expect(taskOf({ kind: "all" })).toBe("describe");
     expect(taskOf({ kind: "all", task: "place" })).toBe("place");
     expect(pendingWhere("describe")).toEqual({ annotatedAt: null });
-    expect(pendingWhere("place")).toEqual({ lat: null, placeEstimatedAt: null });
+    expect(pendingWhere("place")).toEqual({ lat: null, placeSetById: null, placeEstimatedAt: null });
   });
 });
 

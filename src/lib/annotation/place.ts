@@ -127,8 +127,9 @@ export function placeRequestParams(model: string, images: Anthropic.ImageBlockPa
 }
 
 /** Whether an item still wants a guess: nothing in it says where it was, and nobody has asked yet. */
-export function needsPlaceEstimate(item: { lat: number | null; placeEstimatedAt: Date | null }): boolean {
-  return item.lat === null && item.placeEstimatedAt === null;
+export function needsPlaceEstimate(item: { lat: number | null; placeSetById: string | null; placeEstimatedAt: Date | null }): boolean {
+  // A place a member took away is not a gap to fill: they cleared it on purpose.
+  return item.lat === null && item.placeSetById === null && item.placeEstimatedAt === null;
 }
 
 /**
@@ -147,11 +148,11 @@ export async function recordPlaceFailure(photoId: string, opts: { terminal?: boo
  * turn (see geotag-photos). placeEstimatedAt is stamped either way, so a declined item is not asked about again.
  */
 export async function applyPlaceEstimate(photoId: string, estimate: PlaceEstimate): Promise<"placed" | "declined" | "skipped"> {
-  const current = await db.photo.findUnique({ where: { id: photoId }, select: { lat: true, gpsSource: true } });
+  const current = await db.photo.findUnique({ where: { id: photoId }, select: { lat: true, gpsSource: true, placeSetById: true } });
   if (!current) return "skipped";
   // A town-level answer is held to the town before anything is written, name and evidence alike.
   const place = estimate && estimate.confidence >= MIN_PLACE_CONFIDENCE ? scrubCoarsePlace(estimate) : null;
-  const free = current.lat === null && (current.gpsSource === null || current.gpsSource === "ESTIMATE");
+  const free = current.lat === null && current.placeSetById === null && (current.gpsSource === null || current.gpsSource === "ESTIMATE");
   if (!place || !free) {
     await db.photo.update({ where: { id: photoId }, data: { placeEstimatedAt: new Date() } });
     return place ? "skipped" : "declined";

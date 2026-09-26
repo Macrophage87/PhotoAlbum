@@ -497,7 +497,11 @@
             ],
             [
               "On the wrong outing",
-              "Open the outing, **Select photos**, **Take off this activity**. It stays on the trip."
+              "Open the outing, **Select photos**, **Take off this activity**. It stays on the trip, and the outing's hours will not put it back. To let the album go by the time it was taken again, open the photograph and choose **Automatic (by the time it was taken)** under Activity."
+            ],
+            [
+              "A place that should not be shown",
+              "Open the photograph and press **Clear** under Place. Once you have removed a place yourself it stays removed: nothing the album does by itself puts one back — not the file, a track, a Google Takeout import or the AI helper. Set one again by hand if you change your mind."
             ],
             [
               "On the wrong trip, or no trip",
@@ -533,7 +537,7 @@
             "It writes a title, a caption, a description and a list of search words.",
             "It is told the names of people the family has agreed to name. It is never told a child's name.",
             "It never sees faces as faces: no face data of any kind is sent to it.",
-            "Anything you write yourself is left alone. It only replaces its own words.",
+            "Anything you write yourself is left alone. It only replaces its own words — unless you press **Describe again** on a description your family edited, and agree to replace it.",
             "A trip, a collection or a single photograph can be kept out of it entirely."
           ]
         },

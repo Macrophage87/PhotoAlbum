@@ -3,7 +3,7 @@ import { describeRepair, planSidecarRepair, type RepairTarget } from "@/lib/take
 import type { SidecarData } from "@/lib/takeout/sidecar";
 
 const sidecar: SidecarData = { title: "IMG_2001.jpg", description: "Otter Cliff from the Ocean Path", takenAt: new Date("2025-08-12T13:30:00Z"), lat: 44.3186, lng: -68.1917, googleId: "AF1QipAbc" };
-const bare: RepairTarget = { lat: null, lng: null, gpsSource: null, takenAt: null, takenAtSource: null, context: null, caption: null, sourceId: null, originalName: "IMG_2001.jpg" };
+const bare: RepairTarget = { lat: null, lng: null, gpsSource: null, takenAt: null, takenAtSource: null, context: null, caption: null, sourceId: null, placeSetById: null, originalName: "IMG_2001.jpg" };
 
 describe("what a Takeout sidecar may fill in", () => {
   it("fills every gap on a photo that has none of it", () => {
@@ -20,7 +20,7 @@ describe("what a Takeout sidecar may fill in", () => {
     expect(plan.data.takenAt).toEqual(sidecar.takenAt);
   });
   it("never overwrites the camera's own record or anything a member wrote", () => {
-    const settled: RepairTarget = { lat: 10, lng: 20, gpsSource: "EXIF", takenAt: new Date("2025-08-12T13:00:00Z"), takenAtSource: "EXIF_OFFSET", context: "Nana's note", caption: "Ours", sourceId: "kept", originalName: "IMG_2001.jpg" };
+    const settled: RepairTarget = { lat: 10, lng: 20, gpsSource: "EXIF", takenAt: new Date("2025-08-12T13:00:00Z"), takenAtSource: "EXIF_OFFSET", context: "Nana's note", caption: "Ours", sourceId: "kept", placeSetById: null, originalName: "IMG_2001.jpg" };
     expect(planSidecarRepair(settled, sidecar)).toBeNull();
     const manual: RepairTarget = { ...settled, gpsSource: "MANUAL", takenAtSource: "MANUAL" };
     expect(planSidecarRepair(manual, sidecar)).toBeNull();
@@ -42,5 +42,9 @@ describe("what a Takeout sidecar may fill in", () => {
   });
   it("describes a repair in the words the admin page shows", () => {
     expect(describeRepair("IMG_2001.jpg", ["place", "date"])).toBe("IMG_2001.jpg: place, date");
+  });
+  it("leaves a place a member cleared by hand, which looks like none at all but for who cleared it (#72)", () => {
+    const cleared: RepairTarget = { ...bare, placeSetById: "u1", takenAt: new Date("2025-08-12T13:00:00Z"), takenAtSource: "EXIF_OFFSET", context: "kept", caption: "kept", sourceId: "kept" };
+    expect(planSidecarRepair(cleared, sidecar)).toBeNull();
   });
 });

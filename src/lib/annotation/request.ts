@@ -22,7 +22,7 @@ export async function loadItem(photoId: string) {
   return db.photo.findUnique({
     where: { id: photoId },
     select: {
-      id: true, kind: true, status: true, storageKey: true, renditions: true, videoRenditions: true, takenAt: true, takenAtSource: true, tzOffsetMin: true, camera: true, lat: true, lng: true, placeEstimatedAt: true, context: true, caption: true, title: true, durationS: true,
+      id: true, kind: true, status: true, storageKey: true, renditions: true, videoRenditions: true, takenAt: true, takenAtSource: true, tzOffsetMin: true, camera: true, lat: true, lng: true, placeSetById: true, placeEstimatedAt: true, context: true, caption: true, title: true, durationS: true,
       trip: { select: { title: true, timezone: true } },
       collections: { select: { collection: { select: { title: true } } } },
     },

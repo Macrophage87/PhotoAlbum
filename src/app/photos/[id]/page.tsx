@@ -10,7 +10,7 @@ import { AppShell, Container } from "@/components/layout/AppShell";
 import { ExifPanel } from "@/components/photos/ExifPanel";
 import { Button, Card, Label, Select, Textarea } from "@/components/ui";
 import { formatBytes, formatDateTime } from "@/lib/time/format";
-import { reprocessPhoto, resetPhotoDateToCamera, setAsCover, setPhotoDate, shiftPhotoTimezone, trashPhoto, updatePhoto } from "./actions";
+import { reprocessPhoto, setAsCover, shiftPhotoTimezone, trashPhoto, updatePhoto } from "./actions";
 
 const SOURCE_LABEL: Record<string, string> = { EXIF_OFFSET: "from the camera", EXIF_TZLOOKUP: "from the camera", TRIP_TZ: "from the camera, in the trip's zone", SIDECAR: "from Google Photos", FILE_NAME: "from the file name", EXIF_CREATED: "from the file\u2019s created-date tag, which may be when it was edited", FILE_MTIME: "from the file's modified time", UPLOAD_TIME: "the upload time" };
 import { TimezoneShift } from "@/components/photos/TimezoneShift";
@@ -25,6 +25,7 @@ import { isWeakDate } from "@/lib/photos/date-from-neighbours";
 import { guessDateFromTrip } from "@/lib/photos/date-guess-query";
 import { NeighbourDate } from "@/components/photos/NeighbourDate";
 import { DateTroubleshooter } from "@/components/photos/DateTroubleshooter";
+import { DateTakenForm } from "@/components/photos/DateTakenForm";
 import { canEditContainer, canEditMedia, NOT_YOURS } from "@/lib/auth/ownership";
 import { PanoramaView, PanoramaHint } from "@/components/photos/PanoramaView";
 import { ScanViewer } from "@/components/scans/ScanViewer";
@@ -282,16 +283,20 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
                 {photo.tripId && (
                   <div>
                     <Label htmlFor="activityId">Activity</Label>
-                    <Select id="activityId" name="activityId" defaultValue={photo.activityId ?? ""}>
-                      <option value="">None</option>
+                    {/* "auto" hands the question back to the clock; "" is a member saying it was on no activity at all. */}
+                    <Select id="activityId" name="activityId" defaultValue={photo.activitySetById ? photo.activityId ?? "" : "auto"}>
+                      <option value="auto">Automatic (by the time it was taken){!photo.activitySetById && photo.activity ? ` — now ${photo.activity.title}` : ""}</option>
+                      <option value="">None — keep it off every activity</option>
                       {activities.map((a) => (
                         <option key={a.id} value={a.id}>{a.title}</option>
                       ))}
                     </Select>
                     <p className="text-xs text-muted mt-1">
-                      {photo.activitySetBy
-                        ? `Put here by ${uploaderLabel(photo.activitySetBy.name, photo.activitySetBy.email)}, so the activity's hours leave it alone.`
-                        : "Left alone, this follows the time it was taken. Choosing one keeps it there whatever its date says."}
+                      {photo.activitySetBy && photo.activityId
+                        ? `Put here by ${uploaderLabel(photo.activitySetBy.name, photo.activitySetBy.email)}, so the activity's hours leave it alone. Choose Automatic to let its time decide again.`
+                        : photo.activitySetBy
+                        ? `Kept off every activity by ${uploaderLabel(photo.activitySetBy.name, photo.activitySetBy.email)}, so no activity's hours put it back. Choose Automatic, or type in the date it was taken, to let its time decide again.`
+                        : "Automatic follows the time it was taken. Choosing an activity, or None, keeps it that way whatever its date says."}
                     </p>
                   </div>
                 )}
@@ -317,15 +322,11 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
               <ExifPanel photo={photo} tripTimezone={photo.trip?.timezone} />
               <p className="text-xs text-muted mt-2">Uploaded by {uploaderLabel(photo.uploader.name, photo.uploader.email)}</p>
               {!isVideo && mine && (
-                <form action={async (fd) => { "use server"; await setPhotoDate(photo.id, fd); }} className="mt-3 pt-3 border-t border-border space-y-2">
-                  <div className="text-xs font-medium">Date taken</div>
-                  <p className="text-xs text-muted">Defaults to what the camera wrote in the file{photo.takenAtSource ? ` (currently ${photo.takenAtSource === "MANUAL" ? `set by ${photo.dateSetBy ? uploaderLabel(photo.dateSetBy.name, photo.dateSetBy.email) : "a family member"}` : SOURCE_LABEL[photo.takenAtSource] ?? photo.takenAtSource})` : ""}. Change it here when the camera was wrong or a scan has no date.</p>
-                  <div className="flex flex-wrap gap-2">
-                    <input type="datetime-local" name="takenAt" aria-label="Date taken" defaultValue={photo.takenAt ? new Date(photo.takenAt.getTime() + (photo.tzOffsetMin ?? 0) * 60_000).toISOString().slice(0, 16) : ""} required className="h-8 rounded-theme border border-border bg-surface text-text [color-scheme:light] px-2 text-sm" />
-                    <Button type="submit" variant="secondary" size="sm">Save date</Button>
-                    <Button type="submit" variant="secondary" size="sm" formAction={async () => { "use server"; await resetPhotoDateToCamera(photo.id); }}>Use camera date</Button>
-                  </div>
-                </form>
+                <DateTakenForm
+                  photoId={photo.id}
+                  initial={photo.takenAt ? new Date(photo.takenAt.getTime() + (photo.tzOffsetMin ?? 0) * 60_000).toISOString().slice(0, 16) : ""}
+                  hint={`Defaults to what the camera wrote in the file${photo.takenAtSource ? ` (currently ${photo.takenAtSource === "MANUAL" ? `set by ${photo.dateSetBy ? uploaderLabel(photo.dateSetBy.name, photo.dateSetBy.email) : "a family member"}` : SOURCE_LABEL[photo.takenAtSource] ?? photo.takenAtSource})` : ""}. Change it here when the camera was wrong or a scan has no date.`}
+                />
               )}
               {mine && photo.takenAt && <TimezoneShift action={shift} currentOffsetMin={photo.tzOffsetMin} hasTrip={Boolean(photo.trip)} tripTimezone={photo.trip?.timezone} />}
             </Card>

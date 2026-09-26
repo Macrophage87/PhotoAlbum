@@ -3,7 +3,7 @@ import { keeperOf, planFold, type FoldablePhoto } from "@/lib/photos/fold-duplic
 
 const photo = (over: Partial<FoldablePhoto> = {}): FoldablePhoto => ({
   id: "a", caption: null, title: null, context: null, takenAt: null, takenAtSource: null,
-  lat: null, lng: null, placeName: null, gpsSource: null, tripId: null, activityId: null,
+  lat: null, lng: null, placeName: null, gpsSource: null, placeSetById: null, tripId: null, activityId: null, activitySetById: null,
   createdAt: new Date("2025-01-01"), ...over,
 });
 
@@ -50,6 +50,19 @@ describe("folding one identical copy into another", () => {
     const plan = planFold(photo(), photo({ id: "b", tripId: "t1", activityId: "a1" }));
     expect(plan.data).toMatchObject({ tripId: "t1", activityId: "a1" });
     expect(planFold(photo({ tripId: "t2" }), photo({ id: "b", tripId: "t1" })).data).toEqual({});
+  });
+
+  it("never fills a place somebody removed by hand, and a copy's removal takes the keeper's away too (#72)", () => {
+    const cleared = photo({ placeSetById: "nana" });
+    const pinned = photo({ id: "b", lat: 39.4, lng: -76.6, gpsSource: "EXIF", placeName: "Home" });
+    expect(planFold(cleared, pinned).data).toEqual({});
+    expect(planFold(pinned, photo({ id: "c", placeSetById: "nana" })).data).toMatchObject({ lat: null, lng: null, gpsSource: null, placeName: null, placeSetById: "nana" });
+  });
+
+  it("carries who pinned a copy's place, and who chose its activity, with them", () => {
+    expect(planFold(photo(), photo({ id: "b", lat: 1, lng: 2, gpsSource: "MANUAL", placeSetById: "nana" })).data).toMatchObject({ gpsSource: "MANUAL", placeSetById: "nana" });
+    expect(planFold(photo(), photo({ id: "b", lat: 1, lng: 2, gpsSource: "EXIF", placeSetById: null })).data).toMatchObject({ placeSetById: null });
+    expect(planFold(photo(), photo({ id: "b", tripId: "t1", activityId: null, activitySetById: "nana" })).data).toMatchObject({ tripId: "t1", activityId: null, activitySetById: "nana" });
   });
 
   it("keeps whichever has been in the album longest, settling a tie by id so it is never arbitrary", () => {

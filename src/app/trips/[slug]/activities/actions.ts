@@ -11,8 +11,8 @@ import { annotationGates } from "@/lib/annotation/eligibility";
 import { buildActivityRequest, loadActivityForDescription, parseActivityDescription } from "@/lib/annotation/activity";
 import { permittedNames } from "@/lib/people/gates";
 import { canEditContainer, NOT_YOUR_CONTAINER } from "@/lib/auth/ownership";
-import { activityInputFromForm, localInputToInstant } from "@/lib/activities/validation";
-import { reassignPhotosForActivity } from "@/lib/activities/reassign";
+import { activityInputFromForm, keepSeconds, localInputToInstant } from "@/lib/activities/validation";
+import { deleteActivityAndRefile, reassignPhotosForActivity } from "@/lib/activities/reassign";
 import { fieldErrors, participantsFromForm } from "@/lib/trips/validation";
 import type { ActivityType } from "@/generated/prisma/enums";
 import type { ActivityFormState } from "@/components/activities/ActivityForm";
@@ -54,7 +54,7 @@ export async function updateActivity(slug: string, id: string, _prev: ActivityFo
   const parsed = activityInputFromForm(fd);
   if (!parsed.success) return { status: "error", fieldErrors: fieldErrors(parsed.error) };
   const v = parsed.data;
-  const existing = await db.activity.findFirst({ where: { id, tripId: trip.id }, select: { id: true } });
+  const existing = await db.activity.findFirst({ where: { id, tripId: trip.id }, select: { id: true, startTime: true, endTime: true } });
   if (!existing) return { status: "error", message: "Activity not found" };
   // `set` reconciles to exactly what was ticked, so unticking somebody removes them; a form that never carried the
   // control at all leaves the list as it was.
@@ -64,8 +64,9 @@ export async function updateActivity(slug: string, id: string, _prev: ActivityFo
     data: {
       title: v.title,
       type: v.type as ActivityType,
-      startTime: localInputToInstant(v.start, trip.timezone),
-      endTime: localInputToInstant(v.end, trip.timezone),
+      // The form shows whole minutes; an imported track's seconds survive a save that did not move them.
+      startTime: keepSeconds(localInputToInstant(v.start, trip.timezone), existing.startTime),
+      endTime: keepSeconds(localInputToInstant(v.end, trip.timezone), existing.endTime),
       description: v.description,
       ...(there ? { participants: { set: there.map((pid) => ({ id: pid })) } } : {}),
     },
@@ -80,7 +81,8 @@ export async function deleteActivity(slug: string, id: string, fd: FormData): Pr
   const activity = await db.activity.findFirst({ where: { id, tripId: trip.id }, select: { id: true, trackId: true } });
   if (!activity) return;
   const deleteTrack = fd.get("deleteTrack") === "on";
-  await db.activity.delete({ where: { id } });
+  // What was on it goes to whatever else covers its time, rather than being left loose.
+  await deleteActivityAndRefile(id);
   if (deleteTrack && activity.trackId) await db.track.delete({ where: { id: activity.trackId } }).catch(() => {});
   revalidatePath(`/trips/${slug}`, "layout");
   redirect(`/trips/${slug}/activities`);

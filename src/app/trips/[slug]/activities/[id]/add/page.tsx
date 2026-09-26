@@ -45,6 +45,7 @@ export default async function AddToActivityPage({ params, searchParams }: PagePr
       initial={{ photos: page.photos.map((p) => toGridPhoto(p, null, true)), nextCursor: page.nextCursor, total: page.total }}
       extra={
         <TakeWindow
+          kind="activity"
           count={n}
           elsewhere={during.elsewhere}
           label={`Add all ${n} photo${n === 1 ? "" : "s"} taken during it (${when})`}

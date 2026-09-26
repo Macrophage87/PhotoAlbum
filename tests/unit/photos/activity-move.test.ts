@@ -28,13 +28,13 @@ describe("moving an item on the timeline", () => {
     const p = await photo("2025-08-12T10:00:00Z");
     await db.photo.update({ where: { id: p.id }, data: { activityId: sail, activitySetById: me } });
     // A later date correction leaves the choice where it is.
-    await applyPhotoInstant({ id: p.id, tripId, gpsSource: null, activityId: sail, activitySetById: me }, new Date("2025-08-12T10:30:00Z"), 0, "MANUAL", me, { geotag: false });
+    await applyPhotoInstant({ id: p.id, tripId, gpsSource: null, uploaderId: me, activityId: sail, activitySetById: me }, new Date("2025-08-12T10:30:00Z"), 0, "MANUAL", me, { geotag: false });
     expect((await db.photo.findUniqueOrThrow({ where: { id: p.id } })).activityId).toBe(sail);
   });
 
   it("re-files by the clock again once nobody's choice stands", async () => {
     const p = await photo("2025-08-12T19:00:00Z");
-    await applyPhotoInstant({ id: p.id, tripId, gpsSource: null, activityId: null, activitySetById: null }, new Date("2025-08-12T19:00:00Z"), 0, "MANUAL", me, { geotag: false });
+    await applyPhotoInstant({ id: p.id, tripId, gpsSource: null, uploaderId: me, activityId: null, activitySetById: null }, new Date("2025-08-12T19:00:00Z"), 0, "MANUAL", me, { geotag: false });
     expect((await db.photo.findUniqueOrThrow({ where: { id: p.id } })).activityId).toBe(sail);
   });
 

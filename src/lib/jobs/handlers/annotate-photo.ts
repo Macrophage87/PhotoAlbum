@@ -36,7 +36,7 @@ export async function annotatePhoto(job: AnnotatePhotoJob): Promise<void> {
       await recordFailure(item.id, "invalid_output");
       return;
     }
-    await applyAnnotation(item.id, response.model, parsed, { content: response.content, usage: response.usage, stop_reason: response.stop_reason });
+    await applyAnnotation(item.id, response.model, parsed, { content: response.content, usage: response.usage, stop_reason: response.stop_reason }, { replaceEdited: job.replace === true });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[annotate] ${item.id} failed: ${message.slice(0, 200)}`);

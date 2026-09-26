@@ -13,8 +13,11 @@ import { NONE_SLOT } from "@/lib/map/colour-by";
 import { spreadFeatures } from "@/lib/map/jitter";
 
 type Spot = { lat: number; lng: number; name?: string | null };
-/** What Undo needs: where each was on the server, and what the helper had guessed, which only the list knows. */
-type Undo = { before: PlaceBefore[]; guesses: Map<string, string | null> };
+/**
+ * What Undo needs: where each was, the server's token for its own note of the move, and what the helper had guessed,
+ * which only the list knows.
+ */
+type Undo = { before: PlaceBefore[]; token: string | null; guesses: Map<string, string | null> };
 
 /** A small box round one point, for the map to fly to: close enough to see the street, far enough to see the town. */
 function around(at: { lat: number; lng: number }, span = 0.01): [[number, number], [number, number]] {
@@ -140,17 +143,17 @@ export function PlaceStudio({ photos: initial, total, theme, tracks, bounds }: {
         const moved = new Set(r.before.map((b) => b.id));
         const guesses = new Map(chosen.filter((p) => moved.has(p.id)).map((p) => [p.id, p.guess]));
         setItems((prev) => prev.map((p) => (moved.has(p.id) ? { ...p, lat: pin.lat, lng: pin.lng, by: "hand", guess: null } : p)));
-        setNotice({ text: `${r.count} photo${r.count === 1 ? "" : "s"} placed${pin.name ? ` at ${pin.name}` : ""}.`, undo: { before: r.before, guesses } });
+        setNotice({ text: `${r.count} photo${r.count === 1 ? "" : "s"} placed${pin.name ? ` at ${pin.name}` : ""}.`, undo: { before: r.before, token: r.undo, guesses } });
         clear();
       } catch {
         setNotice({ text: "That did not save. Check the connection and press it again." });
       }
     });
 
-  const undo = ({ before, guesses }: Undo) =>
+  const undo = ({ before, token, guesses }: Undo) =>
     start(async () => {
       try {
-        await restorePlaces(before);
+        await restorePlaces(before, token);
         const back = new Map(before.map((b) => [b.id, b]));
         setItems((prev) =>
           prev.map((p) => {
@@ -240,6 +243,7 @@ export function PlaceStudio({ photos: initial, total, theme, tracks, bounds }: {
             theme={theme}
             rings
             directPhotoClick
+            pickedIds={selected}
             marker={pin}
             focusBounds={focus}
             onMapClick={(at) => pointAt(at, false)}

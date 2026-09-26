@@ -90,7 +90,12 @@ export async function deleteTrip(slug: string): Promise<void> {
   const trip = await loadEditableTrip(slug);
   const me = await requireUserOrThrow();
   if (me.role !== "ADMIN") throw new Error("Only an admin can delete a trip");
-  await db.trip.delete({ where: { id: trip.id } });
+  await db.$transaction([
+    // Its activities go with it; a choice about them goes too, or a photo left on no trip would carry a setter that
+    // reads as "kept off by hand" wherever it is filed next.
+    db.photo.updateMany({ where: { tripId: trip.id }, data: { activityId: null, activitySetById: null } }),
+    db.trip.delete({ where: { id: trip.id } }),
+  ]);
   revalidatePath("/", "layout");
   redirect("/photos");
 }

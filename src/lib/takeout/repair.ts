@@ -6,6 +6,8 @@ export type RepairTarget = {
   lat: number | null;
   lng: number | null;
   gpsSource: GpsSource | null;
+  /** Set when a member pinned the place, or took it away: either way theirs, and never filled in behind them. */
+  placeSetById: string | null;
   takenAt: Date | null;
   takenAtSource: TakenAtSource | null;
   context: string | null;
@@ -36,7 +38,9 @@ export function planSidecarRepair(photo: RepairTarget, meta: SidecarData | null)
   const filled: RepairField[] = [];
 
   const hasPlace = photo.lat !== null && photo.lng !== null;
-  const placeIsWeak = !hasPlace || photo.gpsSource === null || WEAK_PLACE.includes(photo.gpsSource);
+  // A place a member cleared looks just like one never known, apart from who cleared it; restoring it would put back
+  // exactly what they removed (a home address on a public trip, say).
+  const placeIsWeak = photo.placeSetById === null && (!hasPlace || photo.gpsSource === null || WEAK_PLACE.includes(photo.gpsSource));
   if (meta.lat !== null && meta.lng !== null && placeIsWeak) {
     data.lat = meta.lat;
     data.lng = meta.lng;

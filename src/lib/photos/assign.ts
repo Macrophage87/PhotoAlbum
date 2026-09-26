@@ -34,3 +34,8 @@ export function pickActivityByTime<T extends ActivityWindow>(activities: T[], in
 export function whoWasThere(uploaderId: string) {
   return { OR: [{ participants: { none: {} } }, { participants: { some: { id: uploaderId } } }] };
 }
+
+/** The same rule over activities already loaded with their participants: the ones this uploader may be filed on. */
+export function openTo<T extends { participants: { id: string }[] }>(activities: T[], uploaderId: string): T[] {
+  return activities.filter((a) => a.participants.length === 0 || a.participants.some((p) => p.id === uploaderId));
+}
