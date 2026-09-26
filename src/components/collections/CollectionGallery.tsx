@@ -35,8 +35,10 @@ export function CollectionGallery({ collectionId, slug, photos, editable, emptyM
   const pathname = usePathname();
   /** The saved order, which is what Arrange starts from and saves over, not whichever order the grid is showing. */
   const saved = () => [...photos].sort((a, b) => a.arranged - b.arranged);
-  /** Only a finished photograph has a picture to lead with. (Trashed ones are never in this grid.) */
-  const coverable = ids.length === 1 && photos.find((p) => p.id === ids[0])?.status === "READY";
+  /** Only a finished photograph with pictures (not a 3D scan nobody has opened) has one to lead with. Trashed ones
+   *  are never in this grid. */
+  const chosen = ids.length === 1 ? photos.find((p) => p.id === ids[0]) : undefined;
+  const coverable = Boolean(chosen && chosen.status === "READY" && chosen.width !== null);
 
   const finish = (fn: () => Promise<unknown>) =>
     start(async () => {
@@ -104,7 +106,7 @@ export function CollectionGallery({ collectionId, slug, photos, editable, emptyM
               <Button variant="ghost" size="sm" onClick={() => setSelected(new Set())}>None</Button>
               <span className="mx-1 text-border">|</span>
               <Button size="sm" variant="secondary" disabled={!coverable || pending} onClick={() => finish(() => setCollectionCover(slug, ids[0]))}>Set as cover</Button>
-              {ids.length === 1 && !coverable && <span className="text-muted" role="status">Only a finished photo can be the cover.</span>}
+              {ids.length === 1 && !coverable && <span className="text-muted" role="status">{chosen?.status === "READY" ? "This item has no picture to lead with." : "Only a finished photo can be the cover."}</span>}
               <Button size="sm" variant="danger" disabled={!ids.length || pending} onClick={remove} data-testid="remove-from-collection">Remove from collection</Button>
               {(
                 <>

@@ -52,6 +52,7 @@ import { SimilarStrip } from "@/components/graph/SimilarStrip";
 import { PersonChips } from "@/components/people/PersonChips";
 import { PhotoTagger } from "@/components/people/PhotoTagger";
 import { NOT_TRASHED } from "@/lib/photos/trash";
+import { isCoverable } from "@/lib/photos/cover";
 
 /** The tab and link-preview title: the item's title, else its caption, else the file name. Members only, like the page. */
 export async function generateMetadata({ params }: PageProps<"/photos/[id]">): Promise<Metadata> {
@@ -346,8 +347,9 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
               {ownsTrip && photo.tripId && (
                 <form action={cover} className="flex items-center gap-2">
                   {/* Only a finished photograph out of the trash has a picture to lead the trip with. */}
-                  <Button type="submit" variant="secondary" size="sm" disabled={isCover || photo.status !== "READY" || Boolean(photo.trashedAt)}>{isCover ? "Trip cover" : "Set as trip cover"}</Button>
-                  {!isCover && photo.status !== "READY" && !photo.trashedAt && <span className="text-xs text-muted">Available once the photo has finished processing.</span>}
+                  <Button type="submit" variant="secondary" size="sm" disabled={isCover || !isCoverable(photo)}>{isCover ? "Trip cover" : "Set as trip cover"}</Button>
+                  {!isCover && !photo.trashedAt && photo.status !== "READY" && <span className="text-xs text-muted">Available once the photo has finished processing.</span>}
+                  {!isCover && !photo.trashedAt && photo.status === "READY" && photo.width === null && <span className="text-xs text-muted">This item has no picture to lead with yet.</span>}
                 </form>
               )}
               {mine && (

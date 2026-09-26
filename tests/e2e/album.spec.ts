@@ -3081,6 +3081,7 @@ test("a collection arranged by hand opens in its saved order, for its owner and 
   const col = (await withDb((c) => c.query(`INSERT INTO "Collection" (id, slug, title, "createdById", visibility, "shareToken", "updatedAt") VALUES (md5(random()::text), $1, 'Arranged by hand', (SELECT id FROM "User" WHERE email = $2), 'LINK', $3, now()) RETURNING id`, [slug, ADMIN, token]))).rows[0].id as string;
   const ids = (loc: Locator) => loc.evaluateAll((els) => els.map((e) => (e.getAttribute("src") ?? "").split("/api/photos/")[1]?.split("/")[0]).filter(Boolean));
   const grid = (p: Page) => ids(p.locator("li.tile-lazy img[src*='/api/photos/']"));
+  const anon = await browser.newContext();
   try {
     for (const [position, id] of photos.entries()) {
       await withDb((c) => c.query(`INSERT INTO "CollectionItem" (id, "collectionId", "photoId", position, "addedById", "createdAt") VALUES (md5(random()::text), $1, $2, $3, (SELECT id FROM "User" WHERE email = $4), now())`, [col, id, position, ADMIN]));
@@ -3097,18 +3098,19 @@ test("a collection arranged by hand opens in its saved order, for its owner and 
     await expect(page.getByTestId("photos-order-arranged")).toHaveAttribute("aria-current", "true");
     await expect.poll(() => grid(page)).toEqual(saved);
 
-    // Opened again with no order asked for, whatever this device chose on other grids, it is the saved order.
+    // Opened again with no order asked for, it is the saved order, even with this device set on "Newest first" from
+    // other grids.
+    await context.addCookies([{ name: "photos-order", value: "newest", url: new URL(page.url()).origin }]);
     await page.goto(`/collections/${slug}/photos`);
     await expect(page.getByTestId("photos-order-arranged")).toHaveAttribute("aria-current", "true");
     await expect.poll(() => grid(page)).toEqual(saved);
 
     // And so for somebody holding the link, who has no order to choose.
-    const anon = await browser.newContext();
     const theirs = await anon.newPage();
     await theirs.goto(`/share/c/${token}`);
     await expect.poll(() => grid(theirs), { timeout: 20_000 }).toEqual(saved);
-    await anon.close();
   } finally {
+    await anon.close();
     await withDb((c) => c.query(`DELETE FROM "Collection" WHERE id = $1`, [col]));
   }
 });

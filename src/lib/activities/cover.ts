@@ -1,6 +1,6 @@
 import { db } from "@/lib/db";
 import { NOT_TRASHED } from "@/lib/photos/trash";
-import { HAS_PICTURES } from "@/lib/photos/cover";
+import { COVERABLE, HAS_PICTURES } from "@/lib/photos/cover";
 
 /** What a cover needs to be drawn and put on a link preview: the preview is often dropped without its size. */
 const select = { id: true, updatedAt: true, width: true, height: true } as const;
@@ -15,7 +15,7 @@ export type ActivityCoverPhoto = { id: string; updatedAt: Date; width: number | 
  * afternoon — or one somebody has thrown away — would be worse than the album's own choice.
  */
 export async function activityCover(activity: { id: string; coverPhotoId: string | null }): Promise<ActivityCoverPhoto | null> {
-  const mine = { activityId: activity.id, status: "READY" as const, ...NOT_TRASHED };
+  const mine = { activityId: activity.id, ...COVERABLE };
   if (activity.coverPhotoId) {
     // One being processed again still has its pictures, and goes on leading meanwhile, as a trip's cover does.
     const chosen = await db.photo.findFirst({ where: { id: activity.coverPhotoId, activityId: activity.id, ...NOT_TRASHED, ...HAS_PICTURES }, select });
@@ -26,7 +26,7 @@ export async function activityCover(activity: { id: string; coverPhotoId: string
 
 /** The activity's photographs a cover can be chosen from, in the order they were taken. */
 export async function activityCoverCandidates(activityId: string, cursor?: string | null, take = 60) {
-  const where = { activityId, status: "READY" as const, ...NOT_TRASHED };
+  const where = { activityId, ...COVERABLE };
   const [rows, total] = await Promise.all([
     db.photo.findMany({
       where,

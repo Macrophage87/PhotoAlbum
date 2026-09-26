@@ -10,7 +10,7 @@ describe("an activity's cover", () => {
 
   const photo = (takenAt: string, over: { activityId?: string | null; trashed?: boolean; status?: "READY" | "PENDING" } = {}) =>
     db.photo.create({
-      data: { uploaderId, activityId: over.activityId === undefined ? walk.id : over.activityId, takenAt: new Date(takenAt), status: over.status ?? "READY", trashedAt: over.trashed ? new Date() : null, originalName: "a.jpg", mimeType: "image/jpeg", storageKey: "k", originalPath: "k/o.jpg", sizeBytes: 1 },
+      data: { uploaderId, activityId: over.activityId === undefined ? walk.id : over.activityId, takenAt: new Date(takenAt), status: over.status ?? "READY", width: (over.status ?? "READY") === "READY" ? 1200 : null, trashedAt: over.trashed ? new Date() : null, originalName: "a.jpg", mimeType: "image/jpeg", storageKey: "k", originalPath: "k/o.jpg", sizeBytes: 1 },
       select: { id: true },
     });
   const choose = async (id: string | null) => {

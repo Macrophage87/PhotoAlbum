@@ -5,7 +5,7 @@ import type { Viewer } from "@/lib/auth/viewer";
 import { visibleContainersWhere } from "@/lib/auth/access";
 import { photoCardSelect, type PhotoCard } from "@/lib/photos/queries";
 import { NOT_TRASHED } from "@/lib/photos/trash";
-import { coverPhotoSelect, standingCover } from "@/lib/photos/cover";
+import { COVERABLE, coverPhotoSelect, standingCover } from "@/lib/photos/cover";
 
 export const collectionCardSelect = {
   id: true,
@@ -50,7 +50,7 @@ export async function getCollectionBySlug(slug: string) {
 
 export type CollectionWithCounts = NonNullable<Awaited<ReturnType<typeof getCollectionBySlug>>>;
 
-type ChosenCover = { id: string; updatedAt: Date; width: number | null; height?: number | null; trashedAt?: Date | null; status: string };
+type ChosenCover = { id: string; updatedAt: Date; width: number | null; height?: number | null; trashedAt?: Date | null };
 
 /**
  * The cover chosen by hand, while it still stands: with pictures to draw, out of the trash, and still one of the
@@ -68,7 +68,7 @@ export async function collectionCoverFor(collection: { id: string; coverPhoto: C
   const chosen = await chosenCollectionCover(collection);
   if (chosen) return chosen;
   const item = await db.collectionItem.findFirst({
-    where: { collectionId: collection.id, photo: { status: "READY", ...NOT_TRASHED } },
+    where: { collectionId: collection.id, photo: COVERABLE },
     orderBy: [{ position: "asc" }, { createdAt: "asc" }],
     select: { photo: { select: { id: true, updatedAt: true, width: true, height: true } } },
   });

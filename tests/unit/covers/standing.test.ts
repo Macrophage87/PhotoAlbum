@@ -15,7 +15,8 @@ import { setAsCover } from "@/app/photos/[id]/actions";
 import { chosenTripCover, coverFor } from "@/lib/trips/queries";
 import { chosenCollectionCover, collectionCoverFor } from "@/lib/collections/queries";
 import { coverPhotoSelect } from "@/lib/photos/cover";
-import { activityCover } from "@/lib/activities/cover";
+import { activityCover, activityCoverCandidates } from "@/lib/activities/cover";
+import { collectionCoverCandidates, tripCoverCandidates } from "@/lib/covers/candidates";
 
 /**
  * A cover is chosen once and read everywhere, so what is chosen has to be a picture, and what is read has to be one
@@ -27,7 +28,7 @@ describe("covers that stand", () => {
   let ready: string, other: string, working: string;
 
   const photo = (name: string, tripId: string | null, status: "READY" | "PROCESSING" | "FAILED", hour: number, activityId?: string) =>
-    db.photo.create({ data: { tripId, activityId, uploaderId: who.id, originalName: name, mimeType: "image/jpeg", storageKey: name, originalPath: `${name}/o.jpg`, sizeBytes: 1, status, takenAt: new Date(Date.UTC(2025, 7, 12, hour)) } });
+    db.photo.create({ data: { tripId, activityId, uploaderId: who.id, originalName: name, mimeType: "image/jpeg", storageKey: name, originalPath: `${name}/o.jpg`, sizeBytes: 1, status, width: status === "READY" ? 1200 : null, takenAt: new Date(Date.UTC(2025, 7, 12, hour)) } });
   const trip = (id: string) => db.trip.findUniqueOrThrow({ where: { id }, include: { coverPhoto: coverPhotoSelect } });
   const collection = (id: string) => db.collection.findUniqueOrThrow({ where: { id }, include: { coverPhoto: coverPhotoSelect } });
 
@@ -107,6 +108,24 @@ describe("covers that stand", () => {
     await expect(setCoverPhoto("acadia", ready)).rejects.toThrow(/finished/);
     await expect(setActivityCover("acadia", activity, ready)).rejects.toThrow(/finished/);
     await expect(setAsCover(ready)).rejects.toThrow(/finished/);
+  });
+
+  it("never leads with, offers or accepts a finished item that has no pictures, such as an unopened 3D scan", async () => {
+    const scan = (await db.photo.create({ data: { tripId: acadia, activityId: activity, uploaderId: who.id, kind: "SCAN", originalName: "room.glb", mimeType: "model/gltf-binary", storageKey: "scan", originalPath: "scan/o.glb", sizeBytes: 1, status: "READY", takenAt: new Date(Date.UTC(2025, 7, 12, 1)) } })).id;
+    await db.collectionItem.create({ data: { collectionId: best, photoId: scan, addedById: who.id, position: -1 } });
+    await expect(setCoverPhoto("acadia", scan)).rejects.toThrow(/finished/);
+    await expect(setCollectionCover("best", scan)).rejects.toThrow(/finished/);
+    await expect(setActivityCover("acadia", activity, scan)).rejects.toThrow(/finished/);
+    // Earliest on the trip and first in the collection, and still not what the album leads with by itself.
+    expect((await coverFor(await trip(acadia)))?.id).toBe(other);
+    expect((await collectionCoverFor(await collection(best)))?.id).toBe(ready);
+    expect((await activityCover({ id: activity, coverPhotoId: null }))?.id).toBe(other);
+    expect((await tripCoverCandidates(acadia)).photos.map((p) => p.id)).not.toContain(scan);
+    expect((await collectionCoverCandidates(best)).photos.map((p) => p.id)).not.toContain(scan);
+    expect((await activityCoverCandidates(activity)).photos.map((p) => p.id)).not.toContain(scan);
+    // Chosen before this was checked: not honoured.
+    await db.trip.update({ where: { id: acadia }, data: { coverPhotoId: scan } });
+    expect(chosenTripCover(await trip(acadia))).toBeNull();
   });
 
   it("goes on leading with a cover while it is processed again, and after a re-process fails", async () => {

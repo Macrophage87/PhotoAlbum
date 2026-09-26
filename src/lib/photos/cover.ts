@@ -15,22 +15,27 @@ export function coverUnlessTrashed<T extends { trashedAt?: Date | null }>(cover:
  * What every trip and collection reads of its hand-chosen cover: enough to draw it and put it on a link preview, and
  * enough to tell whether it still stands.
  */
-export const coverPhotoSelect = { select: { id: true, updatedAt: true, width: true, height: true, trashedAt: true, status: true, tripId: true } } as const;
+export const coverPhotoSelect = { select: { id: true, updatedAt: true, width: true, height: true, trashedAt: true, tripId: true } } as const;
 
 /**
- * A hand-chosen cover, while it is still one to lead with: out of the trash, and with pictures to draw. One that
- * never finished processing has none, and a cover pointing at it is a broken image on the front page and on every
- * link preview. One that finished once keeps its pictures while it is re-processed, and even if that fails, so it
- * goes on leading; the size is written with the pictures, which is how having them is told without reading them.
- * `status` and `width` are required so a caller cannot forget to select them.
+ * A hand-chosen cover, while it is still one to lead with: out of the trash, and with pictures to draw. The size is
+ * written with the pictures, which is how having them is told without reading them. One that never finished
+ * processing has none, nor does a 3D scan nobody has opened yet, and a cover pointing at either is a broken image on
+ * the front page and on every link preview. One that finished once keeps its pictures while it is re-processed, and
+ * even if that fails, so it goes on leading. `width` is required so a caller cannot forget to select it.
  */
-export function standingCover<T extends { trashedAt?: Date | null; status: string; width: number | null }>(cover: T | null | undefined): T | null {
+export function standingCover<T extends { trashedAt?: Date | null; width: number | null }>(cover: T | null | undefined): T | null {
   const kept = coverUnlessTrashed(cover);
-  return kept && (kept.status === "READY" || kept.width !== null) ? kept : null;
+  return kept && kept.width !== null ? kept : null;
 }
 
-/** The same test, for a query: finished, or finished once and being processed again. */
-export const HAS_PICTURES = { OR: [{ status: "READY" as const }, { width: { not: null } }] };
+/** The same test, for a query. */
+export const HAS_PICTURES = { width: { not: null } };
 
-/** What may be chosen as a cover: the same photographs the cover pages offer, finished and out of the trash. */
-export const COVERABLE = { status: "READY", trashedAt: null } as const;
+/** What may be chosen as a cover, and what the album leads with by itself: finished, with pictures, and not trashed. */
+export const COVERABLE = { status: "READY" as const, trashedAt: null, width: { not: null } };
+
+/** The same test, for a photograph already read. */
+export function isCoverable(photo: { status: string; trashedAt: Date | null; width: number | null }): boolean {
+  return photo.status === "READY" && !photo.trashedAt && photo.width !== null;
+}

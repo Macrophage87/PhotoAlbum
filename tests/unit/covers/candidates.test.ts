@@ -17,7 +17,7 @@ describe("what a trip or collection can be fronted by", () => {
     collectionId = (await db.collection.create({ data: { slug: "best", title: "Best of", createdById: me } })).id;
     const photo = (name: string, hour: number, status: "READY" | "PROCESSING", trashed = false) =>
       db.photo.create({
-        data: { tripId, uploaderId: me, originalName: name, mimeType: "image/jpeg", storageKey: "k", originalPath: "k/o.jpg", sizeBytes: 1, status, takenAt: new Date(Date.UTC(2025, 7, 12, hour)), takenAtSource: "EXIF_OFFSET", tzOffsetMin: 0, ...(trashed ? { trashedAt: new Date(), trashedById: me, trashReason: "DUPLICATE" } : {}) },
+        data: { tripId, uploaderId: me, originalName: name, mimeType: "image/jpeg", storageKey: "k", originalPath: "k/o.jpg", sizeBytes: 1, status, width: status === "READY" ? 1200 : null, takenAt: new Date(Date.UTC(2025, 7, 12, hour)), takenAtSource: "EXIF_OFFSET", tzOffsetMin: 0, ...(trashed ? { trashedAt: new Date(), trashedById: me, trashReason: "DUPLICATE" } : {}) },
       });
     second = (await photo("second.jpg", 15, "READY")).id;
     first = (await photo("first.jpg", 9, "READY")).id;
