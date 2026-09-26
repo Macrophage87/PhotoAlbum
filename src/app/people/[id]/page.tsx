@@ -9,7 +9,7 @@ import { PhotoGrid } from "@/components/photos/PhotoGrid";
 import { toGridPhoto } from "@/components/photos/toGrid";
 import { Badge, Button, Card, ConfirmSubmitButton, Input, Label } from "@/components/ui";
 import { decideIndexing, deletePerson, optOutPerson, recordAdultAndName, scrubWithdrawnNow, setNameInDescriptions, updatePerson } from "../actions";
-import { matcherFor, memberTextMentioning, taggedPhotoIds, WITHDRAWN_GRACE_DAYS } from "@/lib/people/forget";
+import { matcherFor, memberTextMentioning, taggedPhotoIds, withdrawalDue, withdrawalNotice, withdrawalReason } from "@/lib/people/forget";
 import { nameMayLeaveServer } from "@/lib/people/consent";
 import { MemberTextList } from "@/components/people/MemberTextList";
 import { PetForm } from "@/components/people/PetForm";
@@ -38,10 +38,10 @@ export default async function PersonPage({ params }: PageProps<"/people/[id]">) 
   const creator = await db.user.findUnique({ where: { id: person.createdById }, select: { name: true } });
   const askWhom = creator?.name?.trim() ? `${creator.name.trim()} (who added them) or an admin` : "an admin";
   // What members wrote by hand that forgetting would leave as it is, shown before anybody presses the button.
-  const memberText = person.kind === "HUMAN" && canChange ? await memberTextMentioning(await matcherFor(person), await taggedPhotoIds(person.id)) : null;
+  const memberText = person.kind === "HUMAN" && canChange ? await memberTextMentioning(await matcherFor(person), await taggedPhotoIds(person.id), person.id) : null;
   // Turning something off that is all that lets the helper use their name takes it out of what was written, too.
   const unNames = `This also takes ${person.name} out of descriptions already written; turning it back on means describing them again.`;
-  const withdrawnUntil = person.namingWithdrawnAt ? new Date(person.namingWithdrawnAt.getTime() + WITHDRAWN_GRACE_DAYS * 86_400_000) : null;
+  const withdrawnUntil = person.namingWithdrawnAt ? withdrawalDue(person.namingWithdrawnAt) : null;
   // Descriptions of this person written before the album could name them, and the one press that redoes them.
   const waiting = await namesWaitingFor(id);
   const refresh = async () => {
@@ -161,7 +161,7 @@ export default async function PersonPage({ params }: PageProps<"/people/[id]">) 
                 {/* Switched off by the album itself, not by anybody's decision: say so, and what happens next. */}
                 {withdrawnUntil && (
                   <div className="rounded-theme border border-amber-300 bg-amber-50 p-2 text-amber-900 space-y-1" data-testid="naming-withdrawn">
-                    <p>The album stopped using {person.name}&apos;s name because it can&apos;t be sure they are over 18. Record a birthday or an adult confirmation below to keep using it; otherwise their name is taken out of descriptions already written on {withdrawnUntil.toLocaleDateString("en-US")}.</p>
+                    <p>{withdrawalNotice(person.name, withdrawalReason(person), withdrawnUntil)} What anybody outside the family can read has already lost it.</p>
                     {isAdmin && (
                       <form action={scrubWithdrawnNow.bind(null, id)}>
                         <ConfirmSubmitButton size="sm" variant="secondary" confirmMessage={`Take ${person.name}'s name out of descriptions already written, now?`}>Take it out now</ConfirmSubmitButton>

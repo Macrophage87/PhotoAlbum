@@ -99,9 +99,8 @@ export async function startWorker(): Promise<void> {
   // Everything written before this version judged names and private title words differently, or not at all; one
   // pass over the album on every start keeps it in step with the matcher as it is now.
   await enqueueRejudge({}).catch((err) => console.error("[worker] could not queue the members-only re-judging", err));
-  // Old helper titles that name somebody, marked as the helper's once (see title-owner.ts).
-  const { markHelperTitlesOnce } = await import("@/lib/annotation/title-owner");
-  await markHelperTitlesOnce().catch((err) => console.error("[worker] marking old helper titles failed", err));
+  // A naming the album withdrew by itself: what strangers can read loses the name at once, not at the next night.
+  await scrubWithdrawnNames().catch((err) => console.error("[worker] withdrawn-name scrub failed", err));
   console.log("[worker] pg-boss handlers registered");
   await reconcileStalePhotos().catch((err) => console.error("[worker] stale-photo reconciliation failed", err));
 }

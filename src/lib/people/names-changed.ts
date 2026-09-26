@@ -1,4 +1,5 @@
 import { db } from "@/lib/db";
+import type { Prisma } from "@/generated/prisma/client";
 
 /**
  * Whether what the helper may say about these items changed after a request about them was built.
@@ -35,4 +36,15 @@ export function unchangedSince(since: Date) {
     faces: { none: { person } },
     animals: { none: { person } },
   };
+}
+
+/**
+ * Whether anybody was forgotten after `since`. Read under a share lock on the one settings row, inside the
+ * transaction that stores an answer: forgetting somebody stamps that row first, so it waits for a write already under
+ * way, and a write that starts after it sees the stamp.
+ */
+export async function forgottenSince(tx: Prisma.TransactionClient, since: Date): Promise<boolean> {
+  const rows = await tx.$queryRaw<{ lastForgetAt: Date | null }[]>`SELECT "lastForgetAt" FROM "AppSetting" WHERE id = 'app' FOR SHARE`;
+  const at = rows[0]?.lastForgetAt;
+  return Boolean(at && at > since);
 }

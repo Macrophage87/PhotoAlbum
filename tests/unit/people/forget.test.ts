@@ -16,7 +16,8 @@ vi.mock("@/lib/jobs/boss", () => ({ enqueue: async () => {} }));
 import { optOutPerson, recordAdultAndName, setNameInDescriptions, tagPersonAt, untagPersonAt, updatePerson, updatePet } from "@/app/people/actions";
 import { applyAnnotation } from "@/lib/annotation/apply";
 import { applyPlaceEstimate } from "@/lib/annotation/place";
-import { scrubWithdrawnNames } from "@/lib/people/forget";
+import { readFileSync } from "node:fs";
+import { scrubWithdrawnNames, withdrawalNotice, withdrawalReason } from "@/lib/people/forget";
 import { loadItem, withoutUnpermittedNames } from "@/lib/annotation/request";
 import { withoutUnpermittedNames as withoutContainerNames } from "@/lib/annotation/container";
 
@@ -87,7 +88,8 @@ describe("forgetting somebody", () => {
     expect(a.title).toBe("A family member at the lake");
     expect(a.description).toBe("A family member and Ben spend the afternoon at the lake. A family member's dog swims out to the raft.");
     // Tags that name her go; a tag with only her first name in it, or merely the letters, stays.
-    expect(a.tags).toEqual(["lake", "ada's dog", "adapter"]);
+    // On her own photograph every word of her name is hers in the keywords; "adapter" is not a word of it.
+    expect(a.tags).toEqual(["lake", "adapter"]);
     expect(a.objects).toEqual(["raft"]);
     expect(p.estimatedDateNote).toBe("1990–1995: a family member looks about ten");
     expect(p.placeEstimateName).toBe("A family member's cabin, Maine");
@@ -111,11 +113,16 @@ describe("forgetting somebody", () => {
     const h = await db.photo.findUniqueOrThrow({ where: { id: handTitled } });
     expect(h).toMatchObject({ title: "Ada Byron's 80th", caption: "Ada blowing out candles", context: "Ada's birthday" });
     expect((h.annotation as StoredAnnotation).caption).toBe("A family member wading in at the lake");
-    const q = new URLSearchParams(redirected.to.split("?")[1]);
-    expect(redirected.to.startsWith("/people/forgotten?")).toBe(true);
-    expect(q.get("p")).toBe(handTitled);
-    expect(q.get("t")).toBe("elsewhere");
-    expect(redirected.to).not.toMatch(/ada/i);
+    // Listed until an admin dismisses it: ids and fields, never the name.
+    expect(redirected.to).toBe("/people/forgotten");
+    const [left] = await db.forgetLeftover.findMany();
+    const items = left.items as { photos: { id: string; fields: string[] }[]; trips: { slug: string }[] };
+    expect(items.photos.map((x) => x.id)).toEqual([handTitled]);
+    expect(items.photos[0].fields).toEqual(["title", "caption", "notes"]);
+    expect(items.trips.map((t) => t.slug)).toContain("elsewhere");
+    expect(JSON.stringify(left.items)).not.toMatch(/ada|byron/i);
+    // Stamped too, so no answer already on its way is written over it.
+    expect((await db.photo.findUniqueOrThrow({ where: { id: handTitled } })).namesScrubbedAt).not.toBeNull();
 
     expect(await found("searchVectorMembers", "byron")).toEqual([handTitled]);
     expect(await db.person.findUnique({ where: { id: adaId } })).toBeNull();
@@ -144,16 +151,24 @@ describe("forgetting somebody", () => {
     expect(p.title ?? p.membersTitle).toBe("A family member at the lake");
   });
 
-  it("leaves somebody else with the same first name alone", async () => {
+  it("takes her first name on her photographs, but leaves somebody else with it alone", async () => {
     await db.person.update({ where: { id: adaId }, data: { name: "Grace Hopper" } });
-    await db.person.create({ data: { name: "Grace Kelly", createdById: admin } });
-    const both = await photo("d.jpg", { annotation: { ...annotation, title: "Grace Kelly and Grace Hopper", caption: "Grace waves" }, annotatedAt: new Date() });
+    const kelly = await db.person.create({ data: { name: "Grace Kelly", createdById: admin } });
+    const hers = await photo("d.jpg", { annotation: { ...annotation, title: "Grace Kelly and Grace Hopper", caption: "Grace waves", tags: ["grace", "hopper family", "lake"] }, annotatedAt: new Date() });
+    const both = await photo("e.jpg", { annotation: { ...annotation, title: "Grace and Grace", caption: "Grace waves", tags: ["grace", "lake"] }, annotatedAt: new Date() });
+    await db.face.create({ data: { photoId: hers, personId: adaId, status: "CONFIRMED", box: [0, 0, 1, 1], confidence: 0 } });
     await db.face.create({ data: { photoId: both, personId: adaId, status: "CONFIRMED", box: [0, 0, 1, 1], confidence: 0 } });
+    await db.face.create({ data: { photoId: both, personId: kelly.id, status: "CONFIRMED", box: [0.5, 0, 0.5, 1], confidence: 0 } });
     await optOutPerson(adaId, form("keep-name"));
-    const a = (await db.photo.findUniqueOrThrow({ where: { id: both } })).annotation as StoredAnnotation;
+    const a = (await db.photo.findUniqueOrThrow({ where: { id: hers } })).annotation as StoredAnnotation;
+    // On her photograph "Grace" is her — an everyday word and another Grace notwithstanding — but "Grace Kelly" is not.
     expect(a.title).toBe("Grace Kelly and a family member");
-    // "Grace" alone could be either of them, so it is left.
-    expect(a.caption).toBe("Grace waves");
+    expect(a.caption).toBe("A family member waves");
+    expect(a.tags).toEqual(["lake"]);
+    // Where the other Grace is tagged too, "Grace" alone could be either of them, so it is left.
+    const b = (await db.photo.findUniqueOrThrow({ where: { id: both } })).annotation as StoredAnnotation;
+    expect(b.caption).toBe("Grace waves");
+    expect(b.tags).toEqual(["grace", "lake"]);
   });
 
   it("does not let an answer asked for before the forget write her name back", async () => {
@@ -199,6 +214,8 @@ describe("forgetting somebody", () => {
     const item = await loadItem(handTitled);
     const safe = await withoutUnpermittedNames(item!);
     expect(safe.title).toBe("A family member's 80th");
+    // Her caption and the notes go without her name as well; "Ada" alone is hers on her own photograph.
+    expect(safe).toMatchObject({ caption: "A family member blowing out candles", context: "A family member's birthday" });
     const container = { description: "Ada Byron came too.", descriptionByHelper: false, photos: [{ id: handTitled, title: "Ada Byron's 80th", titleByHelper: false, annotation: null }] };
     const c = await withoutContainerNames(container);
     expect(c.description).toBe("A family member came too.");
@@ -266,7 +283,13 @@ describe("a name handed over without evidence of an adult", () => {
     const sam = await db.person.create({ data: { name: "Sam Lee", nameInDescriptions: true, createdById: admin } });
     const jo = await db.person.create({ data: { name: "Jo March", birthday: new Date("1950-01-01"), nameInDescriptions: true, createdById: admin } });
     const kit = await db.person.create({ data: { name: "Kit Carson", birthday: new Date("1950-01-01"), nameInDescriptionsSetAt: new Date("2026-01-01"), createdById: admin } });
+    // Recognised on a parent's instruction, never named: nothing to withdraw.
+    const kid = await db.person.create({ data: { name: "Tim Carson", birthday: new Date("2019-01-01"), faceIndexing: true, createdById: admin } });
+    // The migration drops its function once it has run; bring it back from the migration itself to test it.
+    const sql = readFileSync("prisma/migrations/20260926130200_forget_guards/migration.sql", "utf8");
+    await db.$executeRawUnsafe(sql.slice(sql.indexOf("CREATE OR REPLACE FUNCTION withdraw_unevidenced_naming()"), sql.indexOf("SELECT withdraw_unevidenced_naming();")));
     await db.$queryRaw`SELECT withdraw_unevidenced_naming()`;
+    await db.$executeRawUnsafe("DROP FUNCTION withdraw_unevidenced_naming()");
     const after = async (id: string) => db.person.findUniqueOrThrow({ where: { id } });
     // Nothing on record to say Sam is an adult: naming is off at once, and the name is due to be scrubbed.
     expect(await after(sam.id)).toMatchObject({ nameInDescriptions: false });
@@ -275,16 +298,30 @@ describe("a name handed over without evidence of an adult", () => {
     expect(await after(jo.id)).toMatchObject({ nameInDescriptions: true, namingWithdrawnAt: null });
     // Kit's naming was turned off before turning it off scrubbed anything: listed too.
     expect((await after(kit.id)).namingWithdrawnAt).not.toBeNull();
+    expect((await after(kid.id)).namingWithdrawnAt).toBeNull();
+    // What admins are told, by reason.
+    const on = new Date("2026-10-10");
+    expect(withdrawalNotice("Sam Lee", withdrawalReason(await after(sam.id)), on)).toMatch(/record a birthday or adult confirmation and turn their name back on/);
+    expect(withdrawalNotice("Kit Carson", withdrawalReason(await after(kit.id)), on)).toMatch(/was turned off before; its name will be taken out of old descriptions on/);
+    const minor = withdrawalNotice("Tim Carson", withdrawalReason({ birthday: new Date("2019-01-01"), adultAttestedAt: null }), on);
+    expect(minor).toMatch(/will be taken out/);
+    expect(minor).not.toMatch(/record a birthday/i);
   });
 
   it("is taken out of the helper's text once admins have had their fortnight, and not before", async () => {
     await resetTestDb();
     const admin = (await db.user.create({ data: { email: "admin@example.com", role: "ADMIN" } })).id;
     const sam = await db.person.create({ data: { name: "Sam Lee", namingWithdrawnAt: new Date(), createdById: admin } });
-    const photoId = (await db.photo.create({ data: { uploaderId: admin, originalName: "s.jpg", mimeType: "image/jpeg", storageKey: "s", originalPath: "s/o.jpg", sizeBytes: 1, status: "READY", annotation: { ...annotation, caption: "Sam Lee on the swings" }, annotatedAt: new Date() } })).id;
+    // Members-only text waits; what strangers can read (here, a public description and the item's own title) does not.
+    const photoId = (await db.photo.create({ data: { uploaderId: admin, originalName: "s.jpg", mimeType: "image/jpeg", storageKey: "s", originalPath: "s/o.jpg", sizeBytes: 1, status: "READY", annotation: { ...annotation, caption: "Sam Lee on the swings" }, annotationMembersOnly: true, annotatedAt: new Date() } })).id;
+    const open = (await db.photo.create({ data: { uploaderId: admin, originalName: "o.jpg", mimeType: "image/jpeg", storageKey: "o", originalPath: "o/o.jpg", sizeBytes: 1, status: "READY", title: "Sam Lee at the fair", titleByHelper: true, annotation: { ...annotation, title: "Sam Lee at the fair", caption: "Sam Lee at the fair" }, annotatedAt: new Date() } })).id;
     await db.face.create({ data: { photoId, personId: sam.id, status: "CONFIRMED", box: [0, 0, 1, 1], confidence: 0 } });
+    await db.face.create({ data: { photoId: open, personId: sam.id, status: "CONFIRMED", box: [0, 0, 1, 1], confidence: 0 } });
     expect(await scrubWithdrawnNames()).toBe(0);
     expect(((await db.photo.findUniqueOrThrow({ where: { id: photoId } })).annotation as StoredAnnotation).caption).toBe("Sam Lee on the swings");
+    const o = await db.photo.findUniqueOrThrow({ where: { id: open } });
+    expect(o.title).toBe("A family member at the fair");
+    expect((o.annotation as StoredAnnotation).caption).toBe("A family member at the fair");
     expect(await scrubWithdrawnNames(new Date(Date.now() + 15 * 86_400_000))).toBe(1);
     expect(((await db.photo.findUniqueOrThrow({ where: { id: photoId } })).annotation as StoredAnnotation).caption).toBe("A family member on the swings");
     expect((await db.person.findUniqueOrThrow({ where: { id: sam.id } })).namingWithdrawnAt).toBeNull();
@@ -328,6 +365,42 @@ describe("short names", () => {
   });
 });
 
+describe("where short names are used", () => {
+  let admin: string;
+  const photo = (name: string, data: Record<string, unknown>) =>
+    db.photo.create({ data: { uploaderId: admin, originalName: name, mimeType: "image/jpeg", storageKey: name, originalPath: `${name}/o.jpg`, sizeBytes: 1, status: "READY", annotatedAt: new Date(), ...data } }).then((p) => p.id);
+  beforeEach(async () => {
+    await resetTestDb();
+    admin = (await db.user.create({ data: { email: "admin@example.com", role: "ADMIN" } })).id;
+    who.role = "ADMIN";
+    who.id = admin;
+  });
+
+  it("finds a safe one-word name anywhere in the album", async () => {
+    const sam = await db.person.create({ data: { name: "Sam", createdById: admin } });
+    const elsewhere = await photo("s.jpg", { annotation: { ...annotation, title: "Sam at the fair", caption: "Sam at the fair", tags: ["sam's pony"] } });
+    await optOutPerson(sam.id, form("keep-name"));
+    const a = (await db.photo.findUniqueOrThrow({ where: { id: elsewhere } })).annotation as StoredAnnotation;
+    expect(a).toMatchObject({ title: "A family member at the fair", tags: [] });
+  });
+
+  it("leaves a month in a trip's description and in date evidence, and lists the description instead", async () => {
+    const may = await db.person.create({ data: { name: "May Smith", createdById: admin } });
+    const trip = await db.trip.create({ data: { slug: "north", title: "North", description: "In May we drove north. May waved at every cow.", descriptionByHelper: true, startDate: new Date("2026-05-01"), endDate: new Date("2026-05-09"), createdById: admin } });
+    const hers = await photo("m.jpg", { tripId: trip.id, estimatedDateNote: "2019–2020: May 2019 on the calendar", annotation: { ...annotation, title: "", caption: "May waves in May" } });
+    await db.face.create({ data: { photoId: hers, personId: may.id, status: "CONFIRMED", box: [0, 0, 1, 1], confidence: 0 } });
+    await optOutPerson(may.id, form());
+    // On her photograph the name is hers; the month is not.
+    const p = await db.photo.findUniqueOrThrow({ where: { id: hers } });
+    expect((p.annotation as StoredAnnotation).caption).toBe("A family member waves in May");
+    expect(p.estimatedDateNote).toBe("2019–2020: May 2019 on the calendar");
+    // A whole trip's description is left, and listed for somebody to edit.
+    expect((await db.trip.findUniqueOrThrow({ where: { id: trip.id } })).description).toBe("In May we drove north. May waved at every cow.");
+    const [left] = await db.forgetLeftover.findMany();
+    expect((left.items as { trips: { slug: string }[] }).trips).toEqual([{ slug: "north" }]);
+  });
+});
+
 describe("recording that somebody is an adult, for naming", () => {
   it("names them only once there is evidence, separately from recognition", async () => {
     await resetTestDb();
@@ -341,6 +414,8 @@ describe("recording that somebody is an adult, for naming", () => {
     await recordAdultAndName(vi_.id, fd);
     const after = await db.person.findUniqueOrThrow({ where: { id: vi_.id } });
     expect(after).toMatchObject({ nameInDescriptions: true, faceIndexing: false });
-    expect(after.adultAttestedAt).not.toBeNull();
+    // Evidence for naming only: recognition still needs its own attestation.
+    expect(after.adultConfirmedAt).not.toBeNull();
+    expect(after.adultAttestedAt).toBeNull();
   });
 });

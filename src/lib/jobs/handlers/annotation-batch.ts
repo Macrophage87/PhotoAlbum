@@ -2,6 +2,7 @@ import { db } from "@/lib/db";
 import { anthropic } from "@/lib/annotation/client";
 import { annotationGates, notOptedOutWhere } from "@/lib/annotation/eligibility";
 import { buildPlaceRequest, buildRequest, loadItem } from "@/lib/annotation/request";
+import { nameScrubber } from "@/lib/people/unpermitted";
 import { applyAnnotation, parseMessageContent, recordFailure } from "@/lib/annotation/apply";
 import { applyPlaceEstimate, parsePlaceContent, recordPlaceFailure } from "@/lib/annotation/place";
 import { enqueue } from "../boss";
@@ -63,7 +64,7 @@ export async function describedBeforeTheirNames(personId?: string): Promise<stri
         AND (
           pe.kind = 'PET'
           -- The same rule as nameMayLeaveServer: an adult by birthday or by attestation, never a birthday nobody knows.
-          OR ((pe."faceIndexing" OR pe."nameInDescriptions") AND (pe.birthday <= (now() - interval '18 years') OR (pe.birthday IS NULL AND pe."adultAttestedAt" IS NOT NULL)))
+          OR ((pe."faceIndexing" OR pe."nameInDescriptions") AND (pe.birthday <= (now() - interval '18 years') OR (pe.birthday IS NULL AND (pe."adultAttestedAt" IS NOT NULL OR pe."adultConfirmedAt" IS NOT NULL))))
         )
         AND (
           -- When the face became theirs, not when the detector found it: that is usually before the description,
@@ -208,6 +209,8 @@ export async function annotationBackfill(job: AnnotationBackfillJob): Promise<vo
   await heartbeat();
   const task = taskOf(batch.scope as BackfillScope);
   const candidates = await backfillCandidates(batch.scope as BackfillScope);
+  // Everybody's names, and which may not go to the helper, read once for the whole run rather than per item.
+  const scrubber = await nameScrubber();
   let rowId = batch.id;
   let rowLive = false; // whether rowId already carries a real batch id (its results must never be lost)
   let unclaimed: string | null = null; // a batch created at Anthropic whose row claim has not landed yet
@@ -230,7 +233,7 @@ export async function annotationBackfill(job: AnnotationBackfillJob): Promise<vo
         try {
           // The place pass is sent the notes but never names.
           const names = promptFor(task) === "place" ? [] : await permittedNames(item.id);
-          const params = promptFor(task) === "place" ? await buildPlaceRequest(item, gates.model) : await buildRequest(item, gates.model, names);
+          const params = promptFor(task) === "place" ? await buildPlaceRequest(item, gates.model, scrubber) : await buildRequest(item, gates.model, names, scrubber);
           // What the request carries rides on its id, so the answer is judged by what was sent, not by what is true when it lands.
           built.push({ custom_id: annotationCustomId(c.id, requestCarriesMembersOnly(item, names)), params, bytes: imageBytes(params) });
         } catch {

@@ -12,8 +12,12 @@ import { permittedNames } from "@/lib/people/gates";
 import { annotationGates, notOptedOutWhere } from "./eligibility";
 import { descriptionFromMembersOnly } from "./members-only";
 import { memberTitle } from "./helper-text";
-import { unpermittedNameScrub } from "@/lib/people/unpermitted";
-import { namesChangedSince } from "@/lib/people/names-changed";
+import { unpermittedNameScrub, type NameScrub } from "@/lib/people/unpermitted";
+
+/** What a describe says when somebody on its photographs changed while the helper was writing. */
+export const NAMES_CHANGED = "Somebody on these photographs changed while the helper was writing; try again";
+import { forgottenSince, namesChangedSince } from "@/lib/people/names-changed";
+import { loadTombstone } from "@/lib/people/tombstone";
 import { anthropic, thinkingParams } from "./client";
 import { activityDescriptionSchema, parseActivityDescription, type ActivityDescription } from "./activity";
 
@@ -119,12 +123,31 @@ export function describeContainerItem(container: ContainerForDescription, permit
  * What may be described to the helper: photographs' titles only where members gave them, the old description only
  * where a member wrote it, and neither with the name of anybody the helper may not be told.
  */
-export async function withoutUnpermittedNames<T extends { description: string | null; descriptionByHelper: boolean; photos: { id: string; title: string | null; titleByHelper: boolean; annotation: unknown }[] }>(c: T): Promise<T> {
-  const scrub = await unpermittedNameScrub(c.photos.map((p) => p.id));
+export async function withoutUnpermittedNames<
+  T extends {
+    title?: string;
+    activities?: string[];
+    trip?: { title: string };
+    description: string | null;
+    descriptionByHelper: boolean;
+    photos: { id: string; title: string | null; titleByHelper: boolean; annotation: unknown; caption?: string | null; context?: string | null }[];
+  },
+>(c: T, given?: NameScrub): Promise<T> {
+  const scrub = given ?? (await unpermittedNameScrub(c.photos.map((p) => p.id)));
   return {
     ...c,
+    ...(c.title !== undefined ? { title: scrub(c.title) ?? "" } : {}),
+    ...(c.activities ? { activities: c.activities.map((a) => scrub(a) ?? "") } : {}),
+    ...(c.trip ? { trip: { ...c.trip, title: scrub(c.trip.title) ?? "" } } : {}),
     description: c.descriptionByHelper ? null : scrub(c.description),
-    photos: c.photos.map((p) => ({ ...p, title: scrub(memberTitle(p.title, p.annotation, p.titleByHelper)), titleByHelper: false, annotation: null })),
+    photos: c.photos.map((p) => ({
+      ...p,
+      title: scrub(memberTitle(p.title, p.annotation, p.titleByHelper)),
+      titleByHelper: false,
+      annotation: null,
+      ...(p.caption !== undefined ? { caption: scrub(p.caption) } : {}),
+      ...(p.context !== undefined ? { context: scrub(p.context) } : {}),
+    })),
   };
 }
 
@@ -165,20 +188,27 @@ export async function writeContainerDescription(kind: ContainerKind, id: string,
 
   const requestedAt = new Date();
   const names = [...new Set((await Promise.all(container.photos.map((p) => permittedNames(p.id)))).flat())];
-  const request = await buildContainerRequest(await withoutUnpermittedNames(container), gates.model, names, note?.trim() || undefined);
+  // The family's words go without the names the helper may not be told: the photographs', the container's own, and
+  // the note typed beside the button.
+  const scrub = await unpermittedNameScrub(container.photos.map((p) => p.id));
+  const request = await buildContainerRequest(await withoutUnpermittedNames(container, scrub), gates.model, names, scrub(note?.trim() || null) || undefined);
   const response = await anthropic().messages.create(request);
   console.log(`[annotate-${kind}] ${container.id} model=${response.model} stop=${response.stop_reason} in=${response.usage.input_tokens} out=${response.usage.output_tokens}`);
   if (response.stop_reason === "refusal") throw new Error("The helper declined to describe this one");
   const parsed = parseActivityDescription(response.content as { type: string; text?: string }[]);
   if (!parsed) throw new Error("The helper's answer could not be read; try again");
-  // Somebody on these photographs forgotten, renamed or no longer to be named while it was being written: its
-  // answer may name them, so it is not kept.
-  if (await namesChangedSince(container.photos.map((p) => p.id), requestedAt)) throw new Error("Somebody on these photographs changed while the helper was writing; try again");
+  // Nobody forgotten comes back by way of the answer.
+  parsed.description = (await loadTombstone()).scrub(parsed.description);
   // Written from names or notes, it is read by members only; see `descriptionFromMembersOnly`.
   // The description it replaces goes with the request, so a members-only one keeps what is written from it members-only.
   const membersOnly = await descriptionFromMembersOnly(parsed.description, { names, notes: container.photos.some((p) => p.context?.trim()), previous: Boolean(container.description && !container.descriptionByHelper && container.descriptionMembersOnly) });
   const data = { description: parsed.description, descriptionMembersOnly: membersOnly, descriptionSharedAt: null, descriptionByHelper: true };
-  if (kind === "trip") await db.trip.update({ where: { id }, data });
-  else await db.collection.update({ where: { id }, data });
+  // Somebody on these photographs forgotten, renamed or no longer to be named while it was being written, or anybody
+  // forgotten at all: its answer may name them, so it is not kept.
+  await db.$transaction(async (tx) => {
+    if ((await forgottenSince(tx, requestedAt)) || (await namesChangedSince(container.photos.map((p) => p.id), requestedAt))) throw new Error(NAMES_CHANGED);
+    if (kind === "trip") await tx.trip.update({ where: { id }, data });
+    else await tx.collection.update({ where: { id }, data });
+  });
   return parsed.description;
 }

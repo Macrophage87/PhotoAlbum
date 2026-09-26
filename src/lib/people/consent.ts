@@ -5,7 +5,7 @@
  * only an admin can turn on, and which passes the minors check: a birthday showing 18 or older, or an adult
  * attestation. Anyone else ends up with their templates nulled.
  */
-export type ConsentFields = { birthday: Date | null; adultAttestedAt: Date | null; faceIndexing: boolean; nameInDescriptions?: boolean };
+export type ConsentFields = { birthday: Date | null; adultAttestedAt: Date | null; adultConfirmedAt?: Date | null; faceIndexing: boolean; nameInDescriptions?: boolean };
 
 export function ageOn(birthday: Date, on = new Date()): number {
   let age = on.getUTCFullYear() - birthday.getUTCFullYear();
@@ -25,11 +25,14 @@ export function minorsCheckPasses(p: Pick<ConsentFields, "birthday" | "adultAtte
 }
 
 /**
- * An adult on the album's own evidence: the minors check passes and no birthday says otherwise. The attestation is
- * for a birthday nobody knows, so a birthday recorded later showing a child outranks it.
+ * An adult on the album's own evidence, for naming: a birthday showing 18 or older, or — with no birthday — an
+ * admin's word, either the recognition attestation or the naming confirmation (`adultConfirmedAt`). A birthday
+ * recorded later showing a child outranks both. Recognition asks more (minorsCheckPasses): the naming confirmation
+ * says nothing about agreeing to be recognised.
  */
-export function knownAdult(p: Pick<ConsentFields, "birthday" | "adultAttestedAt">, now = new Date()): boolean {
-  return minorsCheckPasses(p, now) && !isMinor(p, now);
+export function knownAdult(p: Pick<ConsentFields, "birthday" | "adultAttestedAt" | "adultConfirmedAt">, now = new Date()): boolean {
+  if (p.birthday) return !isMinor(p, now);
+  return Boolean(p.adultAttestedAt || p.adultConfirmedAt);
 }
 
 export type NamingInput = { byAdmin: boolean; wantIndexing: boolean; parentInstruction: boolean; birthday: Date | null; attest: boolean; isChildFlag: boolean };

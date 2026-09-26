@@ -23,7 +23,7 @@ export async function faceGates(): Promise<FaceGates> {
  */
 export async function permittedNames(photoId: string): Promise<string[]> {
   const { nameMayLeaveServer } = await import("./consent");
-  const personSelect = { name: true, birthday: true, adultAttestedAt: true, faceIndexing: true, nameInDescriptions: true, kind: true, optedOutAt: true } as const;
+  const personSelect = { name: true, birthday: true, adultAttestedAt: true, adultConfirmedAt: true, faceIndexing: true, nameInDescriptions: true, kind: true, optedOutAt: true } as const;
   const [faces, animals] = await Promise.all([
     db.face.findMany({ where: { photoId, status: "CONFIRMED", personId: { not: null } }, select: { person: { select: personSelect } } }),
     db.animalDetection.findMany({ where: { photoId, status: "CONFIRMED", personId: { not: null } }, select: { person: { select: personSelect } } }),

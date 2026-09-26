@@ -13,7 +13,7 @@ import { formatDateTime } from "@/lib/time/format";
 import { SYSTEM_INSTRUCTIONS } from "./prompt";
 import { annotationSchema } from "./schema";
 import { memberTitle } from "./helper-text";
-import { unpermittedNameScrub } from "@/lib/people/unpermitted";
+import { unpermittedNameScrub, type NameScrubber } from "@/lib/people/unpermitted";
 import { thinkingParams } from "./client";
 import { needsPlaceEstimate, placeRequestParams } from "./place";
 import { isWeakDate } from "@/lib/photos/date-from-neighbours";
@@ -101,25 +101,35 @@ async function itemImages(item: ItemForAnnotation): Promise<ImageBlock[]> {
 }
 
 /** Build the Messages request for one item. Images come from local renditions; nothing else is fetched. */
-export async function buildRequest(item: ItemForAnnotation, model: string, permittedNames: string[]): Promise<Anthropic.MessageCreateParamsNonStreaming> {
+export async function buildRequest(item: ItemForAnnotation, model: string, permittedNames: string[], scrubber?: NameScrubber): Promise<Anthropic.MessageCreateParamsNonStreaming> {
   const images = await itemImages(item);
-  const safe = await withoutUnpermittedNames(item);
+  const safe = await withoutUnpermittedNames(item, scrubber);
   return requestParams(model, images, describeItem(safe, permittedNames, needsDateEstimate(item), needsPlaceEstimate(item)));
 }
 
 /**
- * The item as it may be described to the helper: its title only if a member gave it, and without the name of
- * anybody the helper may not be told (see `unpermittedNameScrub`).
+ * The item as it may be described to the helper: its title only if a member gave it, and its title, caption, notes
+ * and the titles of its trip and collections without the name of anybody the helper may not be told (see
+ * `nameScrubber`).
  */
-export async function withoutUnpermittedNames(item: ItemForAnnotation): Promise<ItemForAnnotation> {
-  const scrub = await unpermittedNameScrub([item.id]);
-  return { ...item, title: scrub(memberTitle(item.title, item.annotation, item.titleByHelper)), titleByHelper: false, annotation: null };
+export async function withoutUnpermittedNames(item: ItemForAnnotation, scrubber?: NameScrubber): Promise<ItemForAnnotation> {
+  const scrub = await unpermittedNameScrub([item.id], scrubber);
+  return {
+    ...item,
+    title: scrub(memberTitle(item.title, item.annotation, item.titleByHelper)),
+    titleByHelper: false,
+    annotation: null,
+    caption: scrub(item.caption),
+    context: scrub(item.context),
+    trip: item.trip ? { ...item.trip, title: scrub(item.trip.title) ?? "" } : item.trip,
+    collections: item.collections.map((c) => ({ ...c, collection: { ...c.collection, title: scrub(c.collection.title) ?? "" } })),
+  };
 }
 
 /** The place-only pass: the same frames, a much smaller question, for items described before places were estimated. */
-export async function buildPlaceRequest(item: ItemForAnnotation, model: string): Promise<Anthropic.MessageCreateParamsNonStreaming> {
+export async function buildPlaceRequest(item: ItemForAnnotation, model: string, scrubber?: NameScrubber): Promise<Anthropic.MessageCreateParamsNonStreaming> {
   const images = await itemImages(item);
-  return placeRequestParams(model, images, describePlaceItem(await withoutUnpermittedNames(item)));
+  return placeRequestParams(model, images, describePlaceItem(await withoutUnpermittedNames(item, scrubber)));
 }
 
 /** The text block for the place-only pass: what the family wrote, with no mention of people. */

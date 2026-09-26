@@ -4,7 +4,8 @@ import { enqueueEmbedding } from "@/lib/jobs/handlers/embed-photo";
 import { applyPlaceEstimate, needsPlaceEstimate } from "./place";
 import { isWeakDate } from "@/lib/photos/date-from-neighbours";
 import { judgeHelperText } from "./members-only";
-import { unchangedSince } from "@/lib/people/names-changed";
+import { forgottenSince, unchangedSince } from "@/lib/people/names-changed";
+import { loadTombstone, scrubRecord } from "@/lib/people/tombstone";
 
 export type ApplyResult = { ok: true } | { ok: false; reason: "refusal" | "invalid" | "max_tokens" };
 
@@ -47,7 +48,9 @@ export async function applyAnnotation(photoId: string, model: string, parsed: An
   const requestedAt = opts.requestedAt;
   const current = await db.photo.findUnique({ where: { id: photoId }, select: { takenAt: true, takenAtSource: true, estimatedDateSource: true, annotationSource: true, title: true, membersTitle: true, titleByHelper: true, annotation: true, kind: true, lat: true, placeEstimatedAt: true, context: true } });
   if (!current) return;
-  const stored = toStored(parsed);
+  // Nobody forgotten comes back by way of a new answer, whoever it is about: their names are taken out first.
+  const tombstone = await loadTombstone();
+  const stored = scrubRecord(toStored(parsed), tombstone);
   // Written from names or notes, it is the family's to read: kept off the item's own title and out of public view.
   const judgement = await judgeHelperText(photoId, stored, current.context, opts.sent);
   const membersOnly = judgement.membersOnly;
@@ -60,6 +63,7 @@ export async function applyAnnotation(photoId: string, model: string, parsed: An
   // itself; otherwise nothing of it is kept, the raw answer included.
   const stale = Symbol("stale");
   const kept = await db.$transaction(async (tx) => {
+    if (requestedAt && (await forgottenSince(tx, requestedAt))) throw stale;
     const written = await tx.photo.updateMany({
       where: { id: photoId, ...(requestedAt ? unchangedSince(requestedAt) : {}) },
       data: {
@@ -84,7 +88,7 @@ export async function applyAnnotation(photoId: string, model: string, parsed: An
         annotationOutputTokens: raw.usage?.output_tokens ?? null,
         annotationBatched: raw.batched ?? false,
         ...(est && noReliableDate && !keepMemberEstimate
-          ? { estimatedDate: new Date(Date.UTC(Math.round((est.from + est.to) / 2), 6, 1)), estimatedDateConfidence: est.confidence, estimatedDateSource: "MODEL", estimatedDateNote: `${est.from}–${est.to}: ${est.evidence}` }
+          ? { estimatedDate: new Date(Date.UTC(Math.round((est.from + est.to) / 2), 6, 1)), estimatedDateConfidence: est.confidence, estimatedDateSource: "MODEL", estimatedDateNote: `${est.from}–${est.to}: ${tombstone.scrub(est.evidence)}` }
           : {}),
       },
     });
@@ -102,7 +106,7 @@ export async function applyAnnotation(photoId: string, model: string, parsed: An
   // The place guess is only ever recorded for an item that was actually asked, so clearing a position later still
   // leaves it eligible for the backfill.
   // Asked in the same request, so it was written from the same things.
-  if (needsPlaceEstimate(current)) await applyPlaceEstimate(photoId, parsed.estimatedPlace, { sent: membersOnly || opts.sent });
+  if (needsPlaceEstimate(current)) await applyPlaceEstimate(photoId, parsed.estimatedPlace, { sent: membersOnly || opts.sent, requestedAt });
   // The description changed, so the semantic index for this item is stale.
   await enqueueEmbedding(photoId, true);
 }

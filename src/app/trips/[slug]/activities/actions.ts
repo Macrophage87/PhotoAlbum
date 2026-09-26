@@ -19,7 +19,10 @@ import type { ActivityFormState } from "@/components/activities/ActivityForm";
 import { handWrittenDescription, handWrittenMembersOnly, judgeDescription } from "@/lib/annotation/members-only";
 import { descriptionStaysHelpers } from "@/lib/annotation/helper-text";
 import { namesChangedSince } from "@/lib/people/names-changed";
-import { withoutUnpermittedNames } from "@/lib/annotation/container";
+import { NAMES_CHANGED, withoutUnpermittedNames } from "@/lib/annotation/container";
+import { forgottenSince } from "@/lib/people/names-changed";
+import { loadTombstone } from "@/lib/people/tombstone";
+import { unpermittedNameScrub } from "@/lib/people/unpermitted";
 
 /** An activity is part of the shape of a trip, so it is the trip's maker (and admins) who arrange them. */
 async function loadTrip(slug: string) {
@@ -193,16 +196,17 @@ export async function describeActivityWithAi(slug: string, id: string, note?: st
 
   const requestedAt = new Date();
   const names = [...new Set((await Promise.all(activity.photos.map((p) => permittedNames(p.id)))).flat())];
-  const request = await buildActivityRequest(await withoutUnpermittedNames(activity), gates.model, names, DESCRIPTION_TEXT.parse(note ?? "").trim() || undefined);
+  // The family's words go without the names the helper may not be told, the note beside the button included.
+  const scrub = await unpermittedNameScrub(activity.photos.map((p) => p.id));
+  const request = await buildActivityRequest(await withoutUnpermittedNames(activity, scrub), gates.model, names, scrub(DESCRIPTION_TEXT.parse(note ?? "").trim() || null) || undefined);
   const notes = activity.photos.some((p) => p.context?.trim());
   const response = await anthropic().messages.create(request);
   console.log(`[annotate-activity] ${activity.id} model=${response.model} stop=${response.stop_reason} in=${response.usage.input_tokens} out=${response.usage.output_tokens}`);
   if (response.stop_reason === "refusal") throw new Error("The helper declined to describe this one");
   const parsed = parseActivityDescription(response.content as { type: string; text?: string }[]);
   if (!parsed) throw new Error("The helper's answer could not be read; try again");
-  // Somebody on these photographs forgotten, renamed or no longer to be named while it was being written: its
-  // answer may name them, so it is not kept.
-  if (await namesChangedSince(activity.photos.map((p) => p.id), requestedAt)) throw new Error("Somebody on these photographs changed while the helper was writing; try again");
+  // Nobody forgotten comes back by way of the answer.
+  parsed.description = (await loadTombstone()).scrub(parsed.description);
   // Written from names or notes, it is read by members only; see `descriptionFromMembersOnly`.
   const judged = await judgeDescription(parsed.description, {
     names,
@@ -212,7 +216,12 @@ export async function describeActivityWithAi(slug: string, id: string, note?: st
     previous: Boolean(activity.description && !activity.descriptionByHelper && activity.descriptionMembersOnly),
     privateTitles: activity.trip.visibility === "PUBLIC" ? [] : [activity.trip.title],
   });
-  await db.activity.update({ where: { id }, data: { description: parsed.description, descriptionMembersOnly: judged.membersOnly, descriptionTitleOnly: judged.titleOnly, descriptionSharedAt: null, descriptionByHelper: true } });
+  // Somebody on these photographs forgotten, renamed or no longer to be named while it was being written, or anybody
+  // forgotten at all: its answer may name them, so it is not kept.
+  await db.$transaction(async (tx) => {
+    if ((await forgottenSince(tx, requestedAt)) || (await namesChangedSince(activity.photos.map((p) => p.id), requestedAt))) throw new Error(NAMES_CHANGED);
+    await tx.activity.update({ where: { id }, data: { description: parsed.description, descriptionMembersOnly: judged.membersOnly, descriptionTitleOnly: judged.titleOnly, descriptionSharedAt: null, descriptionByHelper: true } });
+  });
   revalidatePath(`/trips/${slug}/activities/${id}`);
   return parsed.description;
 }

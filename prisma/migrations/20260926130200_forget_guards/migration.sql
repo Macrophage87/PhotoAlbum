@@ -5,19 +5,44 @@
 -- Photo.titleByHelper: whether the title an item goes by is the helper's, even after the helper has since written
 -- another one; only the helper's words are rewritten when somebody is forgotten.
 -- Person.formerNames: a renamed person is still in text written under the old name.
--- Person.namingWithdrawnAt: see below.
--- Person.namesChangedAt: see the trigger below.
+-- Person.namingWithdrawnAt, Person.namesChangedAt, Person.adultConfirmedAt: see below.
 -- descriptionByHelper: which trip, collection and activity descriptions are the helper's words; nobody recorded it
 -- before, so every existing description counts as a member's.
+-- AppSetting.lastForgetAt: when anybody was last forgotten; an answer to a request built before then is not stored.
+-- AppSetting.forgetKey: the key the forgotten-name tombstone is hashed with, made on first use.
+-- ForgottenName: keyed hashes of a forgotten person's names — never the names — so a name nobody may use any more
+-- is recognised in an answer, or in a member's words sent to the helper, after the person's record is gone.
+-- ForgetLeftover: after a forget, the places whose words still mention the name (ids and fields only), kept until an
+-- admin has seen to them.
 ALTER TABLE "Photo" ADD COLUMN "namesScrubbedAt" TIMESTAMP(3),
   ADD COLUMN "titleByHelper" BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE "Person" ADD COLUMN "formerNames" TEXT[] DEFAULT ARRAY[]::TEXT[],
   ADD COLUMN "namingWithdrawnAt" TIMESTAMP(3),
-  ADD COLUMN "namesChangedAt" TIMESTAMP(3);
-ALTER TABLE "AppSetting" ADD COLUMN "helperTitlesMarkedAt" TIMESTAMP(3);
+  ADD COLUMN "namesChangedAt" TIMESTAMP(3),
+  ADD COLUMN "adultConfirmedAt" TIMESTAMP(3),
+  ADD COLUMN "adultConfirmedById" TEXT;
+ALTER TABLE "AppSetting" ADD COLUMN "lastForgetAt" TIMESTAMP(3),
+  ADD COLUMN "forgetKey" TEXT;
 ALTER TABLE "Trip" ADD COLUMN "descriptionByHelper" BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE "Collection" ADD COLUMN "descriptionByHelper" BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE "Activity" ADD COLUMN "descriptionByHelper" BOOLEAN NOT NULL DEFAULT false;
+
+CREATE TABLE "ForgottenName" (
+  "hash" TEXT NOT NULL,
+  "words" INTEGER NOT NULL,
+  "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT "ForgottenName_pkey" PRIMARY KEY ("hash")
+);
+
+CREATE TABLE "ForgetLeftover" (
+  "id" TEXT NOT NULL,
+  "items" JSONB NOT NULL,
+  "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "dismissedAt" TIMESTAMP(3),
+  "dismissedById" TEXT,
+  CONSTRAINT "ForgetLeftover_pkey" PRIMARY KEY ("id")
+);
+CREATE INDEX "ForgetLeftover_dismissedAt_idx" ON "ForgetLeftover"("dismissedAt");
 
 -- Only what decides whether, or as what, somebody may be named: a relationship edit or the nightly "needs a
 -- decision" flag must not throw away the helper's answers about them.
@@ -26,7 +51,7 @@ BEGIN
   IF NEW.name IS DISTINCT FROM OLD.name OR NEW."formerNames" IS DISTINCT FROM OLD."formerNames"
      OR NEW."optedOutAt" IS DISTINCT FROM OLD."optedOutAt" OR NEW."nameInDescriptions" IS DISTINCT FROM OLD."nameInDescriptions"
      OR NEW."faceIndexing" IS DISTINCT FROM OLD."faceIndexing" OR NEW.birthday IS DISTINCT FROM OLD.birthday
-     OR NEW."adultAttestedAt" IS DISTINCT FROM OLD."adultAttestedAt" THEN
+     OR NEW."adultAttestedAt" IS DISTINCT FROM OLD."adultAttestedAt" OR NEW."adultConfirmedAt" IS DISTINCT FROM OLD."adultConfirmedAt" THEN
     NEW."namesChangedAt" := now();
   END IF;
   RETURN NEW;
@@ -36,18 +61,18 @@ CREATE TRIGGER person_names_changed_trigger BEFORE UPDATE ON "Person"
   FOR EACH ROW EXECUTE FUNCTION person_names_changed();
 
 -- Naming somebody needs evidence they are an adult: a birthday showing 18 or older, or an admin's confirmation.
--- Anybody named without it could be a child, so the agreement is switched off at once and nothing more is sent. The
--- names already written into the helper's text wait (see Person.namingWithdrawnAt): admins are shown who, and can
--- record the evidence to keep them. People whose naming was turned off before turning it off scrubbed anything are
--- in the same position and are listed too. A person with no birthday and no confirmation is never "an adult"
--- (NULL is not true), which is the case this exists for.
+-- Anybody whose naming was agreed without it could be a child, so the agreement is switched off at once and nothing
+-- more is sent. What the helper already wrote with their names waits (see Person.namingWithdrawnAt): admins are
+-- shown who, and why. People whose naming was turned off before turning it off scrubbed anything are listed too.
+-- Recognition alone never put a name in anything without that evidence, so it does not bring anybody in. A person
+-- with no birthday and no confirmation is never "an adult" (NULL is not true), which is the case this exists for.
 CREATE OR REPLACE FUNCTION withdraw_unevidenced_naming() RETURNS integer LANGUAGE plpgsql AS $$
 DECLARE n integer;
 BEGIN
   UPDATE "Person" SET "namingWithdrawnAt" = now()
   WHERE kind = 'HUMAN' AND "optedOutAt" IS NULL AND "namingWithdrawnAt" IS NULL
-    AND ("nameInDescriptions" OR "faceIndexing" OR "nameInDescriptionsSetAt" IS NOT NULL)
-    AND NOT COALESCE(("nameInDescriptions" OR "faceIndexing")
+    AND ("nameInDescriptions" OR "nameInDescriptionsSetAt" IS NOT NULL)
+    AND NOT COALESCE("nameInDescriptions"
       AND (birthday <= (now() - interval '18 years') OR (birthday IS NULL AND "adultAttestedAt" IS NOT NULL)), false);
   GET DIAGNOSTICS n = ROW_COUNT;
   UPDATE "Person" SET "nameInDescriptions" = false
@@ -56,21 +81,19 @@ BEGIN
   RETURN n;
 END $$;
 SELECT withdraw_unevidenced_naming();
+DROP FUNCTION withdraw_unevidenced_naming();
 
--- Whose title an item goes by. The helper's while it is the one its record gives, or one of its kept answers gave
--- that title. The rest — an item no member has edited whose title names somebody the album knows, which is the
--- helper's more often than not, since it was told names — is marked once, in JavaScript, by the worker on its first
--- start (src/lib/annotation/title-owner.ts), so this stays one cheap pass with no name matching in SQL.
-CREATE OR REPLACE FUNCTION answer_title(response jsonb) RETURNS text LANGUAGE plpgsql IMMUTABLE AS $$
-BEGIN
-  RETURN btrim(((response->'content'->0->>'text')::jsonb)->>'title');
-EXCEPTION WHEN others THEN
-  RETURN NULL;
-END $$;
+-- Whose title an item goes by: the helper's where it is the title its record gives now, or the title one of its
+-- kept answers gave. Nothing else is guessed; every other title counts as a member's and is listed, not rewritten,
+-- when somebody is forgotten. The title is read from the answer's first text block (a thinking block may come
+-- first) with a pattern rather than by parsing the JSON, so a malformed answer is simply no match.
 UPDATE "Photo" p SET "titleByHelper" = true
 WHERE COALESCE(NULLIF(btrim(p.title), ''), NULLIF(btrim(p."membersTitle"), '')) IS NOT NULL AND p.annotation IS NOT NULL AND (
   btrim(COALESCE(NULLIF(btrim(p.title), ''), p."membersTitle")) = btrim(p.annotation->>'title')
-  OR EXISTS (SELECT 1 FROM "MediaAnnotationRaw" r WHERE r."photoId" = p.id AND answer_title(r.response) = btrim(COALESCE(NULLIF(btrim(p.title), ''), p."membersTitle")))
-
+  OR EXISTS (
+    SELECT 1 FROM "MediaAnnotationRaw" r,
+      LATERAL (SELECT b->>'text' AS t FROM jsonb_array_elements(CASE WHEN jsonb_typeof(r.response->'content') = 'array' THEN r.response->'content' ELSE '[]'::jsonb END) WITH ORDINALITY e(b, i) WHERE b->>'type' = 'text' ORDER BY i LIMIT 1) first
+    WHERE r."photoId" = p.id
+      AND btrim(substring(first.t FROM '"title"\s*:\s*"([^"\\]*)"')) = btrim(COALESCE(NULLIF(btrim(p.title), ''), p."membersTitle"))
+  )
 );
-DROP FUNCTION answer_title(jsonb);

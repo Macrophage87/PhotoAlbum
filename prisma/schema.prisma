@@ -588,8 +588,10 @@ model AppSetting {
   faceDetectionOptInAt   DateTime?
   faceDetectionOptInById String?
   faceDataDeletedAt      DateTime?
-  /// When the one pass that marks old helper titles naming somebody (see src/lib/annotation/title-owner.ts) ran.
-  helperTitlesMarkedAt   DateTime?
+  /// When anybody was last forgotten: an answer from the helper to a request built before then is not stored.
+  lastForgetAt           DateTime?
+  /// The key forgotten names are hashed with (see ForgottenName), made on first use.
+  forgetKey              String?
   updatedAt              DateTime  @updatedAt
 }
 
@@ -676,6 +678,10 @@ model Person {
   /// naming and recognition switches, birthday, adult confirmation. Set by a trigger; an answer from the helper to
   /// a request built before it is not stored.
   namesChangedAt      DateTime?
+  /// An admin's word that this person is an adult, recorded to name them in descriptions. Evidence for naming only:
+  /// recognition still needs its own attestation (adultAttestedAt), which also says they agreed to it.
+  adultConfirmedAt    DateTime?
+  adultConfirmedById  String?
   createdById         String
   createdAt           DateTime   @default(now())
   updatedAt           DateTime   @updatedAt
@@ -907,4 +913,25 @@ model VisitSalt {
   day       String   @id
   salt      String
   createdAt DateTime @default(now())
+}
+
+/// Keyed hashes of a forgotten person's names, never the names: an answer from the helper, or a member's words about
+/// to be sent to it, is checked against them after the person's own record is gone (see src/lib/people/tombstone.ts).
+model ForgottenName {
+  hash      String   @id
+  /// How many words the name has, so a text is only checked for runs that long.
+  words     Int
+  createdAt DateTime @default(now())
+}
+
+/// After somebody was forgotten, the places whose words (a member's, or written before the album kept track) still
+/// mention them: ids and fields only, never the name. Shown until an admin dismisses it.
+model ForgetLeftover {
+  id            String    @id @default(cuid())
+  items         Json
+  createdAt     DateTime  @default(now())
+  dismissedAt   DateTime?
+  dismissedById String?
+
+  @@index([dismissedAt])
 }

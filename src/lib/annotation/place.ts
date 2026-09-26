@@ -2,6 +2,8 @@ import { z } from "zod";
 import type Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { db } from "@/lib/db";
+import { forgottenSince, unchangedSince } from "@/lib/people/names-changed";
+import { loadTombstone } from "@/lib/people/tombstone";
 import { thinkingParams } from "./client";
 import { placeFromMembersOnly } from "./members-only";
 
@@ -149,32 +151,48 @@ export async function recordPlaceFailure(photoId: string, opts: { terminal?: boo
  */
 export async function applyPlaceEstimate(photoId: string, estimate: PlaceEstimate, opts: { sent?: boolean | null; requestedAt?: Date } = {}): Promise<"placed" | "declined" | "skipped" | "stale"> {
   const requestedAt = opts.requestedAt;
-  const current = await db.photo.findUnique({ where: { id: photoId }, select: { lat: true, gpsSource: true, context: true, namesScrubbedAt: true } });
+  const current = await db.photo.findUnique({ where: { id: photoId }, select: { lat: true, gpsSource: true, context: true } });
   if (!current) return "skipped";
-  // Asked before a forgotten name was taken out of this item: its evidence may quote them, so it is asked again.
-  if (requestedAt && current.namesScrubbedAt && current.namesScrubbedAt > requestedAt) return "stale";
-  // A town-level answer is held to the town before anything is written, name and evidence alike.
-  const place = estimate && estimate.confidence >= MIN_PLACE_CONFIDENCE ? scrubCoarsePlace(estimate) : null;
+  // A town-level answer is held to the town before anything is written, name and evidence alike; and nobody
+  // forgotten comes back by way of its name or evidence.
+  const tombstone = await loadTombstone();
+  const coarse = estimate && estimate.confidence >= MIN_PLACE_CONFIDENCE ? scrubCoarsePlace(estimate) : null;
+  const place = coarse ? { ...coarse, name: tombstone.scrub(coarse.name), evidence: tombstone.scrub(coarse.evidence) } : null;
   const free = current.lat === null && (current.gpsSource === null || current.gpsSource === "ESTIMATE");
-  if (!place || !free) {
-    await db.photo.update({ where: { id: photoId }, data: { placeEstimatedAt: new Date() } });
-    return place ? "skipped" : "declined";
-  }
-  await db.photo.update({
-    where: { id: photoId },
-    data: {
-      lat: place.lat,
-      lng: place.lng,
-      gpsSource: "ESTIMATE",
-      placeEstimateName: place.name,
-      placeEstimateConfidence: place.confidence,
-      placeEstimateRadiusM: place.radiusM,
-      placeEstimatePrecision: place.precision === "city" ? "CITY" : place.precision === "region" ? "REGION" : "EXACT",
-      placeEstimateNote: place.evidence,
-      // Its name and evidence are shown beside the pin, and may have come from the notes; see `placeFromMembersOnly`.
-      placeEstimateMembersOnly: await placeFromMembersOnly(photoId, { name: place.name, evidence: place.evidence }, current.context, opts.sent),
-      placeEstimatedAt: new Date(),
-    },
+  const membersOnly = place && free ? await placeFromMembersOnly(photoId, { name: place.name, evidence: place.evidence }, current.context, opts.sent) : false;
+  // Asked before a forgotten name was taken out of this item, before anybody was forgotten, or before anybody on it
+  // changed how they may be named: its evidence may quote them, so nothing is written and it is asked again. Checked
+  // in the write itself.
+  const stale = Symbol("stale");
+  const outcome = await db.$transaction(async (tx) => {
+    if (requestedAt && (await forgottenSince(tx, requestedAt))) throw stale;
+    const guard = { id: photoId, ...(requestedAt ? unchangedSince(requestedAt) : {}) };
+    if (!place || !free) {
+      const n = await tx.photo.updateMany({ where: guard, data: { placeEstimatedAt: new Date() } });
+      if (n.count === 0) throw stale;
+      return place ? ("skipped" as const) : ("declined" as const);
+    }
+    const n = await tx.photo.updateMany({
+      where: guard,
+      data: {
+        lat: place.lat,
+        lng: place.lng,
+        gpsSource: "ESTIMATE",
+        placeEstimateName: place.name,
+        placeEstimateConfidence: place.confidence,
+        placeEstimateRadiusM: place.radiusM,
+        placeEstimatePrecision: place.precision === "city" ? "CITY" : place.precision === "region" ? "REGION" : "EXACT",
+        placeEstimateNote: place.evidence,
+        // Its name and evidence are shown beside the pin, and may have come from the notes; see `placeFromMembersOnly`.
+        placeEstimateMembersOnly: membersOnly,
+        placeEstimatedAt: new Date(),
+      },
+    });
+    if (n.count === 0) throw stale;
+    return "placed" as const;
+  }).catch((err: unknown) => {
+    if (err === stale) return "stale" as const;
+    throw err;
   });
-  return "placed";
+  return outcome;
 }

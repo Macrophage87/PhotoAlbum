@@ -16,7 +16,7 @@ import { actualSpend } from "@/lib/annotation/pricing";
 import { faceGates } from "@/lib/people/gates";
 import { petGates } from "@/lib/pets/gates";
 import { faceCounts, needsDecision } from "@/lib/people/queries";
-import { WITHDRAWN_GRACE_DAYS } from "@/lib/people/forget";
+import { withdrawalDue, withdrawalNotice, withdrawalReason } from "@/lib/people/forget";
 import { FacesAdmin } from "@/components/people/FacesAdmin";
 import { decideIndexing } from "@/app/people/actions";
 import { isMinor } from "@/lib/people/consent";
@@ -47,7 +47,7 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
     faceCounts(fg.retentionDays),
     needsDecision(),
     // Whose naming the album switched off by itself, for want of evidence they are adults: admins decide what next.
-    db.person.findMany({ where: { namingWithdrawnAt: { not: null } }, orderBy: { name: "asc" }, select: { id: true, name: true, namingWithdrawnAt: true } }),
+    db.person.findMany({ where: { namingWithdrawnAt: { not: null } }, orderBy: { name: "asc" }, select: { id: true, name: true, namingWithdrawnAt: true, birthday: true, adultAttestedAt: true, adultConfirmedAt: true } }),
   ]);
   const [gates, batches] = await Promise.all([
     annotationGates(),
@@ -140,12 +140,12 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
           {withdrawn.length > 0 && (
             <div className="mt-4 space-y-2 rounded-theme border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900" data-testid="naming-withdrawn">
               <h3 className="font-medium">Names no longer used</h3>
-              <p>The album stopped using these names because it can&apos;t be sure these people are over 18 (or their naming was turned off before that took the name back out). Nothing more is sent to the AI helper with their names. Record a birthday or adult confirmation on their page to keep using their names; otherwise each name is taken out of descriptions already written on the date shown.</p>
+              <p>Nothing more is sent to the AI helper with these names, and what anybody outside the family can read has already lost them.</p>
               <ul className="space-y-1">
                 {withdrawn.map((p) => (
                   <li key={p.id}>
                     <Link href={`/people/${p.id}`} className="font-medium underline">{p.name}</Link>{" "}
-                    <span className="text-amber-800">— taken out on {new Date(p.namingWithdrawnAt!.getTime() + WITHDRAWN_GRACE_DAYS * 86_400_000).toLocaleDateString("en-US")}</span>
+                    <span className="text-amber-800">— {withdrawalNotice(p.name, withdrawalReason(p), withdrawalDue(p.namingWithdrawnAt!))}</span>
                   </li>
                 ))}
               </ul>
