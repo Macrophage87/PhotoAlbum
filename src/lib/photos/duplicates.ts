@@ -38,7 +38,8 @@ export async function duplicateGroups(limit = 200): Promise<DuplicateGroup[]> {
   return rows;
 }
 
-export type FoldReport = { groups: number; folded: number; filled: string[] };
+/** `conflicts`: kept photographs whose hand-pinned place was kept although a copy's place had been removed by hand. */
+export type FoldReport = { groups: number; folded: number; filled: string[]; conflicts: string[] };
 
 /**
  * Fold every group into its oldest member: take from the copies whatever the keeper is missing, move any collection
@@ -49,7 +50,7 @@ export type FoldReport = { groups: number; folded: number; filled: string[] };
  */
 export async function foldDuplicates(byUserId: string, groups?: DuplicateGroup[]): Promise<FoldReport> {
   const work = groups ?? (await duplicateGroups());
-  const report: FoldReport = { groups: 0, folded: 0, filled: [] };
+  const report: FoldReport = { groups: 0, folded: 0, filled: [], conflicts: [] };
   for (const group of work) {
     const photos = (await db.photo.findMany({ where: { id: { in: group.ids }, ...NOT_TRASHED }, select: foldSelect })) as FoldablePhoto[];
     if (photos.length < 2) continue;
@@ -64,6 +65,7 @@ export async function foldDuplicates(byUserId: string, groups?: DuplicateGroup[]
       Object.assign(data, plan.data);
       filling = { ...filling, ...(plan.data as Partial<FoldablePhoto>) };
       for (const f of plan.filled) if (!report.filled.includes(f)) report.filled.push(f);
+      if (plan.conflict && !report.conflicts.includes(keeper.id)) report.conflicts.push(keeper.id);
     }
     if (Object.keys(data).length) await db.photo.update({ where: { id: keeper.id }, data });
 

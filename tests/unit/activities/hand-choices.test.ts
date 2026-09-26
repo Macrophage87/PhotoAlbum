@@ -351,10 +351,14 @@ describe("filing photographs on activities", () => {
       expect(await row(q.id)).toMatchObject({ tripId: null, activityId: null, activitySetById: null });
     });
 
-    it("confirming an estimated date files the photo by it, as any date set by hand does", async () => {
+    it("confirming an estimated date puts the photo on the day's trip, but its made-up noon picks no activity", async () => {
       const scan = await photo(null, { tripId: null, lat: 1, lng: 2, gpsSource: "TRACK" });
       await confirmEstimatedDate(scan.id, form({ date: "2025-08-12" }));
-      expect(await row(scan.id)).toMatchObject({ tripId, activityId: walk, takenAtSource: "MANUAL", dateSetById: me, estimatedDateSource: "MEMBER", lat: null, gpsSource: null });
+      // Noon is inside the walk, but only the day is known.
+      expect(await row(scan.id)).toMatchObject({ tripId, activityId: null, activitySetById: null, takenAtSource: "MANUAL", dateSetById: me, estimatedDateSource: "MEMBER", lat: null, gpsSource: null });
+      const off = await photo(null, { activityId: null, activitySetById: me });
+      await confirmEstimatedDate(off.id, form({ date: "2025-08-12" }));
+      expect(await row(off.id)).toMatchObject({ activityId: null, activitySetById: me });
     });
   });
 
