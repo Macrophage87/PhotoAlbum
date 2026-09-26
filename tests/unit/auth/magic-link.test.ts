@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
-import { createInvite, requestMagicLink, verifyMagicLink } from "@/lib/auth/magic-link";
+import { checkMagicLink, createInvite, requestMagicLink, verifyMagicLink } from "@/lib/auth/magic-link";
 import { resetTestDb } from "../helpers/reset";
 
 const T0 = new Date("2026-01-01T12:00:00Z");
@@ -34,7 +34,7 @@ describe("magic link", () => {
     expect(req).toEqual({ ok: false, reason: "not_invited" });
   });
 
-  it("allows ADMIN_EMAIL even when other users exist", async () => {
+  it("allows ADMIN_EMAIL while there are members but no admin yet", async () => {
     await db.user.create({ data: { email: "owner@example.com", role: "MEMBER" } });
     const req = await requestMagicLink("boss@example.com", deps(T0, "boss@example.com"));
     expect(req.ok).toBe(true);
@@ -43,6 +43,56 @@ describe("magic link", () => {
     expect(res.ok).toBe(true);
     const user = await db.user.findUniqueOrThrow({ where: { email: "boss@example.com" } });
     expect(user.role).toBe("ADMIN");
+  });
+
+  it("does not recreate ADMIN_EMAIL's account once an admin exists (a removal sticks)", async () => {
+    const boss = deps(T0, "boss@example.com");
+    const first = await requestMagicLink("boss@example.com", boss);
+    if (!first.ok) throw new Error();
+    expect((await verifyMagicLink(first.token, boss)).ok).toBe(true);
+    // Another admin removes the bootstrap account; a link asked for before the removal is still out there.
+    await db.user.create({ data: { email: "other-admin@example.com", role: "ADMIN" } });
+    const outstanding = await requestMagicLink("boss@example.com", boss);
+    if (!outstanding.ok) throw new Error();
+    await db.user.delete({ where: { email: "boss@example.com" } });
+    expect(await requestMagicLink("boss@example.com", boss)).toEqual({ ok: false, reason: "not_invited" });
+    expect(await verifyMagicLink(outstanding.token, boss)).toEqual({ ok: false, reason: "invalid" });
+    expect(await db.user.findUnique({ where: { email: "boss@example.com" } })).toBeNull();
+  });
+
+  it("does not give a removed member an account back from a link they already had", async () => {
+    await db.user.create({ data: { email: "owner@example.com", role: "ADMIN" } });
+    await db.user.create({ data: { email: "cousin@example.com", role: "MEMBER" } });
+    const req = await requestMagicLink("cousin@example.com", deps());
+    if (!req.ok) throw new Error();
+    await db.user.delete({ where: { email: "cousin@example.com" } });
+    expect(await verifyMagicLink(req.token, deps())).toEqual({ ok: false, reason: "invalid" });
+    expect(await db.user.findUnique({ where: { email: "cousin@example.com" } })).toBeNull();
+  });
+
+  it("does not make a member of somebody whose invite was revoked after they asked for a link", async () => {
+    const admin = await db.user.create({ data: { email: "owner@example.com", role: "ADMIN" } });
+    await createInvite("cousin@example.com", admin.id, "MEMBER", deps());
+    const req = await requestMagicLink("cousin@example.com", deps());
+    if (!req.ok) throw new Error();
+    await db.invite.deleteMany({ where: { email: "cousin@example.com" } });
+    expect(await verifyMagicLink(req.token, deps())).toEqual({ ok: false, reason: "invalid" });
+    expect(await db.user.count({ where: { email: "cousin@example.com" } })).toBe(0);
+  });
+
+  it("looking at a link does not use it up", async () => {
+    const req = await requestMagicLink("first@example.com", deps());
+    if (!req.ok) throw new Error();
+    expect(await checkMagicLink(req.token, deps())).toEqual({ ok: true });
+    expect(await checkMagicLink(req.token, deps())).toEqual({ ok: true });
+    expect((await verifyMagicLink(req.token, deps())).ok).toBe(true);
+    expect(await checkMagicLink(req.token, deps())).toEqual({ ok: false, reason: "used" });
+    expect(await checkMagicLink("nope", deps())).toEqual({ ok: false, reason: "invalid" });
+    expect(await checkMagicLink("", deps())).toEqual({ ok: false, reason: "invalid" });
+    const later = new Date(T0.getTime() + 16 * 60 * 1000);
+    const again = await requestMagicLink("first@example.com", deps());
+    if (!again.ok) throw new Error();
+    expect(await checkMagicLink(again.token, deps(later))).toEqual({ ok: false, reason: "expired" });
   });
 
   it("accepts an invite and applies its role", async () => {

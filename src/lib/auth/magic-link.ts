@@ -17,20 +17,20 @@ export type RequestResult =
 /**
  * Decide whether an email may sign in and, if so, mint a single-use token.
  * Allowed when: an account exists, a pending invite exists, or the address may bootstrap the
- * admin account. When ADMIN_EMAIL is configured only that address can bootstrap; without it,
- * the first address to sign in on an empty database becomes the admin.
+ * admin account. When ADMIN_EMAIL is configured only that address can bootstrap, and only while the
+ * album has no admin; without it, the first address to sign in on an empty database becomes the admin.
  */
 export async function requestMagicLink(rawEmail: string, deps: MagicLinkDeps): Promise<RequestResult> {
   const { db } = deps;
   const now = deps.now?.() ?? new Date();
   const email = normalizeEmail(rawEmail);
 
-  const [user, invite, userCount] = await Promise.all([
+  const [user, invite, counts] = await Promise.all([
     db.user.findUnique({ where: { email } }),
     db.invite.findFirst({ where: { email, acceptedAt: null, expiresAt: { gt: now } } }),
-    db.user.count(),
+    accountCounts(db),
   ]);
-  const allowed = Boolean(user) || Boolean(invite) || canBootstrapAdmin(email, userCount, deps.adminEmail);
+  const allowed = Boolean(user) || Boolean(invite) || canBootstrapAdmin(email, counts, deps.adminEmail);
   if (!allowed) return { ok: false, reason: "not_invited" };
 
   const token = generateToken();
@@ -40,10 +40,19 @@ export async function requestMagicLink(rawEmail: string, deps: MagicLinkDeps): P
   return { ok: true, token, email };
 }
 
-/** ADMIN_EMAIL, when set, is the only address that may create the admin account. */
-export function canBootstrapAdmin(email: string, userCount: number, adminEmail?: string): boolean {
-  if (adminEmail && adminEmail.trim()) return normalizeEmail(adminEmail) === email;
-  return userCount === 0;
+export type AccountCounts = { users: number; admins: number };
+
+function accountCounts(db: Db): Promise<AccountCounts> {
+  return Promise.all([db.user.count(), db.user.count({ where: { role: "ADMIN" } })]).then(([users, admins]) => ({ users, admins }));
+}
+
+/**
+ * ADMIN_EMAIL, when set, is the only address that may create the admin account, and only while there is no admin:
+ * once an admin exists it is an ordinary address, so removing that account from the Admin page sticks.
+ */
+export function canBootstrapAdmin(email: string, counts: AccountCounts, adminEmail?: string): boolean {
+  if (adminEmail && adminEmail.trim()) return counts.admins === 0 && normalizeEmail(adminEmail) === email;
+  return counts.users === 0;
 }
 
 export type VerifyResult =
@@ -51,8 +60,22 @@ export type VerifyResult =
   | { ok: false; reason: "invalid" | "expired" | "used" };
 
 /**
+ * Look at a magic-link token without using it, for the page the emailed link opens. Mail scanners fetch links
+ * before the person does, so only the button on that page (a POST) may consume it.
+ */
+export async function checkMagicLink(token: string, deps: MagicLinkDeps): Promise<{ ok: true } | { ok: false; reason: "invalid" | "expired" | "used" }> {
+  const now = deps.now?.() ?? new Date();
+  const record = token ? await deps.db.magicLinkToken.findUnique({ where: { tokenHash: hashToken(token) } }) : null;
+  if (!record) return { ok: false, reason: "invalid" };
+  if (record.usedAt) return { ok: false, reason: "used" };
+  if (record.expiresAt.getTime() < now.getTime()) return { ok: false, reason: "expired" };
+  return { ok: true };
+}
+
+/**
  * Consume a magic-link token. Creates the user on first sign-in, honouring a pending invite's role
- * and promoting the bootstrap admin.
+ * and promoting the bootstrap admin. Whether the address may have an account is decided again here, not
+ * just when the link was sent: the member may have been removed, or the invite revoked, in between.
  */
 export async function verifyMagicLink(token: string, deps: MagicLinkDeps): Promise<VerifyResult> {
   const { db } = deps;
@@ -74,8 +97,9 @@ export async function verifyMagicLink(token: string, deps: MagicLinkDeps): Promi
   if (existing) return { ok: true, userId: existing.id, email, isNewUser: false };
 
   const invite = await db.invite.findFirst({ where: { email, acceptedAt: null, expiresAt: { gt: now } } });
-  const userCount = await db.user.count();
-  const role = canBootstrapAdmin(email, userCount, deps.adminEmail) ? "ADMIN" : invite?.role ?? "MEMBER";
+  const bootstrap = canBootstrapAdmin(email, await accountCounts(db), deps.adminEmail);
+  if (!invite && !bootstrap) return { ok: false, reason: "invalid" };
+  const role = bootstrap ? "ADMIN" : invite?.role ?? "MEMBER";
 
   const user = await db.user.create({ data: { email, role } });
   if (invite) await db.invite.update({ where: { id: invite.id }, data: { acceptedAt: now } });
