@@ -44,7 +44,7 @@ describe("RateLimiter capacity", () => {
 });
 
 describe("allowSignInRequest", () => {
-  const limits = () => ({ perClient: new RateLimiter(20, 1000, () => 0), perNetwork: new RateLimiter(60, 1000, () => 0) });
+  const limits = () => ({ perClient: new RateLimiter(20, 1000, () => 0), perNetwork: new RateLimiter(60, 1000, () => 0), unknown: new RateLimiter(30, 1000, () => 0) });
 
   it("caps each client, and each IPv6 /48 however many /64s it spreads over", () => {
     const l = limits();
@@ -57,9 +57,12 @@ describe("allowSignInRequest", () => {
     expect(allowSignInRequest("2001:db8:2:1::/64", l)).toBe(true);
   });
 
-  it("has no per-client cap without a proxy, rather than one shared bucket for everyone", () => {
+  it("puts every request that no proxy vouches for into one shared bucket", () => {
     const l = limits();
-    for (let i = 0; i < 100; i++) expect(allowSignInRequest(null, l)).toBe(true);
+    for (let i = 0; i < 30; i++) expect(allowSignInRequest(null, l)).toBe(true);
+    expect(allowSignInRequest(null, l)).toBe(false);
+    // Clients a proxy names are unaffected.
+    expect(allowSignInRequest("198.51.100.7", l)).toBe(true);
   });
 
   it("peeks without charging", () => {
@@ -68,5 +71,7 @@ describe("allowSignInRequest", () => {
     expect(rl.hasRoom("all")).toBe(true);
     expect(rl.allow("all")).toBe(true);
     expect(rl.hasRoom("all")).toBe(false);
+    rl.refund("all");
+    expect(rl.allow("all")).toBe(true);
   });
 });

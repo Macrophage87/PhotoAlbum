@@ -22,6 +22,12 @@ export class RateLimiter {
     return !b || this.now() - b.windowStart >= this.windowMs || b.count < this.max;
   }
 
+  /** Take back one recorded call, for work that was charged but in the end not done. */
+  refund(key: string): void {
+    const b = this.buckets.get(key);
+    if (b && b.count > 0) b.count--;
+  }
+
   /** Returns true when the call is allowed and records it; false when the key is over its limit. */
   allow(key: string): boolean {
     const t = this.now();
@@ -61,21 +67,31 @@ export class RateLimiter {
 export const signInPerClient = new RateLimiter(20, 10 * 60 * 1000);
 export const signInPerNetwork = new RateLimiter(60, 10 * 60 * 1000);
 
-export type SignInLimits = { perClient: RateLimiter; perNetwork: RateLimiter };
+/**
+ * Requests that arrive with no proxy naming the client (an install without one, or somebody reaching the app's
+ * port directly) share one bucket: tight enough to bound what they can cost, and with no proxy in front this is a
+ * small private install where it is only ever the family.
+ */
+export const signInUnknownClients = new RateLimiter(30, 10 * 60 * 1000);
+
+export type SignInLimits = { perClient: RateLimiter; perNetwork: RateLimiter; unknown: RateLimiter };
 
 /**
- * Whether this client may ask for another sign-in link. It is best-effort: it only applies when a proxy supplies a
- * client address, so that an install without a proxy does not put every visitor in one shared bucket. Nothing here
- * is keyed on the address asked for, so nobody's requests can use up anybody else's.
+ * Whether this client may ask for another sign-in link, keyed by the address the proxy reports (or the shared
+ * bucket for requests without one). Nothing here is keyed on the address asked for, so nobody's requests can use
+ * up the allowance for anybody else's address.
  */
-export function allowSignInRequest(client: string | null, limits: SignInLimits = { perClient: signInPerClient, perNetwork: signInPerNetwork }): boolean {
-  if (!client) return true;
+export function allowSignInRequest(client: string | null, limits: SignInLimits = { perClient: signInPerClient, perNetwork: signInPerNetwork, unknown: signInUnknownClients }): boolean {
+  if (!client) return limits.unknown.allow("unknown");
   return limits.perClient.allow(client) && limits.perNetwork.allow(clientNetwork(client));
 }
 
 let mailCeiling: RateLimiter | undefined;
-/** Every sign-in email the album sends, together, per hour: a guard for the mail provider's quota. */
-export function signInMailPerHour(perHour: number): RateLimiter {
-  mailCeiling ??= new RateLimiter(perHour, 60 * 60 * 1000);
-  return mailCeiling;
+/**
+ * Every repeat sign-in email the album sends, together, per hour: a guard for the mail provider's quota. Charged when
+ * a link is minted and handed back if its email then fails, so checking and charging are one step.
+ */
+export function signInMailPerHour(perHour: number): { take(): boolean; giveBack(): void } {
+  const ceiling = (mailCeiling ??= new RateLimiter(perHour, 60 * 60 * 1000));
+  return { take: () => ceiling.allow("all"), giveBack: () => ceiling.refund("all") };
 }

@@ -17,7 +17,21 @@ vi.mock("@/lib/auth/session", () => ({
   createSession: async (userId: string) => void who.sessions.push(userId),
   destroySession: async () => void who.destroyed++,
 }));
-vi.mock("@/lib/auth/email", () => ({ magicLinkEmail: (to: string, link: string) => ({ to, text: link }), inviteEmail: (to: string, link: string) => ({ to, text: link }), sendMail: async (m: { to: string; text: string }) => void who.mail.push(m) }));
+const mailer = vi.hoisted(() => ({ fail: false, hang: false, pending: [] as Promise<unknown>[] }));
+vi.mock("@/lib/auth/email", () => ({
+  magicLinkEmail: (to: string, link: string) => ({ to, text: link }),
+  inviteEmail: (to: string, link: string) => ({ to, text: link }),
+  sendMail: async (m: { to: string; text: string }) => {
+    if (mailer.hang) return new Promise(() => {});
+    if (mailer.fail) throw new Error("SMTP is down");
+    who.mail.push(m);
+  },
+}));
+// Work scheduled with after() runs once the answer has gone; the tests wait for it explicitly.
+vi.mock("next/server", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("next/server")>()),
+  after: (fn: () => unknown) => void mailer.pending.push(Promise.resolve().then(fn)),
+}));
 vi.mock("@/lib/google/account", () => ({ disconnectGoogleAccount: async () => {} }));
 vi.mock("next/headers", () => ({ headers: async () => who.headers }));
 vi.mock("next/cache", () => ({ revalidatePath: () => undefined }));
@@ -43,6 +57,8 @@ describe("sign-in links and the Admin page", () => {
     who.signedIn = false;
     who.mail = [];
     who.headers = new Headers();
+    mailer.fail = false;
+    mailer.hang = false;
     who.id = (await db.user.create({ data: { email: "owner@example.com", role: "ADMIN" } })).id;
   });
 
@@ -101,9 +117,11 @@ describe("sign-in links and the Admin page", () => {
     await expect(confirmSignIn(form({ token: "nope" }))).rejects.toThrow("REDIRECT:/auth/signin?error=invalid");
   });
 
-  const ask = (email: string, xff?: string) => {
+  const ask = async (email: string, xff?: string) => {
     who.headers = new Headers(xff ? { "x-forwarded-for": xff } : {});
-    return requestSignIn({ status: "idle" }, form({ email }));
+    const answer = await requestSignIn({ status: "idle" }, form({ email }));
+    await Promise.all(mailer.pending.splice(0));
+    return answer;
   };
   const TOO_MANY = { status: "error", message: "Too many sign-in links were asked for just now. Please wait 10 minutes and try again." };
   const RECENT = { status: "error", message: "A sign-in link was sent to this address in the last few minutes. Please use the newest one in your email." };
@@ -164,20 +182,48 @@ describe("sign-in links and the Admin page", () => {
     expect(who.mail).toHaveLength(1);
   });
 
+  it("answers before the email is sent, so a member's request takes no longer than a stranger's", async () => {
+    await db.user.create({ data: { email: "grandma@example.com", role: "MEMBER" } });
+    mailer.hang = true;
+    who.headers = new Headers({ "x-forwarded-for": "198.51.100.30" });
+    // With a mail server that never answers, the request still comes straight back.
+    expect(await requestSignIn({ status: "idle" }, form({ email: "grandma@example.com" }))).toEqual({ status: "sent", email: "grandma@example.com" });
+    mailer.pending.splice(0);
+  });
+
+  it("withdraws a link whose email could not be sent, so the next request is not told one is on its way", async () => {
+    await db.user.create({ data: { email: "grandma@example.com", role: "MEMBER" } });
+    mailer.fail = true;
+    for (let i = 0; i < 3; i++) expect(await ask("grandma@example.com", "198.51.100.31")).toEqual({ status: "sent", email: "grandma@example.com" });
+    expect(await db.magicLinkToken.count({ where: { email: "grandma@example.com" } })).toBe(0);
+    mailer.fail = false;
+    expect(await ask("grandma@example.com", "198.51.100.31")).toEqual({ status: "sent", email: "grandma@example.com" });
+    expect(who.mail).toHaveLength(1);
+  });
+
   // Last: it uses up the hourly allowance the whole file shares.
-  it("past the hourly ceiling nobody is sent a link, and everyone is told the same", async () => {
+  it("past the hourly ceiling a first link still goes out; a repeat is told to wait, member or stranger", async () => {
     const BUSY = { status: "error", message: "The album has sent a lot of sign-in email in the last hour. Please try again a little later." };
+    const sent = (email: string) => ({ status: "sent", email });
+    // Fill the allowance with second links (first links are never counted).
     let i = 0;
     for (; i < 100; i++) {
       const email = `member${i}@example.com`;
       await db.user.create({ data: { email, role: "MEMBER" } });
-      const answer = await ask(email, `198.18.${i}.1`);
-      if (JSON.stringify(answer) === JSON.stringify(BUSY)) break;
+      expect(await ask(email, `198.18.${i}.1`)).toEqual(sent(email));
+      if (JSON.stringify(await ask(email, `198.18.${i}.1`)) === JSON.stringify(BUSY)) break;
     }
     expect(i).toBeLessThan(MAIL_PER_HOUR);
-    expect(await ask("member0@example.com", "198.19.0.1")).toEqual(BUSY);
+    // Somebody with no live link is still sent one.
+    await db.user.create({ data: { email: "late@example.com", role: "MEMBER" } });
+    expect(await ask("late@example.com", "198.19.0.1")).toEqual(sent("late@example.com"));
+    // A repeat is told to wait, and a stranger's repeat is answered the same way.
+    expect(await ask("late@example.com", "198.19.0.1")).toEqual(BUSY);
+    expect(await ask("stranger@example.com", "198.19.0.2")).toEqual(sent("stranger@example.com"));
     expect(await ask("stranger@example.com", "198.19.0.2")).toEqual(BUSY);
-    const sentHere = who.mail.length;
-    expect(sentHere).toBe(i);
+    // An address that already holds three live links hears that first.
+    await db.user.create({ data: { email: "full@example.com", role: "MEMBER" } });
+    for (let n = 0; n < 3; n++) await requestMagicLink("full@example.com", { db });
+    expect(await ask("full@example.com", "198.19.0.3")).toEqual({ status: "error", message: "A sign-in link was sent to this address in the last few minutes. Please use the newest one in your email." });
   });
 });

@@ -13,9 +13,15 @@ export type MagicLinkDeps = {
 /** How many unused, unexpired links an address may hold before asking again sends nothing new. */
 export const MAX_OUTSTANDING_LINKS = 3;
 
+/** The shared allowance of sign-in mail (SIGN_IN_MAIL_PER_HOUR): take one, or give one back for mail never sent. */
+export type MailAllowance = { take(): boolean; giveBack(): void };
+
 export type RequestResult =
-  | { ok: true; token: string; email: string }
-  | { ok: false; reason: "not_invited" | "recently_sent" };
+  | { ok: true; token: string; email: string; charged: boolean }
+  | { ok: false; reason: "not_invited" | "recently_sent" | "busy" };
+
+/** How many expired links one request clears out of the whole table on its way (the daily purge gets the rest). */
+const EXPIRED_SWEEP_BATCH = 100;
 
 /**
  * Decide whether an email may sign in and, if so, mint a single-use token.
@@ -27,8 +33,12 @@ export type RequestResult =
  * is minted or sent ("recently_sent"), and the links already in its inbox keep working, so asking on somebody's
  * behalf can neither flood them nor lock them out. An address that may not sign in is charged exactly the same
  * way, with a placeholder whose raw token nobody ever sees, so the answers never tell a member from a stranger.
+ *
+ * An address's first live link always goes out. Only a second or third is taken from the shared mail allowance,
+ * so whoever fills that allowance can delay repeat links but never stop anybody signing in; strangers are charged
+ * the same, so how fast it fills says nothing about membership.
  */
-export async function requestMagicLink(rawEmail: string, deps: MagicLinkDeps): Promise<RequestResult> {
+export async function requestMagicLink(rawEmail: string, deps: MagicLinkDeps & { mail?: MailAllowance }): Promise<RequestResult> {
   const { db } = deps;
   const now = deps.now?.() ?? new Date();
   const email = normalizeEmail(rawEmail);
@@ -36,9 +46,14 @@ export async function requestMagicLink(rawEmail: string, deps: MagicLinkDeps): P
   return db.$transaction(async (tx) => {
     // One request per address at a time, so concurrent asks cannot all see room for one more.
     await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`magic-link:${email}`}))::text`;
+    // Expired links are no use to anybody: this address's, and a bounded batch of everybody else's.
     await tx.magicLinkToken.deleteMany({ where: { email, expiresAt: { lte: now } } });
+    await tx.$executeRaw`DELETE FROM "MagicLinkToken" WHERE id IN (SELECT id FROM "MagicLinkToken" WHERE "expiresAt" <= ${now} LIMIT ${EXPIRED_SWEEP_BATCH})`;
     const outstanding = await tx.magicLinkToken.count({ where: { email, usedAt: null, expiresAt: { gt: now } } });
     if (outstanding >= MAX_OUTSTANDING_LINKS) return { ok: false, reason: "recently_sent" } as const;
+    const mail = outstanding > 0 ? deps.mail : undefined;
+    if (mail && !mail.take()) return { ok: false, reason: "busy" } as const;
+    const charged = Boolean(mail);
 
     const [user, invite, counts] = await Promise.all([
       tx.user.findUnique({ where: { email } }),
@@ -51,8 +66,24 @@ export async function requestMagicLink(rawEmail: string, deps: MagicLinkDeps): P
       // A stranger's placeholder is hashed from a token nobody is sent, so it can never be used.
       data: { email, tokenHash: hashToken(allowed ? token : generateToken()), expiresAt: new Date(now.getTime() + MAGIC_LINK_TTL_MS) },
     });
-    return allowed ? ({ ok: true, token, email } as const) : ({ ok: false, reason: "not_invited" } as const);
+    return allowed ? ({ ok: true, token, email, charged } as const) : ({ ok: false, reason: "not_invited" } as const);
   });
+}
+
+/**
+ * A link whose email could not be sent: withdraw it, so the address is not told a link is on its way when none
+ * is, and hand back what it took from the mail allowance.
+ */
+export async function withdrawMagicLink(token: string, charged: boolean, deps: MagicLinkDeps & { mail?: MailAllowance }): Promise<void> {
+  await deps.db.magicLinkToken.deleteMany({ where: { tokenHash: hashToken(token), usedAt: null } });
+  if (charged) deps.mail?.giveBack();
+}
+
+/** The daily purge: every expired link, used or not. */
+export async function purgeExpiredMagicLinks(deps: MagicLinkDeps): Promise<number> {
+  const now = deps.now?.() ?? new Date();
+  const { count } = await deps.db.magicLinkToken.deleteMany({ where: { expiresAt: { lte: now } } });
+  return count;
 }
 
 export type AccountCounts = { users: number; admins: number };

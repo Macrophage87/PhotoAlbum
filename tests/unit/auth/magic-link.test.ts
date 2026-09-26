@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
-import { checkMagicLink, createInvite, maskEmail, MAX_OUTSTANDING_LINKS, requestMagicLink, verifyMagicLink } from "@/lib/auth/magic-link";
+import { checkMagicLink, createInvite, maskEmail, MAX_OUTSTANDING_LINKS, purgeExpiredMagicLinks, requestMagicLink, verifyMagicLink, withdrawMagicLink } from "@/lib/auth/magic-link";
 import type { Db } from "@/lib/db";
 import { resetTestDb } from "../helpers/reset";
 
@@ -159,6 +159,38 @@ describe("magic link", () => {
     if (!ra.ok || !rb.ok) return;
     expect(ra.userId).toBe(rb.userId);
     expect(await db.user.count({ where: { email: "cousin@example.com" } })).toBe(1);
+  });
+
+  it("takes only an address's second and third live link from the mail allowance, and gives back a withdrawn one", async () => {
+    await db.user.create({ data: { email: "grandma@example.com", role: "ADMIN" } });
+    let taken = 0;
+    const mail = { take: () => (taken < 1 ? (taken++, true) : false), giveBack: () => void taken-- };
+    const first = await requestMagicLink("grandma@example.com", { ...deps(), mail });
+    expect(first).toMatchObject({ ok: true, charged: false });
+    const second = await requestMagicLink("grandma@example.com", { ...deps(), mail });
+    expect(second).toMatchObject({ ok: true, charged: true });
+    expect(await requestMagicLink("grandma@example.com", { ...deps(), mail })).toEqual({ ok: false, reason: "busy" });
+    if (!second.ok) throw new Error();
+    await withdrawMagicLink(second.token, true, { db, mail });
+    expect(taken).toBe(0);
+    expect(await checkMagicLink(second.token, deps())).toEqual({ ok: false, reason: "invalid" });
+    // A stranger's second request is charged exactly like a member's.
+    let strangerTaken = 0;
+    const strangerMail = { take: () => (strangerTaken++, true), giveBack: () => {} };
+    await requestMagicLink("stranger@example.com", { ...deps(), mail: strangerMail });
+    await requestMagicLink("stranger@example.com", { ...deps(), mail: strangerMail });
+    expect(strangerTaken).toBe(1);
+  });
+
+  it("clears expired links out of the whole table, on requests and in the daily purge", async () => {
+    for (let i = 0; i < 5; i++) await requestMagicLink(`stranger${i}@example.com`, deps());
+    const later = new Date(T0.getTime() + 16 * 60 * 1000);
+    await requestMagicLink("someone@example.com", deps(later));
+    expect(await db.magicLinkToken.count()).toBe(1);
+    for (let i = 0; i < 5; i++) await requestMagicLink(`stranger${i}@example.com`, deps(later));
+    const muchLater = new Date(T0.getTime() + 60 * 60 * 1000);
+    expect(await purgeExpiredMagicLinks(deps(muchLater))).toBe(6);
+    expect(await db.magicLinkToken.count()).toBe(0);
   });
 
   it("shows only enough of an address to recognise it", () => {
