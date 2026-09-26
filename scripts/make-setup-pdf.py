@@ -410,10 +410,16 @@ docker compose run --rm ml-init       # only after an upgrade that changes the s
 
 # ---------- 9 ----------
 S += [P("9. Development setup and tests", H1),
-      P("For working on the code, run the app on your machine with Node 22 and pnpm, and use Docker only for Postgres and a local mail catcher."),
+      P("For working on the code, run the app on your machine with Node 22 and pnpm, and use Docker only for Postgres and a local mail catcher. "
+        "The database must have the pgvector extension, which the compose image includes and a stock PostgreSQL package does not; "
+        "with your own server, install pgvector and let the role create extensions, or run CREATE EXTENSION vector once in each database "
+        "(including the _test and _e2e ones)."),
+      P("The storage paths in .env.example (/data/photos, /data/imports) are container paths a normal user cannot write to. "
+        "Point PHOTO_STORAGE_ROOT and IMPORT_INBOX_DIR at folders of your own, such as ./.data/photos and ./.data/imports, "
+        "or leave IMPORT_INBOX_DIR empty."),
       code("""
 pnpm install
-cp .env.example .env            # DATABASE_URL should point at localhost:5432
+cp .env.example .env            # DATABASE_URL at localhost:5432; storage paths to your own folders
 docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d db mailpit
 pnpm prisma migrate dev         # create the schema
 pnpm db:seed                    # optional demo data

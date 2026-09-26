@@ -116,15 +116,17 @@ Only points inside the trip's dates are imported, so uploading a whole export is
 
 ## Development
 
-Requirements: Node 22, pnpm, PostgreSQL 16.
+Requirements: Node 22, pnpm, PostgreSQL 16 with the [pgvector](https://github.com/pgvector/pgvector) extension. A stock PostgreSQL package does not include it, and the migrations stop at `CREATE EXTENSION vector` without it; the `pgvector/pgvector:pg16` image from the compose command below has it. On your own server, install pgvector and let the role create extensions, or have an admin run `CREATE EXTENSION vector;` once in each database (`<db>`, `<db>_test`, `<db>_e2e`).
 
 ```bash
 pnpm install
-cp .env.example .env            # point DATABASE_URL at your Postgres
+cp .env.example .env            # point DATABASE_URL at your Postgres, and see below for the storage folders
 pnpm prisma migrate dev         # creates the schema
 pnpm db:seed                    # optional demo data
 pnpm dev                        # http://localhost:3000
 ```
+
+`.env.example` stores photos under `/data/photos` and reads Takeout zips from `/data/imports`, which are paths inside the container and not writable for a normal user (on macOS the root is read-only). Outside Docker, point them at folders of your own before seeding or uploading, for example `PHOTO_STORAGE_ROOT=./.data/photos` and `IMPORT_INBOX_DIR=./.data/imports` (or leave `IMPORT_INBOX_DIR` empty to hide Takeout import); `.data/` is ignored by git.
 
 `docker compose -f docker-compose.yml -f docker-compose.dev.yml up db mailpit` gives you a Postgres on `localhost:5432` and a Mailpit inbox on <http://localhost:8025> for sign-in emails.
 
