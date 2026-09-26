@@ -1690,7 +1690,7 @@ test("photos can be uploaded straight into an activity, and stay there when its 
     .toBe(activityId);
 });
 
-test("a panorama is recognized, kept long, and shown as a panorama rather than a sliver", async ({ context, page }) => {
+test("a panorama is recognized, kept long, and shown as a panorama rather than a sliver", async ({ browser, context, page }) => {
   await signIn(context, ADMIN);
   await page.goto("/upload");
   await chooseFile(page, "panorama.jpg");
@@ -1726,20 +1726,53 @@ test("a panorama is recognized, kept long, and shown as a panorama rather than a
   await expect(view).toBeVisible();
   await view.click();
   await expect(dialog).toBeVisible();
+  // Wait for the picture, so the drag has something to scroll.
+  await expect.poll(() => view.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true);
+  const scrolledFrom = await view.evaluate((el) => el.scrollLeft);
   const at = (await view.boundingBox())!;
   await page.mouse.move(at.x + at.width / 2, at.y + at.height / 2);
   await page.mouse.down();
   await page.mouse.move(at.x + at.width / 2 - 120, at.y + at.height / 2, { steps: 6 });
   await page.mouse.up();
   await expect(dialog).toBeVisible();
+  // The drag really did look around, rather than being swallowed.
+  expect(await view.evaluate((el) => el.scrollLeft)).not.toBe(scrolledFrom);
   const counter = dialog.getByText(/^\d+ \/ \d+$/);
   const before = await counter.textContent();
   await view.focus();
   await page.keyboard.press("ArrowRight");
   await expect(counter).toHaveText(before ?? "");
   await expect(dialog.getByTestId("panorama-view")).toBeVisible();
+
+  // Tab and Shift+Tab go round inside the viewer and never out to the page behind it.
+  const inDialog = () => page.evaluate(() => Boolean(document.activeElement?.closest("[role=dialog]")));
+  const close = dialog.getByRole("button", { name: "Close" });
+  await close.focus();
+  await page.keyboard.press("Shift+Tab");
+  expect(await inDialog()).toBe(true);
+  await expect(close).not.toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(close).toBeFocused();
+  for (let i = 0; i < 25; i++) {
+    await page.keyboard.press("Tab");
+    expect(await inDialog()).toBe(true);
+  }
   await page.keyboard.press("Escape");
   await expect(dialog).toHaveCount(0);
+
+  // On a touch screen a tap on the panorama keeps the viewer open too.
+  const phone = await browser.newContext({ hasTouch: true, isMobile: true, viewport: { width: 390, height: 780 } });
+  try {
+    await signIn(phone, ADMIN);
+    const touch = await phone.newPage();
+    await touch.goto("/photos");
+    await touch.locator("li.tile-lazy").filter({ has: touch.locator(`img[src*='/api/photos/${row.id}/']`) }).locator("img").first().tap();
+    const touchDialog = touch.getByRole("dialog", { name: "Photo viewer" });
+    await touchDialog.getByTestId("panorama-view").tap();
+    await expect(touchDialog).toBeVisible();
+  } finally {
+    await phone.close();
+  }
 });
 
 test("a member edits their own photos and reads everyone else's, and a trip is arranged by whoever made it", async ({ browser, context, page }) => {
@@ -2801,19 +2834,33 @@ test("on a phone the day heading itself opens the whole timeline to choose from"
   // It is a modal sheet for the keyboard too (#128): focus starts on the day being read, Tab stays inside, and
   // Escape hands focus back to the heading that opened it.
   await expect(sheet.locator('[data-day-jump][aria-current="true"]')).toBeFocused();
-  for (let i = 0; i < (await sheet.locator("button").count()) + 2; i++) await page.keyboard.press("Tab");
-  expect(await page.evaluate(() => Boolean(document.activeElement?.closest("[data-testid=day-jump-sheet]")))).toBe(true);
+  const inSheet = () => page.evaluate(() => Boolean(document.activeElement?.closest("[data-testid=day-jump-sheet]")));
+  const buttons = await sheet.locator("button").count();
+  for (let i = 0; i < buttons + 2; i++) {
+    await page.keyboard.press("Tab");
+    expect(await inSheet()).toBe(true);
+  }
+  // Round the ends explicitly: Shift+Tab from Close (the first stop) lands on the last entry, and Tab brings it back.
+  const closeButton = sheet.locator("[data-day-jump-close]");
+  await closeButton.focus();
+  await page.keyboard.press("Shift+Tab");
+  await expect(sheet.locator("button").last()).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(closeButton).toBeFocused();
+  // Closing hands focus back to the heading that opened it.
   await page.keyboard.press("Escape");
   await expect(sheet).toBeHidden();
   await expect(page.getByTestId("day-jump").first()).toBeFocused();
   await page.getByTestId("day-jump").first().click();
   await expect(sheet).toBeVisible();
 
+  // Choosing a day takes focus there, not back to where the sheet was opened.
   const last = sheet.locator("[data-day-jump]").last();
   const target = (await last.getAttribute("data-day-jump"))!;
   await last.click();
   await expect(sheet).toBeHidden();
   await expect(page.locator(`#${target}`)).toBeInViewport({ timeout: 10_000 });
+  expect(await page.evaluate((id) => Boolean(document.activeElement?.closest(`#${id}`)), target)).toBe(true);
 });
 
 test("a day's count includes the photographs on its activities, and its activities are listed under it", async ({ context, page }) => {
@@ -3122,11 +3169,56 @@ test("the phone menu reaches the account page, and scrolls to Sign out on a shor
   const panel = page.locator("#mobile-nav-panel");
   // The panel scrolls itself (#110), since the sticky header stays put however the page is scrolled.
   const signOut = panel.getByRole("button", { name: "Sign out" });
-  await signOut.scrollIntoViewIfNeeded();
+  await expect(signOut).not.toBeInViewport();
+  await panel.hover();
+  await page.mouse.wheel(0, 2000);
+  await expect.poll(() => panel.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
   await expect(signOut).toBeInViewport();
+  // Escape closes it, as it does the laptop's More menu.
+  await page.keyboard.press("Escape");
+  await expect(panel).toHaveCount(0);
+  await page.getByRole("button", { name: "Open menu" }).click();
   // And the account page is a press away on a phone too (#109).
   await panel.getByTestId("mobile-account").click();
   await expect(page).toHaveURL(/\/account$/);
   await expect(panel).toHaveCount(0);
   await page.setViewportSize({ width: 1280, height: 720 });
+});
+
+test("a selection added to a collection shows its chip at once, and Enter waits for the search it was pressed on", async ({ context, page }) => {
+  await signIn(context, ADMIN);
+  const tag = randomUUID().slice(0, 8);
+  const title = `Chip check ${tag}`;
+  const admin = (await withDb((c) => c.query(`SELECT id FROM "User" WHERE email = $1`, [ADMIN]))).rows[0].id as string;
+  const collectionId = `col-${tag}`;
+  await withDb((c) => c.query(`INSERT INTO "Collection" (id, slug, title, "createdById", "updatedAt") VALUES ($1, $2, $3, $4, now())`, [collectionId, `chip-check-${tag}`, title, admin]));
+  try {
+    await page.goto("/trips/acadia/photos");
+    const tile = page.locator("li.tile-lazy").first();
+    await expect(tile).toBeVisible();
+    await page.getByRole("button", { name: "Select photos" }).click();
+    await tile.locator("button").first().click();
+
+    // The search answers slowly. Enter pressed straight after typing must not pick from the list that was there
+    // before (the recent ones), and once the answer to what was typed arrives, that Enter is carried out on it (#129).
+    await page.route("**/api/containers?*", async (route) => {
+      await new Promise((r) => setTimeout(r, 1500));
+      await route.continue();
+    });
+    const picker = page.getByLabel("Add to collection…");
+    await picker.fill(title);
+    await picker.press("Enter");
+    await expect(picker).toHaveAttribute("aria-expanded", "true");
+    await expect(picker).not.toHaveAttribute("aria-activedescendant", /.+/);
+    await expect(picker).toHaveAttribute("aria-expanded", "false", { timeout: 10_000 });
+    await expect(picker).toHaveValue(title);
+    await page.unroute("**/api/containers?*");
+
+    // No reload: the tile carries the new collection's chip as soon as the action is done (#111).
+    page.once("dialog", (d) => void d.accept());
+    await page.getByRole("button", { name: "Add", exact: true }).click();
+    await expect(tile.locator(`[aria-label*="${title}"]`)).toBeVisible();
+  } finally {
+    await withDb((c) => c.query(`DELETE FROM "Collection" WHERE id = $1`, [collectionId]));
+  }
 });
