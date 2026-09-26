@@ -119,14 +119,14 @@ export async function deleteTakeoutArchive(archiveName: string): Promise<string 
 }
 
 /**
- * Fold every set of byte-identical photographs into one. See lib/photos/duplicates: the oldest is kept, whatever
- * it was missing is taken from its copies, and the copies go to the trash marked as duplicates — so this is
- * reversible until somebody empties the trash.
+ * Fold every set of byte-identical photographs into one. See lib/photos/duplicates: the oldest finished one is kept,
+ * whatever it was missing is taken from its copies, and the copies go to the trash marked as duplicates — so this
+ * is reversible until somebody empties the trash.
  */
-export async function foldDuplicatePhotos(): Promise<{ groups: number; folded: number; conflicts: string[] }> {
+export async function foldDuplicatePhotos(): Promise<{ groups: number; folded: number; conflicts: string[]; coversReleased: string[] }> {
   const admin = await requireAdminOrThrow();
   const report = await foldDuplicates(admin.id);
   revalidatePath("/admin");
   revalidatePath("/", "layout");
-  return { groups: report.groups, folded: report.folded, conflicts: report.conflicts };
+  return { groups: report.groups, folded: report.folded, conflicts: report.conflicts, coversReleased: report.coversReleased };
 }

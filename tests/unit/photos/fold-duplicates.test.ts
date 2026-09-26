@@ -83,6 +83,8 @@ describe("folding one identical copy into another", () => {
     expect(keeperOf([recent, old]).id).toBe("old");
     const sameMoment = [photo({ id: "b" }), photo({ id: "a" })];
     expect(keeperOf(sameMoment).id).toBe("a");
+    // A finished one first, however long the other has been here.
+    expect(keeperOf([photo({ id: "old", createdAt: new Date("2024-01-01"), status: "FAILED" }), photo({ id: "new", createdAt: new Date("2026-01-01"), status: "READY" })]).id).toBe("new");
     expect(keeperOf(sameMoment).id).toBe(keeperOf([...sameMoment].reverse()).id);
   });
 });

@@ -1,6 +1,5 @@
 import { db } from "@/lib/db";
-
-const coverSelect = { select: { id: true, updatedAt: true, width: true, height: true, trashedAt: true } } as const;
+import { coverPhotoSelect as coverSelect } from "@/lib/photos/cover";
 
 /** Trip behind a share token, only while the trip is actually in LINK mode. */
 export async function getSharedTrip(token: string) {

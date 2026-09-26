@@ -16,6 +16,7 @@ import { fieldErrors } from "@/lib/trips/validation";
 import { collectionInputFromForm } from "@/lib/collections/validation";
 import { canEditContainer, editableMediaIds, NOT_YOUR_CONTAINER } from "@/lib/auth/ownership";
 import { writeContainerDescription } from "@/lib/annotation/container";
+import { isCoverable } from "@/lib/photos/cover";
 import type { TripFormState } from "@/app/trips/new/actions";
 import { handWrittenDescription } from "@/lib/annotation/members-only";
 import { rejudgeFromAction } from "@/lib/annotation/rejudge-notice";
@@ -94,11 +95,17 @@ export async function rotateCollectionShareToken(slug: string): Promise<void> {
   revalidatePath(`/collections/${slug}/settings`);
 }
 
+/**
+ * Choose (or forget) the picture the collection is known by: one of its own finished photographs. The same
+ * photograph may front other collections too, as it may sit in them.
+ */
 export async function setCollectionCover(slug: string, photoId: string | null): Promise<void> {
   const collection = await loadEditableCollection(slug);
   if (photoId) {
-    const item = await db.collectionItem.findFirst({ where: { collectionId: collection.id, photoId }, select: { id: true } });
+    const item = await db.collectionItem.findFirst({ where: { collectionId: collection.id, photoId }, select: { photo: { select: { status: true, trashedAt: true, width: true } } } });
     if (!item) throw new Error("Photo is not in this collection");
+    // Still processing, failed, or in the trash: there is no picture to lead with.
+    if (!isCoverable(item.photo)) throw new Error("Only a finished photo can be the cover");
   }
   await db.collection.update({ where: { id: collection.id }, data: { coverPhotoId: photoId } });
   revalidatePath(`/collections/${slug}`, "layout");
@@ -180,7 +187,11 @@ const orderSchema = z.array(z.string().min(1)).max(5000);
 export async function reorderCollection(slug: string, itemIds: string[]): Promise<void> {
   const collection = await loadEditableCollection(slug);
   const order = orderSchema.parse(itemIds);
-  await db.$transaction(order.map((id, position) => db.collectionItem.updateMany({ where: { id, collectionId: collection.id }, data: { position } })));
+  await db.$transaction([
+    ...order.map((id, position) => db.collectionItem.updateMany({ where: { id, collectionId: collection.id }, data: { position } })),
+    // From now on the collection opens in this order rather than favourites first.
+    db.collection.update({ where: { id: collection.id }, data: { arrangedAt: new Date() } }),
+  ]);
   revalidatePath(`/collections/${slug}`, "layout");
 }
 
@@ -189,7 +200,10 @@ export async function sortCollectionByDate(slug: string): Promise<void> {
   const collection = await loadEditableCollection(slug);
   const items = await db.collectionItem.findMany({ where: { collectionId: collection.id }, select: { id: true, photo: { select: { takenAt: true, createdAt: true } } } });
   items.sort((a, b) => (a.photo.takenAt?.getTime() ?? Infinity) - (b.photo.takenAt?.getTime() ?? Infinity) || a.photo.createdAt.getTime() - b.photo.createdAt.getTime());
-  await db.$transaction(items.map((it, position) => db.collectionItem.update({ where: { id: it.id }, data: { position } })));
+  await db.$transaction([
+    ...items.map((it, position) => db.collectionItem.update({ where: { id: it.id }, data: { position } })),
+    db.collection.update({ where: { id: collection.id }, data: { arrangedAt: new Date() } }),
+  ]);
   revalidatePath(`/collections/${slug}`, "layout");
 }
 

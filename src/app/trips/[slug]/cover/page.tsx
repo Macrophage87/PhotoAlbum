@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { requireTripOwnerPage } from "@/lib/trips/access";
-import { coverFor } from "@/lib/trips/queries";
+import { chosenTripCover, coverFor } from "@/lib/trips/queries";
 import { tripCoverCandidates } from "@/lib/covers/candidates";
 import { CoverPicker } from "@/components/covers/CoverPicker";
 import { setCoverPhoto } from "../actions";
@@ -18,7 +18,8 @@ export default async function TripCoverPage({ params, searchParams }: PageProps<
     <CoverPicker
       title={trip.title}
       backHref={`/trips/${slug}/settings`}
-      current={trip.coverPhoto}
+      // The hand-chosen one only while it still stands: a trashed or departed cover is not what the album shows.
+      current={chosenTripCover(trip)}
       automatic={automatic}
       photos={page.photos}
       nextCursor={page.nextCursor}

@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { requireCollectionOwnerPage } from "@/lib/collections/access";
-import { collectionCoverFor } from "@/lib/collections/queries";
+import { chosenCollectionCover, collectionCoverFor } from "@/lib/collections/queries";
 import { collectionCoverCandidates } from "@/lib/covers/candidates";
 import { CoverPicker } from "@/components/covers/CoverPicker";
 import { setCollectionCover } from "@/app/collections/actions";
@@ -12,13 +12,14 @@ export default async function CollectionCoverPage({ params, searchParams }: Page
   const { collection } = await requireCollectionOwnerPage(slug, `/collections/${slug}/cover`);
   const sp = await searchParams;
   const after = typeof sp.after === "string" && sp.after ? sp.after : null;
-  const [page, automatic] = await Promise.all([collectionCoverCandidates(collection.id, after), collectionCoverFor(collection)]);
+  const [page, automatic, chosen] = await Promise.all([collectionCoverCandidates(collection.id, after), collectionCoverFor(collection), chosenCollectionCover(collection)]);
 
   return (
     <CoverPicker
       title={collection.title}
       backHref={`/collections/${slug}/settings`}
-      current={collection.coverPhoto}
+      // The hand-chosen one only while it still stands: a trashed cover is not what the album shows.
+      current={chosen}
       automatic={automatic}
       photos={page.photos}
       nextCursor={page.nextCursor}

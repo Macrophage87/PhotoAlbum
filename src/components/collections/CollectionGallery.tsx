@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { usePathname, useRouter } from "next/navigation";
 import { PhotoGrid, type GridPhoto } from "@/components/photos/PhotoGrid";
 import { Button } from "@/components/ui";
 import { ContainerPicker, type Container } from "@/components/containers/ContainerPicker";
@@ -9,14 +10,15 @@ import { bulkMoveToTrip, bulkTrash } from "@/app/photos/bulk-actions";
 import { BulkTrashControl } from "@/components/photos/TrashButton";
 import { previewAddToCollection, previewMoveToTrip } from "@/app/photos/exposure-actions";
 
-export type CollectionGridPhoto = GridPhoto & { itemId: string };
+/** `arranged`: the item's place in the saved order, whatever order the grid is showing. */
+export type CollectionGridPhoto = GridPhoto & { itemId: string; arranged: number };
 
 /**
  * A collection's items for members: select to remove or set the cover, arrange by drag, or sort by date.
  * Read-only viewers get the plain grid.
  */
 
-export function CollectionGallery({ collectionId, slug, photos, editable, emptyMessage }: { collectionId: string; slug: string; photos: CollectionGridPhoto[]; editable: boolean; emptyMessage: string }) {
+export function CollectionGallery({ collectionId, slug, photos, editable, emptyMessage, arranged = false }: { collectionId: string; slug: string; photos: CollectionGridPhoto[]; editable: boolean; emptyMessage: string; /** Whether somebody has saved an order of their own, which sorting by date would replace. */ arranged?: boolean }) {
   const [mode, setMode] = useState<"view" | "select" | "arrange">("view");
   /** What the last tidy-up did, said out loud rather than left to be inferred from a shorter grid. */
   const [notice, setNotice] = useState<string | null>(null);
@@ -29,12 +31,26 @@ export function CollectionGallery({ collectionId, slug, photos, editable, emptyM
   const confirmExposure = async (warnings: string[]) => warnings.length === 0 || window.confirm(`${warnings.join("\n")}\n\nContinue?`);
   const [pending, start] = useTransition();
   const ids = [...selected];
+  const router = useRouter();
+  const pathname = usePathname();
+  /** The saved order, which is what Arrange starts from and saves over, not whichever order the grid is showing. */
+  const saved = () => [...photos].sort((a, b) => a.arranged - b.arranged);
+  /** Only a finished photograph with pictures (not a 3D scan nobody has opened) has one to lead with. Trashed ones
+   *  are never in this grid. */
+  const chosen = ids.length === 1 ? photos.find((p) => p.id === ids[0]) : undefined;
+  const coverable = Boolean(chosen && chosen.status === "READY" && chosen.width !== null);
 
   const finish = (fn: () => Promise<unknown>) =>
     start(async () => {
       await fn();
       setSelected(new Set());
       setMode("view");
+    });
+  /** Having just put the collection in order, show it in that order rather than the one it was being viewed in. */
+  const arrangeAnd = (fn: () => Promise<unknown>) =>
+    finish(async () => {
+      await fn();
+      router.replace(`${pathname}?order=arranged`);
     });
 
   const remove = () =>
@@ -75,8 +91,12 @@ export function CollectionGallery({ collectionId, slug, photos, editable, emptyM
             <>
               <Button variant="secondary" size="sm" onClick={() => { setMode("select"); setNotice(null); }}>Select photos</Button>
               {notice && <span className="text-muted" role="status">{notice}</span>}
-              <Button variant="secondary" size="sm" onClick={() => { setOrder(photos); setMode("arrange"); }}>Arrange</Button>
-              <Button variant="ghost" size="sm" disabled={pending} onClick={() => start(() => sortCollectionByDate(slug))}>Sort by date</Button>
+              <Button variant="secondary" size="sm" onClick={() => { setOrder(saved()); setMode("arrange"); }}>Arrange</Button>
+              <Button variant="ghost" size="sm" disabled={pending} onClick={() => {
+                  // Unlike "Oldest first" above, this is saved, and over whatever order somebody put the items in.
+                  if (arranged && !window.confirm("Replace your saved order with date order?")) return;
+                  arrangeAnd(() => sortCollectionByDate(slug));
+                }}>Save in date order</Button>
             </>
           )}
           {mode === "select" && (
@@ -85,7 +105,8 @@ export function CollectionGallery({ collectionId, slug, photos, editable, emptyM
               <Button variant="ghost" size="sm" onClick={() => setSelected(new Set(photos.map((p) => p.id)))}>All</Button>
               <Button variant="ghost" size="sm" onClick={() => setSelected(new Set())}>None</Button>
               <span className="mx-1 text-border">|</span>
-              <Button size="sm" variant="secondary" disabled={ids.length !== 1 || pending} onClick={() => finish(() => setCollectionCover(slug, ids[0]))}>Set as cover</Button>
+              <Button size="sm" variant="secondary" disabled={!coverable || pending} onClick={() => finish(() => setCollectionCover(slug, ids[0]))}>Set as cover</Button>
+              {ids.length === 1 && !coverable && <span className="text-muted" role="status">{chosen?.status === "READY" ? "This item has no picture to lead with." : "Only a finished photo can be the cover."}</span>}
               <Button size="sm" variant="danger" disabled={!ids.length || pending} onClick={remove} data-testid="remove-from-collection">Remove from collection</Button>
               {(
                 <>
@@ -110,7 +131,7 @@ export function CollectionGallery({ collectionId, slug, photos, editable, emptyM
           {mode === "arrange" && (
             <>
               <span className="text-muted">Drag photos into order</span>
-              <Button size="sm" disabled={pending} onClick={() => finish(() => reorderCollection(slug, order.map((p) => p.itemId)))}>Save order</Button>
+              <Button size="sm" disabled={pending} onClick={() => arrangeAnd(() => reorderCollection(slug, order.map((p) => p.itemId)))}>Save order</Button>
               <Button variant="ghost" size="sm" onClick={() => setMode("view")}>Cancel</Button>
             </>
           )}

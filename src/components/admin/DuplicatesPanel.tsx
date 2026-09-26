@@ -58,8 +58,10 @@ export function DuplicatesPanel({ rows, total }: { rows: DuplicateRow[]; total: 
               const n = r.conflicts.length;
               // A pin kept over a copy whose place somebody removed: two members disagree, so somebody should look.
               const disagree = n ? ` ${n} ${n === 1 ? "photograph keeps a place" : "photographs keep a place"} somebody set by hand, although a copy had its place removed; check ${n === 1 ? "it" : "them"} below.` : "";
+              // A cover chosen by hand that could not move to the photograph kept is named, not changed silently.
+              const released = r.coversReleased.length ? ` ${r.coversReleased.join(", ")} led with a copy the kept photo is not on, so ${r.coversReleased.length === 1 ? "it chooses its own cover" : "they choose their own covers"} again.` : "";
               setDisputed(r.conflicts);
-              setDone(`${r.folded} ${r.folded === 1 ? "copy" : "copies"} folded into ${r.groups} ${r.groups === 1 ? "photograph" : "photographs"}.${disagree}`);
+              setDone(`${r.folded} ${r.folded === 1 ? "copy" : "copies"} folded into ${r.groups} ${r.groups === 1 ? "photograph" : "photographs"}.${disagree}${released}`);
               router.refresh();
             })
           }

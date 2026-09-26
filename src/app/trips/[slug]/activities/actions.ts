@@ -25,6 +25,7 @@ import { forgetState } from "@/lib/people/names-changed";
 import { forgottenScope, loadTombstone } from "@/lib/people/tombstone";
 import { unpermittedNameScrub } from "@/lib/people/unpermitted";
 import { forgetTrackFiles } from "@/lib/tracks/files";
+import { isCoverable } from "@/lib/photos/cover";
 
 /** An activity is part of the shape of a trip, so it is the trip's maker (and admins) who arrange them. */
 async function loadTrip(slug: string) {
@@ -135,15 +136,14 @@ export async function setActivityCover(slug: string, id: string, photoId: string
   const activity = await db.activity.findFirst({ where: { id, tripId: trip.id }, select: { id: true } });
   if (!activity) throw new Error("Activity not found");
   if (photoId) {
-    const photo = await db.photo.findFirst({ where: { id: photoId, activityId: id }, select: { id: true } });
+    const photo = await db.photo.findFirst({ where: { id: photoId, activityId: id }, select: { status: true, trashedAt: true, width: true } });
     if (!photo) throw new Error("Photo is not on this activity");
+    // Still processing, failed, or in the trash: there is no picture to lead with.
+    if (!isCoverable(photo)) throw new Error("Only a finished photo can be the cover");
   }
-  // A photograph fronts one activity at most. One moved here from an activity it was the cover of is released there
-  // first; that activity goes back to leading with its own first photograph.
-  await db.$transaction([
-    ...(photoId ? [db.activity.updateMany({ where: { coverPhotoId: photoId, id: { not: id } }, data: { coverPhotoId: null } })] : []),
-    db.activity.update({ where: { id }, data: { coverPhotoId: photoId } }),
-  ]);
+  // An activity it was moved from may still name it; that choice no longer stands there (activityCover checks), so it
+  // is left alone rather than reached into, as with trips.
+  await db.activity.update({ where: { id }, data: { coverPhotoId: photoId } });
   revalidatePath(`/trips/${slug}/activities/${id}`);
 }
 

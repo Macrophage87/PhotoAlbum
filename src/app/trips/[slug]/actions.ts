@@ -18,6 +18,7 @@ import { handWrittenDescription } from "@/lib/annotation/members-only";
 import { rejudgeFromAction } from "@/lib/annotation/rejudge-notice";
 import { descriptionStaysHelpers } from "@/lib/annotation/helper-text";
 import { forgetTrackFiles } from "@/lib/tracks/files";
+import { isCoverable } from "@/lib/photos/cover";
 
 /** The trip, where this member may change it: whoever made it, and admins. */
 async function loadEditableTrip(slug: string) {
@@ -88,8 +89,10 @@ export async function rotateShareToken(slug: string): Promise<void> {
 export async function setCoverPhoto(slug: string, photoId: string | null): Promise<void> {
   const trip = await loadEditableTrip(slug);
   if (photoId) {
-    const photo = await db.photo.findFirst({ where: { id: photoId, tripId: trip.id }, select: { id: true } });
+    const photo = await db.photo.findFirst({ where: { id: photoId, tripId: trip.id }, select: { status: true, trashedAt: true, width: true } });
     if (!photo) throw new Error("Photo is not on this trip");
+    // Still processing, failed, or in the trash: there is no picture to lead with.
+    if (!isCoverable(photo)) throw new Error("Only a finished photo can be the cover");
   }
   await db.trip.update({ where: { id: trip.id }, data: { coverPhotoId: photoId } });
   revalidatePath(`/trips/${slug}`, "layout");

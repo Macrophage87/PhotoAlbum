@@ -1,5 +1,5 @@
 import { db } from "@/lib/db";
-import { NOT_TRASHED } from "@/lib/photos/trash";
+import { COVERABLE } from "@/lib/photos/cover";
 
 /**
  * The photographs a trip or a collection can be fronted by.
@@ -18,7 +18,7 @@ export type CoverCandidate = { id: string; updatedAt: Date; caption: string | nu
 const select = { id: true, updatedAt: true, caption: true, title: true, membersTitle: true, originalName: true } as const;
 
 export async function tripCoverCandidates(tripId: string, cursor?: string | null, take = COVER_PAGE): Promise<{ photos: CoverCandidate[]; nextCursor: string | null; total: number }> {
-  const where = { tripId, status: "READY" as const, ...NOT_TRASHED };
+  const where = { tripId, ...COVERABLE };
   const [rows, total] = await Promise.all([
     db.photo.findMany({
       where,
@@ -35,7 +35,7 @@ export async function tripCoverCandidates(tripId: string, cursor?: string | null
 }
 
 export async function collectionCoverCandidates(collectionId: string, cursor?: string | null, take = COVER_PAGE): Promise<{ photos: CoverCandidate[]; nextCursor: string | null; total: number }> {
-  const where = { collectionId, photo: { status: "READY" as const, ...NOT_TRASHED } };
+  const where = { collectionId, photo: COVERABLE };
   const [rows, total] = await Promise.all([
     db.collectionItem.findMany({
       where,
