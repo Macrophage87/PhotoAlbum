@@ -1,5 +1,5 @@
 import type { TrackPoint } from "../types";
-import { inWindow, parseLatLng, parseTime, point, type Window } from "./common";
+import { inWindow, parseLatLng, parseTime, point, stayPoints, type Window } from "./common";
 import { streamJsonArray } from "./stream";
 
 type Segment = {
@@ -34,11 +34,7 @@ export function segmentToPoints(seg: Segment, window: Window): TrackPoint[] {
   }
   if (seg.visit) {
     const ll = latLngOf(seg.visit.topCandidate?.placeLocation);
-    if (ll) {
-      if (start !== null && inWindow(start, window)) out.push(point(start, ll[0], ll[1]));
-      if (end !== null && end !== start && inWindow(end, window)) out.push(point(end, ll[0], ll[1]));
-    }
-    return out;
+    return ll ? stayPoints(start, end, ll[0], ll[1], window) : out;
   }
   if (seg.activity) {
     const s = latLngOf(seg.activity.start), e = latLngOf(seg.activity.end);

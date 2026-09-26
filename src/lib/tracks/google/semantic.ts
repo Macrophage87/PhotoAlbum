@@ -1,5 +1,5 @@
 import type { TrackPoint } from "../types";
-import { e7, inWindow, parseTime, point, type Window } from "./common";
+import { e7, inWindow, parseTime, point, stayPoints, type Window } from "./common";
 import { streamJsonArray } from "./stream";
 
 type E7 = { latitudeE7?: number; longitudeE7?: number; latE7?: number; lngE7?: number };
@@ -61,8 +61,7 @@ export function timelineObjectToPoints(obj: TimelineObject, window: Window): Tra
   if (obj.placeVisit) {
     const c = ll(obj.placeVisit.location);
     const { start, end } = dur(obj.placeVisit.duration);
-    if (c && start !== null && inWindow(start, window)) out.push(point(start, c[0], c[1]));
-    if (c && end !== null && end !== start && inWindow(end, window)) out.push(point(end, c[0], c[1]));
+    if (c) out.push(...stayPoints(start, end, c[0], c[1], window));
   }
   return out;
 }
