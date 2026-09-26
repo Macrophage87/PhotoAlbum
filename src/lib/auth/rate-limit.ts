@@ -46,26 +46,26 @@ export class RateLimiter {
 }
 
 /**
- * Sign-in links. Per client address: 20 every 10 minutes. Per address asked for: 3 from any one client, and 10 in
- * all, so somebody else asking for grandma's link cannot use up her own allowance.
+ * Sign-in links. Per client address: 20 every 10 minutes. Per address asked for: 3 from any one client. There is
+ * deliberately no cap on an address as a whole: whoever reached it could lock its owner out, while the per-client
+ * caps already bound how much mail any one requester can cause.
  */
 export const signInPerClient = new RateLimiter(20, 10 * 60 * 1000);
 export const signInPerEmailClient = new RateLimiter(3, 10 * 60 * 1000);
-export const signInPerEmail = new RateLimiter(10, 10 * 60 * 1000);
 
-export type SignInLimits = { perClient: RateLimiter; perEmailClient: RateLimiter; perEmail: RateLimiter };
+export type SignInLimits = { perClient: RateLimiter; perEmailClient: RateLimiter };
 
 /**
  * Whether one more sign-in link may go out. The client is checked first, so a requester already over its own cap
  * cannot use up anybody's address; the address then has an allowance per client, so one requester cannot exhaust
- * it for everyone else. The per-client cap is best-effort: it only applies when a proxy supplies a client address,
+ * it for anyone else. The per-client cap is best-effort: it only applies when a proxy supplies a client address,
  * so that an install without a proxy does not put every visitor in one shared bucket.
  */
 export function allowSignInRequest(
   email: string,
   client: string | null,
-  limits: SignInLimits = { perClient: signInPerClient, perEmailClient: signInPerEmailClient, perEmail: signInPerEmail },
+  limits: SignInLimits = { perClient: signInPerClient, perEmailClient: signInPerEmailClient },
 ): boolean {
   if (client && !limits.perClient.allow(client)) return false;
-  return limits.perEmailClient.allow(`${email}\n${client ?? ""}`) && limits.perEmail.allow(email);
+  return limits.perEmailClient.allow(`${email}\n${client ?? ""}`);
 }
