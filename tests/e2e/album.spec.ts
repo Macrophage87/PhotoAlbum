@@ -873,9 +873,10 @@ test("the AI helper describes reviewed items once an admin opts in, and opted-ou
   const accepted = await withDb((c) => c.query('SELECT lat, "gpsSource" FROM "Photo" WHERE id = $1', [guessed.rows[0].id]));
   expect(accepted.rows[0]).toMatchObject({ gpsSource: "MANUAL", lat: guessed.rows[0].lat });
 
-  // A library described before places were ever estimated: the place-only pass asks about it without touching its
+  // A library described before places were ever estimated (nobody has set this one's place by hand either, which
+  // the pass would respect): the place-only pass asks about it without touching its
   // description, and its answer (a different landmark in the stand-in) is what lands.
-  await withDb((c) => c.query(`UPDATE "Photo" SET lat = NULL, lng = NULL, "gpsSource" = NULL, "placeEstimatedAt" = NULL, "placeEstimateName" = NULL WHERE id = $1`, [guessed.rows[0].id]));
+  await withDb((c) => c.query(`UPDATE "Photo" SET lat = NULL, lng = NULL, "gpsSource" = NULL, "placeSetById" = NULL, "placeEstimatedAt" = NULL, "placeEstimateName" = NULL WHERE id = $1`, [guessed.rows[0].id]));
   await page.goto("/admin");
   await page.getByLabel("What to ask for").selectOption("place");
   await page.getByRole("button", { name: "Estimate" }).click();
