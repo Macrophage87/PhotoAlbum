@@ -74,6 +74,12 @@ export async function removeMember(userId: string): Promise<void> {
     db.photo.updateMany({ where: { uploaderId: userId }, data: { uploaderId: admin.id } }),
     db.track.updateMany({ where: { uploaderId: userId }, data: { uploaderId: admin.id } }),
     db.trip.updateMany({ where: { createdById: userId }, data: { createdById: admin.id } }),
+    // Their choices stay choices. Left to the foreign keys these would be emptied, and an empty setter means the
+    // album's own guess: a photo they took off an activity would be put straight back on it, a place they removed
+    // filled in again, a date they fixed re-read from the file.
+    db.photo.updateMany({ where: { activitySetById: userId }, data: { activitySetById: admin.id } }),
+    db.photo.updateMany({ where: { placeSetById: userId }, data: { placeSetById: admin.id } }),
+    db.photo.updateMany({ where: { dateSetById: userId }, data: { dateSetById: admin.id } }),
     db.user.delete({ where: { id: userId } }),
     db.magicLinkToken.deleteMany({ where: { email: member.email } }),
   ]);
@@ -106,10 +112,10 @@ export async function deleteTakeoutArchive(archiveName: string): Promise<void> {
  * it was missing is taken from its copies, and the copies go to the trash marked as duplicates — so this is
  * reversible until somebody empties the trash.
  */
-export async function foldDuplicatePhotos(): Promise<{ groups: number; folded: number }> {
+export async function foldDuplicatePhotos(): Promise<{ groups: number; folded: number; conflicts: string[] }> {
   const admin = await requireAdminOrThrow();
   const report = await foldDuplicates(admin.id);
   revalidatePath("/admin");
   revalidatePath("/", "layout");
-  return { groups: report.groups, folded: report.folded };
+  return { groups: report.groups, folded: report.folded, conflicts: report.conflicts };
 }

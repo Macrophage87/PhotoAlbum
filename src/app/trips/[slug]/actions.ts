@@ -103,7 +103,15 @@ export async function deleteTrip(slug: string): Promise<void> {
   const trip = await loadEditableTrip(slug);
   const me = await requireUserOrThrow();
   if (me.role !== "ADMIN") throw new Error("Only an admin can delete a trip");
-  await db.trip.delete({ where: { id: trip.id } });
+  await db.$transaction(async (tx) => {
+    // Locked first, so a photo filed onto one of its activities meanwhile is either cleared here or refused because
+    // the trip is gone — never left behind with a setter.
+    await tx.$queryRaw`SELECT id FROM "Trip" WHERE id = ${trip.id} FOR UPDATE`;
+    // Its activities go with it; a choice about them goes too, or a photo left on no trip would carry a setter that
+    // reads as "kept off by hand" wherever it is filed next.
+    await tx.photo.updateMany({ where: { tripId: trip.id }, data: { activityId: null, activitySetById: null } });
+    await tx.trip.deleteMany({ where: { id: trip.id } });
+  });
   revalidatePath("/", "layout");
   redirect("/photos");
 }

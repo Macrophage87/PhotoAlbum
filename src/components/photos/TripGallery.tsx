@@ -12,6 +12,7 @@ import { BulkTrashControl } from "./TrashButton";
 import { addToCollection } from "@/app/collections/actions";
 import { ContainerPicker, type Container } from "@/components/containers/ContainerPicker";
 import { previewAddToCollection, previewMoveToTrip } from "@/app/photos/exposure-actions";
+import { bulkFollowTime } from "@/app/photos/activity-actions";
 
 type Option = { id: string; title: string };
 
@@ -90,7 +91,8 @@ export function TripGallery({ photos: initialPhotos, activities, editable, empty
               <div className="w-48">
                 <Select aria-label="Activity to assign" value={activityId} onChange={(e) => setActivityId(e.target.value)} className="h-8 text-sm">
                   <option value="">Activity…</option>
-                  <option value="__none">No activity</option>
+                  <option value="__auto">Follow the time</option>
+                  <option value="__none">No activity (keep it off)</option>
                   {activities.map((a) => (
                     <option key={a.id} value={a.id}>
                       {a.title}
@@ -98,7 +100,7 @@ export function TripGallery({ photos: initialPhotos, activities, editable, empty
                   ))}
                 </Select>
               </div>
-              <Button size="sm" variant="secondary" disabled={!ids.length || !activityId || pending} onClick={() => run(() => bulkAssignActivity(ids, activityId === "__none" ? null : activityId))}>
+              <Button size="sm" variant="secondary" disabled={!ids.length || !activityId || pending} onClick={() => run(async () => { if (activityId === "__auto") await bulkFollowTime(ids); else await bulkAssignActivity(ids, activityId === "__none" ? null : activityId); })}>
                 Assign
               </Button>
               <div className="w-48">

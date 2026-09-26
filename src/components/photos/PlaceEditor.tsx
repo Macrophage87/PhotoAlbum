@@ -83,7 +83,8 @@ export function PlaceEditor({ photoId, initial, gpsSource, setBy, placeName, est
   const clear = () => start(async () => {
     const r = await clearPhotoPlace(photoId);
     if (!r.ok) { setMessage(r.message); return; }
-    setCurrent({ pos: null, source: null, setBy: null, name: null });
+    // Who removed it stays with it: the album will not put a place back on its own.
+    setCurrent({ pos: null, source: null, setBy: r.setBy, name: null });
     setDraft(null);
     setOpen(false);
     onSaved?.(r);
@@ -107,7 +108,7 @@ export function PlaceEditor({ photoId, initial, gpsSource, setBy, placeName, est
           {current.source === "ESTIMATE" && estimate && <PlaceProvenance estimate={estimate} muted={muted} />}
         </p>
       ) : (
-        <p className={muted}>No place yet. {gpsSource === null ? "The file has no location and no track covers its time." : ""}</p>
+        <p className={muted}>{current.setBy ? `Place removed by ${current.setBy}. The album will not put one back by itself; set one here if you want one.` : `No place yet. ${gpsSource === null ? "The file has no location and no track covers its time." : ""}`}</p>
       )}
       {readOnly ? null : !open ? (
         <div className="flex flex-wrap gap-2">

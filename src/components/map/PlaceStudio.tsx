@@ -51,7 +51,7 @@ export function PlaceStudio({ photos: initial, total, theme, tracks, bounds }: {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [pin, setPin] = useState<Spot | null>(null);
   const [focus, setFocus] = useState<MapPayload["bounds"]>(null);
-  const [notice, setNotice] = useState<{ text: string; undo?: PlaceBefore[] } | null>(null);
+  const [notice, setNotice] = useState<{ text: string; undo?: { before: PlaceBefore[]; token: string | null } } | null>(null);
   const [hits, setHits] = useState<GeocodeHit[] | null>(null);
   const [lookupNote, setLookupNote] = useState<string | null>(null);
   const [pending, start] = useTransition();
@@ -135,17 +135,17 @@ export function PlaceStudio({ photos: initial, total, theme, tracks, bounds }: {
         }
         const moved = new Set(r.before.map((b) => b.id));
         setItems((prev) => prev.map((p) => (moved.has(p.id) ? { ...p, lat: pin.lat, lng: pin.lng, by: "hand", guess: null } : p)));
-        setNotice({ text: `${r.count} photo${r.count === 1 ? "" : "s"} placed${pin.name ? ` at ${pin.name}` : ""}.`, undo: r.before });
+        setNotice({ text: `${r.count} photo${r.count === 1 ? "" : "s"} placed${pin.name ? ` at ${pin.name}` : ""}.`, undo: { before: r.before, token: r.undo } });
         clear();
       } catch {
         setNotice({ text: "That did not save. Check the connection and press it again." });
       }
     });
 
-  const undo = (before: PlaceBefore[]) =>
+  const undo = ({ before, token }: { before: PlaceBefore[]; token: string | null }) =>
     start(async () => {
       try {
-        await restorePlaces(before);
+        await restorePlaces(before, token);
         const back = new Map(before.map((b) => [b.id, b]));
         setItems((prev) =>
           prev.map((p) => {

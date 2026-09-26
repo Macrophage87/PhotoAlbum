@@ -130,8 +130,9 @@ export function placeRequestParams(model: string, images: Anthropic.ImageBlockPa
 }
 
 /** Whether an item still wants a guess: nothing in it says where it was, and nobody has asked yet. */
-export function needsPlaceEstimate(item: { lat: number | null; placeEstimatedAt: Date | null }): boolean {
-  return item.lat === null && item.placeEstimatedAt === null;
+export function needsPlaceEstimate(item: { lat: number | null; placeSetById: string | null; placeEstimatedAt: Date | null }): boolean {
+  // A place a member took away is not a gap to fill: they cleared it on purpose.
+  return item.lat === null && item.placeSetById === null && item.placeEstimatedAt === null;
 }
 
 /**
@@ -151,7 +152,7 @@ export async function recordPlaceFailure(photoId: string, opts: { terminal?: boo
  */
 export async function applyPlaceEstimate(photoId: string, estimate: PlaceEstimate, opts: { sent?: boolean | null; requestedAt?: Date; tombstone?: Tombstone } = {}): Promise<"placed" | "declined" | "skipped" | "stale"> {
   const requestedAt = opts.requestedAt;
-  const current = await db.photo.findUnique({ where: { id: photoId }, select: { lat: true, gpsSource: true, context: true } });
+  const current = await db.photo.findUnique({ where: { id: photoId }, select: { lat: true, gpsSource: true, placeSetById: true, context: true } });
   if (!current) return "skipped";
   // A town-level answer is held to the town before anything is written, name and evidence alike; and nobody
   // forgotten comes back by way of its name or evidence.
@@ -159,7 +160,8 @@ export async function applyPlaceEstimate(photoId: string, estimate: PlaceEstimat
   const coarse = estimate && estimate.confidence >= MIN_PLACE_CONFIDENCE ? scrubCoarsePlace(estimate) : null;
   const scope = tombstone.empty ? undefined : await forgottenScope({ photoIds: [photoId] }, tombstone);
   let place = coarse ? { ...coarse, name: tombstone.scrub(coarse.name, scope), evidence: tombstone.scrub(coarse.evidence, scope) } : null;
-  const free = current.lat === null && (current.gpsSource === null || current.gpsSource === "ESTIMATE");
+  // A place a member took away stays away: see `clearPhotoPlace`.
+  const free = current.lat === null && current.placeSetById === null && (current.gpsSource === null || current.gpsSource === "ESTIMATE");
   const membersOnly = place && free ? await placeFromMembersOnly(photoId, { name: place.name, evidence: place.evidence }, current.context, opts.sent) : false;
   // Asked before a forgotten name was taken out of this item, before anybody was forgotten, or before anybody on it
   // changed how they may be named: its evidence may quote them, so nothing is written and it is asked again. Checked

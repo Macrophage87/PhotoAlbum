@@ -1,5 +1,5 @@
 import { db } from "@/lib/db";
-import { annotationSchema, clampAnnotation, toStored, type Annotation } from "./schema";
+import { annotationSchema, clampAnnotation, toStored, type Annotation, type StoredAnnotation } from "./schema";
 import { enqueueEmbedding } from "@/lib/jobs/handlers/embed-photo";
 import { enqueue } from "@/lib/jobs/boss";
 import { QUEUES } from "@/lib/jobs/queues";
@@ -44,6 +44,20 @@ export function titlesAfter(
   return { title, membersTitle, titleByHelper };
 }
 
+/** The fields a member can rewrite on the item's page (see `updateAnnotation`): theirs, once they have. */
+const MEMBER_FIELDS = ["caption", "description", "tags", "place", "activity", "objects", "visibleText", "mood"] as const;
+
+/**
+ * The record to store: the fresh one, or — where a member has edited the text — theirs, with only what they cannot
+ * edit (the search summary, the season, the title the helper offers) brought up to date.
+ */
+export function keepMemberText(fresh: StoredAnnotation, current: unknown, edited: boolean): StoredAnnotation {
+  if (!edited || !current || typeof current !== "object") return fresh;
+  const kept: Record<string, unknown> = { ...fresh };
+  for (const k of MEMBER_FIELDS) if (k in current) kept[k] = (current as Record<string, unknown>)[k];
+  return kept as StoredAnnotation;
+}
+
 /**
  * `sent` is whether the request that produced this answer carried anything members-only, as recorded when it was
  * built (see `requestCarriesMembersOnly`); null when that was not recorded.
@@ -53,15 +67,18 @@ export function titlesAfter(
  * changed their mind about being named, is not stored: it may name them again. Nothing is kept of it, not even the
  * raw row, and the item stays due to be described again with the names as they are now.
  */
-export async function applyAnnotation(photoId: string, model: string, parsed: Annotation, raw: { usage?: Usage; batched?: boolean } & Record<string, unknown>, opts: { sent?: boolean | null; requestedAt?: Date; tombstone?: Tombstone; attempts?: number } = {}): Promise<void> {
+export async function applyAnnotation(photoId: string, model: string, parsed: Annotation, raw: { usage?: Usage; batched?: boolean } & Record<string, unknown>, opts: { sent?: boolean | null; requestedAt?: Date; tombstone?: Tombstone; attempts?: number; replaceEdited?: boolean } = {}): Promise<void> {
   const requestedAt = opts.requestedAt;
-  const current = await db.photo.findUnique({ where: { id: photoId }, select: { takenAt: true, takenAtSource: true, estimatedDateSource: true, annotationSource: true, title: true, membersTitle: true, titleByHelper: true, annotation: true, kind: true, lat: true, placeEstimatedAt: true, context: true } });
+  const current = await db.photo.findUnique({ where: { id: photoId }, select: { takenAt: true, takenAtSource: true, estimatedDateSource: true, annotationSource: true, title: true, membersTitle: true, titleByHelper: true, annotation: true, kind: true, lat: true, placeSetById: true, placeEstimatedAt: true, context: true } });
   if (!current) return;
   // Nobody forgotten comes back by way of a new answer, whoever it is about: their names are taken out first.
   const tombstone = opts.tombstone ?? (await loadTombstone());
   const scope = tombstone.empty ? undefined : await forgottenScope({ photoIds: [photoId] }, tombstone);
+  // A member's edits are never overwritten by the notes sweep or the names backfill; only a member pressing
+  // "Describe again" and agreeing to lose them replaces them.
+  const edited = current.annotationSource === "EDITED" && !opts.replaceEdited;
   // Nor anybody opted out, or waiting to be forgotten, whose record is still there.
-  const stored = await withoutOptedOutNames(scrubRecord(toStored(parsed), tombstone, scope), photoId);
+  const stored = await withoutOptedOutNames(scrubRecord(keepMemberText(toStored(parsed), current.annotation, edited), tombstone, scope), photoId);
   // Written from names or notes, it is the family's to read: kept off the item's own title and out of public view.
   const judgement = await judgeHelperText(photoId, stored, current.context, opts.sent);
   const membersOnly = judgement.membersOnly;
@@ -98,8 +115,8 @@ export async function applyAnnotation(photoId: string, model: string, parsed: An
         annotation: stored,
         annotationModel: model,
         annotatedAt: new Date(),
-        // A member's edits are never overwritten silently: re-annotation only refreshes machine text.
-        annotationSource: current.annotationSource === "EDITED" ? "EDITED" : "MACHINE",
+        // Re-annotation only refreshes machine text, so an edited record stays the family's.
+        annotationSource: edited ? "EDITED" : "MACHINE",
         annotationError: null,
         annotationMembersOnly: membersOnly,
         annotationTitleOnly: judgement.titleOnly,

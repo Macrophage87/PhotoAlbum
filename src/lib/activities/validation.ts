@@ -35,6 +35,15 @@ export function localInputToInstant(value: string, timezone: string): Date {
 }
 
 /**
+ * The stored instant when the submitted one is the same minute of it, else the submitted one. The form works in
+ * whole minutes, so an activity made from a track (which ends at 15:42:37) would otherwise lose its seconds on
+ * every save — even one that only changed the title — and photographs taken in them would drop off it.
+ */
+export function keepSeconds(submitted: Date, stored: Date): Date {
+  return Math.floor(stored.getTime() / 60_000) === Math.floor(submitted.getTime() / 60_000) ? stored : submitted;
+}
+
+/**
  * The day a new activity starts on, before anybody touches the form.
  *
  * Today, in the trip's own zone: an outing is nearly always written up the evening it happened, and the trip's

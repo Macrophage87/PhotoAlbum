@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { db } from "@/lib/db";
 import { encodePoints } from "@/lib/tracks/encode";
 import { geotagPhotos } from "@/lib/jobs/handlers/geotag-photos";
@@ -113,5 +113,20 @@ describe("geotagPhotos upgrades coarse positions", () => {
     await geotagPhotos({ tripId, trackIds: [google.id] });
     expect((await db.photo.findUniqueOrThrow({ where: { id: photo.id } })).lng).toBeCloseTo(-68, 5);
     expect((await db.photo.findUniqueOrThrow({ where: { id: manual.id } })).lng).toBe(2);
+  });
+
+  it("does not write a track position over a place a member pinned while the job was running (#92)", async () => {
+    await makeTrack(tripId, userId, line(10), "GPX");
+    const p = await makePhoto(tripId, userId, new Date(T0 + 4.5 * 60_000));
+    const real = db.photo.findMany.bind(db.photo);
+    // The member pins it between the job reading its list and reaching this photo.
+    const spy = vi.spyOn(db.photo, "findMany").mockImplementationOnce((async (args: Parameters<typeof real>[0]) => {
+      const rows = await real(args);
+      await db.photo.update({ where: { id: p.id }, data: { lat: 1, lng: 2, gpsSource: "MANUAL" } });
+      return rows;
+    }) as unknown as typeof db.photo.findMany);
+    expect((await geotagPhotos({ tripId })).updated).toBe(0);
+    spy.mockRestore();
+    expect(await db.photo.findUniqueOrThrow({ where: { id: p.id } })).toMatchObject({ lat: 1, lng: 2, gpsSource: "MANUAL" });
   });
 });

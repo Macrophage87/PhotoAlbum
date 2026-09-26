@@ -16,7 +16,15 @@ export type DuplicateRow = { contentHash: string; ids: string[]; thumbUrl: strin
 export function DuplicatesPanel({ rows, total }: { rows: DuplicateRow[]; total: number }) {
   const [pending, start] = useTransition();
   const [done, setDone] = useState<string | null>(null);
+  const [disputed, setDisputed] = useState<string[]>([]);
   const router = useRouter();
+  const check = disputed.length ? (
+    <ul className="text-sm flex flex-wrap gap-2" data-testid="fold-conflicts">
+      {disputed.map((id, i) => (
+        <li key={id}><Link href={`/photos/${id}`} className="underline underline-offset-2">Check photo {i + 1}</Link></li>
+      ))}
+    </ul>
+  ) : null;
 
   if (!rows.length) {
     return (
@@ -24,6 +32,7 @@ export function DuplicatesPanel({ rows, total }: { rows: DuplicateRow[]; total: 
         <h2 className="font-display text-xl font-semibold">Identical copies</h2>
         {/* Folding empties this panel, so what it did has to be said here too — and said out loud, not merely shown. */}
         <p role="status" className="text-muted mt-1 text-sm">{done ?? "No photograph is in the album twice."}</p>
+        {check}
       </Card>
     );
   }
@@ -46,7 +55,11 @@ export function DuplicatesPanel({ rows, total }: { rows: DuplicateRow[]; total: 
           onClick={() =>
             start(async () => {
               const r = await foldDuplicatePhotos();
-              setDone(`${r.folded} ${r.folded === 1 ? "copy" : "copies"} folded into ${r.groups} ${r.groups === 1 ? "photograph" : "photographs"}.`);
+              const n = r.conflicts.length;
+              // A pin kept over a copy whose place somebody removed: two members disagree, so somebody should look.
+              const disagree = n ? ` ${n} ${n === 1 ? "photograph keeps a place" : "photographs keep a place"} somebody set by hand, although a copy had its place removed; check ${n === 1 ? "it" : "them"} below.` : "";
+              setDisputed(r.conflicts);
+              setDone(`${r.folded} ${r.folded === 1 ? "copy" : "copies"} folded into ${r.groups} ${r.groups === 1 ? "photograph" : "photographs"}.${disagree}`);
               router.refresh();
             })
           }
@@ -55,6 +68,7 @@ export function DuplicatesPanel({ rows, total }: { rows: DuplicateRow[]; total: 
         </Button>
       </div>
       {done && <p role="status" className="text-sm rounded-theme bg-emerald-50 border border-emerald-200 text-emerald-900 p-3">{done}</p>}
+      {check}
       <ul className="flex flex-wrap gap-3">
         {rows.map((r) => (
           <li key={r.contentHash} className="w-32">

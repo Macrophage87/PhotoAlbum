@@ -43,7 +43,8 @@ export type ImportTrackJob = {
 };
 export type GeotagPhotosJob = { tripId: string; trackIds?: string[] };
 export type DeletePhotoJob = { storageKey: string };
-export type AnnotatePhotoJob = { photoId: string };
+/** `replace`: a member asked for a new description over the family's own edited one, and confirmed it. */
+export type AnnotatePhotoJob = { photoId: string; replace?: boolean };
 export type AnnotationBackfillJob = { batchId: string };
 export type EmbedPhotoJob = { photoId: string; textOnly?: boolean };
 export type DetectFacesJob = { photoId: string };
