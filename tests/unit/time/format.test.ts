@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatDay, formatTakenAt } from "@/lib/time/format";
+import { formatDay, formatInstant, formatTakenAt } from "@/lib/time/format";
 
 describe("how a day is written", () => {
   it("carries the year on a timeline heading: an album spans decades, and August 12 alone places nothing", () => {
@@ -32,5 +32,16 @@ describe("when a photograph was taken (#75)", () => {
   it("falls back to the trip's zone, then UTC, when its offset is unknown", () => {
     expect(formatTakenAt(at, null, "America/New_York")).toBe("Sat, Jul 4, 2026 · 11:00 PM");
     expect(formatTakenAt(at, null, null)).toBe("Sun, Jul 5, 2026 · 3:00 AM");
+  });
+});
+
+describe("a timestamp on an admin page (#126)", () => {
+  it("writes the same text on the server and during hydration, marked as UTC", () => {
+    expect(formatInstant("2026-09-26T23:15:00Z", "dateTime", "UTC")).toBe("9/26/2026, 11:15 PM UTC");
+    expect(formatInstant("2026-09-27T01:00:00Z", "date", "UTC")).toBe("9/27/2026 UTC");
+  });
+
+  it("uses the zone it is given once the browser's is known", () => {
+    expect(formatInstant("2026-09-26T23:15:00Z", "dateTime", "America/New_York")).toBe("9/26/2026, 7:15 PM");
   });
 });

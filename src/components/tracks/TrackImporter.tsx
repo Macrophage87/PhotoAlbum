@@ -98,7 +98,7 @@ export function TrackImporter({ tripId, tripSlug }: { tripId: string; tripSlug: 
                 <div className="mt-2 space-y-1">
                   <p className="text-muted">
                     {it.summary.kind.toUpperCase()}
-                    {it.summary.format ? ` (${it.summary.format})` : ""} · {it.summary.pointsRead.toLocaleString()} points read
+                    {it.summary.format ? ` (${it.summary.format})` : ""} · {it.summary.pointsRead.toLocaleString("en-US")} points read
                   </p>
                   <ul className="space-y-0.5">
                     {it.summary.tracks.map((t) => (
@@ -108,7 +108,7 @@ export function TrackImporter({ tripId, tripSlug }: { tripId: string; tripSlug: 
                         ) : (
                           <span>{t.name}</span>
                         )}
-                        <span className="text-muted"> · {t.pointCount.toLocaleString()} pts{t.distanceM > 0 && t.type ? ` · ${formatDistance(t.distanceM)}` : ""}</span>
+                        <span className="text-muted"> · {t.pointCount.toLocaleString("en-US")} pts{t.distanceM > 0 && t.type ? ` · ${formatDistance(t.distanceM)}` : ""}</span>
                       </li>
                     ))}
                   </ul>

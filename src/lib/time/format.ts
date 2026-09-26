@@ -57,6 +57,19 @@ export function formatDateTime(instant: Date, timezone: string, fmt = "EEE, MMM 
   return format(new TZDate(instant, timezone), fmt);
 }
 
+export type InstantStyle = "date" | "dateTime";
+
+/**
+ * A timestamp (when something was trashed, imported, run) in `timeZone`, or the runtime's own zone when none is
+ * given. Written with "UTC" after it when that is the zone asked for, so a server-rendered time is not mistaken
+ * for local. Components should reach this through useLocalTime, which picks the zone safely for hydration.
+ */
+export function formatInstant(instant: string | Date, style: InstantStyle = "dateTime", timeZone?: string): string {
+  const d = new Date(instant);
+  const s = style === "date" ? d.toLocaleDateString("en-US", { timeZone }) : d.toLocaleString("en-US", { timeZone, month: "numeric", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" });
+  return timeZone === "UTC" ? `${s} UTC` : s;
+}
+
 export function formatDuration(seconds: number): string {
   const s = Math.round(seconds);
   const h = Math.floor(s / 3600);
@@ -73,7 +86,7 @@ export function formatDistance(meters: number, unit: "km" | "mi" = "mi"): string
 }
 
 export function formatElevation(meters: number, unit: "m" | "ft" = "ft"): string {
-  return unit === "m" ? `${Math.round(meters)} m` : `${Math.round(meters * 3.28084).toLocaleString()} ft`;
+  return unit === "m" ? `${Math.round(meters)} m` : `${Math.round(meters * 3.28084).toLocaleString("en-US")} ft`;
 }
 
 export function formatSpeed(ms: number, unit: "kmh" | "mph" = "mph"): string {

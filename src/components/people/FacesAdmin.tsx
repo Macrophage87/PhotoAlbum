@@ -1,10 +1,12 @@
 "use client";
 
 import { useTransition } from "react";
+import { useLocalTime } from "@/components/time/useLocalTime";
 import { Button } from "@/components/ui";
 import { deleteAllFaceData, setFaceDetectionOptIn } from "@/app/people/actions";
 
 export function FacesAdmin({ gates, counts }: { gates: { sidecar: boolean; envEnabled: boolean; optedInAt: string | null; active: boolean; retentionDays: number }; counts: { templates: number; unnamed: number; people: number; nextPurge: string | null } }) {
+  const stamp = useLocalTime();
   const [pending, start] = useTransition();
   return (
     <div className="rounded-theme border border-border bg-surface p-4 space-y-3 text-sm">
@@ -17,8 +19,8 @@ export function FacesAdmin({ gates, counts }: { gates: { sidecar: boolean; envEn
       <dl className="grid grid-cols-[10rem_1fr] gap-y-1">
         <dt className="text-muted">ML sidecar</dt><dd>{gates.sidecar ? "configured" : "not configured (set ML_URL and ML_TOKEN)"}</dd>
         <dt className="text-muted">Operator flag</dt><dd>{gates.envEnabled ? "FACE_INDEXING_ENABLED is on" : "FACE_INDEXING_ENABLED is off"}</dd>
-        <dt className="text-muted">Admin opt-in</dt><dd>{gates.optedInAt ? `on since ${new Date(gates.optedInAt).toLocaleDateString("en-US")}` : "off"}</dd>
-        <dt className="text-muted">Stored templates</dt><dd>{counts.templates} ({counts.unnamed} unnamed{counts.nextPurge ? `, oldest purged by ${new Date(counts.nextPurge).toLocaleDateString("en-US")}` : ""}) · {counts.people} people</dd>
+        <dt className="text-muted">Admin opt-in</dt><dd>{gates.optedInAt ? `on since ${stamp(gates.optedInAt, "date")}` : "off"}</dd>
+        <dt className="text-muted">Stored templates</dt><dd>{counts.templates} ({counts.unnamed} unnamed{counts.nextPurge ? `, oldest purged by ${stamp(counts.nextPurge, "date")}` : ""}) · {counts.people} people</dd>
       </dl>
       <div className="flex flex-wrap items-center gap-3">
         {gates.optedInAt ? (
