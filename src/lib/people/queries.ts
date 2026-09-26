@@ -9,16 +9,28 @@ import { isMinor, minorsCheckPasses } from "./consent";
 export type PersonCard = { id: string; name: string; kind: "HUMAN" | "PET"; species: string | null; isFlock: boolean; relationship: string | null; faceIndexing: boolean; pendingDecision: boolean; optedOut: boolean; basis: "birthday" | "attestation" | "none"; minor: boolean; photoCount: number; sample: { id: string; updatedAt: Date } | null };
 
 export async function listPeople(): Promise<PersonCard[]> {
+  // Counted in the database rather than by loading every face: a person on thousands of photographs is one row here.
   // A face on a photograph in the trash is not a face the album still has: it counts for nothing and is never the
   // picture shown for somebody, which is how a trashed photograph used to go on looking out of the People page.
   // A pet the animal matcher found and somebody agreed with is on those photographs as surely as a tagged one.
-  const on = { where: { status: "CONFIRMED" as const, photo: NOT_TRASHED }, select: { photoId: true, photo: { select: { id: true, updatedAt: true, status: true } } } };
-  const people = await db.person.findMany({ orderBy: { name: "asc" }, include: { faces: on, animals: on } });
+  const [people, counts] = await Promise.all([
+    db.person.findMany({ orderBy: { name: "asc" } }),
+    db.$queryRaw<{ personId: string; n: number; sampleId: string | null; sampleUpdatedAt: Date | null }[]>`
+      WITH seen AS (
+        SELECT "personId", "photoId" FROM "Face" WHERE status = 'CONFIRMED' AND "personId" IS NOT NULL
+        UNION
+        SELECT "personId", "photoId" FROM "AnimalDetection" WHERE status = 'CONFIRMED' AND "personId" IS NOT NULL
+      )
+      SELECT s."personId", count(*)::int AS n,
+        (array_agg(p.id ORDER BY p."takenAt" NULLS LAST, p.id) FILTER (WHERE p.status = 'READY'))[1] AS "sampleId",
+        (array_agg(p."updatedAt" ORDER BY p."takenAt" NULLS LAST, p.id) FILTER (WHERE p.status = 'READY'))[1] AS "sampleUpdatedAt"
+      FROM seen s JOIN "Photo" p ON p.id = s."photoId" AND p."trashedAt" IS NULL
+      GROUP BY s."personId"`,
+  ]);
+  const byPerson = new Map(counts.map((c) => [c.personId, c]));
   return people.map((p) => {
-    const seen = [...p.faces, ...p.animals];
-    const photoIds = new Set(seen.map((f) => f.photoId));
-    const sample = seen.find((f) => f.photo.status === "READY")?.photo ?? null;
-    return { id: p.id, name: p.name, kind: p.kind, species: p.species, isFlock: p.isFlock, relationship: p.relationship, faceIndexing: p.faceIndexing, pendingDecision: p.pendingDecision, optedOut: Boolean(p.optedOutAt), basis: p.adultAttestedAt ? "attestation" : p.birthday && minorsCheckPasses(p) ? "birthday" : "none", minor: isMinor(p), photoCount: photoIds.size, sample: sample ? { id: sample.id, updatedAt: sample.updatedAt } : null };
+    const c = byPerson.get(p.id);
+    return { id: p.id, name: p.name, kind: p.kind, species: p.species, isFlock: p.isFlock, relationship: p.relationship, faceIndexing: p.faceIndexing, pendingDecision: p.pendingDecision, optedOut: Boolean(p.optedOutAt), basis: p.adultAttestedAt ? "attestation" : p.birthday && minorsCheckPasses(p) ? "birthday" : "none", minor: isMinor(p), photoCount: c?.n ?? 0, sample: c?.sampleId && c.sampleUpdatedAt ? { id: c.sampleId, updatedAt: c.sampleUpdatedAt } : null };
   });
 }
 
