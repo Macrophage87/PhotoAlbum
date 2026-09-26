@@ -59,6 +59,7 @@ export function PanoramaView({ src, alt, wrap = false, axis = "horizontal", clas
         aria-label={`${alt} — a panorama; drag or scroll to look around`}
         className={`h-full w-full ${horizontal ? "overflow-x-auto overflow-y-hidden" : "overflow-y-auto overflow-x-hidden"} overscroll-contain select-none focus:outline-none focus-visible:ring-2 focus-visible:ring-white/60 ${dragging ? "cursor-grabbing" : "cursor-grab"}`}
         onPointerDown={(e) => {
+          moved.current = false;
           if (e.pointerType === "touch") return; // the browser's own scrolling is better than anything done by hand
           e.preventDefault();
           e.stopPropagation();
@@ -66,7 +67,6 @@ export function PanoramaView({ src, alt, wrap = false, axis = "horizontal", clas
           if (!el) return;
           el.setPointerCapture(e.pointerId);
           from.current = { pointer: horizontal ? e.clientX : e.clientY, scroll: horizontal ? el.scrollLeft : el.scrollTop };
-          moved.current = false;
           setDragging(true);
         }}
         onPointerMove={(e) => {
@@ -78,7 +78,12 @@ export function PanoramaView({ src, alt, wrap = false, axis = "horizontal", clas
           if (horizontal) el.scrollLeft = from.current.scroll - delta;
           else el.scrollTop = from.current.scroll - delta;
         }}
-        onPointerUp={(e) => { box.current?.releasePointerCapture(e.pointerId); setDragging(false); }}
+        onPointerUp={(e) => {
+          box.current?.releasePointerCapture(e.pointerId);
+          setDragging(false);
+          // The click that ends a drag comes straight after this; once it has had its chance, forget the drag.
+          requestAnimationFrame(() => { moved.current = false; });
+        }}
         onPointerCancel={() => setDragging(false)}
         // A drag that ends over the picture must not also count as a click on it, which in a lightbox means closing it.
         onClickCapture={(e) => { if (moved.current) { moved.current = false; e.preventDefault(); e.stopPropagation(); } }}

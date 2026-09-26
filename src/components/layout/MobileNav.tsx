@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
@@ -15,10 +15,30 @@ export function MobileNav({ links, signedIn, name }: { links: NavLink[]; signedI
   const [open, setOpen] = useState(false);
   const pathname = usePathname();
   const close = () => setOpen(false);
+  const button = useRef<HTMLButtonElement>(null);
+
+  // Arriving somewhere else by any route (Back, say, not only a link in here) closes the menu, as More does.
+  const [at, setAt] = useState(pathname);
+  if (at !== pathname) {
+    setAt(pathname);
+    setOpen(false);
+  }
+
+  useEffect(() => {
+    if (!open) return;
+    const esc = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      setOpen(false);
+      button.current?.focus();
+    };
+    document.addEventListener("keydown", esc);
+    return () => document.removeEventListener("keydown", esc);
+  }, [open]);
 
   return (
     <div className="lg:hidden">
       <button
+        ref={button}
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
@@ -36,7 +56,7 @@ export function MobileNav({ links, signedIn, name }: { links: NavLink[]; signedI
       </button>
       {open && (
         // The header is sticky, so the page scrolling does nothing for a panel taller than a short screen: it scrolls itself.
-        <div id="mobile-nav-panel" className="absolute left-0 right-0 top-14 max-h-[calc(100dvh-3.5rem)] overflow-y-auto overscroll-contain border-b border-border bg-surface shadow-lg">
+        <div id="mobile-nav-panel" className="absolute left-0 right-0 top-14 max-h-[calc(100vh-3.5rem)] supports-[height:100dvh]:max-h-[calc(100dvh-3.5rem)] overflow-y-auto overscroll-contain border-b border-border bg-surface shadow-lg">
           <nav className="mx-auto max-w-6xl px-4 py-2 flex flex-col text-base">
             {links.map((l) => (
               <Link key={l.href} href={l.href} onClick={close} className={`px-3 py-2.5 rounded-theme hover:bg-surface-alt ${pathname === l.href ? "font-medium text-primary" : ""}`}>
