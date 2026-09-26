@@ -32,5 +32,8 @@ describe("keeping Tab inside a modal", () => {
     expect(canTakeFocus({ tabIndex: 0, ...hidden })).toBe(false);
     expect(canTakeFocus({ tabIndex: 0, ...shown }, "hidden")).toBe(false);
     expect(canTakeFocus({ tabIndex: 0, ...shown }, "visible")).toBe(true);
+    // A video with controls reports tabIndex -1 and is still a Tab stop, unless it is hidden.
+    expect(canTakeFocus({ tabIndex: -1, ...shown }, "visible", true)).toBe(true);
+    expect(canTakeFocus({ tabIndex: -1, ...hidden }, "visible", true)).toBe(false);
   });
 });

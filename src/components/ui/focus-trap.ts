@@ -5,11 +5,15 @@ type Focusable = { tabIndex: number; disabled?: boolean; getClientRects: () => {
 
 /**
  * In the tab order, not disabled, and drawn and visible: a hidden or collapsed control is skipped by Tab, so the trap
- * skips it too. `visibility` is passed in (from getComputedStyle) so this can be asked without a browser.
+ * skips it too. `visibility` (from getComputedStyle) and `media` (a video or audio showing its controls, which the
+ * browser tabs to whatever its tabIndex says) are passed in, so this can be asked without a browser.
  */
-export function canTakeFocus(el: Focusable, visibility = "visible"): boolean {
-  return el.tabIndex >= 0 && !el.disabled && visibility !== "hidden" && el.getClientRects().length > 0;
+export function canTakeFocus(el: Focusable, visibility = "visible", media = false): boolean {
+  return (el.tabIndex >= 0 || media) && !el.disabled && visibility !== "hidden" && el.getClientRects().length > 0;
 }
+
+/** A clip or sound with its controls showing is in the tab order although it reports tabIndex -1, unless told otherwise. */
+const isControlledMedia = (el: Element) => el.matches("video[controls], audio[controls]") && el.getAttribute("tabindex") !== "-1";
 
 /**
  * Where Tab should go instead of where the browser would send it, or null to let it be: from the last back to the
@@ -27,7 +31,7 @@ export function trapTarget<T>(focusable: T[], active: T | null, shift: boolean, 
 /** Keep Tab and Shift+Tab inside `container`, for a modal dialog. Call from a keydown listener. */
 export function trapTab(e: KeyboardEvent, container: HTMLElement) {
   if (e.key !== "Tab") return;
-  const focusable = Array.from(container.querySelectorAll<HTMLElement>(CANDIDATES)).filter((el) => canTakeFocus(el as HTMLElement & { disabled?: boolean }, getComputedStyle(el).visibility));
+  const focusable = Array.from(container.querySelectorAll<HTMLElement>(CANDIDATES)).filter((el) => canTakeFocus(el as HTMLElement & { disabled?: boolean }, getComputedStyle(el).visibility, isControlledMedia(el)));
   const active = document.activeElement as HTMLElement | null;
   const to = trapTarget(focusable, active, e.shiftKey, Boolean(active && container.contains(active)));
   if (!to) return;
