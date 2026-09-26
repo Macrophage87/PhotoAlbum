@@ -13,7 +13,9 @@ export type NameScrub = (text: string | null | undefined) => string | null;
  *
  * Built once for a run of requests (loading everybody and preparing their matchers is the costly part), then asked
  * for the photographs each request is about: a short name that is also an everyday word ("Grace") is only taken out
- * where its owner is, or was, tagged on one of them.
+ * where its owner is, or was, tagged on one of them. Elsewhere their full names go, and a first name nobody else has
+ * that is no word ("Timothy waved"), unless the words around it make it a place or somebody else ("a train to
+ * Florence", "Florence Nightingale"): only what the helper is sent, so erring towards taking a name out costs little.
  */
 export type NameScrubber = { forPhotos(photoIds: string[]): Promise<NameScrub> };
 
@@ -49,7 +51,7 @@ async function taggedOn(photoIds: string[]): Promise<Set<string>> {
 function scrubWith(matchers: { id: string; m: NameMatcher }[], tagged: Set<string>, tombstone: Tombstone): NameScrub {
   return (text) => {
     if (typeof text !== "string" || !text) return text ?? null;
-    const named = matchers.reduce((t, { id, m }) => m.scrub(t, { tagged: tagged.has(id), fullOnly: true }), text);
+    const named = matchers.reduce((t, { id, m }) => m.scrub(t, { tagged: tagged.has(id) }), text);
     return tombstone.scrub(named);
   };
 }

@@ -3,7 +3,8 @@ import { anthropic } from "@/lib/annotation/client";
 import { annotationGates, notOptedOutWhere } from "@/lib/annotation/eligibility";
 import { buildPlaceRequest, buildRequest, loadItem } from "@/lib/annotation/request";
 import { nameScrubber } from "@/lib/people/unpermitted";
-import { loadTombstone } from "@/lib/people/tombstone";
+import { loadTombstone, tombstoneStale } from "@/lib/people/tombstone";
+import { forgetRunning } from "@/lib/people/names-changed";
 import { applyAnnotation, parseMessageContent, recordFailure } from "@/lib/annotation/apply";
 import { applyPlaceEstimate, parsePlaceContent, recordPlaceFailure } from "@/lib/annotation/place";
 import { enqueue } from "../boss";
@@ -342,9 +343,13 @@ export async function annotationBatchPoll(): Promise<void> {
     const remote = await anthropic().messages.batches.retrieve(b.anthropicBatchId).catch(() => null);
     if (!remote) continue;
     if (remote.processing_status !== "ended") continue;
+    // While somebody is being forgotten no answer can be stored: the batch waits for the next poll rather than
+    // having every answer in it thrown away and asked again one at a time, at the full price.
+    if (await forgetRunning()) continue;
     let succeeded = 0, errored = 0, canceled = 0;
-    // The forgotten names, read once for the batch rather than for every answer in it.
-    const tombstone = await loadTombstone();
+    // The forgotten names, read once for the batch rather than for every answer in it, and again only if somebody
+    // is forgotten meanwhile.
+    let tombstone = await loadTombstone();
     // Every request in the run was built after its first row was created, so that is the time to judge answers by.
     const requestedAt = b.parentId ? ((await db.annotationBatch.findUnique({ where: { id: b.parentId }, select: { createdAt: true } }))?.createdAt ?? b.createdAt) : b.createdAt;
     for await (const result of await anthropic().messages.batches.results(b.anthropicBatchId)) {
@@ -369,6 +374,7 @@ export async function annotationBatchPoll(): Promise<void> {
         await fail("max_tokens");
         continue;
       }
+      if (await tombstoneStale(tombstone)) tombstone = await loadTombstone();
       if (promptFor(task) === "place") {
         const place = parsePlaceContent(message.content as { type: string; text?: string }[]);
         if (place === undefined) {

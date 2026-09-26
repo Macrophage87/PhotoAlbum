@@ -16,7 +16,7 @@ import { unpermittedNameScrub, type NameScrub } from "@/lib/people/unpermitted";
 
 /** What a describe says when somebody on its photographs changed while the helper was writing. */
 export const NAMES_CHANGED = "Somebody on these photographs changed while the helper was writing; try again";
-import { forgetUnderWay, namesChangedSince } from "@/lib/people/names-changed";
+import { forgetState, namesChangedSince } from "@/lib/people/names-changed";
 import { loadTombstone } from "@/lib/people/tombstone";
 import { anthropic, thinkingParams } from "./client";
 import { activityDescriptionSchema, parseActivityDescription, type ActivityDescription } from "./activity";
@@ -198,7 +198,8 @@ export async function writeContainerDescription(kind: ContainerKind, id: string,
   const parsed = parseActivityDescription(response.content as { type: string; text?: string }[]);
   if (!parsed) throw new Error("The helper's answer could not be read; try again");
   // Nobody forgotten comes back by way of the answer.
-  parsed.description = (await loadTombstone()).scrub(parsed.description);
+  const tombstone = await loadTombstone();
+  parsed.description = tombstone.scrub(parsed.description);
   // Written from names or notes, it is read by members only; see `descriptionFromMembersOnly`.
   // The description it replaces goes with the request, so a members-only one keeps what is written from it members-only.
   const membersOnly = await descriptionFromMembersOnly(parsed.description, { names, notes: container.photos.some((p) => p.context?.trim()), previous: Boolean(container.description && !container.descriptionByHelper && container.descriptionMembersOnly) });
@@ -206,9 +207,12 @@ export async function writeContainerDescription(kind: ContainerKind, id: string,
   // Somebody on these photographs forgotten, renamed or no longer to be named while it was being written, or anybody
   // forgotten at all: its answer may name them, so it is not kept.
   await db.$transaction(async (tx) => {
-    if ((await forgetUnderWay(tx, requestedAt)) || (await namesChangedSince(container.photos.map((p) => p.id), requestedAt))) throw new Error(NAMES_CHANGED);
+    const forget = await forgetState(tx, tombstone.loadedAt);
+    if (forget.underWay || (await namesChangedSince(container.photos.map((p) => p.id), requestedAt))) throw new Error(NAMES_CHANGED);
+    // Somebody forgotten since the forgotten names were read: read them again.
+    if (forget.reload) data.description = (await loadTombstone()).scrub(data.description);
     if (kind === "trip") await tx.trip.update({ where: { id }, data });
     else await tx.collection.update({ where: { id }, data });
   });
-  return parsed.description;
+  return data.description;
 }

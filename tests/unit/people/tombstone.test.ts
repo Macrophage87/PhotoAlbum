@@ -19,8 +19,9 @@ import { applyPlaceEstimate } from "@/lib/annotation/place";
 import { loadItem, withoutUnpermittedNames } from "@/lib/annotation/request";
 import { withoutUnpermittedNames as withoutContainerNames } from "@/lib/annotation/container";
 import { forgottenNames, loadTombstone } from "@/lib/people/tombstone";
+import { withForgetLock } from "@/lib/people/names-changed";
 
-const record = (over: Partial<StoredAnnotation> = {}) =>
+const record = (over: Partial<StoredAnnotation> & Record<string, unknown> = {}) =>
   annotationSchema.parse({ title: "At the lake", caption: "A day at the lake", description: "Swimming.", tags: ["lake"], place: null, activity: null, objects: [], visibleText: null, season: "summer", mood: null, searchSummary: "lake", estimatedYear: null, estimatedPlace: null, ...over });
 
 describe("a forgotten name, after the person's record is gone", () => {
@@ -89,13 +90,13 @@ describe("a forgotten name, after the person's record is gone", () => {
     const before = new Date(Date.now() - 60_000);
     const other = (await db.photo.create({ data: { uploaderId: admin, originalName: "o.jpg", mimeType: "image/jpeg", storageKey: "o", originalPath: "o/o.jpg", sizeBytes: 1, status: "READY" } })).id;
     // A forget still running: nothing is stored, and the item is asked about again.
-    await db.appSetting.upsert({ where: { id: "app" }, create: { id: "app", lastForgetAt: new Date() }, update: { lastForgetAt: new Date(), forgetFinishedAt: null } });
     queued.jobs = [];
-    await applyAnnotation(other, "m", record(), { content: [] }, { requestedAt: before });
+    await withForgetLock(async () => {
+      await applyAnnotation(other, "m", record(), { content: [] }, { requestedAt: before });
+    });
     expect((await db.photo.findUniqueOrThrow({ where: { id: other } })).annotationError).toBe("names_changed");
     expect(queued.jobs.length).toBeGreaterThan(0);
     // Once it has finished, an answer about a photograph it never touched is kept.
-    await db.appSetting.update({ where: { id: "app" }, data: { forgetFinishedAt: new Date() } });
     await applyAnnotation(other, "m", record(), { content: [] }, { requestedAt: before });
     expect((await db.photo.findUniqueOrThrow({ where: { id: other } })).annotation).not.toBeNull();
   });
@@ -114,6 +115,45 @@ describe("a forgotten name, after the person's record is gone", () => {
     const p = await db.photo.findUniqueOrThrow({ where: { id: photoId } });
     expect(p.namesScrubbedAt).not.toBeNull();
     expect((p.annotation as StoredAnnotation).description).toBe("A family member casts a line.");
+  });
+});
+
+describe("forgotten names read before a forget", () => {
+  let admin: string;
+  beforeEach(async () => {
+    await resetTestDb();
+    admin = (await db.user.create({ data: { email: "admin@example.com", role: "ADMIN" } })).id;
+    who.role = "ADMIN";
+    who.id = admin;
+  });
+
+  it("are read again before an answer is stored", async () => {
+    const ts = await loadTombstone();
+    const kent = await db.person.create({ data: { name: "Timothy Kent", createdById: admin } });
+    await optOutPerson(kent.id, new FormData());
+    const other = (await db.photo.create({ data: { uploaderId: admin, originalName: "o.jpg", mimeType: "image/jpeg", storageKey: "o", originalPath: "o/o.jpg", sizeBytes: 1, status: "READY" } })).id;
+    await applyAnnotation(other, "m", record({ caption: "Timothy Kent blowing candles" }), { content: [] }, { requestedAt: new Date(), tombstone: ts });
+    expect(((await db.photo.findUniqueOrThrow({ where: { id: other } })).annotation as StoredAnnotation).caption).toBe("A family member blowing candles");
+  });
+
+  it("stamp every photograph in a trip whose title names them", async () => {
+    const kent = await db.person.create({ data: { name: "Timothy Kent", createdById: admin } });
+    const trip = await db.trip.create({ data: { slug: "bday", title: "Timothy Kent's 5th birthday", startDate: new Date("2026-07-01"), endDate: new Date("2026-07-01"), createdById: admin } });
+    const plain = (await db.photo.create({ data: { uploaderId: admin, originalName: "p.jpg", mimeType: "image/jpeg", storageKey: "p", originalPath: "p/o.jpg", sizeBytes: 1, status: "READY", tripId: trip.id } })).id;
+    await optOutPerson(kent.id, new FormData());
+    expect((await db.photo.findUniqueOrThrow({ where: { id: plain } })).namesScrubbedAt).not.toBeNull();
+  });
+
+  it("are never forgotten two at a time", async () => {
+    const spans: [number, number][] = [];
+    const run = () => withForgetLock(async () => {
+      const a = Date.now();
+      await new Promise((r) => setTimeout(r, 150));
+      spans.push([a, Date.now()]);
+    });
+    await Promise.all([run(), run()]);
+    spans.sort((x, y) => x[0] - y[0]);
+    expect(spans[1][0]).toBeGreaterThanOrEqual(spans[0][1]);
   });
 });
 
@@ -137,6 +177,41 @@ describe("names that are also words", () => {
     expect(ts.mentions("sage")).toBe(false);
     // No "a a family member": the article goes with the name.
     expect(ts.scrub("We met a Sage at the fair")).toBe("We met a family member at the fair");
+  });
+
+  it("never keeps a one-word name that is a month or an everyday word", async () => {
+    for (const n of ["June", "May", "Grace", "Jack", "Will"]) await forget(n);
+    expect(await db.forgottenName.count()).toBe(0);
+    const ts = await loadTombstone();
+    for (const t of ["Our trip in June", "Taken in May 2019", "Amazing Grace", "Grace Bay", "Union Jack", "Jack Russell", "Will you come?"]) expect(ts.scrub(t)).toBe(t);
+    const other = (await db.photo.create({ data: { uploaderId: admin, originalName: "o.jpg", mimeType: "image/jpeg", storageKey: "o", originalPath: "o/o.jpg", sizeBytes: 1, status: "READY" } })).id;
+    await applyAnnotation(other, "m", record({ caption: "Our trip in June", estimatedYear: { from: 2019, to: 2019, confidence: 0.8, evidence: "Taken in May 2019" } }), { content: [] }, { requestedAt: new Date() });
+    const p = await db.photo.findUniqueOrThrow({ where: { id: other } });
+    expect((p.annotation as StoredAnnotation).caption).toBe("Our trip in June");
+    expect(p.estimatedDateNote).toBe("2019–2019: Taken in May 2019");
+  });
+
+  it("keeps a one-word name out only where the words around it make it them", async () => {
+    await forget("Florence");
+    await forget("Robin");
+    const ts = await loadTombstone();
+    for (const t of ["A trip to Florence, Italy", "Florence Nightingale statue", "Robin Hood", "The Duomo in Florence", "Florence 2019"]) expect(ts.scrub(t)).toBe(t);
+    expect(ts.scrub("Florence waved at Robin's dog")).toBe("A family member waved at a family member's dog");
+    // A sentence before it ending in a capitalized word is no neighbour.
+    expect(ts.scrub("We drove to Maine. Florence swam.")).toBe("We drove to Maine. A family member swam.");
+  });
+
+  it("counts a one-word name in the helper's keywords in any case", async () => {
+    await forget("Ximena");
+    const ts = await loadTombstone();
+    expect(ts.namesTag("ximena")).toBe(true);
+    expect(ts.namesTag("ximena's pool")).toBe(true);
+    expect(ts.scrubKeywords("ximena fishing")).toBe("A family member fishing");
+    // In prose, only as a name is written.
+    expect(ts.scrub("ximena fishing")).toBe("ximena fishing");
+    const other = (await db.photo.create({ data: { uploaderId: admin, originalName: "o.jpg", mimeType: "image/jpeg", storageKey: "o", originalPath: "o/o.jpg", sizeBytes: 1, status: "READY" } })).id;
+    await applyAnnotation(other, "m", record({ tags: ["ximena", "ximena's pool", "pool"], searchSummary: "ximena fishing pool" }), { content: [] }, { requestedAt: new Date() });
+    expect((await db.photo.findUniqueOrThrow({ where: { id: other } })).annotation).toMatchObject({ tags: ["pool"], searchSummary: "A family member fishing pool" });
   });
 
   it("never keeps a first name taken from a full one", async () => {

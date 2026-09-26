@@ -161,7 +161,7 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
               </ul>
               <form action={allowForgottenNameTyped} className="flex flex-wrap items-center gap-2">
                 <label className="flex items-center gap-1">Or type the name <input name="name" className="h-8 rounded-theme border border-border bg-surface text-text [color-scheme:light] px-2" autoComplete="off" /></label>
-                <Button type="submit" size="sm" variant="secondary">Allow it again if it is forgotten</Button>
+                <ConfirmSubmitButton size="sm" variant="secondary" confirmMessage="Allow this name again if it is a forgotten one? The AI helper may then be told it and write it.">Allow it again if it is forgotten</ConfirmSubmitButton>
               </form>
             </div>
           )}

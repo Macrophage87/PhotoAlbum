@@ -599,16 +599,15 @@ model AppSetting {
   faceDetectionOptInAt   DateTime?
   faceDetectionOptInById String?
   faceDataDeletedAt      DateTime?
-  /// When anybody was last forgotten: an answer from the helper to a request built before then is not stored.
+  /// When anybody was last forgotten: forgotten names read before then are read again before an answer is stored.
+  /// (While a forget runs it holds an advisory lock and no answer is stored: src/lib/people/names-changed.ts.)
   lastForgetAt           DateTime?
-  /// When the last forget finished: while one is under way (lastForgetAt later than this) no answer is stored.
-  forgetFinishedAt       DateTime?
   /// This install's random salt for the key forgotten names are hashed under (with FORGET_KEY from the
   /// environment, so neither a database copy nor the secret alone is enough); outside production, with FORGET_KEY
   /// unset, it stands in for the key, with a warning on the Admin page.
   forgetKey              String?
-  /// Which key forgotten names are hashed under (a fingerprint, never the key): a different one means the secret
-  /// changed, and names forgotten before are no longer recognised until it is put back.
+  /// A fingerprint (never the key) of the FORGET_KEY-based key, recorded when a name is first hashed under it: a
+  /// missing or different one then pauses forgetting and the helper until it is put back.
   forgetKeyFingerprint   String?
   /// What the last whole-album members-only judging used: the matcher's version and the names it knew, so the
   /// daily sweep and a restart judge again only what changed (src/lib/annotation/rejudge.ts).

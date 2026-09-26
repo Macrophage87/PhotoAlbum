@@ -38,16 +38,41 @@ export function unchangedSince(since: Date) {
   };
 }
 
+/** The advisory lock a forget holds from start to finish (see `withForgetLock`). */
+const FORGET_LOCK = 0x666f7267; // "forg"
+
 /**
- * Whether a forget that began after `since` is still under way. Read under a share lock on the one settings row,
- * inside the transaction that stores an answer: forgetting stamps that row before it does anything else, so it waits
- * for a write already under way, and a write that starts after it sees the stamp. While it runs, which photographs
- * it will touch is not known yet, so nothing is stored; once it has finished, the photographs it touched carry
- * `namesScrubbedAt` (see `unchangedSince`), and only answers about those are thrown away.
+ * Run a forget holding the forget lock, so no two forgets overlap and no answer is stored while one runs: every write
+ * that stores an answer takes the lock shared (see `forgetState`), so a forget waits for writes already under way,
+ * and a write that starts after it sees it held. Held by a transaction of its own, it is let go however the forget
+ * ends, a crash included.
  */
-export async function forgetUnderWay(tx: Prisma.TransactionClient, since: Date): Promise<boolean> {
-  const rows = await tx.$queryRaw<{ lastForgetAt: Date | null; forgetFinishedAt: Date | null }[]>`SELECT "lastForgetAt", "forgetFinishedAt" FROM "AppSetting" WHERE id = 'app' FOR SHARE`;
+export async function withForgetLock<T>(fn: () => Promise<T>): Promise<T> {
+  return db.$transaction(
+    async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(${FORGET_LOCK}::bigint)`;
+      return fn();
+    },
+    { timeout: 60 * 60_000, maxWait: 10 * 60_000 },
+  );
+}
+
+/**
+ * Read inside the transaction that stores an answer. `underWay`: a forget is running. Which photographs it will touch
+ * is not known yet, so nothing is stored; once it has finished, the photographs it touched carry `namesScrubbedAt`
+ * (see `unchangedSince`), and only answers about those are thrown away. `reload`: a forget has begun since the
+ * forgotten names were read at `loadedAt` (see Tombstone.loadedAt), which may be missing one, so they are read again
+ * before anything is stored.
+ */
+export async function forgetState(tx: Prisma.TransactionClient, loadedAt?: Date): Promise<{ underWay: boolean; reload: boolean }> {
+  // Held until this transaction ends, so a forget cannot begin between this check and the write.
+  const [{ free }] = await tx.$queryRaw<{ free: boolean }[]>`SELECT pg_try_advisory_xact_lock_shared(${FORGET_LOCK}::bigint) AS free`;
+  const rows = await tx.$queryRaw<{ lastForgetAt: Date | null }[]>`SELECT "lastForgetAt" FROM "AppSetting" WHERE id = 'app'`;
   const started = rows[0]?.lastForgetAt;
-  const finished = rows[0]?.forgetFinishedAt;
-  return Boolean(started && started > since && (!finished || finished < started));
+  return { underWay: !free, reload: Boolean(loadedAt && started && started >= loadedAt) };
+}
+
+/** Whether somebody is being forgotten right now: for deciding whether to wait, not for writing. */
+export async function forgetRunning(): Promise<boolean> {
+  return db.$transaction(async (tx) => !(await tx.$queryRaw<{ free: boolean }[]>`SELECT pg_try_advisory_xact_lock_shared(${FORGET_LOCK}::bigint) AS free`)[0].free);
 }

@@ -9,8 +9,9 @@ import { enqueueAnimalMatchAllOpen } from "@/lib/jobs/handlers/detect-animals";
 import { requireUserOrThrow } from "@/lib/auth/viewer";
 import { canChangePerson, canEditMedia, NOT_YOUR_PERSON, NOT_YOURS } from "@/lib/auth/ownership";
 import { knownAdult, nameMayLeaveServer, namingOutcome } from "@/lib/people/consent";
-import { forgetNameEverywhere, forgetNameInText, forgetOnPhoto, matcherFor, memberTextMentioning, photosMentioning, taggedPhotoIds } from "@/lib/people/forget";
-import { assertCanForget, forgottenHashOf, rememberForgotten } from "@/lib/people/tombstone";
+import { forgetNameEverywhere, forgetNameInText, forgetOnPhoto, matcherFor, memberTextMentioning, photosInContainers, photosMentioning, taggedPhotoIds } from "@/lib/people/forget";
+import { assertCanForget, forgottenHashesOf, rememberForgotten } from "@/lib/people/tombstone";
+import { withForgetLock } from "@/lib/people/names-changed";
 import { enqueueFaceDetection } from "@/lib/jobs/handlers/detect-faces";
 import { confirmFaceAs, rejectProposal } from "@/lib/people/matching";
 import { rejudgeFromAction } from "@/lib/annotation/rejudge-notice";
@@ -224,25 +225,26 @@ export async function optOutPerson(personId: string, fd: FormData): Promise<void
   if (person.kind === "PET") throw new Error("A pet is removed, not forgotten");
   // Without a key to remember their names under, forgetting them would let the names come straight back.
   await assertCanForget();
-  // First of all: from this moment until the forget has finished, no answer from the helper is stored at all, so none
+  // One forget at a time, and while it runs no answer from the helper is stored at all (see withForgetLock), so none
   // can bring the name back while the photographs to scrub are still being found.
-  const now = new Date();
-  await db.appSetting.upsert({ where: { id: "app" }, create: { id: "app", lastForgetAt: now }, update: { lastForgetAt: now } });
-  let left: Awaited<ReturnType<typeof memberTextMentioning>>;
-  try {
+  const left = await withForgetLock(async () => {
+    const now = new Date();
+    await db.appSetting.upsert({ where: { id: "app" }, create: { id: "app", lastForgetAt: now }, update: { lastForgetAt: now } });
     const m = await matcherFor(person);
     const tagged = await taggedPhotoIds(personId);
-    // Photographs whose members' words name them too: what the helper wrote there was written from those words.
-    const before = await memberTextMentioning(m, tagged, personId);
-    const photoIds = [...new Set([...tagged, ...(await photosMentioning(m)), ...before.photos.map((p) => p.id)])];
+    // Photographs whose members' words name them too — their own, or their trip's, collection's or activity's: what
+    // the helper wrote there was written from those words.
+    const before = await memberTextMentioning(m, tagged, personId, Infinity);
+    const photoIds = [...new Set([...tagged, ...(await photosMentioning(m)), ...before.photos.map((p) => p.id), ...(await photosInContainers(before))])];
     await db.person.update({ where: { id: personId }, data: { faceIndexing: false, nameInDescriptions: false, pendingDecision: false, keepNameOnPhotos: keepName, optedOutAt: person.optedOutAt ?? now, faceIndexingSetAt: now, namingWithdrawnAt: null } });
-    // Their names, hashed, outlive their record: see tombstone.ts. Stamped again once they are remembered.
+    // Their names, hashed, outlive their record: see tombstone.ts. Stamped again once they are remembered, so names
+    // read before are read again.
     if (!keepName) await rememberForgotten(m.tombstoneForms);
     await db.appSetting.update({ where: { id: "app" }, data: { lastForgetAt: new Date() } });
     await forgetNameInText(photoIds, m, { tagged, personId });
     // What is left mentioning them is what members wrote (or the helper's trip descriptions, where only a name that
     // is also a word is left); it is listed so it can be edited by hand.
-    left = await memberTextMentioning(m, tagged, personId);
+    const after = await memberTextMentioning(m, tagged, personId);
     await db.faceCluster.deleteMany({ where: { personId } });
     await db.face.deleteMany({ where: { proposedPersonId: personId } });
     if (keepName) {
@@ -252,14 +254,13 @@ export async function optOutPerson(personId: string, fd: FormData): Promise<void
       // Forgetting entirely also removes the person page; the record of who is in which photo went with the faces.
       await db.person.delete({ where: { id: personId } });
     }
-    // Until the record was gone the remembered names still counted as somebody's; an answer asked for before now
-    // about any of these photographs is thrown away, and the whole album's while the stamp below is newest.
+    // Until the record was gone the remembered names still counted as somebody's: an answer asked for before now
+    // about any of these photographs is thrown away, and names read before now are read again.
     const settled = new Date();
     await db.photo.updateMany({ where: { id: { in: photoIds } }, data: { namesScrubbedAt: settled } });
     await db.appSetting.update({ where: { id: "app" }, data: { lastForgetAt: settled } });
-  } finally {
-    await db.appSetting.update({ where: { id: "app" }, data: { forgetFinishedAt: new Date() } });
-  }
+    return after;
+  });
   // The list stays until an admin (or whoever forgot them) has seen to it: ids and fields, never the name.
   const count = left.photos.length + left.trips.length + left.collections.length + left.activities.length;
   if (!keepName && count) {
@@ -284,8 +285,8 @@ export async function allowForgottenName(hash: string): Promise<void> {
 export async function allowForgottenNameTyped(fd: FormData): Promise<void> {
   await requireAdmin();
   const name = String(fd.get("name") ?? "").trim();
-  const hash = name ? await forgottenHashOf(name) : null;
-  if (hash) await db.forgottenName.deleteMany({ where: { hash } });
+  const hashes = name ? await forgottenHashesOf(name) : [];
+  if (hashes.length) await db.forgottenName.deleteMany({ where: { hash: { in: hashes } } });
   revalidatePath("/admin");
 }
 

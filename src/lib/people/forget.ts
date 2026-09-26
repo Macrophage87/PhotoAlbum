@@ -127,6 +127,16 @@ async function containersOf(photoIds: string[]) {
   return { trips: some(photos.map((p) => p.tripId)), activities: some(photos.map((p) => p.activityId)), collections: some(photos.flatMap((p) => p.collections.map((c) => c.collectionId))) };
 }
 
+/**
+ * What could name them in public that was not there at the last pass: text the helper wrote since, text a member has
+ * shown to everyone since (which is not written again), and photographs they have been tagged on since, where even
+ * their first name is theirs.
+ */
+function writtenSince(since: Date, personId?: string): Prisma.PhotoWhereInput {
+  const tag = personId ? { some: { personId, confirmedAt: { gt: since } } } : null;
+  return { OR: [{ annotatedAt: { gt: since } }, { annotationSharedAt: { gt: since } }, ...(tag ? [{ faces: tag }, { animals: tag }] : [])] };
+}
+
 export type ForgetScope = {
   /** The items they are, or were, on. */
   tagged?: Set<string>;
@@ -158,7 +168,7 @@ export async function forgetNameInText(photoIds: string[], m: NameMatcher, opts:
   const touched: string[] = [];
   if (ids.length) {
     const [photos, others, given] = await Promise.all([
-      db.photo.findMany({ where: { id: { in: ids }, ...(opts.since ? { annotatedAt: { gt: opts.since } } : {}) }, select: { id: true, title: true, membersTitle: true, titleByHelper: true, annotation: true, annotationMembersOnly: true, placeEstimateName: true, placeEstimateNote: true, placeEstimateMembersOnly: true, estimatedDateNote: true } }),
+      db.photo.findMany({ where: { id: { in: ids }, ...(opts.since ? writtenSince(opts.since, opts.personId) : {}) }, select: { id: true, title: true, membersTitle: true, titleByHelper: true, annotation: true, annotationMembersOnly: true, placeEstimateName: true, placeEstimateNote: true, placeEstimateMembersOnly: true, estimatedDateNote: true } }),
       othersOn(ids.filter((id) => tagged.has(id)), opts.personId),
       answerTitles(ids),
     ]);
@@ -209,8 +219,8 @@ export async function forgetNameInText(photoIds: string[], m: NameMatcher, opts:
 export type MemberTextField = "title" | "caption" | "notes";
 export type MemberText = {
   photos: { id: string; label: string; fields: MemberTextField[] }[];
-  trips: { slug: string; title: string }[];
-  collections: { slug: string; title: string }[];
+  trips: { id: string; slug: string; title: string }[];
+  collections: { id: string; slug: string; title: string }[];
   activities: { id: string; title: string; tripSlug: string }[];
 };
 
@@ -223,7 +233,7 @@ const MEMBER_TEXT_LIMIT = 100;
  * helper's descriptions of trips around their photographs where only a name that is also a word ("May") is left.
  * Listed so their authors (or an admin) can decide what to do with those words.
  */
-export async function memberTextMentioning(m: NameMatcher, tagged: Set<string> = new Set(), personId?: string): Promise<MemberText> {
+export async function memberTextMentioning(m: NameMatcher, tagged: Set<string> = new Set(), personId?: string, limit = MEMBER_TEXT_LIMIT): Promise<MemberText> {
   const out: MemberText = { photos: [], trips: [], collections: [], activities: [] };
   const words = probes(m.albumForms);
   const taggedIds = [...tagged];
@@ -241,20 +251,36 @@ export async function memberTextMentioning(m: NameMatcher, tagged: Set<string> =
     if ((!h.title && m.mentions(p.title, where)) || (!h.membersTitle && m.mentions(p.membersTitle, where))) fields.push("title");
     if (m.mentions(p.caption, where)) fields.push("caption");
     if (m.mentions(p.context, where)) fields.push("notes");
-    if (fields.length && out.photos.length < MEMBER_TEXT_LIMIT) out.photos.push({ id: p.id, label: p.title?.trim() || p.caption?.trim() || p.originalName, fields });
+    if (fields.length && out.photos.length < limit) out.photos.push({ id: p.id, label: p.title?.trim() || p.caption?.trim() || p.originalName, fields });
   }
   const near = await containersOf(taggedIds);
-  // Around their photographs anybody's words count, the helper's too; elsewhere only members'.
-  const found = (ids: string[]) => ({ description: { not: null }, OR: [{ id: { in: ids } }, { descriptionByHelper: false, OR: words.map((w) => ({ description: { contains: w, mode: "insensitive" as const } })) }] });
+  // Around their photographs anybody's words count, the helper's too; elsewhere only members' — and a trip's,
+  // collection's or activity's title is always a member's.
+  const contains = (field: "title" | "description") => words.map((w) => ({ [field]: { contains: w, mode: "insensitive" as const } }));
+  const found = (ids: string[]) => ({ OR: [{ id: { in: ids } }, { descriptionByHelper: false, OR: contains("description") }, ...(words.length ? [{ OR: contains("title") }] : [])] });
   const [trips, collections, activities] = await Promise.all([
     db.trip.findMany({ where: found(near.trips), select: { id: true, slug: true, title: true, description: true }, orderBy: { startDate: "asc" } }),
     db.collection.findMany({ where: found(near.collections), select: { id: true, slug: true, title: true, description: true }, orderBy: { title: "asc" } }),
     db.activity.findMany({ where: found(near.activities), select: { id: true, title: true, description: true, trip: { select: { slug: true } } }, orderBy: { startTime: "asc" } }),
   ]);
-  out.trips = trips.filter((t) => m.mentions(t.description, { tagged: near.trips.includes(t.id) })).slice(0, MEMBER_TEXT_LIMIT).map((t) => ({ slug: t.slug, title: t.title }));
-  out.collections = collections.filter((c) => m.mentions(c.description, { tagged: near.collections.includes(c.id) })).slice(0, MEMBER_TEXT_LIMIT).map((c) => ({ slug: c.slug, title: c.title }));
-  out.activities = activities.filter((a) => m.mentions(a.description, { tagged: near.activities.includes(a.id) })).slice(0, MEMBER_TEXT_LIMIT).map((a) => ({ id: a.id, title: a.title, tripSlug: a.trip.slug }));
+  const names = (x: { title: string; description: string | null }, tagged: boolean) => m.mentions(x.description, { tagged }) || m.mentions(x.title, { tagged });
+  out.trips = trips.filter((t) => names(t, near.trips.includes(t.id))).slice(0, limit).map((t) => ({ id: t.id, slug: t.slug, title: t.title }));
+  out.collections = collections.filter((c) => names(c, near.collections.includes(c.id))).slice(0, limit).map((c) => ({ id: c.id, slug: c.slug, title: c.title }));
+  out.activities = activities.filter((a) => names(a, near.activities.includes(a.id))).slice(0, limit).map((a) => ({ id: a.id, title: a.title, tripSlug: a.trip.slug }));
   return out;
+}
+
+/**
+ * The photographs in trips, collections and activities whose members' words name them: those words go to the helper
+ * with every photograph there, so what it wrote about any of them may name them.
+ */
+export async function photosInContainers(t: Pick<MemberText, "trips" | "collections" | "activities">): Promise<string[]> {
+  const trips = t.trips.map((x) => x.id);
+  const collections = t.collections.map((x) => x.id);
+  const activities = t.activities.map((x) => x.id);
+  if (!trips.length && !collections.length && !activities.length) return [];
+  const rows = await db.photo.findMany({ where: { OR: [{ tripId: { in: trips } }, { activityId: { in: activities } }, { collections: { some: { collectionId: { in: collections } } } }] }, select: { id: true } });
+  return rows.map((r) => r.id);
 }
 
 /**
@@ -280,6 +306,26 @@ export async function forgetNameEverywhere(person: PersonNames, opts: { publicOn
   const m = await matcherFor(person);
   const tagged = await taggedPhotoIds(person.id);
   await forgetNameInText([...tagged, ...(await photosMentioning(m))], m, { tagged, personId: person.id, publicOnly: opts.publicOnly, since: opts.since });
+}
+
+/**
+ * The helper's text on an item, and its title, without the name of anybody whose naming the album withdrew by itself:
+ * for text a member is about to show to everyone, which the nightly public pass would otherwise not reach for days.
+ */
+export async function withoutWithdrawnNames(photoId: string, text: { annotation: unknown; title: string | null }): Promise<{ annotation: unknown; title: string | null; changed: boolean }> {
+  const people = await db.person.findMany({ where: { namingWithdrawnAt: { not: null } }, select: { id: true, name: true, formerNames: true } });
+  let annotation = text.annotation;
+  let title = text.title;
+  if (!people.length) return { annotation, title, changed: false };
+  const tagged = await db.face.findMany({ where: { photoId, OR: [{ personId: { in: people.map((p) => p.id) } }, { proposedPersonId: { in: people.map((p) => p.id) } }] }, select: { personId: true, proposedPersonId: true } });
+  const on = new Set(tagged.flatMap((f) => [f.personId, f.proposedPersonId]));
+  for (const p of people) {
+    const m = await matcherFor(p);
+    const where: Where = { tagged: on.has(p.id), others: on.has(p.id) ? ((await othersOn([photoId], p.id)).get(photoId) ?? []) : [] };
+    if (annotation && typeof annotation === "object" && !Array.isArray(annotation)) annotation = scrubAnnotation(annotation as StoredAnnotation, m, where);
+    title = m.scrub(title, where);
+  }
+  return { annotation, title, changed: JSON.stringify(annotation) !== JSON.stringify(text.annotation) || title !== text.title };
 }
 
 /** How long a withdrawal nobody asked for waits for an admin to record evidence before members-only text is scrubbed. */

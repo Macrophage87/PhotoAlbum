@@ -15,6 +15,8 @@ import { BACKFILL_CAP, backfillCandidates, backfillExclusions, taskOf, type Back
 import { annotationSchema, toStored, type StoredAnnotation } from "@/lib/annotation/schema";
 import { anthropic } from "@/lib/annotation/client";
 import { helperText, judgeHelperText, knownNames, mentionsAnyName, pastHelperTitles, titleIsHelpers } from "@/lib/annotation/members-only";
+import { enqueueEmbedding } from "@/lib/jobs/handlers/embed-photo";
+import { withoutWithdrawnNames } from "@/lib/people/forget";
 
 /** The admin's half of the two gates. Recorded with who and when so the decision is auditable. */
 export async function setAnnotationOptIn(on: boolean): Promise<void> {
@@ -141,9 +143,13 @@ export async function setAnnotationShared(photoId: string, seenRevision: number,
   const own = photo.title?.trim() || null;
   const kept = photo.membersTitle?.trim() || null;
   let data;
+  let scrubbed = false;
   if (everyone) {
+    // Nobody whose naming the album withdrew is shown by name: the nightly pass only looks at what was written since.
+    const out = await withoutWithdrawnNames(photoId, { annotation: photo.annotation, title: ai });
+    scrubbed = out.changed;
     // The helper's title goes back on the item if it has none of its own.
-    data = { annotationMembersOnly: false, annotationTitleOnly: false, annotationTitleWords: [], annotationTitleFrom: [], annotationSharedAt: new Date(), ...(ai && !own && kept === ai ? { title: ai, titleByHelper: true, membersTitle: null } : {}) };
+    data = { annotationMembersOnly: false, annotationTitleOnly: false, annotationTitleWords: [], annotationTitleFrom: [], annotationSharedAt: new Date(), ...(out.changed ? { annotation: out.annotation as object } : {}), ...(ai && !own && kept === ai ? { title: out.title, titleByHelper: true, membersTitle: null } : {}) };
   } else {
     const unknown = own && photo.titleByHelper === null && own !== ai;
     const helpers = photo.kind !== "EXTERNAL_VIDEO" && titleIsHelpers({ title: photo.title, titleByHelper: photo.titleByHelper, aiTitle: ai, ...(unknown ? { pastTitles: await pastHelperTitles(photoId), namesSomebody: mentionsAnyName(own!, await knownNames()) } : {}) });
@@ -151,6 +157,11 @@ export async function setAnnotationShared(photoId: string, seenRevision: number,
   }
   const done = await db.photo.updateMany({ where: { id: photoId, annotationRevision: seenRevision }, data });
   if (!done.count) throw new Error(DESCRIPTION_CHANGED);
+  if (scrubbed) {
+    // The semantic index was made from the words with the name.
+    await db.$executeRaw`UPDATE "Photo" SET "textEmbedding" = NULL WHERE id = ${photoId}`;
+    await enqueueEmbedding(photoId, true);
+  }
   revalidatePath(`/photos/${photoId}`);
   // The title and the words show in galleries, timelines, maps and search results too.
   revalidatePath("/", "layout");

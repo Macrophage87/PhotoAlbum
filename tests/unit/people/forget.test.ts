@@ -18,6 +18,7 @@ import { applyAnnotation } from "@/lib/annotation/apply";
 import { applyPlaceEstimate } from "@/lib/annotation/place";
 import { readFileSync } from "node:fs";
 import { scrubWithdrawnNames, withdrawalNotice, withdrawalReason } from "@/lib/people/forget";
+import { setAnnotationShared } from "@/app/annotation/actions";
 import { loadItem, withoutUnpermittedNames } from "@/lib/annotation/request";
 import { withoutUnpermittedNames as withoutContainerNames } from "@/lib/annotation/container";
 
@@ -225,6 +226,13 @@ describe("forgetting somebody", () => {
     expect((await withoutContainerNames({ ...container, descriptionByHelper: true })).description).toBeNull();
   });
 
+  it("takes a first name nobody else has out of notes on photographs they are not on, before the helper sees them", async () => {
+    await db.person.update({ where: { id: adaId }, data: { faceIndexing: false, nameInDescriptions: false } });
+    const elsewhere = (await db.photo.create({ data: { uploaderId: admin, originalName: "e.jpg", mimeType: "image/jpeg", storageKey: "e", originalPath: "e/o.jpg", sizeBytes: 1, status: "READY", context: "Ada waved from the boat on a trip to Florence, Italy" } })).id;
+    const safe = await withoutUnpermittedNames((await loadItem(elsewhere))!);
+    expect(safe.context).toBe("A family member waved from the boat on a trip to Florence, Italy");
+  });
+
   it("takes the name off one photograph's text when its tag is taken off", async () => {
     await db.face.deleteMany({ where: { photoId } });
     const fd = new FormData();
@@ -332,6 +340,37 @@ describe("a name handed over without evidence of an adult", () => {
     expect(await scrubWithdrawnNames(new Date(Date.now() + 15 * 86_400_000))).toBe(1);
     expect(((await db.photo.findUniqueOrThrow({ where: { id: photoId } })).annotation as StoredAnnotation).caption).toBe("A family member on the swings");
     expect((await db.person.findUniqueOrThrow({ where: { id: sam.id } })).namingWithdrawnAt).toBeNull();
+  });
+
+  it("in the nightly pass, reaches text shown to everyone since, and photographs tagged since", async () => {
+    await resetTestDb();
+    const admin = (await db.user.create({ data: { email: "admin@example.com", role: "ADMIN" } })).id;
+    const sam = await db.person.create({ data: { name: "Sam Lee", namingWithdrawnAt: new Date(), createdById: admin } });
+    const long = new Date(Date.now() - 10 * 86_400_000);
+    const shown = (await db.photo.create({ data: { uploaderId: admin, originalName: "s.jpg", mimeType: "image/jpeg", storageKey: "s", originalPath: "s/o.jpg", sizeBytes: 1, status: "READY", annotation: { ...annotation, caption: "Sam Lee fishing" }, annotationMembersOnly: true, annotatedAt: long } })).id;
+    const later = (await db.photo.create({ data: { uploaderId: admin, originalName: "l.jpg", mimeType: "image/jpeg", storageKey: "l", originalPath: "l/o.jpg", sizeBytes: 1, status: "READY", annotation: { ...annotation, caption: "Sam on the swings" }, annotatedAt: long } })).id;
+    await scrubWithdrawnNames();
+    // Shown to everyone after the first pass (not written again), and tagged after it.
+    await db.photo.update({ where: { id: shown }, data: { annotationMembersOnly: false, annotationSharedAt: new Date() } });
+    await db.face.create({ data: { photoId: later, personId: sam.id, status: "CONFIRMED", box: [0, 0, 1, 1], confidence: 0 } });
+    await scrubWithdrawnNames();
+    expect(((await db.photo.findUniqueOrThrow({ where: { id: shown } })).annotation as StoredAnnotation).caption).toBe("A family member fishing");
+    expect(((await db.photo.findUniqueOrThrow({ where: { id: later } })).annotation as StoredAnnotation).caption).toBe("A family member on the swings");
+  });
+
+  it("is taken out of the helper's text a member shows to everyone", async () => {
+    await resetTestDb();
+    const admin = (await db.user.create({ data: { email: "admin@example.com", role: "ADMIN" } })).id;
+    who.role = "ADMIN";
+    who.id = admin;
+    await db.person.create({ data: { name: "Timothy Kent", namingWithdrawnAt: new Date(), createdById: admin } });
+    const photoId = (await db.photo.create({ data: { uploaderId: admin, originalName: "t.jpg", mimeType: "image/jpeg", storageKey: "t", originalPath: "t/o.jpg", sizeBytes: 1, status: "READY", annotation: { ...annotation, title: "Timothy Kent fishing", caption: "Timothy Kent fishing" }, membersTitle: "Timothy Kent fishing", annotationMembersOnly: true, annotatedAt: new Date() } })).id;
+    const { annotationRevision } = await db.photo.findUniqueOrThrow({ where: { id: photoId } });
+    await setAnnotationShared(photoId, annotationRevision, true);
+    const p = await db.photo.findUniqueOrThrow({ where: { id: photoId } });
+    expect(p.annotationMembersOnly).toBe(false);
+    expect((p.annotation as StoredAnnotation).caption).toBe("A family member fishing");
+    expect(p.title).toBe("A family member fishing");
   });
 
   it("stays pending through a recognition save when naming was turned off before, until naming is turned back on", async () => {

@@ -24,37 +24,54 @@ describe("the key forgotten names are hashed under", () => {
     env.FORGET_KEY = KEY;
     const state = await forgetKeyState();
     expect(state.problem).toBeNull();
-    expect(state.version).toBe(1);
+    expect(state.write?.version).toBe(1);
     await rememberForgotten([{ form: "Timothy Kent", capitalizedOnly: false }]);
     // The salt is in the database; the key made with it is not.
     const setting = await db.appSetting.findUniqueOrThrow({ where: { id: "app" } });
     expect(setting.forgetKey).not.toBeNull();
-    expect(Buffer.from(setting.forgetKey!, "base64").equals(state.key!)).toBe(false);
+    expect(Buffer.from(setting.forgetKey!, "base64").equals(state.write!.key)).toBe(false);
     expect((await db.forgottenName.findFirstOrThrow()).keyVersion).toBe(1);
     expect((await loadTombstone()).scrub("Timothy Kent waved")).toBe("A family member waved");
   });
 
-  it("outside production stands in with a key in the database, and says so", async () => {
+  it("outside production stands in with a key made from the database, and says so", async () => {
     const state = await forgetKeyState();
-    expect(state.key).not.toBeNull();
+    expect(state.write?.version).toBe(0);
     expect(state.problem).toMatch(/FORGET_KEY is not set/);
     expect(state.paused).toBe(false);
   });
 
-  it("in production, missing, refuses to forget and pauses the helper", async () => {
+  it("in production, never set, refuses to forget but leaves the helper running", async () => {
     env.NODE_ENV = "production";
     await expect(assertCanForget()).rejects.toThrow(/paused/);
     const gates = await annotationGates();
-    expect(gates).toMatchObject({ active: false, pausedForForgetKey: true });
+    expect(gates.pausedForForgetKey).toBe(false);
   });
 
-  it("changed, is noticed, and names hashed under the old one are not used", async () => {
+  it("still recognises names forgotten before it was set, and counts them for admins", async () => {
+    await rememberForgotten([{ form: "Timothy Kent", capitalizedOnly: false }]);
+    env.FORGET_KEY = KEY;
+    await rememberForgotten([{ form: "Ada Byron", capitalizedOnly: false }]);
+    const state = await forgetKeyState();
+    expect(state.weak).toBe(1);
+    expect(state.problem).toMatch(/1 forgotten name was kept before FORGET_KEY was set/);
+    expect(state.paused).toBe(false);
+    expect((await loadTombstone()).scrub("Timothy Kent went fishing with Ada Byron")).toBe("A family member went fishing with a family member");
+  });
+
+  it("once names are hashed under it, missing or changed pauses forgetting and the helper everywhere", async () => {
     env.FORGET_KEY = KEY;
     await rememberForgotten([{ form: "Timothy Kent", capitalizedOnly: false }]);
+    // Not production: a worker started by hand without the key is caught all the same.
+    env.FORGET_KEY = undefined;
+    expect(await forgetKeyState()).toMatchObject({ paused: true, write: null });
+    await expect(assertCanForget()).rejects.toThrow(/paused/);
+    expect(await annotationGates()).toMatchObject({ active: false, pausedForForgetKey: true });
     env.FORGET_KEY = Buffer.alloc(32, 9).toString("base64");
-    env.NODE_ENV = "production";
     const state = await forgetKeyState();
     expect(state.problem).toMatch(/has changed/);
     expect(state.paused).toBe(true);
+    env.FORGET_KEY = KEY;
+    expect((await forgetKeyState()).paused).toBe(false);
   });
 });

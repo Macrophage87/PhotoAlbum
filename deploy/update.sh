@@ -11,9 +11,10 @@
 #   2. `git fetch` + `git reset --hard origin/<branch>` as the checkout's
 #      owner (the branch is the source of truth; .env and the compose
 #      override are untracked and survive the reset),
-#   3. `docker compose up --build -d` (the container applies migrations at
+#   3. make FORGET_KEY in .env if it has none (printed loudly: back it up),
+#   4. `docker compose up --build -d` (the container applies migrations at
 #      start; in-flight photo processing gets 45 s to finish),
-#   4. wait for /api/health, then prune dangling images and day-old build cache.
+#   5. wait for /api/health, then prune dangling images and day-old build cache.
 #
 # Runs as a user with sudo (the deploy login) or as root.
 set -euo pipefail
@@ -44,10 +45,20 @@ as_owner git fetch origin "$BRANCH"
 as_owner git reset --hard "origin/$BRANCH"
 echo "== at $(as_owner git rev-parse --short HEAD) =="
 
-# 3. build + (re)start
+# 3. FORGET_KEY: the secret forgotten people's names are hashed under (docs/DEPLOY.md). Made once if .env has none.
+# It is not in the database dumps above, so it has to be backed up with .env; lost or changed, names forgotten under
+# it are no longer recognised, and forgetting and the AI helper pause until it is put back.
+if as_root test -f .env && ! as_root grep -qE '^FORGET_KEY=.+' .env; then
+  KEY=$(openssl rand -base64 32)
+  # Written in place (not replaced), so .env keeps its owner and mode.
+  as_root sh -c "tmp=\$(mktemp) && grep -vE '^FORGET_KEY=' .env > \"\$tmp\"; printf 'FORGET_KEY=%s\n' '$KEY' >> \"\$tmp\" && cat \"\$tmp\" > .env && rm -f \"\$tmp\""
+  echo "!! made a new FORGET_KEY in $APP_DIR/.env. Back it up now, somewhere other than $BACKUP_DIR (the database dumps do not contain it)." >&2
+fi
+
+# 4. build + (re)start
 as_root docker compose up --build -d
 
-# 4. health
+# 5. health
 for ((i = 0; i < HEALTH_TIMEOUT; i += 5)); do
   if curl -fs "http://127.0.0.1:$APP_PORT/api/health" >/dev/null 2>&1; then
     as_root docker image prune -f >/dev/null

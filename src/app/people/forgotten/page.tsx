@@ -28,15 +28,15 @@ export default async function ForgottenPage() {
       const items = l.items as { photos: { id: string; fields: MemberTextField[] }[]; trips: { slug: string }[]; collections: { slug: string }[]; activities: { id: string }[] };
       const [photos, trips, collections, activities] = await Promise.all([
         db.photo.findMany({ where: { id: { in: items.photos.map((p) => p.id) }, trashedAt: null }, select: { id: true, originalName: true, takenAt: true, trip: { select: { startDate: true } } } }),
-        db.trip.findMany({ where: { slug: { in: items.trips.map((t) => t.slug) } }, select: { slug: true, startDate: true } }),
-        db.collection.findMany({ where: { slug: { in: items.collections.map((c) => c.slug) } }, select: { slug: true, createdAt: true } }),
+        db.trip.findMany({ where: { slug: { in: items.trips.map((t) => t.slug) } }, select: { id: true, slug: true, startDate: true } }),
+        db.collection.findMany({ where: { slug: { in: items.collections.map((c) => c.slug) } }, select: { id: true, slug: true, createdAt: true } }),
         db.activity.findMany({ where: { id: { in: items.activities.map((a) => a.id) } }, select: { id: true, startTime: true, trip: { select: { slug: true } } } }),
       ]);
       const fields = new Map(items.photos.map((p) => [p.id, p.fields]));
       const text: MemberText = {
         photos: photos.map((p) => ({ id: p.id, label: `${p.originalName}, ${day(p.takenAt)}${p.trip ? `, on the trip of ${day(p.trip.startDate)}` : ""}`, fields: fields.get(p.id) ?? [] })),
-        trips: trips.map((t) => ({ slug: t.slug, title: `The trip of ${day(t.startDate)}` })),
-        collections: collections.map((c) => ({ slug: c.slug, title: `A collection made ${day(c.createdAt)}` })),
+        trips: trips.map((t) => ({ id: t.id, slug: t.slug, title: `The trip of ${day(t.startDate)}` })),
+        collections: collections.map((c) => ({ id: c.id, slug: c.slug, title: `A collection made ${day(c.createdAt)}` })),
         activities: activities.map((a) => ({ id: a.id, title: `An outing on ${day(a.startTime)}`, tripSlug: a.trip.slug })),
       };
       return { id: l.id, createdAt: l.createdAt, text, count: photos.length + trips.length + collections.length + activities.length };

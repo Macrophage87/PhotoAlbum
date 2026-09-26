@@ -20,7 +20,7 @@ import { handWrittenDescription, handWrittenMembersOnly, judgeDescription } from
 import { descriptionStaysHelpers } from "@/lib/annotation/helper-text";
 import { namesChangedSince } from "@/lib/people/names-changed";
 import { NAMES_CHANGED, withoutUnpermittedNames } from "@/lib/annotation/container";
-import { forgetUnderWay } from "@/lib/people/names-changed";
+import { forgetState } from "@/lib/people/names-changed";
 import { loadTombstone } from "@/lib/people/tombstone";
 import { unpermittedNameScrub } from "@/lib/people/unpermitted";
 
@@ -206,7 +206,8 @@ export async function describeActivityWithAi(slug: string, id: string, note?: st
   const parsed = parseActivityDescription(response.content as { type: string; text?: string }[]);
   if (!parsed) throw new Error("The helper's answer could not be read; try again");
   // Nobody forgotten comes back by way of the answer.
-  parsed.description = (await loadTombstone()).scrub(parsed.description);
+  const tombstone = await loadTombstone();
+  parsed.description = tombstone.scrub(parsed.description);
   // Written from names or notes, it is read by members only; see `descriptionFromMembersOnly`.
   const judged = await judgeDescription(parsed.description, {
     names,
@@ -219,7 +220,10 @@ export async function describeActivityWithAi(slug: string, id: string, note?: st
   // Somebody on these photographs forgotten, renamed or no longer to be named while it was being written, or anybody
   // forgotten at all: its answer may name them, so it is not kept.
   await db.$transaction(async (tx) => {
-    if ((await forgetUnderWay(tx, requestedAt)) || (await namesChangedSince(activity.photos.map((p) => p.id), requestedAt))) throw new Error(NAMES_CHANGED);
+    const forget = await forgetState(tx, tombstone.loadedAt);
+    if (forget.underWay || (await namesChangedSince(activity.photos.map((p) => p.id), requestedAt))) throw new Error(NAMES_CHANGED);
+    // Somebody forgotten since the forgotten names were read: read them again.
+    if (forget.reload) parsed.description = (await loadTombstone()).scrub(parsed.description);
     await tx.activity.update({ where: { id }, data: { description: parsed.description, descriptionMembersOnly: judged.membersOnly, descriptionTitleOnly: judged.titleOnly, descriptionTitleWords: judged.titleOnly ? (judged.titleWords ?? []) : [], descriptionSharedAt: null, descriptionByHelper: true } });
   });
   revalidatePath(`/trips/${slug}/activities/${id}`);

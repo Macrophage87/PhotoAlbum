@@ -146,11 +146,31 @@ describe("where a first name is also a place", () => {
     expect(scrub("Florence Adams", "With Florence at the Duomo")).toBe("With a family member at the Duomo");
   });
 
-  it("is never taken away from their photographs for somebody merely not to be named", () => {
+  it("is not taken beside a place written as one, or before a number, away from their photographs", () => {
     const m = nameMatcher(["Florence Adams"]);
-    expect(m.scrub("Florence and Tuscany 2019; Florence waved", { fullOnly: true })).toBe("Florence and Tuscany 2019; Florence waved");
-    expect(m.scrub("Florence Adams waved", { fullOnly: true })).toBe("A family member waved");
-    expect(m.scrub("Florence waved", { tagged: true, fullOnly: true })).toBe("A family member waved");
+    const text = "a quiet dusk. Florence, Italy. Florence 2019 was the year of the old Florence Nightingale statue by the river";
+    expect(m.scrub(text)).toBe(text);
+    // A first name nobody else has is taken otherwise: what is sent to the helper errs that way.
+    expect(nameMatcher(["Timothy Kent"]).scrub("Timothy waved")).toBe("A family member waved");
+  });
+
+  it("on their own photographs, keeps only a place written as one", () => {
+    const m = nameMatcher(["Florence Adams"]);
+    expect(m.scrub("A trip to Florence, Italy; Florence, Italy.", { tagged: true })).toBe("A trip to Florence, Italy; Florence, Italy.");
+    expect(m.scrub("A walk to Florence's house with Florence", { tagged: true })).toBe("A walk to a family member's house with a family member");
+    const may = nameMatcher(["May Jones"]);
+    expect(may.scrub("May Day at the fair. The May pole. MAY DAY", { tagged: true })).toBe("May Day at the fair. The May pole. MAY DAY");
+    expect(may.scrub("May swims", { tagged: true })).toBe("A family member swims");
+  });
+});
+
+describe("a name at the start of a sentence", () => {
+  it("is theirs whatever capitalized word ended the sentence before", () => {
+    expect(scrub("Ada Byron", "We drove to Maine. Ada swam.")).toBe("We drove to Maine. A family member swam.");
+    expect(scrub("Ada Byron", "Ben went with Tom. Ada smiled.", ["Tom Jones"])).toBe("Ben went with Tom. A family member smiled.");
+    expect(scrub("Jack Byron", "The Union Jack. Jack swam.", [], true)).toBe("The Union Jack. A family member swam.");
+    // An initial is no sentence end.
+    expect(scrub("Ada Byron", "J. Ada Smith waved")).toBe("J. Ada Smith waved");
   });
 });
 

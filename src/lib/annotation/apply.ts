@@ -6,7 +6,7 @@ import { QUEUES } from "@/lib/jobs/queues";
 import { applyPlaceEstimate, needsPlaceEstimate } from "./place";
 import { isWeakDate } from "@/lib/photos/date-from-neighbours";
 import { judgeHelperText, knownNames, mentionsAnyName, pastHelperTitles, titleIsHelpers } from "./members-only";
-import { forgetUnderWay, unchangedSince } from "@/lib/people/names-changed";
+import { forgetState, unchangedSince } from "@/lib/people/names-changed";
 import { loadTombstone, scrubRecord, type Tombstone } from "@/lib/people/tombstone";
 
 export type ApplyResult = { ok: true } | { ok: false; reason: "refusal" | "invalid" | "max_tokens" };
@@ -52,7 +52,7 @@ export function titlesAfter(
  * changed their mind about being named, is not stored: it may name them again. Nothing is kept of it, not even the
  * raw row, and the item stays due to be described again with the names as they are now.
  */
-export async function applyAnnotation(photoId: string, model: string, parsed: Annotation, raw: { usage?: Usage; batched?: boolean } & Record<string, unknown>, opts: { sent?: boolean | null; requestedAt?: Date; tombstone?: Tombstone } = {}): Promise<void> {
+export async function applyAnnotation(photoId: string, model: string, parsed: Annotation, raw: { usage?: Usage; batched?: boolean } & Record<string, unknown>, opts: { sent?: boolean | null; requestedAt?: Date; tombstone?: Tombstone; attempts?: number } = {}): Promise<void> {
   const requestedAt = opts.requestedAt;
   const current = await db.photo.findUnique({ where: { id: photoId }, select: { takenAt: true, takenAtSource: true, estimatedDateSource: true, annotationSource: true, title: true, membersTitle: true, titleByHelper: true, annotation: true, kind: true, lat: true, placeEstimatedAt: true, context: true } });
   if (!current) return;
@@ -83,8 +83,12 @@ export async function applyAnnotation(photoId: string, model: string, parsed: An
   // Stored only if nothing about who may be named on it changed since the request was built, checked in the write
   // itself; otherwise nothing of it is kept, the raw answer included.
   const stale = Symbol("stale");
+  const reload = Symbol("reload");
   const kept = await db.$transaction(async (tx) => {
-    if (requestedAt && (await forgetUnderWay(tx, requestedAt))) throw stale;
+    const forget = await forgetState(tx, tombstone.loadedAt);
+    if (forget.underWay) throw stale;
+    // Somebody was forgotten since the forgotten names were read: read them again, and judge the answer afresh.
+    if (forget.reload) throw reload;
     const written = await tx.photo.updateMany({
       where: { id: photoId, ...(requestedAt ? unchangedSince(requestedAt) : {}) },
       data: {
@@ -119,9 +123,14 @@ export async function applyAnnotation(photoId: string, model: string, parsed: An
     return true;
   }).catch((err: unknown) => {
     if (err === stale) return false;
+    if (err === reload) return "reload" as const;
     throw err;
   });
-  if (!kept) {
+  if (kept === "reload") {
+    const attempts = opts.attempts ?? 0;
+    if (attempts < 3) return applyAnnotation(photoId, model, parsed, raw, { ...opts, tombstone: await loadTombstone(), attempts: attempts + 1 });
+  }
+  if (kept !== true) {
     await recordFailure(photoId, "names_changed", { terminal: false });
     // Asked again once the change has settled, so no item is left undescribed for it.
     await enqueue(QUEUES.annotatePhoto, { photoId }, { singletonKey: `annotate:${photoId}`, singletonSeconds: 60, startAfter: 60 });

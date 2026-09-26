@@ -2,7 +2,7 @@ import { z } from "zod";
 import type Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { db } from "@/lib/db";
-import { forgetUnderWay, unchangedSince } from "@/lib/people/names-changed";
+import { forgetState, unchangedSince } from "@/lib/people/names-changed";
 import { loadTombstone, type Tombstone } from "@/lib/people/tombstone";
 import { thinkingParams } from "./client";
 import { placeFromMembersOnly } from "./members-only";
@@ -157,7 +157,7 @@ export async function applyPlaceEstimate(photoId: string, estimate: PlaceEstimat
   // forgotten comes back by way of its name or evidence.
   const tombstone = opts.tombstone ?? (await loadTombstone());
   const coarse = estimate && estimate.confidence >= MIN_PLACE_CONFIDENCE ? scrubCoarsePlace(estimate) : null;
-  const place = coarse ? { ...coarse, name: tombstone.scrub(coarse.name), evidence: tombstone.scrub(coarse.evidence) } : null;
+  let place = coarse ? { ...coarse, name: tombstone.scrub(coarse.name), evidence: tombstone.scrub(coarse.evidence) } : null;
   const free = current.lat === null && (current.gpsSource === null || current.gpsSource === "ESTIMATE");
   const membersOnly = place && free ? await placeFromMembersOnly(photoId, { name: place.name, evidence: place.evidence }, current.context, opts.sent) : false;
   // Asked before a forgotten name was taken out of this item, before anybody was forgotten, or before anybody on it
@@ -165,7 +165,13 @@ export async function applyPlaceEstimate(photoId: string, estimate: PlaceEstimat
   // in the write itself.
   const stale = Symbol("stale");
   const outcome = await db.$transaction(async (tx) => {
-    if (requestedAt && (await forgetUnderWay(tx, requestedAt))) throw stale;
+    const forget = await forgetState(tx, tombstone.loadedAt);
+    if (forget.underWay) throw stale;
+    // Somebody forgotten since the forgotten names were read: read them again.
+    if (forget.reload && place) {
+      const fresh = await loadTombstone();
+      place = { ...place, name: fresh.scrub(place.name), evidence: fresh.scrub(place.evidence) };
+    }
     const guard = { id: photoId, ...(requestedAt ? unchangedSince(requestedAt) : {}) };
     if (!place || !free) {
       const n = await tx.photo.updateMany({ where: guard, data: { placeEstimatedAt: new Date() } });
