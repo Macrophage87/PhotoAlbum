@@ -47,8 +47,9 @@ describe("what counts as a visit at all", () => {
     expect(referrerHost(null, "https://album.example")).toBe(null);
   });
 
-  it("reads the visitor's address from the first hop the proxy names, never the proxies behind it", () => {
-    expect(callerAddress(new Headers({ "x-forwarded-for": "198.51.100.7, 10.0.0.1, 10.0.0.2" }))).toBe("198.51.100.7");
+  it("reads the visitor's address from the entry our proxy appended, never one the visitor wrote itself", () => {
+    expect(callerAddress(new Headers({ "x-forwarded-for": "10.9.9.9, 198.51.100.7" }))).toBe("198.51.100.7");
+    expect(callerAddress(new Headers({ "x-forwarded-for": "198.51.100.7" }))).toBe("198.51.100.7");
     expect(callerAddress(new Headers({ "x-real-ip": "203.0.113.9" }))).toBe("203.0.113.9");
     expect(callerAddress(new Headers())).toBe("unknown");
   });

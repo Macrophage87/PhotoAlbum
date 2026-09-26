@@ -6,10 +6,13 @@ import { env } from "@/lib/env";
 import { requestMagicLink } from "@/lib/auth/magic-link";
 import { magicLinkEmail, sendMail } from "@/lib/auth/email";
 import { safeNextPath } from "@/lib/auth/tokens";
-import { signInPerClient, signInPerEmail } from "@/lib/auth/rate-limit";
+import { allowSignInRequest } from "@/lib/auth/rate-limit";
+import { forwardedClient } from "@/lib/auth/client-address";
 import { headers } from "next/headers";
 
 export type SignInState = { status: "idle" } | { status: "sent"; email: string } | { status: "error"; message: string };
+
+const TOO_MANY: SignInState = { status: "error", message: "Too many sign-in links were asked for just now. Please wait 10 minutes and try again." };
 
 const schema = z.object({ email: z.string().email(), next: z.string().optional() });
 
@@ -17,13 +20,11 @@ export async function requestSignIn(_prev: SignInState, formData: FormData): Pro
   const parsed = schema.safeParse({ email: formData.get("email"), next: formData.get("next") || undefined });
   if (!parsed.success) return { status: "error", message: "Enter a valid email address." };
 
-  // Throttle link requests so the form cannot be used to flood a member's inbox. The response stays
-  // identical to the normal path so nothing about membership is revealed.
+  // Throttle link requests so the form cannot be used to flood a member's inbox. The limits are charged the same
+  // whether or not the address belongs to anybody, so saying "wait" reveals nothing about membership, and it is said
+  // out loud: a quietly swallowed request looks exactly like an email that never came.
   const email = parsed.data.email.trim().toLowerCase();
-  // The per-client cap is best-effort: it only applies when a proxy supplies a client address, so that
-  // an install without a proxy does not put every visitor in one shared bucket.
-  const client = (await headers()).get("x-forwarded-for")?.split(",")[0]?.trim() || null;
-  if (!signInPerEmail.allow(email) || (client && !signInPerClient.allow(client))) return { status: "sent", email };
+  if (!allowSignInRequest(email, forwardedClient(await headers()))) return TOO_MANY;
 
   const result = await requestMagicLink(parsed.data.email, { db, adminEmail: env().ADMIN_EMAIL });
   // Always report success to avoid leaking which addresses are members.
