@@ -10,7 +10,7 @@ process.env.PHOTO_STORAGE_ROOT = root;
 vi.mock("@/lib/jobs/boss", () => ({ enqueue: async () => "job" }));
 
 import { importTrack } from "@/lib/jobs/handlers/import-track";
-import { forgetTrackFiles } from "@/lib/tracks/files";
+import { forgetGoogleExports, forgetTrackFiles } from "@/lib/tracks/files";
 
 /** Put a file where the import route would have streamed it. */
 function uploaded(fixture: string | null, key: string, text?: string): string {
@@ -56,5 +56,17 @@ describe("the files an import leaves behind", () => {
     await db.track.deleteMany({ where: { originalFile: key } });
     await forgetTrackFiles([key]);
     expect(stillThere(key)).toBe(false);
+  });
+  it("deletes the Google exports earlier imports kept, once, and forgets them on their tracks", async () => {
+    const key = uploaded("google-records.json", "imports/old-export.json");
+    const gpx = uploaded("sample.gpx", "imports/kept.gpx");
+    const base = { tripId, uploaderId: userId, name: "t", startTime: new Date(), endTime: new Date(), pointCount: 2, minLat: 0, maxLat: 0, minLng: 0, maxLng: 0, simplified: [], pointsBlob: new Uint8Array(0) };
+    await db.track.create({ data: { ...base, source: "GOOGLE", originalFile: key } as never });
+    await db.track.create({ data: { ...base, source: "GPX", originalFile: gpx } as never });
+    expect(await forgetGoogleExports()).toBe(1);
+    expect(stillThere(key)).toBe(false);
+    expect(stillThere(gpx)).toBe(true);
+    expect(await db.track.count({ where: { source: "GOOGLE", originalFile: { not: null } } })).toBe(0);
+    expect(await forgetGoogleExports()).toBe(0);
   });
 });
