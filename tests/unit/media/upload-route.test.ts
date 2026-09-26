@@ -12,6 +12,8 @@ process.env.MAX_SCAN_UPLOAD_BYTES = "5000";
 const viewer = vi.hoisted(() => ({ kind: "user" as const, user: { id: "", email: "u@example.com", name: null as string | null, role: "MEMBER" as "MEMBER" | "ADMIN" } }));
 vi.mock("@/lib/auth/viewer", () => ({ getViewer: async () => viewer }));
 const queued = vi.hoisted(() => ({ jobs: [] as { queue: string; data: { photoId: string } }[], fail: false }));
+// No pg-boss here: no job is waiting for anything.
+vi.mock("@/lib/jobs/live", () => ({ hasLiveProcessingJob: async () => false }));
 vi.mock("@/lib/jobs/boss", () => ({ enqueue: async (queue: string, data: { photoId: string }) => { if (queued.fail) throw new Error("queue unavailable"); queued.jobs.push({ queue, data }); return "job"; } }));
 const claim = vi.hoisted(() => ({ fail: false }));
 vi.mock("@/lib/media/content-hash", async (orig) => {

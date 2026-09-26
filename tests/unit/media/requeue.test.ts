@@ -5,7 +5,8 @@ import { resetTestDb } from "../helpers/reset";
 const queued = vi.hoisted(() => [] as { queue: string; data: { photoId: string }; opts: { singletonKey?: string } }[]);
 vi.mock("@/lib/jobs/boss", () => ({ enqueue: async (queue: string, data: { photoId: string }, opts: { singletonKey?: string }) => { queued.push({ queue, data, opts }); return "job"; } }));
 
-import { hasLiveProcessingJob, processAgainIfStuck } from "@/lib/media/requeue";
+import { processAgainIfStuck } from "@/lib/media/requeue";
+import { hasLiveProcessingJob } from "@/lib/jobs/live";
 
 const MIN = 60_000;
 const noJob = async () => false;
@@ -22,10 +23,10 @@ describe("queueing processing again for a photo that never became a picture", ()
     return db.photo.findUniqueOrThrow({ where: { id: p.id } });
   };
 
-  it("queues a PENDING one an hour on with no job for it, once, keyed so pg-boss holds one", async () => {
+  it("queues a PENDING one an hour on with no job for it, once", async () => {
     const p = await row("PENDING", 90 * MIN);
     expect(await processAgainIfStuck(p, { liveJob: noJob })).toBe(true);
-    expect(queued).toEqual([{ queue: "process-photo", data: { photoId: p.id, tripId: null }, opts: { singletonKey: `process:${p.id}` } }]);
+    expect(queued).toEqual([{ queue: "process-photo", data: { photoId: p.id, tripId: null }, opts: undefined }]);
     // Read before the first went through: it has changed since, so nothing more is queued.
     expect(await processAgainIfStuck(p, { liveJob: noJob })).toBe(false);
     expect(queued).toHaveLength(1);
@@ -35,15 +36,17 @@ describe("queueing processing again for a photo that never became a picture", ()
     expect(await processAgainIfStuck(await row("PENDING", 90 * MIN), { liveJob: async () => true })).toBe(false);
     expect(queued).toHaveLength(0);
   });
-  it("leaves a FAILED one to pg-boss's own retries for a few minutes, then queues it (a clip to transcoding)", async () => {
-    expect(await processAgainIfStuck(await row("FAILED", 1 * MIN, "VIDEO"))).toBe(false);
+  it("leaves a FAILED one to pg-boss's own retries, then queues it (a clip to transcoding)", async () => {
+    expect(await processAgainIfStuck(await row("FAILED", 1 * MIN, "VIDEO"), { liveJob: noJob })).toBe(false);
+    // Old enough, but a retry is still waiting for it.
+    expect(await processAgainIfStuck(await row("FAILED", 10 * MIN, "VIDEO"), { liveJob: async () => true })).toBe(false);
     const old = await row("FAILED", 10 * MIN, "VIDEO");
-    expect(await processAgainIfStuck(old)).toBe(true);
-    expect(queued).toEqual([{ queue: "transcode-video", data: { photoId: old.id, tripId: null }, opts: { singletonKey: `transcode:${old.id}` } }]);
+    expect(await processAgainIfStuck(old, { liveJob: noJob })).toBe(true);
+    expect(queued).toEqual([{ queue: "transcode-video", data: { photoId: old.id, tripId: null }, opts: undefined }]);
   });
   it("queues once when the same file arrives twice at the same moment", async () => {
     const p = await row("FAILED", 10 * MIN);
-    const results = await Promise.all([processAgainIfStuck(p), processAgainIfStuck(p)]);
+    const results = await Promise.all([processAgainIfStuck(p, { liveJob: noJob }), processAgainIfStuck(p, { liveJob: noJob })]);
     expect(results.filter(Boolean)).toHaveLength(1);
     expect(queued).toHaveLength(1);
   });

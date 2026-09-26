@@ -13,6 +13,8 @@ process.env.PHOTO_STORAGE_ROOT = photoRoot;
 const enqueued = vi.hoisted(() => [] as { queue: string; data: unknown }[]);
 /** A queue whose next enqueue fails, as pg-boss does when its database connection drops. */
 const refuse = vi.hoisted(() => ({ queue: null as string | null }));
+// No pg-boss here: no job is waiting for anything.
+vi.mock("@/lib/jobs/live", () => ({ hasLiveProcessingJob: async () => false }));
 vi.mock("@/lib/jobs/boss", () => ({ enqueue: async (queue: string, data: unknown) => { if (refuse.queue === queue) { refuse.queue = null; throw new Error("queue unavailable"); } enqueued.push({ queue, data }); } }));
 
 /** What happens as a stored file is about to take its hash: nothing, a failure, or the same bytes landing by upload. */
