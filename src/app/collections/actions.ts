@@ -17,6 +17,7 @@ import { collectionInputFromForm } from "@/lib/collections/validation";
 import { canEditContainer, editableMediaIds, NOT_YOUR_CONTAINER } from "@/lib/auth/ownership";
 import { writeContainerDescription } from "@/lib/annotation/container";
 import type { TripFormState } from "@/app/trips/new/actions";
+import { searchParamsObject } from "@/lib/search-params";
 
 export type CollectionFormState = TripFormState;
 
@@ -207,7 +208,7 @@ export async function moreCandidates(slug: string, query: string, cursor: string
   await requireUserOrThrow();
   const collection = await db.collection.findUnique({ where: { slug }, select: { id: true } });
   if (!collection) throw new Error("Collection not found");
-  const filter = parsePickerFilter(Object.fromEntries(new URLSearchParams(query).entries()));
+  const filter = parsePickerFilter(searchParamsObject(new URLSearchParams(query)));
   const page = await candidatePhotoPage({ kind: "collection", id: collection.id }, filter, { cursor });
   return { photos: page.photos.map((p) => toGridPhoto(p, null, true)), nextCursor: page.nextCursor };
 }

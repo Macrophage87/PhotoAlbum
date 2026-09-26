@@ -5,6 +5,7 @@ import { canViewTrip } from "@/lib/auth/access";
 import { tripPhotoPage } from "@/lib/photos/page";
 import { toGridPhoto } from "@/components/photos/toGrid";
 import { parseGalleryFilter } from "@/lib/photos/filters";
+import { searchParamsObject } from "@/lib/search-params";
 
 /** The next page of a trip gallery, under the same visibility rule as the page itself; uploader names for members only. */
 export async function GET(request: NextRequest, { params }: RouteContext<"/api/trips/[slug]/photos">) {
@@ -15,7 +16,7 @@ export async function GET(request: NextRequest, { params }: RouteContext<"/api/t
   const member = viewer.kind === "user";
   const sp = request.nextUrl.searchParams;
   // The next page of a narrowed gallery is the next page of that same narrowing, read the same way the page reads it.
-  const filter = parseGalleryFilter(Object.fromEntries(sp.entries()), { member });
+  const filter = parseGalleryFilter(searchParamsObject(sp), { member });
   // The same order the page was built in, or the next page would continue a different list.
   const asked = sp.get("order");
   const order = asked === "oldest" ? "taken" : asked === "newest" ? "newest" : "favorites";
