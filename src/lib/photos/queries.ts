@@ -1,7 +1,7 @@
 import { db } from "@/lib/db";
 import type { Prisma } from "@/generated/prisma/client";
 import { NOT_TRASHED } from "@/lib/photos/trash";
-import { idsInLocalYear, idsMatching, intersectIds } from "./page";
+import { GALLERY_PAGE, idsInLocalYear, idsMatching, intersectIds } from "./page";
 import { NO_FILTER, type GalleryFilter } from "./filters";
 import { idsWithPerson } from "@/lib/people/in-photos";
 
@@ -47,7 +47,15 @@ export async function listTripPhotos(tripId: string, uploaderId?: string): Promi
   });
 }
 
-export async function listUnassignedPhotos(filter: GalleryFilter = NO_FILTER): Promise<{ photos: PhotoCard[]; total: number }> {
+/**
+ * One page of the photographs on no trip, newest upload first, with a cursor (the last one's id) for the next page.
+ *
+ * It used to be all of them at once, which after a Takeout import of a decade is thousands of tiles on the one page
+ * meant for filing them away. `total` is how many there are with nothing asked; `matched` is how many the filter
+ * keeps, so the heading can say both.
+ */
+export async function unassignedPhotoPage(filter: GalleryFilter = NO_FILTER, opts: { cursor?: string | null; take?: number } = {}): Promise<{ photos: PhotoCard[]; nextCursor: string | null; matched: number; total: number }> {
+  const take = opts.take ?? GALLERY_PAGE;
   const lists: string[][] = [];
   if (filter.q) lists.push(await idsMatching(filter.q));
   if (filter.year) lists.push(await idsInLocalYear(null, filter.year));
@@ -61,9 +69,15 @@ export async function listUnassignedPhotos(filter: GalleryFilter = NO_FILTER): P
     ...(filter.kind ? { kind: filter.kind } : {}),
     ...(restrict ? { id: { in: restrict } } : {}),
   };
-  const [photos, total] = await Promise.all([
-    restrict && restrict.length === 0 ? Promise.resolve([]) : db.photo.findMany({ where, orderBy: [{ createdAt: "desc" }], select: photoCardSelect }),
+  const nothing = Boolean(restrict && restrict.length === 0);
+  const [photos, matched, total] = await Promise.all([
+    nothing
+      ? Promise.resolve([])
+      : db.photo.findMany({ where, orderBy: [{ createdAt: "desc" }, { id: "desc" }], select: photoCardSelect, take: take + 1, ...(opts.cursor ? { cursor: { id: opts.cursor }, skip: 1 } : {}) }),
+    nothing ? Promise.resolve(0) : db.photo.count({ where }),
     db.photo.count({ where: { tripId: null, ...NOT_TRASHED } }),
   ]);
-  return { photos, total };
+  const more = photos.length > take;
+  const page = more ? photos.slice(0, take) : photos;
+  return { photos: page, nextCursor: more ? page[page.length - 1].id : null, matched, total };
 }
