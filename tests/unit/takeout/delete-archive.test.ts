@@ -28,4 +28,11 @@ describe("deleting a Takeout archive from the Admin page", () => {
     expect(await deleteTakeoutArchive("takeout-001.zip")).toBeNull();
     expect(existsSync(path.join(inbox, "takeout-001.zip"))).toBe(false);
   });
+  it("does not let a run whose worker died hold the archive for ever", async () => {
+    const old = new Date(Date.now() - 60 * 60_000);
+    await db.takeoutImport.create({ data: { archiveName: "takeout-001.zip", startedById: who.id, startedAt: old, heartbeatAt: old } });
+    expect(await deleteTakeoutArchive("takeout-001.zip")).toBeNull();
+    expect(existsSync(path.join(inbox, "takeout-001.zip"))).toBe(false);
+    expect((await db.takeoutImport.findFirstOrThrow()).status).toBe("FAILED");
+  });
 });
