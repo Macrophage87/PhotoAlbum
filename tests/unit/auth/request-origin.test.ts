@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { clientKey, clientNetwork, forwardedClient } from "@/lib/auth/client-address";
+import { describe, expect, it, vi } from "vitest";
+import { clientKey, clientNetwork, forwardedClient, warnOnceIfNoClient } from "@/lib/auth/client-address";
 import { isSameOriginRequest } from "@/lib/auth/same-origin";
 import { hstsIncludesSubdomains, hstsValue } from "@/lib/security/hsts";
 
@@ -40,6 +40,24 @@ describe("forwardedClient", () => {
   it("widens an IPv6 /64 to its /48, and leaves an IPv4 address as it is", () => {
     expect(clientNetwork(clientKey("2001:db8:1:2::5"))).toBe("2001:db8:1::/48");
     expect(clientNetwork("198.51.100.7")).toBe("198.51.100.7");
+  });
+});
+
+describe("warnOnceIfNoClient", () => {
+  it("warns once in production when no proxy names the client, and never otherwise", () => {
+    const log = vi.fn();
+    warnOnceIfNoClient(null, log); // the test environment is not production
+    vi.stubEnv("NODE_ENV", "production");
+    try {
+      warnOnceIfNoClient("198.51.100.7", log);
+      expect(log).not.toHaveBeenCalled();
+      warnOnceIfNoClient(null, log);
+      warnOnceIfNoClient(null, log);
+      expect(log).toHaveBeenCalledTimes(1);
+      expect(log.mock.calls[0]![0]).toMatch(/X-Forwarded-For/);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });
 

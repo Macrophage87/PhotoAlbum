@@ -7,7 +7,7 @@ import { requestMagicLink, withdrawMagicLink } from "@/lib/auth/magic-link";
 import { magicLinkEmail, sendMail } from "@/lib/auth/email";
 import { safeNextPath } from "@/lib/auth/tokens";
 import { allowSignInRequest, signInMailPerHour } from "@/lib/auth/rate-limit";
-import { forwardedClient } from "@/lib/auth/client-address";
+import { forwardedClient, warnOnceIfNoClient } from "@/lib/auth/client-address";
 import { headers } from "next/headers";
 import { after } from "next/server";
 
@@ -32,7 +32,9 @@ export async function requestSignIn(_prev: SignInState, formData: FormData): Pro
   //   goes out and a full allowance can delay a repeat link but never stop anybody signing in.
   // Every answer is the same whether or not the address belongs to anybody, so none of them reveals membership.
   const email = parsed.data.email.trim().toLowerCase();
-  if (!allowSignInRequest(forwardedClient(await headers()))) return TOO_MANY;
+  const client = forwardedClient(await headers());
+  warnOnceIfNoClient(client);
+  if (!allowSignInRequest(client)) return TOO_MANY;
 
   const mail = signInMailPerHour(env().SIGN_IN_MAIL_PER_HOUR);
   const result = await requestMagicLink(email, { db, adminEmail: env().ADMIN_EMAIL, mail });

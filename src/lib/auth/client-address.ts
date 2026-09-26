@@ -58,3 +58,19 @@ function expandIPv6(a: string): number[] {
   const groups = tail === undefined ? h : [...h, ...Array<string>(8 - h.length - t.length).fill("0"), ...t];
   return groups.map((x) => parseInt(x, 16) || 0);
 }
+
+let warnedNoClient = false;
+
+/**
+ * Say once, in production, that a request came with no client address. Behind the reverse proxy the docs describe
+ * that never happens, so it means the proxy is not passing X-Forwarded-For (or somebody is reaching the app's port
+ * directly), and every such request is sharing one sign-in rate-limit bucket.
+ */
+export function warnOnceIfNoClient(client: string | null, log: (message: string) => void = console.warn): void {
+  if (client || warnedNoClient || process.env.NODE_ENV !== "production") return;
+  warnedNoClient = true;
+  log(
+    "[sign-in] a request arrived without X-Forwarded-For or X-Real-IP, so all such requests share one rate-limit bucket. " +
+      "If the album is behind a reverse proxy, make it pass X-Forwarded-For; check the app's port is not reachable directly (APP_BIND).",
+  );
+}

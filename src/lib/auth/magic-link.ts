@@ -22,6 +22,11 @@ export type RequestResult =
 
 /** How many expired links one request clears out of the whole table on its way (the daily purge gets the rest). */
 const EXPIRED_SWEEP_BATCH = 100;
+/**
+ * Links are kept a day past expiry before they are swept, so somebody clicking an old one is still told it has
+ * expired or was already used, rather than that it is not valid.
+ */
+export const EXPIRED_LINK_GRACE_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Decide whether an email may sign in and, if so, mint a single-use token.
@@ -46,9 +51,9 @@ export async function requestMagicLink(rawEmail: string, deps: MagicLinkDeps & {
   return db.$transaction(async (tx) => {
     // One request per address at a time, so concurrent asks cannot all see room for one more.
     await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`magic-link:${email}`}))::text`;
-    // Expired links are no use to anybody: this address's, and a bounded batch of everybody else's.
-    await tx.magicLinkToken.deleteMany({ where: { email, expiresAt: { lte: now } } });
-    await tx.$executeRaw`DELETE FROM "MagicLinkToken" WHERE id IN (SELECT id FROM "MagicLinkToken" WHERE "expiresAt" <= ${now} LIMIT ${EXPIRED_SWEEP_BATCH})`;
+    // Links a day past expiry are no use to anybody: sweep a bounded batch, skipping rows another request holds.
+    const stale = new Date(now.getTime() - EXPIRED_LINK_GRACE_MS);
+    await tx.$executeRaw`DELETE FROM "MagicLinkToken" WHERE id IN (SELECT id FROM "MagicLinkToken" WHERE "expiresAt" <= ${stale} LIMIT ${EXPIRED_SWEEP_BATCH} FOR UPDATE SKIP LOCKED)`;
     const outstanding = await tx.magicLinkToken.count({ where: { email, usedAt: null, expiresAt: { gt: now } } });
     if (outstanding >= MAX_OUTSTANDING_LINKS) return { ok: false, reason: "recently_sent" } as const;
     const mail = outstanding > 0 ? deps.mail : undefined;
@@ -79,10 +84,11 @@ export async function withdrawMagicLink(token: string, charged: boolean, deps: M
   if (charged) deps.mail?.giveBack();
 }
 
-/** The daily purge: every expired link, used or not. */
+/** The daily purge: every link more than a day past expiry, used or not (placeholders included). */
 export async function purgeExpiredMagicLinks(deps: MagicLinkDeps): Promise<number> {
   const now = deps.now?.() ?? new Date();
-  const { count } = await deps.db.magicLinkToken.deleteMany({ where: { expiresAt: { lte: now } } });
+  const stale = new Date(now.getTime() - EXPIRED_LINK_GRACE_MS);
+  const { count } = await deps.db.magicLinkToken.deleteMany({ where: { expiresAt: { lte: stale } } });
   return count;
 }
 

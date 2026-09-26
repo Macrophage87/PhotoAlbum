@@ -182,14 +182,25 @@ describe("magic link", () => {
     expect(strangerTaken).toBe(1);
   });
 
-  it("clears expired links out of the whole table, on requests and in the daily purge", async () => {
+  it("clears links a day past expiry out of the whole table, on requests and in the daily purge", async () => {
+    await db.user.create({ data: { email: "grandma@example.com", role: "ADMIN" } });
+    const old = await requestMagicLink("grandma@example.com", deps());
+    if (!old.ok) throw new Error();
     for (let i = 0; i < 5; i++) await requestMagicLink(`stranger${i}@example.com`, deps());
+    // Within the day's grace an old link is still recognised, so its owner is told it expired.
     const later = new Date(T0.getTime() + 16 * 60 * 1000);
     await requestMagicLink("someone@example.com", deps(later));
+    expect(await db.magicLinkToken.count()).toBe(7);
+    expect(await checkMagicLink(old.token, deps(later))).toEqual({ ok: false, reason: "expired" });
+    expect(await purgeExpiredMagicLinks(deps(later))).toBe(0);
+    // A day on, a request sweeps them.
+    const nextDay = new Date(T0.getTime() + 25 * 60 * 60 * 1000);
+    await requestMagicLink("someone-else@example.com", deps(nextDay));
     expect(await db.magicLinkToken.count()).toBe(1);
-    for (let i = 0; i < 5; i++) await requestMagicLink(`stranger${i}@example.com`, deps(later));
-    const muchLater = new Date(T0.getTime() + 60 * 60 * 1000);
-    expect(await purgeExpiredMagicLinks(deps(muchLater))).toBe(6);
+    // And the daily purge gets whatever is left.
+    await requestMagicLink("third@example.com", deps(nextDay));
+    const dayAfter = new Date(T0.getTime() + 50 * 60 * 60 * 1000);
+    expect(await purgeExpiredMagicLinks(deps(dayAfter))).toBe(2);
     expect(await db.magicLinkToken.count()).toBe(0);
   });
 
