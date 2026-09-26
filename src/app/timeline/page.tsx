@@ -15,6 +15,8 @@ import { CollectionFilter } from "@/components/collections/CollectionFilter";
 import { GalleryFilters } from "@/components/photos/GalleryFilters";
 import { filterIsActive, parseGalleryFilter } from "@/lib/photos/filters";
 import { peopleInPhotos } from "@/lib/people/in-photos";
+import { timelineOrderFor } from "@/lib/timeline/order-choice";
+import { OrderToggle } from "@/components/timeline/OrderToggle";
 
 export const metadata = { title: "Timeline" };
 
@@ -27,7 +29,9 @@ export default async function GlobalTimelinePage({ searchParams }: PageProps<"/t
   const narrow = parseGalleryFilter(sp, { member: editable });
   const searching = filterIsActive(narrow);
   const people = viewer.kind === "user" ? await peopleInPhotos() : [];
-  const trips = filter ? [] : await listVisibleTrips(viewer);
+  // The whole album opens on what is newest, trips and days alike, unless this person has asked for the other way.
+  const order = await timelineOrderFor(sp, "newest");
+  const trips = filter ? [] : (await listVisibleTrips(viewer)).sort((a, b) => (order === "newest" ? b.startDate.getTime() - a.startDate.getTime() : a.startDate.getTime() - b.startDate.getTime()));
   const [all, collectionGroups] = await Promise.all([
     Promise.all(trips.map((t) => tripTimeline(t.id, t.timezone, narrow))),
     filter ? collectionTimeline(filter.id, narrow) : Promise.resolve(null),
@@ -41,7 +45,7 @@ export default async function GlobalTimelinePage({ searchParams }: PageProps<"/t
           <h2 className="font-display text-2xl font-semibold mb-4">
             <Link href={`/collections/${filter.slug}`} className="hover:underline underline-offset-2">{filter.title}</Link>
           </h2>
-          <Timeline groups={collectionGroups.groups} tripSlug="" timezone="UTC" member={editable} idPrefix={`c-${filter.slug}`} />
+          <Timeline groups={collectionGroups.groups} tripSlug="" timezone="UTC" member={editable} idPrefix={`c-${filter.slug}`} order={order} />
         </TripTheme>
       )}
       {!filter && trips.length === 0 && <p className="text-muted">Nothing to show yet.</p>}
@@ -57,7 +61,7 @@ export default async function GlobalTimelinePage({ searchParams }: PageProps<"/t
               </h2>
               <p className="text-muted text-sm">{formatDayRange(dateColumnToDay(trip.startDate), dateColumnToDay(trip.endDate))}</p>
             </div>
-            <Timeline groups={result.groups} tripSlug={trip.slug} timezone={trip.timezone} member={editable} idPrefix={`t-${trip.slug}`} />
+            <Timeline groups={result.groups} tripSlug={trip.slug} timezone={trip.timezone} member={editable} idPrefix={`t-${trip.slug}`} order={order} />
           </TripTheme>
         ))}
       </div>
@@ -70,8 +74,9 @@ export default async function GlobalTimelinePage({ searchParams }: PageProps<"/t
           <h1 className="font-display text-3xl font-semibold">Timeline</h1>
           <CollectionFilter current={filter ? { slug: filter.slug, title: filter.title } : null} basePath="/timeline" />
         </div>
-        <div className="mb-6">
+        <div className="mb-6 space-y-3">
           <GalleryFilters filter={narrow} action="/timeline" people={people} placeholder="Search the whole album" hidden={filter ? { collection: filter.slug } : undefined} />
+          <OrderToggle order={order} />
         </div>
         {editable ? <SelectionProvider>{body}</SelectionProvider> : body}
       </Container>

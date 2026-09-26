@@ -8,6 +8,8 @@ import { Timeline } from "@/components/timeline/Timeline";
 import { ButtonLink } from "@/components/ui";
 import { SelectionProvider } from "@/components/photos/selection";
 import { peopleInPhotos } from "@/lib/people/in-photos";
+import { timelineOrderFor } from "@/lib/timeline/order-choice";
+import { OrderToggle } from "@/components/timeline/OrderToggle";
 
 /**
  * What a trip opens on: the days it was, in order.
@@ -22,6 +24,8 @@ export default async function TripTimelinePage({ params, searchParams }: PagePro
   const { trip, editable } = await loadViewableTrip(slug);
   // Who uploaded what is members-only, so an anonymous visitor never sees the member list nor narrows by it.
   const filter = parseGalleryFilter(sp, { member: editable });
+  // A trip reads from its first morning unless this person has asked for the latest day first.
+  const order = await timelineOrderFor(sp, "oldest");
   const [{ groups, matched, total, active }, activities, members, people] = await Promise.all([
     tripTimeline(trip.id, trip.timezone, filter),
     db.activity.findMany({ where: { tripId: trip.id }, orderBy: { startTime: "asc" }, select: { id: true, title: true } }),
@@ -44,11 +48,14 @@ export default async function TripTimelinePage({ params, searchParams }: PagePro
         activities={activities.map((a) => ({ id: a.id, label: a.title }))}
         placeholder="Search this trip"
       />
-      <p className="text-sm text-muted" data-testid="timeline-count">{active ? describeCount(matched, total, true) : `${total} photo${total === 1 ? "" : "s"}`}</p>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-sm text-muted" data-testid="timeline-count">{active ? describeCount(matched, total, true) : `${total} photo${total === 1 ? "" : "s"}`}</p>
+        <OrderToggle order={order} />
+      </div>
       {active && matched === 0 ? (
         <p className="text-muted text-sm" data-testid="no-matches">Nothing here matches that. Try fewer words, or clear the search.</p>
       ) : (
-        <Timeline groups={groups} tripSlug={slug} timezone={trip.timezone} member={editable} />
+        <Timeline groups={groups} tripSlug={slug} timezone={trip.timezone} member={editable} order={order} />
       )}
     </div>
   );

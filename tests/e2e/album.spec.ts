@@ -3001,3 +3001,29 @@ test("the placing screen is for members, and the old address from a trip goes to
   await page.goto("/place?trip=acadia");
   await expect(page).toHaveURL(/\/trips\/acadia\/place$/);
 });
+
+test("a timeline can run newest first, and remembers that choice on this device", async ({ context, page }) => {
+  await signIn(context, ADMIN);
+  const dayKeys = async () => (await page.locator("section[id^='day-']").evaluateAll((els) => els.map((e) => e.id.replace(/^day-/, "")))).filter((k) => k !== "undated");
+
+  await page.goto("/trips/acadia");
+  await expect(page.getByTestId("timeline-order-oldest")).toHaveAttribute("aria-current", "true");
+  const oldest = await dayKeys();
+  expect(oldest.length).toBeGreaterThan(1);
+  expect([...oldest].sort()).toEqual(oldest);
+
+  await page.getByTestId("timeline-order-newest").click();
+  await expect(page).toHaveURL(/order=newest/);
+  await expect(page.getByTestId("timeline-order-newest")).toHaveAttribute("aria-current", "true");
+  const newest = await dayKeys();
+  expect(newest).toEqual([...oldest].reverse());
+
+  // Kept for next time, without anything in the address.
+  await page.goto("/trips/acadia");
+  await expect(page.getByTestId("timeline-order-newest")).toHaveAttribute("aria-current", "true");
+  expect(await dayKeys()).toEqual(newest);
+
+  // And the album-wide timeline follows the same choice.
+  await page.goto("/timeline");
+  await expect(page.getByTestId("timeline-order-newest")).toHaveAttribute("aria-current", "true");
+});

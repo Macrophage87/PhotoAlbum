@@ -6,6 +6,8 @@ import { Timeline } from "@/components/timeline/Timeline";
 import { SelectionProvider } from "@/components/photos/selection";
 import { ButtonLink } from "@/components/ui";
 import { peopleInPhotos } from "@/lib/people/in-photos";
+import { timelineOrderFor } from "@/lib/timeline/order-choice";
+import { OrderToggle } from "@/components/timeline/OrderToggle";
 import { CollectionUploader } from "@/components/collections/CollectionUploader";
 import { env } from "@/lib/env";
 import { annotationGates } from "@/lib/annotation/eligibility";
@@ -16,6 +18,7 @@ export default async function CollectionTimelinePage({ params, searchParams }: P
   const sp = await searchParams;
   const { collection, editable } = await loadViewableCollection(slug);
   const filter = parseGalleryFilter(sp, { member: editable });
+  const order = await timelineOrderFor(sp, "oldest");
   const [{ groups, matched, total, active }, people, gates] = await Promise.all([
     collectionTimeline(collection.id, filter),
     editable ? peopleInPhotos({ collectionId: collection.id }) : Promise.resolve([]),
@@ -30,11 +33,14 @@ export default async function CollectionTimelinePage({ params, searchParams }: P
         </div>
       )}
       <GalleryFilters filter={filter} action={`/collections/${slug}`} people={editable ? people : undefined} placeholder="Search this collection" />
-      <p className="text-sm text-muted" data-testid="timeline-count">{active ? describeCount(matched, total, true) : `${total} photo${total === 1 ? "" : "s"}`}</p>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-sm text-muted" data-testid="timeline-count">{active ? describeCount(matched, total, true) : `${total} photo${total === 1 ? "" : "s"}`}</p>
+        <OrderToggle order={order} />
+      </div>
       {active && matched === 0 ? (
         <p className="text-muted text-sm" data-testid="no-matches">Nothing here matches that. Try fewer words, or clear the search.</p>
       ) : (
-        <Timeline groups={groups} tripSlug="" timezone="UTC" member={editable} />
+        <Timeline groups={groups} tripSlug="" timezone="UTC" member={editable} order={order} />
       )}
     </div>
   );

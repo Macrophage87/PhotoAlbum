@@ -1,4 +1,5 @@
 import { photosOnDay, type DayGroup } from "@/lib/timeline/build";
+import { orderTimeline, type TimelineOrder } from "@/lib/timeline/order";
 import type { PhotoCard } from "@/lib/photos/queries";
 import { formatDay, formatLocalTime } from "@/lib/time/format";
 import { toGridPhoto } from "@/components/photos/toGrid";
@@ -13,7 +14,8 @@ import { photoFavourites } from "@/lib/favourites/queries";
 
 export type TimelineGroups = DayGroup<PhotoCard, ActivityCardData>[];
 
-export async function Timeline({ groups, tripSlug, timezone, member, idPrefix = "day", activityHrefBase }: { groups: TimelineGroups; tripSlug: string; timezone: string; member: boolean; idPrefix?: string; activityHrefBase?: string }) {
+export async function Timeline({ groups: built, tripSlug, timezone, member, idPrefix = "day", activityHrefBase, order = "oldest" }: { groups: TimelineGroups; tripSlug: string; timezone: string; member: boolean; idPrefix?: string; activityHrefBase?: string; /** Which way it runs; the page decides, and shows the switch. */ order?: TimelineOrder }) {
+  const groups = orderTimeline(built, order);
   if (groups.length === 0) return <p className="text-muted text-sm">Nothing on the timeline yet. Upload photos or add an activity.</p>;
   // The timeline is where most photographs are actually looked at, so it carries the same hearts as the grids: whose
   // favorites they are, loaded for the whole page in two small queries. Members only — a favorite is a person's.
