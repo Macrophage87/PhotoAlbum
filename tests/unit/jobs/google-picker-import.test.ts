@@ -61,7 +61,7 @@ describe("the Picker download job", () => {
     });
     await googlePickerImport(job());
     const rows = await statuses();
-    expect(rows[0]).toMatchObject({ status: "FAILED", error: "Download from Google Photos failed." });
+    expect(rows[0]).toMatchObject({ status: "FAILED", error: "Download from Google Photos failed. Pick it again in Google Photos to fetch it." });
     expect(rows[1]).toMatchObject({ status: "FAILED", error: expect.stringMatching(/Larger than/) });
     expect(rows[2]).toMatchObject({ status: "PENDING", sizeBytes: 10 });
     expect(enqueued.map((e) => e.queue)).toEqual(["transcode-video"]);
@@ -87,7 +87,7 @@ describe("the Picker download job", () => {
     await googlePickerImport(job());
     const rows = await statuses();
     expect(rows.map((r) => r.status)).toEqual(["PENDING", "FAILED", "PENDING"]);
-    expect(rows[1].error).toBe("Google Photos refused the download.");
+    expect(rows[1].error).toBe("Google Photos refused the download. Pick it again in Google Photos to fetch it.");
     expect(enqueued).toHaveLength(2);
   });
   it("stops and fails the rest when refreshing the token is turned down", async () => {
@@ -128,6 +128,32 @@ describe("the Picker download job", () => {
     const clip = await db.photo.findUniqueOrThrow({ where: { id: ids[2] } });
     expect(clip).toMatchObject({ status: "FAILED", originalPath: "pending", storageKey: "pending", sizeBytes: 0 });
     expect(existsSync(path.join(photoRoot, "photos", ids[2]))).toBe(false);
+  });
+  it("takes back its own rows a crashed run left half-taken, but not ones another download is working on", async () => {
+    google.download.mockImplementation(async () => body(10));
+    // One abandoned long ago by a run that died; one taken a moment ago by a download still going.
+    await db.photo.update({ where: { id: ids[0] }, data: { status: "PROCESSING", updatedAt: new Date(Date.now() - 60 * 60_000) } });
+    await db.photo.update({ where: { id: ids[1] }, data: { status: "PROCESSING" } });
+    await googlePickerImport(job());
+    const rows = await statuses();
+    expect(rows[0]).toMatchObject({ status: "PENDING", sizeBytes: 10 });
+    expect(rows[1]).toMatchObject({ status: "PROCESSING", sizeBytes: 0 });
+  });
+  it("downloads nothing once pg-boss has given up on the job", async () => {
+    google.download.mockImplementation(async () => body(10));
+    await googlePickerImport(job(), AbortSignal.abort());
+    expect(google.download).not.toHaveBeenCalled();
+    expect((await statuses()).map((r) => r.status)).toEqual(["PENDING", "PENDING", "PENDING"]);
+  });
+  it("does not put back a row somebody else took after this job's download failed", async () => {
+    google.download.mockImplementation(async (_t: string, item: { id: string }) => {
+      if (item.id !== "gp-1") return body(10);
+      // The sweep (or a re-pick) takes the row while this download is failing.
+      await db.photo.update({ where: { id: ids[0] }, data: { status: "FAILED", error: "taken by someone else" } });
+      throw new Error("socket hang up");
+    });
+    await googlePickerImport(job());
+    expect((await statuses())[0]).toMatchObject({ status: "FAILED", error: "taken by someone else" });
   });
   it("fails every row when no access token can be had", async () => {
     google.token.mockRejectedValue(new GoogleAuthError("gone", true));

@@ -88,6 +88,9 @@ export async function startWorker(): Promise<void> {
   await boss.schedule(QUEUES.purgeVisits, "15 3 * * *", {}, { retryLimit: 0 });
   await boss.schedule(QUEUES.sweepStrandedUploads, "40 * * * *", {}, { retryLimit: 0 });
   console.log("[worker] pg-boss handlers registered");
+  // Before the reconciliation below, so a Picker download lost in the restart is told to be picked again rather
+  // than re-processed (it has no file to process).
+  await (await import("@/lib/media/stranded")).sweepStrandedUploads().catch((err) => console.error("[worker] stranded-upload sweep failed", err));
   await reconcileStalePhotos().catch((err) => console.error("[worker] stale-photo reconciliation failed", err));
   await (await import("@/lib/tracks/files")).forgetGoogleExports().catch((err) => console.error("[worker] could not delete old Google exports", err));
 }

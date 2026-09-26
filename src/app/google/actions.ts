@@ -10,6 +10,7 @@ import { ALLOWED_MIMES, EXT_MIME, VIDEO_MIMES } from "@/lib/media/mime";
 import { enqueue } from "@/lib/jobs/boss";
 import { QUEUES } from "@/lib/jobs/queues";
 import { fileExisting } from "@/lib/photos/file-existing";
+import { DOWNLOAD_ABANDONED_MS, takeableDownload } from "@/lib/google/download-claim";
 
 export type PickerStart = { ok: true; sessionId: string; pickerUri: string; pollIntervalMs: number; deadline: number } | { ok: false; reconnect: boolean; message: string };
 export type PickerPoll = { state: "picking" } | { state: "queued"; photoIds: string[]; skipped: number; unsupported: number } | { state: "error"; reconnect: boolean; message: string };
@@ -47,7 +48,7 @@ export async function pollPickerSession(sessionId: string, tripId: string | null
     if (tripId && !(await db.trip.findUnique({ where: { id: tripId }, select: { id: true } }))) tripId = null;
     // Nothing in the trash counts as already in the album: picking it again is how a member gets it back. Nor does
     // another member's row whose file never arrived: it is not in the album, and it is not this member's to fetch.
-    const existing = new Map((await db.photo.findMany({ where: { sourceKind: "GOOGLE_PICKER", sourceId: { in: items.map((i) => i.id) }, trashedAt: null, OR: [{ originalPath: { not: "pending" } }, { uploaderId: user.id }] }, select: { id: true, sourceId: true, uploaderId: true, status: true, originalPath: true } })).map((r) => [r.sourceId, r]));
+    const existing = new Map((await db.photo.findMany({ where: { sourceKind: "GOOGLE_PICKER", sourceId: { in: items.map((i) => i.id) }, trashedAt: null, OR: [{ originalPath: { not: "pending" } }, { uploaderId: user.id }] }, select: { id: true, sourceId: true, uploaderId: true, status: true, originalPath: true, updatedAt: true } })).map((r) => [r.sourceId, r]));
     const photoIds: string[] = [];
     const jobItems: Record<string, unknown> = {};
     /** The rows this poll made, as against ones it picked up again. */
@@ -58,9 +59,11 @@ export async function pollPickerSession(sessionId: string, tripId: string | null
         const had = existing.get(item.id);
         // One of theirs whose file never arrived — its download failed, or the poll that made it failed before the
         // download was queued — is picked again to be fetched, not skipped as though it were in the album.
-        if (had && had.uploaderId === user.id && had.originalPath === "pending" && (had.status === "PENDING" || had.status === "FAILED")) {
+        // A download that died holding it counts too, once it has plainly been abandoned.
+        if (had && had.uploaderId === user.id && had.originalPath === "pending" && (had.status === "PENDING" || had.status === "FAILED" || (had.status === "PROCESSING" && had.updatedAt.getTime() < Date.now() - DOWNLOAD_ABANDONED_MS))) {
           // Conditional: a download job may be taking it this moment, and then it is on its way already.
-          const again = await db.photo.updateMany({ where: { id: had.id, originalPath: "pending", status: { in: ["PENDING", "FAILED"] } }, data: { status: "PENDING", error: null, ...(tripId ? { tripId, activityId: null, activitySetById: null } : {}) } });
+          const abandoned = takeableDownload().OR[1];
+          const again = await db.photo.updateMany({ where: { id: had.id, originalPath: "pending", OR: [{ status: { in: ["PENDING", "FAILED"] } }, abandoned] }, data: { status: "PENDING", error: null, ...(tripId ? { tripId, activityId: null, activitySetById: null } : {}) } });
           if (again.count === 1) {
             photoIds.push(had.id);
             jobItems[had.id] = item;

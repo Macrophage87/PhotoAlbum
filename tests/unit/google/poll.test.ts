@@ -60,6 +60,32 @@ describe("finishing a Picker session", () => {
     expect(queue.sent[0].photoIds).toHaveLength(2);
     expect(await db.photo.findUniqueOrThrow({ where: { id: theirs.id } })).toMatchObject({ status: "FAILED", uploaderId: other.id });
   });
+  it("fetches again an item whose download died holding it, but not one whose download is still going", async () => {
+    const base = { uploaderId: who.id, sourceKind: "GOOGLE_PICKER" as const, mimeType: "image/jpeg", storageKey: "pending", originalPath: "pending", sizeBytes: 0, status: "PROCESSING" as const };
+    const lost = await db.photo.create({ data: { ...base, sourceId: "gp-1", originalName: "p1.jpg", updatedAt: new Date(Date.now() - 60 * 60_000) } });
+    const going = await db.photo.create({ data: { ...base, sourceId: "gp-2", originalName: "p2.jpg" } });
+    const r = await pollPickerSession("s5", null);
+    expect(r).toMatchObject({ state: "queued" });
+    expect(queue.sent[0].photoIds).toEqual([lost.id]);
+    expect((await db.photo.findUniqueOrThrow({ where: { id: going.id } })).status).toBe("PROCESSING");
+  });
+  it("does not queue again a row that a download took between being read and being re-queued", async () => {
+    const failed = await db.photo.create({ data: { uploaderId: who.id, sourceKind: "GOOGLE_PICKER", sourceId: "gp-1", status: "FAILED", error: "x", originalName: "p1.jpg", mimeType: "image/jpeg", storageKey: "pending", originalPath: "pending", sizeBytes: 0 } });
+    const c = (globalThis as unknown as { prisma: typeof db }).prisma;
+    const real = c.photo.findMany.bind(c.photo);
+    const spy = vi.spyOn(c.photo, "findMany").mockImplementationOnce((async (args: unknown) => {
+      const read = await real(args as never);
+      await db.photo.update({ where: { id: failed.id }, data: { status: "PROCESSING" } });
+      return read;
+    }) as never);
+    try {
+      await pollPickerSession("s6", null);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(queue.sent[0].photoIds).not.toContain(failed.id);
+    expect((await db.photo.findUniqueOrThrow({ where: { id: failed.id } })).status).toBe("PROCESSING");
+  });
   it("does not count an item in the trash as already in the album", async () => {
     await db.photo.create({ data: { uploaderId: who.id, sourceKind: "GOOGLE_PICKER", sourceId: "gp-1", status: "READY", originalName: "p1.jpg", mimeType: "image/jpeg", storageKey: "photos/y", originalPath: "photos/y/original.jpg", sizeBytes: 9, trashedAt: new Date(), trashReason: "OTHER" } });
     const r = await pollPickerSession("s3", null);

@@ -1,5 +1,6 @@
 import { db } from "@/lib/db";
 import { storage } from "@/lib/storage";
+import { DOWNLOAD_ABANDONED_MS, PICK_AGAIN } from "@/lib/google/download-claim";
 
 /**
  * Longer than anything that makes a row before its file arrives can take: an upload is one request, a Takeout item a
@@ -26,5 +27,12 @@ export async function sweepStrandedUploads(now = new Date()): Promise<number> {
     await storage().deletePrefix(`photos/${p.id}`).catch(() => undefined);
   }
   if (gone) console.warn(`[worker] removed ${gone} upload(s) whose file never arrived`);
-  return gone;
+  // A Picker download that died holding its row is said to have failed, with what to do about it; the row stays so
+  // the member sees it, and picking it again fetches it.
+  const lost = await db.photo.updateMany({
+    where: { sourceKind: "GOOGLE_PICKER", status: "PROCESSING", originalPath: "pending", updatedAt: { lt: new Date(now.getTime() - DOWNLOAD_ABANDONED_MS) } },
+    data: { status: "FAILED", error: `The download from Google Photos was interrupted. ${PICK_AGAIN}` },
+  });
+  if (lost.count) console.warn(`[worker] marked ${lost.count} interrupted Google Photos download(s) as failed`);
+  return gone + lost.count;
 }

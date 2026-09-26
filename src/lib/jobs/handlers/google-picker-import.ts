@@ -6,6 +6,7 @@ import { accessTokenFor, forgetAccessToken } from "@/lib/google/account";
 import { GoogleAuthError } from "@/lib/google/oauth";
 import { deletePickerSession, listPickedItems, openDownload, type PickedItem } from "@/lib/google/picker";
 import { EXT_BY_MIME } from "@/lib/media/mime";
+import { PICK_AGAIN, takeableDownload } from "@/lib/google/download-claim";
 import { enqueue } from "../boss";
 import { QUEUES, type GooglePickerImportJob } from "../queues";
 
@@ -30,7 +31,8 @@ const tokenFailure = (err: unknown) => (err instanceof GoogleAuthError && err.ne
  * again; a refused download on its own fails that item and nothing else.
  */
 export async function googlePickerImport(job: GooglePickerImportJob, signal?: AbortSignal): Promise<void> {
-  const rows = await db.photo.findMany({ where: { id: { in: job.photoIds }, originalPath: "pending", status: "PENDING", sourceKind: "GOOGLE_PICKER" } });
+  // Its own rows still waiting, and any a crashed run of this job left half-taken (its retry picks them up).
+  const rows = await db.photo.findMany({ where: { id: { in: job.photoIds }, sourceKind: "GOOGLE_PICKER", ...takeableDownload() } });
   if (rows.length === 0) return;
   const token = async () => {
     try {
@@ -79,19 +81,20 @@ export async function googlePickerImport(job: GooglePickerImportJob, signal?: Ab
     const originalPath = `${storageKey}/original.${EXT_BY_MIME[row.mimeType]}`;
     // Taken for this job, atomically: a row picked again while this job waited may have been fetched by the job that
     // picking queued, or be being fetched by it now. Whoever takes it first has it; the other passes it by.
-    const claim = await db.photo.updateMany({ where: { id: row.id, originalPath: "pending", status: "PENDING" }, data: { status: "PROCESSING" } });
+    const claim = await db.photo.updateMany({ where: { id: row.id, ...takeableDownload() }, data: { status: "PROCESSING" } });
     if (claim.count !== 1) continue;
-    /** How to recognise the row as still this job's: taken, then stored. */
-    let mine: { status: "PROCESSING" | "PENDING"; originalPath: string } = { status: "PROCESSING", originalPath: "pending" };
+    /** How to recognise the row as still this job's (taken, then stored): nobody has written to it since this job did. */
+    const taken = await db.photo.findUniqueOrThrow({ where: { id: row.id }, select: { updatedAt: true } });
+    let mine: { status: "PROCESSING" | "PENDING"; originalPath: string; updatedAt: Date } = { status: "PROCESSING", originalPath: "pending", updatedAt: taken.updatedAt };
     try {
       const res = await download(row.id);
       const { bytes } = await store.putStream(originalPath, Readable.fromWeb(res.body as never), { maxBytes: isVideo ? env().MAX_VIDEO_UPLOAD_BYTES : env().MAX_UPLOAD_BYTES });
-      await db.photo.update({ where: { id: row.id }, data: { storageKey, originalPath, sizeBytes: bytes, status: "PENDING" } });
-      mine = { status: "PENDING", originalPath };
+      const stored = await db.photo.update({ where: { id: row.id }, data: { storageKey, originalPath, sizeBytes: bytes, status: "PENDING" }, select: { updatedAt: true } });
+      mine = { status: "PENDING", originalPath, updatedAt: stored.updatedAt };
       if (isVideo) await enqueue(QUEUES.transcodeVideo, { photoId: row.id, tripId: row.tripId });
       else await enqueue(QUEUES.processPhoto, { photoId: row.id, tripId: row.tripId });
     } catch (err) {
-      const reason = err instanceof NoToken ? tokenFailure(err.reason) : err instanceof StorageLimitError ? `Larger than ${Math.round(err.maxBytes / 1048576)} MB` : err instanceof GoogleAuthError ? "Google Photos refused the download." : "Download from Google Photos failed.";
+      const reason = err instanceof NoToken ? tokenFailure(err.reason) : err instanceof StorageLimitError ? `Larger than ${Math.round(err.maxBytes / 1048576)} MB` : err instanceof GoogleAuthError ? `Google Photos refused the download. ${PICK_AGAIN}` : `Download from Google Photos failed. ${PICK_AGAIN}`;
       // Back to having no file, so picking it again fetches it rather than finding a row pointing at nothing — but
       // only while it is still this job's to put back.
       const reset = await db.photo.updateMany({ where: { id: row.id, ...mine }, data: { status: "FAILED", error: reason, storageKey: "pending", originalPath: "pending", sizeBytes: 0 } }).catch(() => ({ count: 0 }));

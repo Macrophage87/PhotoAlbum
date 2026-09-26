@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -32,5 +32,30 @@ describe("rows whose file never arrived", () => {
     expect(await sweepStrandedUploads()).toBe(1);
     expect(existsSync(path.join(root, "photos", stranded.id))).toBe(false);
     expect((await db.photo.findMany({ select: { id: true } })).map((p) => p.id).sort()).toEqual([recent.id, repicked.id, queued.id, failed.id].sort());
+  });
+  it("says a Picker download lost with its worker failed, with what to do, and keeps the row", async () => {
+    const lost = await row({ sourceKind: "GOOGLE_PICKER", status: "PROCESSING", updatedAt: new Date(Date.now() - 60 * 60_000) });
+    const going = await row({ sourceKind: "GOOGLE_PICKER", status: "PROCESSING" });
+    await sweepStrandedUploads();
+    expect(await db.photo.findUniqueOrThrow({ where: { id: lost.id } })).toMatchObject({ status: "FAILED", error: expect.stringMatching(/Pick it again/) });
+    expect((await db.photo.findUniqueOrThrow({ where: { id: going.id } })).status).toBe("PROCESSING");
+  });
+  it("leaves a row that a download took between being listed and being deleted", async () => {
+    const old = new Date(Date.now() - STRANDED_AFTER_MS - 60_000);
+    const p = await row({ createdAt: old, updatedAt: old });
+    // Taken just as the sweep lists it: the conditional delete must then find nothing to take.
+    const realFindMany = db.photo.findMany;
+    const c = (globalThis as unknown as { prisma: typeof db }).prisma;
+    const spy = vi.spyOn(c.photo, "findMany").mockImplementationOnce((async (args: unknown) => {
+      const listed = await (realFindMany as (a: unknown) => Promise<unknown[]>)(args);
+      await db.photo.update({ where: { id: p.id }, data: { status: "PROCESSING" } });
+      return listed;
+    }) as never);
+    try {
+      expect(await sweepStrandedUploads()).toBe(0);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(await db.photo.count({ where: { id: p.id } })).toBe(1);
   });
 });
