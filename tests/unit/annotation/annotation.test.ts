@@ -65,7 +65,7 @@ describe("annotation schema and pricing", () => {
 });
 
 describe("the text block", () => {
-  const base = { id: "p", kind: "PHOTO" as const, status: "READY" as const, storageKey: "k", renditions: null, videoRenditions: null, takenAt: new Date("2025-08-12T12:00:00Z"), takenAtSource: "EXIF_OFFSET" as const, tzOffsetMin: -240, camera: "iPhone 15", lat: null, lng: null, placeEstimatedAt: null, context: "lobster rolls on the mail boat", caption: null, title: null, titleByHelper: false, annotation: null, durationS: null, trip: { title: "Acadia", timezone: "America/New_York" }, collections: [{ collection: { title: "Summer" } }] };
+  const base = { id: "p", kind: "PHOTO" as const, status: "READY" as const, storageKey: "k", renditions: null, videoRenditions: null, takenAt: new Date("2025-08-12T12:00:00Z"), takenAtSource: "EXIF_OFFSET" as const, tzOffsetMin: -240, camera: "iPhone 15", lat: null, lng: null, placeEstimatedAt: null, context: "lobster rolls on the mail boat", caption: null, title: null, titleByHelper: null, annotation: null, durationS: null, trip: { title: "Acadia", timezone: "America/New_York" }, collections: [{ collection: { title: "Summer" } }] };
   it("includes notes, containers and the names rule, and asks for a date only when needed", () => {
     const text = describeItem(base, ["Sam"], false);
     expect(text).toContain("Notes from the person who uploaded it: lobster rolls");

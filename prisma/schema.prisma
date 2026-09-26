@@ -405,15 +405,15 @@ model Photo {
   /// When a forgotten person's name was last taken out of this item's machine-written text. An answer from the
   /// helper to a request built before then is thrown away rather than stored, since it may name them again.
   namesScrubbedAt           DateTime?
-  /// The title the item goes by (its title, or `membersTitle` when it has none) was written by the helper. A member
-  /// typing a different title makes it theirs.
-  titleByHelper             Boolean  @default(false)
   /// Members-only only because the text repeats a word from the title of a trip or collection strangers cannot
   /// open: making that trip or collection public lifts it (see src/lib/annotation/rejudge.ts).
   annotationTitleOnly       Boolean  @default(false)
   /// When the uploader or an admin chose to show the helper's text to everyone. Nothing re-flags it until it is
   /// written again.
   annotationSharedAt        DateTime?
+  /// Who wrote `title`: true when the helper's title was put on the item, false when a member typed it, null for a
+  /// title from before the album kept track. A members-only item loses the helper's title, never a typed one.
+  titleByHelper             Boolean?
   /// Darkroom edits, kept as instructions rather than applied to the file: crop, straighten, brightness, contrast,
   /// colour. The original is never touched, the renditions are re-rendered from it whenever this changes, and
   /// clearing it puts the item back exactly as it arrived. Only the uploader or an admin may set it.
@@ -592,6 +592,11 @@ model AppSetting {
   lastForgetAt           DateTime?
   /// The key forgotten names are hashed with (see ForgottenName), made on first use.
   forgetKey              String?
+  /// What the last whole-album members-only judging used: the matcher's version and the names it knew, so the
+  /// daily sweep and a restart judge again only what changed (src/lib/annotation/rejudge.ts).
+  membersOnlyMatcher     String?
+  membersOnlyNames       String[]  @default([])
+  membersOnlyJudgedAt    DateTime?
   updatedAt              DateTime  @updatedAt
 }
 

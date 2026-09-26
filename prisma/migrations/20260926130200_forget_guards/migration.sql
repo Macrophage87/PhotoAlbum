@@ -2,8 +2,6 @@
 --
 -- Photo.namesScrubbedAt: when a forgotten name was last taken out of the helper's text on an item, so an answer to
 -- a request built before then (a batch takes hours) is thrown away instead of writing the name back.
--- Photo.titleByHelper: whether the title an item goes by is the helper's, even after the helper has since written
--- another one; only the helper's words are rewritten when somebody is forgotten.
 -- Person.formerNames: a renamed person is still in text written under the old name.
 -- Person.namingWithdrawnAt, Person.namesChangedAt, Person.adultConfirmedAt: see below.
 -- descriptionByHelper: which trip, collection and activity descriptions are the helper's words; nobody recorded it
@@ -14,8 +12,7 @@
 -- is recognised in an answer, or in a member's words sent to the helper, after the person's record is gone.
 -- ForgetLeftover: after a forget, the places whose words still mention the name (ids and fields only), kept until an
 -- admin has seen to them.
-ALTER TABLE "Photo" ADD COLUMN "namesScrubbedAt" TIMESTAMP(3),
-  ADD COLUMN "titleByHelper" BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE "Photo" ADD COLUMN "namesScrubbedAt" TIMESTAMP(3);
 ALTER TABLE "Person" ADD COLUMN "formerNames" TEXT[] DEFAULT ARRAY[]::TEXT[],
   ADD COLUMN "namingWithdrawnAt" TIMESTAMP(3),
   ADD COLUMN "namesChangedAt" TIMESTAMP(3),
@@ -82,18 +79,3 @@ BEGIN
 END $$;
 SELECT withdraw_unevidenced_naming();
 DROP FUNCTION withdraw_unevidenced_naming();
-
--- Whose title an item goes by: the helper's where it is the title its record gives now, or the title one of its
--- kept answers gave. Nothing else is guessed; every other title counts as a member's and is listed, not rewritten,
--- when somebody is forgotten. The title is read from the answer's first text block (a thinking block may come
--- first) with a pattern rather than by parsing the JSON, so a malformed answer is simply no match.
-UPDATE "Photo" p SET "titleByHelper" = true
-WHERE COALESCE(NULLIF(btrim(p.title), ''), NULLIF(btrim(p."membersTitle"), '')) IS NOT NULL AND p.annotation IS NOT NULL AND (
-  btrim(COALESCE(NULLIF(btrim(p.title), ''), p."membersTitle")) = btrim(p.annotation->>'title')
-  OR EXISTS (
-    SELECT 1 FROM "MediaAnnotationRaw" r,
-      LATERAL (SELECT b->>'text' AS t FROM jsonb_array_elements(CASE WHEN jsonb_typeof(r.response->'content') = 'array' THEN r.response->'content' ELSE '[]'::jsonb END) WITH ORDINALITY e(b, i) WHERE b->>'type' = 'text' ORDER BY i LIMIT 1) first
-    WHERE r."photoId" = p.id
-      AND btrim(substring(first.t FROM '"title"\s*:\s*"([^"\\]*)"')) = btrim(COALESCE(NULLIF(btrim(p.title), ''), p."membersTitle"))
-  )
-);

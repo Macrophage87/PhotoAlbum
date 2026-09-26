@@ -5,7 +5,7 @@ import { ShareHelperText } from "./ShareHelperText";
 import { OptOutToggle } from "./OptOutToggle";
 
 /** The helper's description on the item page: read for everyone who may see the item, editable for members. */
-export function AnnotationCard({ photoId, annotation, membersOnly = false, source, model, error, optOut, optOutReason, active, editable }: { photoId: string; annotation: StoredAnnotation | null; /** Read by the family only (see `judgeHelperText`). */ membersOnly?: boolean; source: string | null; model: string | null; error: string | null; optOut: boolean; /** Why the item will not be sent (its own flag, or an opted-out trip or collection), or null. */ optOutReason: string | null; active: boolean; editable: boolean }) {
+export function AnnotationCard({ photoId, annotation, membersOnly = false, titleOnly = false, annotatedAt = null, source, model, error, optOut, optOutReason, active, editable }: { photoId: string; annotation: StoredAnnotation | null; /** Read by the family only (see `judgeHelperText`). */ membersOnly?: boolean; /** Only because it repeats a word of a private trip's or collection's title. */ titleOnly?: boolean; /** When it was written, as the page read it: showing it to everyone is refused if it has been written again since. */ annotatedAt?: string | null; source: string | null; model: string | null; error: string | null; optOut: boolean; /** Why the item will not be sent (its own flag, or an opted-out trip or collection), or null. */ optOutReason: string | null; active: boolean; editable: boolean }) {
   const update = updateAnnotation.bind(null, photoId);
   const again = reannotate.bind(null, photoId);
   return (
@@ -69,7 +69,7 @@ export function AnnotationCard({ photoId, annotation, membersOnly = false, sourc
           {annotation.place && <p className="text-muted">Place: {annotation.place}</p>}
         </div>
       ) : null}
-      {annotation && <ShareHelperText membersOnly={membersOnly} share={editable ? setAnnotationShared.bind(null, photoId) : undefined} />}
+      {annotation && <ShareHelperText membersOnly={membersOnly} titleOnly={titleOnly} share={editable ? setAnnotationShared.bind(null, photoId, annotatedAt) : undefined} />}
       {editable && (
         <div className="space-y-2 pt-2 border-t border-border">
           {active && !optOutReason && (

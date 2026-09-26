@@ -3,7 +3,7 @@ import { annotationSchema, clampAnnotation, toStored, type Annotation } from "./
 import { enqueueEmbedding } from "@/lib/jobs/handlers/embed-photo";
 import { applyPlaceEstimate, needsPlaceEstimate } from "./place";
 import { isWeakDate } from "@/lib/photos/date-from-neighbours";
-import { judgeHelperText } from "./members-only";
+import { judgeHelperText, knownNames, mentionsAnyName, pastHelperTitles, titleIsHelpers } from "./members-only";
 import { forgottenSince, unchangedSince } from "@/lib/people/names-changed";
 import { loadTombstone, scrubRecord } from "@/lib/people/tombstone";
 
@@ -14,25 +14,31 @@ export type Usage = { input_tokens: number; output_tokens: number; cache_read_in
 
 /**
  * Where the helper's title goes. A title of the family's own is never touched. The helper's goes on the item where
- * it has none, unless it is members-only, when it is kept in `membersTitle` for members to read instead. What is in
- * `membersTitle` already is replaced only when it was the helper's last title: a title moved there because it named
- * somebody (see the members_only_text migration) is the family's.
+ * it has none, unless it is members-only, when it is kept in `membersTitle` for members to read instead; and on a
+ * members-only item a title the helper put there before (see `titleIsHelpers`) comes off it too. What is in
+ * `membersTitle` already is replaced only when it was the helper's last title.
  */
-export function titlesAfter(current: { title: string | null; membersTitle: string | null; previousAiTitle: string | null }, aiTitle: string, membersOnly: boolean): { title: string | null; membersTitle: string | null } {
+export function titlesAfter(
+  current: { title: string | null; membersTitle: string | null; previousAiTitle: string | null; titleByHelper?: boolean | null; pastTitles?: string[]; namesSomebody?: boolean },
+  aiTitle: string,
+  membersOnly: boolean,
+): { title: string | null; membersTitle: string | null; titleByHelper: boolean | null } {
   const held = current.membersTitle?.trim() || null;
   const helpers = !held || held === current.previousAiTitle?.trim();
-  const membersTitle = helpers ? (membersOnly && aiTitle ? aiTitle : null) : held;
-  const title = !membersOnly && !current.title?.trim() && !membersTitle && aiTitle ? aiTitle : current.title;
-  return { title, membersTitle };
-}
-
-/** Whether the title the item goes by after this answer is the helper's. */
-function titleIsHelpers(current: { title: string | null; membersTitle: string | null; titleByHelper: boolean }, after: { title: string | null; membersTitle: string | null }, aiTitle: string): boolean {
-  const goesBy = (t: { title: string | null; membersTitle: string | null }) => t.title?.trim() || t.membersTitle?.trim() || null;
-  const now = goesBy(after);
-  if (!now) return false;
-  if (now === goesBy(current)) return current.titleByHelper || now === aiTitle;
-  return now === aiTitle;
+  let membersTitle = helpers ? (membersOnly && aiTitle ? aiTitle : null) : held;
+  let title = current.title;
+  let titleByHelper = current.titleByHelper ?? null;
+  if (membersOnly) {
+    if (titleIsHelpers({ title, titleByHelper, aiTitle: current.previousAiTitle, pastTitles: current.pastTitles, namesSomebody: current.namesSomebody })) {
+      membersTitle = membersTitle ?? title;
+      title = null;
+      titleByHelper = null;
+    }
+  } else if (!title?.trim() && !membersTitle && aiTitle) {
+    title = aiTitle;
+    titleByHelper = true;
+  }
+  return { title, membersTitle, titleByHelper };
 }
 
 /**
@@ -55,7 +61,20 @@ export async function applyAnnotation(photoId: string, model: string, parsed: An
   const judgement = await judgeHelperText(photoId, stored, current.context, opts.sent);
   const membersOnly = judgement.membersOnly;
   const aiTitle = current.kind !== "EXTERNAL_VIDEO" ? stored.title.trim() : "";
-  const titles = titlesAfter({ title: current.title, membersTitle: current.membersTitle, previousAiTitle: (current.annotation as { title?: string } | null)?.title ?? null }, aiTitle, membersOnly);
+  const previousAiTitle = (current.annotation as { title?: string } | null)?.title ?? null;
+  // A title of unknown origin on an item going members-only: the helper's past answers and its words decide.
+  const unknownTitle = membersOnly && current.title?.trim() && current.titleByHelper === null && current.title.trim() !== previousAiTitle?.trim();
+  const titles = titlesAfter(
+    {
+      title: current.title,
+      membersTitle: current.membersTitle,
+      previousAiTitle,
+      titleByHelper: current.titleByHelper,
+      ...(unknownTitle ? { pastTitles: await pastHelperTitles(photoId), namesSomebody: mentionsAnyName(current.title!, await knownNames()) } : {}),
+    },
+    aiTitle,
+    membersOnly,
+  );
   const est = parsed.estimatedYear;
   const noReliableDate = isWeakDate(current.takenAtSource, current.takenAt);
   const keepMemberEstimate = current.estimatedDateSource === "MEMBER";
@@ -80,8 +99,7 @@ export async function applyAnnotation(photoId: string, model: string, parsed: An
         // Embedded videos keep YouTube's title; see `titlesAfter` for everything else.
         title: titles.title,
         membersTitle: titles.membersTitle,
-        // Whose title it goes by: the helper's when it just gave the one it goes by, a member's own when it kept that.
-        titleByHelper: titleIsHelpers(current, titles, aiTitle),
+        titleByHelper: titles.titleByHelper,
         annotationInputTokens: raw.usage?.input_tokens ?? null,
         annotationCacheReadTokens: raw.usage?.cache_read_input_tokens ?? null,
         annotationCacheWriteTokens: raw.usage?.cache_creation_input_tokens ?? null,

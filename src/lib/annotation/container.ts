@@ -130,7 +130,7 @@ export async function withoutUnpermittedNames<
     trip?: { title: string };
     description: string | null;
     descriptionByHelper: boolean;
-    photos: { id: string; title: string | null; titleByHelper: boolean; annotation: unknown; caption?: string | null; context?: string | null }[];
+    photos: { id: string; title: string | null; titleByHelper: boolean | null; annotation: unknown; caption?: string | null; context?: string | null }[];
   },
 >(c: T, given?: NameScrub): Promise<T> {
   const scrub = given ?? (await unpermittedNameScrub(c.photos.map((p) => p.id)));

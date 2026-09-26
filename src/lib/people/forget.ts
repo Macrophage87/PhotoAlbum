@@ -85,16 +85,17 @@ function likeAny(column: Prisma.Sql, words: string[]): Prisma.Sql {
   return Prisma.sql`(${Prisma.join(words.map((w) => Prisma.sql`${column} ILIKE ${`%${w}%`}`), " OR ")})`;
 }
 
-type MachineText = { id: string; title: string | null; membersTitle: string | null; titleByHelper: boolean; annotation: unknown; placeEstimateName: string | null; placeEstimateNote: string | null; estimatedDateNote: string | null };
+type MachineText = { id: string; title: string | null; membersTitle: string | null; titleByHelper: boolean | null; annotation: unknown; placeEstimateName: string | null; placeEstimateNote: string | null; estimatedDateNote: string | null };
 
 /**
- * Which of an item's two titles are the helper's words: the title its record gives now, one of its kept answers
- * gave, or one it was recorded as giving (`titleByHelper`, for the title the item goes by).
+ * Which of an item's two titles are the helper's words: the title its record gives now, or one of its kept answers
+ * gave; for the item's own title, also one recorded as the helper's (`titleByHelper` true). A title recorded as a
+ * member's (false) is theirs whatever it says, and one from before the album kept track (null) counts as a member's
+ * unless it is one of the helper's own titles: it is listed, never rewritten.
  */
 function helpersTitles(p: Pick<MachineText, "title" | "membersTitle" | "titleByHelper" | "annotation">, given: Set<string> = new Set()) {
-  const mine = (t: string | null, flagged: boolean) => Boolean(t?.trim()) && (flagged || t!.trim() === helperTitle(p.annotation) || given.has(t!.trim()));
-  const hasOwn = Boolean(p.title?.trim());
-  return { title: mine(p.title, p.titleByHelper), membersTitle: mine(p.membersTitle, p.titleByHelper && !hasOwn) };
+  const said = (t: string | null) => Boolean(t?.trim()) && (t!.trim() === helperTitle(p.annotation) || given.has(t!.trim()));
+  return { title: Boolean(p.title?.trim()) && p.titleByHelper !== false && (p.titleByHelper === true || said(p.title)), membersTitle: said(p.membersTitle) };
 }
 
 /** Whether the helper's words on an item mention them. Evidence notes only by names that are nobody else's. */
@@ -224,7 +225,7 @@ export async function memberTextMentioning(m: NameMatcher, tagged: Set<string> =
   const taggedIds = [...tagged];
   const anywhere = words.length ? Prisma.sql`(${likeAny(Prisma.sql`title`, words)} OR ${likeAny(Prisma.sql`"membersTitle"`, words)} OR ${likeAny(Prisma.sql`caption`, words)} OR ${likeAny(Prisma.sql`context`, words)})` : Prisma.sql`false`;
   const theirs = taggedIds.length ? Prisma.sql`id IN (${Prisma.join(taggedIds)})` : Prisma.sql`false`;
-  const photos = await db.$queryRaw<{ id: string; title: string | null; membersTitle: string | null; titleByHelper: boolean; caption: string | null; context: string | null; annotation: unknown; originalName: string }[]>`
+  const photos = await db.$queryRaw<{ id: string; title: string | null; membersTitle: string | null; titleByHelper: boolean | null; caption: string | null; context: string | null; annotation: unknown; originalName: string }[]>`
     SELECT id, title, "membersTitle", "titleByHelper", caption, context, annotation, "originalName" FROM "Photo"
     WHERE "trashedAt" IS NULL AND (${anywhere} OR ${theirs})
     ORDER BY "createdAt" ASC`;

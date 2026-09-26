@@ -127,18 +127,27 @@ describe("recording what a request to the helper carried", () => {
 
 describe("where the helper's title goes", () => {
   it("fills an empty title with a public one, and keeps a members-only one aside", () => {
-    expect(titlesAfter({ title: null, membersTitle: null, previousAiTitle: null }, "Mail boat lunch", false)).toEqual({ title: "Mail boat lunch", membersTitle: null });
-    expect(titlesAfter({ title: null, membersTitle: null, previousAiTitle: null }, "Ada on the boat", true)).toEqual({ title: null, membersTitle: "Ada on the boat" });
+    expect(titlesAfter({ title: null, membersTitle: null, previousAiTitle: null }, "Mail boat lunch", false)).toEqual({ title: "Mail boat lunch", membersTitle: null, titleByHelper: true });
+    expect(titlesAfter({ title: null, membersTitle: null, previousAiTitle: null }, "Ada on the boat", true)).toEqual({ title: null, membersTitle: "Ada on the boat", titleByHelper: null });
     // The family's own title is never touched.
-    expect(titlesAfter({ title: "Our day", membersTitle: null, previousAiTitle: null }, "Ada on the boat", true)).toEqual({ title: "Our day", membersTitle: "Ada on the boat" });
+    expect(titlesAfter({ title: "Our day", membersTitle: null, previousAiTitle: null }, "Ada on the boat", true)).toEqual({ title: "Our day", membersTitle: "Ada on the boat", titleByHelper: null });
+  });
+
+  it("takes an older helper title off a members-only item, and never one the family typed", () => {
+    // Described from notes as "Ada's birthday cake", then described again as "Cake table": the old title was the helper's.
+    expect(titlesAfter({ title: "Ada's birthday cake", membersTitle: null, previousAiTitle: "Ada's birthday cake", titleByHelper: true }, "Cake table", true)).toEqual({ title: null, membersTitle: "Cake table", titleByHelper: null });
+    expect(titlesAfter({ title: "Ada's birthday cake", membersTitle: null, previousAiTitle: "Cake table", titleByHelper: null, pastTitles: ["Ada's birthday cake"] }, "Cake table", true)).toMatchObject({ title: null });
+    expect(titlesAfter({ title: "Ada's birthday cake", membersTitle: null, previousAiTitle: "Cake table", titleByHelper: null, namesSomebody: true }, "Cake table", true)).toMatchObject({ title: null });
+    // Typed by a member since the album kept track: theirs to publish, names and all.
+    expect(titlesAfter({ title: "Ada's birthday cake", membersTitle: null, previousAiTitle: "Cake table", titleByHelper: false, namesSomebody: true }, "Cake table", true)).toMatchObject({ title: "Ada's birthday cake" });
   });
 
   it("replaces only the helper's own last title, never one moved aside because it named somebody", () => {
     // Described again without names: the old members-only title goes and the new one is anybody's.
-    expect(titlesAfter({ title: null, membersTitle: "Ada on the boat", previousAiTitle: "Ada on the boat" }, "Boat day", false)).toEqual({ title: "Boat day", membersTitle: null });
+    expect(titlesAfter({ title: null, membersTitle: "Ada on the boat", previousAiTitle: "Ada on the boat" }, "Boat day", false)).toEqual({ title: "Boat day", membersTitle: null, titleByHelper: true });
     // A title of the family's that was moved aside stays, and keeps the public one from taking its place.
-    expect(titlesAfter({ title: null, membersTitle: "Nana's 80th", previousAiTitle: "Boat day" }, "Boat day", false)).toEqual({ title: null, membersTitle: "Nana's 80th" });
-    expect(titlesAfter({ title: null, membersTitle: "Nana's 80th", previousAiTitle: "Boat day" }, "Ada on the boat", true)).toEqual({ title: null, membersTitle: "Nana's 80th" });
+    expect(titlesAfter({ title: null, membersTitle: "Nana's 80th", previousAiTitle: "Boat day" }, "Boat day", false)).toEqual({ title: null, membersTitle: "Nana's 80th", titleByHelper: null });
+    expect(titlesAfter({ title: null, membersTitle: "Nana's 80th", previousAiTitle: "Boat day" }, "Ada on the boat", true)).toEqual({ title: null, membersTitle: "Nana's 80th", titleByHelper: null });
   });
 });
 

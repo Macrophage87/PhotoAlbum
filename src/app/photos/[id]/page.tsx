@@ -308,7 +308,7 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
             </Card>
             )}
 
-            <AnnotationCard photoId={photo.id} annotation={photo.annotation as StoredAnnotation | null} membersOnly={photo.annotationMembersOnly} source={photo.annotationSource} model={photo.annotationModel} error={photo.annotationError} optOut={photo.annotationOptOut} optOutReason={optOutWhy} active={gates.active} editable={mine} />
+            <AnnotationCard photoId={photo.id} annotation={photo.annotation as StoredAnnotation | null} membersOnly={photo.annotationMembersOnly} titleOnly={photo.annotationTitleOnly} annotatedAt={photo.annotatedAt?.toISOString() ?? null} source={photo.annotationSource} model={photo.annotationModel} error={photo.annotationError} optOut={photo.annotationOptOut} optOutReason={optOutWhy} active={gates.active} editable={mine} />
             {/* Where a date came from is worth reading whoever you are; taking one of the readings is not. */}
             <div className="mb-2"><DateTroubleshooter photoId={photo.id} readOnly={!mine} /></div>
             {mine && neighbourGuess && <div className="mb-3"><NeighbourDate photoId={photo.id} guess={{ ...neighbourGuess, takenAt: neighbourGuess.takenAt.toISOString() }} /></div>}
