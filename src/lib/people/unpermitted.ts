@@ -49,7 +49,7 @@ async function taggedOn(photoIds: string[]): Promise<Set<string>> {
 function scrubWith(matchers: { id: string; m: NameMatcher }[], tagged: Set<string>, tombstone: Tombstone): NameScrub {
   return (text) => {
     if (typeof text !== "string" || !text) return text ?? null;
-    const named = matchers.reduce((t, { id, m }) => m.scrub(t, { tagged: tagged.has(id) }), text);
+    const named = matchers.reduce((t, { id, m }) => m.scrub(t, { tagged: tagged.has(id), fullOnly: true }), text);
     return tombstone.scrub(named);
   };
 }

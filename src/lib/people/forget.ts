@@ -139,6 +139,8 @@ export type ForgetScope = {
    * for members. For a naming the album withdrew by itself, whose members-only text waits for admins.
    */
   publicOnly?: boolean;
+  /** Only what the helper wrote after this (for the nightly public pass). */
+  since?: Date | null;
 };
 
 /**
@@ -153,9 +155,10 @@ export type ForgetScope = {
 export async function forgetNameInText(photoIds: string[], m: NameMatcher, opts: ForgetScope = {}): Promise<void> {
   const tagged = opts.tagged ?? new Set<string>();
   const ids = [...new Set(photoIds)];
+  const touched: string[] = [];
   if (ids.length) {
     const [photos, others, given] = await Promise.all([
-      db.photo.findMany({ where: { id: { in: ids } }, select: { id: true, title: true, membersTitle: true, titleByHelper: true, annotation: true, annotationMembersOnly: true, placeEstimateName: true, placeEstimateNote: true, placeEstimateMembersOnly: true, estimatedDateNote: true } }),
+      db.photo.findMany({ where: { id: { in: ids }, ...(opts.since ? { annotatedAt: { gt: opts.since } } : {}) }, select: { id: true, title: true, membersTitle: true, titleByHelper: true, annotation: true, annotationMembersOnly: true, placeEstimateName: true, placeEstimateNote: true, placeEstimateMembersOnly: true, estimatedDateNote: true } }),
       othersOn(ids.filter((id) => tagged.has(id)), opts.personId),
       answerTitles(ids),
     ]);
@@ -166,23 +169,24 @@ export async function forgetNameInText(photoIds: string[], m: NameMatcher, opts:
       const h = helpersTitles(p, given.get(p.id));
       const helperText = !opts.publicOnly || !p.annotationMembersOnly;
       const evidence = !opts.publicOnly || !p.placeEstimateMembersOnly;
-      await db.photo.update({
-        where: { id: p.id },
-        data: {
-          ...(a && helperText ? { annotation: scrubAnnotation(a, m, where) } : {}),
-          // A title is only rewritten while it is the helper's; a member's own title is theirs.
-          ...(h.title ? { title: m.scrub(p.title, where) } : {}),
-          ...(h.membersTitle && !opts.publicOnly ? { membersTitle: m.scrub(p.membersTitle, where) } : {}),
-          // Evidence says "May 1990" as readily as "May at the lake": only names that could be nobody else's.
-          ...(evidence ? { placeEstimateName: m.scrub(p.placeEstimateName), placeEstimateNote: m.scrub(p.placeEstimateNote), estimatedDateNote: m.scrub(p.estimatedDateNote) } : {}),
-          namesScrubbedAt: now,
-        },
-      });
+      const next = {
+        ...(a && helperText ? { annotation: scrubAnnotation(a, m, where) } : {}),
+        // A title is only rewritten while it is the helper's; a member's own title is theirs.
+        ...(h.title ? { title: m.scrub(p.title, where) } : {}),
+        ...(h.membersTitle && !opts.publicOnly ? { membersTitle: m.scrub(p.membersTitle, where) } : {}),
+        // Evidence says "May 1990" as readily as "May at the lake": only names that could be nobody else's.
+        ...(evidence ? { placeEstimateName: m.scrub(p.placeEstimateName), placeEstimateNote: m.scrub(p.placeEstimateNote), estimatedDateNote: m.scrub(p.estimatedDateNote) } : {}),
+      };
+      const changed = Object.entries(next).some(([k, v]) => JSON.stringify(v) !== JSON.stringify((p as Record<string, unknown>)[k]));
+      if (changed) touched.push(p.id);
+      // A forget stamps every photograph it looked at, so no answer about any of them is written over it; the
+      // withdrawal's public pass writes (and stamps) only what it changed.
+      if (changed || !opts.publicOnly) await db.photo.update({ where: { id: p.id }, data: { ...next, namesScrubbedAt: now } });
     }
-    const found = photos.map((p) => p.id);
-    if (found.length && !opts.publicOnly) {
+    const found = opts.publicOnly ? touched : photos.map((p) => p.id);
+    if (found.length) {
       await db.$executeRaw`UPDATE "Photo" SET "textEmbedding" = NULL WHERE id IN (${Prisma.join(found)})`;
-      await db.mediaAnnotationRaw.deleteMany({ where: { photoId: { in: found } } });
+      if (!opts.publicOnly) await db.mediaAnnotationRaw.deleteMany({ where: { photoId: { in: found } } });
       for (const id of found) await enqueueEmbedding(id, true);
     }
   }
@@ -191,7 +195,7 @@ export async function forgetNameInText(photoIds: string[], m: NameMatcher, opts:
   // could be nobody else's are taken out of them. What is left naming them is listed (see memberTextMentioning).
   const near = await containersOf([...tagged]);
   const words = probes(m.albumForms);
-  const byHelper = (ids: string[]) => ({ descriptionByHelper: true, ...(opts.publicOnly ? { descriptionMembersOnly: false } : {}), OR: [{ id: { in: ids } }, ...words.map((w) => ({ description: { contains: w, mode: "insensitive" as const } }))] });
+  const byHelper = (ids: string[]) => ({ descriptionByHelper: true, ...(opts.publicOnly ? { descriptionMembersOnly: false } : {}), ...(opts.since ? { updatedAt: { gt: opts.since } } : {}), OR: [{ id: { in: ids } }, ...words.map((w) => ({ description: { contains: w, mode: "insensitive" as const } }))] });
   const [trips, activities, collections] = await Promise.all([
     db.trip.findMany({ where: byHelper(near.trips), select: { id: true, description: true } }),
     db.activity.findMany({ where: byHelper(near.activities), select: { id: true, description: true } }),
@@ -272,10 +276,10 @@ export async function forgetOnPhoto(photoId: string, person: PersonNames): Promi
  * (or were) on, on items naming them by a name nobody else has, and in the descriptions the helper wrote. For
  * somebody whose agreement to be named was withdrawn, or was recorded without evidence they are an adult.
  */
-export async function forgetNameEverywhere(person: PersonNames, opts: { publicOnly?: boolean } = {}): Promise<void> {
+export async function forgetNameEverywhere(person: PersonNames, opts: { publicOnly?: boolean; since?: Date | null } = {}): Promise<void> {
   const m = await matcherFor(person);
   const tagged = await taggedPhotoIds(person.id);
-  await forgetNameInText([...tagged, ...(await photosMentioning(m))], m, { tagged, personId: person.id, publicOnly: opts.publicOnly });
+  await forgetNameInText([...tagged, ...(await photosMentioning(m))], m, { tagged, personId: person.id, publicOnly: opts.publicOnly, since: opts.since });
 }
 
 /** How long a withdrawal nobody asked for waits for an admin to record evidence before members-only text is scrubbed. */
@@ -289,15 +293,18 @@ export const WITHDRAWN_GRACE_DAYS = 14;
  */
 export async function scrubWithdrawnNames(now = new Date()): Promise<number> {
   const due = new Date(now.getTime() - WITHDRAWN_GRACE_DAYS * 86_400_000);
-  const people = await db.person.findMany({ where: { namingWithdrawnAt: { not: null } }, select: { id: true, name: true, formerNames: true, namingWithdrawnAt: true } });
+  const people = await db.person.findMany({ where: { namingWithdrawnAt: { not: null } }, select: { id: true, name: true, formerNames: true, namingWithdrawnAt: true, namingPublicScrubbedAt: true } });
   let done = 0;
   for (const p of people) {
     if (p.namingWithdrawnAt! <= due) {
       await forgetNameEverywhere(p);
-      await db.person.update({ where: { id: p.id }, data: { namingWithdrawnAt: null } });
+      await db.person.update({ where: { id: p.id }, data: { namingWithdrawnAt: null, namingPublicScrubbedAt: null } });
       done += 1;
     } else {
-      await forgetNameEverywhere(p, { publicOnly: true });
+      // The whole album the first time; after that only what the helper has written since.
+      const at = new Date();
+      await forgetNameEverywhere(p, { publicOnly: true, since: p.namingPublicScrubbedAt });
+      await db.person.update({ where: { id: p.id }, data: { namingPublicScrubbedAt: at } });
     }
   }
   return done;
@@ -315,7 +322,7 @@ export function withdrawalReason(p: { birthday: Date | null; adultAttestedAt: Da
 export function withdrawalNotice(name: string, reason: WithdrawalReason, on: Date): string {
   const when = on.toLocaleDateString("en-US");
   if (reason === "minor") return `${name}'s birthday shows they are under 18, so the album no longer uses their name. It will be taken out of descriptions already written on ${when}.`;
-  if (reason === "turned-off") return `Using ${name}'s name was turned off before; its name will be taken out of old descriptions on ${when}.`;
+  if (reason === "turned-off") return `Using ${name}'s name was turned off before; their name will be taken out of old descriptions on ${when}.`;
   return `The album can't be sure ${name} is over 18, so it stopped using their name. To keep it, record a birthday or adult confirmation and turn their name back on; otherwise it is taken out of descriptions already written on ${when}. Naming stays off until an admin turns it on.`;
 }
 

@@ -10,7 +10,7 @@ import { requireUserOrThrow } from "@/lib/auth/viewer";
 import { canChangePerson, canEditMedia, NOT_YOUR_PERSON, NOT_YOURS } from "@/lib/auth/ownership";
 import { knownAdult, nameMayLeaveServer, namingOutcome } from "@/lib/people/consent";
 import { forgetNameEverywhere, forgetNameInText, forgetOnPhoto, matcherFor, memberTextMentioning, photosMentioning, taggedPhotoIds } from "@/lib/people/forget";
-import { rememberForgotten } from "@/lib/people/tombstone";
+import { assertCanForget, forgottenHashOf, rememberForgotten } from "@/lib/people/tombstone";
 import { enqueueFaceDetection } from "@/lib/jobs/handlers/detect-faces";
 import { confirmFaceAs, rejectProposal } from "@/lib/people/matching";
 import { rejudgeFromAction } from "@/lib/annotation/rejudge-notice";
@@ -186,7 +186,9 @@ export async function decideIndexing(personId: string, fd: FormData): Promise<vo
   if (named && !nameMayLeaveServer(after)) await forgetNameEverywhere(after);
   // Evidence they are an adult, however it was recorded: a withdrawal the album made by itself for want of it no
   // longer needs to scrub anything. Naming stays off until an admin turns it back on.
-  if (knownAdult(after) && after.namingWithdrawnAt) await db.person.update({ where: { id: personId }, data: { namingWithdrawnAt: null } });
+  // Only evidence that was missing counts: a Recognition save for somebody whose naming was turned off before, with
+  // evidence already on record, is no decision about naming, which only turning it back on is.
+  if (!knownAdult(person) && knownAdult(after) && after.namingWithdrawnAt) await db.person.update({ where: { id: personId }, data: { namingWithdrawnAt: null } });
   if (outcome.nullTemplates) await nullTemplatesFor(personId);
   else {
     // Enabling later: templates of confirmed faces are recomputed by re-scanning their photos, then open faces are re-matched.
@@ -220,44 +222,73 @@ export async function optOutPerson(personId: string, fd: FormData): Promise<void
   if (!canChangePerson(user, person)) throw new Error(NOT_YOUR_PERSON);
   // A pet has no face data to forget; it is removed with deletePerson, which gives its detections back.
   if (person.kind === "PET") throw new Error("A pet is removed, not forgotten");
-  const m = await matcherFor(person);
-  const tagged = await taggedPhotoIds(personId);
-  const photoIds = [...new Set([...tagged, ...(await photosMentioning(m))])];
+  // Without a key to remember their names under, forgetting them would let the names come straight back.
+  await assertCanForget();
+  // First of all: from this moment until the forget has finished, no answer from the helper is stored at all, so none
+  // can bring the name back while the photographs to scrub are still being found.
   const now = new Date();
-  // First, so every answer from the helper to a request built before now is thrown away, whoever it is about.
   await db.appSetting.upsert({ where: { id: "app" }, create: { id: "app", lastForgetAt: now }, update: { lastForgetAt: now } });
-  await db.person.update({ where: { id: personId }, data: { faceIndexing: false, nameInDescriptions: false, pendingDecision: false, keepNameOnPhotos: keepName, optedOutAt: person.optedOutAt ?? now, faceIndexingSetAt: now, namingWithdrawnAt: null } });
-  await forgetNameInText(photoIds, m, { tagged, personId });
-  // What is left mentioning them is what members wrote (or the helper's trip descriptions, where only a name that
-  // is also a word is left); it is listed so it can be edited by hand, and stamped so no answer is written over it.
-  const left = await memberTextMentioning(m, tagged, personId);
-  if (left.photos.length) await db.photo.updateMany({ where: { id: { in: left.photos.map((p) => p.id) } }, data: { namesScrubbedAt: now } });
-  // Their names, hashed, outlive their record: see tombstone.ts.
-  if (!keepName) await rememberForgotten(m.tombstoneForms);
-  await db.faceCluster.deleteMany({ where: { personId } });
-  await db.face.deleteMany({ where: { proposedPersonId: personId } });
-  if (keepName) {
-    await db.$executeRaw`UPDATE "Face" SET embedding = NULL, "clusterId" = NULL WHERE "personId" = ${personId}`;
-  } else {
-    await db.face.deleteMany({ where: { personId } });
-    // Forgetting entirely also removes the person page; the record of who is in which photo went with the faces.
-    await db.person.delete({ where: { id: personId } });
+  let left: Awaited<ReturnType<typeof memberTextMentioning>>;
+  try {
+    const m = await matcherFor(person);
+    const tagged = await taggedPhotoIds(personId);
+    // Photographs whose members' words name them too: what the helper wrote there was written from those words.
+    const before = await memberTextMentioning(m, tagged, personId);
+    const photoIds = [...new Set([...tagged, ...(await photosMentioning(m)), ...before.photos.map((p) => p.id)])];
+    await db.person.update({ where: { id: personId }, data: { faceIndexing: false, nameInDescriptions: false, pendingDecision: false, keepNameOnPhotos: keepName, optedOutAt: person.optedOutAt ?? now, faceIndexingSetAt: now, namingWithdrawnAt: null } });
+    // Their names, hashed, outlive their record: see tombstone.ts.
+    if (!keepName) await rememberForgotten(m.tombstoneForms);
+    await forgetNameInText(photoIds, m, { tagged, personId });
+    // What is left mentioning them is what members wrote (or the helper's trip descriptions, where only a name that
+    // is also a word is left); it is listed so it can be edited by hand.
+    left = await memberTextMentioning(m, tagged, personId);
+    await db.faceCluster.deleteMany({ where: { personId } });
+    await db.face.deleteMany({ where: { proposedPersonId: personId } });
+    if (keepName) {
+      await db.$executeRaw`UPDATE "Face" SET embedding = NULL, "clusterId" = NULL WHERE "personId" = ${personId}`;
+    } else {
+      await db.face.deleteMany({ where: { personId } });
+      // Forgetting entirely also removes the person page; the record of who is in which photo went with the faces.
+      await db.person.delete({ where: { id: personId } });
+    }
+  } finally {
+    await db.appSetting.update({ where: { id: "app" }, data: { forgetFinishedAt: new Date() } });
   }
-  // The list stays until an admin has seen to it: ids and fields, never the name.
+  // The list stays until an admin (or whoever forgot them) has seen to it: ids and fields, never the name.
   const count = left.photos.length + left.trips.length + left.collections.length + left.activities.length;
   if (!keepName && count) {
     const items = { photos: left.photos.map((p) => ({ id: p.id, fields: p.fields })), trips: left.trips.map((t) => ({ slug: t.slug })), collections: left.collections.map((c) => ({ slug: c.slug })), activities: left.activities.map((x) => ({ id: x.id })) };
-    await db.forgetLeftover.create({ data: { items } });
+    await db.forgetLeftover.create({ data: { items, createdById: user.id } });
   }
   revalidatePath("/people", "layout");
   revalidatePath("/admin");
   if (!keepName) redirect("/people/forgotten");
 }
 
+/**
+ * Allow a forgotten name again: one entry by its place in the list (nothing shown says what it is), or whichever
+ * entry a name an admin types would be. For a name that turned out to be somebody else's too, or an everyday word.
+ */
+export async function allowForgottenName(hash: string): Promise<void> {
+  await requireAdmin();
+  await db.forgottenName.deleteMany({ where: { hash } });
+  revalidatePath("/admin");
+}
+
+export async function allowForgottenNameTyped(fd: FormData): Promise<void> {
+  await requireAdmin();
+  const name = String(fd.get("name") ?? "").trim();
+  const hash = name ? await forgottenHashOf(name) : null;
+  if (hash) await db.forgottenName.deleteMany({ where: { hash } });
+  revalidatePath("/admin");
+}
+
 /** An admin has seen to a forget's leftovers list. */
 export async function dismissForgetLeftover(id: string): Promise<void> {
-  const admin = await requireAdmin();
-  await db.forgetLeftover.updateMany({ where: { id, dismissedAt: null }, data: { dismissedAt: new Date(), dismissedById: admin.id } });
+  const user = await requireUserOrThrow();
+  // Admins, or the member who forgot them: the list is theirs.
+  const mine = user.role === "ADMIN" ? {} : { createdById: user.id };
+  await db.forgetLeftover.updateMany({ where: { id, dismissedAt: null, ...mine }, data: { dismissedAt: new Date(), dismissedById: user.id } });
   revalidatePath("/people/forgotten");
   revalidatePath("/admin");
 }

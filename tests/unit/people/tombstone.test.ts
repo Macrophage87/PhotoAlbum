@@ -10,14 +10,15 @@ vi.mock("@/lib/auth/viewer", () => ({
 }));
 vi.mock("next/cache", () => ({ revalidatePath: () => undefined }));
 vi.mock("next/navigation", () => ({ redirect: () => undefined }));
-vi.mock("@/lib/jobs/boss", () => ({ enqueue: async () => {} }));
+const queued = vi.hoisted(() => ({ jobs: [] as unknown[] }));
+vi.mock("@/lib/jobs/boss", () => ({ enqueue: async (...args: unknown[]) => void queued.jobs.push(args) }));
 
-import { optOutPerson } from "@/app/people/actions";
+import { allowForgottenName, allowForgottenNameTyped, optOutPerson } from "@/app/people/actions";
 import { applyAnnotation } from "@/lib/annotation/apply";
 import { applyPlaceEstimate } from "@/lib/annotation/place";
 import { loadItem, withoutUnpermittedNames } from "@/lib/annotation/request";
 import { withoutUnpermittedNames as withoutContainerNames } from "@/lib/annotation/container";
-import { loadTombstone } from "@/lib/people/tombstone";
+import { forgottenNames, loadTombstone } from "@/lib/people/tombstone";
 
 const record = (over: Partial<StoredAnnotation> = {}) =>
   annotationSchema.parse({ title: "At the lake", caption: "A day at the lake", description: "Swimming.", tags: ["lake"], place: null, activity: null, objects: [], visibleText: null, season: "summer", mood: null, searchSummary: "lake", estimatedYear: null, estimatedPlace: null, ...over });
@@ -82,5 +83,71 @@ describe("a forgotten name, after the person's record is gone", () => {
     const rows = await db.forgottenName.findMany();
     expect(rows.length).toBeGreaterThan(0);
     expect(JSON.stringify(rows)).not.toMatch(/timothy|kent/i);
+  });
+
+  it("is thrown away only while a forget is under way, or about a photograph the forget touched", async () => {
+    const before = new Date(Date.now() - 60_000);
+    const other = (await db.photo.create({ data: { uploaderId: admin, originalName: "o.jpg", mimeType: "image/jpeg", storageKey: "o", originalPath: "o/o.jpg", sizeBytes: 1, status: "READY" } })).id;
+    // A forget still running: nothing is stored, and the item is asked about again.
+    await db.appSetting.upsert({ where: { id: "app" }, create: { id: "app", lastForgetAt: new Date() }, update: { lastForgetAt: new Date(), forgetFinishedAt: null } });
+    queued.jobs = [];
+    await applyAnnotation(other, "m", record(), { content: [] }, { requestedAt: before });
+    expect((await db.photo.findUniqueOrThrow({ where: { id: other } })).annotationError).toBe("names_changed");
+    expect(queued.jobs.length).toBeGreaterThan(0);
+    // Once it has finished, an answer about a photograph it never touched is kept.
+    await db.appSetting.update({ where: { id: "app" }, data: { forgetFinishedAt: new Date() } });
+    await applyAnnotation(other, "m", record(), { content: [] }, { requestedAt: before });
+    expect((await db.photo.findUniqueOrThrow({ where: { id: other } })).annotation).not.toBeNull();
+  });
+
+  it("stamps a photograph whose members' words name them, and takes the name out of what the helper wrote there", async () => {
+    await db.photo.update({ where: { id: photoId }, data: { annotation: record({ caption: "Timothy by the river", description: "Timothy Kent casts a line." }), annotatedAt: new Date() } });
+    await forget();
+    const p = await db.photo.findUniqueOrThrow({ where: { id: photoId } });
+    expect(p.namesScrubbedAt).not.toBeNull();
+    expect((p.annotation as StoredAnnotation).description).toBe("A family member casts a line.");
+  });
+});
+
+describe("names that are also words", () => {
+  let admin: string;
+  beforeEach(async () => {
+    await resetTestDb();
+    admin = (await db.user.create({ data: { email: "admin@example.com", role: "ADMIN" } })).id;
+    who.role = "ADMIN";
+    who.id = admin;
+  });
+  const forget = async (name: string) => {
+    const p = await db.person.create({ data: { name, createdById: admin } });
+    await optOutPerson(p.id, new FormData());
+  };
+
+  it("keeps a one-word name only as a name is written", async () => {
+    await forget("Sage");
+    const ts = await loadTombstone();
+    expect(ts.scrub("a sage green dress; Sage waved; SAGE")).toBe("a sage green dress; a family member waved; a family member");
+    expect(ts.mentions("sage")).toBe(false);
+    // No "a a family member": the article goes with the name.
+    expect(ts.scrub("We met a Sage at the fair")).toBe("We met a family member at the fair");
+  });
+
+  it("never keeps a first name taken from a full one", async () => {
+    await forget("Florence Adams");
+    const ts = await loadTombstone();
+    expect(ts.scrub("Train to Florence to see the Duomo; florence adams waved")).toBe("Train to Florence to see the Duomo; a family member waved");
+  });
+
+  it("can be allowed again by an admin, by its place in the list or by typing it, without the list saying what it is", async () => {
+    await forget("Sage");
+    await forget("Robin Hood");
+    const list = await forgottenNames();
+    expect(list.length).toBe(2);
+    expect(JSON.stringify(list)).not.toMatch(/sage|robin/i);
+    const fd = new FormData();
+    fd.set("name", "robin  hood");
+    await allowForgottenNameTyped(fd);
+    expect((await loadTombstone()).scrub("Robin Hood rode")).toBe("Robin Hood rode");
+    await allowForgottenName((await forgottenNames())[0].hash);
+    expect((await loadTombstone()).empty).toBe(true);
   });
 });

@@ -39,12 +39,15 @@ export function unchangedSince(since: Date) {
 }
 
 /**
- * Whether anybody was forgotten after `since`. Read under a share lock on the one settings row, inside the
- * transaction that stores an answer: forgetting somebody stamps that row first, so it waits for a write already under
- * way, and a write that starts after it sees the stamp.
+ * Whether a forget that began after `since` is still under way. Read under a share lock on the one settings row,
+ * inside the transaction that stores an answer: forgetting stamps that row before it does anything else, so it waits
+ * for a write already under way, and a write that starts after it sees the stamp. While it runs, which photographs
+ * it will touch is not known yet, so nothing is stored; once it has finished, the photographs it touched carry
+ * `namesScrubbedAt` (see `unchangedSince`), and only answers about those are thrown away.
  */
-export async function forgottenSince(tx: Prisma.TransactionClient, since: Date): Promise<boolean> {
-  const rows = await tx.$queryRaw<{ lastForgetAt: Date | null }[]>`SELECT "lastForgetAt" FROM "AppSetting" WHERE id = 'app' FOR SHARE`;
-  const at = rows[0]?.lastForgetAt;
-  return Boolean(at && at > since);
+export async function forgetUnderWay(tx: Prisma.TransactionClient, since: Date): Promise<boolean> {
+  const rows = await tx.$queryRaw<{ lastForgetAt: Date | null; forgetFinishedAt: Date | null }[]>`SELECT "lastForgetAt", "forgetFinishedAt" FROM "AppSetting" WHERE id = 'app' FOR SHARE`;
+  const started = rows[0]?.lastForgetAt;
+  const finished = rows[0]?.forgetFinishedAt;
+  return Boolean(started && started > since && (!finished || finished < started));
 }

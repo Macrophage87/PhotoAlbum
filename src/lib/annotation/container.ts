@@ -16,7 +16,7 @@ import { unpermittedNameScrub, type NameScrub } from "@/lib/people/unpermitted";
 
 /** What a describe says when somebody on its photographs changed while the helper was writing. */
 export const NAMES_CHANGED = "Somebody on these photographs changed while the helper was writing; try again";
-import { forgottenSince, namesChangedSince } from "@/lib/people/names-changed";
+import { forgetUnderWay, namesChangedSince } from "@/lib/people/names-changed";
 import { loadTombstone } from "@/lib/people/tombstone";
 import { anthropic, thinkingParams } from "./client";
 import { activityDescriptionSchema, parseActivityDescription, type ActivityDescription } from "./activity";
@@ -206,7 +206,7 @@ export async function writeContainerDescription(kind: ContainerKind, id: string,
   // Somebody on these photographs forgotten, renamed or no longer to be named while it was being written, or anybody
   // forgotten at all: its answer may name them, so it is not kept.
   await db.$transaction(async (tx) => {
-    if ((await forgottenSince(tx, requestedAt)) || (await namesChangedSince(container.photos.map((p) => p.id), requestedAt))) throw new Error(NAMES_CHANGED);
+    if ((await forgetUnderWay(tx, requestedAt)) || (await namesChangedSince(container.photos.map((p) => p.id), requestedAt))) throw new Error(NAMES_CHANGED);
     if (kind === "trip") await tx.trip.update({ where: { id }, data });
     else await tx.collection.update({ where: { id }, data });
   });

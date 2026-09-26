@@ -9,33 +9,35 @@ import { dismissForgetLeftover } from "../actions";
 
 export const metadata = { title: "Forgotten", robots: { index: false, follow: false } };
 
+const day = (d: Date | null) => (d ? d.toLocaleDateString("en-US") : "no date");
+
 /**
- * Members-only: what is left after somebody was forgotten, for as long as an admin has not dismissed it. The helper's
- * words no longer say their name; these are words that do — a member's, or written before the album kept track of
- * who wrote them — linked so they can be edited. Nothing here, stored or shown, is the name itself.
+ * What is left after somebody was forgotten, for admins and the member who forgot them, until one of them is done
+ * with it. The helper's words no longer say their name; these are words that do — a member's, or written before the
+ * album kept track of who wrote them — linked so they can be edited. Nothing here, stored or shown, is the name
+ * itself: each place is labelled by its file name, its date and its trip, never by words that may carry the name.
  */
 export default async function ForgottenPage() {
   const user = await requireUser("/people/forgotten");
   const viewer = await getViewer();
   const isAdmin = user.role === "ADMIN";
-  const lists = await db.forgetLeftover.findMany({ where: { dismissedAt: null }, orderBy: { createdAt: "desc" } });
+  const lists = await db.forgetLeftover.findMany({ where: { dismissedAt: null, ...(isAdmin ? {} : { createdById: user.id }) }, orderBy: { createdAt: "desc" } });
   const shown = await Promise.all(
     lists.map(async (l) => {
-      // Ids and fields only: labels are read afresh, and the name was never stored.
+      // Ids and fields only: the name was never stored, and labels are made afresh from neutral facts.
       const items = l.items as { photos: { id: string; fields: MemberTextField[] }[]; trips: { slug: string }[]; collections: { slug: string }[]; activities: { id: string }[] };
-      // Read afresh: a photograph trashed since, or a trip deleted, is not listed.
       const [photos, trips, collections, activities] = await Promise.all([
-        db.photo.findMany({ where: { id: { in: items.photos.map((p) => p.id) }, trashedAt: null }, select: { id: true, title: true, caption: true, originalName: true } }),
-        db.trip.findMany({ where: { slug: { in: items.trips.map((t) => t.slug) } }, select: { slug: true, title: true } }),
-        db.collection.findMany({ where: { slug: { in: items.collections.map((c) => c.slug) } }, select: { slug: true, title: true } }),
-        db.activity.findMany({ where: { id: { in: items.activities.map((a) => a.id) } }, select: { id: true, title: true, trip: { select: { slug: true } } } }),
+        db.photo.findMany({ where: { id: { in: items.photos.map((p) => p.id) }, trashedAt: null }, select: { id: true, originalName: true, takenAt: true, trip: { select: { startDate: true } } } }),
+        db.trip.findMany({ where: { slug: { in: items.trips.map((t) => t.slug) } }, select: { slug: true, startDate: true } }),
+        db.collection.findMany({ where: { slug: { in: items.collections.map((c) => c.slug) } }, select: { slug: true, createdAt: true } }),
+        db.activity.findMany({ where: { id: { in: items.activities.map((a) => a.id) } }, select: { id: true, startTime: true, trip: { select: { slug: true } } } }),
       ]);
       const fields = new Map(items.photos.map((p) => [p.id, p.fields]));
       const text: MemberText = {
-        photos: photos.map((p) => ({ id: p.id, label: p.title?.trim() || p.caption?.trim() || p.originalName, fields: fields.get(p.id) ?? [] })),
-        trips,
-        collections,
-        activities: activities.map((a) => ({ id: a.id, title: a.title, tripSlug: a.trip.slug })),
+        photos: photos.map((p) => ({ id: p.id, label: `${p.originalName}, ${day(p.takenAt)}${p.trip ? `, on the trip of ${day(p.trip.startDate)}` : ""}`, fields: fields.get(p.id) ?? [] })),
+        trips: trips.map((t) => ({ slug: t.slug, title: `The trip of ${day(t.startDate)}` })),
+        collections: collections.map((c) => ({ slug: c.slug, title: `A collection made ${day(c.createdAt)}` })),
+        activities: activities.map((a) => ({ id: a.id, title: `An outing on ${day(a.startTime)}`, tripSlug: a.trip.slug })),
       };
       return { id: l.id, createdAt: l.createdAt, text, count: photos.length + trips.length + collections.length + activities.length };
     }),
@@ -50,13 +52,11 @@ export default async function ForgottenPage() {
         {shown.length === 0 && <p>Nothing left to see to.</p>}
         {shown.map((l) => (
           <section key={l.id} className="space-y-2 rounded-theme border border-border p-4" data-testid="forget-leftover">
-            <p className="text-sm text-muted">Forgotten on {l.createdAt.toLocaleDateString("en-US")}. Written by members, or before the album kept track of who wrote them: open each to edit it, or ask whoever wrote it.</p>
+            <p className="text-sm text-muted">Forgotten on {day(l.createdAt)}. Written by members, or before the album kept track of who wrote them: open each to edit it, or ask whoever wrote it.</p>
             {l.count ? <MemberTextList text={l.text} /> : <p className="text-sm">Everything listed has since been removed.</p>}
-            {isAdmin && (
-              <form action={dismissForgetLeftover.bind(null, l.id)}>
-                <Button type="submit" size="sm" variant="secondary">Done with this list</Button>
-              </form>
-            )}
+            <form action={dismissForgetLeftover.bind(null, l.id)}>
+              <Button type="submit" size="sm" variant="secondary">Done with this list</Button>
+            </form>
           </section>
         ))}
         <p><Link className="underline" href="/people">Back to People</Link></p>

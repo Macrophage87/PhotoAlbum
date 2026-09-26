@@ -1,7 +1,8 @@
 import { db } from "@/lib/db";
+import { forgetKeyState } from "@/lib/people/tombstone";
 import { env } from "@/lib/env";
 
-export type AnnotationGates = { envEnabled: boolean; hasKey: boolean; optedInAt: Date | null; optedInBy: string | null; active: boolean; model: string };
+export type AnnotationGates = { envEnabled: boolean; hasKey: boolean; optedInAt: Date | null; optedInBy: string | null; active: boolean; model: string; forgetKeyProblem: string | null; pausedForForgetKey: boolean };
 
 /** Both gates must hold before anything is sent: the operator's flag and key, and an admin's opt-in on the disclosure screen. */
 export async function annotationGates(): Promise<AnnotationGates> {
@@ -10,7 +11,9 @@ export async function annotationGates(): Promise<AnnotationGates> {
   const envEnabled = e.ANNOTATION_ENABLED;
   const hasKey = Boolean(e.ANTHROPIC_API_KEY);
   const optedInAt = setting?.annotationOptInAt ?? null;
-  return { envEnabled, hasKey, optedInAt, optedInBy: setting?.annotationOptInById ?? null, active: envEnabled && hasKey && Boolean(optedInAt), model: e.ANNOTATION_MODEL };
+  // Nothing goes while forgotten names could not be recognised in what is sent and what comes back (tombstone.ts).
+  const forgetKey = await forgetKeyState();
+  return { envEnabled, hasKey, optedInAt, optedInBy: setting?.annotationOptInById ?? null, active: envEnabled && hasKey && Boolean(optedInAt) && !forgetKey.paused, model: e.ANNOTATION_MODEL, forgetKeyProblem: forgetKey.problem, pausedForForgetKey: forgetKey.paused };
 }
 
 /**

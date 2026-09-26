@@ -72,7 +72,7 @@ export function AnnotationAdmin({ gates, model, batches, spend, rawRetentionDays
         <ul className="list-disc pl-5 space-y-1 text-muted">
           <li>The 1600-pixel rendition of the photo, or three or four frames of a clip; never the original file.</li>
           <li>The uploader&apos;s notes, the caption and title, the date and camera when known, and the trip and collection titles.</li>
-          <li>The names of confirmed people whose recognition an admin has turned on and who are adults, plus confirmed pet names; never face data or templates.</li>
+          <li>The names of confirmed people an admin has agreed may be named and who are known to be adults, plus confirmed pet names; never face data or templates. Anybody else&apos;s name is taken out of the notes, captions and titles before they are sent, and so is the name of anybody who was forgotten.</li>
         </ul>
         <p className="text-muted">The helper returns a caption, description, tags, place and a search summary. Raw responses are kept for {rawRetentionDays} days for debugging, then purged. Items, trips and collections can be opted out; opted-out items are never sent, including by a backfill.</p>
         <dl className="grid grid-cols-[10rem_1fr] gap-y-1">

@@ -20,7 +20,7 @@ import { handWrittenDescription, handWrittenMembersOnly, judgeDescription } from
 import { descriptionStaysHelpers } from "@/lib/annotation/helper-text";
 import { namesChangedSince } from "@/lib/people/names-changed";
 import { NAMES_CHANGED, withoutUnpermittedNames } from "@/lib/annotation/container";
-import { forgottenSince } from "@/lib/people/names-changed";
+import { forgetUnderWay } from "@/lib/people/names-changed";
 import { loadTombstone } from "@/lib/people/tombstone";
 import { unpermittedNameScrub } from "@/lib/people/unpermitted";
 
@@ -219,7 +219,7 @@ export async function describeActivityWithAi(slug: string, id: string, note?: st
   // Somebody on these photographs forgotten, renamed or no longer to be named while it was being written, or anybody
   // forgotten at all: its answer may name them, so it is not kept.
   await db.$transaction(async (tx) => {
-    if ((await forgottenSince(tx, requestedAt)) || (await namesChangedSince(activity.photos.map((p) => p.id), requestedAt))) throw new Error(NAMES_CHANGED);
+    if ((await forgetUnderWay(tx, requestedAt)) || (await namesChangedSince(activity.photos.map((p) => p.id), requestedAt))) throw new Error(NAMES_CHANGED);
     await tx.activity.update({ where: { id }, data: { description: parsed.description, descriptionMembersOnly: judged.membersOnly, descriptionTitleOnly: judged.titleOnly, descriptionSharedAt: null, descriptionByHelper: true } });
   });
   revalidatePath(`/trips/${slug}/activities/${id}`);

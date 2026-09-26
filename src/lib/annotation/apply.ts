@@ -1,10 +1,12 @@
 import { db } from "@/lib/db";
 import { annotationSchema, clampAnnotation, toStored, type Annotation } from "./schema";
 import { enqueueEmbedding } from "@/lib/jobs/handlers/embed-photo";
+import { enqueue } from "@/lib/jobs/boss";
+import { QUEUES } from "@/lib/jobs/queues";
 import { applyPlaceEstimate, needsPlaceEstimate } from "./place";
 import { isWeakDate } from "@/lib/photos/date-from-neighbours";
 import { judgeHelperText, knownNames, mentionsAnyName, pastHelperTitles, titleIsHelpers } from "./members-only";
-import { forgottenSince, unchangedSince } from "@/lib/people/names-changed";
+import { forgetUnderWay, unchangedSince } from "@/lib/people/names-changed";
 import { loadTombstone, scrubRecord } from "@/lib/people/tombstone";
 
 export type ApplyResult = { ok: true } | { ok: false; reason: "refusal" | "invalid" | "max_tokens" };
@@ -82,7 +84,7 @@ export async function applyAnnotation(photoId: string, model: string, parsed: An
   // itself; otherwise nothing of it is kept, the raw answer included.
   const stale = Symbol("stale");
   const kept = await db.$transaction(async (tx) => {
-    if (requestedAt && (await forgottenSince(tx, requestedAt))) throw stale;
+    if (requestedAt && (await forgetUnderWay(tx, requestedAt))) throw stale;
     const written = await tx.photo.updateMany({
       where: { id: photoId, ...(requestedAt ? unchangedSince(requestedAt) : {}) },
       data: {
@@ -119,6 +121,8 @@ export async function applyAnnotation(photoId: string, model: string, parsed: An
   });
   if (!kept) {
     await recordFailure(photoId, "names_changed", { terminal: false });
+    // Asked again once the change has settled, so no item is left undescribed for it.
+    await enqueue(QUEUES.annotatePhoto, { photoId }, { singletonKey: `annotate:${photoId}`, singletonSeconds: 60, startAfter: 60 });
     return;
   }
   // The place guess is only ever recorded for an item that was actually asked, so clearing a position later still

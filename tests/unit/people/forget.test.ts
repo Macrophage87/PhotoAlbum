@@ -13,7 +13,7 @@ vi.mock("next/cache", () => ({ revalidatePath: () => undefined }));
 vi.mock("next/navigation", () => ({ redirect: (to: string) => void (redirected.to = to) }));
 vi.mock("@/lib/jobs/boss", () => ({ enqueue: async () => {} }));
 
-import { optOutPerson, recordAdultAndName, setNameInDescriptions, tagPersonAt, untagPersonAt, updatePerson, updatePet } from "@/app/people/actions";
+import { decideIndexing, optOutPerson, recordAdultAndName, setNameInDescriptions, tagPersonAt, untagPersonAt, updatePerson, updatePet } from "@/app/people/actions";
 import { applyAnnotation } from "@/lib/annotation/apply";
 import { applyPlaceEstimate } from "@/lib/annotation/place";
 import { readFileSync } from "node:fs";
@@ -164,7 +164,8 @@ describe("forgetting somebody", () => {
     // On her photograph "Grace" is her — an everyday word and another Grace notwithstanding — but "Grace Kelly" is not.
     expect(a.title).toBe("Grace Kelly and a family member");
     expect(a.caption).toBe("A family member waves");
-    expect(a.tags).toEqual(["lake"]);
+    // "grace" alone is her there; "hopper family" is a surname in a keyword, which could as well be a place or a thing.
+    expect(a.tags).toEqual(["hopper family", "lake"]);
     // Where the other Grace is tagged too, "Grace" alone could be either of them, so it is left.
     const b = (await db.photo.findUniqueOrThrow({ where: { id: both } })).annotation as StoredAnnotation;
     expect(b.caption).toBe("Grace waves");
@@ -302,7 +303,7 @@ describe("a name handed over without evidence of an adult", () => {
     // What admins are told, by reason.
     const on = new Date("2026-10-10");
     expect(withdrawalNotice("Sam Lee", withdrawalReason(await after(sam.id)), on)).toMatch(/record a birthday or adult confirmation and turn their name back on/);
-    expect(withdrawalNotice("Kit Carson", withdrawalReason(await after(kit.id)), on)).toMatch(/was turned off before; its name will be taken out of old descriptions on/);
+    expect(withdrawalNotice("Kit Carson", withdrawalReason(await after(kit.id)), on)).toMatch(/was turned off before; their name will be taken out of old descriptions on/);
     const minor = withdrawalNotice("Tim Carson", withdrawalReason({ birthday: new Date("2019-01-01"), adultAttestedAt: null }), on);
     expect(minor).toMatch(/will be taken out/);
     expect(minor).not.toMatch(/record a birthday/i);
@@ -321,9 +322,33 @@ describe("a name handed over without evidence of an adult", () => {
     expect(((await db.photo.findUniqueOrThrow({ where: { id: photoId } })).annotation as StoredAnnotation).caption).toBe("Sam Lee on the swings");
     const o = await db.photo.findUniqueOrThrow({ where: { id: open } });
     expect(o.title).toBe("A family member at the fair");
+    // Only what changed is written: a photograph whose public text never named him is left unstamped.
+    const quiet = (await db.photo.create({ data: { uploaderId: admin, originalName: "q.jpg", mimeType: "image/jpeg", storageKey: "q", originalPath: "q/o.jpg", sizeBytes: 1, status: "READY", annotation: { ...annotation, title: "", caption: "A quiet lake" }, annotatedAt: new Date(Date.now() - 86_400_000) } })).id;
+    await db.face.create({ data: { photoId: quiet, personId: sam.id, status: "CONFIRMED", box: [0, 0, 1, 1], confidence: 0 } });
+    await scrubWithdrawnNames();
+    expect((await db.photo.findUniqueOrThrow({ where: { id: quiet } })).namesScrubbedAt).toBeNull();
+    expect((await db.person.findUniqueOrThrow({ where: { id: sam.id } })).namingPublicScrubbedAt).not.toBeNull();
     expect((o.annotation as StoredAnnotation).caption).toBe("A family member at the fair");
     expect(await scrubWithdrawnNames(new Date(Date.now() + 15 * 86_400_000))).toBe(1);
     expect(((await db.photo.findUniqueOrThrow({ where: { id: photoId } })).annotation as StoredAnnotation).caption).toBe("A family member on the swings");
+    expect((await db.person.findUniqueOrThrow({ where: { id: sam.id } })).namingWithdrawnAt).toBeNull();
+  });
+
+  it("stays pending through a recognition save when naming was turned off before, until naming is turned back on", async () => {
+    await resetTestDb();
+    const admin = (await db.user.create({ data: { email: "admin@example.com", role: "ADMIN" } })).id;
+    who.role = "ADMIN";
+    who.id = admin;
+    const kit = await db.person.create({ data: { name: "Kit Carson", birthday: new Date("1950-01-01"), namingWithdrawnAt: new Date(), createdById: admin } });
+    await decideIndexing(kit.id, new FormData());
+    expect((await db.person.findUniqueOrThrow({ where: { id: kit.id } })).namingWithdrawnAt).not.toBeNull();
+    await setNameInDescriptions(kit.id, true);
+    expect((await db.person.findUniqueOrThrow({ where: { id: kit.id } })).namingWithdrawnAt).toBeNull();
+    // Somebody with no evidence at all: recording a birthday through the recognition form is the evidence asked for.
+    const sam = await db.person.create({ data: { name: "Sam Lee", namingWithdrawnAt: new Date(), createdById: admin } });
+    const fd = new FormData();
+    fd.set("birthday", "1960-02-02");
+    await decideIndexing(sam.id, fd);
     expect((await db.person.findUniqueOrThrow({ where: { id: sam.id } })).namingWithdrawnAt).toBeNull();
   });
 

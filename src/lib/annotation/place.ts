@@ -2,7 +2,7 @@ import { z } from "zod";
 import type Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { db } from "@/lib/db";
-import { forgottenSince, unchangedSince } from "@/lib/people/names-changed";
+import { forgetUnderWay, unchangedSince } from "@/lib/people/names-changed";
 import { loadTombstone } from "@/lib/people/tombstone";
 import { thinkingParams } from "./client";
 import { placeFromMembersOnly } from "./members-only";
@@ -165,7 +165,7 @@ export async function applyPlaceEstimate(photoId: string, estimate: PlaceEstimat
   // in the write itself.
   const stale = Symbol("stale");
   const outcome = await db.$transaction(async (tx) => {
-    if (requestedAt && (await forgottenSince(tx, requestedAt))) throw stale;
+    if (requestedAt && (await forgetUnderWay(tx, requestedAt))) throw stale;
     const guard = { id: photoId, ...(requestedAt ? unchangedSince(requestedAt) : {}) };
     if (!place || !free) {
       const n = await tx.photo.updateMany({ where: guard, data: { placeEstimatedAt: new Date() } });

@@ -590,8 +590,13 @@ model AppSetting {
   faceDataDeletedAt      DateTime?
   /// When anybody was last forgotten: an answer from the helper to a request built before then is not stored.
   lastForgetAt           DateTime?
-  /// The key forgotten names are hashed with (see ForgottenName), made on first use.
+  /// When the last forget finished: while one is under way (lastForgetAt later than this) no answer is stored.
+  forgetFinishedAt       DateTime?
+  /// Outside production only, with FORGET_HASH_KEY unset: a key kept here, with a warning on the Admin page.
   forgetKey              String?
+  /// Which key forgotten names are hashed under (a fingerprint, never the key): a different one means the secret
+  /// changed, and names forgotten before are no longer recognised until it is put back.
+  forgetKeyFingerprint   String?
   /// What the last whole-album members-only judging used: the matcher's version and the names it knew, so the
   /// daily sweep and a restart judge again only what changed (src/lib/annotation/rejudge.ts).
   membersOnlyMatcher     String?
@@ -683,6 +688,9 @@ model Person {
   /// naming and recognition switches, birthday, adult confirmation. Set by a trigger; an answer from the helper to
   /// a request built before it is not stored.
   namesChangedAt      DateTime?
+  /// When what strangers can read last lost this person's name after the album withdrew their naming by itself;
+  /// the nightly pass only looks at what the helper wrote since.
+  namingPublicScrubbedAt DateTime?
   /// An admin's word that this person is an adult, recorded to name them in descriptions. Evidence for naming only:
   /// recognition still needs its own attestation (adultAttestedAt), which also says they agreed to it.
   adultConfirmedAt    DateTime?
@@ -923,16 +931,20 @@ model VisitSalt {
 /// Keyed hashes of a forgotten person's names, never the names: an answer from the helper, or a member's words about
 /// to be sent to it, is checked against them after the person's own record is gone (see src/lib/people/tombstone.ts).
 model ForgottenName {
-  hash      String   @id
-  /// How many words the name has, so a text is only checked for runs that long.
-  words     Int
-  createdAt DateTime @default(now())
+  hash            String   @id
+  /// The fingerprint of the key it was hashed under.
+  keyId           String
+  /// Matched only as a name is written (capitalized, or in capitals): a one-word name, or one of everyday words.
+  capitalizedOnly Boolean  @default(false)
+  createdAt       DateTime @default(now())
 }
 
 /// After somebody was forgotten, the places whose words (a member's, or written before the album kept track) still
 /// mention them: ids and fields only, never the name. Shown until an admin dismisses it.
 model ForgetLeftover {
   id            String    @id @default(cuid())
+  /// Who forgot them: the list is for them and admins.
+  createdById   String
   items         Json
   createdAt     DateTime  @default(now())
   dismissedAt   DateTime?
