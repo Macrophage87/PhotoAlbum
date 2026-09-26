@@ -363,13 +363,17 @@ docker system df                  # disk used by images and volumes
 Two GitHub Actions workflows in `.github/workflows/` deploy on push, the
 same way the other sites on the family server do: **push to `staging`**
 and the staging instance updates itself; **push to `main`** and the live
-instance does. Each is one job with one SSH step that runs the shared
-[`deploy/update.sh`](../deploy/update.sh) on the server with three
-variables (`APP_DIR`, `BRANCH`, `APP_PORT`). The script dumps the database
-to a `backups/` folder next to the checkout, resets the checkout to the
-branch (`.env` and `docker-compose.override.yml` are untracked and
-survive), runs `docker compose up --build -d`, waits for `/api/health`,
-and prunes old images. A deploy rebuilds the image, so expect a short
+instance does. Both are called from `ci.yml` only after its `test` and
+`docker` jobs pass for the pushed commit, and they deploy exactly that
+commit. Each is one job with one SSH step that runs the shared
+[`deploy/update.sh`](../deploy/update.sh) on the server with four
+variables (`APP_DIR`, `BRANCH`, `APP_PORT`, and `DEPLOY_SHA`, the commit
+CI tested). The script skips a commit older than the one already deployed
+(CI runs can finish out of order), dumps the database to a `backups/`
+folder next to the checkout and stops if the dump fails, resets the
+checkout to the commit (`.env` and `docker-compose.override.yml` are
+untracked and survive), runs `docker compose up --build -d`, waits for
+`/api/health`, and prunes old images. A deploy rebuilds the image, so expect a short
 outage of a minute or two per push; in-flight photo processing gets 45
 seconds to finish first.
 
@@ -379,9 +383,8 @@ seconds to finish first.
 | `main` | `deploy-production.yml` | `/cieply/sites/cieply.com/PhotoAlbum-live` | 3004 (cieply.com) |
 
 Until the three secrets below exist, or until the instance's folder exists
-on the server, a workflow prints a note and exits green. `ci.yml` still
-runs the test suite on every push as a visible ✓/✗ but does not gate the
-deploy; `staging` itself is the gate for `main`.
+on the server, a workflow prints a note and exits green. A red CI run
+means no deploy; `staging` is still the rehearsal for `main`.
 
 To arm it (a private repo needs two keys: one for the runner to reach the
 server, one for the server to read GitHub):
@@ -396,8 +399,10 @@ server, one for the server to read GitHub):
 2. **Server → GitHub.** The checkout's owner needs a key that can read the
    repo: a read-only deploy key in their `~/.ssh` (step 4 above) or a
    personal key that already has access.
-3. Push a commit to `staging` and watch the run under the repo's
-   **Actions** tab; **Run workflow** there redeploys without a commit.
+3. Push a commit to `staging` and watch the CI run under the repo's
+   **Actions** tab; the deploy job runs after the tests. To redeploy
+   without a commit, re-run that deploy job, or use **Run workflow** on CI
+   for the branch (it tests the tip again first).
 
 The production workflow points at a second checkout,
 `PhotoAlbum-live`, with its own `.env` (`APP_PORT=3004`, `APP_URL`
