@@ -7,7 +7,8 @@
 #
 # What it does, in order:
 #   1. dump the database to $BACKUP_DIR (a deploy runs migrations, so keep a
-#      restore point — docs/DEPLOY.md step 10),
+#      restore point — docs/DEPLOY.md step 10); a failed or truncated dump
+#      stops the deploy,
 #   2. `git fetch` + `git reset --hard origin/<branch>` as the checkout's
 #      owner (the branch is the source of truth; .env and the compose
 #      override are untracked and survive the reset),
@@ -34,9 +35,23 @@ echo "== $APP_DIR: updating to origin/$BRANCH =="
 # 1. restore point (only if the stack is already running)
 if as_root docker compose ps --status running --services 2>/dev/null | grep -qx db; then
   as_root mkdir -p "$BACKUP_DIR"
-  STAMP=$(date +%F-%H%M)
-  as_root sh -c "docker compose exec -T db pg_dump -U photoalbum photoalbum | gzip > '$BACKUP_DIR/db-pre-deploy-$STAMP.sql.gz'"
-  echo "== database dumped to $BACKUP_DIR/db-pre-deploy-$STAMP.sql.gz =="
+  DUMP="$BACKUP_DIR/db-pre-deploy-$(date +%F-%H%M).sql.gz"
+  # The container's own POSTGRES_USER/POSTGRES_DB, so a role or database renamed in .env is dumped too. pipefail
+  # (set above) makes a failing pg_dump fail the pipeline instead of leaving gzip's empty file as "the backup".
+  if ! as_root docker compose exec -T db sh -c 'exec pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' | gzip | as_root tee "$DUMP" >/dev/null; then
+    echo "!! pg_dump failed — not deploying without a restore point" >&2
+    exit 1
+  fi
+  # pg_dump writes this trailer last, so its presence means the dump ran to the end.
+  TRAILER=$(as_root gzip -cd "$DUMP" | tail -n 5) || TRAILER=
+  case "$TRAILER" in
+    *'PostgreSQL database dump complete'*) ;;
+    *)
+      echo "!! $DUMP is empty or truncated — not deploying without a restore point" >&2
+      exit 1
+      ;;
+  esac
+  echo "== database dumped to $DUMP ($(as_root du -h "$DUMP" | cut -f1)) =="
 fi
 
 # 2. code
