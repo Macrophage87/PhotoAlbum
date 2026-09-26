@@ -74,6 +74,14 @@ export async function foldDuplicates(byUserId: string, groups?: DuplicateGroup[]
         update: {},
       });
     }
+    // A copy somebody chose as a cover was chosen for the picture, which the keeper is too. It takes the copy's place
+    // wherever it now sits: every collection a copy was in (it has just joined them), and the trip and activity it
+    // ends up on. Anywhere else goes back to choosing for itself, since a cover that is not there would not stand.
+    const copyIds = copies.map((c) => c.id);
+    await db.collection.updateMany({ where: { coverPhotoId: { in: copyIds }, items: { some: { photoId: keeper.id } } }, data: { coverPhotoId: keeper.id } });
+    if (filling.tripId) await db.trip.updateMany({ where: { id: filling.tripId, coverPhotoId: { in: copyIds } }, data: { coverPhotoId: keeper.id } });
+    if (filling.activityId) await db.activity.updateMany({ where: { id: filling.activityId, coverPhotoId: { in: copyIds } }, data: { coverPhotoId: keeper.id } });
+
     // And whoever made a copy a favourite meant the photograph, not that copy of the file.
     const favourites = await db.photoFavorite.findMany({ where: { photoId: { in: copies.map((c) => c.id) } }, select: { userId: true } });
     for (const f of favourites) {

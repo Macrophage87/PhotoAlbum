@@ -62,6 +62,33 @@ describe("folding the identical copies already in the album", () => {
     expect(await foldDuplicates(user.id)).toMatchObject({ groups: 0, folded: 0 });
   });
 
+  it("puts the kept photograph wherever a copy of it had been chosen as the cover", async () => {
+    const user = await db.user.create({ data: { email: "fold3@example.com", role: "ADMIN" } });
+    const mkTrip = (slug: string) => db.trip.create({ data: { slug, title: slug, startDate: new Date("2025-08-10"), endDate: new Date("2025-08-16"), createdById: user.id } });
+    const trip = await mkTrip("acadia");
+    const elsewhere = await mkTrip("zion");
+    const walk = await db.activity.create({ data: { tripId: trip.id, title: "Walk", type: "HIKE", startTime: new Date("2025-08-12T08:00:00Z"), endTime: new Date("2025-08-12T18:00:00Z") } });
+    const collection = await db.collection.create({ data: { slug: "best", title: "Best of", createdById: user.id } });
+    const mk = (name: string, extra: Record<string, unknown> = {}) =>
+      db.photo.create({ data: { uploaderId: user.id, originalName: name, mimeType: "image/jpeg", storageKey: name, originalPath: `${name}/o.jpg`, sizeBytes: 1, status: "READY", contentHash: "cover-bytes", ...extra } });
+    // The keeper is filed nowhere; the copy, on the walk, fronts the trip, the walk and a collection.
+    const keeper = await mk("first.jpg", { createdAt: new Date("2024-01-01") });
+    const copy = await mk("second.jpg", { createdAt: new Date("2025-01-01"), tripId: trip.id, activityId: walk.id });
+    await db.collectionItem.create({ data: { collectionId: collection.id, photoId: copy.id, position: 0, addedById: user.id } });
+    await db.trip.update({ where: { id: trip.id }, data: { coverPhotoId: copy.id } });
+    await db.activity.update({ where: { id: walk.id }, data: { coverPhotoId: copy.id } });
+    await db.collection.update({ where: { id: collection.id }, data: { coverPhotoId: copy.id } });
+    // A trip the keeper will not be on keeps nothing pointing at it: that cover could not stand.
+    await db.trip.update({ where: { id: elsewhere.id }, data: { coverPhotoId: copy.id } });
+
+    await foldDuplicates(user.id);
+
+    expect((await db.trip.findUniqueOrThrow({ where: { id: trip.id } })).coverPhotoId).toBe(keeper.id);
+    expect((await db.activity.findUniqueOrThrow({ where: { id: walk.id } })).coverPhotoId).toBe(keeper.id);
+    expect((await db.collection.findUniqueOrThrow({ where: { id: collection.id } })).coverPhotoId).toBe(keeper.id);
+    expect((await db.trip.findUniqueOrThrow({ where: { id: elsewhere.id } })).coverPhotoId).toBe(copy.id);
+  });
+
   it("leaves alone what has no hash yet and what is already in the trash", async () => {
     const user = await db.user.create({ data: { email: "fold2@example.com", role: "ADMIN" } });
     const mk = (name: string, extra: Record<string, unknown> = {}) =>
