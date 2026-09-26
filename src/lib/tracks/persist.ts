@@ -6,7 +6,7 @@ import { encodePoints } from "./encode";
 import { simplifyLine } from "./simplify";
 import { computeStats, mergeStats } from "./stats";
 import type { ParsedTrack } from "./types";
-import { guessTypeFromSpeed } from "./sport";
+import { fallbackActivityType } from "./sport";
 import { reassignPhotosForActivity } from "@/lib/activities/reassign";
 
 export type PersistOptions = {
@@ -59,7 +59,7 @@ export async function persistTrack(parsed: ParsedTrack, opts: PersistOptions): P
   let activityId: string | null = null;
   let type: ActivityType | null = opts.activityType ?? parsed.sport ?? null;
   if (opts.createActivity) {
-    type = type ?? guessTypeFromSpeed(stats.avgSpeedMs);
+    type = type ?? fallbackActivityType(parsed.sportRaw, stats.avgSpeedMs);
     const activity = await db.activity.create({
       data: { tripId: opts.tripId, title: parsed.name, type, startTime: parsed.session?.startTime ?? startTime, endTime: parsed.session?.endTime ?? endTime, trackId: track.id },
     });
