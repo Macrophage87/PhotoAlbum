@@ -88,6 +88,61 @@ function ringColour(colours: readonly string[]): ExpressionSpecification {
   return ["match", ["coalesce", ["get", "slot"], -1], ...colours.flatMap((colour, i) => [i, colour]), "#ffffff"] as unknown as ExpressionSpecification;
 }
 
+/** How far round a fingertip a tap still counts as touching a pin, in screen pixels. */
+const TAP_SLOP = 12;
+/** A group that would still be this tight on screen once split is offered as a list instead of zoomed into. */
+const STACKED_PX = 40;
+/** How many a list of photographs at one spot shows; a bigger group is zoomed into as usual. */
+const STACK_LIST_MAX = 60;
+const CLUSTER_MAX_ZOOM = 16;
+
+/** Metres per screen pixel at a latitude and zoom (MapLibre's tiles are 512 pixels across). */
+function metresPerPixel(lat: number, zoom: number): number {
+  return (40_075_016.686 * Math.cos((lat * Math.PI) / 180)) / (512 * 2 ** zoom);
+}
+
+/** How wide a set of points is on the ground, in metres, corner to corner. */
+function spanMetres(points: [number, number][]): number {
+  const lngs = points.map((p) => p[0]);
+  const lats = points.map((p) => p[1]);
+  const midLat = (Math.min(...lats) + Math.max(...lats)) / 2;
+  const dy = (Math.max(...lats) - Math.min(...lats)) * 111_320;
+  const dx = (Math.max(...lngs) - Math.min(...lngs)) * 111_320 * Math.cos((midLat * Math.PI) / 180);
+  return Math.hypot(dx, dy);
+}
+
+/**
+ * The photographs at one spot as a list of pictures, each big enough for a finger. Pins on exactly one spot cannot be
+ * told apart by tapping — only the top one is ever hit, however far the map is zoomed — so there the map asks which.
+ */
+function stackList(list: PhotoFeatureProps[], pick: (id: string) => void): HTMLElement {
+  const el = document.createElement("div");
+  el.dataset.testid = "map-stack";
+  const head = document.createElement("div");
+  head.style.cssText = "font-size:13px;margin-bottom:6px";
+  head.textContent = `${list.length} photos here. Tap one.`;
+  el.appendChild(head);
+  const grid = document.createElement("div");
+  grid.style.cssText = "display:grid;grid-template-columns:repeat(3,64px);gap:6px;max-height:220px;overflow-y:auto";
+  for (const p of list) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.setAttribute("aria-label", p.caption || "Photo");
+    b.dataset.photo = p.id;
+    b.style.cssText = "width:64px;height:64px;padding:0;border:0;border-radius:6px;overflow:hidden;cursor:pointer;background:#ddd";
+    const img = document.createElement("img");
+    img.src = p.thumbUrl;
+    img.alt = "";
+    img.loading = "lazy";
+    img.style.cssText = "width:100%;height:100%;object-fit:cover;display:block";
+    b.appendChild(img);
+    b.onclick = () => pick(p.id);
+    grid.appendChild(b);
+  }
+  el.appendChild(grid);
+  return el;
+}
+
 function svgToImage(svg: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image(64, 64);
@@ -149,7 +204,7 @@ export function MapView({ photos, tracks, bounds, theme, className = "", onPhoto
         data: EMPTY,
         cluster: true,
         clusterRadius: 48,
-        clusterMaxZoom: 16,
+        clusterMaxZoom: CLUSTER_MAX_ZOOM,
         // Each group keeps a count per ring colour, so its ring can be drawn in the shares it holds.
         clusterProperties: Object.fromEntries(Array.from({ length: SLOT_COUNT }, (_, i) => [`s${i}`, ["+", ["case", ["==", ["get", "slot"], i], 1, 0]]])),
       });
@@ -231,19 +286,50 @@ export function MapView({ photos, tracks, bounds, theme, className = "", onPhoto
         hoveredRef.current = id;
       };
 
+      /** Ask which of several photographs at one spot was meant; the answer goes where a tap on its pin would. */
+      const chooseFrom = (at: [number, number], list: PhotoFeatureProps[]) => {
+        popupRef.current?.remove();
+        const pick = (id: string) => {
+          popupRef.current?.remove();
+          callbacks.current.onPhotoClick?.(id);
+        };
+        popupRef.current = new Popup({ offset: 14, maxWidth: "260px" }).setLngLat(at).setDOMContent(stackList(list, pick)).addTo(map);
+      };
+
       if (interactive) {
         map.on("click", "clusters", (e: MapMouseEvent) => {
           const f = map.queryRenderedFeatures(e.point, { layers: ["clusters"] })[0];
           if (!f) return;
           const src = map.getSource("photos") as GeoJSONSource;
-          src.getClusterExpansionZoom(f.properties!.cluster_id as number).then((zoom: number) => {
-            map.easeTo({ center: (f.geometry as GeoJSON.Point).coordinates as [number, number], zoom });
+          const at = (f.geometry as GeoJSON.Point).coordinates as [number, number];
+          const id = f.properties!.cluster_id as number;
+          const count = Number(f.properties!.point_count);
+          src.getClusterExpansionZoom(id).then(async (zoom: number) => {
+            // A group that only splits past the last zoom that groups, and would still be a heap of pins once split,
+            // is listed rather than zoomed into: zooming would only show the top pin of the heap.
+            if (zoom > CLUSTER_MAX_ZOOM && count <= STACK_LIST_MAX) {
+              const leaves = (await src.getClusterLeaves(id, count, 0)) as GeoJSON.Feature<GeoJSON.Point, PhotoFeatureProps>[];
+              const span = spanMetres(leaves.map((l) => l.geometry.coordinates as [number, number]));
+              if (span / metresPerPixel(at[1], Math.min(zoom, map.getMaxZoom())) < STACKED_PX) {
+                chooseFrom(at, leaves.map((l) => l.properties));
+                return;
+              }
+            }
+            map.easeTo({ center: at, zoom });
           });
         });
         map.on("click", "photo-points", (e: MapMouseEvent) => {
-          const f = map.queryRenderedFeatures(e.point, { layers: ["photo-points"] })[0];
+          // A fingertip is wider than a pin: everything under it counts, so pins on top of one another can all be reached.
+          const box: [[number, number], [number, number]] = [[e.point.x - TAP_SLOP, e.point.y - TAP_SLOP], [e.point.x + TAP_SLOP, e.point.y + TAP_SLOP]];
+          const under = map.queryRenderedFeatures(box, { layers: ["photo-points"] });
+          const f = map.queryRenderedFeatures(e.point, { layers: ["photo-points"] })[0] ?? under[0];
           if (!f) return;
           const p = f.properties as PhotoFeatureProps;
+          const distinct = [...new Map(under.map((u) => [(u.properties as PhotoFeatureProps).id, u.properties as PhotoFeatureProps])).values()];
+          if (distinct.length > 1) {
+            chooseFrom((f.geometry as GeoJSON.Point).coordinates as [number, number], distinct);
+            return;
+          }
           popupRef.current?.remove();
           if (callbacks.current.directPhotoClick) {
             callbacks.current.onPhotoClick?.(p.id);
