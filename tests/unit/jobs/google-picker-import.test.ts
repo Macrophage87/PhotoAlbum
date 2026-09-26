@@ -155,6 +155,15 @@ describe("the Picker download job", () => {
     await googlePickerImport(job());
     expect((await statuses())[0]).toMatchObject({ status: "FAILED", error: "taken by someone else" });
   });
+  it("does not write its file onto a row somebody else took while it downloaded, nor queue it", async () => {
+    google.download.mockImplementation(async (_t: string, item: { id: string }) => {
+      if (item.id === "gp-1") await db.photo.update({ where: { id: ids[0] }, data: { status: "FAILED", error: "taken over" } });
+      return body(10);
+    });
+    await googlePickerImport(job());
+    expect((await statuses())[0]).toMatchObject({ status: "FAILED", error: "taken over", sizeBytes: 0 });
+    expect(enqueued.map((e) => (e.data as { photoId: string }).photoId)).not.toContain(ids[0]);
+  });
   it("fails every row when no access token can be had", async () => {
     google.token.mockRejectedValue(new GoogleAuthError("gone", true));
     await googlePickerImport(job());

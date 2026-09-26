@@ -89,8 +89,14 @@ export async function googlePickerImport(job: GooglePickerImportJob, signal?: Ab
     try {
       const res = await download(row.id);
       const { bytes } = await store.putStream(originalPath, Readable.fromWeb(res.body as never), { maxBytes: isVideo ? env().MAX_VIDEO_UPLOAD_BYTES : env().MAX_UPLOAD_BYTES });
-      const stored = await db.photo.update({ where: { id: row.id }, data: { storageKey, originalPath, sizeBytes: bytes, status: "PENDING" }, select: { updatedAt: true } });
-      mine = { status: "PENDING", originalPath, updatedAt: stored.updatedAt };
+      // Only onto a row still this job's: if the sweep or a re-pick took it meanwhile, theirs is the say now.
+      const stored = await db.photo.updateMany({ where: { id: row.id, ...mine }, data: { storageKey, originalPath, sizeBytes: bytes, status: "PENDING" } });
+      if (stored.count !== 1) {
+        console.warn(`[google] ${row.originalName} was taken over while downloading; leaving it`);
+        continue;
+      }
+      const now = await db.photo.findUniqueOrThrow({ where: { id: row.id }, select: { updatedAt: true } });
+      mine = { status: "PENDING", originalPath, updatedAt: now.updatedAt };
       if (isVideo) await enqueue(QUEUES.transcodeVideo, { photoId: row.id, tripId: row.tripId });
       else await enqueue(QUEUES.processPhoto, { photoId: row.id, tripId: row.tripId });
     } catch (err) {
