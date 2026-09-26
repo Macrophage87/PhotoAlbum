@@ -157,7 +157,7 @@ describe("geotagPhotos", () => {
       expect(await placed(photo.id)).toEqual({ lat: expect.closeTo(spot.lat, 6), lng: expect.closeTo(spot.lng, 6) });
     });
 
-    it("together: arrived somewhere together, and Dad is 4.5 km on at the photo, inside the stray limit", async () => {
+    it("together: arrived somewhere together, Dad 4.5 km on at the photo but within 3 km of the place in the hour before it", async () => {
       await dadTrack(dadId, 300, 43);
       const spot = dadAt(20, 43);
       const along = recorded(Array.from({ length: 11 }, (_, k) => [T0 + 2 * k * M, dadAt(2 * k, 43)] as [number, LL]));
@@ -261,6 +261,26 @@ describe("geotagPhotos", () => {
       const photo = await makePhoto(tripId, userId, new Date(T0 + 40 * M));
       await geotagPhotos({ tripId });
       expect(await placed(photo.id)).toEqual({ lat: expect.closeTo(dadAt(40, 300).lat, 6), lng: -68 });
+    });
+
+    it("apart: Dad rode past the museum early in a long visit, and is 4.4 km off at the photo hours later (K)", async () => {
+      const museum = { lat: 44, lng: -68 };
+      // Past the museum's door at 13:30, then out to 4.4 km east by 14:30, where he potters about for hours.
+      await dadRoute(dadId, 400, (i) => ({ lat: 44 + N(200 * Math.sin(i / 7)), lng: -68 + E(i <= 30 ? 500 : Math.min(4_400, 500 + (i - 30) * 65)) }));
+      await importTimeline(userId, [move(T0 - 20 * M, T0, { lat: 44.02, lng: -68 }, museum), visit(T0, T0 + 390 * M, museum)]);
+      const photo = await makePhoto(tripId, userId, new Date(T0 + 240 * M));
+      await geotagPhotos({ tripId });
+      expect(await placed(photo.id)).toEqual({ lat: 44, lng: -68 });
+    });
+
+    it("together: a park whose centre the trail comes within 3 km of only at the car park, the photo within the hour (B4)", async () => {
+      const carPark = { lat: 44, lng: -68 };
+      await dadRoute(dadId, 180, (i) => (i <= 10 ? carPark : { lat: 44 + N((i - 10) * 60), lng: -68 }));
+      const centre = { lat: 44, lng: -68 + E(2_800) };
+      await importTimeline(userId, [recorded(Array.from({ length: 6 }, (_, k) => [T0 + 2 * k * M, carPark] as [number, LL])), visit(T0 + 10 * M, T0 + 170 * M, centre)]);
+      const photo = await makePhoto(tripId, userId, new Date(T0 + 60 * M));
+      await geotagPhotos({ tripId });
+      expect(await placed(photo.id)).toEqual({ lat: expect.closeTo(44 + N(50 * 60), 6), lng: -68 });
     });
 
     it("together: with Son rather than Dad, when both ride and Son is the one beside her (C)", async () => {
