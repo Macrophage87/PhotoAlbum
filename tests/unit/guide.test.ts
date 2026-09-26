@@ -34,6 +34,13 @@ describe("the family's guide", () => {
     expect(first.heading).toMatch(/getting in/i);
     expect(JSON.stringify(first)).toMatch(/password/i);
   });
+
+  it("says a Photos grid opens Favorites first, as the pages do (their sortChoice fallback is \"favorites\")", () => {
+    const rows = G.sections.flatMap((s) => s.blocks).flatMap((b) => (b.kind === "table" ? b.rows : []));
+    const photos = rows.filter((r) => r[0] === "Photos");
+    expect(photos.length).toBeGreaterThan(0);
+    for (const row of photos) expect(row[1]).toMatch(/favorites first/i);
+  });
 });
 
 describe("the guide's two marks of inline markup", () => {

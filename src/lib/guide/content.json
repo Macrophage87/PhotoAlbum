@@ -112,7 +112,7 @@
             ],
             [
               "Photos",
-              "All of them in a plain grid, newest first."
+              "All of them in a plain grid, **Favorites first**, or by date either way."
             ],
             [
               "Overview",
