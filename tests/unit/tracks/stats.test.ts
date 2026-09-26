@@ -81,3 +81,58 @@ describe("computeStats on very large tracks", () => {
     expect(s.distanceM).toBeGreaterThan(300_000);
   });
 });
+
+/** Due north at `speed` m/s, one point every `stepS` seconds. */
+function line(count: number, speed: number, stepS: number, t0 = Date.parse("2025-08-12T13:00:00Z"), lat0 = 44): TrackPoint[] {
+  return Array.from({ length: count }, (_, i) => ({ t: t0 + i * stepS * 1000, lat: lat0 + (i * stepS * speed) / 111_195, lng: -68 }));
+}
+
+describe("computeStats on fast transport", () => {
+  it("keeps the distance and speed of a high-speed train", () => {
+    const s = computeStats(line(601, 80, 1));
+    expect(s.distanceM).toBeGreaterThan(47_500);
+    expect(s.distanceM).toBeLessThan(48_500);
+    expect(s.movingTimeS).toBe(600);
+    expect(s.avgSpeedMs).toBeCloseTo(80, 0);
+    expect(s.maxSpeedMs).toBeCloseTo(80, 0);
+  });
+  it("keeps a flight logged once a minute", () => {
+    const s = computeStats(line(61, 250, 60));
+    expect(s.distanceM).toBeGreaterThan(890_000);
+    expect(s.avgSpeedMs).toBeCloseTo(250, 0);
+  });
+  it("still drops a glitch that wanders off for a few samples and comes back", () => {
+    const pts = syntheticWalk();
+    pts[100] = { ...pts[100], lat: pts[100].lat + 0.01 };
+    pts[101] = { ...pts[101], lat: pts[101].lat + 0.02 };
+    pts[102] = { ...pts[102], lat: pts[102].lat + 0.01 };
+    const s = computeStats(pts);
+    expect(s.distanceM).toBeLessThan(1100);
+    expect(s.maxSpeedMs).toBeLessThan(5);
+  });
+  it("still drops a one-sample spike on a motorway drive", () => {
+    const pts = line(301, 30, 1);
+    pts[150] = { ...pts[150], lng: -67.99 };
+    const s = computeStats(pts);
+    expect(s.distanceM).toBeLessThan(9100);
+    expect(s.maxSpeedMs).toBeLessThan(35);
+  });
+});
+
+describe("computeStats on sparsely sampled tracks", () => {
+  it("counts moving time for a ride logged once a minute, but not a long stop", () => {
+    const ride = line(101, 6, 60);
+    const t1 = ride[100].t + 20 * 60_000; // a 20-minute stop, then another 20 minutes of riding
+    const pts = [...ride, ...line(21, 6, 60, t1, ride[100].lat).slice(1)];
+    const s = computeStats(pts);
+    // 100 minutes, then 19 more: the step that spans the stop is not moving.
+    expect(s.movingTimeS).toBe(119 * 60);
+    expect(s.avgSpeedMs).toBeGreaterThan(5.9);
+    expect(s.avgSpeedMs).toBeLessThan(6.1);
+  });
+  it("counts a satellite tracker reporting every ten minutes", () => {
+    const s = computeStats(line(13, 1.2, 600));
+    expect(s.movingTimeS).toBe(7200);
+    expect(s.avgSpeedMs).toBeCloseTo(1.2, 1);
+  });
+});

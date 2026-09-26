@@ -4,6 +4,8 @@ import type { DeviceSession, TrackPoint, TrackStatsResult } from "./types";
 export const MOVING_SPEED_MS = 0.5;
 export const MAX_GAP_S = 30;
 export const TELEPORT_SPEED_MS = 50;
+/** Runs of fast samples up to this long that end near where they began are treated as one glitch. */
+const MAX_EXCURSION_SEGMENTS = 5;
 export const ELEVATION_THRESHOLD_M = 3;
 
 function median3(a: number, b: number, c: number) {
@@ -64,6 +66,53 @@ export function normalizedPower(points: TrackPoint[]): number | null {
   return n ? Math.round(Math.pow(sum4 / n, 0.25)) : null;
 }
 
+/**
+ * Which segments (points[i - 1] to points[i], flagged at i) are GPS jumps rather than travel. A segment faster than
+ * TELEPORT_SPEED_MS is a jump unless a neighbouring segment carries on the same way at a comparable speed: a train
+ * or a plane keeps going, while a glitch is a lone leap, an out-and-back spike, or a short excursion that comes back
+ * to where it left. A fixed speed limit alone would throw away every segment of a flight or a high-speed train.
+ */
+function teleportSegments(points: TrackPoint[], dist: number[]): boolean[] {
+  const n = points.length;
+  const speed = new Array<number>(n).fill(0);
+  for (let i = 1; i < n; i++) {
+    const dt = (points[i].t - points[i - 1].t) / 1000;
+    speed[i] = dt > 0 ? dist[i] / dt : 0;
+  }
+  const fast = (i: number) => speed[i] > TELEPORT_SPEED_MS;
+  // Segments a and a + 1 are consecutive: comparable speeds, and the pair does not double back on itself.
+  const carriesOn = (a: number, i: number) =>
+    a >= 1 && a + 1 < n && Math.min(speed[a], speed[a + 1]) >= speed[i] / 3 &&
+    haversine(points[a - 1].lat, points[a - 1].lng, points[a + 1].lat, points[a + 1].lng) >= (dist[a] + dist[a + 1]) / 2;
+  const out = new Array<boolean>(n).fill(false);
+  for (let i = 1; i < n; i++) out[i] = fast(i) && !carriesOn(i - 1, i) && !carriesOn(i, i);
+  // A few fast samples that wander off and return are one glitch, even where each step looks like the next.
+  for (let s = 1; s < n; s++) {
+    if (!fast(s)) continue;
+    let e = s, path = dist[s];
+    while (e + 1 < n && fast(e + 1)) path += dist[++e];
+    const net = haversine(points[s - 1].lat, points[s - 1].lng, points[e].lat, points[e].lng);
+    if (e - s < MAX_EXCURSION_SEGMENTS && net < path / 2) out.fill(true, s, e + 1);
+    s = e;
+  }
+  return out;
+}
+
+/**
+ * The longest step between samples still counted as moving. Phones on battery saver and satellite trackers log once
+ * a minute or less often, so the limit grows with the track's usual interval; otherwise such a track never moves.
+ */
+function gapLimitS(points: TrackPoint[]): number {
+  const dts: number[] = [];
+  for (let i = 1; i < points.length; i++) {
+    const dt = (points[i].t - points[i - 1].t) / 1000;
+    if (dt > 0) dts.push(dt);
+  }
+  if (!dts.length) return MAX_GAP_S;
+  dts.sort((a, b) => a - b);
+  return Math.max(MAX_GAP_S, 3 * dts[dts.length >> 1]);
+}
+
 export type StatsOptions = { skipElevation?: boolean; elevationWindow?: number; cyclingCadence?: boolean };
 
 export function computeStats(points: TrackPoint[], opts: StatsOptions = {}): TrackStatsResult {
@@ -81,18 +130,23 @@ export function computeStats(points: TrackPoint[], opts: StatsOptions = {}): Tra
   let cadSum = 0, cadT = 0, cadMax = 0;
   let pwrSum = 0, pwrT = 0, pwrMax = 0;
 
+  const dist = new Array<number>(n).fill(0);
+  for (let i = 1; i < n; i++) dist[i] = haversine(points[i - 1].lat, points[i - 1].lng, points[i].lat, points[i].lng);
+  const teleports = teleportSegments(points, dist);
+  const maxGap = gapLimitS(points);
+
   for (let i = 1; i < n; i++) {
     const a = points[i - 1], b = points[i];
     const dt = (b.t - a.t) / 1000;
     if (dt <= 0) continue;
-    const dd = haversine(a.lat, a.lng, b.lat, b.lng);
+    const dd = dist[i];
     const v = b.spd !== undefined ? b.spd : dd / dt;
-    const teleport = dd / dt > TELEPORT_SPEED_MS;
+    const teleport = teleports[i];
     if (!teleport) distance += dd;
     speeds.push(teleport ? 0 : v);
-    if (v >= MOVING_SPEED_MS && dt <= MAX_GAP_S && !teleport) moving += dt;
+    if (v >= MOVING_SPEED_MS && dt <= maxGap && !teleport) moving += dt;
     // Sensor samples are time-weighted, but a sample after a long pause only counts once.
-    const w = dt <= MAX_GAP_S ? dt : 1;
+    const w = dt <= maxGap ? dt : 1;
     if (b.hr !== undefined && b.hr > 0) { hrSum += b.hr * w; hrT += w; if (b.hr > hrMax) hrMax = b.hr; }
     if (b.cad !== undefined && (b.cad > 0 || !opts.cyclingCadence)) { cadSum += b.cad * w; cadT += w; if (b.cad > cadMax) cadMax = b.cad; }
     if (b.pwr !== undefined) { pwrSum += b.pwr * w; pwrT += w; if (b.pwr > pwrMax) pwrMax = b.pwr; }
