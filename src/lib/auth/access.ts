@@ -105,3 +105,13 @@ export function visibleMediaWhere(viewer: Viewer): Prisma.PhotoWhereInput {
 export function isReadOnly(viewer: Viewer): boolean {
   return !canContribute(viewer);
 }
+
+/**
+ * Who a request is answered for, once the real viewer has been let in. A shared link's pages (`?view=share`) show
+ * what anybody holding the link sees, members included, so a member reading one is answered as a visitor: no
+ * uploader names, no members-only words, nothing the page itself would not show them. Whether they may open it at
+ * all is still asked of who they are.
+ */
+export function viewerFor(viewer: Viewer, view: string | null | undefined): Viewer {
+  return view === "share" && viewer.kind === "user" ? { kind: "anonymous", user: null, shareTokens: viewer.shareTokens } : viewer;
+}

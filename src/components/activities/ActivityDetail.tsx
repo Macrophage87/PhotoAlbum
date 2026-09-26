@@ -136,7 +136,7 @@ export function ActivityDetail({ trip, activity, photos, upload, share, save, de
         </Card>
       )}
 
-      {activity.track && <ActivityMapSection trackId={activity.track.id} activityId={activity.id} type={activity.type} theme={mapThemeOf(getTheme(trip.themeKey))} />}
+      {activity.track && <ActivityMapSection trackId={activity.track.id} activityId={activity.id} type={activity.type} theme={mapThemeOf(getTheme(trip.themeKey))} member={member || mode.editable} />}
 
       <section className="space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">

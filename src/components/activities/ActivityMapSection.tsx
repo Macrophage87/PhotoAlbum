@@ -12,14 +12,14 @@ import { Lightbox, type LightboxPhoto } from "@/components/photos/Lightbox";
  * Map of one activity's track plus its photos, with charts whose cursor drives a marker on the map. It asks for the
  * activity alone rather than the whole trip, so the same section works for whoever holds only the activity's link.
  */
-export function ActivityMapSection({ trackId, activityId, type, theme }: { trackId: string; activityId: string; type: ActivityType; theme: MapTheme }) {
+export function ActivityMapSection({ trackId, activityId, type, theme, member = false }: { trackId: string; activityId: string; type: ActivityType; theme: MapTheme; /** A member on a member's page; otherwise the map is asked for as the page's visitors see it (`view=share`). */ member?: boolean }) {
   const [data, setData] = useState<MapPayload | null>(null);
   const [marker, setMarker] = useState<{ lat: number; lng: number } | null>(null);
   const [lightbox, setLightbox] = useState<number | null>(null);
 
   useEffect(() => {
     let alive = true;
-    fetch(`/api/activities/${activityId}/geojson`)
+    fetch(`/api/activities/${activityId}/geojson${member ? "" : "?view=share"}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((d: MapPayload | null) => {
         if (alive && d) setData(d);
@@ -27,7 +27,7 @@ export function ActivityMapSection({ trackId, activityId, type, theme }: { track
     return () => {
       alive = false;
     };
-  }, [activityId]);
+  }, [activityId, member]);
 
   const photos: LightboxPhoto[] = useMemo(() => (data?.photos.features ?? []).map((f) => ({ id: f.properties.id, mediumUrl: f.properties.mediumUrl, width: null, height: null, caption: f.properties.caption, alt: f.properties.caption ?? "Photo" })), [data]);
 
