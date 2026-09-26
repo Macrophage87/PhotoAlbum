@@ -24,7 +24,7 @@ export type TimelineResult = { groups: TimelineGroups; matched: number; total: n
  * afternoon it was taken. An activity is kept only while something inside it still matches, so a narrowed timeline
  * is the matches and nothing else.
  */
-export async function tripTimeline(tripId: string, timezone: string, filter: GalleryFilter = NO_FILTER): Promise<TimelineResult> {
+export async function tripTimeline(tripId: string, timezone: string, filter: GalleryFilter = NO_FILTER, /** The filter's id list, when the caller has already worked it out for several trips at once. */ restricted?: string[] | null): Promise<TimelineResult> {
   const active = filterIsActive(filter);
   const total = await db.photo.count({ where: { tripId, ...NOT_TRASHED, status: "READY" } });
   if (!active) {
@@ -37,24 +37,10 @@ export async function tripTimeline(tripId: string, timezone: string, filter: Gal
     return { groups, matched: dated.length + undated.length, total, active };
   }
 
-  // Words and years are answered as id lists, the same ones the gallery uses, so the two agree about what matches.
-  const lists: string[][] = [];
-  if (filter.q) lists.push(await idsMatching(filter.q));
-  if (filter.year) lists.push(await idsInLocalYear(tripId, filter.year));
-  // One list per name, so two names means the photographs they are both on rather than either.
-  for (const id of filter.personIds) lists.push(await idsWithPerson(id));
-  const restrict = lists.length ? intersectIds(lists) : null;
+  const restrict = restricted === undefined ? await timelineIds(filter, tripId) : restricted;
   if (restrict && restrict.length === 0) return { groups: [], matched: 0, total, active };
 
-  const where: Prisma.PhotoWhereInput = {
-    tripId,
-    ...NOT_TRASHED,
-    status: "READY",
-    ...(filter.uploaderId ? { uploaderId: filter.uploaderId } : {}),
-    ...(filter.kind ? { kind: filter.kind } : {}),
-    ...(filter.activityId ? { activityId: filter.activityId } : {}),
-    ...(restrict ? { id: { in: restrict } } : {}),
-  };
+  const where: Prisma.PhotoWhereInput = { tripId, ...narrowedWhere(filter, restrict) };
   const [dated, undated, activities] = await Promise.all([
     db.photo.findMany({ where: { ...where, takenAt: { not: null } }, orderBy: [{ takenAt: "asc" }, { id: "asc" }], select: photoCardSelect }),
     db.photo.findMany({ where: { ...where, takenAt: null }, orderBy: { createdAt: "asc" }, select: photoCardSelect }),
@@ -64,4 +50,41 @@ export async function tripTimeline(tripId: string, timezone: string, filter: Gal
   const kept = new Set(photos.map((p) => p.activityId).filter(Boolean) as string[]);
   const groups = buildTimeline(photos, activities.filter((a) => kept.has(a.id)), timezone);
   return { groups, matched: photos.length, total, active };
+}
+
+/**
+ * Words and years are answered as id lists, the same ones the gallery uses, so the two agree about what matches.
+ * Null when nothing is being asked that needs one. Without a trip the lists cover the whole album, so the timeline
+ * of everything asks each question once rather than once per trip.
+ */
+export async function timelineIds(filter: GalleryFilter, tripId: string | null): Promise<string[] | null> {
+  const lists: string[][] = [];
+  if (filter.q) lists.push(await idsMatching(filter.q));
+  if (filter.year) lists.push(await idsInLocalYear(tripId, filter.year));
+  // One list per name, so two names means the photographs they are both on rather than either.
+  for (const id of filter.personIds) lists.push(await idsWithPerson(id));
+  return lists.length ? intersectIds(lists) : null;
+}
+
+/** What a narrowed timeline keeps, apart from the trip: the plain columns the filter asks about, and the id list. */
+function narrowedWhere(filter: GalleryFilter, restrict: string[] | null): Prisma.PhotoWhereInput {
+  return {
+    ...NOT_TRASHED,
+    status: "READY",
+    ...(filter.uploaderId ? { uploaderId: filter.uploaderId } : {}),
+    ...(filter.kind ? { kind: filter.kind } : {}),
+    ...(filter.activityId ? { activityId: filter.activityId } : {}),
+    ...(restrict ? { id: { in: restrict } } : {}),
+  };
+}
+
+/**
+ * How many photographs each trip would put on its timeline, answered for many trips in one query, so the timeline
+ * of everything can decide what goes on a page before it loads any of them. Narrowed, a trip with nothing that
+ * matches is simply missing from the answer.
+ */
+export async function timelineCounts(tripIds: string[], filter: GalleryFilter = NO_FILTER, restrict: string[] | null = null): Promise<Map<string, number>> {
+  if (!tripIds.length || (restrict && restrict.length === 0)) return new Map();
+  const rows = await db.photo.groupBy({ by: ["tripId"], where: { tripId: { in: tripIds }, ...narrowedWhere(filter, restrict) }, _count: { _all: true } });
+  return new Map(rows.flatMap((r) => (r.tripId ? [[r.tripId, r._count._all] as const] : [])));
 }

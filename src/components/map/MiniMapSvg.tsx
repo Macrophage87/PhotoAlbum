@@ -1,9 +1,14 @@
 import type { ActivityType } from "@/generated/prisma/enums";
 import { ACTIVITY_COLOR } from "@/lib/activities/types";
+import { thinLine } from "@/lib/tracks/simplify";
+
+/** More than enough for a 160×120 drawing; a stored line can have thousands, and every one was sent to the browser. */
+export const MINI_MAP_POINTS = 200;
 
 /** Tiny static route preview. SVG instead of a WebGL map so dozens can sit on one page. */
-export function MiniMapSvg({ line, type, className = "" }: { line: [number, number][]; type?: ActivityType; className?: string }) {
-  if (line.length < 2) return null;
+export function MiniMapSvg({ line: full, type, className = "" }: { line: [number, number][]; type?: ActivityType; className?: string }) {
+  if (full.length < 2) return null;
+  const line = thinLine(full, MINI_MAP_POINTS);
   const lats = line.map((p) => p[0]);
   const lngs = line.map((p) => p[1]);
   const minLat = Math.min(...lats), maxLat = Math.max(...lats), minLng = Math.min(...lngs), maxLng = Math.max(...lngs);
