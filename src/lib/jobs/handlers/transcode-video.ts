@@ -9,6 +9,7 @@ import { makeRenditions } from "@/lib/images/renditions";
 import { ffmpeg, posterArgs, probe, transcodeArgs } from "@/lib/video/ffmpeg";
 import { pickTripByDay, whoWasThere } from "@/lib/photos/assign";
 import { activityFor } from "@/lib/activities/reassign";
+import { dateByHand, dateMovedSince, lockedPhoto } from "@/lib/photos/member-owned";
 import { localDayFromOffset, offsetMinutesInZone } from "@/lib/time/local-day";
 import { withHeavyLock } from "../heavy-lock";
 import { workerStopping } from "../shutdown";
@@ -79,29 +80,38 @@ export async function transcodeVideo(job: TranscodeVideoJob, signal?: AbortSigna
       }
       // A hand-set date keeps the zone it was typed in.
       const tzOffsetMin = byHand && photo.tzOffsetMin !== null ? photo.tzOffsetMin : trip ? offsetMinutesInZone(instant, trip.timezone) : 0;
-      // A clip uploaded into an activity, or filed (or taken off one) by hand, stays where the member put it.
-      const filing = await activityFor(photo, trip?.id ?? null, instant);
       const videoRenditions: VideoRenditions = { mp4: { key: mp4Key, w: out.width ?? 0, h: out.height ?? 0, bytes }, poster: { key: posterKey } };
       const contentHash = photo.contentHash ?? (await sha256File(input));
-      await db.photo.update({
-        where: { id: photo.id },
-        data: {
-          status: "READY",
-          contentHash,
-          kind: "VIDEO",
-          width: out.width,
-          height: out.height,
-          durationS: out.durationS ?? info.durationS,
-          renditions,
-          videoRenditions,
-          takenAt: instant,
-          takenAtSource,
-          tzOffsetMin,
-          tripId: trip?.id ?? null,
-          activityId: filing.activityId,
-          activitySetById: filing.activitySetById,
-          camera: info.videoCodec ? `${info.videoCodec}${info.hdr ? " HDR" : ""}` : null,
-        },
+      // The row was read before the heavy lock and ffmpeg, minutes ago: a member may have dated the clip or filed it
+      // on an activity since. So it is read again, locked, and what a member set is never written over.
+      await db.$transaction(async (tx) => {
+        const now = await lockedPhoto(tx, photo.id);
+        if (!now) return;
+        // A date given (or changed) since the job read the row stands, and so does the trip it put the clip on; a
+        // date a member set before is kept as it is too (its trip still follows from it, as the job read it).
+        const moved = dateMovedSince(photo, now);
+        const keepDate = moved || dateByHand(now);
+        const tripId = moved || now.tripId !== photo.tripId ? now.tripId : (trip?.id ?? null);
+        // A clip uploaded into an activity, or filed (or taken off one) by hand, stays where the member put it.
+        const filing = await activityFor(now, tripId, keepDate ? now.takenAt : instant, tx);
+        await tx.photo.update({
+          where: { id: photo.id },
+          data: {
+            status: "READY",
+            contentHash,
+            kind: "VIDEO",
+            width: out.width,
+            height: out.height,
+            durationS: out.durationS ?? info.durationS,
+            renditions,
+            videoRenditions,
+            ...(keepDate ? {} : { takenAt: instant, takenAtSource, tzOffsetMin }),
+            tripId,
+            activityId: filing.activityId,
+            activitySetById: filing.activitySetById,
+            camera: info.videoCodec ? `${info.videoCodec}${info.hdr ? " HDR" : ""}` : null,
+          },
+        });
       });
     }, signal);
     // Follow-up jobs are best-effort here; the sweeps pick up anything the queue refused.

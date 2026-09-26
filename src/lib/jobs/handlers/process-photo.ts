@@ -13,6 +13,7 @@ import { readGPano } from "@/lib/images/panorama-read";
 import { editsSchema, hasEdits, type PhotoEdits } from "@/lib/images/edits";
 import { pickTripByDay, whoWasThere } from "@/lib/photos/assign";
 import { activityFor } from "@/lib/activities/reassign";
+import { dateByHand, dateMovedSince, lockedPhoto, placeByHand } from "@/lib/photos/member-owned";
 import { localDayFromOffset, offsetMinutesInZone } from "@/lib/time/local-day";
 import { enqueue } from "../boss";
 import { QUEUES, type ProcessPhotoJob } from "../queues";
@@ -160,52 +161,70 @@ export async function processPhoto(job: ProcessPhotoJob, signal?: AbortSignal): 
     const { width, height, renditions, panorama } = await makeRenditions(source, photo.storageKey, (key, buf) => store.putBuffer(key, buf), editsOf(photo.edits), gpano);
     signal?.throwIfAborted();
 
-    // 6. Activity assignment within the trip. A member who uploaded this into an activity, or put it there (or took
-    // it off) by hand, has already answered the question — the time window does not get to overrule them.
-    const filing = await activityFor(photo, trip?.id ?? null, takenAt);
-
-    // A place a member pinned, or took away, is theirs: the file's own GPS does not come back over it.
-    const placedByHand = photo.gpsSource === "MANUAL" || photo.placeSetById !== null;
-    const hasGps = !placedByHand && exif.lat !== null && exif.lng !== null;
-    // A position the album did not read out of this file: Google's sidecar, or the helper's guess at the place. Both
-    // survive a re-process, since re-reading the same file will not produce a better one.
-    const keptGps = (photo.gpsSource === "SIDECAR" || photo.gpsSource === "ESTIMATE") && photo.lat !== null && photo.lng !== null;
-    const sidecarGps = keptGps && photo.gpsSource === "SIDECAR";
     const contentHash = photo.contentHash ?? (await sha256File(localPath));
-    await db.photo.update({
-      where: { id: photo.id },
-      data: {
-        status: "READY",
-        width,
-        height,
-        takenAt,
-        takenAtSource,
-        tzOffsetMin,
-        lat: hasGps ? exif.lat : photo.gpsSource === "MANUAL" || keptGps ? photo.lat : null,
-        lng: hasGps ? exif.lng : photo.gpsSource === "MANUAL" || keptGps ? photo.lng : null,
-        altitude: hasGps ? exif.altitude : null,
-        gpsSource: hasGps ? "EXIF" : photo.gpsSource === "MANUAL" ? "MANUAL" : keptGps ? photo.gpsSource : null,
-        contentHash,
-        camera: cameraLabel(exif),
-        lens: exif.lens,
-        exif: {
-          exposureTime: exif.exposureTime,
-          fNumber: exif.fNumber,
-          iso: exif.iso,
-          focalLength: exif.focalLength,
-          orientation: exif.orientation,
-          offsetTimeOriginal: exif.offsetTimeOriginal,
-          dateTimeOriginal: exif.dateTimeOriginal,
-          ...(mtimeHeader && Number.isFinite(mtimeHeader) ? { fileLastModified: mtimeHeader } : {}),
+
+    // 6. Write back. The row was read when the job started, and rendering takes a while: a member may have dated the
+    // item, pinned or cleared its place, or filed it on an activity since. So the row is read again, locked, and
+    // everything a member may have answered is worked out from that; what a member set is never written over.
+    const settled = await db.$transaction(async (tx) => {
+      const now = await lockedPhoto(tx, photo.id);
+      if (!now) return null;
+      // A date given (or changed) since the job read the row is newer than anything the job worked out: it stands,
+      // and so does the trip it put the item on. A date a member set before is kept as it is, too (the job read the
+      // same one, so its trip still follows from it).
+      const moved = dateMovedSince(photo, now);
+      const keepDate = moved || dateByHand(now);
+      const date = keepDate ? { takenAt: now.takenAt, tzOffsetMin: now.tzOffsetMin } : { takenAt, tzOffsetMin };
+      const tripId = moved || now.tripId !== photo.tripId ? now.tripId : (trip?.id ?? null);
+      // Activity assignment within the trip. A member who uploaded this into an activity, or put it there (or took it
+      // off) by hand, has already answered the question — the time window does not get to overrule them.
+      const filing = await activityFor(now, tripId, date.takenAt, tx);
+      // A place a member pinned, or took away, is theirs: the file's own GPS does not come back over it, and none of
+      // the place is written at all.
+      const byHand = placeByHand(now);
+      const hasGps = !byHand && exif.lat !== null && exif.lng !== null;
+      // A position the album did not read out of this file: Google's sidecar, or the helper's guess at the place.
+      // Both survive a re-process, since re-reading the same file will not produce a better one.
+      const keptGps = (now.gpsSource === "SIDECAR" || now.gpsSource === "ESTIMATE") && now.lat !== null && now.lng !== null;
+      await tx.photo.update({
+        where: { id: photo.id },
+        data: {
+          status: "READY",
+          width,
+          height,
+          ...(keepDate ? {} : { takenAt, takenAtSource, tzOffsetMin }),
+          ...(byHand
+            ? {}
+            : {
+                lat: hasGps ? exif.lat : keptGps ? now.lat : null,
+                lng: hasGps ? exif.lng : keptGps ? now.lng : null,
+                altitude: hasGps ? exif.altitude : null,
+                gpsSource: hasGps ? "EXIF" : keptGps ? now.gpsSource : null,
+              }),
+          contentHash,
+          camera: cameraLabel(exif),
+          lens: exif.lens,
+          exif: {
+            exposureTime: exif.exposureTime,
+            fNumber: exif.fNumber,
+            iso: exif.iso,
+            focalLength: exif.focalLength,
+            orientation: exif.orientation,
+            offsetTimeOriginal: exif.offsetTimeOriginal,
+            dateTimeOriginal: exif.dateTimeOriginal,
+            ...(mtimeHeader && Number.isFinite(mtimeHeader) ? { fileLastModified: mtimeHeader } : {}),
+          },
+          renditions,
+          panorama,
+          panoProjection: gpano?.projection ?? null,
+          tripId,
+          activityId: filing.activityId,
+          activitySetById: filing.activitySetById,
         },
-        renditions,
-        panorama,
-        panoProjection: gpano?.projection ?? null,
-        tripId: trip?.id ?? null,
-        activityId: filing.activityId,
-        activitySetById: filing.activitySetById,
-      },
+      });
+      return { tripId, takenAt: date.takenAt, positioned: hasGps || (keptGps && now.gpsSource === "SIDECAR") };
     });
+    if (!settled) return;
 
     await enqueueEmbedding(photo.id);
     await enqueueFaceDetection(photo.id);
@@ -213,8 +232,8 @@ export async function processPhoto(job: ProcessPhotoJob, signal?: AbortSignal): 
 
     // 7. Position GPS-less photos from any track covering that moment (handler lands in Phase 5). A place the helper
     // guessed at does not count as positioned: a track that covers the moment is better than a guess.
-    if (trip && !hasGps && !sidecarGps && takenAt) {
-      await enqueue(QUEUES.geotagPhotos, { tripId: trip.id }, { singletonKey: `geotag:${trip.id}`, singletonSeconds: 10, singletonNextSlot: true });
+    if (settled.tripId && !settled.positioned && settled.takenAt) {
+      await enqueue(QUEUES.geotagPhotos, { tripId: settled.tripId }, { singletonKey: `geotag:${settled.tripId}`, singletonSeconds: 10, singletonNextSlot: true });
     }
   } catch (err) {
     // Cut short by a shutdown: the job is retried once the worker is back, so the row is left for that run.
