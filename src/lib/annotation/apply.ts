@@ -1,5 +1,5 @@
 import { db } from "@/lib/db";
-import { annotationSchema, clampAnnotation, toStored, type Annotation } from "./schema";
+import { annotationSchema, clampAnnotation, toStored, type Annotation, type StoredAnnotation } from "./schema";
 import { enqueueEmbedding } from "@/lib/jobs/handlers/embed-photo";
 import { applyPlaceEstimate, needsPlaceEstimate } from "./place";
 import { isWeakDate } from "@/lib/photos/date-from-neighbours";
@@ -9,10 +9,26 @@ export type ApplyResult = { ok: true } | { ok: false; reason: "refusal" | "inval
 /** Persist a parsed record on the item and keep the raw response briefly for debugging. Never logs content. */
 export type Usage = { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null };
 
+/** The fields a member can rewrite on the item's page (see `updateAnnotation`): theirs, once they have. */
+const MEMBER_FIELDS = ["caption", "description", "tags", "place", "activity", "objects", "visibleText", "mood"] as const;
+
+/**
+ * The record to store: the fresh one, or — where a member has edited the text — theirs, with only what they cannot
+ * edit (the search summary, the season, the title the helper offers) brought up to date.
+ */
+export function keepMemberText(fresh: StoredAnnotation, current: unknown, edited: boolean): StoredAnnotation {
+  if (!edited || !current || typeof current !== "object") return fresh;
+  const kept: Record<string, unknown> = { ...fresh };
+  for (const k of MEMBER_FIELDS) if (k in current) kept[k] = (current as Record<string, unknown>)[k];
+  return kept as StoredAnnotation;
+}
+
 export async function applyAnnotation(photoId: string, model: string, parsed: Annotation, raw: { usage?: Usage; batched?: boolean } & Record<string, unknown>): Promise<void> {
-  const current = await db.photo.findUnique({ where: { id: photoId }, select: { takenAt: true, takenAtSource: true, estimatedDateSource: true, annotationSource: true, title: true, kind: true, lat: true, placeEstimatedAt: true } });
+  const current = await db.photo.findUnique({ where: { id: photoId }, select: { takenAt: true, takenAtSource: true, estimatedDateSource: true, annotation: true, annotationSource: true, title: true, kind: true, lat: true, placeEstimatedAt: true } });
   if (!current) return;
-  const stored = toStored(parsed);
+  // A member's edits are never overwritten, by the notes sweep, the names backfill or a press of Reannotate alike.
+  const edited = current.annotationSource === "EDITED";
+  const stored = keepMemberText(toStored(parsed), current.annotation, edited);
   const est = parsed.estimatedYear;
   const noReliableDate = isWeakDate(current.takenAtSource, current.takenAt);
   const keepMemberEstimate = current.estimatedDateSource === "MEMBER";
@@ -23,8 +39,8 @@ export async function applyAnnotation(photoId: string, model: string, parsed: An
         annotation: stored,
         annotationModel: model,
         annotatedAt: new Date(),
-        // A member's edits are never overwritten silently: re-annotation only refreshes machine text.
-        annotationSource: current.annotationSource === "EDITED" ? "EDITED" : "MACHINE",
+        // Re-annotation only refreshes machine text, so an edited record stays the family's.
+        annotationSource: edited ? "EDITED" : "MACHINE",
         annotationError: null,
         // A title the family did not write themselves: only ever filled in where there is none (embedded videos keep YouTube's).
         ...(!current.title?.trim() && current.kind !== "EXTERNAL_VIDEO" && stored.title.trim() ? { title: stored.title.trim() } : {}),

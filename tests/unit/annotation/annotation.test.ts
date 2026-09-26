@@ -135,6 +135,13 @@ describe("applying a record", () => {
     expect(p.annotationSource).toBe("EDITED");
     expect(p.estimatedDate?.getUTCFullYear()).toBe(1980);
   });
+  it("keeps the words a member wrote when the item is described again, and refreshes only the helper's own (#43)", async () => {
+    const theirs = { ...toStored(annotationSchema.parse(fixture)), caption: "Grandma at Lake Tahoe", description: "Grandma Jo on the dock at Tahoe", tags: ["grandma", "tahoe"], searchSummary: "old summary" };
+    await db.photo.update({ where: { id: photoId }, data: { annotation: theirs, annotationSource: "EDITED" } });
+    await applyAnnotation(photoId, "claude-opus-5", annotationSchema.parse({ ...fixture, caption: "An older woman at a beach", searchSummary: "new summary" }), {});
+    const a = (await db.photo.findUniqueOrThrow({ where: { id: photoId } })).annotation as { caption: string; description: string; tags: string[]; searchSummary: string };
+    expect(a).toMatchObject({ caption: "Grandma at Lake Tahoe", description: "Grandma Jo on the dock at Tahoe", tags: ["grandma", "tahoe"], searchSummary: "new summary" });
+  });
 });
 
 describe("real spend and byte budgets", () => {
