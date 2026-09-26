@@ -289,3 +289,59 @@ describe("computeStats drops a glitch that leaps off a walk and holds there", ()
     expect(s.maxSpeedMs).toBeLessThan(5);
   });
 });
+
+describe("computeStats drops long bursts of bad GPS", () => {
+  const M_LNG = 1 / (111_195 * Math.cos((44 * Math.PI) / 180));
+  const shift = (p: TrackPoint, e: number, n = 0): TrackPoint => ({ ...p, lng: p.lng + e * M_LNG, lat: p.lat + n / 111_195 });
+  // Deterministic stand-in for Math.random.
+  const rng = (seed: number) => () => ((seed = (seed * 1_103_515_245 + 12_345) % 2_147_483_648) / 2_147_483_648);
+
+  it("twenty 200 m spikes in a row on a run", () => {
+    const pts = line(1901, 3, 1);
+    const clean = computeStats(pts).distanceM;
+    for (let k = 0; k < 20; k++) pts[1000 + 3 * k] = shift(pts[1000 + 3 * k], 200);
+    const s = computeStats(pts);
+    expect(s.distanceM).toBeLessThan(clean + 100);
+    expect(s.maxSpeedMs).toBeLessThan(5);
+  });
+  it("two minutes of fixes scattered up to 500 m around the path", () => {
+    const pts = line(1901, 3, 1);
+    const clean = computeStats(pts).distanceM;
+    const r = rng(7);
+    for (let i = 1000; i < 1120; i++) {
+      const a = r() * 2 * Math.PI, d = 100 + r() * 400;
+      pts[i] = shift(pts[i], d * Math.cos(a), d * Math.sin(a));
+    }
+    const s = computeStats(pts);
+    expect(s.distanceM).toBeLessThan(clean + 300);
+    expect(s.maxSpeedMs).toBeLessThan(5);
+  });
+  it("a phone flapping between its own fix and a Wi-Fi fix 1.5 km away", () => {
+    const pts = line(1215, 1.4, 1);
+    const clean = computeStats(pts).distanceM;
+    for (let i = 500; i < 620; i += 2) pts[i] = shift(pts[i], 1_500);
+    const s = computeStats(pts);
+    expect(s.distanceM).toBeLessThan(clean + 100);
+    expect(s.avgSpeedMs!).toBeLessThan(2);
+  });
+  it("a steady drift off a drive at four times its speed", () => {
+    const pts = line(601, 25, 1);
+    const clean = computeStats(pts).distanceM;
+    // Eight fixes marching sideways at 110 m/s, then easing back onto the road over 40 s.
+    for (let k = 0; k < 8; k++) pts[300 + k] = shift(pts[300 + k], 110 * (k + 1));
+    for (let k = 1; k < 40; k++) pts[307 + k] = shift(pts[307 + k], 880 * (1 - k / 40));
+    const s = computeStats(pts);
+    expect(s.distanceM).toBeLessThan(clean + 1_000);
+    // The easing back is slow enough to be believed; the 110 m/s march is not.
+    expect(s.maxSpeedMs).toBeLessThan(40);
+  });
+  it("a marching drift off a walk logged every 30 s", () => {
+    const pts = line(121, 1.3, 30);
+    const clean = computeStats(pts).distanceM;
+    // Eight fixes marching off at 60 m/s, and the walk carrying on from where they ended.
+    for (let i = 60; i < pts.length; i++) pts[i] = shift(pts[i], 1_800 * Math.min(8, i - 59));
+    const s = computeStats(pts);
+    expect(s.distanceM).toBeLessThan(clean + 100);
+    expect(s.maxSpeedMs).toBeLessThan(5);
+  });
+});

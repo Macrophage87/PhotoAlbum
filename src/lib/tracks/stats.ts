@@ -8,7 +8,9 @@ export const TELEPORT_SPEED_MS = 50;
 const MIN_TRAVEL_SEGMENTS = 5;
 /** Fast runs separated by at most this many slower segments are judged as one run. */
 const MAX_SLOW_INSIDE_RUN = 2;
-/** Steps at least this long say nothing about how a vehicle got up to speed. */
+/** A turn sharper than this is the track doubling back on itself. */
+const REVERSAL_RAD = (2 * Math.PI) / 3;
+/** Steps at least this long say little about how a vehicle got up to speed. */
 const SPARSE_STEP_S = 30;
 /** A fast run this long is travel even if it ends near where it began (a sightseeing flight's loop). */
 const LONG_RUN_SEGMENTS = 30;
@@ -89,11 +91,15 @@ function teleportSegments(points: TrackPoint[], dist: number[]): boolean[] {
     speed[i] = dt > 0 ? dist[i] / dt : 0;
   }
   const fast = (i: number) => speed[i] > TELEPORT_SPEED_MS;
-  // The first segment beside a run (in direction `dir`) that moves in time: at vehicle speed, or too sparse to tell.
-  const atSpeed = (edge: number, dir: 1 | -1) => {
+  // The first segment beside a run (in direction `dir`) that moves in time is at a speed the run could have grown
+  // out of: a vehicle's, and not a third of the run's own. A sparse step says less about acceleration, so it need
+  // only be moving at more than a walk.
+  const atSpeed = (edge: number, dir: 1 | -1, runSpeed: number) => {
     for (let i = edge + dir; i >= 1 && i < n; i += dir) {
       const dt = (points[i].t - points[i - 1].t) / 1000;
-      if (dt > 0) return speed[i] >= TELEPORT_SPEED_MS / 3 || dt >= SPARSE_STEP_S;
+      if (dt <= 0) continue;
+      if (dt >= SPARSE_STEP_S) return speed[i] >= TELEPORT_SPEED_MS / 10;
+      return speed[i] >= TELEPORT_SPEED_MS / 3 && runSpeed <= 3 * speed[i];
     }
     return false;
   };
@@ -115,35 +121,43 @@ function teleportSegments(points: TrackPoint[], dist: number[]): boolean[] {
     const net = haversine(points[s - 1].lat, points[s - 1].lng, points[e].lat, points[e].lng);
     // A run at either end of the track has nothing before or after it to agree with: most often a cold start.
     const atEdge = s === 1 || e === n - 1;
-    // A long run is travel whatever its shape: flights climb and descend, and trains repeat a stale fix. A shorter
-    // one must be steady, get somewhere, and be entered or left at vehicle speed; one that leaps off a walk is a
-    // glitch whether it holds out there, comes back or never does.
+    // A long run is travel unless it keeps doubling back: flights climb and descend and trains repeat a stale fix,
+    // but bad GPS spikes out and back, and a phone flapping between its own fix and a Wi-Fi one reverses every step.
+    // A shorter run must be steady, get somewhere, and be entered or left at a speed it could have grown out of; one
+    // that leaps off a walk (or off a drive at three times its speed) is a glitch whether it comes back or not.
+    const runSpeed = median(speed.slice(s, e + 1).filter((v) => v > TELEPORT_SPEED_MS));
     const travel =
-      len >= LONG_RUN_SEGMENTS ||
-      (len > MIN_TRAVEL_SEGMENTS && !atEdge && net >= path / 2 && steady(points, dist, speed, s, e) && (atSpeed(s, -1) || atSpeed(e, 1)));
+      (len >= LONG_RUN_SEGMENTS && turns(points, dist, s, e, REVERSAL_RAD) * 10 <= len) ||
+      (len > MIN_TRAVEL_SEGMENTS && !atEdge && net >= path / 2 && steady(points, dist, speed, s, e) && (atSpeed(s, -1, runSpeed) || atSpeed(e, 1, runSpeed)));
     if (!travel) for (let i = s; i <= e; i++) if (fast(i)) out[i] = true;
     s = e;
   }
   return out;
 }
 
+function median(values: number[]): number {
+  const sorted = [...values].sort((x, y) => x - y);
+  return sorted[sorted.length >> 1];
+}
+
 /** Every segment of the run within a factor of three of its median speed, and no turn sharper than a right angle. */
 function steady(points: TrackPoint[], dist: number[], speed: number[], s: number, e: number): boolean {
-  const sorted = speed.slice(s, e + 1).sort((x, y) => x - y);
-  const median = sorted[sorted.length >> 1];
-  if (sorted[0] < median / 3 || sorted[sorted.length - 1] > median * 3) return false;
-  let last: number | null = null;
+  const run = speed.slice(s, e + 1);
+  const m = median(run);
+  return run.every((v) => v >= m / 3 && v <= m * 3) && turns(points, dist, s, e, Math.PI / 2) === 0;
+}
+
+/** How many times the heading turns by more than `limit` radians between consecutive segments of the run. */
+function turns(points: TrackPoint[], dist: number[], s: number, e: number, limit: number): number {
+  let last: number | null = null, count = 0;
   for (let i = s; i <= e; i++) {
     if (dist[i] < 1) continue;
     const a = points[i - 1], b = points[i];
     const heading = Math.atan2((b.lng - a.lng) * Math.cos((a.lat * Math.PI) / 180), b.lat - a.lat);
-    if (last !== null) {
-      const turn = Math.abs(((heading - last + 3 * Math.PI) % (2 * Math.PI)) - Math.PI);
-      if (turn > Math.PI / 2) return false;
-    }
+    if (last !== null && Math.abs(((heading - last + 3 * Math.PI) % (2 * Math.PI)) - Math.PI) > limit) count++;
     last = heading;
   }
-  return true;
+  return count;
 }
 
 /**
