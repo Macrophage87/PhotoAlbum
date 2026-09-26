@@ -23,6 +23,9 @@ export const HEAVY_JOB_EXPIRE_SECONDS = (2 * FFMPEG_TIMEOUT_MS) / 1000 + 20 * 60
  * been touched for HEAVY_HEARTBEAT_SECONDS, so a crash is noticed within a few minutes. Six touches per window, so
  * one slow database round trip never fails a job that is still running.
  */
+// A live handler whose heartbeat pg-boss nevertheless failed (a database outage longer than the window) is not
+// aborted; with the one worker process its retry then waits behind it on the heavy lock, so the work is repeated
+// once but never concurrently.
 export const HEAVY_HEARTBEAT_SECONDS = 180;
 export const HEAVY_HEARTBEAT_REFRESH_SECONDS = 30;
 export const HEAVY_QUEUES: readonly QueueName[] = [QUEUES.transcodeVideo, QUEUES.embedPhoto, QUEUES.detectFaces, QUEUES.detectAnimals];

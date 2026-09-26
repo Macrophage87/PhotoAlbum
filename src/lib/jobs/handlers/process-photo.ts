@@ -42,7 +42,8 @@ export function editsOf(raw: unknown): PhotoEdits | null {
 export async function processPhoto(job: ProcessPhotoJob, signal?: AbortSignal): Promise<void> {
   const photo = await db.photo.findUnique({ where: { id: job.photoId } });
   if (!photo) return;
-  await db.photo.update({ where: { id: photo.id }, data: { status: "PROCESSING", error: null } });
+  // The stamp marks the row as this run's: a retry of a timed-out run stamps it again.
+  const { updatedAt: claimedAt } = await db.photo.update({ where: { id: photo.id }, data: { status: "PROCESSING", error: null }, select: { updatedAt: true } });
 
   try {
     const store = storage();
@@ -208,7 +209,14 @@ export async function processPhoto(job: ProcessPhotoJob, signal?: AbortSignal): 
   } catch (err) {
     // Cut short by a shutdown: the job is retried once the worker is back, so the row is left for that run.
     if (signal?.aborted && workerStopping()) throw err;
-    const message = signal?.aborted ? "Processing took too long and was stopped." : err instanceof Error ? err.message : String(err);
+    if (signal?.aborted) {
+      // Timed out. Rendering cannot be interrupted, so the retry may already have the row (or have finished it):
+      // fail it only while it is still this run's.
+      console.error(`[process-photo] ${photo.id} timed out`);
+      await db.photo.updateMany({ where: { id: photo.id, status: "PROCESSING", updatedAt: claimedAt }, data: { status: "FAILED", error: "Processing took too long and was stopped." } });
+      throw err;
+    }
+    const message = err instanceof Error ? err.message : String(err);
     console.error(`[process-photo] ${photo.id} failed:`, message);
     await db.photo.update({ where: { id: photo.id }, data: { status: "FAILED", error: message.slice(0, 500) } });
     throw err;

@@ -11,6 +11,16 @@ process.env.PHOTO_STORAGE_ROOT = photoRoot;
 vi.mock("@/lib/jobs/boss", () => ({ enqueue: async () => {} }));
 const stopping = vi.hoisted(() => ({ now: false }));
 vi.mock("@/lib/jobs/shutdown", () => ({ workerStopping: () => stopping.now, markStopping: () => undefined }));
+// Lets a test act while the (uninterruptible) rendering is under way, as a retry running beside it would.
+const during = vi.hoisted(() => ({ render: null as null | (() => Promise<void>) }));
+vi.mock("@/lib/images/renditions", async (orig) => {
+  const real = (await orig()) as typeof import("@/lib/images/renditions");
+  return { ...real, makeRenditions: async (...args: Parameters<typeof real.makeRenditions>) => {
+    const out = await real.makeRenditions(...args);
+    await during.render?.();
+    return out;
+  } };
+});
 
 import { processPhoto } from "@/lib/jobs/handlers/process-photo";
 
@@ -19,6 +29,7 @@ describe("a process-photo run whose job was aborted", () => {
   beforeEach(async () => {
     await resetTestDb();
     stopping.now = false;
+    during.render = null;
     userId = (await db.user.create({ data: { email: "pa@example.com", role: "ADMIN" } })).id;
   });
   async function stage() {
@@ -45,6 +56,31 @@ describe("a process-photo run whose job was aborted", () => {
     const id = await stage();
     stopping.now = true;
     await expect(processPhoto({ photoId: id, mode: "renditions" }, aborted())).rejects.toThrow();
+    expect((await db.photo.findUniqueOrThrow({ where: { id } })).status).toBe("PROCESSING");
+  });
+
+  it("does not write FAILED over a retry that already finished the item", async () => {
+    const id = await stage();
+    const ac = new AbortController();
+    during.render = async () => {
+      // pg-boss times this run out; its retry claims the row and finishes it before the render here returns.
+      ac.abort();
+      await db.photo.update({ where: { id }, data: { status: "PROCESSING" } });
+      await db.photo.update({ where: { id }, data: { status: "READY" } });
+    };
+    await expect(processPhoto({ photoId: id }, ac.signal)).rejects.toThrow();
+    expect(await db.photo.findUniqueOrThrow({ where: { id } })).toMatchObject({ status: "READY", error: null });
+  });
+
+  it("does not fail a row a retry has claimed and is still working on", async () => {
+    const id = await stage();
+    const ac = new AbortController();
+    during.render = async () => {
+      ac.abort();
+      await new Promise((r) => setTimeout(r, 5));
+      await db.photo.update({ where: { id }, data: { status: "PROCESSING" } });
+    };
+    await expect(processPhoto({ photoId: id, mode: "renditions" }, ac.signal)).rejects.toThrow();
     expect((await db.photo.findUniqueOrThrow({ where: { id } })).status).toBe("PROCESSING");
   });
 });

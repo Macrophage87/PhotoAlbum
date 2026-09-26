@@ -32,9 +32,11 @@ export async function transcodeVideo(job: TranscodeVideoJob, signal?: AbortSigna
   if (!photo) return;
   const store = storage();
   let work: string | null = null;
+  // The stamp marks the row as this run's: a retry of a timed-out run stamps it again.
+  let claimedAt: Date | null = null;
   // Everything after the row turns PROCESSING is inside the try, so no failure can leave it spinning.
   try {
-    await db.photo.update({ where: { id: photo.id }, data: { status: "PROCESSING", error: null } });
+    claimedAt = (await db.photo.update({ where: { id: photo.id }, data: { status: "PROCESSING", error: null }, select: { updatedAt: true } })).updatedAt;
     const input = store.localPath?.(photo.originalPath);
     if (!input) throw new Error("transcode-video requires a storage driver with local paths");
     const dir = (work = await mkdtemp(path.join(tmpdir(), "clip-")));
@@ -107,7 +109,13 @@ export async function transcodeVideo(job: TranscodeVideoJob, signal?: AbortSigna
   } catch (err) {
     // Cut short by a shutdown: the job is retried once the worker is back, so the row is left for that run.
     if (signal?.aborted && workerStopping()) throw err;
-    const message = signal?.aborted ? "Transcoding took too long and was stopped." : err instanceof Error ? err.message : String(err);
+    if (signal?.aborted) {
+      // Timed out: the retry may already have the row, so fail it only while it is still this run's.
+      console.error(`[transcode-video] ${photo.id} timed out`);
+      if (claimedAt) await db.photo.updateMany({ where: { id: photo.id, status: "PROCESSING", updatedAt: claimedAt }, data: { status: "FAILED", error: "Transcoding took too long and was stopped." } });
+      throw err;
+    }
+    const message = err instanceof Error ? err.message : String(err);
     console.error(`[transcode-video] ${photo.id} failed:`, message);
     await db.photo.update({ where: { id: photo.id }, data: { status: "FAILED", error: message.slice(0, 500) } });
     throw err;

@@ -70,7 +70,9 @@ export async function startWorker(): Promise<void> {
   await boss.work(QUEUES.detectAnimals, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 3, heartbeatRefreshSeconds: HEAVY_HEARTBEAT_REFRESH_SECONDS }, async ([job]) => detectAnimalsJob(job.data as never, job.signal));
   await boss.work(QUEUES.animalSweep, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 30 }, async () => void (await animalSweep()));
   await boss.work(QUEUES.matchAnimals, { batchSize: 1, localConcurrency: 2, pollingIntervalSeconds: 2 }, async ([job]) => void (await proposeAnimalsForPhoto((job.data as { photoId: string }).photoId)));
-  await boss.work(QUEUES.googlePickerImport, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 2 }, async ([job]) => googlePickerImport(job.data as never, job.signal));
+  await boss.work(QUEUES.googlePickerImport, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 2, includeMetadata: true }, async ([job]) =>
+    googlePickerImport(job.data as never, job.signal, { finalAttempt: job.retryCount >= job.retryLimit }),
+  );
   await boss.work(QUEUES.matchPhoto, { batchSize: 1, localConcurrency: 2, pollingIntervalSeconds: 2 }, async ([job]) => matchPhoto(job.data as never));
   await boss.work(QUEUES.faceSweep, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 30 }, async () => void (await faceSweep()));
   await boss.work(QUEUES.flagNewAdults, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60 }, async () => void (await flagNewAdults()));

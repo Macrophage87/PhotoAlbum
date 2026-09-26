@@ -14,7 +14,7 @@ import { QUEUES, type GooglePickerImportJob } from "../queues";
  * GOOGLE_PICKER`), then hand each to the normal processing pipeline. Google strips location from the download, so
  * the member is told to fix places on the review screen. A failed download marks that row FAILED with the reason.
  */
-export async function googlePickerImport(job: GooglePickerImportJob, signal?: AbortSignal): Promise<void> {
+export async function googlePickerImport(job: GooglePickerImportJob, signal?: AbortSignal, opts: { finalAttempt?: boolean } = {}): Promise<void> {
   const rows = await db.photo.findMany({ where: { id: { in: job.photoIds }, originalPath: "pending", status: "PENDING", sourceKind: "GOOGLE_PICKER" } });
   if (rows.length === 0) return;
   let token: string;
@@ -26,9 +26,13 @@ export async function googlePickerImport(job: GooglePickerImportJob, signal?: Ab
     return;
   }
   const store = storage();
-  for (const row of rows) {
-    // Timed out (or shutting down): the retry picks up every row still pending, the picker session included.
-    if (signal?.aborted) return;
+  for (const [i, row] of rows.entries()) {
+    // Timed out (or shutting down): the retry picks up every row still pending, the picker session included. With no
+    // retry left, the rest are failed instead of waiting for ever.
+    if (signal?.aborted) {
+      if (opts.finalAttempt) await db.photo.updateMany({ where: { id: { in: rows.slice(i).map((r) => r.id) }, originalPath: "pending", status: "PENDING" }, data: { status: "FAILED", error: "Download from Google Photos took too long." } });
+      return;
+    }
     const item = job.items[row.id];
     if (!item) continue;
     const isVideo = row.kind === "VIDEO";

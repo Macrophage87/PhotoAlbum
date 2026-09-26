@@ -14,19 +14,20 @@ vi.mock("@/lib/jobs/boss", () => ({ enqueue: (queue: string, data: object, optio
 
 import { enqueueEmbedding } from "@/lib/jobs/handlers/embed-photo";
 import { QUEUES } from "@/lib/jobs/queues";
+import { db } from "@/lib/db";
 
-const SCHEMA = "pgboss_unit_debounce";
+// One schema per run, dropped afterwards, so an interrupted run never leaves jobs behind for the next.
+const SCHEMA = `pgboss_unit_debounce_${process.pid}_${Math.random().toString(36).slice(2, 8)}`;
 
 describe("follow-up jobs on a real queue", () => {
   beforeAll(async () => {
     real.boss = new PgBoss({ connectionString: process.env.DATABASE_URL!, schema: SCHEMA, supervise: false, schedule: false });
     await real.boss.start();
-    await real.boss.deleteQueue(QUEUES.embedPhoto).catch(() => undefined);
     await real.boss.createQueue(QUEUES.embedPhoto);
   });
   afterAll(async () => {
-    await real.boss.deleteQueue(QUEUES.embedPhoto).catch(() => undefined);
     await real.boss.stop({ graceful: false });
+    await db.$executeRawUnsafe(`DROP SCHEMA IF EXISTS "${SCHEMA}" CASCADE`);
   });
 
   it("queues a re-run after one that already finished in the same minute, and folds a third request into it", async () => {
