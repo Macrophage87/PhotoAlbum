@@ -86,11 +86,11 @@ export async function forgetKeyState(): Promise<ForgetKeyState> {
   let problem: string | null = null;
   // Names hashed under FORGET_KEY, and no FORGET_KEY (or another) to recognise them with.
   const paused = Boolean((recorded || count(1) > 0) && !matches);
-  if (paused) problem = v1 ? "FORGET_KEY has changed, so names forgotten before are not recognised. Put the earlier FORGET_KEY back." : "FORGET_KEY is not set, and names were forgotten under it. Put it back.";
+  if (paused) problem = v1 ? "FORGET_KEY has changed, so names forgotten before are not recognized. Put the earlier FORGET_KEY back." : "FORGET_KEY is not set, and names were forgotten under it. Put it back.";
   else if (invalid) problem = `${INVALID_FORGET_KEY} Until it is, nobody is forgotten for good.`;
   else if (!v1 && production) problem = "FORGET_KEY is not set, so nobody can be forgotten until it is.";
   else if (!v1) problem = "FORGET_KEY is not set, so forgotten names are hashed under a key made from the database alone. Set it before this album is used for real.";
-  else if (weak) problem = `${weak} forgotten ${weak === 1 ? "name was" : "names were"} kept before FORGET_KEY was set, under a key made from the database alone. They are still recognised, but a copy of the database is enough to test names against them.`;
+  else if (weak) problem = `${weak} forgotten ${weak === 1 ? "name was" : "names were"} kept before FORGET_KEY was set, under a key made from the database alone. They are still recognized, but a copy of the database is enough to test names against them.`;
   const keys = [v0, ...(v1 && matches ? [v1] : [])];
   // A key that is set but not valid never writes, in any environment: whoever set it meant names to be kept under
   // it, not under the weaker stand-in, so forgets wait until it is put right.
