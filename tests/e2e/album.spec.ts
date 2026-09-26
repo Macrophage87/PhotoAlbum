@@ -1709,6 +1709,29 @@ test("a panorama is recognized, kept long, and shown as a panorama rather than a
   const tile = page.locator("li.tile-lazy").filter({ has: page.locator(`img[src*='/api/photos/${row.id}/']`) });
   await expect(tile).toHaveClass(/col-span-2/);
   await expect(tile.getByText("360°")).toBeVisible();
+
+  // Opened big, a tap on it or a drag across it looks around instead of closing the viewer (#73), and with the
+  // panorama focused the arrow keys pan it rather than changing photos (#74).
+  await tile.locator("img").first().click();
+  const dialog = page.getByRole("dialog", { name: "Photo viewer" });
+  const view = dialog.getByTestId("panorama-view");
+  await expect(view).toBeVisible();
+  await view.click();
+  await expect(dialog).toBeVisible();
+  const at = (await view.boundingBox())!;
+  await page.mouse.move(at.x + at.width / 2, at.y + at.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(at.x + at.width / 2 - 120, at.y + at.height / 2, { steps: 6 });
+  await page.mouse.up();
+  await expect(dialog).toBeVisible();
+  const counter = dialog.getByText(/^\d+ \/ \d+$/);
+  const before = await counter.textContent();
+  await view.focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(counter).toHaveText(before ?? "");
+  await expect(dialog.getByTestId("panorama-view")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
 });
 
 test("a member edits their own photos and reads everyone else's, and a trip is arranged by whoever made it", async ({ browser, context, page }) => {

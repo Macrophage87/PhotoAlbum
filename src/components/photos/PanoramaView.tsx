@@ -22,6 +22,9 @@ export function PanoramaView({ src, alt, wrap = false, axis = "horizontal", clas
   const box = useRef<HTMLDivElement>(null);
   const [dragging, setDragging] = useState(false);
   const from = useRef({ pointer: 0, scroll: 0 });
+  // Whether the pointer has travelled since it went down. A ref, not state: the click that ends a drag arrives after
+  // React has already flushed setDragging(false), so the state reads false by the time the click needs it.
+  const moved = useRef(false);
   const horizontal = axis === "horizontal";
 
   // Start in the middle: a panorama has as much to see one way as the other, and a 360 needs room on both sides.
@@ -63,20 +66,22 @@ export function PanoramaView({ src, alt, wrap = false, axis = "horizontal", clas
           if (!el) return;
           el.setPointerCapture(e.pointerId);
           from.current = { pointer: horizontal ? e.clientX : e.clientY, scroll: horizontal ? el.scrollLeft : el.scrollTop };
+          moved.current = false;
           setDragging(true);
         }}
         onPointerMove={(e) => {
           if (!dragging) return;
           const el = box.current;
           if (!el) return;
-          const moved = (horizontal ? e.clientX : e.clientY) - from.current.pointer;
-          if (horizontal) el.scrollLeft = from.current.scroll - moved;
-          else el.scrollTop = from.current.scroll - moved;
+          const delta = (horizontal ? e.clientX : e.clientY) - from.current.pointer;
+          if (Math.abs(delta) > 3) moved.current = true;
+          if (horizontal) el.scrollLeft = from.current.scroll - delta;
+          else el.scrollTop = from.current.scroll - delta;
         }}
         onPointerUp={(e) => { box.current?.releasePointerCapture(e.pointerId); setDragging(false); }}
         onPointerCancel={() => setDragging(false)}
         // A drag that ends over the picture must not also count as a click on it, which in a lightbox means closing it.
-        onClickCapture={(e) => { if (dragging) { e.preventDefault(); e.stopPropagation(); } }}
+        onClickCapture={(e) => { if (moved.current) { moved.current = false; e.preventDefault(); e.stopPropagation(); } }}
       >
         <div className={horizontal ? "flex h-full w-max" : "w-full"}>
           <PanoImage src={src} alt={alt} horizontal={horizontal} onReady={centre} />
