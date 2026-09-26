@@ -27,6 +27,25 @@ export type TripSort = (typeof TRIP_SORTS)[number];
 export const DATE_SORTS = ["oldest", "newest"] as const;
 export type DateSort = (typeof DATE_SORTS)[number];
 
+/**
+ * What a visitor may order by. Favourites first is a member's order: a visitor sees no hearts, but a list put in the
+ * order the family hearted it would show them anyway, one position at a time. So a visitor, or anybody looking
+ * through a shared link, is offered the dates only, and a remembered "favorites" from a member's session on the same
+ * device is ignored rather than honoured.
+ */
+export const VISITOR_PHOTO_SORTS = ["oldest", "newest"] as const satisfies readonly PhotoSort[];
+export const VISITOR_TRIP_SORTS = ["newest", "oldest"] as const satisfies readonly TripSort[];
+
+/** How to order a grid of photographs for this viewer: favourites first for a member, else earliest first. */
+export async function photoSortChoice(sp: Record<string, string | string[] | undefined>, member: boolean): Promise<PhotoSort> {
+  return member ? sortChoice(sp, SORT_COOKIES.photos, PHOTO_SORTS, "favorites") : sortChoice(sp, SORT_COOKIES.photos, VISITOR_PHOTO_SORTS, "oldest");
+}
+
+/** How to order the trips for this viewer: favourites first for a member, else newest first. */
+export async function tripSortChoice(sp: Record<string, string | string[] | undefined>, member: boolean): Promise<TripSort> {
+  return member ? sortChoice(sp, SORT_COOKIES.trips, TRIP_SORTS, "favorites") : sortChoice(sp, SORT_COOKIES.trips, VISITOR_TRIP_SORTS, "newest");
+}
+
 /** A collection's photographs can also be shown in the order somebody arranged them. */
 export const COLLECTION_SORTS = ["arranged", ...PHOTO_SORTS] as const;
 export type CollectionSort = (typeof COLLECTION_SORTS)[number];
@@ -37,7 +56,7 @@ export type CollectionSort = (typeof COLLECTION_SORTS)[number];
  * habit. The others are still a click away, in the address. A collection nobody has arranged is ordered like any
  * other grid of photographs.
  */
-export async function collectionSortChoice(sp: Record<string, string | string[] | undefined>, arranged: boolean): Promise<CollectionSort> {
-  if (arranged) return asked(sp, COLLECTION_SORTS, "order") ?? "arranged";
-  return sortChoice(sp, SORT_COOKIES.photos, PHOTO_SORTS, "favorites");
+export async function collectionSortChoice(sp: Record<string, string | string[] | undefined>, arranged: boolean, member: boolean): Promise<CollectionSort> {
+  if (arranged) return asked(sp, member ? COLLECTION_SORTS : (["arranged", ...VISITOR_PHOTO_SORTS] as const), "order") ?? "arranged";
+  return photoSortChoice(sp, member);
 }

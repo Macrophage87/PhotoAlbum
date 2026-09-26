@@ -24,7 +24,8 @@ export async function GET(request: NextRequest, { params }: RouteContext<"/api/t
   const filter = parseGalleryFilter(searchParamsObject(sp), { member, inTrip: true });
   // The same order the page was built in, or the next page would continue a different list.
   const asked = sp.get("order");
-  const order: PhotoOrder = asked === "oldest" ? "taken" : asked === "newest" ? "newest" : "favorites";
+  // Favourites first is a member's order (see VISITOR_PHOTO_SORTS): anybody else gets the dates, earliest first.
+  const order: PhotoOrder = asked === "newest" ? "newest" : asked === "oldest" || !member ? "taken" : "favorites";
   // `ids` re-reads photos the gallery already shows, after an action changed them, under the same rules and filter.
   const ids = sp.get("ids")?.split(",").filter(Boolean).slice(0, REREAD_MAX);
   const viewerId = member && viewer.kind === "user" ? viewer.user.id : null;

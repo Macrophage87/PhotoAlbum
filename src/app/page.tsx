@@ -3,7 +3,7 @@ import { getViewer } from "@/lib/auth/viewer";
 import { ContainerSearch } from "@/components/containers/ContainerSearch";
 import { favouritesFor } from "@/lib/favourites/queries";
 import { countVisibleTrips, coverFor, listVisibleTrips } from "@/lib/trips/queries";
-import { SORT_COOKIES, TRIP_SORTS, sortChoice } from "@/lib/sort-choice";
+import { SORT_COOKIES, tripSortChoice } from "@/lib/sort-choice";
 import { SortToggle } from "@/components/ui/SortToggle";
 import { collectionCoverFor, countVisibleCollections, listVisibleCollections } from "@/lib/collections/queries";
 import { CollectionCard } from "@/components/collections/CollectionCard";
@@ -21,8 +21,8 @@ export default async function HomePage({ searchParams }: PageProps<"/">) {
   const q = typeof sp.q === "string" && sp.q.trim() ? sp.q.trim().slice(0, 100) : null;
   const page = Math.max(1, Number(typeof sp.page === "string" ? sp.page : 1) || 1);
   const skip = (page - 1) * PAGE;
-  // Favourites first unless this person has asked for the trips by date, either way round.
-  const sort = await sortChoice(sp, SORT_COOKIES.trips, TRIP_SORTS, "favorites");
+  // Favourites first for a member unless they have asked for the trips by date; a visitor gets the dates only.
+  const sort = await tripSortChoice(sp, viewer.kind === "user");
   const [trips, collections, tripCount, collectionCount] = await Promise.all([
     listVisibleTrips(viewer, { q, take: PAGE, skip, order: sort }),
     listVisibleCollections(viewer, { q, take: PAGE, skip }),
@@ -54,7 +54,7 @@ export default async function HomePage({ searchParams }: PageProps<"/">) {
           {tripCount > 1 && (
             <SortToggle
               value={sort}
-              options={[{ value: "favorites", label: "Favorites first" }, { value: "newest", label: "Newest first" }, { value: "oldest", label: "Oldest first" }]}
+              options={[...(member ? [{ value: "favorites" as const, label: "Favorites first" }] : []), { value: "newest", label: "Newest first" }, { value: "oldest", label: "Oldest first" }]}
               cookie={SORT_COOKIES.trips}
               label="How the trips are ordered"
               testId="trips-order"

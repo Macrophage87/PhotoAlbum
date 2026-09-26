@@ -40,7 +40,10 @@ export async function listVisibleTrips(viewer: Viewer, opts: { q?: string | null
       ? Prisma.sql`ORDER BY t."startDate" DESC, t.id DESC`
       : opts.order === "oldest"
         ? Prisma.sql`ORDER BY t."startDate" ASC, t.id ASC`
-        : favouriteOrderSql("trip", "t", viewer.kind === "user" ? viewer.user.id : null, Prisma.sql`t."startDate" DESC, t.id DESC`)}
+        : viewer.kind === "user"
+          ? favouriteOrderSql("trip", "t", viewer.user.id, Prisma.sql`t."startDate" DESC, t.id DESC`)
+          : // Favourites first is a member's order; a visitor would read the family's hearts off it. Newest first instead.
+            Prisma.sql`ORDER BY t."startDate" DESC, t.id DESC`}
     LIMIT ${opts.take ?? 1000} OFFSET ${opts.skip ?? 0}`;
   const rows = await db.trip.findMany({ where: { ...where, id: { in: ids.map((i) => i.id) } }, select: tripCardSelect });
   const byId = new Map(rows.map((r) => [r.id, r]));

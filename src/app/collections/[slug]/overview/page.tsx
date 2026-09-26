@@ -11,8 +11,8 @@ import { uploadByteLimits } from "@/lib/media/upload-limits";
 
 export default async function CollectionOverviewPage({ params }: PageProps<"/collections/[slug]/overview">) {
   const { slug } = await params;
-  const { collection, editable } = await loadViewableCollection(slug);
-  const [items, gates] = await Promise.all([listCollectionItems(collection.id, { order: defaultCollectionOrder(collection) }), editable ? annotationGates() : Promise.resolve(null)]);
+  const { viewer, collection, editable } = await loadViewableCollection(slug);
+  const [items, gates] = await Promise.all([listCollectionItems(collection.id, { viewerId: viewer.kind === "user" ? viewer.user.id : null, order: defaultCollectionOrder(collection, editable) }), editable ? annotationGates() : Promise.resolve(null)]);
   const upload = editable ? <CollectionUploader collectionId={collection.id} slug={slug} maxClipSeconds={env().MAX_CLIP_SECONDS} maxBytes={uploadByteLimits()} annotationActive={Boolean(gates?.active)} /> : null;
   const ready = items.filter((i) => i.status === "READY");
   const dated = ready.filter((i) => i.takenAt).map((i) => i.takenAt!.getTime());

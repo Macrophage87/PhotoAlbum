@@ -61,7 +61,8 @@ describe("favorites", () => {
     expect((await listVisibleTrips(viewerFor(me, "me@example.com"))).map((t) => t.id)).toEqual([tripA, tripB]);
     // Without that mark the newest leads again.
     expect((await listVisibleTrips(viewerFor(you, "you@example.com"))).map((t) => t.id)).toEqual([tripA, tripB]);
-    expect((await listVisibleTrips(anon)).map((t) => t.id)).toEqual([tripA, tripB]);
+    // A visitor is not shown the family's hearts, as an order either: the newest leads.
+    expect((await listVisibleTrips(anon)).map((t) => t.id)).toEqual([tripB, tripA]);
 
     await setFavourite("collection", colA, you, true);
     await setFavourite("collection", colA, me, true);

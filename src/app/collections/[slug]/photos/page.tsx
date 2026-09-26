@@ -16,7 +16,7 @@ export default async function CollectionPhotosPage({ params, searchParams }: Pag
   const { collection, editable, owns } = await loadViewableCollection(slug, `/collections/${slug}/photos`);
   const viewer = await getViewer();
   const arranged = Boolean(collection.arrangedAt);
-  const sort = await collectionSortChoice(sp, arranged);
+  const sort = await collectionSortChoice(sp, arranged, editable);
   const items = await listCollectionItems(collection.id, { viewerId: viewer.kind === "user" ? viewer.user.id : null, order: sort });
   const shown = editable ? items : items.filter((i) => i.status === "READY");
   const favourites = await photoFavourites(shown.map((p) => p.id), viewer);
@@ -36,7 +36,7 @@ export default async function CollectionPhotosPage({ params, searchParams }: Pag
         options={[
           // Only where somebody has arranged it; the saved order is this collection's own, not a habit for other grids.
           ...(arranged ? [{ value: "arranged" as CollectionSort, label: "Saved order", remember: false as const }] : []),
-          { value: "favorites", label: "Favorites first" },
+          ...(editable ? [{ value: "favorites" as CollectionSort, label: "Favorites first" }] : []),
           { value: "oldest", label: "Oldest first" },
           { value: "newest", label: "Newest first" },
         ]}

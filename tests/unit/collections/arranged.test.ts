@@ -43,10 +43,13 @@ describe("a collection's saved order", () => {
   const arrangedAt = async () => (await db.collection.findUniqueOrThrow({ where: { id: collectionId } })).arrangedAt;
 
   it("is kept, noted, and shown as saved rather than favourites first", async () => {
-    expect(defaultCollectionOrder({ arrangedAt: await arrangedAt() })).toBe("favorites");
+    expect(defaultCollectionOrder({ arrangedAt: await arrangedAt() }, true)).toBe("favorites");
+    // A visitor is never given the family's hearts as an order: the dates instead.
+    expect(defaultCollectionOrder({ arrangedAt: await arrangedAt() }, false)).toBe("oldest");
     await reorderCollection("best", await itemIds([b, a, c]));
     expect(await arrangedAt()).not.toBeNull();
-    expect(defaultCollectionOrder({ arrangedAt: await arrangedAt() })).toBe("arranged");
+    expect(defaultCollectionOrder({ arrangedAt: await arrangedAt() }, true)).toBe("arranged");
+    expect(defaultCollectionOrder({ arrangedAt: await arrangedAt() }, false)).toBe("arranged");
     expect((await listCollectionItems(collectionId, { order: "arranged", viewerId: who.id })).map((i) => i.id)).toEqual([b, a, c]);
     // Shown another way, each item still knows its place in the saved order, which is what Arrange starts from.
     const byFavourite = await listCollectionItems(collectionId, { order: "favorites", viewerId: who.id });
@@ -64,12 +67,17 @@ describe("a collection's saved order", () => {
 
   it("opens an arranged collection in its saved order whatever the device last chose, unless the address asks", async () => {
     jar.set(SORT_COOKIES.photos, "newest");
-    expect(await collectionSortChoice({}, true)).toBe("arranged");
-    expect(await collectionSortChoice({ order: "favorites" }, true)).toBe("favorites");
+    expect(await collectionSortChoice({}, true, true)).toBe("arranged");
+    expect(await collectionSortChoice({ order: "favorites" }, true, true)).toBe("favorites");
     // Nobody has arranged it: the device's habit, as on any other grid, and no saved order to ask for.
-    expect(await collectionSortChoice({}, false)).toBe("newest");
+    expect(await collectionSortChoice({}, false, true)).toBe("newest");
     jar.clear();
-    expect(await collectionSortChoice({ order: "arranged" }, false)).toBe("favorites");
+    expect(await collectionSortChoice({ order: "arranged" }, false, true)).toBe("favorites");
+    // A visitor cannot ask for favourites first, from the address or a member's habit on the same device.
+    expect(await collectionSortChoice({ order: "favorites" }, true, false)).toBe("arranged");
+    expect(await collectionSortChoice({ order: "favorites" }, false, false)).toBe("oldest");
+    jar.set(SORT_COOKIES.photos, "favorites");
+    expect(await collectionSortChoice({}, false, false)).toBe("oldest");
   });
 
   it("knows each item's place in the saved order where positions have gaps and ties", async () => {

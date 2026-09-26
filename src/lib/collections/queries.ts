@@ -26,12 +26,13 @@ export type CollectionCardData = Prisma.CollectionGetPayload<{ select: typeof co
 /** Collections for the front page, most recently touched first, optionally narrowed by name, and paged. */
 export async function listVisibleCollections(viewer: Viewer, opts: { q?: string | null; take?: number; skip?: number } = {}): Promise<CollectionCardData[]> {
   const where = { ...visibleContainersWhere(viewer), ...(opts.q ? { title: { contains: opts.q, mode: "insensitive" as const } } : {}) };
-  // Same order as the trips: mine, then the family's, then most recently touched.
+  // Same order as the trips: mine, then the family's, then most recently touched. A visitor gets only the last: the
+  // family's hearts, read off the order, are theirs.
   const ids = await db.$queryRaw<{ id: string }[]>`
     SELECT c.id FROM "Collection" c
     WHERE ${viewer.kind === "user" ? Prisma.sql`TRUE` : Prisma.sql`c.visibility = 'PUBLIC'`}
       AND ${opts.q ? Prisma.sql`c.title ILIKE ${"%" + opts.q + "%"}` : Prisma.sql`TRUE`}
-    ${favouriteOrderSql("collection", "c", viewer.kind === "user" ? viewer.user.id : null, Prisma.sql`c."updatedAt" DESC, c.id DESC`)}
+    ${viewer.kind === "user" ? favouriteOrderSql("collection", "c", viewer.user.id, Prisma.sql`c."updatedAt" DESC, c.id DESC`) : Prisma.sql`ORDER BY c."updatedAt" DESC, c.id DESC`}
     LIMIT ${opts.take ?? 1000} OFFSET ${opts.skip ?? 0}`;
   const rows = await db.collection.findMany({ where: { ...where, id: { in: ids.map((i) => i.id) } }, select: collectionCardSelect });
   const byId = new Map(rows.map((r) => [r.id, r]));
@@ -83,8 +84,9 @@ export type CollectionItemCard = PhotoCard & { itemId: string; position: number;
  * The order a collection is shown in when nobody asks for another: the saved one, once somebody has arranged it, and
  * otherwise favourites first. Pages without an order of their own (the overview, a shared link) use this.
  */
-export function defaultCollectionOrder(collection: { arrangedAt: Date | null }): "arranged" | "favorites" {
-  return collection.arrangedAt ? "arranged" : "favorites";
+export function defaultCollectionOrder(collection: { arrangedAt: Date | null }, member: boolean): "arranged" | "favorites" | "oldest" {
+  // Favourites first only for a member: see VISITOR_PHOTO_SORTS.
+  return collection.arrangedAt ? "arranged" : member ? "favorites" : "oldest";
 }
 
 /** Items in display order. Every status is included so members see processing tiles. */
@@ -106,6 +108,8 @@ export async function listCollectionItems(collectionId: string, opts: { viewerId
   }
   // An empty collection has nothing to order, and asking Postgres about an empty list is an error, not a no-op.
   if (!cards.length || (opts.order ?? "favorites") !== "favorites") return cards;
+  // Favourites first is a member's order (`viewerId` says who); anybody else would read the family's hearts from it.
+  if (!opts.viewerId) return listCollectionItems(collectionId, { order: "oldest" });
   // Favourites lead; the collection's own arrangement is the tie-break, so everything else stays where it was put.
   const state = await db.$queryRaw<{ id: string; n: bigint; mine: boolean }[]>`
     SELECT p.id,

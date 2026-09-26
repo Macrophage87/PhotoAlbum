@@ -123,7 +123,9 @@ export async function tripPhotoPage(tripId: string, opts: { uploaderId?: string;
     ...(restrict ? { id: { in: restrict } } : {}),
     status: { in: opts.readyOnly ? ["READY"] : ["READY", "PENDING", "PROCESSING", "FAILED"] },
   };
-  const order = opts.order ?? "favorites";
+  // Favourites first is a member's order, and a member's is the only one that names who is looking (`viewerId`).
+  // Anybody else would learn from it what the family hearted, so they get the order the day happened in.
+  const order = (opts.order ?? "favorites") === "favorites" && !opts.viewerId ? "taken" : (opts.order ?? "favorites");
   if (order === "favorites") {
     // Favourites lead, then the family's, then the order the day happened in. The cursor is how far down the list
     // we are: the sort key is computed, so there is nothing stable to key from, and a page is 240 rows.

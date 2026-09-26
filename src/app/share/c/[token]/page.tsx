@@ -9,6 +9,6 @@ export default async function SharedCollectionPage({ params }: PageProps<"/share
   const collection = await getSharedCollection(token);
   if (!collection) notFound();
   // In the order its owner arranged it, where they have; a shared link has no order of its own to offer.
-  const items = await listCollectionItems(collection.id, { order: defaultCollectionOrder(collection) });
+  const items = await listCollectionItems(collection.id, { order: defaultCollectionOrder(collection, false) });
   return <PhotoGrid photos={items.filter((p) => p.status === "READY").map((p) => toGridPhoto(p))} emptyMessage="Nothing here yet." />;
 }

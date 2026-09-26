@@ -147,9 +147,10 @@ describe("paging by position rather than by the row the cursor came from", () =>
 
   it("reads a favourites-first cursor as a whole number of rows, and anything else as the first page", async () => {
     expect([offsetCursor(null), offsetCursor("240"), offsetCursor("-1"), offsetCursor("0.5"), offsetCursor("2.9"), offsetCursor("abc"), offsetCursor("1e30"), offsetCursor("Infinity")]).toEqual([0, 240, 0, 0, 2, 0, 0, 0]);
-    const first = await tripPhotoPage(tripId, { take: 4 });
+    // Favourites first is a member's order, so the member is named.
+    const first = await tripPhotoPage(tripId, { take: 4, viewerId: userId });
     for (const cursor of ["-1", "0.5", "1e30"]) {
-      await expect(tripPhotoPage(tripId, { cursor, take: 4 })).resolves.toMatchObject({ photos: first.photos });
+      await expect(tripPhotoPage(tripId, { cursor, take: 4, viewerId: userId })).resolves.toMatchObject({ photos: first.photos });
     }
   });
 });
