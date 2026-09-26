@@ -2,7 +2,7 @@ import { db } from "@/lib/db";
 import { getViewer } from "@/lib/auth/viewer";
 import { canEditMedia } from "@/lib/auth/ownership";
 import { mediaAccessInclude, mediaBytesAllowed, mediaTripNameable, toMediaAccess } from "@/lib/photos/access";
-import { readableDescription, readableTitle } from "@/lib/photos/readable-text";
+import { readableDescription, readablePlaceGuess, readableTitle } from "@/lib/photos/readable-text";
 import { photoUrl } from "@/lib/photos/urls";
 import { uploaderLabel } from "@/components/photos/toGrid";
 import type { PlaceEstimate } from "@/components/photos/PlaceEditor";
@@ -52,7 +52,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   const { id } = await params;
   const photo = await db.photo.findUnique({
     where: { id },
-    select: { id: true, status: true, uploaderId: true, kind: true, title: true, membersTitle: true, caption: true, context: true, annotation: true, annotationMembersOnly: true, takenAt: true, tzOffsetMin: true, takenAtSource: true, lat: true, lng: true, gpsSource: true, edits: true, placeName: true, placeEstimateName: true, placeEstimateConfidence: true, placeEstimateRadiusM: true, placeEstimatePrecision: true, placeEstimateNote: true, updatedAt: true, renditions: true, originalPath: true, uploader: { select: { name: true, email: true } }, placeSetBy: { select: { name: true, email: true } }, dateSetBy: { select: { name: true, email: true } }, ...mediaAccessInclude, trip: { select: { id: true, slug: true, title: true, timezone: true, themeKey: true, visibility: true, shareToken: true } } },
+    select: { id: true, status: true, uploaderId: true, kind: true, title: true, membersTitle: true, caption: true, context: true, annotation: true, annotationMembersOnly: true, takenAt: true, tzOffsetMin: true, takenAtSource: true, lat: true, lng: true, gpsSource: true, edits: true, placeName: true, placeEstimateName: true, placeEstimateConfidence: true, placeEstimateRadiusM: true, placeEstimatePrecision: true, placeEstimateNote: true, placeEstimateMembersOnly: true, updatedAt: true, renditions: true, originalPath: true, uploader: { select: { name: true, email: true } }, placeSetBy: { select: { name: true, email: true } }, dateSetBy: { select: { name: true, email: true } }, ...mediaAccessInclude, trip: { select: { id: true, slug: true, title: true, timezone: true, themeKey: true, visibility: true, shareToken: true } } },
   });
   if (!photo || photo.status !== "READY") return Response.json({ error: "Not found" }, { status: 404 });
   const url = new URL(request.url);
@@ -72,7 +72,8 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     takenAt: photo.takenAt?.toISOString() ?? null,
     tzOffsetMin: photo.tzOffsetMin,
     takenAtSource: photo.takenAtSource,
-    timezone: photo.trip?.timezone ?? null,
+    // The trip's zone and look are the trip's, like its name.
+    timezone: tripOpen ? photo.trip!.timezone : null,
     lat: photo.lat,
     lng: photo.lng,
     gpsSource: photo.gpsSource,
@@ -82,8 +83,9 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     // panel never says the same thing twice.
     placeName: photo.placeName,
     uneditedUrl: photo.kind === "PHOTO" && photo.edits ? photoUrl(photo, "original") : null,
-    placeEstimate: photo.gpsSource === "ESTIMATE" ? { name: photo.placeEstimateName, confidence: photo.placeEstimateConfidence, radiusM: photo.placeEstimateRadiusM, note: photo.placeEstimateNote, precision: photo.placeEstimatePrecision } : null,
-    themeKey: photo.trip?.themeKey ?? null,
+    // The guess says it is a guess to everybody; what it is called and why are the family's when it came from their notes.
+    placeEstimate: photo.gpsSource === "ESTIMATE" ? { ...readablePlaceGuess(photo, member), confidence: photo.placeEstimateConfidence, radiusM: photo.placeEstimateRadiusM, precision: photo.placeEstimatePrecision } : null,
+    themeKey: tripOpen ? photo.trip!.themeKey : null,
     originalUrl: photo.kind === "PHOTO" ? photoUrl(photo, photo.edits ? "edited" : "original") : null,
     // Editing is the uploader's and an admin's; everyone else in the family gets the same panel, read-only.
     editable: canEditMedia(viewer.user, photo),

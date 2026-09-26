@@ -7,6 +7,7 @@ import { applyPlaceEstimate, parsePlaceContent, recordPlaceFailure } from "@/lib
 import { enqueue } from "../boss";
 import { QUEUES, type AnnotationBackfillJob } from "../queues";
 import { permittedNames } from "@/lib/people/gates";
+import { annotationCustomId, parseAnnotationCustomId, requestCarriesMembersOnly } from "@/lib/annotation/members-only";
 import { NOT_TRASHED } from "@/lib/photos/trash";
 import { Prisma } from "@/generated/prisma/client";
 
@@ -227,8 +228,11 @@ export async function annotationBackfill(job: AnnotationBackfillJob): Promise<vo
         const item = await loadItem(c.id);
         if (!item) { skip("missing"); continue; }
         try {
-          const params = promptFor(task) === "place" ? await buildPlaceRequest(item, gates.model) : await buildRequest(item, gates.model, await permittedNames(item.id));
-          built.push({ custom_id: c.id, params, bytes: imageBytes(params) });
+          // The place pass is sent the notes but never names.
+          const names = promptFor(task) === "place" ? [] : await permittedNames(item.id);
+          const params = promptFor(task) === "place" ? await buildPlaceRequest(item, gates.model) : await buildRequest(item, gates.model, names);
+          // What the request carries rides on its id, so the answer is judged by what was sent, not by what is true when it lands.
+          built.push({ custom_id: annotationCustomId(c.id, requestCarriesMembersOnly(item, names)), params, bytes: imageBytes(params) });
         } catch {
           skip("noRendition");
         }
@@ -338,7 +342,7 @@ export async function annotationBatchPoll(): Promise<void> {
     // Every request in the run was built after its first row was created, so that is the time to judge answers by.
     const requestedAt = b.parentId ? ((await db.annotationBatch.findUnique({ where: { id: b.parentId }, select: { createdAt: true } }))?.createdAt ?? b.createdAt) : b.createdAt;
     for await (const result of await anthropic().messages.batches.results(b.anthropicBatchId)) {
-      const photoId = result.custom_id;
+      const { photoId, sent } = parseAnnotationCustomId(result.custom_id);
       // A place run never writes annotation state: an item it could not place keeps whatever description it has.
       const fail = (reason: string, opts?: { terminal?: boolean }) => (promptFor(task) === "place" ? recordPlaceFailure(photoId, opts ?? {}) : recordFailure(photoId, reason, opts ?? {}));
       if (result.result.type !== "succeeded") {
@@ -366,7 +370,7 @@ export async function annotationBatchPoll(): Promise<void> {
           await fail("invalid_output");
           continue;
         }
-        if ((await applyPlaceEstimate(photoId, place, requestedAt)) === "stale") {
+        if ((await applyPlaceEstimate(photoId, place, { sent, requestedAt })) === "stale") {
           errored++;
           continue;
         }
@@ -379,7 +383,7 @@ export async function annotationBatchPoll(): Promise<void> {
         await fail("invalid_output");
         continue;
       }
-      await applyAnnotation(photoId, message.model, parsed, { content: message.content, usage: message.usage, stop_reason: message.stop_reason, batched: true }, requestedAt);
+      await applyAnnotation(photoId, message.model, parsed, { content: message.content, usage: message.usage, stop_reason: message.stop_reason, batched: true }, { sent, requestedAt });
       succeeded++;
     }
     console.log(`[annotation-backfill] batch ${b.anthropicBatchId} ended: ${succeeded} ok, ${errored} failed, ${canceled} cancelled`);

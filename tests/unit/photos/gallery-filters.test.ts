@@ -54,6 +54,11 @@ describe("reading a gallery filter from the address bar", () => {
     expect(filterIsActive(parseGalleryFilter({ person: "p1" }, { member: false }))).toBe(false);
     // The words stay, but are marked as a stranger's, so they are matched against what a stranger may read.
     expect(parseGalleryFilter({ q: "Ada" }, { member: false })).toMatchObject({ q: "Ada", member: false });
+    // An activity is asked about only inside its trip: elsewhere it would tell a stranger which public photographs
+    // came from an outing on a trip they may not open.
+    expect(parseGalleryFilter({ activity: "a1" }, { member: false }).activityId).toBeNull();
+    expect(parseGalleryFilter({ activity: "a1" }, { member: false, inTrip: true }).activityId).toBe("a1");
+    expect(parseGalleryFilter({ activity: "a1" }, { member: true }).activityId).toBe("a1");
   });
 
   it("throws away a kind the album does not have, and a year that could not be one", () => {

@@ -740,11 +740,12 @@ test("notes from the review screen and the item page are searchable, within what
   await page.goto("/search?q=Mock+video");
   await expect(page.getByRole("status")).toContainText("1 result");
 
-  // Anonymous: the Acadia photo is public through the collection; the YouTube video sits on a private trip.
+  // Anonymous: the Acadia photo is public through the collection, but "lobster" is only in its notes, which are the
+  // family's; the YouTube video sits on a private trip.
   const anon = await browser.newContext();
   const anonPage = await anon.newPage();
   await anonPage.goto("/search?q=lobster");
-  await expect(anonPage.getByRole("status")).toContainText("1 result");
+  await expect(anonPage.getByRole("status")).toContainText("Nothing matches");
   await expect(anonPage.getByText(/Uploaded by/)).toHaveCount(0);
   await expect(anonPage.getByLabel("Uploaded by")).toHaveCount(0);
   await anonPage.goto("/search?q=Mock+video");
@@ -783,8 +784,12 @@ test("the AI helper describes reviewed items once an admin opts in, and opted-ou
     }, { timeout: 30_000, intervals: [1000] })
     .toBe(1);
   await expect(page.getByLabel("Caption", { exact: true }).nth(1)).toHaveValue("Lobster rolls on the mail boat");
-  // The helper's title lands on the item because the member left it empty; it heads the page and its tab.
-  await expect(page.getByLabel("Title", { exact: true })).toHaveValue("Mail boat lunch");
+  // The item has notes, so the helper's title is the family's: it heads the page and its tab for a member, and is
+  // offered beside the empty title box rather than put in it, where anybody who may see the item would read it.
+  await expect(page.getByTestId("photo-title")).toHaveText("Mail boat lunch");
+  await expect(page.getByLabel("Title", { exact: true })).toHaveValue("");
+  await expect(page.getByLabel("Title", { exact: true })).toHaveAttribute("placeholder", "Mail boat lunch");
+  await expect(page.getByTestId("photo-members-title")).toContainText("Mail boat lunch");
   await expect(page).toHaveTitle(/Mail boat lunch/);
   await page.goto("/search?q=seafood");
   await expect(page.getByRole("status")).toContainText("1 result");

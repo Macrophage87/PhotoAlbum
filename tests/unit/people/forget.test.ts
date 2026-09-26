@@ -155,14 +155,14 @@ describe("forgetting somebody", () => {
     const before = new Date(Date.now() - 60_000);
     await optOutPerson(adaId, form("keep-name"));
     const answer = annotationSchema.parse({ ...annotation, estimatedYear: null, estimatedPlace: null });
-    await applyAnnotation(photoId, "m", answer, { content: [] }, before);
+    await applyAnnotation(photoId, "m", answer, { content: [] }, { requestedAt: before });
     const p = await db.photo.findUniqueOrThrow({ where: { id: photoId } });
     expect((p.annotation as StoredAnnotation).title).toBe("A family member at the lake");
     expect(p.annotationError).toBe("names_changed");
     expect(await db.mediaAnnotationRaw.count({ where: { photoId } })).toBe(0);
-    expect(await applyPlaceEstimate(photoId, { name: "Ada's cabin", precision: "exact", lat: 44, lng: -68, radiusM: 100, confidence: 0.9, evidence: "Ada's sign" }, before)).toBe("stale");
+    expect(await applyPlaceEstimate(photoId, { name: "Ada's cabin", precision: "exact", lat: 44, lng: -68, radiusM: 100, confidence: 0.9, evidence: "Ada's sign" }, { requestedAt: before })).toBe("stale");
     // Asked for after, it is stored as usual.
-    await applyAnnotation(photoId, "m", answer, { content: [] }, new Date());
+    await applyAnnotation(photoId, "m", answer, { content: [] }, { requestedAt: new Date() });
     expect(await db.mediaAnnotationRaw.count({ where: { photoId } })).toBe(1);
   });
 
@@ -171,7 +171,7 @@ describe("forgetting somebody", () => {
     await setNameInDescriptions(adaId, false);
     await db.person.update({ where: { id: adaId }, data: { faceIndexing: false } });
     const answer = annotationSchema.parse({ ...annotation, estimatedYear: null, estimatedPlace: null });
-    await applyAnnotation(photoId, "m", answer, { content: [] }, before);
+    await applyAnnotation(photoId, "m", answer, { content: [] }, { requestedAt: before });
     expect((await db.photo.findUniqueOrThrow({ where: { id: photoId } })).annotationError).toBe("names_changed");
   });
 

@@ -3,7 +3,7 @@ import { Badge } from "@/components/ui";
 import { ShareBar } from "@/components/share/ShareBar";
 import { DescriptionEditor } from "@/components/descriptions/DescriptionEditor";
 
-export function CollectionHeader({ collection, shareUrl, save, describe }: { collection: { title: string; description: string | null; themeKey: string; visibility: "PRIVATE" | "LINK" | "PUBLIC"; _count: { items: number } }; shareUrl?: string | null; /** Write the description here rather than on the settings page. Absent for anyone who may not arrange the collection. */ save?: (text: string) => Promise<void>; /** Ask the helper for one, with whatever is in the box as the note. */ describe?: (note: string) => Promise<string>; }) {
+export function CollectionHeader({ collection, shareUrl, save, describe, share }: { collection: { title: string; description: string | null; descriptionMembersOnly?: boolean; themeKey: string; visibility: "PRIVATE" | "LINK" | "PUBLIC"; _count: { items: number } }; shareUrl?: string | null; /** Write the description here rather than on the settings page. Absent for anyone who may not arrange the collection. */ save?: (text: string) => Promise<void>; /** Ask the helper for one, with whatever is in the box as the note. */ describe?: (note: string) => Promise<string>; /** Show the description to everyone, or keep it for the family. */ share?: (everyone: boolean) => Promise<void>; }) {
   const theme = getTheme(collection.themeKey);
   const Art = theme.headerArt;
   return (
@@ -32,7 +32,7 @@ export function CollectionHeader({ collection, shareUrl, save, describe }: { col
               reader when there is none to read: an empty box belongs to whoever may fill it. */}
           {(save || collection.description) && (
             <div className="mt-3">
-              <DescriptionEditor what="collection" description={collection.description} save={save} describe={describe} className="text-text/90" />
+              <DescriptionEditor what="collection" description={collection.description} save={save} describe={describe} membersOnly={collection.descriptionMembersOnly} share={share} className="text-text/90" />
             </div>
           )}
         </div>

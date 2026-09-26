@@ -3,6 +3,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { db } from "@/lib/db";
 import { thinkingParams } from "./client";
+import { placeFromMembersOnly } from "./members-only";
 
 /**
  * What the helper may guess at, and what it must leave alone. Shared word for word by the full description request
@@ -146,8 +147,9 @@ export async function recordPlaceFailure(photoId: string, opts: { terminal?: boo
  * from the camera, from a track or from a Google sidecar always wins; a track imported afterwards replaces it in
  * turn (see geotag-photos). placeEstimatedAt is stamped either way, so a declined item is not asked about again.
  */
-export async function applyPlaceEstimate(photoId: string, estimate: PlaceEstimate, requestedAt?: Date): Promise<"placed" | "declined" | "skipped" | "stale"> {
-  const current = await db.photo.findUnique({ where: { id: photoId }, select: { lat: true, gpsSource: true, namesScrubbedAt: true } });
+export async function applyPlaceEstimate(photoId: string, estimate: PlaceEstimate, opts: { sent?: boolean | null; requestedAt?: Date } = {}): Promise<"placed" | "declined" | "skipped" | "stale"> {
+  const requestedAt = opts.requestedAt;
+  const current = await db.photo.findUnique({ where: { id: photoId }, select: { lat: true, gpsSource: true, context: true, namesScrubbedAt: true } });
   if (!current) return "skipped";
   // Asked before a forgotten name was taken out of this item: its evidence may quote them, so it is asked again.
   if (requestedAt && current.namesScrubbedAt && current.namesScrubbedAt > requestedAt) return "stale";
@@ -169,6 +171,8 @@ export async function applyPlaceEstimate(photoId: string, estimate: PlaceEstimat
       placeEstimateRadiusM: place.radiusM,
       placeEstimatePrecision: place.precision === "city" ? "CITY" : place.precision === "region" ? "REGION" : "EXACT",
       placeEstimateNote: place.evidence,
+      // Its name and evidence are shown beside the pin, and may have come from the notes; see `placeFromMembersOnly`.
+      placeEstimateMembersOnly: await placeFromMembersOnly(photoId, { name: place.name, evidence: place.evidence }, current.context, opts.sent),
       placeEstimatedAt: new Date(),
     },
   });

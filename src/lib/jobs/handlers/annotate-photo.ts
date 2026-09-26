@@ -3,6 +3,7 @@ import { annotationGates, optOutReason } from "@/lib/annotation/eligibility";
 import { buildRequest, loadItem } from "@/lib/annotation/request";
 import { applyAnnotation, parseMessageContent, recordFailure } from "@/lib/annotation/apply";
 import { permittedNames } from "@/lib/people/gates";
+import { requestCarriesMembersOnly } from "@/lib/annotation/members-only";
 import type { AnnotatePhotoJob } from "../queues";
 
 /**
@@ -19,7 +20,10 @@ export async function annotatePhoto(job: AnnotatePhotoJob): Promise<void> {
   // Taken before the names are read: an answer to a request older than a forget or a consent change is not stored.
   const requestedAt = new Date();
   // Names go to the helper only for confirmed people whose indexing is on and who are not minors; pets always.
-  const request = await buildRequest(item, gates.model, await permittedNames(item.id));
+  const names = await permittedNames(item.id);
+  const request = await buildRequest(item, gates.model, names);
+  // Recorded now, from what actually goes: the answer is members-only if this request carried anything that is.
+  const sent = requestCarriesMembersOnly(item, names);
   try {
     // `messages.create` rather than `parse`: a truncated or off-schema answer must be recorded, not thrown and retried at full price.
     const response = await anthropic().messages.create(request);
@@ -38,7 +42,7 @@ export async function annotatePhoto(job: AnnotatePhotoJob): Promise<void> {
       await recordFailure(item.id, "invalid_output");
       return;
     }
-    await applyAnnotation(item.id, response.model, parsed, { content: response.content, usage: response.usage, stop_reason: response.stop_reason }, requestedAt);
+    await applyAnnotation(item.id, response.model, parsed, { content: response.content, usage: response.usage, stop_reason: response.stop_reason }, { sent, requestedAt });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[annotate] ${item.id} failed: ${message.slice(0, 200)}`);

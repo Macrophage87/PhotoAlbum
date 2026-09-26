@@ -15,7 +15,7 @@ export async function GET(request: NextRequest, { params }: RouteContext<"/api/t
   const member = viewer.kind === "user";
   const sp = request.nextUrl.searchParams;
   // The next page of a narrowed gallery is the next page of that same narrowing, read the same way the page reads it.
-  const filter = parseGalleryFilter(Object.fromEntries(sp.entries()), { member });
+  const filter = parseGalleryFilter(Object.fromEntries(sp.entries()), { member, inTrip: true });
   // The same order the page was built in, or the next page would continue a different list.
   const asked = sp.get("order");
   const order = asked === "oldest" ? "taken" : asked === "newest" ? "newest" : "favorites";

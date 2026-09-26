@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { descriptionStaysMembersOnly, readableContainerDescription, readableDescription, readableTitle, withReadableDescription } from "@/lib/photos/readable-text";
-import { mentionsAnyName } from "@/lib/annotation/members-only";
+import { readableContainerDescription, readableDescription, readablePlaceGuess, readableTitle, withReadableDescription } from "@/lib/photos/readable-text";
+import { annotationCustomId, mentionsAnyName, mentionsAnyTitle, parseAnnotationCustomId, requestCarriesMembersOnly } from "@/lib/annotation/members-only";
+import { titlesAfter } from "@/lib/annotation/apply";
 import { mediaTripNameable } from "@/lib/photos/access";
 import type { Viewer } from "@/lib/auth/viewer";
 
@@ -42,25 +43,74 @@ describe("what a viewer may read of a photograph", () => {
     expect(readableContainerDescription({ ...trip, descriptionMembersOnly: false }, false)).toBe(trip.description);
   });
 
-  it("keeps a description members-only while its words are unchanged, and hands it back to its author once rewritten", () => {
-    const before = { description: "A week at the lake with Ada.", descriptionMembersOnly: true };
-    expect(descriptionStaysMembersOnly(before, "  A week at the lake with Ada. ")).toBe(true);
-    expect(descriptionStaysMembersOnly(before, "A week at the lake.")).toBe(false);
-    expect(descriptionStaysMembersOnly({ ...before, descriptionMembersOnly: false }, before.description)).toBe(false);
+  it("names the helper's guess at a place only where it came from nothing members-only", () => {
+    const guess = { placeEstimateName: "Towson, Maryland", placeEstimateNote: "the notes say Grandma's house" };
+    expect(readablePlaceGuess({ ...guess, placeEstimateMembersOnly: true }, true)).toEqual({ name: "Towson, Maryland", note: "the notes say Grandma's house" });
+    expect(readablePlaceGuess({ ...guess, placeEstimateMembersOnly: true }, false)).toEqual({ name: null, note: null });
+    expect(readablePlaceGuess({ ...guess, placeEstimateMembersOnly: false }, false)).toEqual({ name: "Towson, Maryland", note: "the notes say Grandma's house" });
+    expect(readablePlaceGuess(guess, false)).toEqual({ name: null, note: null });
   });
 });
 
 describe("spotting a name the album knows", () => {
-  it("matches any word of a name, whole words only, ignoring case", () => {
+  it("matches the whole name, or its first word when that is a given name of three letters or more", () => {
     expect(mentionsAnyName("Ada and Ben on the porch", ["Ada Lovelace"])).toBe(true);
     expect(mentionsAnyName("Coffee with grandma jo", ["Grandma Jo"])).toBe(true);
+    expect(mentionsAnyName("Coffee with Grandma", ["Grandma Jo"])).toBe(true);
+    // "Jo" on its own is too short to tell from a word, and a surname on its own is not how anybody is written.
+    expect(mentionsAnyName("Jo and the dog", ["Grandma Jo"])).toBe(false);
+    expect(mentionsAnyName("The Lovelace house", ["Ada Lovelace"])).toBe(false);
+    expect(mentionsAnyName("Lunch with Pat O'Brien", ["Pat O'Brien"])).toBe(true);
+    // "van" begins a name without being one.
+    expect(mentionsAnyName("Loading the van", ["van Gogh"])).toBe(false);
+    expect(mentionsAnyName("A van Gogh print", ["van Gogh"])).toBe(true);
+  });
+
+  it("reads possessives, plurals and accents, and only whole words", () => {
     expect(mentionsAnyName("Ada's first swim", ["Ada"])).toBe(true);
-    // Inside another word is not a mention.
+    expect(mentionsAnyName("Ada’s first swim", ["Ada"])).toBe(true);
+    expect(mentionsAnyName("Dinner at the Smiths", ["Smith"])).toBe(true);
+    expect(mentionsAnyName("Jose on the dock", ["José"])).toBe(true);
+    expect(mentionsAnyName("José on the dock", ["Jose"])).toBe(true);
     expect(mentionsAnyName("A canada goose", ["Ada"])).toBe(false);
     expect(mentionsAnyName("Anything at all", [])).toBe(false);
-    // A name with punctuation in it is still read as its words, and nothing in it is taken as a pattern.
-    expect(mentionsAnyName("Lunch with O'Brien", ["Pat O'Brien"])).toBe(true);
+    // Nothing in a name is taken as a pattern.
     expect(mentionsAnyName("a b c", ["(.*)"])).toBe(false);
+  });
+
+  it("spots a word of a private title, but not one every title has", () => {
+    expect(mentionsAnyTitle("Waiting at Hopkins", ["Hopkins weekend"])).toBe(true);
+    expect(mentionsAnyTitle("A long weekend", ["Hopkins weekend"])).toBe(false);
+    expect(mentionsAnyTitle("Summer 2019", ["Lake House 2019"])).toBe(false);
+    // Any other word of four letters or more counts, common or not: a false alarm only keeps a sentence in the family.
+    expect(mentionsAnyTitle("At the lake", ["Lake House 2019"])).toBe(true);
+  });
+});
+
+describe("recording what a request to the helper carried", () => {
+  it("counts notes and confirmed names, and rides on a batch request's id", () => {
+    expect(requestCarriesMembersOnly({ context: "  " }, [])).toBe(false);
+    expect(requestCarriesMembersOnly({ context: "the key is under the mat" }, [])).toBe(true);
+    expect(requestCarriesMembersOnly({ context: null }, ["Ada"])).toBe(true);
+    expect(parseAnnotationCustomId(annotationCustomId("cabc123", true))).toEqual({ photoId: "cabc123", sent: true });
+    expect(parseAnnotationCustomId(annotationCustomId("cabc123", false))).toEqual({ photoId: "cabc123", sent: null });
+  });
+});
+
+describe("where the helper's title goes", () => {
+  it("fills an empty title with a public one, and keeps a members-only one aside", () => {
+    expect(titlesAfter({ title: null, membersTitle: null, previousAiTitle: null }, "Mail boat lunch", false)).toEqual({ title: "Mail boat lunch", membersTitle: null });
+    expect(titlesAfter({ title: null, membersTitle: null, previousAiTitle: null }, "Ada on the boat", true)).toEqual({ title: null, membersTitle: "Ada on the boat" });
+    // The family's own title is never touched.
+    expect(titlesAfter({ title: "Our day", membersTitle: null, previousAiTitle: null }, "Ada on the boat", true)).toEqual({ title: "Our day", membersTitle: "Ada on the boat" });
+  });
+
+  it("replaces only the helper's own last title, never one moved aside because it named somebody", () => {
+    // Described again without names: the old members-only title goes and the new one is anybody's.
+    expect(titlesAfter({ title: null, membersTitle: "Ada on the boat", previousAiTitle: "Ada on the boat" }, "Boat day", false)).toEqual({ title: "Boat day", membersTitle: null });
+    // A title of the family's that was moved aside stays, and keeps the public one from taking its place.
+    expect(titlesAfter({ title: null, membersTitle: "Nana's 80th", previousAiTitle: "Boat day" }, "Boat day", false)).toEqual({ title: null, membersTitle: "Nana's 80th" });
+    expect(titlesAfter({ title: null, membersTitle: "Nana's 80th", previousAiTitle: "Boat day" }, "Ada on the boat", true)).toEqual({ title: null, membersTitle: "Nana's 80th" });
   });
 });
 

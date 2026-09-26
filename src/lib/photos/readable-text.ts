@@ -15,6 +15,12 @@ export function readableTitle(p: Pick<TextFields, "title" | "membersTitle">, mem
   return own ?? (member ? p.membersTitle?.trim() || null : null);
 }
 
+/** What the helper's guess at the place is called, and why, for this viewer: see `placeFromMembersOnly`. */
+export function readablePlaceGuess(p: { placeEstimateName: string | null; placeEstimateNote: string | null; placeEstimateMembersOnly?: boolean }, member: boolean): { name: string | null; note: string | null } {
+  if (member || p.placeEstimateMembersOnly === false) return { name: p.placeEstimateName, note: p.placeEstimateNote };
+  return { name: null, note: null };
+}
+
 /** The lightbox's description: the helper's, else the notes (members only). */
 export function readableDescription(p: TextFields, member: boolean): string | null {
   const ai = (p.annotation as { description?: string } | null)?.description ?? null;
@@ -34,13 +40,4 @@ export function readableContainerDescription(c: { description: string | null; de
 /** The same thing with its description replaced by what this viewer may read, for handing on to a page. */
 export function withReadableDescription<T extends { description: string | null; descriptionMembersOnly: boolean }>(c: T, member: boolean): T {
   return { ...c, description: readableContainerDescription(c, member) };
-}
-
-/**
- * Whether a description written by hand is still members-only. Saving the same words again (the box the helper's
- * answer lands in is saved as it stands) keeps them members-only; anything written afresh is its author's to publish,
- * like a trip's title.
- */
-export function descriptionStaysMembersOnly(before: { description: string | null; descriptionMembersOnly: boolean }, next: string | null | undefined): boolean {
-  return before.descriptionMembersOnly && (next ?? "").trim() === (before.description ?? "").trim();
 }

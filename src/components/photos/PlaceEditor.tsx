@@ -35,7 +35,8 @@ export function PlaceProvenance({ estimate, muted }: { estimate: PlaceEstimate; 
   const detail = [sureness(estimate.confidence), withinLabel(estimate.radiusM, estimate.precision)].filter(Boolean).join(" · ");
   return (
     <span className={`block text-xs ${muted}`} data-testid="place-estimate">
-      {estimate.name && <span className="block">{estimate.name}{detail && ` · ${detail}`}</span>}
+      {/* The name is withheld from strangers where it came from the family's notes; how sure the guess is is not. */}
+      {(estimate.name || detail) && <span className="block">{[estimate.name, detail].filter(Boolean).join(" · ")}</span>}
       {estimate.note && <span className="block">{estimate.note}</span>}
     </span>
   );

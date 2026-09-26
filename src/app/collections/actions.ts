@@ -17,7 +17,7 @@ import { collectionInputFromForm } from "@/lib/collections/validation";
 import { canEditContainer, editableMediaIds, NOT_YOUR_CONTAINER } from "@/lib/auth/ownership";
 import { writeContainerDescription } from "@/lib/annotation/container";
 import type { TripFormState } from "@/app/trips/new/actions";
-import { descriptionStaysMembersOnly } from "@/lib/photos/readable-text";
+import { handWrittenMembersOnly } from "@/lib/annotation/members-only";
 import { descriptionStaysHelpers } from "@/lib/annotation/helper-text";
 
 export type CollectionFormState = TripFormState;
@@ -42,7 +42,7 @@ export async function createCollection(_prev: CollectionFormState, fd: FormData)
   if (!parsed.success) return { status: "error", fieldErrors: fieldErrors(parsed.error) };
   const v = parsed.data;
   const slug = await uniqueSlug(v.title, async (s) => Boolean(await db.collection.findUnique({ where: { slug: s }, select: { id: true } })));
-  await db.collection.create({ data: { slug, title: v.title, description: v.description, themeKey: v.themeKey, createdById: user.id } });
+  await db.collection.create({ data: { slug, title: v.title, description: v.description, descriptionMembersOnly: await handWrittenMembersOnly(null, v.description), themeKey: v.themeKey, createdById: user.id } });
   revalidatePath("/");
   redirect(`/collections/${slug}`);
 }
@@ -64,7 +64,7 @@ export async function updateCollection(slug: string, _prev: CollectionFormState,
     data: {
       title: v.title,
       description: v.description,
-      descriptionMembersOnly: descriptionStaysMembersOnly(collection, v.description),
+      descriptionMembersOnly: await handWrittenMembersOnly(collection, v.description),
       descriptionByHelper: descriptionStaysHelpers(collection, v.description),
       themeKey: v.themeKey,
       // A link is minted the first time this collection is shared that way, and dropped whenever it stops being.
@@ -223,7 +223,14 @@ const DESCRIPTION_TEXT = z.string().max(4000);
 export async function setCollectionDescription(slug: string, text: string): Promise<void> {
   const collection = await loadEditableCollection(slug);
   const description = DESCRIPTION_TEXT.parse(text).trim();
-  await db.collection.update({ where: { id: collection.id }, data: { description: description || null, descriptionMembersOnly: descriptionStaysMembersOnly(collection, description), descriptionByHelper: descriptionStaysHelpers(collection, description) } });
+  await db.collection.update({ where: { id: collection.id }, data: { description: description || null, descriptionMembersOnly: await handWrittenMembersOnly(collection, description), descriptionByHelper: descriptionStaysHelpers(collection, description) } });
+  revalidatePath(`/collections/${slug}`, "layout");
+}
+
+/** Show the collection's description to everyone who may open it, or keep it for the family; see setTripDescriptionShared. */
+export async function setCollectionDescriptionShared(slug: string, everyone: boolean): Promise<void> {
+  const collection = await loadEditableCollection(slug);
+  await db.collection.update({ where: { id: collection.id }, data: { descriptionMembersOnly: !everyone } });
   revalidatePath(`/collections/${slug}`, "layout");
 }
 

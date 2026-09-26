@@ -20,7 +20,7 @@ export default async function TripPhotosPage({ params, searchParams }: PageProps
   const sp = await searchParams;
   const { trip, editable, owns } = await loadViewableTrip(slug, `/trips/${slug}/photos`);
   // Who uploaded what is members-only, so an anonymous visitor never sees the member list nor filters by it.
-  const filter = parseGalleryFilter(sp, { member: editable });
+  const filter = parseGalleryFilter(sp, { member: editable, inTrip: true });
   // Favourites first unless this person has asked for the grid by date, either way round.
   const sort = await sortChoice(sp, SORT_COOKIES.photos, PHOTO_SORTS, "favorites");
   const [page, activities, members, people] = await Promise.all([

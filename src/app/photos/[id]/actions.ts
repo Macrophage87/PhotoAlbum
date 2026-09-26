@@ -244,7 +244,7 @@ export async function clearPhotoPlace(id: string): Promise<PlaceResult> {
   if (!(await editorOrNull(id))) return { ok: false, message: NOT_YOURS };
   const photo = await db.photo.findUnique({ where: { id }, select: { tripId: true } });
   if (!photo) return { ok: false, message: "Photo not found" };
-  await db.photo.update({ where: { id }, data: { lat: null, lng: null, altitude: null, gpsSource: null, placeSetById: null, placeName: null, placeEstimateName: null, placeEstimateConfidence: null, placeEstimateRadiusM: null, placeEstimatePrecision: null, placeEstimateNote: null } });
+  await db.photo.update({ where: { id }, data: { lat: null, lng: null, altitude: null, gpsSource: null, placeSetById: null, placeName: null, placeEstimateName: null, placeEstimateConfidence: null, placeEstimateRadiusM: null, placeEstimatePrecision: null, placeEstimateNote: null, placeEstimateMembersOnly: false } });
   if (photo.tripId) await enqueue(QUEUES.geotagPhotos, { tripId: photo.tripId }, { singletonKey: `geotag:${photo.tripId}`, singletonSeconds: 10, singletonNextSlot: true });
   revalidatePath(`/photos/${id}`);
   revalidatePath("/trips", "layout");

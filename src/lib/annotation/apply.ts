@@ -12,22 +12,41 @@ export type ApplyResult = { ok: true } | { ok: false; reason: "refusal" | "inval
 export type Usage = { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null };
 
 /**
+ * Where the helper's title goes. A title of the family's own is never touched. The helper's goes on the item where
+ * it has none, unless it is members-only, when it is kept in `membersTitle` for members to read instead. What is in
+ * `membersTitle` already is replaced only when it was the helper's last title: a title moved there because it named
+ * somebody (see the members_only_text migration) is the family's.
+ */
+export function titlesAfter(current: { title: string | null; membersTitle: string | null; previousAiTitle: string | null }, aiTitle: string, membersOnly: boolean): { title: string | null; membersTitle: string | null } {
+  const held = current.membersTitle?.trim() || null;
+  const helpers = !held || held === current.previousAiTitle?.trim();
+  const membersTitle = helpers ? (membersOnly && aiTitle ? aiTitle : null) : held;
+  const title = !membersOnly && !current.title?.trim() && !membersTitle && aiTitle ? aiTitle : current.title;
+  return { title, membersTitle };
+}
+
+/**
+ * `sent` is whether the request that produced this answer carried anything members-only, as recorded when it was
+ * built (see `requestCarriesMembersOnly`); null when that was not recorded.
+ *
  * `requestedAt` is when the request was built (for a batch, when its run was started). An answer that comes back
  * after a forgotten person's name was scrubbed from the item, or after anybody on it was renamed, untagged or
  * changed their mind about being named, is not stored: it may name them again. Nothing is kept of it, not even the
  * raw row, and the item stays due to be described again with the names as they are now.
  */
-export async function applyAnnotation(photoId: string, model: string, parsed: Annotation, raw: { usage?: Usage; batched?: boolean } & Record<string, unknown>, requestedAt?: Date): Promise<void> {
+export async function applyAnnotation(photoId: string, model: string, parsed: Annotation, raw: { usage?: Usage; batched?: boolean } & Record<string, unknown>, opts: { sent?: boolean | null; requestedAt?: Date } = {}): Promise<void> {
+  const requestedAt = opts.requestedAt;
   if (requestedAt && (await namesChangedSince([photoId], requestedAt))) {
     await recordFailure(photoId, "names_changed", { terminal: false });
     return;
   }
-  const current = await db.photo.findUnique({ where: { id: photoId }, select: { takenAt: true, takenAtSource: true, estimatedDateSource: true, annotationSource: true, title: true, kind: true, lat: true, placeEstimatedAt: true, context: true } });
+  const current = await db.photo.findUnique({ where: { id: photoId }, select: { takenAt: true, takenAtSource: true, estimatedDateSource: true, annotationSource: true, title: true, membersTitle: true, annotation: true, kind: true, lat: true, placeEstimatedAt: true, context: true } });
   if (!current) return;
   const stored = toStored(parsed);
   // Written from names or notes, it is the family's to read: kept off the item's own title and out of public view.
-  const membersOnly = await writtenFromMembersOnly(photoId, stored, current.context);
+  const membersOnly = await writtenFromMembersOnly(photoId, stored, current.context, opts.sent);
   const aiTitle = current.kind !== "EXTERNAL_VIDEO" ? stored.title.trim() : "";
+  const titles = titlesAfter({ title: current.title, membersTitle: current.membersTitle, previousAiTitle: (current.annotation as { title?: string } | null)?.title ?? null }, aiTitle, membersOnly);
   const est = parsed.estimatedYear;
   const noReliableDate = isWeakDate(current.takenAtSource, current.takenAt);
   const keepMemberEstimate = current.estimatedDateSource === "MEMBER";
@@ -42,10 +61,9 @@ export async function applyAnnotation(photoId: string, model: string, parsed: An
         annotationSource: current.annotationSource === "EDITED" ? "EDITED" : "MACHINE",
         annotationError: null,
         annotationMembersOnly: membersOnly,
-        // A title the family did not write themselves: only ever filled in where there is none (embedded videos keep
-        // YouTube's). One that names somebody is shown to members in its place instead, and never becomes the title.
-        membersTitle: membersOnly && aiTitle ? aiTitle : null,
-        ...(!membersOnly && !current.title?.trim() && aiTitle ? { title: aiTitle } : {}),
+        // Embedded videos keep YouTube's title; see `titlesAfter` for everything else.
+        title: titles.title,
+        membersTitle: titles.membersTitle,
         annotationInputTokens: raw.usage?.input_tokens ?? null,
         annotationCacheReadTokens: raw.usage?.cache_read_input_tokens ?? null,
         annotationCacheWriteTokens: raw.usage?.cache_creation_input_tokens ?? null,
@@ -60,7 +78,8 @@ export async function applyAnnotation(photoId: string, model: string, parsed: An
   ]);
   // The place guess is only ever recorded for an item that was actually asked, so clearing a position later still
   // leaves it eligible for the backfill.
-  if (needsPlaceEstimate(current)) await applyPlaceEstimate(photoId, parsed.estimatedPlace);
+  // Asked in the same request, so it was written from the same things.
+  if (needsPlaceEstimate(current)) await applyPlaceEstimate(photoId, parsed.estimatedPlace, { sent: membersOnly || opts.sent });
   // The description changed, so the semantic index for this item is stale.
   await enqueueEmbedding(photoId, true);
 }

@@ -6,6 +6,7 @@ import { NOT_TRASHED } from "@/lib/photos/trash";
 import { NO_FILTER, type GalleryFilter } from "./filters";
 import { boundingBox, MILE_IN_METRES, NO_PICKER_FILTER, type PickerFilter } from "./picker-filter";
 import { idsWithPerson } from "@/lib/people/in-photos";
+import { publicMediaSql } from "@/lib/search/query";
 
 /** Gallery pages load this many items at a time; the client asks for the next page by cursor. */
 export const GALLERY_PAGE = 240;
@@ -20,7 +21,7 @@ export type PhotoOrder = "favorites" | "taken" | "newest";
  * Where a word search is asked: one trip, the photographs on no trip (`tripId: null`), one collection, or — with
  * none of those — the whole album, which for anybody but a member is only what sits somewhere public.
  */
-export type MatchScope = { tripId?: string | null; collectionId?: string; publicOnly?: boolean };
+export type MatchScope = { tripId?: string | null; collectionId?: string; publicOnly?: boolean; /** Only items with a position: a map's words are asked of what it can show. */ placed?: boolean };
 
 /** More matches than this for one set of words is a word that means nothing; the best-ranked are kept. */
 export const MATCH_LIMIT = 5000;
@@ -37,20 +38,25 @@ export const MATCH_LIMIT = 5000;
  */
 export async function idsMatching(q: string, opts: { member: boolean; scope?: MatchScope; limit?: number }): Promise<string[]> {
   const scope = opts.scope ?? {};
-  const like = `%${q}%`;
+  const limit = opts.limit ?? MATCH_LIMIT;
+  // The words are looked for as typed: a % or an _ in them is a character, not a pattern.
+  const like = `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
   // Members match what members read; anybody else only what anybody may, so a name or a note never picks out a photograph.
   const column = opts.member ? Prisma.sql`p."searchVectorMembers"` : Prisma.sql`p."searchVector"`;
   const titled = opts.member ? Prisma.sql`(p.title ILIKE ${like} OR p."membersTitle" ILIKE ${like})` : Prisma.sql`p.title ILIKE ${like}`;
   const within: Prisma.Sql[] = [];
   if (scope.tripId !== undefined) within.push(scope.tripId === null ? Prisma.sql`p."tripId" IS NULL` : Prisma.sql`p."tripId" = ${scope.tripId}`);
   if (scope.collectionId) within.push(Prisma.sql`EXISTS (SELECT 1 FROM "CollectionItem" ci WHERE ci."photoId" = p.id AND ci."collectionId" = ${scope.collectionId})`);
-  if (scope.publicOnly) within.push(Prisma.sql`(EXISTS (SELECT 1 FROM "Trip" t WHERE t.id = p."tripId" AND t.visibility = 'PUBLIC') OR EXISTS (SELECT 1 FROM "CollectionItem" ci JOIN "Collection" c ON c.id = ci."collectionId" WHERE ci."photoId" = p.id AND c.visibility = 'PUBLIC'))`);
+  if (scope.publicOnly) within.push(publicMediaSql());
+  if (scope.placed) within.push(Prisma.sql`p.lat IS NOT NULL AND p.lng IS NOT NULL`);
   const rows = await db.$queryRaw<{ id: string }[]>`
     SELECT p.id FROM "Photo" p, LATERAL (SELECT websearch_to_tsquery('english', ${q}) || websearch_to_tsquery('simple', ${q}) AS query) qq
     WHERE p."trashedAt" IS NULL AND ${within.length ? Prisma.join(within, " AND ") : Prisma.sql`TRUE`}
       AND (${column} @@ qq.query OR p."originalName" ILIKE ${like} OR p.caption ILIKE ${like} OR ${titled})
     ORDER BY ts_rank_cd(${column}, qq.query) DESC, p.id
-    LIMIT ${opts.limit ?? MATCH_LIMIT}`;
+    LIMIT ${limit}`;
+  // Kept quiet from the viewer, who sees the best-ranked matches; said here so a word that means nothing is noticed.
+  if (rows.length === limit) console.warn(`[search] "${q.slice(0, 40)}" matched more than ${limit} items in its scope; the best-ranked ${limit} are used`);
   return rows.map((r) => r.id);
 }
 

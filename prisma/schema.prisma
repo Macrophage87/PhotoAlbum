@@ -426,6 +426,9 @@ model Photo {
   /// private sits in (never the building or the street), REGION for a wider area.
   placeEstimatePrecision  PlacePrecision?
   placeEstimateNote       String?
+  /// The guess's name and evidence were written from something members-only, or name somebody: members only.
+  /// The position itself is the item's, shown to whoever may see it.
+  placeEstimateMembersOnly Boolean @default(false)
   placeEstimatedAt        DateTime?
   /// For undated items: the helper's estimated year range, kept until a member sets a real date.
   estimatedDate           DateTime?
