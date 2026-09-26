@@ -10,12 +10,12 @@ process.env.PHOTO_STORAGE_ROOT = photoRoot;
 process.env.MAX_UPLOAD_BYTES = "1000";
 const enqueued = vi.hoisted(() => [] as { queue: string; data: unknown }[]);
 vi.mock("@/lib/jobs/boss", () => ({ enqueue: async (queue: string, data: unknown) => { enqueued.push({ queue, data }); } }));
-const google = vi.hoisted(() => ({ token: vi.fn(), download: vi.fn(), deleted: [] as string[], noted: [] as unknown[] }));
+const google = vi.hoisted(() => ({ token: vi.fn(), download: vi.fn(), list: vi.fn(), deleted: [] as string[], forgotten: 0 }));
 vi.mock("@/lib/google/account", () => ({
   accessTokenFor: google.token,
-  noteAuthFailure: async (_u: string, err: unknown) => { const hit = (err as { needsReconnect?: boolean })?.needsReconnect === true; if (hit) google.noted.push(err); return hit; },
+  forgetAccessToken: () => { google.forgotten++; },
 }));
-vi.mock("@/lib/google/picker", async (orig) => ({ ...(await orig()) as object, openDownload: google.download, deletePickerSession: async (_t: string, id: string) => { google.deleted.push(id); } }));
+vi.mock("@/lib/google/picker", async (orig) => ({ ...(await orig()) as object, openDownload: google.download, listPickedItems: google.list, deletePickerSession: async (_t: string, id: string) => { google.deleted.push(id); } }));
 
 import { googlePickerImport } from "@/lib/jobs/handlers/google-picker-import";
 import { GoogleAuthError } from "@/lib/google/oauth";
@@ -28,9 +28,10 @@ describe("the Picker download job", () => {
   let ids: string[];
   beforeEach(async () => {
     await resetTestDb();
-    enqueued.length = 0; google.deleted.length = 0; google.noted.length = 0;
+    enqueued.length = 0; google.deleted.length = 0; google.forgotten = 0;
     google.token.mockReset().mockResolvedValue("tok");
     google.download.mockReset();
+    google.list.mockReset().mockResolvedValue([]);
     userId = (await db.user.create({ data: { email: "pk@example.com", role: "MEMBER" } })).id;
     ids = [];
     for (const n of [1, 2, 3]) {
@@ -64,18 +65,49 @@ describe("the Picker download job", () => {
     expect(rows[2]).toMatchObject({ status: "PENDING", sizeBytes: 10 });
     expect(enqueued.map((e) => e.queue)).toEqual(["transcode-video"]);
   });
-  it("stops at a 401 mid-way, fails the rest, and notes the account needs reconnecting", async () => {
+  it("asks for the token afresh for each item, and after a 401 refreshes it and tries once more", async () => {
+    let n = 0;
+    google.token.mockImplementation(async () => `tok-${++n}`);
+    google.download.mockImplementation(async (token: string, item: { id: string }) => {
+      // The token the job started with runs out while the second item is on its way.
+      if (item.id === "gp-2" && token === "tok-3") throw new GoogleAuthError("refused (401)", true);
+      return body(10);
+    });
+    await googlePickerImport(job());
+    expect((await statuses()).map((r) => r.status)).toEqual(["PENDING", "PENDING", "PENDING"]);
+    expect(google.forgotten).toBe(1);
+    expect(google.download).toHaveBeenCalledTimes(4);
+  });
+  it("fails only the item when Google keeps refusing its download, and never calls the connection lost", async () => {
     google.download.mockImplementation(async (_t: string, item: { id: string }) => {
       if (item.id === "gp-2") throw new GoogleAuthError("refused (401)", true);
       return body(10);
     });
     await googlePickerImport(job());
     const rows = await statuses();
+    expect(rows.map((r) => r.status)).toEqual(["PENDING", "FAILED", "PENDING"]);
+    expect(rows[1].error).toBe("Google Photos refused the download.");
+    expect(enqueued).toHaveLength(2);
+  });
+  it("stops and fails the rest when refreshing the token is turned down", async () => {
+    let n = 0;
+    google.token.mockImplementation(async () => { if (++n > 2) throw new GoogleAuthError("invalid_grant", true); return "tok"; });
+    google.download.mockImplementation(async () => body(10));
+    await googlePickerImport(job());
+    const rows = await statuses();
     expect(rows.map((r) => r.status)).toEqual(["PENDING", "FAILED", "FAILED"]);
-    expect(rows[1].error).toBe("Google Photos needs to be connected again.");
     expect(rows[2].error).toBe("Google Photos needs to be connected again.");
-    expect(google.noted).toHaveLength(1);
-    expect(google.download).toHaveBeenCalledTimes(2);
+    expect(google.download).toHaveBeenCalledTimes(1);
+  });
+  it("gets fresh addresses for the items when Google refuses an old one (403), and carries on", async () => {
+    google.download.mockImplementation(async (_t: string, item: { baseUrl: string }) => {
+      if (!item.baseUrl.includes("fresh")) throw new GoogleAuthError("refused (403)", false);
+      return body(10);
+    });
+    google.list.mockResolvedValue([1, 2, 3].map((n) => ({ id: `gp-${n}`, type: n === 3 ? "VIDEO" : "PHOTO", baseUrl: `https://lh3.test/fresh-${n}`, mimeType: "", filename: "", createTime: null, width: null, height: null })));
+    await googlePickerImport(job());
+    expect((await statuses()).map((r) => r.status)).toEqual(["PENDING", "PENDING", "PENDING"]);
+    expect(google.list).toHaveBeenCalledTimes(1);
   });
   it("fails every row when no access token can be had", async () => {
     google.token.mockRejectedValue(new GoogleAuthError("gone", true));
