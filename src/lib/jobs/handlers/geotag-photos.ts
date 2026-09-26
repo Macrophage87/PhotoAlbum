@@ -65,8 +65,12 @@ export async function geotagPhotos(job: GeotagPhotosJob): Promise<{ updated: num
       if (!pos) continue;
       const same = photo.gpsSource === "TRACK" && photo.lat === pos.lat && photo.lng === pos.lng && (photo.altitude ?? null) === (pos.ele ?? null);
       if (same) break;
-      await db.photo.update({ where: { id: photo.id }, data: { lat: pos.lat, lng: pos.lng, altitude: pos.ele ?? null, gpsSource: "TRACK" } });
-      updated++;
+      // Written only if it is still in the state it was chosen in: a member may have pinned it while this ran.
+      const r = await db.photo.updateMany({
+        where: { id: photo.id, ...(photo.gpsSource === null ? { lat: null, gpsSource: null } : { gpsSource: photo.gpsSource }) },
+        data: { lat: pos.lat, lng: pos.lng, altitude: pos.ele ?? null, gpsSource: "TRACK" },
+      });
+      updated += r.count;
       break;
     }
   }
