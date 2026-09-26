@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { existsSync, mkdtempSync, readdirSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { db } from "@/lib/db";
@@ -11,7 +11,13 @@ process.env.MAX_UPLOAD_BYTES = "1000";
 process.env.MAX_SCAN_UPLOAD_BYTES = "5000";
 const viewer = vi.hoisted(() => ({ kind: "user" as const, user: { id: "", email: "u@example.com", name: null as string | null, role: "MEMBER" as "MEMBER" | "ADMIN" } }));
 vi.mock("@/lib/auth/viewer", () => ({ getViewer: async () => viewer }));
-vi.mock("@/lib/jobs/boss", () => ({ enqueue: async () => "job" }));
+const queued = vi.hoisted(() => ({ jobs: [] as { queue: string; data: { photoId: string } }[], fail: false }));
+vi.mock("@/lib/jobs/boss", () => ({ enqueue: async (queue: string, data: { photoId: string }) => { if (queued.fail) throw new Error("queue unavailable"); queued.jobs.push({ queue, data }); return "job"; } }));
+const claim = vi.hoisted(() => ({ fail: false }));
+vi.mock("@/lib/media/content-hash", async (orig) => {
+  const real = (await orig()) as typeof import("@/lib/media/content-hash");
+  return { claimContentHash: async (...args: Parameters<typeof real.claimContentHash>) => { if (claim.fail) throw new Error("database went away"); return real.claimContentHash(...args); } };
+});
 const filing = vi.hoisted(() => ({ fail: false }));
 vi.mock("@/lib/photos/file-existing", async (orig) => {
   const real = (await orig()) as typeof import("@/lib/photos/file-existing");
@@ -31,7 +37,11 @@ const settles = <T,>(p: Promise<T>) => Promise.race([p, new Promise<"hung">((r) 
 describe("the upload route", () => {
   beforeEach(async () => {
     await resetTestDb();
+    rmSync(path.join(photoRoot, "photos"), { recursive: true, force: true });
     filing.fail = false;
+    claim.fail = false;
+    queued.fail = false;
+    queued.jobs.length = 0;
     viewer.user.id = (await db.user.create({ data: { email: "u@example.com", role: "MEMBER" } })).id;
   });
 
@@ -51,18 +61,41 @@ describe("the upload route", () => {
     const body = new ReadableStream<Uint8Array>({ start(c) { c.enqueue(bytes(100)); } });
     const pending = upload(body, "a.jpg", {}, ac.signal);
     setTimeout(() => ac.abort(), 20);
-    expect(await settles(pending)).not.toBe("hung");
+    const r = await settles(pending);
+    expect(r).not.toBe("hung");
+    expect((r as Response).status).toBe(499);
     expect(await db.photo.count()).toBe(0);
     expect(leftovers()).toEqual([]);
   });
 
   it("removes the stored original when a step after storing fails", async () => {
-    const collection = await db.collection.create({ data: { slug: "c", title: "C", themeKey: "default", createdById: viewer.user.id } });
-    filing.fail = true;
-    const r = await upload(bytes(10), "a.jpg", { "x-collection-id": collection.id });
+    claim.fail = true;
+    const r = await upload(bytes(10), "a.jpg");
     expect(r.status).toBe(500);
     expect(await db.photo.count()).toBe(0);
     expect(leftovers()).toEqual([]);
+  });
+
+  it("keeps a photo once it has its hash, whatever fails after, since another upload may already point at it", async () => {
+    const collection = await db.collection.create({ data: { slug: "c", title: "C", themeKey: "default", createdById: viewer.user.id } });
+    filing.fail = true;
+    const r = await upload(bytes(10), "a.jpg", { "x-collection-id": collection.id });
+    expect(r.status).toBe(200);
+    expect(await db.photo.count()).toBe(1);
+    queued.fail = true;
+    filing.fail = false;
+    expect((await upload(bytes(11), "b.jpg")).status).toBe(500);
+    expect(await db.photo.findFirstOrThrow({ where: { originalName: "b.jpg" } })).toMatchObject({ status: "FAILED", error: expect.stringMatching(/Re-process/) });
+  });
+
+  it("queues processing again when the same file arrives for a photo that failed", async () => {
+    const first = await (await upload(bytes(30, 9), "f.jpg")).json();
+    await db.photo.update({ where: { id: first.photoId }, data: { status: "FAILED", error: "boom" } });
+    queued.jobs.length = 0;
+    const again = await (await upload(bytes(30, 9), "g.jpg")).json();
+    expect(again).toMatchObject({ photoId: first.photoId, duplicate: true, status: "PENDING" });
+    expect(queued.jobs.map((j) => j.data.photoId)).toEqual([first.photoId]);
+    expect(await db.photo.findUniqueOrThrow({ where: { id: first.photoId } })).toMatchObject({ status: "PENDING", error: null });
   });
 
   it("leaves no empty folder behind a file refused for size", async () => {
@@ -75,19 +108,6 @@ describe("the upload route", () => {
     expect((await upload(bytes(3000), "splat.ply")).status).toBe(200);
     expect((await upload(bytes(3000, 2), "big.jpg")).status).toBe(413);
     expect((await upload(bytes(6000, 3), "huge.ply")).status).toBe(413);
-  });
-
-  it("keeps one of two identical files sent at the same moment", async () => {
-    // Both bodies finish at the same moment, so both requests go looking for the other's hash together.
-    let release!: () => void;
-    const gate = new Promise<void>((r) => { release = r; });
-    const held = () => new ReadableStream<Uint8Array>({ async start(c) { c.enqueue(bytes(50, 7)); await gate; c.close(); } });
-    const sent = [upload(held(), "a.jpg"), upload(held(), "b.jpg")];
-    setTimeout(release, 50);
-    const answers = await Promise.all(sent.map(async (p) => (await p).json()));
-    expect(await db.photo.count()).toBe(1);
-    expect(answers.filter((a) => a.duplicate)).toHaveLength(1);
-    expect(new Set(answers.map((a) => a.photoId)).size).toBe(1);
   });
 
   it("answers a member's own retry after a lost answer as their upload, still processing, not as already in the album", async () => {

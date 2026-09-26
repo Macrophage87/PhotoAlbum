@@ -8,10 +8,13 @@ import { enqueue } from "@/lib/jobs/boss";
 import { QUEUES } from "@/lib/jobs/queues";
 import { fileExisting } from "@/lib/photos/file-existing";
 import { uploaderLabel } from "@/components/photos/toGrid";
-import { ALLOWED_MIMES as ALLOWED, EXT_BY_MIME, EXT_MIME, kindForMime, scanFormatOf, VIDEO_MIMES as VIDEO } from "@/lib/media/mime";
+import { ALLOWED_MIMES as ALLOWED, EXT_BY_MIME, kindForMime, scanFormatOf, VIDEO_MIMES as VIDEO } from "@/lib/media/mime";
 import { claimContentHash } from "@/lib/media/content-hash";
+import { mimeAsSent } from "@/lib/media/picker";
 import { maxUploadBytes } from "@/lib/media/limits";
 import { uploadByteLimits } from "@/lib/media/upload-limits";
+import { processAgainIfStuck } from "@/lib/media/requeue";
+import { isResend } from "@/lib/media/resend";
 
 export const dynamic = "force-dynamic";
 
@@ -46,9 +49,7 @@ export async function POST(request: Request) {
   const { fileName, lastModified } = parsed.data;
   let tripId = parsed.data.tripId;
 
-  const ext = fileName.toLowerCase().split(".").pop() ?? "";
-  let mime = parsed.data.contentType?.split(";")[0].trim() ?? "";
-  if (!ALLOWED.has(mime)) mime = EXT_MIME[ext] ?? "";
+  const mime = mimeAsSent({ name: fileName, type: parsed.data.contentType ?? "" }) ?? "";
   if (!ALLOWED.has(mime)) return Response.json({ error: `Unsupported file type: ${fileName}` }, { status: 415 });
 
   if (tripId) {
@@ -104,7 +105,7 @@ export async function POST(request: Request) {
     if (match) {
       const already = await db.photo.findUniqueOrThrow({
         where: { id: match.id },
-        select: { id: true, status: true, originalName: true, uploaderId: true, createdAt: true, trip: { select: { slug: true, title: true } }, uploader: { select: { name: true, email: true } } },
+        select: { id: true, kind: true, tripId: true, status: true, originalPath: true, updatedAt: true, originalName: true, uploaderId: true, createdAt: true, trip: { select: { slug: true, title: true } }, uploader: { select: { name: true, email: true } } },
       });
       // Nothing is kept: neither the bytes just written nor the row that was waiting for them. The member is told
       // which one the album already has, so "it did not appear" is never the impression left behind. Sent to a
@@ -112,14 +113,16 @@ export async function POST(request: Request) {
       await storage().deletePrefix(storageKey).catch(() => undefined);
       await db.photo.delete({ where: { id: photo.id } }).catch(() => {});
       const filed = await fileExisting(viewer.user, already.id, { tripId: tripId ?? null, activityId: activityId ?? null, collectionId: collectionId ?? null });
+      // The one the album has never became a picture (or its job was lost): sending it again is the moment to try.
+      const status = (await processAgainIfStuck(already)) ? "PENDING" : already.status;
       return Response.json({
         photoId: already.id,
         // A retry of this very file whose earlier answer was lost (the phone locked as it came back) finds the row that
         // earlier attempt made. That is their upload arriving, not something the album already had. The same file
         // chosen again is a first attempt, and is told the album has it.
-        duplicate: !((parsed.data.attempt ?? 1) > 1 && isResend(already, viewer.user.id, fileName)),
+        duplicate: !isResend(already, parsed.data.attempt ?? 1, viewer.user.id, fileName),
         // How far along it is, so one still being processed is watched until it is done rather than called ready.
-        status: already.status,
+        status,
         originalName: already.originalName,
         trip: already.trip ?? null,
         filed,
@@ -127,7 +130,6 @@ export async function POST(request: Request) {
         owner: filed.notYours ? uploaderLabel(already.uploader.name, already.uploader.email) : null,
       });
     }
-    if (collectionId) await fileExisting(viewer.user, photo.id, { collectionId });
   } catch (err) {
     // The prefix is this row's own folder, so whatever reached it — the whole original, when a later step failed —
     // goes with the row.
@@ -139,6 +141,11 @@ export async function POST(request: Request) {
     return Response.json({ error: "Upload failed" }, { status: 500 });
   }
 
+  // From here the row has its hash, so another upload of the same bytes may already have been answered with it: it
+  // is kept whatever goes wrong now, and says what did.
+  if (collectionId) {
+    await fileExisting(viewer.user, photo.id, { collectionId }).catch((err) => console.error("[upload] could not add to the collection", err));
+  }
   try {
     // A scan goes through the photo handler too, which dates it and files it on a trip — it just has no pixels to
     // render, so nothing is made from it.
@@ -150,11 +157,4 @@ export async function POST(request: Request) {
     return Response.json({ error: "Upload stored but processing could not be queued" }, { status: 500 });
   }
   return Response.json({ photoId: photo.id });
-}
-
-/** How recently a row must have been made by the same member, from a file of the same name, to be this upload's first go. */
-const RESEND_WINDOW_MS = 30 * 60_000;
-
-function isResend(already: { uploaderId: string; originalName: string; createdAt: Date }, userId: string, fileName: string, now = Date.now()): boolean {
-  return already.uploaderId === userId && already.originalName === fileName && now - already.createdAt.getTime() < RESEND_WINDOW_MS;
 }

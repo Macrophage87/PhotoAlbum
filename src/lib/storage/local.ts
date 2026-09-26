@@ -36,9 +36,9 @@ export class LocalStorage implements StorageProvider {
       await pipeline(body, counter, createWriteStream(file));
     } catch (err) {
       await rm(file, { force: true });
-      // The folder made for it goes too when nothing else is in it (rmdir refuses a folder that is not empty), so a
-      // refused upload does not leave an empty photos/<id>/ behind. Never the root itself.
-      if (path.resolve(dir) !== path.resolve(this.root)) await rmdir(dir).catch(() => undefined);
+      // An item's own folder (photos/<id>/) goes too when nothing else is in it (rmdir refuses a folder that is not
+      // empty), so a refused upload does not leave it behind. Shared folders such as imports/ stay.
+      if (/^photos\/[^/]+\/[^/]+$/.test(key)) await rmdir(dir).catch(() => undefined);
       throw err;
     }
     return { bytes };

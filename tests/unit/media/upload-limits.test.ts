@@ -25,3 +25,13 @@ describe("what a tile shows once its file has arrived", () => {
     expect(statusAfterUpload({ duplicate: true, status: "FAILED" })).toBe("processing");
   });
 });
+
+describe("the type a file is filed under when sent", () => {
+  it("is the browser's when the album takes it, else the one its name says, as the upload route decides", async () => {
+    const { mimeAsSent } = await import("@/lib/media/picker");
+    expect(mimeAsSent({ name: "splat.ply", type: "application/octet-stream" })).toBe("application/x-ply");
+    expect(mimeAsSent({ name: "clip.mov", type: "" })).toBe("video/quicktime");
+    expect(mimeAsSent({ name: "odd.jpg", type: "image/png" })).toBe("image/png");
+    expect(mimeAsSent({ name: "notes.pdf", type: "application/pdf" })).toBeNull();
+  });
+});
