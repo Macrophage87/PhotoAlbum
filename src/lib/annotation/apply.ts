@@ -4,7 +4,7 @@ import { enqueueEmbedding } from "@/lib/jobs/handlers/embed-photo";
 import { enqueue } from "@/lib/jobs/boss";
 import { QUEUES } from "@/lib/jobs/queues";
 import { applyPlaceEstimate, needsPlaceEstimate } from "./place";
-import { isWeakDate } from "@/lib/photos/date-from-neighbours";
+import { isWeakDate, WEAK_DATE_SOURCES } from "@/lib/photos/date-from-neighbours";
 import { judgeHelperText, knownNames, mentionsAnyName, pastHelperTitles, titleIsHelpers } from "./members-only";
 import { forgetState, unchangedSince } from "@/lib/people/names-changed";
 import { withoutOptedOutNames } from "@/lib/people/unpermitted";
@@ -57,6 +57,17 @@ export function keepMemberText(fresh: StoredAnnotation, current: unknown, edited
   for (const k of MEMBER_FIELDS) if (k in current) kept[k] = (current as Record<string, unknown>)[k];
   return kept as StoredAnnotation;
 }
+
+/**
+ * What `applyAnnotation` reads before it guesses a date, as a filter the write carries: no date the album trusts
+ * (`isWeakDate`), and no estimate a member settled (estimatedDateSource MEMBER; null counts as open).
+ */
+const OPEN_TO_A_DATE_GUESS = {
+  AND: [
+    { OR: [{ takenAt: null }, { takenAtSource: null }, { takenAtSource: { in: WEAK_DATE_SOURCES } }] },
+    { OR: [{ estimatedDateSource: null }, { estimatedDateSource: { not: "MEMBER" as const } }] },
+  ],
+};
 
 /**
  * `sent` is whether the request that produced this answer carried anything members-only, as recorded when it was
@@ -133,12 +144,18 @@ export async function applyAnnotation(photoId: string, model: string, parsed: An
         annotationCacheWriteTokens: raw.usage?.cache_creation_input_tokens ?? null,
         annotationOutputTokens: raw.usage?.output_tokens ?? null,
         annotationBatched: raw.batched ?? false,
-        ...(est && noReliableDate && !keepMemberEstimate
-          ? { estimatedDate: new Date(Date.UTC(Math.round((est.from + est.to) / 2), 6, 1)), estimatedDateConfidence: est.confidence, estimatedDateSource: "MODEL", estimatedDateNote: `${est.from}–${est.to}: ${tombstone.scrub(est.evidence, scope)}` }
-          : {}),
       },
     });
     if (written.count === 0) throw stale;
+    // The date guess is written on its own, carrying the state it was judged by: a member who dated the item or
+    // settled its estimate after the read is never overwritten. Matching nothing skips only the date; the rest of
+    // the answer stands.
+    if (est && noReliableDate && !keepMemberEstimate) {
+      await tx.photo.updateMany({
+        where: { AND: [{ id: photoId }, OPEN_TO_A_DATE_GUESS] },
+        data: { estimatedDate: new Date(Date.UTC(Math.round((est.from + est.to) / 2), 6, 1)), estimatedDateConfidence: est.confidence, estimatedDateSource: "MODEL", estimatedDateNote: `${est.from}–${est.to}: ${tombstone.scrub(est.evidence, scope)}` },
+      });
+    }
     await tx.mediaAnnotationRaw.create({ data: { photoId, model, response: raw as object } });
     return true;
   }).catch((err: unknown) => {
