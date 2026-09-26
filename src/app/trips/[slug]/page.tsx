@@ -27,7 +27,7 @@ export default async function TripTimelinePage({ params, searchParams }: PagePro
   // A trip reads from its first morning unless this person has asked for the latest day first.
   const order = await timelineOrderFor(sp, "oldest");
   const [{ groups, matched, total, active }, activities, members, people] = await Promise.all([
-    tripTimeline(trip.id, trip.timezone, filter),
+    tripTimeline(trip.id, trip.timezone, filter, editable),
     db.activity.findMany({ where: { tripId: trip.id }, orderBy: { startTime: "asc" }, select: { id: true, title: true } }),
     editable ? db.user.findMany({ where: { photos: { some: { tripId: trip.id } } }, orderBy: { name: "asc" }, select: { id: true, name: true, email: true } }) : Promise.resolve([]),
     editable ? peopleInPhotos({ tripId: trip.id }) : Promise.resolve([]),

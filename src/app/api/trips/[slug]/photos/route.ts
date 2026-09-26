@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { getViewer } from "@/lib/auth/viewer";
 import { canViewTrip } from "@/lib/auth/access";
-import { tripPhotoPage } from "@/lib/photos/page";
+import { tripPhotoPage, type PhotoOrder } from "@/lib/photos/page";
 import { toGridPhoto } from "@/components/photos/toGrid";
 import { parseGalleryFilter } from "@/lib/photos/filters";
 import { photoFavourites } from "@/lib/favourites/queries";
@@ -23,11 +23,14 @@ export async function GET(request: NextRequest, { params }: RouteContext<"/api/t
   const filter = parseGalleryFilter(Object.fromEntries(sp.entries()), { member });
   // The same order the page was built in, or the next page would continue a different list.
   const asked = sp.get("order");
-  const order = asked === "oldest" ? "taken" : asked === "newest" ? "newest" : "favorites";
+  const order: PhotoOrder = asked === "oldest" ? "taken" : asked === "newest" ? "newest" : "favorites";
   // `ids` re-reads photos the gallery already shows, after an action changed them, under the same rules and filter.
   const ids = sp.get("ids")?.split(",").filter(Boolean).slice(0, REREAD_MAX);
   const viewerId = member && viewer.kind === "user" ? viewer.user.id : null;
-  const page = await tripPhotoPage(trip.id, ids ? { ids, take: Math.max(ids.length, 1), filter, order, viewerId } : { cursor: sp.get("cursor"), filter, order, viewerId });
+  // A visitor's gallery (and a share page's, whoever is looking) shows only finished items, as its first page does;
+  // their words never match names.
+  const common = { filter, order, viewerId, member, readyOnly: !member };
+  const page = await tripPhotoPage(trip.id, ids ? { ...common, ids, take: Math.max(ids.length, 1) } : { ...common, cursor: sp.get("cursor") });
   // Hearts as the page draws them, so a tile from a later page has one too.
   const favourites = member ? await photoFavourites(page.photos.map((p) => p.id), viewer) : new Map();
   return NextResponse.json({ photos: page.photos.map((p) => toGridPhoto(p, null, member, favourites.get(p.id))), nextCursor: ids ? null : page.nextCursor, total: page.total }, { headers: { "Cache-Control": "private, no-store" } });

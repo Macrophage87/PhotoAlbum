@@ -46,9 +46,9 @@ export type MapPayload = {
  * search means the same thing on every surface: asking the map for "lighthouse" shows where the lighthouse
  * photographs were taken, which is a thing a map can answer and a list cannot.
  */
-export async function narrowing(filter: GalleryFilter, tripId: string | null): Promise<{ where: Prisma.PhotoWhereInput; nothing: boolean }> {
+export async function narrowing(filter: GalleryFilter, tripId: string | null, member: boolean): Promise<{ where: Prisma.PhotoWhereInput; nothing: boolean }> {
   const lists: string[][] = [];
-  if (filter.q) lists.push(await idsMatching(filter.q));
+  if (filter.q) lists.push(await idsMatching(filter.q, member));
   if (filter.year) lists.push(await idsInLocalYear(tripId, filter.year));
   // One list per name, so two names means the photographs they are both on rather than either.
   for (const id of filter.personIds) lists.push(await idsWithPerson(id));
@@ -74,7 +74,7 @@ export async function narrowing(filter: GalleryFilter, tripId: string | null): P
  */
 export async function buildMapPayload(viewer: Viewer, tripId?: string, filter: GalleryFilter = NO_FILTER): Promise<MapPayload> {
   const active = filterIsActive(filter);
-  const narrowed = await narrowing(filter, tripId ?? null);
+  const narrowed = await narrowing(filter, tripId ?? null, viewer.kind === "user");
   const tripWhere = tripId ? { id: tripId } : visibleTripsWhere(viewer);
   const member = viewer.kind === "user";
   const trips = await db.trip.findMany({ where: tripWhere, select: { id: true, slug: true, title: true, themeKey: true, timezone: true }, orderBy: { startDate: "desc" } });
@@ -174,7 +174,7 @@ export async function buildMapPayload(viewer: Viewer, tripId?: string, filter: G
 
 /** Photos in a collection (no tracks). The caller has already checked the viewer may open the collection; a photo's trip is named only when the viewer may open that trip too. */
 export async function buildCollectionMapPayload(viewer: Viewer, collectionId: string, filter: GalleryFilter = NO_FILTER): Promise<MapPayload> {
-  const narrowed = await narrowing(filter, null);
+  const narrowed = await narrowing(filter, null, viewer.kind === "user");
   const found = narrowed.nothing ? [] : await db.photo.findMany({
     where: { ...NOT_TRASHED, status: "READY", lat: { not: null }, lng: { not: null }, collections: { some: { collectionId } }, ...narrowed.where },
     select: { id: true, lat: true, lng: true, caption: true, takenAt: true, tzOffsetMin: true, updatedAt: true, activityId: true, gpsSource: true, activity: { select: { title: true } }, uploader: { select: { id: true, name: true, email: true } }, trip: { select: { id: true, slug: true, title: true, visibility: true, shareToken: true, timezone: true } } },

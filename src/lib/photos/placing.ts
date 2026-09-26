@@ -59,7 +59,7 @@ export async function photosForPlacing(
   filter: GalleryFilter,
   show: PlacingShow,
 ): Promise<{ photos: PlacingPhoto[]; total: number }> {
-  const narrowed = await narrowing(filter, trip.id);
+  const narrowed = await narrowing(filter, trip.id, true);
   if (narrowed.nothing) return { photos: [], total: 0 };
   const where: Prisma.PhotoWhereInput = {
     ...NOT_TRASHED,

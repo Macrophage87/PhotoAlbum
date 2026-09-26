@@ -24,7 +24,7 @@ export type TimelineResult = { groups: TimelineGroups; matched: number; total: n
  * afternoon it was taken. An activity is kept only while something inside it still matches, so a narrowed timeline
  * is the matches and nothing else.
  */
-export async function tripTimeline(tripId: string, timezone: string, filter: GalleryFilter = NO_FILTER): Promise<TimelineResult> {
+export async function tripTimeline(tripId: string, timezone: string, filter: GalleryFilter = NO_FILTER, member = false): Promise<TimelineResult> {
   const active = filterIsActive(filter);
   const total = await db.photo.count({ where: { tripId, ...NOT_TRASHED, status: "READY" } });
   if (!active) {
@@ -39,7 +39,7 @@ export async function tripTimeline(tripId: string, timezone: string, filter: Gal
 
   // Words and years are answered as id lists, the same ones the gallery uses, so the two agree about what matches.
   const lists: string[][] = [];
-  if (filter.q) lists.push(await idsMatching(filter.q));
+  if (filter.q) lists.push(await idsMatching(filter.q, member));
   if (filter.year) lists.push(await idsInLocalYear(tripId, filter.year));
   // One list per name, so two names means the photographs they are both on rather than either.
   for (const id of filter.personIds) lists.push(await idsWithPerson(id));

@@ -22,11 +22,15 @@ export type PhotoOrder = "favorites" | "taken" | "newest";
  * The same index the search page uses — captions, titles, notes, the AI's description and tags, and for members the
  * names of the people in the picture — plus the file's own name, because "DSC_0421" is sometimes all anyone
  * remembers. A separate query rather than a join so both ways of ordering a gallery can use it unchanged.
+ *
+ * `member` picks the column: only a signed-in member's words are matched against names (people, pets, uploaders),
+ * or a visitor could find which photographs somebody is in by typing their name.
  */
-export async function idsMatching(q: string): Promise<string[]> {
+export async function idsMatching(q: string, member: boolean): Promise<string[]> {
+  const column = member ? Prisma.sql`p."searchVectorMembers"` : Prisma.sql`p."searchVector"`;
   const rows = await db.$queryRaw<{ id: string }[]>`
     SELECT p.id FROM "Photo" p, LATERAL (SELECT websearch_to_tsquery('english', ${q}) || websearch_to_tsquery('simple', ${q}) AS query) qq
-    WHERE p."trashedAt" IS NULL AND (p."searchVectorMembers" @@ qq.query OR p."originalName" ILIKE ${"%" + q + "%"} OR p.caption ILIKE ${"%" + q + "%"} OR p.title ILIKE ${"%" + q + "%"})
+    WHERE p."trashedAt" IS NULL AND (${column} @@ qq.query OR p."originalName" ILIKE ${"%" + q + "%"} OR p.caption ILIKE ${"%" + q + "%"} OR p.title ILIKE ${"%" + q + "%"})
     LIMIT 5000`;
   return rows.map((r) => r.id);
 }
@@ -56,13 +60,13 @@ export function intersectIds(lists: string[][]): string[] {
 }
 
 /** One page of a trip's gallery in capture order, with a cursor (the last item's id) for the next page. */
-export async function tripPhotoPage(tripId: string, opts: { uploaderId?: string; cursor?: string | null; take?: number; viewerId?: string | null; order?: PhotoOrder; filter?: GalleryFilter; /** Only these, for re-reading photos a gallery already holds; any that no longer belong here are left out. */ ids?: string[] } = {}): Promise<PhotoPage> {
+export async function tripPhotoPage(tripId: string, opts: { uploaderId?: string; cursor?: string | null; take?: number; viewerId?: string | null; order?: PhotoOrder; filter?: GalleryFilter; /** A signed-in member, whose words may match names; see `idsMatching`. */ member?: boolean; /** Finished items only, as a visitor is shown them: nothing still processing or failed. */ readyOnly?: boolean; /** Only these, for re-reading photos a gallery already holds; any that no longer belong here are left out. */ ids?: string[] } = {}): Promise<PhotoPage> {
   const take = opts.take ?? GALLERY_PAGE;
   // `uploaderId` predates the filter and still works on its own, so a link somebody kept goes on working.
   const filter: GalleryFilter = { ...NO_FILTER, ...opts.filter, uploaderId: opts.filter?.uploaderId ?? opts.uploaderId ?? null };
   const lists: string[][] = [];
   if (opts.ids) lists.push(opts.ids);
-  if (filter.q) lists.push(await idsMatching(filter.q));
+  if (filter.q) lists.push(await idsMatching(filter.q, opts.member ?? false));
   if (filter.year) lists.push(await idsInLocalYear(tripId, filter.year));
   // One list per name, so two names means the photographs they are both on rather than either.
   for (const id of filter.personIds) lists.push(await idsWithPerson(id));
@@ -77,7 +81,7 @@ export async function tripPhotoPage(tripId: string, opts: { uploaderId?: string;
     ...(filter.kind ? { kind: filter.kind } : {}),
     ...(filter.activityId ? { activityId: filter.activityId } : {}),
     ...(restrict ? { id: { in: restrict } } : {}),
-    status: { in: ["READY", "PENDING", "PROCESSING", "FAILED"] },
+    status: { in: opts.readyOnly ? ["READY"] : ["READY", "PENDING", "PROCESSING", "FAILED"] },
   };
   const order = opts.order ?? "favorites";
   if (order === "favorites") {
@@ -88,7 +92,7 @@ export async function tripPhotoPage(tripId: string, opts: { uploaderId?: string;
       db.$queryRaw<{ id: string }[]>`
         SELECT p.id FROM "Photo" p
         WHERE p."tripId" = ${tripId} AND p."trashedAt" IS NULL
-          AND p.status IN ('READY', 'PENDING', 'PROCESSING', 'FAILED')
+          AND ${opts.readyOnly ? Prisma.sql`p.status = 'READY'` : Prisma.sql`p.status IN ('READY', 'PENDING', 'PROCESSING', 'FAILED')`}
           AND ${filter.uploaderId ? Prisma.sql`p."uploaderId" = ${filter.uploaderId}` : Prisma.sql`TRUE`}
           AND ${filter.kind ? Prisma.sql`p.kind = ${filter.kind}::"MediaKind"` : Prisma.sql`TRUE`}
           AND ${filter.activityId ? Prisma.sql`p."activityId" = ${filter.activityId}` : Prisma.sql`TRUE`}
@@ -156,7 +160,8 @@ export async function idsNear(near: { lat: number; lng: number; miles: number })
 export async function candidatePhotoPage(target: PickerTarget, filter: PickerFilter = NO_PICKER_FILTER, opts: { cursor?: string | null; take?: number } = {}): Promise<PhotoPage> {
   const take = opts.take ?? GALLERY_PAGE;
   const lists: string[][] = [];
-  if (filter.q) lists.push(await idsMatching(filter.q));
+  // Only members pick photographs to add, so their words may match names.
+  if (filter.q) lists.push(await idsMatching(filter.q, true));
   if (filter.near) lists.push(await idsNear(filter.near));
   // One list per name, so two names means the photographs they are both on rather than either.
   for (const id of filter.personIds) lists.push(await idsWithPerson(id));

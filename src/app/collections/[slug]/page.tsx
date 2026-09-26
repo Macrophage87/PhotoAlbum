@@ -20,7 +20,7 @@ export default async function CollectionTimelinePage({ params, searchParams }: P
   const filter = parseGalleryFilter(sp, { member: editable });
   const order = await timelineOrderFor(sp, "oldest");
   const [{ groups, matched, total, active }, people, gates] = await Promise.all([
-    collectionTimeline(collection.id, filter),
+    collectionTimeline(collection.id, filter, editable),
     editable ? peopleInPhotos({ collectionId: collection.id }) : Promise.resolve([]),
     editable ? annotationGates() : Promise.resolve(null),
   ]);

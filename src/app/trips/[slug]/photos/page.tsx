@@ -24,7 +24,7 @@ export default async function TripPhotosPage({ params, searchParams }: PageProps
   // Favourites first unless this person has asked for the grid by date, either way round.
   const sort = await sortChoice(sp, SORT_COOKIES.photos, PHOTO_SORTS, "favorites");
   const [page, activities, members, people] = await Promise.all([
-    tripPhotoPage(trip.id, { filter, order: sort === "oldest" ? "taken" : sort, viewerId: editable ? (await getViewer()).user?.id ?? null : null }),
+    tripPhotoPage(trip.id, { filter, member: editable, readyOnly: !editable, order: sort === "oldest" ? "taken" : sort, viewerId: editable ? (await getViewer()).user?.id ?? null : null }),
     db.activity.findMany({ where: { tripId: trip.id }, orderBy: { startTime: "asc" }, select: { id: true, title: true } }),
     editable ? db.user.findMany({ where: { photos: { some: { tripId: trip.id } } }, orderBy: { name: "asc" }, select: { id: true, name: true, email: true } }) : Promise.resolve([]),
     editable ? peopleInPhotos({ tripId: trip.id }) : Promise.resolve([]),
