@@ -7,8 +7,26 @@ import { ScanViewer } from "@/components/scans/ScanViewer";
 import { panoramaLabel } from "@/lib/images/panorama";
 import { PetTagger } from "@/components/people/PetTagger";
 import { LightboxInfo } from "./LightboxInfo";
+import { trapTab } from "@/components/ui/focus-trap";
 
 export type LightboxPhoto = { id: string; mediumUrl: string; width: number | null; height: number | null; caption: string | null; alt: string; /** Shown to members only; never set for anonymous viewers. */ uploadedBy?: string | null; /** Set for embedded videos: the lightbox shows the click-to-play facade instead of the image. */ youtubeId?: string | null; title?: string | null; /** Set for uploaded clips: plays inline with controls. */ videoUrl?: string | null; durationS?: number | null; /** Members can tag a pet from here. */ canTag?: boolean; /** Full-size file, opened by a second click on the picture. */ originalUrl?: string | null; /** A panorama, shown filling the height and panned sideways rather than shrunk to fit. */ panorama?: { projection: string | null; panoUrl: string } | null; /** A 3D scan, turned in place. */ scan?: { format: string | null; modelUrl: string; hasPoster: boolean } | null };
+
+/**
+ * Where the arrow keys already mean something — the caret in a field, panning a panorama or a map, turning a scan,
+ * seeking a clip — they are left to it rather than taken to change photos, which would also throw away whatever was
+ * being typed in the info panel.
+ */
+const OWNS_ARROWS = "input, textarea, select, [contenteditable]:not([contenteditable=false]), [data-testid=panorama-view], .maplibregl-map, model-viewer, video, [role=slider], [role=listbox], [role=combobox]";
+
+/** What a key pressed while the lightbox is open should do to it, if anything. */
+export function lightboxKeyAction(e: { key: string; defaultPrevented: boolean; target: EventTarget | null }): "close" | "prev" | "next" | null {
+  if (e.defaultPrevented) return null;
+  if (e.key === "Escape") return "close";
+  if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return null;
+  const el = e.target as { isContentEditable?: boolean; closest?: (selector: string) => unknown } | null;
+  if (el?.isContentEditable || (typeof el?.closest === "function" && el.closest(OWNS_ARROWS))) return null;
+  return e.key === "ArrowLeft" ? "prev" : "next";
+}
 
 export function Lightbox({ photos, index, onClose, onNavigate, share = null }: { photos: LightboxPhoto[]; index: number; onClose: () => void; onNavigate: (i: number) => void; /** On a share page: the token that lets the info request through without a cookie. */ share?: { token: string; kind: string } | null }) {
   const photo = photos[index];
@@ -22,14 +40,8 @@ export function Lightbox({ photos, index, onClose, onNavigate, share = null }: {
     const opener = document.activeElement as HTMLElement | null;
     closeRef.current?.focus();
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Tab" && dialogRef.current) {
-        // Keep keyboard focus inside the dialog.
-        const focusable = Array.from(dialogRef.current.querySelectorAll<HTMLElement>("a[href], button:not([disabled]), input, select, textarea"));
-        if (!focusable.length) return;
-        const first = focusable[0], last = focusable[focusable.length - 1];
-        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
-        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
-      }
+      // Keep keyboard focus inside the dialog.
+      if (dialogRef.current) trapTab(e, dialogRef.current);
     };
     window.addEventListener("keydown", onKey);
     document.body.style.overflow = "hidden";
@@ -43,9 +55,10 @@ export function Lightbox({ photos, index, onClose, onNavigate, share = null }: {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-      if (e.key === "ArrowLeft") prev();
-      if (e.key === "ArrowRight") next();
+      const action = lightboxKeyAction(e);
+      if (action === "close") onClose();
+      if (action === "prev") prev();
+      if (action === "next") next();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -88,16 +101,19 @@ export function Lightbox({ photos, index, onClose, onNavigate, share = null }: {
             </div>
           ) : photo.panorama ? (
             // A panorama fills the height and is dragged: fitting a 10:1 sweep to the width of a phone leaves a
-            // strip an inch tall, which is the one way of showing it that throws away why it was taken.
-            <PanoramaView
-              src={photo.panorama.panoUrl}
-              alt={photo.alt}
-              wrap={photo.panorama.projection === "EQUIRECTANGULAR_360"}
-              axis={(photo.width ?? 0) >= (photo.height ?? 0) ? "horizontal" : "vertical"}
-              className="h-[46vh] lg:h-[72vh] w-full max-w-full bg-black/40"
-            >
-              <PanoramaHint label={panoramaLabel(photo.panorama.projection)} />
-            </PanoramaView>
+            // strip an inch tall, which is the one way of showing it that throws away why it was taken. Like every
+            // other kind of picture here, a click or tap on it stays with it rather than closing the viewer.
+            <div className="w-full" data-testid="lightbox-panorama" onClick={(e) => e.stopPropagation()}>
+              <PanoramaView
+                src={photo.panorama.panoUrl}
+                alt={photo.alt}
+                wrap={photo.panorama.projection === "EQUIRECTANGULAR_360"}
+                axis={(photo.width ?? 0) >= (photo.height ?? 0) ? "horizontal" : "vertical"}
+                className="h-[46vh] lg:h-[72vh] w-full max-w-full bg-black/40"
+              >
+                <PanoramaHint label={panoramaLabel(photo.panorama.projection)} />
+              </PanoramaView>
+            </div>
           ) : photo.originalUrl ? (
             // A second click on the picture opens the full-size file in its own tab.
             <a href={photo.originalUrl} target="_blank" rel="noreferrer" title="Open the full-size photo" className="max-h-full max-w-full" onClick={(e) => e.stopPropagation()}>

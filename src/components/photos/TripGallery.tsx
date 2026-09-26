@@ -188,7 +188,7 @@ export function TripGallery({ photos: initialPhotos, activities, editable, empty
           })
         }
       />
-      {more && <LoadMoreSentinel hasMore={paged.hasMore} loading={paged.loading} error={paged.error} onLoad={paged.loadMore} shown={photos.length} total={more.total} />}
+      {more && <LoadMoreSentinel hasMore={paged.hasMore} loading={paged.loading} error={paged.error} onLoad={paged.loadMore} pages={paged.pages} shown={photos.length} total={more.total} />}
     </div>
   );
 }

@@ -104,7 +104,8 @@ export function PhotoGrid({ photos, emptyMessage = "No photos yet.", selectable:
               )}
               {p.favourite && (
                 <span className="absolute top-1 right-1 rounded-full bg-black/45 backdrop-blur-sm">
-                  <FavouriteButton kind="photo" id={p.id} initial={p.favourite} dark size="sm" />
+                  {/* Keyed on what the server says, so a refreshed page re-seeds a heart that holds its own state. */}
+                  <FavouriteButton key={`${p.favourite.mine}:${p.favourite.count}`} kind="photo" id={p.id} initial={p.favourite} dark size="sm" />
                 </span>
               )}
               {p.badge && <span className="absolute top-1 left-1 text-[10px] bg-black/60 text-white rounded px-1.5 py-0.5">{p.badge}</span>}

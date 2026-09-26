@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { formatDay, formatInstant, formatTakenAt } from "@/lib/time/format";
+import { formatDay, formatInstant, formatPace, formatTakenAt } from "@/lib/time/format";
+import { formatClipDuration } from "@/components/photos/ClipTile";
 
 describe("how a day is written", () => {
   it("carries the year on a timeline heading: an album spans decades, and August 12 alone places nothing", () => {
@@ -43,5 +44,19 @@ describe("a timestamp on an admin page (#126)", () => {
 
   it("uses the zone it is given once the browser's is known", () => {
     expect(formatInstant("2026-09-26T23:15:00Z", "dateTime", "America/New_York")).toBe("9/26/2026, 7:15 PM");
+  });
+});
+
+describe("minutes and seconds", () => {
+  it("carries a rounded-up minute instead of writing :60 (#138)", () => {
+    expect(formatClipDuration(59.7)).toBe("1:00");
+    expect(formatClipDuration(89.6)).toBe("1:30");
+    expect(formatClipDuration(119.5)).toBe("2:00");
+    expect(formatClipDuration(12.2)).toBe("0:12");
+  });
+
+  it("does the same for a pace", () => {
+    expect(formatPace(1609.344 / 479.6)).toBe("8:00 /mi");
+    expect(formatPace(1000 / 299.7, "km")).toBe("5:00 /km");
   });
 });

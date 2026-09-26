@@ -8,6 +8,7 @@ export default async function SharedPhotosPage({ params }: PageProps<"/share/[to
   const { token } = await params;
   const trip = await getSharedTrip(token);
   if (!trip) notFound();
-  const page = await tripPhotoPage(trip.id);
-  return <SharedGallery photos={page.photos.filter((p) => p.status === "READY").map((p) => toGridPhoto(p))} more={{ url: `/api/trips/${trip.slug}/photos`, nextCursor: page.nextCursor, total: page.total }} />;
+  // Finished items only, asked of the database so the count and the next page agree with what is shown.
+  const page = await tripPhotoPage(trip.id, { readyOnly: true });
+  return <SharedGallery photos={page.photos.map((p) => toGridPhoto(p))} more={{ url: `/api/trips/${trip.slug}/photos?view=share`, nextCursor: page.nextCursor, total: page.total }} />;
 }

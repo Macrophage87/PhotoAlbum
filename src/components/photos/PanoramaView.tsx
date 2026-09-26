@@ -22,6 +22,9 @@ export function PanoramaView({ src, alt, wrap = false, axis = "horizontal", clas
   const box = useRef<HTMLDivElement>(null);
   const [dragging, setDragging] = useState(false);
   const from = useRef({ pointer: 0, scroll: 0 });
+  // Whether the pointer has travelled since it went down. A ref, not state: the click that ends a drag arrives after
+  // React has already flushed setDragging(false), so the state reads false by the time the click needs it.
+  const moved = useRef(false);
   const horizontal = axis === "horizontal";
 
   // Start in the middle: a panorama has as much to see one way as the other, and a 360 needs room on both sides.
@@ -56,6 +59,7 @@ export function PanoramaView({ src, alt, wrap = false, axis = "horizontal", clas
         aria-label={`${alt} — a panorama; drag or scroll to look around`}
         className={`h-full w-full ${horizontal ? "overflow-x-auto overflow-y-hidden" : "overflow-y-auto overflow-x-hidden"} overscroll-contain select-none focus:outline-none focus-visible:ring-2 focus-visible:ring-white/60 ${dragging ? "cursor-grabbing" : "cursor-grab"}`}
         onPointerDown={(e) => {
+          moved.current = false;
           if (e.pointerType === "touch") return; // the browser's own scrolling is better than anything done by hand
           e.preventDefault();
           e.stopPropagation();
@@ -69,14 +73,20 @@ export function PanoramaView({ src, alt, wrap = false, axis = "horizontal", clas
           if (!dragging) return;
           const el = box.current;
           if (!el) return;
-          const moved = (horizontal ? e.clientX : e.clientY) - from.current.pointer;
-          if (horizontal) el.scrollLeft = from.current.scroll - moved;
-          else el.scrollTop = from.current.scroll - moved;
+          const delta = (horizontal ? e.clientX : e.clientY) - from.current.pointer;
+          if (Math.abs(delta) > 3) moved.current = true;
+          if (horizontal) el.scrollLeft = from.current.scroll - delta;
+          else el.scrollTop = from.current.scroll - delta;
         }}
-        onPointerUp={(e) => { box.current?.releasePointerCapture(e.pointerId); setDragging(false); }}
+        onPointerUp={(e) => {
+          box.current?.releasePointerCapture(e.pointerId);
+          setDragging(false);
+          // The click that ends a drag comes straight after this; once it has had its chance, forget the drag.
+          requestAnimationFrame(() => { moved.current = false; });
+        }}
         onPointerCancel={() => setDragging(false)}
         // A drag that ends over the picture must not also count as a click on it, which in a lightbox means closing it.
-        onClickCapture={(e) => { if (dragging) { e.preventDefault(); e.stopPropagation(); } }}
+        onClickCapture={(e) => { if (moved.current) { moved.current = false; e.preventDefault(); e.stopPropagation(); } }}
       >
         <div className={horizontal ? "flex h-full w-max" : "w-full"}>
           <PanoImage src={src} alt={alt} horizontal={horizontal} onReady={centre} />

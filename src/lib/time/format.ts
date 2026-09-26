@@ -96,9 +96,10 @@ export function formatSpeed(ms: number, unit: "kmh" | "mph" = "mph"): string {
 /** min/mi pace from m/s */
 export function formatPace(ms: number, unit: "km" | "mi" = "mi"): string {
   if (ms <= 0) return "–";
-  const secPer = (unit === "km" ? 1000 : 1609.344) / ms;
+  // Round the whole first, or 7:59.6 would read 7:60.
+  const secPer = Math.round((unit === "km" ? 1000 : 1609.344) / ms);
   const m = Math.floor(secPer / 60);
-  const s = Math.round(secPer % 60);
+  const s = secPer % 60;
   return `${m}:${String(s).padStart(2, "0")} /${unit}`;
 }
 

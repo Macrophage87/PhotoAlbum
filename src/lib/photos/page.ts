@@ -86,11 +86,12 @@ export function intersectIds(lists: string[][]): string[] {
 }
 
 /** One page of a trip's gallery in capture order, with a cursor (the last item's id) for the next page. */
-export async function tripPhotoPage(tripId: string, opts: { uploaderId?: string; cursor?: string | null; take?: number; viewerId?: string | null; order?: PhotoOrder; filter?: GalleryFilter } = {}): Promise<PhotoPage> {
+export async function tripPhotoPage(tripId: string, opts: { uploaderId?: string; cursor?: string | null; take?: number; viewerId?: string | null; order?: PhotoOrder; filter?: GalleryFilter; /** Finished items only, as a visitor is shown them: nothing still processing or failed. */ readyOnly?: boolean; /** Only these, for re-reading photos a gallery already holds; any that no longer belong here are left out. */ ids?: string[] } = {}): Promise<PhotoPage> {
   const take = opts.take ?? GALLERY_PAGE;
   // `uploaderId` predates the filter and still works on its own, so a link somebody kept goes on working.
   const filter: GalleryFilter = { ...NO_FILTER, ...opts.filter, uploaderId: opts.filter?.uploaderId ?? opts.uploaderId ?? null };
   const lists: string[][] = [];
+  if (opts.ids) lists.push(opts.ids);
   if (filter.q) lists.push(await idsMatching(filter.q, { member: filter.member, scope: { tripId } }));
   if (filter.year) lists.push(await idsInLocalYear(tripId, filter.year));
   // One list per name, so two names means the photographs they are both on rather than either.
@@ -106,7 +107,7 @@ export async function tripPhotoPage(tripId: string, opts: { uploaderId?: string;
     ...(filter.kind ? { kind: filter.kind } : {}),
     ...(filter.activityId ? { activityId: filter.activityId } : {}),
     ...(restrict ? { id: { in: restrict } } : {}),
-    status: { in: ["READY", "PENDING", "PROCESSING", "FAILED"] },
+    status: { in: opts.readyOnly ? ["READY"] : ["READY", "PENDING", "PROCESSING", "FAILED"] },
   };
   const order = opts.order ?? "favorites";
   if (order === "favorites") {
@@ -117,7 +118,7 @@ export async function tripPhotoPage(tripId: string, opts: { uploaderId?: string;
       db.$queryRaw<{ id: string }[]>`
         SELECT p.id FROM "Photo" p
         WHERE p."tripId" = ${tripId} AND p."trashedAt" IS NULL
-          AND p.status IN ('READY', 'PENDING', 'PROCESSING', 'FAILED')
+          AND ${opts.readyOnly ? Prisma.sql`p.status = 'READY'` : Prisma.sql`p.status IN ('READY', 'PENDING', 'PROCESSING', 'FAILED')`}
           AND ${filter.uploaderId ? Prisma.sql`p."uploaderId" = ${filter.uploaderId}` : Prisma.sql`TRUE`}
           AND ${filter.kind ? Prisma.sql`p.kind = ${filter.kind}::"MediaKind"` : Prisma.sql`TRUE`}
           AND ${filter.activityId ? Prisma.sql`p."activityId" = ${filter.activityId}` : Prisma.sql`TRUE`}
