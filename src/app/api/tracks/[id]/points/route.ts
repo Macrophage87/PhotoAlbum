@@ -9,8 +9,10 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   const track = await loadViewableTrack(viewer, id);
   if (!track) return Response.json({ error: "Not found" }, { status: 404 });
   const col = decodePoints(track.pointsBlob);
+  // Never cacheable by a shared cache, even for a public trip: a trip made private again (say, once somebody notices
+  // the track starts at the house) must stop being served at once, not an hour later from a proxy.
   return Response.json(
     { id: track.id, startTime: track.startTime.toISOString(), timezone: track.trip.timezone, points: col },
-    { headers: { "Cache-Control": `${track.trip.visibility === "PUBLIC" ? "public" : "private"}, max-age=3600` } },
+    { headers: { "Cache-Control": "private, max-age=3600" } },
   );
 }
