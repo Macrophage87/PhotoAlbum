@@ -127,7 +127,7 @@ function teleportSegments(points: TrackPoint[], dist: number[]): boolean[] {
     // that leaps off a walk (or off a drive at three times its speed) is a glitch whether it comes back or not.
     const runSpeed = median(speed.slice(s, e + 1).filter((v) => v > TELEPORT_SPEED_MS));
     const travel =
-      (len >= LONG_RUN_SEGMENTS && turns(points, dist, s, e, REVERSAL_RAD) * 10 <= len) ||
+      (len >= LONG_RUN_SEGMENTS && turns(points, dist, s, e, REVERSAL_RAD, fast) * 10 <= len) ||
       (len > MIN_TRAVEL_SEGMENTS && !atEdge && net >= path / 2 && steady(points, dist, speed, s, e) && (atSpeed(s, -1, runSpeed) || atSpeed(e, 1, runSpeed)));
     if (!travel) for (let i = s; i <= e; i++) if (fast(i)) out[i] = true;
     s = e;
@@ -147,11 +147,15 @@ function steady(points: TrackPoint[], dist: number[], speed: number[], s: number
   return run.every((v) => v >= m / 3 && v <= m * 3) && turns(points, dist, s, e, Math.PI / 2) === 0;
 }
 
-/** How many times the heading turns by more than `limit` radians between consecutive segments of the run. */
-function turns(points: TrackPoint[], dist: number[], s: number, e: number, limit: number): number {
+/**
+ * How many times the heading turns by more than `limit` radians between consecutive segments of the run, counting
+ * only the segments `only` accepts: a slow step between an out-jump and a back-jump (or a stale fix's jitter) would
+ * otherwise split one reversal into two quarter turns, or add one of its own.
+ */
+function turns(points: TrackPoint[], dist: number[], s: number, e: number, limit: number, only: (i: number) => boolean = () => true): number {
   let last: number | null = null, count = 0;
   for (let i = s; i <= e; i++) {
-    if (dist[i] < 1) continue;
+    if (dist[i] < 1 || !only(i)) continue;
     const a = points[i - 1], b = points[i];
     const heading = Math.atan2((b.lng - a.lng) * Math.cos((a.lat * Math.PI) / 180), b.lat - a.lat);
     if (last !== null && Math.abs(((heading - last + 3 * Math.PI) % (2 * Math.PI)) - Math.PI) > limit) count++;

@@ -345,3 +345,23 @@ describe("computeStats drops long bursts of bad GPS", () => {
     expect(s.maxSpeedMs).toBeLessThan(5);
   });
 });
+
+describe("computeStats counts reversals between fast segments only", () => {
+  const M_LNG = 1 / (111_195 * Math.cos((44 * Math.PI) / 180));
+  it("a phone flapping 300 m and holding each position for two fixes", () => {
+    const pts = line(1901, 3, 1);
+    const clean = computeStats(pts).distanceM;
+    for (let i = 1000; i < 1120; i++) if ((i - 1000) % 4 < 2) pts[i] = { ...pts[i], lng: pts[i].lng + 300 * M_LNG };
+    const s = computeStats(pts);
+    expect(s.distanceM).toBeLessThan(clean + 300);
+    expect(s.maxSpeedMs).toBeLessThan(5);
+  });
+  it("a train whose every fourth fix is a stale one re-reported with a few metres of jitter", () => {
+    const pts = line(3601, 80, 1);
+    for (let i = 4; i < pts.length; i += 4) {
+      const a = (i * 2.4) % (2 * Math.PI);
+      pts[i] = { ...pts[i - 1], t: pts[i].t, lat: pts[i - 1].lat + (3 * Math.sin(a)) / 111_195, lng: pts[i - 1].lng + 3 * Math.cos(a) * M_LNG };
+    }
+    expect(computeStats(pts).distanceM).toBeGreaterThan(280_000);
+  });
+});
