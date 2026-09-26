@@ -2,6 +2,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { backoffMs, isRetryable, MAX_ATTEMPTS, STATUS_NOTICE_AFTER, statusRetryMs } from "@/lib/media/upload-retry";
 import { AttemptError, attemptUpload, statusAfterUpload, type FiledAnswer, type UploadTarget } from "@/lib/media/upload-one";
 
@@ -9,9 +10,11 @@ export type UploadItem = {
   localId: string;
   /** Which uploader it was added from ("upload", "activity:<id>", …), so each shows its own batch and no other. */
   scope: string;
-  /** The page it was added on, for the way back from the pill. */
+  /** The page it was added on (path and query), for the way back from the pill. */
   from: string;
-  file: File;
+  /** Let go of once it has arrived, so a long session does not hold on to every photograph it ever sent. */
+  file: File | null;
+  name: string;
   progress: number; // 0..1 upload progress
   photoId?: string;
   status: "queued" | "uploading" | "processing" | "ready" | "failed";
@@ -34,7 +37,14 @@ export type UploadItem = {
    * through a batch changes where the files added after that go, not the ones already on their way. */
   target: UploadTarget;
   optOut: boolean;
+  /** A failure the member has been shown (on the page it was added from) or has dismissed from the pill. */
+  seen?: boolean;
 };
+
+/** The batch an uploader shows by default: the place its files are sent to. */
+export function scopeFor(target: UploadTarget): string {
+  return `to:${target.activityId ?? ""}:${target.collectionId ?? ""}:${target.tripId ?? ""}`;
+}
 
 type Queue = {
   items: UploadItem[];
@@ -43,6 +53,8 @@ type Queue = {
   retry: (scope: string) => void;
   /** Take a scope's finished files off the list. */
   clear: (scope: string) => void;
+  /** The member has seen these failures (or waved them away), so the pill need not keep pointing at them. */
+  acknowledge: (scope?: string) => void;
   /** Set when answers about processing have stopped coming back for a while; says so without failing anything. */
   statusTrouble: null | "offline" | "signedout";
 };
@@ -101,12 +113,12 @@ export function UploadQueueProvider({ children }: { children: ReactNode }) {
         tries += 1;
         update(item.localId, { status: "uploading", attempts: attempt, tries, retrying: false, error: undefined });
         try {
-          const answer = await attemptUpload(item.file, item.target, item.optOut, (p) => update(item.localId, { progress: p }), () => {}, tries);
+          const answer = await attemptUpload(item.file!, item.target, item.optOut, (p) => update(item.localId, { progress: p }), () => {}, tries);
           const { photoId, duplicate, filed, owner } = answer;
           // The album already holds these bytes: nothing was added, and the tile points at the one it has rather
           // than pretending a second copy went up. Only one that is finished is ready; one still being processed (or
           // this member's own, whose first answer was lost on the way back) is watched like any other.
-          update(item.localId, { photoId, status: statusAfterUpload(answer), progress: 1, retrying: false, duplicate, filed, owner });
+          update(item.localId, { photoId, status: statusAfterUpload(answer), progress: 1, retrying: false, duplicate, filed, owner, file: null });
           return;
         } catch (err) {
           const failure = err instanceof AttemptError ? err.failure : { kind: "network" as const, message: err instanceof Error ? err.message : "Upload failed" };
@@ -145,7 +157,7 @@ export function UploadQueueProvider({ children }: { children: ReactNode }) {
 
   const retry = useCallback((scope: string) => {
     // Their goes so far are remembered (`tries`), so the album hears these as retries rather than new files.
-    const again = itemsRef.current.filter((i) => i.scope === scope && i.status === "failed" && !i.photoId).map((i) => ({ ...i, status: "queued" as const, error: undefined, attempts: 0, retrying: false, progress: 0 }));
+    const again = itemsRef.current.filter((i) => i.scope === scope && i.status === "failed" && !i.photoId && i.file).map((i) => ({ ...i, status: "queued" as const, error: undefined, attempts: 0, retrying: false, progress: 0, seen: false }));
     if (!again.length) return;
     setItems((prev) => prev.map((it) => again.find((a) => a.localId === it.localId) ?? it));
     queue.current.push(...again);
@@ -153,7 +165,14 @@ export function UploadQueueProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const clear = useCallback((scope: string) => {
-    setItems((prev) => prev.filter((i) => i.scope !== scope || inPlay(i)));
+    const kept = itemsRef.current.filter((i) => i.scope !== scope || inPlay(i));
+    setItems(kept);
+    // The batch in hand began with one of those just cleared: count from what is left.
+    setBatchFrom((from) => (from && kept.some((i) => i.localId === from) ? from : (kept.find(inPlay)?.localId ?? null)));
+  }, []);
+
+  const acknowledge = useCallback((scope?: string) => {
+    setItems((prev) => (prev.some((i) => i.status === "failed" && !i.seen && (!scope || i.scope === scope)) ? prev.map((i) => (i.status === "failed" && (!scope || i.scope === scope) ? { ...i, seen: true } : i)) : prev));
   }, []);
 
   /**
@@ -248,34 +267,64 @@ export function UploadQueueProvider({ children }: { children: ReactNode }) {
   }, [sending]);
 
   return (
-    <QueueContext.Provider value={{ items, add, retry, clear, statusTrouble }}>
+    <QueueContext.Provider value={{ items, add, retry, clear, acknowledge, statusTrouble }}>
       {children}
-      <UploadPill items={batchFrom ? items.slice(Math.max(0, items.findIndex((i) => i.localId === batchFrom))) : items} />
+      <UploadPill batch={batchFrom ? items.slice(Math.max(0, items.findIndex((i) => i.localId === batchFrom))) : items} unseen={items.filter((i) => i.status === "failed" && !i.seen)} dismiss={() => acknowledge()} />
     </QueueContext.Provider>
   );
 }
 
 /**
  * How the uploads are going, wherever the member is in the album: a small line in the corner while anything is still
- * going up or being processed, which opens to say what is outstanding and leads back to where they were added.
+ * going up or being processed, which opens to say what is outstanding and leads back to where they were added. What
+ * did not make it keeps it up, amber, until the member has seen the list on that page or waved it away — a failure
+ * is not something to learn about only by going back to look.
  */
-function UploadPill({ items }: { items: UploadItem[] }) {
+function UploadPill({ batch, unseen, dismiss }: { batch: UploadItem[]; unseen: UploadItem[]; dismiss: () => void }) {
   const [open, setOpen] = useState(false);
-  const going = items.filter(inPlay);
-  if (!going.length) return null;
-  // `items` is the batch in hand, so "12 of 100" counts what was added since the queue was last idle.
-  const sent = items.filter((i) => i.photoId).length;
+  const pathname = usePathname();
+  const going = batch.filter(inPlay);
   const toSend = going.filter((i) => i.status !== "processing").length;
-  const failed = items.filter((i) => i.status === "failed").length;
+  const sent = batch.filter((i) => i.photoId).length;
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    window.addEventListener("keydown", close);
+    return () => window.removeEventListener("keydown", close);
+  }, [open]);
+
+  // Said to a screen reader at the moments that matter, not at every file.
+  const announce = unseen.length && !going.length ? `${unseen.length} ${unseen.length === 1 ? "file" : "files"} didn't make it.` : going.length ? (toSend ? `Uploading ${batch.length} ${batch.length === 1 ? "file" : "files"}.` : `All ${batch.length} uploaded.`) : "";
+  const status = <p role="status" aria-live="polite" className="sr-only">{announce}</p>;
+  // Picking from the album has its own button where this would sit; the pill is back on the next page.
+  if ((!going.length && !unseen.length) || pathname.endsWith("/add")) return status;
+  const place = "fixed z-40 left-4 sm:left-auto sm:right-4 bottom-[calc(1rem+env(safe-area-inset-bottom))] max-w-[calc(100vw-2rem)] text-sm";
+
+  if (!going.length) {
+    const back = unseen[unseen.length - 1].from;
+    return (
+      <div className={place} data-testid="upload-pill">
+        {status}
+        <div className="flex items-center gap-1 rounded-full bg-amber-100 border border-amber-300 text-amber-900 shadow-lg pl-4 pr-1 py-1">
+          <Link href={back} data-testid="upload-pill-review">
+            {unseen.length} {unseen.length === 1 ? "file" : "files"} didn&apos;t make it — <span className="underline underline-offset-2">Review</span>
+          </Link>
+          <button type="button" onClick={dismiss} aria-label="Dismiss" className="px-2 py-1 rounded-full hover:bg-amber-200">×</button>
+        </div>
+      </div>
+    );
+  }
+
   const back = going[going.length - 1].from;
   return (
-    <div className="fixed bottom-4 right-4 z-50 max-w-[calc(100vw-2rem)] text-sm" data-testid="upload-pill">
+    <div className={place} data-testid="upload-pill">
+      {status}
       {open && (
-        <div className="mb-2 w-72 rounded-theme border border-border bg-surface p-3 shadow-lg space-y-2">
+        <div id="upload-pill-panel" className="mb-2 w-72 rounded-theme border border-border bg-surface p-3 shadow-lg space-y-2">
           <p>
             {toSend > 0 ? `${toSend} still to send` : "All sent"}
             {going.length - toSend > 0 ? `; ${going.length - toSend} being processed` : ""}
-            {failed ? `; ${failed} did not make it` : ""}.
+            {unseen.length ? `; ${unseen.length} didn't make it` : ""}.
           </p>
           <p className="text-muted">You can keep using the album while these go up; don&apos;t close the tab until they&apos;re done.</p>
           <Link href={back} className="text-primary underline underline-offset-2" onClick={() => setOpen(false)}>
@@ -283,8 +332,8 @@ function UploadPill({ items }: { items: UploadItem[] }) {
           </Link>
         </div>
       )}
-      <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} className="rounded-full bg-primary text-white px-4 py-2 shadow-lg">
-        {toSend > 0 ? `Uploading ${sent} of ${items.length}` : `Processing ${going.length}`}
+      <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} aria-controls="upload-pill-panel" className="rounded-full bg-primary text-primary-fg px-4 py-2 shadow-lg">
+        {toSend > 0 ? `Uploading ${sent} of ${batch.length}` : `Processing ${going.length}`}
       </button>
     </div>
   );

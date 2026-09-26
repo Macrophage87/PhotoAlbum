@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui";
 import { Uploader } from "@/components/photos/Uploader";
+import { inPlay, scopeFor, useUploadQueue } from "@/components/photos/UploadQueue";
 import type { UploadByteLimits } from "@/lib/media/limits";
 
 /**
@@ -32,8 +33,10 @@ export function InlineUploader({ target, openLabel, note, testId, maxClipSeconds
   /** Everything from the time it happened, in one press: see `TakeWindow`. */
   takeAll?: ReactNode;
 }) {
-  const [open, setOpen] = useState(false);
-  const [uploading, setUploading] = useState(!pickHref && !takeAll);
+  // Coming back while files added here are still going up (or some did not make it) opens straight onto them.
+  const running = useUploadQueue().items.some((i) => i.scope === scopeFor(target) && (inPlay(i) || (i.status === "failed" && !i.seen)));
+  const [open, setOpen] = useState(running);
+  const [uploading, setUploading] = useState(running || (!pickHref && !takeAll));
   const router = useRouter();
   if (!open) {
     return (

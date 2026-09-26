@@ -2054,19 +2054,62 @@ test("files already on their way keep the trip they were added with when the tri
   await expect(page.getByTestId("upload-failures")).toContainText("6 files did not go up", { timeout: 30_000 });
 });
 
+test("a batch keeps going when the member leaves the page, and what did not make it is waiting for them", async ({ context, page }) => {
+  test.setTimeout(120_000);
+  await signIn(context, ADMIN);
+  await page.goto("/upload");
+  await page.waitForLoadState("networkidle");
+  const tag = randomUUID().slice(0, 8);
+  let release!: () => void;
+  const held = new Promise<void>((r) => { release = r; });
+  const answered: string[] = [];
+  await page.route("**/api/upload", async (route) => {
+    const name = decodeURIComponent(route.request().headers()["x-file-name"] ?? "");
+    await held;
+    // One of the four the album turns down, so there is something to come back to.
+    if (name.startsWith("refused-")) await route.fulfill({ status: 415, contentType: "application/json", body: JSON.stringify({ error: "Turned down for the test" }) });
+    else await route.fallback();
+    answered.push(name);
+  });
+  const jpeg = fs.readFileSync(fixture("photo-no-exif.jpg"));
+  const file = (name: string) => ({ name, mimeType: "image/jpeg", buffer: Buffer.concat([jpeg, Buffer.from(`\n<!-- ${name} ${tag} -->`)]) });
+  await page.locator("#photo-file-input").first().setInputFiles([`away-1-${tag}.jpg`, `away-2-${tag}.jpg`, `away-3-${tag}.jpg`, `refused-${tag}.jpg`].map(file));
+
+  // Off to the home page while they are still on their way.
+  await page.locator('header a[href="/"]').first().click();
+  await expect(page).toHaveURL(/\/$/);
+  await expect(page.getByTestId("upload-pill")).toBeVisible();
+  release();
+  await expect.poll(() => answered.length, { timeout: 60_000 }).toBe(4);
+  await expect.poll(async () => (await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "Photo" WHERE "originalName" LIKE $1`, [`away-%-${tag}.jpg`]))).rows[0].n, { timeout: 60_000 }).toBe(3);
+
+  // Once the rest are done, the pill stays to say one did not make it, and leads back to the list.
+  const review = page.getByTestId("upload-pill-review");
+  await expect(review).toContainText("1 file didn't make it", { timeout: 60_000 });
+  await review.click();
+  await expect(page).toHaveURL(/\/upload/);
+  await expect(page.getByTestId("upload-failures")).toContainText(`refused-${tag}.jpg`);
+  // Seen there, so the pill has nothing more to say.
+  await expect(page.getByTestId("upload-pill")).toHaveCount(0);
+});
+
 test("a file over the size limit is refused by name before any of it is sent", async ({ context, page }) => {
   await signIn(context, ADMIN);
   await page.goto("/upload");
   await page.waitForLoadState("networkidle");
-  let sent = 0;
-  await page.route("**/api/upload", (route) => { sent += 1; return route.fallback(); });
+  const sent: string[] = [];
+  await page.route("**/api/upload", (route) => {
+    sent.push(decodeURIComponent(route.request().headers()["x-file-name"] ?? ""));
+    return route.fulfill({ status: 415, contentType: "application/json", body: JSON.stringify({ error: "Not kept in this test" }) });
+  });
   // The e2e server holds scans to 2 MB (MAX_SCAN_UPLOAD_BYTES), well under the photo limit a scan used to get.
   await page.locator('input[type="file"]').first().setInputFiles({ name: "splat.ply", mimeType: "application/octet-stream", buffer: Buffer.alloc(3 * 1024 * 1024, 1) });
   const refused = page.locator('ul[role="alert"]');
   await expect(refused).toContainText("splat.ply");
   await expect(refused).toContainText("up to 2 MB");
-  await page.waitForTimeout(500);
-  expect(sent).toBe(0);
+  // A small one after it does go: once its request is seen, the big one plainly never was.
+  await page.locator('input[type="file"]').first().setInputFiles({ name: "small.ply", mimeType: "application/octet-stream", buffer: Buffer.alloc(1024, 1) });
+  await expect.poll(() => sent).toEqual(["small.ply"]);
 });
 
 test("the overview shows a handful of the trip at random, and picks again when asked", async ({ context, page }) => {

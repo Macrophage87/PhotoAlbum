@@ -1,13 +1,12 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { usePathname } from "next/navigation";
 import Link from "next/link";
 import { Button, buttonClasses } from "@/components/ui";
 import { albumTakes, isScanPick, isVideoPick, mimeAsSent, refusalFor } from "@/lib/media/picker";
 import { maxUploadBytes, tooBigMessage, type UploadByteLimits } from "@/lib/media/limits";
 import { MAX_BATCH, overCapMessage, progressLine } from "@/lib/media/upload-retry";
-import { inPlay, MAX_STATUS_IDS, useUploadQueue, type UploadItem } from "./UploadQueue";
+import { inPlay, MAX_STATUS_IDS, scopeFor, useUploadQueue, type UploadItem } from "./UploadQueue";
 
 /**
  * Read a clip's duration in the browser so an over-long file is refused before any bytes are sent.
@@ -59,8 +58,7 @@ export function Uploader({ tripId, activityId, collectionId, scope, onDone, maxC
   // The files themselves go up through the album-wide queue (UploadQueue), which carries on while the member moves
   // about the album; this is a view onto the ones added here.
   const queue = useUploadQueue();
-  const here = scope ?? `to:${activityId ?? ""}:${collectionId ?? ""}:${tripId ?? ""}`;
-  const pathname = usePathname();
+  const here = scope ?? scopeFor({ tripId, activityId, collectionId });
   const items = queue.items.filter((i) => i.scope === here);
   const statusTrouble = queue.statusTrouble;
   const [optOut, setOptOut] = useState(false);
@@ -108,14 +106,14 @@ export function Uploader({ tripId, activityId, collectionId, scope, onDone, maxC
           continue;
         }
       }
-      fresh.push({ localId: key, scope: here, from: pathname, file, progress: 0, status: "queued", tries: 0, target: { ...targetRef.current }, optOut: optOutRef.current });
+      fresh.push({ localId: key, scope: here, from: `${window.location.pathname}${window.location.search}`, file, name: file.name, progress: 0, status: "queued", tries: 0, target: { ...targetRef.current }, optOut: optOutRef.current });
     }
     // What is still going counts against the cap too, so adding a hundred, then another hundred, then another
     // before the first have finished is the same as adding three hundred at once.
     const room = Math.max(0, MAX_BATCH - itemsRef.current.filter(inPlay).length);
     if (fresh.length > room) {
       const over = fresh.splice(room);
-      refused.push({ key: `cap-${over[0].localId}`, name: over.length === 1 ? over[0].file.name : `${over.length} files`, why: overCapMessage(over.length) });
+      refused.push({ key: `cap-${over[0].localId}`, name: over.length === 1 ? over[0].name : `${over.length} files`, why: overCapMessage(over.length) });
     }
     if (!fresh.length && !refused.length) return;
     if (refused.length) setRefusals((prev) => [...prev, ...refused]);
@@ -131,7 +129,7 @@ export function Uploader({ tripId, activityId, collectionId, scope, onDone, maxC
     ...refusals,
     // These did go up; the album could not make anything of them afterwards — an over-long clip, a file that is not
     // the picture its name claims. They belong here rather than among the ones that never arrived.
-    ...items.filter((i) => i.status === "failed" && i.photoId).map((i) => ({ key: i.localId, name: i.file.name, why: i.error ?? "The album could not make sense of it." })),
+    ...items.filter((i) => i.status === "failed" && i.photoId).map((i) => ({ key: i.localId, name: i.name, why: i.error ?? "The album could not make sense of it." })),
   ];
   const doneIds = items.filter((i) => i.status === "ready").map((i) => i.photoId!);
   const allSettled = items.length > 0 && items.every((i) => i.status === "ready" || i.status === "failed");
@@ -155,10 +153,19 @@ export function Uploader({ tripId, activityId, collectionId, scope, onDone, maxC
   };
   /** Put the ones that did not make it back on the queue, from the top. */
   const retryFailed = () => queue.retry(here);
+  // Only when a batch settles while this is on screen: coming back to one that settled already is not news.
+  const wasSettled = useRef(allSettled);
   useEffect(() => {
-    if (allSettled && onDone) onDone(doneIds);
+    if (allSettled && !wasSettled.current && onDone) onDone(doneIds);
+    wasSettled.current = allSettled;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [allSettled]);
+  // Once the list of what did not make it is on this page, the pill elsewhere need not keep saying so.
+  const unseenFailures = items.some((i) => i.status === "failed" && !i.seen);
+  const { acknowledge } = queue;
+  useEffect(() => {
+    if (allSettled && unseenFailures) acknowledge(here);
+  }, [allSettled, unseenFailures, acknowledge, here]);
 
   return (
     <div className="space-y-4">
@@ -243,7 +250,7 @@ export function Uploader({ tripId, activityId, collectionId, scope, onDone, maxC
           <ul className="text-muted space-y-0.5 max-h-40 overflow-y-auto">
             {filedHere.map((i) => (
               <li key={i.localId}>
-                <b>{i.file.name}</b>: <Link href={`/photos/${i.photoId}`} className="text-primary underline underline-offset-2">{i.filed?.movedFrom ? `moved here from ${i.filed.movedFrom}` : "now here"}</Link>
+                <b>{i.name}</b>: <Link href={`/photos/${i.photoId}`} className="text-primary underline underline-offset-2">{i.filed?.movedFrom ? `moved here from ${i.filed.movedFrom}` : "now here"}</Link>
               </li>
             ))}
           </ul>
@@ -258,7 +265,7 @@ export function Uploader({ tripId, activityId, collectionId, scope, onDone, maxC
           <ul className="text-muted space-y-0.5 max-h-40 overflow-y-auto">
             {notYours.map((i) => (
               <li key={i.localId}>
-                <b>{i.file.name}</b>: <Link href={`/photos/${i.photoId}`} className="text-primary underline underline-offset-2">{i.owner ? `${i.owner}'s copy` : "the copy the album has"}</Link>
+                <b>{i.name}</b>: <Link href={`/photos/${i.photoId}`} className="text-primary underline underline-offset-2">{i.owner ? `${i.owner}'s copy` : "the copy the album has"}</Link>
               </li>
             ))}
           </ul>
@@ -273,7 +280,7 @@ export function Uploader({ tripId, activityId, collectionId, scope, onDone, maxC
           <ul className="text-muted space-y-0.5 max-h-40 overflow-y-auto">
             {alreadyHere.map((i) => (
               <li key={i.localId}>
-                <b>{i.file.name}</b>: <Link href={`/photos/${i.photoId}`} className="text-primary underline underline-offset-2">the copy the album has</Link>
+                <b>{i.name}</b>: <Link href={`/photos/${i.photoId}`} className="text-primary underline underline-offset-2">the copy the album has</Link>
               </li>
             ))}
           </ul>
@@ -287,7 +294,7 @@ export function Uploader({ tripId, activityId, collectionId, scope, onDone, maxC
           </p>
           <ul className="text-red-700 space-y-0.5 max-h-40 overflow-y-auto">
             {failed.map((i) => (
-              <li key={i.localId}><b>{i.file.name}</b>: {i.error}</li>
+              <li key={i.localId}><b>{i.name}</b>: {i.error}</li>
             ))}
           </ul>
           <Button type="button" variant="secondary" size="sm" onClick={retryFailed} data-testid="retry-failed">
@@ -302,10 +309,10 @@ export function Uploader({ tripId, activityId, collectionId, scope, onDone, maxC
             <li key={it.localId} className="relative aspect-square rounded-theme overflow-hidden bg-surface-alt border border-border">
               {it.thumbUrl ? (
                 // eslint-disable-next-line @next/next/no-img-element
-                <img src={it.thumbUrl} alt={it.file.name} className="w-full h-full object-cover" />
+                <img src={it.thumbUrl} alt={it.name} className="w-full h-full object-cover" />
               ) : (
                 <div className="w-full h-full flex flex-col items-center justify-center p-2 text-center">
-                  <span className="text-xs text-muted truncate w-full">{it.file.name}</span>
+                  <span className="text-xs text-muted truncate w-full">{it.name}</span>
                   {it.status === "uploading" && (
                     <div className="w-full h-1.5 bg-border rounded mt-2 overflow-hidden">
                       <div className="h-full bg-primary transition-all" style={{ width: `${Math.round(it.progress * 100)}%` }} />

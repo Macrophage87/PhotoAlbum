@@ -17,6 +17,7 @@ import "./globals.css";
 import { RegisterServiceWorker } from "@/components/pwa/RegisterServiceWorker";
 import { VisitBeacon } from "@/components/visits/VisitBeacon";
 import { UploadQueueProvider } from "@/components/photos/UploadQueue";
+import { getViewer } from "@/lib/auth/viewer";
 import { env } from "@/lib/env";
 
 // Every theme's font pair is loaded once here and referenced by CSS variable.
@@ -59,11 +60,12 @@ export const viewport: Viewport = {
 export default async function RootLayout({ children }: LayoutProps<"/">) {
   // Every page carries a per-request CSP nonce (set in src/proxy.ts), so nothing is prerendered at build time.
   await headers();
+  const viewer = await getViewer();
   return (
     <html lang="en" className={`${fontVars} h-full antialiased`}>
       <body className="min-h-full flex flex-col">
-        {/* Uploads carry on from page to page, so their queue lives above every page. */}
-        <UploadQueueProvider>{children}</UploadQueueProvider>
+        {/* Uploads carry on from page to page, so their queue lives above every page (members only: nobody else uploads). */}
+        {viewer.kind === "user" ? <UploadQueueProvider>{children}</UploadQueueProvider> : children}
         <RegisterServiceWorker />
         {env().VISITOR_STATS_ENABLED && <VisitBeacon />}
       </body>
