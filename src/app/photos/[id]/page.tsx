@@ -295,7 +295,7 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
                       {photo.activitySetBy && photo.activityId
                         ? `Put here by ${uploaderLabel(photo.activitySetBy.name, photo.activitySetBy.email)}, so the activity's hours leave it alone. Choose Automatic to let its time decide again.`
                         : photo.activitySetBy
-                        ? `Kept off every activity by ${uploaderLabel(photo.activitySetBy.name, photo.activitySetBy.email)}, so no activity's hours put it back. Choose Automatic, or change its date, to let its time decide again.`
+                        ? `Kept off every activity by ${uploaderLabel(photo.activitySetBy.name, photo.activitySetBy.email)}, so no activity's hours put it back. Choose Automatic, or type in the date it was taken, to let its time decide again.`
                         : "Automatic follows the time it was taken. Choosing an activity, or None, keeps it that way whatever its date says."}
                     </p>
                   </div>

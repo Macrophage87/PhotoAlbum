@@ -20,7 +20,7 @@ export async function applyPhotoInstant(
   tzOffsetMin: number,
   source: TakenAtSource,
   dateSetById: string | null,
-  opts: { geotag?: boolean; byMember?: boolean } = {},
+  opts: { geotag?: boolean; releaseKeptOff?: boolean } = {},
 ): Promise<string | null> {
   let tripId = photo.tripId;
   if (!tripId) {
@@ -29,10 +29,11 @@ export async function applyPhotoInstant(
     tripId = pickTripByDay(trips, localDayFromOffset(takenAt, tzOffsetMin))?.id ?? null;
   }
   // An activity a member chose stays chosen: a corrected date does not move a photo out of the walk it was on. One
-  // kept off every activity stays off through the album's own re-reading of the date, but a member giving it a new
-  // date by hand is saying when it really was, so that time decides again.
+  // kept off every activity stays off through shifts, bulk corrections and the album's own re-reading of the date;
+  // only a member typing (or picking) the one date this photo was taken — `releaseKeptOff` — says when it really
+  // was, so that time decides again.
   const keptOff = !photo.activityId && photo.activitySetById !== null;
-  const { activityId, activitySetById } = await activityFor(opts.byMember && keptOff ? { ...photo, activitySetById: null } : photo, tripId, takenAt);
+  const { activityId, activitySetById } = await activityFor(opts.releaseKeptOff && keptOff ? { ...photo, activitySetById: null } : photo, tripId, takenAt);
   await db.photo.update({
     where: { id: photo.id },
     data: {

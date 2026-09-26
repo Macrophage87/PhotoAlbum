@@ -8,7 +8,7 @@ import { editableMediaIds } from "@/lib/auth/ownership";
 import { enqueue } from "@/lib/jobs/boss";
 import { QUEUES } from "@/lib/jobs/queues";
 import { activityWindow, tripWindow } from "@/lib/photos/in-window";
-import { refileByClock } from "@/lib/activities/reassign";
+import { onActivity, refileByClock } from "@/lib/activities/reassign";
 
 const ids = z.array(z.string().min(1)).min(1).max(500);
 
@@ -28,7 +28,7 @@ export async function attachToActivity(activityId: string, photoIds: string[]): 
   if (!activity) throw new Error("Activity not found");
   const list = await editableMediaIds(user, ids.parse(photoIds));
   if (!list.length) return 0;
-  const r = await db.photo.updateMany({ where: { id: { in: list } }, data: { tripId: activity.tripId, activityId: activity.id, activitySetById: user.id } });
+  const r = await onActivity(() => db.photo.updateMany({ where: { id: { in: list } }, data: { tripId: activity.tripId, activityId: activity.id, activitySetById: user.id } }));
   await geotag(activity.tripId);
   revalidatePath(`/trips/${activity.trip.slug}`, "layout");
   return r.count;

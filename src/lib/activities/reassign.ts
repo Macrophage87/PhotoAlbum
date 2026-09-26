@@ -1,5 +1,5 @@
 import { db } from "@/lib/db";
-import type { Prisma } from "@/generated/prisma/client";
+import { Prisma } from "@/generated/prisma/client";
 import { openTo, pickActivityByTime, whoWasThere } from "@/lib/photos/assign";
 
 /**
@@ -43,9 +43,29 @@ export async function refileByClock(tripId: string, scope: Prisma.PhotoWhereInpu
     await refileOnce(tripId, scope);
   } catch (err) {
     // An activity deleted between reading the list and writing to it: read again, once, without it.
-    if ((err as { code?: string }).code !== "P2003") throw err;
+    if (!activityVanished(err)) throw err;
     await refileOnce(tripId, scope);
   }
+}
+
+/** What a member is told when the activity they were filing onto was deleted a moment before. */
+export const ACTIVITY_GONE = "That activity was just deleted";
+
+/** Run a filing onto an activity, turning "it was deleted under us" into words a member can read. */
+export async function onActivity<T>(write: () => Promise<T>): Promise<T> {
+  try {
+    return await write();
+  } catch (err) {
+    if (activityVanished(err)) throw new Error(ACTIVITY_GONE);
+    throw err;
+  }
+}
+
+/** A foreign key to an activity that no longer exists (or a deadlock with the delete): the filing lost a race. */
+export function activityVanished(err: unknown): boolean {
+  const e = err as { code?: string; meta?: { code?: string; driverAdapterError?: { cause?: { originalCode?: string } } } } | null;
+  const pg = e?.meta?.code ?? e?.meta?.driverAdapterError?.cause?.originalCode;
+  return e?.code === "P2003" || e?.code === "P2034" || (e?.code === "P2010" && (pg === "23503" || pg === "40P01"));
 }
 
 async function refileOnce(tripId: string, scope: Prisma.PhotoWhereInput): Promise<void> {
@@ -58,10 +78,15 @@ async function refileOnce(tripId: string, scope: Prisma.PhotoWhereInput): Promis
     const to = p.takenAt ? pickActivityByTime(openTo(activities, p.uploaderId), p.takenAt)?.id ?? null : null;
     if (to !== p.activityId) moves.push({ photo: p, to });
   }
-  // Each written only if it is still as it was read: a member filing it by hand, or correcting its date, while this
-  // runs wins, and the change of date files it again on its own.
-  for (const { photo: p, to } of moves) {
-    await db.photo.updateMany({ where: { id: p.id, tripId, activitySetById: null, activityId: p.activityId, takenAt: p.takenAt }, data: { activityId: to } });
+  // Written a thousand at a time, and each only if it is still as it was read: a member filing it by hand, or
+  // correcting its date, while this runs wins, and the change of date files it again on its own.
+  for (let i = 0; i < moves.length; i += 1000) {
+    const rows = moves.slice(i, i + 1000).map(({ photo: p, to }) => Prisma.sql`(${p.id}, ${p.activityId}, ${to}, ${p.takenAt?.toISOString() ?? null})`);
+    await db.$executeRaw`
+      UPDATE "Photo" AS p SET "activityId" = v.to_id::text, "updatedAt" = now()
+      FROM (VALUES ${Prisma.join(rows)}) AS v(id, from_id, to_id, taken_at)
+      WHERE p.id = v.id::text AND p."tripId" = ${tripId} AND p."activitySetById" IS NULL
+        AND p."activityId" IS NOT DISTINCT FROM v.from_id::text AND p."takenAt" IS NOT DISTINCT FROM v.taken_at::timestamp(3)`;
   }
 }
 

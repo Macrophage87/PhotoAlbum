@@ -8,7 +8,8 @@ import { trashSchema } from "@/lib/photos/trash";
 import { enqueue } from "@/lib/jobs/boss";
 import { QUEUES } from "@/lib/jobs/queues";
 import { applyPhotoInstant, requestGeotag } from "@/lib/photos/apply-date";
-import { refileByClock } from "@/lib/activities/reassign";
+import { onActivity, refileByClock } from "@/lib/activities/reassign";
+import { rememberSetters, settersFor } from "@/lib/photos/place-undo";
 import { datePlanSchema, isEmptyPlan, planDate } from "@/lib/photos/bulk-date";
 import { offsetMinutesInZone } from "@/lib/time/local-day";
 import { editableMediaIds } from "@/lib/auth/ownership";
@@ -30,7 +31,7 @@ export async function bulkAssignActivity(photoIds: string[], activityId: string 
   if (activityId) {
     const activity = await db.activity.findUnique({ where: { id: activityId }, select: { tripId: true } });
     if (!activity) return;
-    await db.photo.updateMany({ where: { id: { in: list }, tripId: activity.tripId }, data: { activityId, activitySetById: user.id } });
+    await onActivity(() => db.photo.updateMany({ where: { id: { in: list }, tripId: activity.tripId }, data: { activityId, activitySetById: user.id } }));
   } else {
     // Only a photograph on a trip has activities to stay off.
     await db.photo.updateMany({ where: { id: { in: list }, tripId: { not: null } }, data: { activityId: null, activitySetById: user.id } });
@@ -73,8 +74,11 @@ export async function bulkSetPlace(photoIds: string[], lat: number, lng: number,
   return r.count;
 }
 
-/** Where a photograph was before it was moved, so the move can be taken back. */
-export type PlaceBefore = { id: string; lat: number | null; lng: number | null; gpsSource: "EXIF" | "TRACK" | "MANUAL" | "SIDECAR" | "ESTIMATE" | null; placeName: string | null; placeSetById: string | null };
+/**
+ * Where a photograph was before it was moved, so the move can be taken back. `removedByHand` says it had no place
+ * because a member removed it; who that was stays on the server (see place-undo).
+ */
+export type PlaceBefore = { id: string; lat: number | null; lng: number | null; gpsSource: "EXIF" | "TRACK" | "MANUAL" | "SIDECAR" | "ESTIMATE" | null; placeName: string | null; removedByHand: boolean };
 
 const beforeSchema = z
   .array(
@@ -84,7 +88,7 @@ const beforeSchema = z
       lng: z.number().min(-180).max(180).nullable(),
       gpsSource: z.enum(["EXIF", "TRACK", "MANUAL", "SIDECAR", "ESTIMATE"]).nullable(),
       placeName: z.string().max(200).nullable(),
-      placeSetById: z.string().min(1).nullable().optional(),
+      removedByHand: z.boolean().optional(),
     }),
   )
   .min(1)
@@ -98,33 +102,33 @@ const beforeSchema = z
  * Nothing is revalidated: the screen keeps its own list, and every page that shows a position is built afresh when
  * it is next opened. Rebuilding this one underneath would only make the phone fetch every link on it again.
  */
-export async function placePhotos(photoIds: string[], lat: number, lng: number, name?: string | null): Promise<{ count: number; before: PlaceBefore[] }> {
+export async function placePhotos(photoIds: string[], lat: number, lng: number, name?: string | null): Promise<{ count: number; before: PlaceBefore[]; undo: string | null }> {
   const user = await requireUserOrThrow();
   const list = await editableMediaIds(user, ids.parse(photoIds));
-  if (!list.length) return { count: 0, before: [] };
+  if (!list.length) return { count: 0, before: [], undo: null };
   if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) throw new Error("That is not a place on the map");
-  const before = await db.photo.findMany({ where: { id: { in: list } }, select: { id: true, lat: true, lng: true, gpsSource: true, placeName: true, placeSetById: true } });
+  const rows = await db.photo.findMany({ where: { id: { in: list } }, select: { id: true, lat: true, lng: true, gpsSource: true, placeName: true, placeSetById: true } });
   const r = await db.photo.updateMany({ where: { id: { in: list } }, data: { lat, lng, altitude: null, gpsSource: "MANUAL", placeSetById: user.id, placeName: typeof name === "string" && name.trim() ? name.trim().slice(0, 200) : null } });
-  return { count: r.count, before };
+  const before = rows.map(({ placeSetById, ...p }) => ({ ...p, removedByHand: p.lat === null && placeSetById !== null }));
+  return { count: r.count, before, undo: rememberSetters(user.id, rows) };
 }
 
 /**
  * Take a move back: each photograph returns to exactly where it was, whoever or whatever had put it there —
  * including "nowhere, because somebody removed it", which must stay removed rather than become a gap the album
- * fills in. The list comes back from the browser, so who is named as having set a place is only taken where that
- * is a real member; otherwise it is the member pressing Undo, who is the one putting it back.
+ * fills in. Who had set each place comes from what the server noted when the move was made (`undo`), never from
+ * the browser; without that note (a restart, or an hour gone), the member pressing Undo is recorded instead.
  */
-export async function restorePlaces(entries: PlaceBefore[]): Promise<number> {
+export async function restorePlaces(entries: PlaceBefore[], undo?: string | null): Promise<number> {
   const user = await requireUserOrThrow();
   const all = beforeSchema.parse(entries);
   const mine = new Set(await editableMediaIds(user, all.map((e) => e.id)));
   const allowed = all.filter((e) => mine.has(e.id));
-  const named = [...new Set(allowed.map((e) => e.placeSetById).filter((v): v is string => Boolean(v)))];
-  const members = new Set((await db.user.findMany({ where: { id: { in: named } }, select: { id: true } })).map((u) => u.id));
+  const noted = settersFor(undo, user.id);
   const setter = (e: (typeof allowed)[number]) => {
-    const byHand = e.gpsSource === "MANUAL" || (e.lat === null && Boolean(e.placeSetById));
-    if (!byHand) return null;
-    return e.placeSetById && members.has(e.placeSetById) ? e.placeSetById : user.id;
+    const was = noted?.has(e.id) ? noted.get(e.id)! : undefined;
+    const byHand = e.gpsSource === "MANUAL" || (e.lat === null && (noted ? Boolean(was) : Boolean(e.removedByHand)));
+    return byHand ? was ?? user.id : null;
   };
   await db.$transaction(
     allowed.map((e) =>
@@ -192,7 +196,7 @@ export async function bulkSetDate(photoIds: string[], plan: unknown): Promise<{ 
   const { rows, skipped, notYours } = await planSelection(user, photoIds, plan);
   const trips = new Set<string>();
   for (const row of rows) {
-    const tripId = await applyPhotoInstant(row.photo, new Date(row.after.at), row.after.tzOffsetMin, "MANUAL", user.id, { geotag: false, byMember: true });
+    const tripId = await applyPhotoInstant(row.photo, new Date(row.after.at), row.after.tzOffsetMin, "MANUAL", user.id, { geotag: false });
     if (tripId) trips.add(tripId);
   }
   // One re-geotag per trip rather than one per photo: the job walks the whole trip anyway.

@@ -14,9 +14,11 @@ import path from "node:path";
 import { bulkFollowTime, bulkTakeOffActivity, putInActivity } from "@/app/photos/activity-actions";
 import { removeMember } from "@/app/admin/actions";
 import { fileExisting } from "@/lib/photos/file-existing";
-import { bulkAssignActivity, bulkMoveToTrip } from "@/app/photos/bulk-actions";
+import { bulkAssignActivity, bulkMoveToTrip, bulkSetDate } from "@/app/photos/bulk-actions";
+import { deleteTrip } from "@/app/trips/[slug]/actions";
+import { confirmEstimatedDate } from "@/app/annotation/actions";
 import { createActivity, deleteActivity, updateActivity } from "@/app/trips/[slug]/activities/actions";
-import { updatePhoto } from "@/app/photos/[id]/actions";
+import { setPhotoDate, updatePhoto } from "@/app/photos/[id]/actions";
 import { activityWindow, tripWindow } from "@/lib/photos/in-window";
 import { applyPhotoInstant } from "@/lib/photos/apply-date";
 import { deleteActivityAndRefile, reassignPhotosForActivity, refileByClock } from "@/lib/activities/reassign";
@@ -246,12 +248,12 @@ describe("filing photographs on activities", () => {
 
     it("a date a member gives by hand lets the time decide again for one kept off every activity", async () => {
       const p = await photo(at(20), { activityId: null, activitySetById: me });
-      await applyPhotoInstant(await row(p.id), at(10), 0, "MANUAL", me, { geotag: false, byMember: true });
+      await applyPhotoInstant(await row(p.id), at(10), 0, "MANUAL", me, { geotag: false, releaseKeptOff: true });
       expect(await row(p.id)).toMatchObject({ activityId: walk, activitySetById: null });
       // A photo filed on an activity by hand keeps it, though.
       const boat = (await db.activity.create({ data: { tripId, title: "Boat", type: "BOAT", startTime: at(18), endTime: at(19) } })).id;
       const q = await photo(at(18, 30), { activityId: boat, activitySetById: me });
-      await applyPhotoInstant(await row(q.id), at(10), 0, "MANUAL", me, { geotag: false, byMember: true });
+      await applyPhotoInstant(await row(q.id), at(10), 0, "MANUAL", me, { geotag: false, releaseKeptOff: true });
       expect(await row(q.id)).toMatchObject({ activityId: boat, activitySetById: me });
     });
 
@@ -305,6 +307,54 @@ describe("filing photographs on activities", () => {
       await refileByClock(tripId, { id: p.id });
       spy.mockRestore();
       expect((await row(p.id)).activityId).toBeNull();
+    });
+  });
+
+  it("refileByClock reads again when an activity it chose is deleted before it writes", async () => {
+    const boat = (await db.activity.create({ data: { tripId, title: "Boat", type: "BOAT", startTime: at(9, 30), endTime: at(10, 30) } })).id;
+    const p = await photo(at(10), { activityId: null });
+    const real = db.activity.findMany.bind(db.activity);
+    const spy = vi.spyOn(db.activity, "findMany").mockImplementationOnce((async (args: Parameters<typeof real>[0]) => {
+      const rows = await real(args);
+      await db.activity.delete({ where: { id: boat } });
+      return rows;
+    }) as unknown as typeof db.activity.findMany);
+    await refileByClock(tripId, { id: p.id });
+    spy.mockRestore();
+    expect((await row(p.id)).activityId).toBe(walk);
+  });
+
+  describe("second review", () => {
+    it("a plain save of Automatic leaves a filing nobody chose exactly where it is", async () => {
+      // Put on the boat before the album kept count of who chose what; the clock would now say the walk.
+      const boat = (await db.activity.create({ data: { tripId, title: "Boat", type: "BOAT", startTime: at(18), endTime: at(19) } })).id;
+      const legacy = await photo(at(10), { activityId: boat, activitySetById: null });
+      await updatePhoto(legacy.id, form({ caption: "Hi", context: "", tripId, activityId: "auto" }));
+      expect(await row(legacy.id)).toMatchObject({ activityId: boat, activitySetById: null });
+    });
+
+    it("a bulk shift keeps a photo kept off every activity off, where typing its one date lets the time decide", async () => {
+      const p = await photo(at(20), { activityId: null, activitySetById: me });
+      // Ten hours earlier: inside the walk, but a shift is a correction of the clock, not a new answer.
+      await bulkSetDate([p.id], { mode: "shift", years: 0, months: 0, days: 0, minutes: -600 });
+      expect(await row(p.id)).toMatchObject({ activityId: null, activitySetById: me });
+      await setPhotoDate(p.id, form({ takenAt: "2025-08-12T10:00" }));
+      expect(await row(p.id)).toMatchObject({ activityId: walk, activitySetById: null });
+    });
+
+    it("deleting a trip leaves its photos with no activity and nobody's choice", async () => {
+      const p = await photo(at(10), { activityId: null, activitySetById: me });
+      const q = await photo(at(10), { activityId: walk, activitySetById: me });
+      who.role = "ADMIN";
+      await expect(deleteTrip("acadia")).rejects.toThrow(/REDIRECT/);
+      expect(await row(p.id)).toMatchObject({ tripId: null, activityId: null, activitySetById: null });
+      expect(await row(q.id)).toMatchObject({ tripId: null, activityId: null, activitySetById: null });
+    });
+
+    it("confirming an estimated date files the photo by it, as any date set by hand does", async () => {
+      const scan = await photo(null, { tripId: null, lat: 1, lng: 2, gpsSource: "TRACK" });
+      await confirmEstimatedDate(scan.id, form({ date: "2025-08-12" }));
+      expect(await row(scan.id)).toMatchObject({ tripId, activityId: walk, takenAtSource: "MANUAL", dateSetById: me, estimatedDateSource: "MEMBER", lat: null, gpsSource: null });
     });
   });
 

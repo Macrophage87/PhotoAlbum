@@ -13,7 +13,7 @@ import { guessDateFromTrip, guessDatesForTrip } from "@/lib/photos/date-guess-qu
 import { dateReport, type DateReport } from "@/lib/photos/date-report";
 import { enqueue } from "@/lib/jobs/boss";
 import { QUEUES } from "@/lib/jobs/queues";
-import { activityFor } from "@/lib/activities/reassign";
+import { activityFor, onActivity } from "@/lib/activities/reassign";
 import { applyPhotoInstant } from "@/lib/photos/apply-date";
 import { offsetMinutesInZone, wallTimeWithOffsetToInstant } from "@/lib/time/local-day";
 import { storage } from "@/lib/storage";
@@ -68,7 +68,10 @@ export async function updatePhoto(id: string, fd: FormData): Promise<void> {
   } else if (!fd.has("activityId")) {
     ({ activityId, activitySetById } = photo);
   } else if (v.activityId === "auto") {
-    ({ activityId, activitySetById } = await byTime());
+    // Automatic is what the form shows for a filing nobody chose, so a plain save of it changes nothing; only
+    // switching to it from somebody's choice hands the photo back to the clock.
+    if (photo.activitySetById) ({ activityId, activitySetById } = await byTime());
+    else ({ activityId, activitySetById } = photo);
   } else if (v.activityId && !(await db.activity.count({ where: { id: v.activityId, tripId: v.tripId } }))) {
     // Deleted from under the form, or not this trip's: nothing to file it on, so nothing changes.
     ({ activityId, activitySetById } = photo);
@@ -85,7 +88,7 @@ export async function updatePhoto(id: string, fd: FormData): Promise<void> {
     for (const cid of wanted) if (!held.has(cid)) await addToCollection(cid, [id]);
     for (const cid of held) if (!wanted.has(cid)) await removeFromCollection(cid, [id]);
   }
-  await db.photo.update({ where: { id }, data: { title, caption: v.caption, context: v.context, ...(v.context !== photo.context ? { contextUpdatedAt: new Date(), annotationError: null } : {}), tripId: v.tripId, activityId, activitySetById } });
+  await onActivity(() => db.photo.update({ where: { id }, data: { title, caption: v.caption, context: v.context, ...(v.context !== photo.context ? { contextUpdatedAt: new Date(), annotationError: null } : {}), tripId: v.tripId, activityId, activitySetById } }));
   revalidatePath(`/photos/${id}`);
   if (photo.tripId) revalidatePath(`/trips`, "layout");
 }
@@ -156,7 +159,7 @@ export async function shiftPhotoTimezone(id: string, fd: FormData): Promise<void
   }
   const oldOffset = photo.tzOffsetMin ?? 0;
   const takenAt = new Date(photo.takenAt.getTime() + (oldOffset - newOffset) * 60_000);
-  await applyPhotoInstant(photo, takenAt, newOffset, "MANUAL", user.id, { byMember: true });
+  await applyPhotoInstant(photo, takenAt, newOffset, "MANUAL", user.id);
   revalidatePath(`/photos/${id}`);
   revalidatePath("/trips", "layout");
 }
@@ -179,7 +182,7 @@ export async function setPhotoDate(id: string, fd: FormData): Promise<DateResult
   if (wall.year < 1800 || wall.year > 2100) return { ok: false, message: "That year looks wrong" };
   const tzOffsetMin = photo.tzOffsetMin ?? (photo.trip ? offsetMinutesInZone(wallTimeWithOffsetToInstant(wall, 0), photo.trip.timezone) : 0);
   const takenAt = wallTimeWithOffsetToInstant(wall, tzOffsetMin);
-  await applyPhotoInstant(photo, takenAt, tzOffsetMin, "MANUAL", user.id, { byMember: true });
+  await applyPhotoInstant(photo, takenAt, tzOffsetMin, "MANUAL", user.id, { releaseKeptOff: true });
   revalidatePath(`/photos/${id}`);
   revalidatePath("/trips", "layout");
   return { ok: true, takenAt: takenAt.toISOString(), tzOffsetMin, source: "MANUAL", setBy: uploaderLabel(user.name, user.email) };
@@ -195,7 +198,7 @@ export async function resetPhotoDateToCamera(id: string): Promise<DateResult> {
   const exif = await readExif(local).catch(() => null);
   const resolved = exif ? resolveTakenAt(exif, photo.trip?.timezone ?? null) : null;
   if (!resolved) return { ok: false, message: "This file carries no camera date" };
-  await applyPhotoInstant(photo, resolved.takenAt, resolved.tzOffsetMin, resolved.source, null, { byMember: true });
+  await applyPhotoInstant(photo, resolved.takenAt, resolved.tzOffsetMin, resolved.source, null);
   revalidatePath(`/photos/${id}`);
   revalidatePath("/trips", "layout");
   return { ok: true, takenAt: resolved.takenAt.toISOString(), tzOffsetMin: resolved.tzOffsetMin, source: resolved.source, setBy: null };
@@ -300,7 +303,7 @@ export async function setDateFromNeighbours(id: string): Promise<DateGuessResult
   if (!guess) return { ok: false, message: "The other photos on this trip do not say anything about this one" };
   const photo = await db.photo.findUnique({ where: { id }, select: { id: true, tripId: true, gpsSource: true, uploaderId: true, activityId: true, activitySetById: true } });
   if (!photo) return { ok: false, message: "Photo not found" };
-  await applyPhotoInstant(photo, guess.takenAt, guess.tzOffsetMin, "MANUAL", user.id, { byMember: true });
+  await applyPhotoInstant(photo, guess.takenAt, guess.tzOffsetMin, "MANUAL", user.id);
   return { ok: true, takenAt: guess.takenAt.toISOString(), tzOffsetMin: guess.tzOffsetMin, source: "MANUAL", setBy: uploaderLabel(user.name, user.email) };
 }
 
@@ -315,7 +318,7 @@ export async function setTripDatesFromNeighbours(tripId: string): Promise<number
     if (!mine.has(g.id)) continue;
     const photo = await db.photo.findUnique({ where: { id: g.id }, select: { id: true, tripId: true, gpsSource: true, uploaderId: true, activityId: true, activitySetById: true } });
     if (!photo) continue;
-    await applyPhotoInstant(photo, g.guess.takenAt, g.guess.tzOffsetMin, "MANUAL", user.id, { byMember: true });
+    await applyPhotoInstant(photo, g.guess.takenAt, g.guess.tzOffsetMin, "MANUAL", user.id);
     n += 1;
   }
   revalidatePath("/trips", "layout");
@@ -337,7 +340,7 @@ export async function applyReportedDate(id: string, iso: string): Promise<DateGu
   const photo = await db.photo.findUnique({ where: { id }, select: { id: true, tripId: true, gpsSource: true, uploaderId: true, activityId: true, activitySetById: true, tzOffsetMin: true, trip: { select: { timezone: true } } } });
   if (!photo) return { ok: false, message: "Photo not found" };
   const offset = photo.trip ? offsetMinutesInZone(at, photo.trip.timezone) : photo.tzOffsetMin ?? 0;
-  await applyPhotoInstant(photo, at, offset, "MANUAL", user.id, { byMember: true });
+  await applyPhotoInstant(photo, at, offset, "MANUAL", user.id, { releaseKeptOff: true });
   return { ok: true, takenAt: at.toISOString(), tzOffsetMin: offset, source: "MANUAL", setBy: uploaderLabel(user.name, user.email) };
 }
 

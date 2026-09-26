@@ -15,8 +15,10 @@ const foldSelect = {
   lng: true,
   placeName: true,
   gpsSource: true,
+  placeSetById: true,
   tripId: true,
   activityId: true,
+  activitySetById: true,
   createdAt: true,
 } as const;
 

@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { db } from "@/lib/db";
+import { applyPhotoInstant } from "@/lib/photos/apply-date";
 import { enqueueMatch } from "@/lib/jobs/handlers/match-photo";
 import { env } from "@/lib/env";
 import { requireAdminOrThrow, requireUserOrThrow } from "@/lib/auth/viewer";
@@ -113,14 +114,18 @@ export async function updateAnnotation(photoId: string, fd: FormData): Promise<v
   revalidatePath(`/photos/${photoId}`);
 }
 
-/** Turn the helper's estimate (or the member's own) into the item's real date. */
+/**
+ * Turn the helper's estimate (or the member's own) into the item's real date. It goes the way any date a member
+ * sets goes, so the trip, the activity and a pin taken from a track at the old time all follow it.
+ */
 export async function confirmEstimatedDate(photoId: string, fd: FormData): Promise<void> {
   const user = await requireUserOrThrow();
-  const owner = await db.photo.findUnique({ where: { id: photoId }, select: { uploaderId: true } });
-  if (!owner) return;
-  if (!canEditMedia(user, owner)) throw new Error(NOT_YOURS);
+  const photo = await db.photo.findUnique({ where: { id: photoId }, select: { id: true, uploaderId: true, tripId: true, gpsSource: true, activityId: true, activitySetById: true } });
+  if (!photo) return;
+  if (!canEditMedia(user, photo)) throw new Error(NOT_YOURS);
   const day = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).parse(fd.get("date"));
-  await db.photo.update({ where: { id: photoId }, data: { takenAt: new Date(`${day}T12:00:00Z`), takenAtSource: "MANUAL", tzOffsetMin: 0, estimatedDateSource: "MEMBER", estimatedDateNote: null, estimatedDateConfidence: null } });
+  await db.photo.update({ where: { id: photoId }, data: { estimatedDateSource: "MEMBER", estimatedDateNote: null, estimatedDateConfidence: null } });
+  await applyPhotoInstant(photo, new Date(`${day}T12:00:00Z`), 0, "MANUAL", user.id, { releaseKeptOff: true });
   await enqueueMatch([photoId]);
   revalidatePath(`/photos/${photoId}`);
   revalidatePath("/review");

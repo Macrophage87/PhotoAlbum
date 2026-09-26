@@ -24,8 +24,11 @@ export type FoldablePhoto = {
   lng: number | null;
   placeName: string | null;
   gpsSource: string | null;
+  /** Who pinned the place, or — with no position — who removed it. */
+  placeSetById: string | null;
   tripId: string | null;
   activityId: string | null;
+  activitySetById: string | null;
   createdAt: Date;
 };
 
@@ -70,11 +73,22 @@ export function planFold(keeper: FoldablePhoto, copy: FoldablePhoto): FoldPlan {
   const keeperPlaceIsWeak = !keeperHasPlace || keeper.gpsSource === null || WEAK_PLACE.includes(keeper.gpsSource);
   const copyHasPlace = copy.lat !== null && copy.lng !== null;
   const copyPlaceIsBetter = copyHasPlace && copy.gpsSource !== null && !WEAK_PLACE.includes(copy.gpsSource);
-  if (keeperPlaceIsWeak && copyPlaceIsBetter) {
+  // A place somebody removed by hand is the strongest word on it there is: never filled on the keeper, and a copy
+  // that had its place removed takes the keeper's away too, with who removed it — it is the same photograph.
+  const keeperCleared = !keeperHasPlace && keeper.placeSetById !== null;
+  const copyCleared = !copyHasPlace && copy.placeSetById !== null;
+  if (keeperCleared) {
+    // Nothing to take.
+  } else if (copyCleared) {
+    Object.assign(data, { lat: null, lng: null, altitude: null, gpsSource: null, placeName: null, placeSetById: copy.placeSetById });
+    filled.push("place removed");
+  } else if (keeperPlaceIsWeak && copyPlaceIsBetter) {
     data.lat = copy.lat;
     data.lng = copy.lng;
     data.gpsSource = copy.gpsSource;
     data.placeName = copy.placeName;
+    // A pin a member put on the copy is still theirs on the keeper.
+    data.placeSetById = copy.gpsSource === "MANUAL" ? copy.placeSetById : null;
     filled.push("place");
   } else if (!keeper.placeName?.trim() && copy.placeName?.trim() && keeperHasPlace === copyHasPlace) {
     data.placeName = copy.placeName;
@@ -85,6 +99,8 @@ export function planFold(keeper: FoldablePhoto, copy: FoldablePhoto): FoldPlan {
   if (!keeper.tripId && copy.tripId) {
     data.tripId = copy.tripId;
     data.activityId = copy.activityId;
+    // Whoever chose the copy's activity (or kept it off them all) chose it for this photograph.
+    data.activitySetById = copy.activitySetById;
     filled.push("trip");
   }
 

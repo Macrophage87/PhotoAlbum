@@ -65,16 +65,26 @@ describe("a place cleared by hand", () => {
 
   it("comes back removed, not merely empty, when a move on the map is undone", async () => {
     await clearPhotoPlace(photoId);
-    const { before } = await placePhotos([photoId], 10, 20);
-    expect(before[0]).toMatchObject({ lat: null, placeSetById: who.id });
-    await restorePlaces(before);
+    const { before, undo } = await placePhotos([photoId], 10, 20);
+    expect(before[0]).toMatchObject({ lat: null, removedByHand: true });
+    await restorePlaces(before, undo);
     expect(await row()).toMatchObject({ lat: null, gpsSource: null, placeSetById: who.id });
-    // A name the browser sends back is only believed if it is a real member.
-    await placePhotos([photoId], 10, 20);
-    await restorePlaces([{ ...before[0], placeSetById: "nobody" }]);
-    expect((await row()).placeSetById).toBe(who.id);
     // An ordinary position is restored as nobody's choice.
-    await restorePlaces([{ id: photoId, lat: 1, lng: 2, gpsSource: "EXIF", placeName: null, placeSetById: null }]);
+    await restorePlaces([{ id: photoId, lat: 1, lng: 2, gpsSource: "EXIF", placeName: null, removedByHand: false }]);
     expect(await row()).toMatchObject({ lat: 1, gpsSource: "EXIF", placeSetById: null });
+  });
+
+  it("puts back who set the place from the server's note, never from the browser", async () => {
+    const aunt = (await db.user.create({ data: { email: "aunt@example.com" } })).id;
+    const cousin = (await db.user.create({ data: { email: "cousin@example.com" } })).id;
+    await db.photo.update({ where: { id: photoId }, data: { lat: 5, lng: 6, gpsSource: "MANUAL", placeSetById: aunt } });
+    const { before, undo } = await placePhotos([photoId], 10, 20);
+    // The browser cannot name somebody else: the entry carries no setter at all, and a forged one is ignored.
+    await restorePlaces([{ ...before[0], placeSetById: cousin } as never], undo);
+    expect(await row()).toMatchObject({ lat: 5, gpsSource: "MANUAL", placeSetById: aunt });
+    // Without the server's note (a restart), the member pressing Undo is recorded.
+    const again = await placePhotos([photoId], 10, 20);
+    await restorePlaces(again.before, "no-such-token");
+    expect((await row()).placeSetById).toBe(who.id);
   });
 });
