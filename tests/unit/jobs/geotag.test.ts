@@ -151,6 +151,49 @@ describe("geotagPhotos", () => {
       expect(await latOf(mine.id)).toBe(44.081);
     });
 
+    it("follows the uploader's own visit when she was apart from him at its doors, though its centre is near his route (F)", async () => {
+      // Dad rides north for four hours. Mom walks to a museum 2 km east of where he will be at 14:40, stays three
+      // hours with nothing recorded but the visit, and walks off. At both doors he is kilometres away.
+      await makeTrack(tripId, dadId, line(240), "GPX");
+      const east = (m: number) => -68 + m / (111_195 * Math.cos((44.1 * Math.PI) / 180));
+      const museum = { lat: 44.1, lng: east(2_000) };
+      await makeTrack(tripId, userId, [
+        ...Array.from({ length: 11 }, (_, i) => ({ t: T0 + i * 60_000, ...museum })),
+        ...Array.from({ length: 37 }, (_, i) => ({ t: T0 + (15 + i * 5) * 60_000, ...museum, filled: "visit" as const })),
+        ...Array.from({ length: 10 }, (_, i) => ({ t: T0 + (200 + i) * 60_000, ...museum })),
+      ], "GOOGLE");
+      const mine = await makePhoto(tripId, userId, new Date(T0 + 100 * 60_000));
+      await geotagPhotos({ tripId });
+      const p = await db.photo.findUniqueOrThrow({ where: { id: mine.id } });
+      expect([p.lat, p.lng]).toEqual([museum.lat, expect.closeTo(museum.lng, 6)]);
+    });
+
+    it("keeps the activity track when she was with him at the doors of a huge park whose centre is far off (B, doors)", async () => {
+      await makeTrack(tripId, dadId, line(240), "GPX");
+      const east = (m: number) => -68 + m / (111_195 * Math.cos((44 * Math.PI) / 180));
+      // Her recorded fixes follow his trail up to 13:10 and again from 14:00; in between, the park's centre 3.5 km east.
+      await makeTrack(tripId, userId, [
+        ...line(11),
+        ...Array.from({ length: 9 }, (_, i) => ({ t: T0 + (15 + i * 5) * 60_000, lat: 44.03, lng: east(3_500), filled: "visit" as const })),
+        ...line(10, 60),
+      ], "GOOGLE");
+      const mine = await makePhoto(tripId, userId, new Date(T0 + 30 * 60_000));
+      await geotagPhotos({ tripId });
+      expect(await latOf(mine.id)).toBeCloseTo(44.03, 5);
+      expect((await db.photo.findUniqueOrThrow({ where: { id: mine.id } })).lng).toBe(-68);
+    });
+
+    for (const km of [1, 5]) {
+      it(`follows her own trace logged every 8 minutes when it is ${km} km from his (A)`, async () => {
+        const east = -68 + (km * 1000) / (111_195 * Math.cos((44 * Math.PI) / 180));
+        await makeTrack(tripId, userId, Array.from({ length: 5 }, (_, i) => ({ t: T0 + i * 8 * 60_000, lat: 44 + i * 0.008, lng: east })), "GOOGLE");
+        const mine = await makePhoto(tripId, userId, new Date(T0 + 12 * 60_000));
+        await geotagPhotos({ tripId });
+        const p = await db.photo.findUniqueOrThrow({ where: { id: mine.id } });
+        expect(p.lng).toBeCloseTo(east, 6);
+      });
+    }
+
     it("chooses the member she was with when two others' activity tracks cover the moment (C)", async () => {
       const son = (await db.user.create({ data: { email: "son@example.com", role: "MEMBER" } })).id;
       // Dad is 5 km away; her own trace and Son's track are within 100 m of each other.

@@ -14,25 +14,34 @@ const VISIT_APART_M = 3_000;
 
 type Position = { lat: number; lng: number; ele?: number };
 type Fix<T> = { track: T; pos: Position; kind: PositionKind };
+type Covering = { startTime: Date; endTime: Date };
+
+/** A track's position at an instant, or null where it does not cover it. */
+function positionOn<T extends Covering>(track: T, points: TrackPoint[], tMs: number): Position | null {
+  return tMs < track.startTime.getTime() || tMs > track.endTime.getTime() ? null : positionAt(points, tMs);
+}
 
 /**
  * The track to place a photo from, and where. The uploader's own GPX/FIT comes first. Then, where the uploader's own
- * Google trace and other members' GPX/FIT cover the moment, the trace is weighed against the nearest of them:
- * - a recorded position more than TOGETHER_M away says the uploader was elsewhere (Mom in the museum while Dad was
- *   out on his bike), so the trace places the photo;
- * - a position at a visit's place says so only beyond VISIT_APART_M, since the centre of a big park can be far from
- *   the trail through it;
- * - a position snapped across a signal gap, or interpolated by the importer, says nothing, and neither does being
- *   close: then the nearest activity track, the more precise record, places it.
- * After that, the uploader's own Google trace, others' GPX/FIT, others' Google traces. Within each, start-time order.
+ * Google trace and other members' GPX/FIT cover the moment, the trace is weighed against them:
+ * - a recorded position more than TOGETHER_M from every one of them says the uploader was elsewhere (Mom in the
+ *   museum while Dad was out on his bike), so the trace places the photo;
+ * - a position at a visit's place is judged at the visit's doors: the uploader's last recorded fix before it and
+ *   first after it, against each activity track at those same moments. Apart at every door that can be compared
+ *   means elsewhere; together at any door means together (the trailhead of a park whose centre is far from the
+ *   trail). With no door to compare, the visit's centre must be more than VISIT_APART_M away;
+ * - a position snapped across a signal gap, or interpolated by the importer, says nothing.
+ * Wherever the uploader was not shown to be elsewhere, the nearest activity track they were with (or simply the
+ * nearest), the more precise record, places the photo. After that, the uploader's own Google trace, others' GPX/FIT,
+ * others' Google traces. Within each, start-time order.
  */
-function choose<T extends { source: string; uploaderId: string }>(tracks: T[], uploaderId: string, at: (t: T) => Omit<Fix<T>, "track"> | null): Fix<T> | null {
+function choose<T extends Covering & { source: string; uploaderId: string }>(tracks: T[], uploaderId: string, tMs: number, pointsOf: (t: T) => TrackPoint[]): Fix<T> | null {
   const all = (own: boolean, google: boolean, one = false) => {
     const out: Fix<T>[] = [];
     for (const track of tracks) {
       if ((track.uploaderId === uploaderId) !== own || (track.source === "GOOGLE") !== google) continue;
-      const fix = at(track);
-      if (fix) out.push({ track, ...fix });
+      const pos = positionOn(track, pointsOf(track), tMs);
+      if (pos) out.push({ track, pos, kind: positionKindAt(pointsOf(track), tMs) ?? "soft" });
       if (one && out.length) break;
     }
     return out;
@@ -41,13 +50,29 @@ function choose<T extends { source: string; uploaderId: string }>(tracks: T[], u
   if (ownPrecise) return ownPrecise;
   const [ownGoogle] = all(true, true, true);
   const others = all(false, false);
-  if (ownGoogle && others.length) {
-    const away = (f: Fix<T>) => haversine(ownGoogle.pos.lat, ownGoogle.pos.lng, f.pos.lat, f.pos.lng);
-    const nearest = others.reduce((a, b) => (away(b) < away(a) ? b : a));
-    const apart = ownGoogle.kind === "firm" ? TOGETHER_M : ownGoogle.kind === "visit" ? VISIT_APART_M : Infinity;
-    return away(nearest) > apart ? ownGoogle : nearest;
-  }
-  return ownGoogle ?? others[0] ?? all(false, true, true)[0] ?? null;
+  if (!ownGoogle || !others.length) return ownGoogle ?? others[0] ?? all(false, true, true)[0] ?? null;
+
+  const away = (f: Fix<T>) => haversine(ownGoogle.pos.lat, ownGoogle.pos.lng, f.pos.lat, f.pos.lng);
+  const byDistance = [...others].sort((a, b) => away(a) - away(b));
+  if (ownGoogle.kind === "firm") return away(byDistance[0]) > TOGETHER_M ? ownGoogle : byDistance[0];
+  if (ownGoogle.kind === "soft") return byDistance[0];
+
+  // A visit: compare at its doors.
+  const own = pointsOf(ownGoogle.track);
+  let k = 0;
+  while (k < own.length && own[k].t <= tMs) k++;
+  let before: TrackPoint | undefined, after: TrackPoint | undefined;
+  for (let i = k - 1; i >= 0 && !before; i--) if (!own[i].filled) before = own[i];
+  for (let i = k; i < own.length && !after; i++) if (!own[i].filled) after = own[i];
+  const together = (f: Fix<T>) => {
+    const doors = [before, after].filter((d): d is TrackPoint => !!d);
+    const gaps = doors.flatMap((d) => {
+      const p = positionOn(f.track, pointsOf(f.track), d.t);
+      return p ? [haversine(d.lat, d.lng, p.lat, p.lng)] : [];
+    });
+    return gaps.length ? gaps.some((g) => g <= TOGETHER_M) : away(f) <= VISIT_APART_M;
+  };
+  return byDistance.find(together) ?? ownGoogle;
 }
 
 /** Only timestamps that came from the camera (or were set by hand) are trustworthy enough to place a photo on a track. */
@@ -105,11 +130,7 @@ export async function geotagPhotos(job: GeotagPhotosJob): Promise<{ updated: num
   let updated = 0;
   for (const photo of photos) {
     const t = photo.takenAt!.getTime();
-    const chosen = choose(tracks, photo.uploaderId, (track) => {
-      if (t < track.startTime.getTime() || t > track.endTime.getTime()) return null;
-      const pts = pointsOf(track), pos = positionAt(pts, t);
-      return pos && { pos, kind: positionKindAt(pts, t) ?? "soft" };
-    });
+    const chosen = choose(tracks, photo.uploaderId, t, pointsOf);
     if (chosen) {
       const { track, pos } = chosen;
       const same = photo.gpsSource === "TRACK" && photo.lat === pos.lat && photo.lng === pos.lng && (photo.altitude ?? null) === (pos.ele ?? null);
