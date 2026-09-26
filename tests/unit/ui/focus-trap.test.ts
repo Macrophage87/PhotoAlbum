@@ -30,5 +30,7 @@ describe("keeping Tab inside a modal", () => {
     expect(canTakeFocus({ tabIndex: -1, ...shown })).toBe(false);
     expect(canTakeFocus({ tabIndex: 0, disabled: true, ...shown })).toBe(false);
     expect(canTakeFocus({ tabIndex: 0, ...hidden })).toBe(false);
+    expect(canTakeFocus({ tabIndex: 0, ...shown }, "hidden")).toBe(false);
+    expect(canTakeFocus({ tabIndex: 0, ...shown }, "visible")).toBe(true);
   });
 });
