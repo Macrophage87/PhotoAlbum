@@ -11,6 +11,7 @@ import { CollectionHeader } from "@/components/collections/CollectionHeader";
 import { TripTabs } from "@/components/trips/TripTabs";
 import { ShareCookie } from "@/app/share/[token]/ShareCookie";
 import { collectionCard } from "@/app/collections/[slug]/layout";
+import { withReadableDescription } from "@/lib/photos/readable-text";
 
 export async function generateMetadata({ params }: LayoutProps<"/share/c/[token]">): Promise<Metadata> {
   const { token } = await params;
@@ -49,7 +50,7 @@ export default async function SharedCollectionLayout({ params, children }: Layou
           <span className="text-muted">Shared with you</span>
         </div>
       </div>
-      <CollectionHeader collection={collection} shareUrl={shareableCollectionUrl(collection, env().APP_URL)} />
+      <CollectionHeader collection={withReadableDescription(collection, false)} shareUrl={shareableCollectionUrl(collection, env().APP_URL)} />
       <TripTabs tabs={tabs} />
       <main className="mx-auto max-w-6xl px-4 sm:px-6 py-8">{children}</main>
     </TripTheme>

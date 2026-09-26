@@ -52,15 +52,17 @@ import { SimilarStrip } from "@/components/graph/SimilarStrip";
 import { PersonChips } from "@/components/people/PersonChips";
 import { PhotoTagger } from "@/components/people/PhotoTagger";
 import { NOT_TRASHED } from "@/lib/photos/trash";
+import { readableTitle } from "@/lib/photos/readable-text";
 
 /** The tab and link-preview title: the item's title, else its caption, else the file name. Members only, like the page. */
 export async function generateMetadata({ params }: PageProps<"/photos/[id]">): Promise<Metadata> {
   const { id } = await params;
   const viewer = await getViewer();
   if (viewer.kind !== "user") return { title: "Photo" };
-  const photo = await db.photo.findUnique({ where: { id }, select: { title: true, caption: true, originalName: true } });
+  const photo = await db.photo.findUnique({ where: { id }, select: { title: true, membersTitle: true, caption: true, originalName: true } });
   if (!photo) return { title: "Photo" };
-  return { title: photo.title ?? photo.caption ?? photo.originalName, description: photo.title ? (photo.caption ?? undefined) : undefined, robots: { index: false, follow: false } };
+  const title = readableTitle(photo, true);
+  return { title: title ?? photo.caption ?? photo.originalName, description: title ? (photo.caption ?? undefined) : undefined, robots: { index: false, follow: false } };
 }
 
 export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {

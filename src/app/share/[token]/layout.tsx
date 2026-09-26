@@ -11,6 +11,7 @@ import { TripHeader } from "@/components/trips/TripHeader";
 import { TripTabs } from "@/components/trips/TripTabs";
 import { ShareCookie } from "./ShareCookie";
 import { tripCard } from "@/app/trips/[slug]/layout";
+import { withReadableDescription } from "@/lib/photos/readable-text";
 
 export async function generateMetadata({ params }: LayoutProps<"/share/[token]">): Promise<Metadata> {
   const { token } = await params;
@@ -52,7 +53,7 @@ export default async function ShareLayout({ params, children }: LayoutProps<"/sh
           <span className="text-muted">Shared with you</span>
         </div>
       </div>
-      <TripHeader trip={trip} shareUrl={shareableTripUrl(trip, env().APP_URL)} />
+      <TripHeader trip={withReadableDescription(trip, false)} shareUrl={shareableTripUrl(trip, env().APP_URL)} />
       <TripTabs tabs={tabs} />
       <main className="mx-auto max-w-6xl px-4 sm:px-6 py-8">{children}</main>
     </TripTheme>

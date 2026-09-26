@@ -4,6 +4,7 @@ import { NOT_TRASHED } from "@/lib/photos/trash";
 import { isAdmin } from "@/lib/auth/ownership";
 import type { ViewerUser } from "@/lib/auth/viewer";
 import { photoUrl } from "@/lib/photos/urls";
+import { readableTitle } from "@/lib/photos/readable-text";
 
 /**
  * The photographs waiting to be put on the map.
@@ -34,7 +35,7 @@ export async function unplacedForTray(user: ViewerUser, opts: { tripId?: string 
       orderBy: [{ takenAt: { sort: "asc", nulls: "last" } }, { createdAt: "asc" }, { id: "asc" }],
       take: take + 1,
       ...(opts.cursor ? { cursor: { id: opts.cursor }, skip: 1 } : {}),
-      select: { id: true, updatedAt: true, caption: true, title: true, originalName: true, takenAt: true, lat: true, lng: true, placeEstimateName: true, trip: { select: { title: true } } },
+      select: { id: true, updatedAt: true, caption: true, title: true, membersTitle: true, originalName: true, takenAt: true, lat: true, lng: true, placeEstimateName: true, trip: { select: { title: true } } },
     }),
     db.photo.count({ where }),
   ]);
@@ -44,7 +45,7 @@ export async function unplacedForTray(user: ViewerUser, opts: { tripId?: string 
     photos: page.map((p) => ({
       id: p.id,
       thumbUrl: photoUrl(p, "thumb"),
-      label: p.caption ?? p.title ?? p.originalName,
+      label: p.caption ?? readableTitle(p, true) ?? p.originalName,
       takenAt: p.takenAt?.toISOString() ?? null,
       tripTitle: p.trip?.title ?? null,
       guess: p.lat !== null ? p.placeEstimateName ?? "somewhere guessed" : null,

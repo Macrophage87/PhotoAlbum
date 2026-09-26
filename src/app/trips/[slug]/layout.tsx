@@ -17,6 +17,7 @@ import { TripTabs } from "@/components/trips/TripTabs";
 import { previewCard } from "@/lib/share/preview";
 import { annotationGates } from "@/lib/annotation/eligibility";
 import { describeTripWithAi, setTripDescription } from "./actions";
+import { readableContainerDescription, withReadableDescription } from "@/lib/photos/readable-text";
 
 export async function generateMetadata({ params }: LayoutProps<"/trips/[slug]">): Promise<Metadata> {
   const { slug } = await params;
@@ -36,7 +37,8 @@ export async function generateMetadata({ params }: LayoutProps<"/trips/[slug]">)
 /** The card a link to this trip carries: its title, its dates or description, and its cover photo. */
 export async function tripCard(trip: TripWithCounts, pageUrl: string, shareToken?: string) {
   const cover = await coverFor(trip);
-  const description = trip.description?.trim() || formatDayRange(dateColumnToDay(trip.startDate), dateColumnToDay(trip.endDate));
+  // A link's card is read by whoever it is posted to, so it carries only what a stranger may read.
+  const description = readableContainerDescription(trip, false)?.trim() || formatDayRange(dateColumnToDay(trip.startDate), dateColumnToDay(trip.endDate));
   return previewCard({ title: trip.title, description, pageUrl, cover, appUrl: env().APP_URL, shareToken, shareKind: "trip" });
 }
 
@@ -68,7 +70,7 @@ export default async function TripLayout({ params, children }: LayoutProps<"/tri
     <TripTheme themeKey={trip.themeKey}>
       <Nav viewer={viewer} />
       <TripHeader
-        trip={trip}
+        trip={withReadableDescription(trip, viewer.kind === "user")}
         shareUrl={shareableTripUrl(trip, env().APP_URL)}
         {...(owns ? { save: setTripDescription.bind(null, slug), ...((await annotationGates()).active ? { describe: describeTripWithAi.bind(null, slug) } : {}) } : {})}
       />

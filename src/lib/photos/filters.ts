@@ -21,9 +21,15 @@ export type GalleryFilter = {
   kind: MediaKind | null;
   year: number | null;
   activityId: string | null;
+  /**
+   * Read for a signed-in member. The words are then matched against what members may read — names, notes, the
+   * helper's members-only text — and otherwise only against what anybody may (see `idsMatching`). Off unless the
+   * filter was parsed for a member, so a filter made up anywhere else asks the question a stranger may ask.
+   */
+  member: boolean;
 };
 
-export const NO_FILTER: GalleryFilter = { q: null, uploaderId: null, personIds: [], kind: null, year: null, activityId: null };
+export const NO_FILTER: GalleryFilter = { q: null, uploaderId: null, personIds: [], kind: null, year: null, activityId: null, member: false };
 
 const KINDS: MediaKind[] = ["PHOTO", "VIDEO", "EXTERNAL_VIDEO", "SCAN"];
 
@@ -60,7 +66,7 @@ const many = (v: string | string[] | undefined): string[] => {
  * Read a filter off the address bar. `member` is false for anonymous visitors, who see neither who uploaded what
  * nor who is in the picture, and must not be able to narrow by either: a stranger who could ask a public trip for
  * "photographs with Ada in them" would be told which of them she is on, which is the whole of what the album keeps
- * from them.
+ * from them. The same goes for the words: theirs are matched only against what they may read.
  */
 export function parseGalleryFilter(sp: Params, opts: { member: boolean }): GalleryFilter {
   const rawQ = one(sp.q);
@@ -73,6 +79,7 @@ export function parseGalleryFilter(sp: Params, opts: { member: boolean }): Galle
     kind: kind && (KINDS as string[]).includes(kind) ? (kind as MediaKind) : null,
     year: Number.isInteger(year) && year >= FIRST_PHOTOGRAPH && year <= 2200 ? year : null,
     activityId: one(sp.activity),
+    member: opts.member,
   };
 }
 

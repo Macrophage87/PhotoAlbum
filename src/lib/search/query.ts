@@ -60,14 +60,28 @@ export function visibilitySql(viewer: Viewer): Prisma.Sql {
 }
 
 /**
- * Keyword search. Members query the column that also carries names; anonymous visitors query the base column, so a
- * name never enters their ranking. The uploader filter is a members-only control and is ignored otherwise.
+ * The words a hit is shown with, and the title it goes by, for this viewer. Members read the notes and the helper's
+ * members-only title; anybody else reads the family's caption and title, and the helper's caption only where it was
+ * written from nothing members-only. The same split as the two search columns, so a snippet never shows a stranger
+ * what their search could not have matched.
+ */
+export function hitTextSql(member: boolean): { title: Prisma.Sql; snippetSource: Prisma.Sql } {
+  if (member) return { title: Prisma.sql`COALESCE(NULLIF(btrim(p.title), ''), p."membersTitle")`, snippetSource: Prisma.sql`concat_ws(' · ', p.caption, COALESCE(NULLIF(btrim(p.title), ''), p."membersTitle"), p.context, p.annotation->>'caption')` };
+  return { title: Prisma.sql`p.title`, snippetSource: Prisma.sql`concat_ws(' · ', p.caption, p.title, CASE WHEN NOT p."annotationMembersOnly" THEN p.annotation->>'caption' END)` };
+}
+
+/**
+ * Keyword search. Members query the column that also carries names and notes; anonymous visitors query the base
+ * column, so neither enters their ranking. The uploader filter is a members-only control and is ignored otherwise.
+ *
+ * The semantic half is members-only too: an item's text embedding is built from everything members may read about
+ * it, notes and names included, so a stranger's query compared against it would be ranked by what they may not see.
  */
 export async function searchMedia(viewer: Viewer, params: SearchParams, limit = 120, embed: ((q: string) => Promise<number[] | null>) | null = defaultEmbed): Promise<SearchHit[]> {
   const q = normalizeQuery(params.q);
   if (!q) return [];
-  const queryVec = embed ? await embed(q) : null;
   const member = viewer.kind === "user";
+  const queryVec = member && embed ? await embed(q) : null;
   const column = member ? Prisma.sql`p."searchVectorMembers"` : Prisma.sql`p."searchVector"`;
   const filters: Prisma.Sql[] = [];
   if (params.tripId) filters.push(Prisma.sql`p."tripId" = ${params.tripId}`);
@@ -83,6 +97,7 @@ export async function searchMedia(viewer: Viewer, params: SearchParams, limit = 
   if (params.year) filters.push(Prisma.sql`EXTRACT(YEAR FROM (p."takenAt" + make_interval(mins => COALESCE(p."tzOffsetMin", 0)))) = ${params.year}`);
   if (params.kind) filters.push(Prisma.sql`p.kind = ${params.kind}::"MediaKind"`);
   const where = filters.length ? Prisma.join(filters, " AND ") : Prisma.sql`TRUE`;
+  const text = hitTextSql(member);
   const uploader = member ? Prisma.sql`COALESCE(NULLIF(u.name, ''), split_part(u.email, '@', 1))` : Prisma.sql`NULL`;
   // A private trip's title is members-only metadata: anonymous visitors see the trip of a hit only when they may open that trip.
   // Same rule as canViewTrip: a held share cookie counts only while the trip is LINK and the token still matches.
@@ -92,12 +107,12 @@ export async function searchMedia(viewer: Viewer, params: SearchParams, limit = 
   const similarity = queryVec ? Prisma.sql`CASE WHEN p."textEmbedding" IS NULL THEN NULL ELSE 1 - (p."textEmbedding" <=> ${vectorLiteral(queryVec)}::vector) END` : Prisma.sql`NULL::float`;
   const match = queryVec ? Prisma.sql`(${column} @@ query OR (p."textEmbedding" IS NOT NULL AND 1 - (p."textEmbedding" <=> ${vectorLiteral(queryVec)}::vector) >= ${SEMANTIC_FLOOR}))` : Prisma.sql`${column} @@ query`;
   const rows = await db.$queryRaw<(SearchHit & { similarity: number | null })[]>`
-    SELECT p.id, p.kind, p.status, p.caption, p.title, p."originalName", p."externalId", p."externalStatus", p."durationS", p.width, p.height,
+    SELECT p.id, p.kind, p.status, p.caption, ${text.title} AS title, p."originalName", p."externalId", p."externalStatus", p."durationS", p.width, p.height,
            p."takenAt", p."tzOffsetMin", p."updatedAt", p."gpsSource",
            CASE WHEN ${tripVisible} THEN t.slug END AS "tripSlug", CASE WHEN ${tripVisible} THEN t.title END AS "tripTitle", ${uploader} AS "uploaderName",
            ts_rank_cd(${column}, query) AS rank,
            ${similarity} AS similarity,
-           ts_headline('english', concat_ws(' · ', p.caption, p.title, p.context, p.annotation->>'caption'), query, 'MaxWords=18, MinWords=6, StartSel=[[, StopSel=]], MaxFragments=1') AS snippet
+           ts_headline('english', ${text.snippetSource}, query, 'MaxWords=18, MinWords=6, StartSel=[[, StopSel=]], MaxFragments=1') AS snippet
     FROM "Photo" p
     LEFT JOIN "Trip" t ON t.id = p."tripId"
     LEFT JOIN "User" u ON u.id = p."uploaderId",

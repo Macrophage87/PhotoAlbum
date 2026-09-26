@@ -14,6 +14,7 @@ import type { TripFormState } from "@/app/trips/new/actions";
 import { levelOf } from "@/lib/visibility/exposure";
 import { canEditContainer, editableMediaIds, NOT_YOUR_CONTAINER } from "@/lib/auth/ownership";
 import { writeContainerDescription } from "@/lib/annotation/container";
+import { descriptionStaysMembersOnly } from "@/lib/photos/readable-text";
 
 /** The trip, where this member may change it: whoever made it, and admins. */
 async function loadEditableTrip(slug: string) {
@@ -42,6 +43,7 @@ export async function updateTrip(slug: string, _prev: TripFormState, fd: FormDat
     data: {
       title: v.title,
       description: v.description,
+      descriptionMembersOnly: descriptionStaysMembersOnly(trip, v.description),
       startDate: dayToDateColumn(v.startDate),
       endDate: dayToDateColumn(v.endDate),
       timezone: v.timezone,
@@ -156,7 +158,7 @@ const DESCRIPTION_TEXT = z.string().max(4000);
 export async function setTripDescription(slug: string, text: string): Promise<void> {
   const trip = await loadEditableTrip(slug);
   const description = DESCRIPTION_TEXT.parse(text).trim();
-  await db.trip.update({ where: { id: trip.id }, data: { description: description || null } });
+  await db.trip.update({ where: { id: trip.id }, data: { description: description || null, descriptionMembersOnly: descriptionStaysMembersOnly(trip, description) } });
   revalidatePath(`/trips/${slug}`, "layout");
 }
 

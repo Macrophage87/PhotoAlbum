@@ -2,6 +2,7 @@ import type { PhotoCard } from "@/lib/photos/queries";
 import type { FavouriteState } from "@/lib/favourites/queries";
 import { photoUrl } from "@/lib/photos/urls";
 import type { GridPhoto } from "./PhotoGrid";
+import { readableTitle } from "@/lib/photos/readable-text";
 
 /**
  * Uploader names are part of the members-only layer: pass `member` only for signed-in viewers. A member who has not
@@ -12,6 +13,8 @@ export function uploaderLabel(name: string | null | undefined, email?: string | 
 }
 
 export function toGridPhoto(p: PhotoCard, badge?: string | null, member = false, favourite?: FavouriteState | null): GridPhoto {
+  // The helper's title that names somebody is a member's to read; anybody else sees the item's own title or none.
+  const title = readableTitle(p, member);
   return {
     uploadedBy: member ? uploaderLabel(p.uploader?.name, p.uploader?.email) : null,
     canTag: member && p.status === "READY",
@@ -23,7 +26,7 @@ export function toGridPhoto(p: PhotoCard, badge?: string | null, member = false,
     // The full-size view follows the picture as it is now; an item nobody has edited links straight to its own file.
     originalUrl: p.kind === "PHOTO" && p.status === "READY" ? photoUrl(p, p.edits ? "edited" : "original") : null,
     durationS: p.durationS,
-    title: p.title,
+    title,
     unavailable: p.externalStatus === "UNAVAILABLE",
     id: p.id,
     status: p.status,
@@ -34,7 +37,7 @@ export function toGridPhoto(p: PhotoCard, badge?: string | null, member = false,
     // A panorama carries the long rendition it is panned across, so a tile and the lightbox can both show it whole.
     panorama: p.panorama ? { projection: p.panoProjection, panoUrl: photoUrl(p, "pano") } : null,
     caption: p.caption,
-    alt: p.caption ?? p.title ?? p.originalName,
+    alt: p.caption ?? title ?? p.originalName,
     badge: badge ?? (p.gpsSource === "TRACK" ? "from track" : null),
     takenAt: p.takenAt?.toISOString() ?? null,
     tzOffsetMin: p.tzOffsetMin,

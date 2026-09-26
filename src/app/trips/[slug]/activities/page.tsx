@@ -5,6 +5,7 @@ import { ButtonLink } from "@/components/ui";
 import { NOT_TRASHED } from "@/lib/photos/trash";
 import { DATE_SORTS, SORT_COOKIES, sortChoice } from "@/lib/sort-choice";
 import { SortToggle } from "@/components/ui/SortToggle";
+import { withReadableDescription } from "@/lib/photos/readable-text";
 
 export default async function ActivitiesPage({ params, searchParams }: PageProps<"/trips/[slug]/activities">) {
   const { slug } = await params;
@@ -43,7 +44,7 @@ export default async function ActivitiesPage({ params, searchParams }: PageProps
       ) : (
         <div className="space-y-4">
           {activities.map((a) => (
-            <ActivityCard key={a.id} activity={{ ...a, photoCount: a._count.photos }} tripSlug={slug} timezone={trip.timezone} />
+            <ActivityCard key={a.id} activity={{ ...withReadableDescription(a, editable), photoCount: a._count.photos }} tripSlug={slug} timezone={trip.timezone} />
           ))}
         </div>
       )}
