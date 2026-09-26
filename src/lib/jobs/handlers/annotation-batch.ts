@@ -47,7 +47,8 @@ export function pendingWhere(task: BackfillTask) {
  * confirmed in it and either the tag or their permission to be named is newer than the description — which makes
  * the run self-clearing, since describing it again moves the description past both.
  *
- * A minor is never named and so never brings an item into this run; a pet always may be.
+ * A minor is never named and so never brings an item into this run, nor does anybody with no birthday or
+ * attestation; a pet always may be.
  */
 export async function describedBeforeTheirNames(personId?: string): Promise<string[]> {
   const only = personId ? Prisma.sql`AND pe.id = ${personId}` : Prisma.empty;
@@ -60,10 +61,13 @@ export async function describedBeforeTheirNames(personId?: string): Promise<stri
         ${only}
         AND (
           pe.kind = 'PET'
-          OR ((pe."faceIndexing" OR pe."nameInDescriptions") AND (pe.birthday IS NULL OR pe.birthday <= (now() - interval '18 years')))
+          -- The same rule as nameMayLeaveServer: an adult by birthday or by attestation, never a birthday nobody knows.
+          OR ((pe."faceIndexing" OR pe."nameInDescriptions") AND (pe.birthday <= (now() - interval '18 years') OR (pe.birthday IS NULL AND pe."adultAttestedAt" IS NOT NULL)))
         )
         AND (
-          f."createdAt" > p."annotatedAt"
+          -- When the face became theirs, not when the detector found it: that is usually before the description,
+          -- and the member's "yes, that is Ada" days after it.
+          COALESCE(f."confirmedAt", f."createdAt") > p."annotatedAt"
           OR pe."nameInDescriptionsSetAt" > p."annotatedAt"
           OR pe."faceIndexingSetAt" > p."annotatedAt"
         )
@@ -72,7 +76,7 @@ export async function describedBeforeTheirNames(personId?: string): Promise<stri
       SELECT 1 FROM "AnimalDetection" a JOIN "Person" ape ON ape.id = a."personId"
       WHERE a."photoId" = p.id AND a.status = 'CONFIRMED' AND ape."optedOutAt" IS NULL AND ape.kind = 'PET'
         ${onlyAnimal}
-        AND a."createdAt" > p."annotatedAt"
+        AND COALESCE(a."confirmedAt", a."createdAt") > p."annotatedAt"
     ))`;
   return rows.map((r) => r.id);
 }

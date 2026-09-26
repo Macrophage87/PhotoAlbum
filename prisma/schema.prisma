@@ -663,6 +663,9 @@ model Face {
   ageAtCaptureYears Float?
   status            FaceStatus @default(DETECTED)
   createdAt         DateTime   @default(now())
+  /// When it became a named person's: set by a database trigger whenever status becomes CONFIRMED or the person
+  /// changes, which is what "described before their names" compares with, since detection comes long before.
+  confirmedAt       DateTime?
 
   @@index([photoId])
   @@index([clusterId])
@@ -698,6 +701,8 @@ model AnimalDetection {
   proposedPerson   Person?      @relation("AnimalProposed", fields: [proposedPersonId], references: [id], onDelete: SetNull)
   status           AnimalStatus @default(DETECTED)
   createdAt        DateTime     @default(now())
+  /// When somebody agreed it is this pet: set by a database trigger, like Face.confirmedAt.
+  confirmedAt      DateTime?
 
   @@index([photoId])
   @@index([personId])
