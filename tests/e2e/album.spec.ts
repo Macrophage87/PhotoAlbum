@@ -1937,8 +1937,9 @@ test("photographs with no place are dropped onto the map, several at a time", as
 
   // Tap one, then tap the map: the path that works on a phone and from a keyboard.
   await tray.locator(`button:has(img[src*='/api/photos/${waiting.rows[0].id}/'])`).click();
+  // Near the edge, not the middle: the map opens fitted to the album, so its middle may well be somebody's pin.
   const box = (await map.boundingBox())!;
-  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.click(box.x + 12, box.y + box.height / 2);
   await expect(page.getByTestId("place-notice")).toContainText("placed");
   await expect
     .poll(async () => (await withDb((c) => c.query('SELECT lat, "gpsSource" FROM "Photo" WHERE id = $1', [waiting.rows[0].id]))).rows[0].gpsSource, { timeout: 20_000, intervals: [1000] })

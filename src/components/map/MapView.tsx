@@ -7,6 +7,7 @@ import type { MapTheme } from "@/lib/map/theme";
 import type { PhotoFeatureProps, TrackFeatureProps } from "@/lib/map/geojson";
 import { basemapStyle } from "./style";
 import { SLOT_COLOURS, SLOT_COUNT } from "@/lib/map/colour-by";
+import { formatDay } from "@/lib/time/format";
 
 /** A photograph on the map, with the colour slot of its ring when the map is coloured by something. */
 export type MapPhotoProps = PhotoFeatureProps & { slot?: number };
@@ -33,6 +34,8 @@ export type MapViewProps = {
   slotColours?: readonly string[];
   /** A tap on a photograph's pin is handed straight to `onPhotoClick`, without the preview in between. */
   directPhotoClick?: boolean;
+  /** Photographs currently chosen, shown as pressed in the list of a heap of pins (with `directPhotoClick`). */
+  pickedIds?: ReadonlySet<string>;
   /** A click on the map itself (not on a photo or track), for placing things. */
   onMapClick?: (pos: { lat: number; lng: number }) => void;
   /** Something dropped on the map, with the spot it landed on. Nothing is dropped unless `acceptsDrop` says so. */
@@ -88,6 +91,79 @@ function ringColour(colours: readonly string[]): ExpressionSpecification {
   return ["match", ["coalesce", ["get", "slot"], -1], ...colours.flatMap((colour, i) => [i, colour]), "#ffffff"] as unknown as ExpressionSpecification;
 }
 
+/** How far from a pin's centre a fingertip still counts as touching it, in screen pixels (a pin is 32 across). */
+const TAP_RADIUS = 20;
+/** A group that would still be this tight on screen once split is offered as a list instead of zoomed into. */
+const STACKED_PX = 40;
+/** How many a list of photographs at one spot shows; a bigger group is zoomed into as usual. */
+const STACK_LIST_MAX = 60;
+const CLUSTER_MAX_ZOOM = 16;
+
+/** Metres per screen pixel at a latitude and zoom (MapLibre's tiles are 512 pixels across). */
+function metresPerPixel(lat: number, zoom: number): number {
+  return (40_075_016.686 * Math.cos((lat * Math.PI) / 180)) / (512 * 2 ** zoom);
+}
+
+/** How wide a set of points is on the ground, in metres, corner to corner. */
+function spanMetres(points: [number, number][]): number {
+  const lngs = points.map((p) => p[0]);
+  const lats = points.map((p) => p[1]);
+  const midLat = (Math.min(...lats) + Math.max(...lats)) / 2;
+  const dy = (Math.max(...lats) - Math.min(...lats)) * 111_320;
+  const dx = (Math.max(...lngs) - Math.min(...lngs)) * 111_320 * Math.cos((midLat * Math.PI) / 180);
+  return Math.hypot(dx, dy);
+}
+
+/** What a picture in the list is called: its caption, or which one it is and the day, so each reads differently. */
+function stackLabel(p: PhotoFeatureProps, i: number, n: number): string {
+  // The day where it was taken when the map knows it; else the UTC day, never the viewer's own zone.
+  const day = p.day ? formatDay(p.day, "long") : p.takenAt ? new Date(p.takenAt).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric", timeZone: "UTC" }) : null;
+  return `${p.caption || `Photo ${i + 1} of ${n}`}${day ? `, ${day}` : ""}`;
+}
+
+/** A picture in the list drawn as chosen or not, for a map where tapping chooses. */
+function showPicked(b: HTMLElement, on: boolean) {
+  b.setAttribute("aria-pressed", String(on));
+  b.style.boxShadow = on ? "0 0 0 3px #2563eb" : "none";
+  b.style.opacity = on ? "1" : "0.85";
+}
+
+/**
+ * The photographs at one spot as a list of pictures, each big enough for a finger. Pins on exactly one spot cannot be
+ * told apart by tapping — only the top one is ever hit, however far the map is zoomed — so there the map asks which.
+ * Where tapping chooses (`picked` given) each shows whether it is chosen, and the list stays open for choosing more.
+ */
+function stackList(list: PhotoFeatureProps[], maxHeight: number, pick: (id: string, b: HTMLElement) => void, picked: ReadonlySet<string> | null): HTMLElement {
+  const el = document.createElement("div");
+  el.dataset.testid = "map-stack";
+  const head = document.createElement("div");
+  head.style.cssText = "font-size:13px;margin-bottom:6px";
+  head.textContent = `${list.length} photos here. ${picked ? "Tap to choose." : "Tap one."}`;
+  el.appendChild(head);
+  const grid = document.createElement("div");
+  grid.setAttribute("role", "group");
+  grid.setAttribute("aria-label", `${list.length} photos here`);
+  grid.style.cssText = `display:grid;grid-template-columns:repeat(3,64px);gap:6px;padding:3px;max-height:${maxHeight}px;overflow-y:auto`;
+  list.forEach((p, i) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.setAttribute("aria-label", stackLabel(p, i, list.length));
+    b.dataset.photo = p.id;
+    b.style.cssText = "width:64px;height:64px;padding:0;border:0;border-radius:6px;overflow:hidden;cursor:pointer;background:#ddd";
+    if (picked) showPicked(b, picked.has(p.id));
+    const img = document.createElement("img");
+    img.src = p.thumbUrl;
+    img.alt = "";
+    img.loading = "lazy";
+    img.style.cssText = "width:100%;height:100%;object-fit:cover;display:block";
+    b.appendChild(img);
+    b.onclick = () => pick(p.id, b);
+    grid.appendChild(b);
+  });
+  el.appendChild(grid);
+  return el;
+}
+
 function svgToImage(svg: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image(64, 64);
@@ -97,16 +173,18 @@ function svgToImage(svg: string): Promise<HTMLImageElement> {
   });
 }
 
-export function MapView({ photos, tracks, bounds, theme, className = "", onPhotoClick, onTrackClick, onTrackHover, highlightTrackId, marker, focusBounds, interactive = true, rings = false, slotColours = SLOT_COLOURS, directPhotoClick = false, onMapClick, onDropAt, acceptsDrop }: MapViewProps) {
+export function MapView({ photos, tracks, bounds, theme, className = "", onPhotoClick, onTrackClick, onTrackHover, highlightTrackId, marker, focusBounds, interactive = true, rings = false, slotColours = SLOT_COLOURS, directPhotoClick = false, pickedIds, onMapClick, onDropAt, acceptsDrop }: MapViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MLMap | null>(null);
   const markerRef = useRef<Marker | null>(null);
   const popupRef = useRef<Popup | null>(null);
   const hoveredRef = useRef<string | null>(null);
+  /** The list of a heap of pins while it is open, so what is chosen can be kept up to date in it. */
+  const stackRef = useRef<HTMLElement | null>(null);
   const [loaded, setLoaded] = useState(false);
-  const callbacks = useRef({ onPhotoClick, onTrackClick, onTrackHover, onMapClick, directPhotoClick });
+  const callbacks = useRef({ onPhotoClick, onTrackClick, onTrackHover, onMapClick, directPhotoClick, pickedIds });
   useEffect(() => {
-    callbacks.current = { onPhotoClick, onTrackClick, onTrackHover, onMapClick, directPhotoClick };
+    callbacks.current = { onPhotoClick, onTrackClick, onTrackHover, onMapClick, directPhotoClick, pickedIds };
   });
 
   // Create the map once
@@ -149,7 +227,7 @@ export function MapView({ photos, tracks, bounds, theme, className = "", onPhoto
         data: EMPTY,
         cluster: true,
         clusterRadius: 48,
-        clusterMaxZoom: 16,
+        clusterMaxZoom: CLUSTER_MAX_ZOOM,
         // Each group keeps a count per ring colour, so its ring can be drawn in the shares it holds.
         clusterProperties: Object.fromEntries(Array.from({ length: SLOT_COUNT }, (_, i) => [`s${i}`, ["+", ["case", ["==", ["get", "slot"], i], 1, 0]]])),
       });
@@ -231,19 +309,85 @@ export function MapView({ photos, tracks, bounds, theme, className = "", onPhoto
         hoveredRef.current = id;
       };
 
+      /** Ask which of several photographs at one spot was meant; the answer goes where a tap on its pin would. */
+      const chooseFrom = (at: [number, number], list: PhotoFeatureProps[]) => {
+        if (mapRef.current !== map) return; // the map went away while the group was being looked up
+        popupRef.current?.remove();
+        const choosing = callbacks.current.directPhotoClick && callbacks.current.pickedIds ? callbacks.current.pickedIds : null;
+        const pick = (id: string, b: HTMLElement) => {
+          // Where tapping chooses, the list stays open so several can be chosen out of one heap; otherwise it has done its job.
+          if (choosing) showPicked(b, b.getAttribute("aria-pressed") !== "true");
+          else popupRef.current?.remove();
+          callbacks.current.onPhotoClick?.(id);
+        };
+        // Short enough to fit the map it is on, which on a phone is under half the screen.
+        const room = Math.min(220, map.getContainer().clientHeight - 80);
+        const el = stackList(list, Math.max(72, room), pick, choosing);
+        const popup = new Popup({ offset: 14, maxWidth: "260px" }).setLngLat(at).setDOMContent(el);
+        // Whether focus is in the list (or on its close button). Removing the popup takes its content out of the page
+        // before "close" fires, so by then the browser can no longer say; it is noted as focus comes and goes instead.
+        let focusInside = false;
+        popup.on("close", () => {
+          if (stackRef.current === el) stackRef.current = null;
+          // Back to the map, not to the top of the page, for whoever is going by keyboard.
+          if (focusInside && mapRef.current === map) map.getCanvas().focus();
+        });
+        popupRef.current = popup.addTo(map);
+        stackRef.current = el;
+        const box = popup.getElement();
+        box.addEventListener("focusin", () => { focusInside = true; }, true);
+        // Focus going somewhere else on the page; a focused button taken out with the popup has nowhere to go (null).
+        box.addEventListener("focusout", (e) => { if (e.relatedTarget && !box.contains(e.relatedTarget as Node)) focusInside = false; }, true);
+        box.addEventListener("pointerdown", () => { focusInside = focusInside || box.contains(document.activeElement); }, true);
+        box.addEventListener("keydown", (e) => {
+          if (e.key === "Escape") { e.stopPropagation(); popup.remove(); }
+        });
+        el.querySelector("button")?.focus({ preventScroll: true });
+      };
+
       if (interactive) {
         map.on("click", "clusters", (e: MapMouseEvent) => {
           const f = map.queryRenderedFeatures(e.point, { layers: ["clusters"] })[0];
           if (!f) return;
           const src = map.getSource("photos") as GeoJSONSource;
-          src.getClusterExpansionZoom(f.properties!.cluster_id as number).then((zoom: number) => {
-            map.easeTo({ center: (f.geometry as GeoJSON.Point).coordinates as [number, number], zoom });
-          });
+          const at = (f.geometry as GeoJSON.Point).coordinates as [number, number];
+          const id = f.properties!.cluster_id as number;
+          const count = Number(f.properties!.point_count);
+          src
+            .getClusterExpansionZoom(id)
+            .then(async (zoom: number) => {
+              // A group that only splits past the last zoom that groups, and would still be a heap of pins once split,
+              // is listed rather than zoomed into: zooming would only show the top pin of the heap.
+              if (zoom > CLUSTER_MAX_ZOOM && count <= STACK_LIST_MAX) {
+                const leaves = (await src.getClusterLeaves(id, count, 0)) as GeoJSON.Feature<GeoJSON.Point, PhotoFeatureProps>[];
+                const span = spanMetres(leaves.map((l) => l.geometry.coordinates as [number, number]));
+                if (span / metresPerPixel(at[1], Math.min(zoom, map.getMaxZoom())) < STACKED_PX) {
+                  chooseFrom(at, leaves.map((l) => l.properties));
+                  return;
+                }
+              }
+              if (mapRef.current === map) map.easeTo({ center: at, zoom });
+            })
+            // New data can retire a group between the tap and the answer; the tap then simply does nothing.
+            .catch(() => {});
         });
         map.on("click", "photo-points", (e: MapMouseEvent) => {
           const f = map.queryRenderedFeatures(e.point, { layers: ["photo-points"] })[0];
           if (!f) return;
           const p = f.properties as PhotoFeatureProps;
+          // A fingertip is wider than a pin: every pin centred within TAP_RADIUS of the tap counts as touched too, so
+          // pins on top of one another can all be reached. Nearest first, and no more than a list can sensibly hold.
+          const r = TAP_RADIUS;
+          const near = map
+            .queryRenderedFeatures([[e.point.x - r, e.point.y - r], [e.point.x + r, e.point.y + r]], { layers: ["photo-points"] })
+            .map((u) => ({ props: u.properties as PhotoFeatureProps, d: map.project((u.geometry as GeoJSON.Point).coordinates as [number, number]).dist(e.point) }))
+            .filter((u) => u.d <= r || u.props.id === p.id)
+            .sort((a, b) => a.d - b.d);
+          const distinct = [...new Map(near.map((u) => [u.props.id, u.props])).values()].slice(0, STACK_LIST_MAX);
+          if (distinct.length > 1) {
+            chooseFrom((f.geometry as GeoJSON.Point).coordinates as [number, number], distinct);
+            return;
+          }
           popupRef.current?.remove();
           if (callbacks.current.directPhotoClick) {
             callbacks.current.onPhotoClick?.(p.id);
@@ -351,6 +495,13 @@ export function MapView({ photos, tracks, bounds, theme, className = "", onPhoto
     };
     // New data renumbers the groups, so the rings are drawn afresh whenever the photographs change.
   }, [rings, photos, loaded, slotColours]);
+
+  // What is chosen, kept up to date in an open list of a heap of pins.
+  useEffect(() => {
+    const el = stackRef.current;
+    if (!el || !pickedIds || !directPhotoClick) return;
+    for (const b of el.querySelectorAll<HTMLElement>("button[data-photo]")) showPicked(b, pickedIds.has(b.dataset.photo!));
+  }, [pickedIds, directPhotoClick]);
 
   // External highlight
   useEffect(() => {

@@ -9,7 +9,7 @@ import { enqueue } from "@/lib/jobs/boss";
 import { QUEUES } from "@/lib/jobs/queues";
 import { applyPhotoInstant, requestGeotag } from "@/lib/photos/apply-date";
 import { onActivity, refileByClock } from "@/lib/activities/reassign";
-import { rememberSetters, settersFor } from "@/lib/photos/place-undo";
+import { forgetPlaces, placesFor, rememberPlaces } from "@/lib/photos/place-undo";
 import { datePlanSchema, isEmptyPlan, planDate } from "@/lib/photos/bulk-date";
 import { offsetMinutesInZone } from "@/lib/time/local-day";
 import { editableMediaIds } from "@/lib/auth/ownership";
@@ -110,38 +110,39 @@ export async function placePhotos(photoIds: string[], lat: number, lng: number, 
   const list = await editableMediaIds(user, ids.parse(photoIds));
   if (!list.length) return { count: 0, before: [], undo: null };
   if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) throw new Error("That is not a place on the map");
-  const rows = await db.photo.findMany({ where: { id: { in: list } }, select: { id: true, lat: true, lng: true, gpsSource: true, placeName: true, placeSetById: true } });
+  const rows = await db.photo.findMany({ where: { id: { in: list } }, select: { id: true, lat: true, lng: true, altitude: true, gpsSource: true, placeName: true, placeSetById: true } });
   const r = await db.photo.updateMany({ where: { id: { in: list } }, data: { lat, lng, altitude: null, gpsSource: "MANUAL", placeSetById: user.id, placeName: typeof name === "string" && name.trim() ? name.trim().slice(0, 200) : null } });
-  const before = rows.map(({ placeSetById, ...p }) => ({ ...p, removedByHand: p.lat === null && placeSetById !== null }));
-  return { count: r.count, before, undo: rememberSetters(user.id, rows) };
+  const before = rows.map((p) => ({ id: p.id, lat: p.lat, lng: p.lng, gpsSource: p.gpsSource, placeName: p.placeName, removedByHand: p.lat === null && p.placeSetById !== null }));
+  return { count: r.count, before, undo: rememberPlaces(user.id, rows) };
 }
 
 /**
  * Take a move back: each photograph returns to exactly where it was, whoever or whatever had put it there —
  * including "nowhere, because somebody removed it", which must stay removed rather than become a gap the album
- * fills in. Who had set each place comes from what the server noted when the move was made (`undo`), never from
- * the browser; without that note (a restart, or an hour gone), the member pressing Undo is recorded instead.
+ * fills in — with the height the camera recorded and whose choice it was. All of that comes from what the server
+ * noted when the move was made (`undo`), never from the browser: the entries only say which to take back.
+ * Without the note (a restart, or an hour gone) the browser's positions are put back, but as the member pressing
+ * Undo placing them by hand, since nothing else it says about them can be checked.
  */
-export async function restorePlaces(entries: PlaceBefore[], undo?: string | null): Promise<number> {
+/** Where each photograph was put back to, as it was written, so the screen shows what the album now says. */
+export type PlaceRestored = { id: string; lat: number | null; lng: number | null; gpsSource: PlaceBefore["gpsSource"] };
+
+export async function restorePlaces(entries: PlaceBefore[], undo?: string | null): Promise<PlaceRestored[]> {
   const user = await requireUserOrThrow();
   const all = beforeSchema.parse(entries);
   const mine = new Set(await editableMediaIds(user, all.map((e) => e.id)));
   const allowed = all.filter((e) => mine.has(e.id));
-  const noted = settersFor(undo, user.id);
-  const setter = (e: (typeof allowed)[number]) => {
-    const was = noted?.has(e.id) ? noted.get(e.id)! : undefined;
-    const byHand = e.gpsSource === "MANUAL" || (e.lat === null && (noted ? Boolean(was) : Boolean(e.removedByHand)));
-    return byHand ? was ?? user.id : null;
+  const noted = placesFor(undo, user.id);
+  const restored = (e: (typeof allowed)[number]) => {
+    const was = noted?.get(e.id);
+    if (was) return { lat: was.lat, lng: was.lng, altitude: was.altitude, gpsSource: was.gpsSource, placeName: was.placeName, placeSetById: was.placeSetById };
+    if (e.lat === null) return { lat: null, lng: null, altitude: null, gpsSource: null, placeName: e.placeName, placeSetById: e.removedByHand ? user.id : null };
+    return { lat: e.lat, lng: e.lng, altitude: null, gpsSource: "MANUAL" as const, placeName: e.placeName, placeSetById: user.id };
   };
-  await db.$transaction(
-    allowed.map((e) =>
-      db.photo.update({
-        where: { id: e.id },
-        data: { lat: e.lat, lng: e.lat === null ? null : e.lng, gpsSource: e.lat === null ? null : e.gpsSource, placeName: e.placeName, placeSetById: setter(e) },
-      }),
-    ),
-  );
-  return allowed.length;
+  const writes = allowed.map((e) => ({ id: e.id, data: restored(e) }));
+  await db.$transaction(writes.map((w) => db.photo.update({ where: { id: w.id }, data: w.data })));
+  forgetPlaces(noted ? undo : null);
+  return writes.map((w) => ({ id: w.id, lat: w.data.lat, lng: w.data.lng, gpsSource: w.data.gpsSource }));
 }
 
 /** The instructions stored on a row, where they still make sense; anything unreadable is treated as none. */

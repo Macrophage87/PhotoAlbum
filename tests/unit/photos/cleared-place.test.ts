@@ -69,9 +69,9 @@ describe("a place cleared by hand", () => {
     expect(before[0]).toMatchObject({ lat: null, removedByHand: true });
     await restorePlaces(before, undo);
     expect(await row()).toMatchObject({ lat: null, gpsSource: null, placeSetById: who.id });
-    // An ordinary position is restored as nobody's choice.
+    // Without the server's note, a position the browser sends back is the presser's own placing, whatever it claims.
     await restorePlaces([{ id: photoId, lat: 1, lng: 2, gpsSource: "EXIF", placeName: null, removedByHand: false }]);
-    expect(await row()).toMatchObject({ lat: 1, gpsSource: "EXIF", placeSetById: null });
+    expect(await row()).toMatchObject({ lat: 1, gpsSource: "MANUAL", placeSetById: who.id });
   });
 
   it("puts back who set the place from the server's note, never from the browser", async () => {
