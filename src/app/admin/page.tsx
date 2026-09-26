@@ -148,7 +148,7 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
           {pendingForgets > 0 && (
             <div className="mt-4 rounded-theme border border-red-300 bg-red-50 p-3 text-sm text-red-900" data-testid="forgets-waiting">
               <p className="font-medium">{pendingForgets === 1 ? "1 person is" : `${pendingForgets} people are`} waiting to be forgotten</p>
-              <p>They were switched off at once, but their names can only be forgotten for good once FORGET_KEY is set. It happens by itself when the worker next starts, or overnight.</p>
+              <p>They were switched off at once, but their names can only be forgotten for good once {forgetKey.invalid ? "FORGET_KEY, which is set but not valid, is put right (32 random bytes of base64: openssl rand -base64 32)" : "FORGET_KEY is set"}. It happens by itself when the worker next starts, or overnight.</p>
             </div>
           )}
           {forgotten.length > 0 && (

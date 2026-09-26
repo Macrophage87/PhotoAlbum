@@ -1,9 +1,10 @@
 import { createHash, createHmac, hkdfSync, randomBytes } from "node:crypto";
 import { env } from "@/lib/env";
 import { db } from "@/lib/db";
+import { forgetKeySecret, INVALID_FORGET_KEY } from "./forget-key";
 import { Prisma } from "@/generated/prisma/client";
 import type { StoredAnnotation } from "@/lib/annotation/schema";
-import { inTitleCase, isEverydayWord, isKinWord, kinshipKey, isPlaceOrDateWord, normalizeName, notThePerson, replaceSpans, type Neighbourhood } from "./scrub";
+import { inTitleCase, isEverydayWord, isKinWord, isTitlePrefix, kinshipKey, isPlaceOrDateWord, normalizeName, notThePerson, replaceSpans, type Neighbourhood } from "./scrub";
 
 /**
  * What the album remembers of somebody it has forgotten: keyed hashes of their names, never the names.
@@ -44,6 +45,8 @@ export type ForgetKeyState = {
   paused: boolean;
   /** Names hashed under the development stand-in, which a copy of the database is enough to test. */
   weak: number;
+  /** FORGET_KEY is set, but not to 32 bytes of base64. */
+  invalid: boolean;
 };
 
 function fingerprint(key: Buffer): string {
@@ -67,10 +70,11 @@ async function installSalt(): Promise<Buffer> {
 export async function forgetKeyState(): Promise<ForgetKeyState> {
   const e = env();
   const production = e.NODE_ENV === "production";
-  const secret = e.FORGET_KEY ? Buffer.from(e.FORGET_KEY, "base64") : null;
+  const secret = forgetKeySecret(e.FORGET_KEY);
+  const invalid = Boolean(e.FORGET_KEY) && !secret;
   const salt = await installSalt();
   const v0: VersionKey = { version: 0, key: Buffer.from(hkdfSync("sha256", salt, Buffer.alloc(0), "forgotten-name v0", 32)) };
-  const v1: VersionKey | null = secret?.length === 32 ? { version: 1, key: Buffer.from(hkdfSync("sha256", secret, salt, "forgotten-name v1", 32)) } : null;
+  const v1: VersionKey | null = secret ? { version: 1, key: Buffer.from(hkdfSync("sha256", secret, salt, "forgotten-name v1", 32)) } : null;
   const [setting, counts] = await Promise.all([
     db.appSetting.findUniqueOrThrow({ where: { id: "app" }, select: { forgetKeyFingerprint: true } }),
     db.forgottenName.groupBy({ by: ["keyVersion"], _count: { _all: true } }),
@@ -83,13 +87,13 @@ export async function forgetKeyState(): Promise<ForgetKeyState> {
   // Names hashed under FORGET_KEY, and no FORGET_KEY (or another) to recognise them with.
   const paused = Boolean((recorded || count(1) > 0) && !matches);
   if (paused) problem = v1 ? "FORGET_KEY has changed, so names forgotten before are not recognised. Put the earlier FORGET_KEY back." : "FORGET_KEY is not set, and names were forgotten under it. Put it back.";
-  else if (secret && !v1) problem = "FORGET_KEY is not 32 bytes of base64.";
+  else if (invalid) problem = `${INVALID_FORGET_KEY} Until it is, nobody is forgotten for good.`;
   else if (!v1 && production) problem = "FORGET_KEY is not set, so nobody can be forgotten until it is.";
   else if (!v1) problem = "FORGET_KEY is not set, so forgotten names are hashed under a key made from the database alone. Set it before this album is used for real.";
   else if (weak) problem = `${weak} forgotten ${weak === 1 ? "name was" : "names were"} kept before FORGET_KEY was set, under a key made from the database alone. They are still recognised, but a copy of the database is enough to test names against them.`;
   const keys = [v0, ...(v1 && matches ? [v1] : [])];
   const write = paused ? null : v1 && matches ? v1 : production ? null : v0;
-  return { keys, write, problem, paused, weak };
+  return { keys, write, problem, paused, weak, invalid };
 }
 
 function hash(key: Buffer, normalized: string): string {
@@ -113,6 +117,9 @@ function normalizedForm(f: string): string {
  * trips, collections and activities (see `containerKey`) — ids only — and is only ever looked for there: "Florence"
  * anywhere else is a city.
  */
+/** One forgotten person's kinship titles and the photographs they were tagged on, both hashed under the row's key. */
+type KinshipGroup = { photos: string[]; kin: string[] };
+
 export async function rememberForgotten(forms: { form: string; capitalizedOnly: boolean; derived?: boolean; kinship?: string[] }[], where: { photoIds?: Iterable<string>; taggedPhotoIds?: Iterable<string>; containerIds?: Iterable<string> } = {}): Promise<void> {
   const taggedPhotoIds = [...new Set(where.taggedPhotoIds ?? [])];
   const photoIds = [...new Set([...(where.photoIds ?? []), ...taggedPhotoIds])];
@@ -120,14 +127,14 @@ export async function rememberForgotten(forms: { form: string; capitalizedOnly: 
   const state = await forgetKeyState();
   const w = state.write;
   if (!w) throw new Error(`Forgetting is paused: ${state.problem ?? "no key"}`);
-  const rows = new Map<string, { hash: string; keyVersion: number; capitalizedOnly: boolean; derived: boolean; kinship: string[]; photoIds: string[]; taggedPhotoIds: string[]; containerIds: string[] }>();
+  const rows = new Map<string, { hash: string; keyVersion: number; capitalizedOnly: boolean; derived: boolean; kinshipGroups: KinshipGroup[]; photoIds: string[]; taggedPhotoIds: string[]; containerIds: string[] }>();
   for (const f of forms) {
     const n = normalizedForm(f.form);
     if (!n || n.split(" ").length > MAX_WORDS) continue;
     const h = hash(w.key, n);
     const oneWord = (!CJK.test(n) && !n.includes(" ")) || Boolean(f.derived);
     // A spelling stored both ways is matched the stricter way.
-    rows.set(h, { hash: h, keyVersion: w.version, capitalizedOnly: (rows.get(h)?.capitalizedOnly ?? true) && f.capitalizedOnly, derived: (rows.get(h)?.derived ?? true) && Boolean(f.derived), kinship: [...new Set([...(rows.get(h)?.kinship ?? []), ...(f.kinship ?? []).map((k) => hash(w.key, `kin:${kinshipKey(k)}`))])], photoIds: oneWord ? photoIds : [], taggedPhotoIds: oneWord ? taggedPhotoIds : [], containerIds: oneWord ? containerIds : [] });
+    rows.set(h, { hash: h, keyVersion: w.version, capitalizedOnly: (rows.get(h)?.capitalizedOnly ?? true) && f.capitalizedOnly, derived: (rows.get(h)?.derived ?? true) && Boolean(f.derived), kinshipGroups: oneWord ? [{ photos: taggedPhotoIds.map((id) => hash(w.key, `photo:${id}`)), kin: [...new Set([...(rows.get(h)?.kinshipGroups[0]?.kin ?? []), ...(f.kinship ?? []).map((k) => hash(w.key, `kin:${kinshipKey(k)}`))])] }] : [], photoIds: oneWord ? photoIds : [], taggedPhotoIds: oneWord ? taggedPhotoIds : [], containerIds: oneWord ? containerIds : [] });
   }
   if (!rows.size) return;
   // From the first name hashed under FORGET_KEY, running without that very key is noticed (see forgetKeyState).
@@ -135,12 +142,12 @@ export async function rememberForgotten(forms: { form: string; capitalizedOnly: 
   // The same name forgotten again (another Ximena, on other photographs) is looked for in both places.
   for (const r of rows.values()) {
     await db.$executeRaw`
-      INSERT INTO "ForgottenName" (hash, "keyVersion", "capitalizedOnly", derived, kinship, "photoIds", "taggedPhotoIds", "containerIds")
-      VALUES (${r.hash}, ${r.keyVersion}, ${r.capitalizedOnly}, ${r.derived}, ${r.kinship}::text[], ${r.photoIds}::text[], ${r.taggedPhotoIds}::text[], ${r.containerIds}::text[])
+      INSERT INTO "ForgottenName" (hash, "keyVersion", "capitalizedOnly", derived, "kinshipGroups", "photoIds", "taggedPhotoIds", "containerIds")
+      VALUES (${r.hash}, ${r.keyVersion}, ${r.capitalizedOnly}, ${r.derived}, ${JSON.stringify(r.kinshipGroups)}::jsonb, ${r.photoIds}::text[], ${r.taggedPhotoIds}::text[], ${r.containerIds}::text[])
       ON CONFLICT (hash) DO UPDATE SET
         "capitalizedOnly" = "ForgottenName"."capitalizedOnly" AND EXCLUDED."capitalizedOnly",
         derived = "ForgottenName".derived AND EXCLUDED.derived,
-        kinship = ARRAY(SELECT DISTINCT unnest(COALESCE("ForgottenName".kinship, '{}') || EXCLUDED.kinship)),
+        "kinshipGroups" = COALESCE("ForgottenName"."kinshipGroups", '[]'::jsonb) || EXCLUDED."kinshipGroups",
         "photoIds" = ARRAY(SELECT DISTINCT unnest(COALESCE("ForgottenName"."photoIds", '{}') || EXCLUDED."photoIds")),
         "taggedPhotoIds" = ARRAY(SELECT DISTINCT unnest(COALESCE("ForgottenName"."taggedPhotoIds", '{}') || EXCLUDED."taggedPhotoIds")),
         "containerIds" = ARRAY(SELECT DISTINCT unnest(COALESCE("ForgottenName"."containerIds", '{}') || EXCLUDED."containerIds"))`;
@@ -173,10 +180,12 @@ export type Scope = {
   /** Of those, the ones whose owner was tagged on one of these photographs, where they are the likelier reading. */
   own: ReadonlySet<string>;
   tagged: ReadonlySet<string>;
+  /** The photographs themselves (none for a whole trip, collection or activity). */
+  photos: ReadonlySet<string>;
   /** About a whole trip, collection or activity. */
   whole?: boolean;
 };
-export const NO_SCOPE: Scope = { rows: new Set(), own: new Set(), tagged: new Set() };
+export const NO_SCOPE: Scope = { rows: new Set(), own: new Set(), tagged: new Set(), photos: new Set() };
 
 /**
  * Which one-word forgotten names count in text about these photographs (theirs, and their trips', collections' and
@@ -211,7 +220,7 @@ export async function forgottenScope(where: { photoIds?: string[]; containers?: 
       ${inContainers ? Prisma.sql`UNION SELECT "personId" FROM "Face" WHERE "personId" IS NOT NULL AND "photoId" IN (${inContainers}) UNION SELECT "personId" FROM "AnimalDetection" WHERE "personId" IS NOT NULL AND "photoId" IN (${inContainers})` : Prisma.empty}`,
   ]);
   // A whole trip, collection or activity is about many photographs, few of them hers: the wider place guard there.
-  return { rows: new Set(rows.map((r) => `${r.keyVersion}:${r.hash}`)), own: new Set(rows.filter((r) => r.own).map((r) => `${r.keyVersion}:${r.hash}`)), tagged: new Set(tagged.map((t) => t.personId)), whole: containers.length > 0 };
+  return { rows: new Set(rows.map((r) => `${r.keyVersion}:${r.hash}`)), own: new Set(rows.filter((r) => r.own).map((r) => `${r.keyVersion}:${r.hash}`)), tagged: new Set(tagged.map((t) => t.personId)), photos: new Set(containers.length ? [] : photoIds), whole: containers.length > 0 };
 }
 
 /** Whether any forgotten name is kept with the places it was found. */
@@ -250,8 +259,8 @@ export async function tombstoneStale(ts: Tombstone): Promise<boolean> {
 export async function loadTombstone(): Promise<Tombstone> {
   const loadedAt = new Date();
   const state = await forgetKeyState();
-  const rows = await db.$queryRaw<{ hash: string; keyVersion: number; capitalizedOnly: boolean; derived: boolean; kinship: string[] | null; scoped: boolean }[]>`
-    SELECT hash, "keyVersion", "capitalizedOnly", derived, kinship, (cardinality(COALESCE("photoIds", '{}')) + cardinality(COALESCE("containerIds", '{}')) > 0) AS scoped
+  const rows = await db.$queryRaw<{ hash: string; keyVersion: number; capitalizedOnly: boolean; derived: boolean; kinshipGroups: KinshipGroup[] | null; scoped: boolean }[]>`
+    SELECT hash, "keyVersion", "capitalizedOnly", derived, "kinshipGroups", (cardinality(COALESCE("photoIds", '{}')) + cardinality(COALESCE("containerIds", '{}')) > 0) AS scoped
     FROM "ForgottenName" WHERE "keyVersion" = ANY(${state.keys.map((k) => k.version)}::int[])`;
   if (!rows.length) return empty(loadedAt);
   const keys = state.keys.filter((k) => rows.some((r) => r.keyVersion === k.version));
@@ -279,18 +288,15 @@ export async function loadTombstone(): Promise<Tombstone> {
       .filter((r) => r.scoped || !current.has(`${r.keyVersion}:${r.hash}`))
       .map((r) => {
         const key = `${r.keyVersion}:${r.hash}`;
-        return [key, { key, capOnly: r.capitalizedOnly, derived: r.derived, kinship: r.kinship ?? [], scoped: r.scoped, people: r.scoped ? whoseForm.get(key) : undefined }] as const;
+        return [key, { key, capOnly: r.capitalizedOnly, derived: r.derived, kinshipGroups: r.kinshipGroups ?? [], scoped: r.scoped, people: r.scoped ? whoseForm.get(key) : undefined }] as const;
       }),
   );
   if (!byHash.size) return empty(loadedAt);
   /** A forgotten name this normalized run is, if any. */
-  const lookup = (norm: string): { key: string; capOnly: boolean; derived: boolean; kinship: string[]; scoped: boolean; people?: Set<string> } | undefined => {
-    for (const k of keys) {
-      const v = byHash.get(`${k.version}:${hash(k.key, norm)}`);
-      if (v) return v;
-    }
-    return undefined;
-  };
+  type Found = { readonly key: string; readonly capOnly: boolean; readonly derived: boolean; readonly kinshipGroups: KinshipGroup[]; readonly scoped: boolean; readonly people: Set<string> | undefined };
+  /** Every forgotten name this normalized run is, under any key (forgotten before FORGET_KEY was set, and after). */
+  const lookupAll = (norm: string): Found[] => keys.map((k) => byHash.get(`${k.version}:${hash(k.key, norm)}`)).filter((v): v is Found => Boolean(v));
+  const lookup = (norm: string): Found | undefined => lookupAll(norm)[0];
   const capital = (raw: string) => /^\p{Lu}/u.test(raw);
   const keyOf = (rowKey: string) => keys.find((k) => rowKey.startsWith(`${k.version}:`))!.key;
   const isNameWord = (w: string) => {
@@ -318,36 +324,55 @@ export async function loadTombstone(): Promise<Tombstone> {
         const run = tokens.slice(i, i + n);
         // Only words next to each other: a run broken by anything but a hyphen or a space is not a name.
         if (run.some((t, j) => j > 0 && !/^[\s\-‐]+$/u.test(text.slice(run[j - 1].end, t.start)))) continue;
-        const found = lookup(run.map((t) => t.norm).join(" "));
-        if (!found) continue;
-        let start = run[0].start;
-        if (n === 1 || found.scoped) {
-          // Only where the forget found them; a row from before that was kept, nowhere.
-          if (!scope?.rows.has(found.key)) continue;
-          // Somebody the album knows by that name is on these photographs: it is theirs here.
-          if (found.people && [...found.people].some((id) => scope.tagged.has(id))) continue;
-          if (mode === "tag") {
-            if (!wholeTag) continue;
-          } else if (mode === "summary") {
-            // Keywords: a word of its own, in any case, but not "florence duomo" or "may 2019".
-            const beside = [tokens[i - 1], tokens[i + 1]].filter(Boolean);
-            if (beside.some((t) => isPlaceOrDateWord(t.raw) || /^\p{Lu}/u.test(t.raw))) continue;
-          } else if (!guarded(text, run, found.capOnly, found)) continue;
-          // A kinship word before it: on their own photograph it is them, and goes with the name ("Grandpa Sam at the
-          // lake" is "A family member at the lake") unless their name carries another ("Aunt Ruth" is not Grandma
-          // Ruth); elsewhere it is somebody else's ("Uncle Sam hat"). Their own "Grandma Ruth" is matched whole.
-          let k = i > 0 && isKinWord(tokens[i - 1].raw) && /^[\s]+$/u.test(text.slice(tokens[i - 1].end, run[0].start)) ? i - 1 : -1;
-          // All of a hyphenated one: "Great-Aunt", "Step-Mom".
-          while (k > 0 && isKinWord(tokens[k - 1].raw) && (/^[-‐]$/u.test(text.slice(tokens[k - 1].end, tokens[k].start)) || (titlePrefix(tokens[k - 1]) && /^[ \t]+$/u.test(text.slice(tokens[k - 1].end, tokens[k].start))))) k--;
-          if (k >= 0) {
-            // Kept hashed like the names ("Tia", "Nan" and "Oma" are names too), under the row's own key.
-            const kinRun = hash(keyOf(found.key), `kin:${kinshipKey(tokens.slice(k, i).map((t) => t.raw).join(" "))}`);
-            const other = found.kinship.length > 0 && !found.kinship.includes(kinRun);
-            if (other) continue;
-            if (scope.own.has(found.key)) start = tokens[k].start;
-            else if (found.derived) continue;
-          }
-        } else if (found.capOnly && !guarded(text, run, true)) continue;
+        // The same name may have been forgotten more than once, under either key: whichever is in play here counts.
+        const attempt = (found: Found): number | null => {
+          let start = run[0].start;
+          if (n === 1 || found.scoped) {
+            // Only where the forget found them; a row from before that was kept, nowhere.
+            if (!scope?.rows.has(found.key)) return null;
+            // Somebody the album knows by that name is on these photographs: it is theirs here.
+            if (found.people && [...found.people].some((id) => scope.tagged.has(id))) return null;
+            if (mode === "tag") {
+              if (!wholeTag) return null;
+            } else if (mode === "summary") {
+              // Keywords: a word of its own, in any case, but not "florence duomo" or "may 2019".
+              const beside = [tokens[i - 1], tokens[i + 1]].filter(Boolean);
+              if (beside.some((t) => isPlaceOrDateWord(t.raw) || /^\p{Lu}/u.test(t.raw))) return null;
+            } else if (!guarded(text, run, found.capOnly, found)) return null;
+            // A kinship word before it: on their own photograph it is them, and goes with the name ("Grandpa Sam at the
+            // lake" is "A family member at the lake") unless their name carries another ("Aunt Ruth" is not Grandma
+            // Ruth); elsewhere it is somebody else's ("Uncle Sam hat"). Their own "Grandma Ruth" is matched whole.
+            let k = i > 0 && isKinWord(tokens[i - 1].raw) && !isTitlePrefix(tokens[i - 1].raw) && /^[\s]+$/u.test(text.slice(tokens[i - 1].end, run[0].start)) ? i - 1 : -1;
+            // All of a hyphenated one: "Great-Aunt", "Step-Mom".
+            // A descriptor before a kinship word belongs to the title too: "Big Sister Ada".
+            const joins = (t: { raw: string }) => titlePrefix(t) || /^(?:big|little|baby|old|young)$/iu.test(t.raw);
+            while (k > 0 && isKinWord(tokens[k - 1].raw) && (/^[-‐]$/u.test(text.slice(tokens[k - 1].end, tokens[k].start)) || (joins(tokens[k - 1]) && /^[ \t]+$/u.test(text.slice(tokens[k - 1].end, tokens[k].start))))) k--;
+            if (k >= 0) {
+              // Kept hashed like the names ("Tia", "Nan" and "Oma" are names too), under the row's own key.
+              const kinRun = hash(keyOf(found.key), `kin:${kinshipKey(tokens.slice(k, i).map((t) => t.raw).join(" "))}`);
+              // Whoever was tagged on these photographs decides: their title, or any if their name had none. Two
+              // forgotten Adas keep their own ("Great Aunt Ada" on hers, "Grandma Ada" on Ada Byron's).
+              const accepts = (groups: KinshipGroup[]) => groups.length === 0 || groups.some((g) => g.kin.length === 0 || g.kin.includes(kinRun));
+              // Their photographs are kept hashed too, so the groups say nothing without the key.
+              const here = new Set([...scope.photos].map((id) => hash(keyOf(found.key), `photo:${id}`)));
+              const theirs = found.kinshipGroups.filter((g) => g.photos.some((p) => here.has(p)));
+              if (scope.own.has(found.key) && theirs.length) {
+                if (!accepts(theirs)) return null;
+                start = tokens[k].start;
+              } else {
+                if (!accepts(found.kinshipGroups)) return null;
+                if (found.derived) return null;
+              }
+            }
+          } else if (found.capOnly && !guarded(text, run, true)) return null;
+          return start;
+        };
+        let start: number | null = null;
+        for (const found of lookupAll(run.map((t) => t.norm).join(" "))) {
+          start = attempt(found);
+          if (start !== null) break;
+        }
+        if (start === null) continue;
         spans.push([start, run[n - 1].end]);
         i += n - 1;
         break;

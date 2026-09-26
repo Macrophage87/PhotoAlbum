@@ -8,7 +8,8 @@ vi.mock("@/lib/env", async (orig) => {
   return { ...actual, env: () => ({ ...actual.env(), ...env }) };
 });
 
-import { assertCanForget, forgetKeyState, loadTombstone, rememberForgotten } from "@/lib/people/tombstone";
+import { assertCanForget, forgetKeyState, forgottenScope, loadTombstone, rememberForgotten } from "@/lib/people/tombstone";
+import { unpermittedNameScrub } from "@/lib/people/unpermitted";
 import { annotationGates } from "@/lib/annotation/eligibility";
 
 const KEY = Buffer.alloc(32, 7).toString("base64");
@@ -73,5 +74,36 @@ describe("the key forgotten names are hashed under", () => {
     expect(state.paused).toBe(true);
     env.FORGET_KEY = KEY;
     expect((await forgetKeyState()).paused).toBe(false);
+  });
+
+  it("refuses a FORGET_KEY that is not 32 bytes of base64, and takes one that is", async () => {
+    env.NODE_ENV = "production";
+    env.FORGET_KEY = "e2e-forget-key-not-a-secret";
+    const bad = await forgetKeyState();
+    expect(bad.write).toBeNull();
+    expect(bad.invalid).toBe(true);
+    expect(bad.problem).toMatch(/set but not valid/);
+    await expect(assertCanForget()).rejects.toThrow(/paused/);
+    env.FORGET_KEY = KEY;
+    const good = await forgetKeyState();
+    expect(good.write?.version).toBe(1);
+    expect(good.invalid).toBe(false);
+    expect(good.problem).toBeNull();
+  });
+
+  it("recognises a name forgotten before FORGET_KEY was set and again after, on both people's photographs", async () => {
+    const admin = (await db.user.create({ data: { email: "admin@example.com", role: "ADMIN" } })).id;
+    const photo = async () => (await db.photo.create({ data: { uploaderId: admin, originalName: "a.jpg", mimeType: "image/jpeg", storageKey: "a", originalPath: "a/o.jpg", sizeBytes: 1, status: "READY" } })).id;
+    const byron = await photo();
+    const stone = await photo();
+    // Under the stand-in key first, then under FORGET_KEY.
+    await rememberForgotten([{ form: "Ada", capitalizedOnly: true, derived: true, kinship: ["Grandma"] }], { photoIds: [byron], taggedPhotoIds: [byron] });
+    env.FORGET_KEY = KEY;
+    await rememberForgotten([{ form: "Ada", capitalizedOnly: true, derived: true }], { photoIds: [stone], taggedPhotoIds: [stone] });
+    const ts = await loadTombstone();
+    expect(ts.scrub("Ada smiles", await forgottenScope({ photoIds: [stone] }, ts))).toBe("A family member smiles");
+    expect(ts.scrub("Grandma Ada smiles", await forgottenScope({ photoIds: [byron] }, ts))).toBe("A family member smiles");
+    expect((await unpermittedNameScrub([stone]))("Ada smiles")).toBe("A family member smiles");
+    expect((await unpermittedNameScrub([byron]))("Ada smiles")).toBe("A family member smiles");
   });
 });

@@ -542,6 +542,37 @@ describe("names that are also words", () => {
     expect(ts.scrub("Grandpa Sam at the lake", await sc(await photo()))).toBe("Grandpa Sam at the lake");
   });
 
+  it("keeps each forgotten person's kinship title to their own photographs when two share a first name", async () => {
+    const greatAunt = await forget("Great Aunt Ada");
+    const byron = await forget("Ada Byron");
+    const ts = await loadTombstone();
+    for (const text of ["Grandma Ada laughed.", "Step Mom Ada waved.", "Aunt Ada smiled."]) expect(ts.scrub(text, await sc(byron))).toBe(`A family member ${text.split(" ").slice(-1)[0]}`);
+    expect(ts.scrub("Aunt Ada smiled.", await sc(greatAunt))).toBe("Aunt Ada smiled.");
+    expect(ts.scrub("Great Aunt Ada at the lake", await sc(greatAunt))).toBe("A family member at the lake");
+    expect(ts.scrub("Grand-Aunt Ada at the lake", await sc(greatAunt))).toBe("A family member at the lake");
+    // Which photographs each forgotten Ada was on is not readable without the key.
+    const groups = JSON.stringify((await db.forgottenName.findMany()).map((r) => r.kinshipGroups));
+    for (const id of [greatAunt, byron]) expect(groups).not.toContain(id);
+  });
+
+  it("takes a half- or step- title, or a descriptor before a kinship word, whole with the name", async () => {
+    const on = await forget("Ada Lee");
+    const ts = await loadTombstone();
+    for (const [text, want] of [["Half-Sister Ada swam.", "A family member swam."], ["Half Sister Ada swam.", "A family member swam."], ["Half Brother Ada sang.", "A family member sang."], ["Step Mom Ada waved.", "A family member waved."], ["Big Sister Ada swam.", "A family member swam."], ["Little Brother Ada swam.", "A family member swam."]]) {
+      expect(ts.scrub(text, await sc(on))).toBe(want);
+      expect(nameMatcher(["Ada Lee"]).scrub(text, { tagged: true })).toBe(want);
+    }
+  });
+
+  it("reads 'Great' as a title only before a kinship word", async () => {
+    const on = await forget("Ada Byron");
+    const ts = await loadTombstone();
+    for (const [text, want] of [["The Great Ada show.", "The Great a family member show."], ["Alexander the Great Ada.", "Alexander the Great a family member."]]) {
+      expect(ts.scrub(text, await sc(on))).toBe(want);
+      expect(nameMatcher(["Ada Byron"]).scrub(text, { tagged: true })).toBe(want);
+    }
+  });
+
   it("visits a place only with a real place after it, on her own photograph", async () => {
     const on = await forget("Charlotte Brown");
     const ts = await loadTombstone();
@@ -592,9 +623,10 @@ describe("names that are also words", () => {
     for (const name of ["Tia Johnson", "Nan Smith", "Oma Lee", "Nana Ama Mensah", "Grand Duke Ivan"]) await forget(name);
     const words = new Set(["tia", "nan", "oma", "nana", "grand", "duke", "grandma", "aunt", "grand duke", "nana ama"]);
     const rows = await db.forgottenName.findMany();
-    expect(rows.some((r) => r.kinship.length > 0)).toBe(true);
-    for (const r of rows) for (const k of r.kinship) expect(words.has(k)).toBe(false);
-    expect(JSON.stringify(rows.map((r) => r.kinship))).not.toMatch(/tia|nan|oma|grand|duke/i);
+    const kin = (r: (typeof rows)[number]) => (r.kinshipGroups as { kin: string[] }[]).flatMap((g) => g.kin);
+    expect(rows.some((r) => kin(r).length > 0)).toBe(true);
+    for (const r of rows) for (const k of kin(r)) expect(words.has(k)).toBe(false);
+    expect(JSON.stringify(rows.map(kin))).not.toMatch(/tia|nan|oma|grand|duke/i);
   });
 
   it("reads 'in the sun' as the place only where the phrase ends", async () => {
@@ -662,7 +694,7 @@ describe("forgetting while FORGET_KEY is missing", () => {
     const on = (await db.photo.create({ data: { uploaderId: admin, originalName: "t.jpg", mimeType: "image/jpeg", storageKey: "t", originalPath: "t/o.jpg", sizeBytes: 1, status: "READY", annotation: record({ caption: "Timothy Kent fishing" }), annotatedAt: new Date() } })).id;
     await db.face.create({ data: { photoId: on, personId: p.id, status: "CONFIRMED", box: [0, 0, 1, 1], confidence: 0 } });
     const state = vi.spyOn(await import("@/lib/people/tombstone"), "forgetKeyState");
-    state.mockResolvedValueOnce({ keys: [], write: null, problem: "FORGET_KEY is not set", paused: false, weak: 0 });
+    state.mockResolvedValueOnce({ keys: [], write: null, problem: "FORGET_KEY is not set", paused: false, weak: 0, invalid: false });
     await optOutPerson(p.id, new FormData());
     const waiting = await db.person.findUniqueOrThrow({ where: { id: p.id } });
     expect(waiting).toMatchObject({ faceIndexing: false, nameInDescriptions: false, forgetPendingById: admin });
