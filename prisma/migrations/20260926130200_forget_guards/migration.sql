@@ -31,7 +31,7 @@ ALTER TABLE "Activity" ADD COLUMN "descriptionByHelper" BOOLEAN NOT NULL DEFAULT
 
 CREATE TABLE "ForgottenName" (
   "hash" TEXT NOT NULL,
-  "keyId" TEXT NOT NULL,
+  "keyVersion" INTEGER NOT NULL,
   "capitalizedOnly" BOOLEAN NOT NULL DEFAULT false,
   "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT "ForgottenName_pkey" PRIMARY KEY ("hash")

@@ -15,8 +15,8 @@ import { normalizeName, replaceSpans } from "./scrub";
  * everyday words, counts only as a name is written — "Sage", not "a sage green dress". A name somebody the album
  * knows now also answers to is not treated as forgotten: that is their name, not the forgotten person's.
  *
- * The key is derived from FORGET_HASH_KEY, a secret kept with the environment rather than in the database, so a
- * copy of the database alone is not enough to test names against the hashes. Without it (or with a different one
+ * The key is derived from FORGET_KEY, a secret kept with the environment, salted with a random value kept in the
+ * database, so neither a copy of the database nor the secret alone is enough to test names against the hashes. Without it (or with a different one
  * than the names were hashed under), production refuses to forget anybody and pauses the helper until it is put
  * right; anywhere else a key kept in the database stands in, with a warning.
  */
@@ -26,42 +26,56 @@ const CJK_RUN = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=
 const MAX_WORDS = 4;
 const MAX_CJK = 12;
 
-export type ForgetKeyState = { key: Buffer | null; id: string | null; problem: string | null; paused: boolean };
+export type ForgetKeyState = { key: Buffer | null; version: number | null; problem: string | null; paused: boolean };
 
 function fingerprint(key: Buffer): string {
   return createHash("sha256").update(key).digest("hex").slice(0, 16);
 }
 
-/** The key forgotten names are hashed under, and anything admins need to put right about it. */
+/** This install's random salt, made once and kept in the database. */
+async function installSalt(): Promise<Buffer> {
+  await db.appSetting.upsert({ where: { id: "app" }, create: { id: "app", forgetKey: randomBytes(32).toString("base64") }, update: {} });
+  // Two first uses at once must agree on one salt: only an empty one is filled.
+  await db.appSetting.updateMany({ where: { id: "app", forgetKey: null }, data: { forgetKey: randomBytes(32).toString("base64") } });
+  return Buffer.from((await db.appSetting.findUniqueOrThrow({ where: { id: "app" }, select: { forgetKey: true } })).forgetKey!, "base64");
+}
+
+/**
+ * The key forgotten names are hashed under, and anything admins need to put right about it. Version 1 is HKDF of
+ * FORGET_KEY (from the environment) salted with this install's random salt (from the database), so neither a copy
+ * of the database nor the secret alone is enough. Version 0 is the development stand-in, the salt alone.
+ */
 export async function forgetKeyState(): Promise<ForgetKeyState> {
   const e = env();
   const production = e.NODE_ENV === "production";
-  const secret = e.FORGET_HASH_KEY ? Buffer.from(e.FORGET_HASH_KEY, "base64") : null;
+  const secret = e.FORGET_KEY ? Buffer.from(e.FORGET_KEY, "base64") : null;
+  const salt = await installSalt();
   let key: Buffer | null = null;
-  let id: string | null = null;
+  let version: number | null = null;
   let problem: string | null = null;
   if (secret && secret.length === 32) {
-    key = Buffer.from(hkdfSync("sha256", secret, Buffer.alloc(0), "forgotten-names-v1", 32));
-    id = `env:${fingerprint(key)}`;
+    key = Buffer.from(hkdfSync("sha256", secret, salt, "forgotten-name v1", 32));
+    version = 1;
   } else if (production) {
-    problem = secret ? "FORGET_HASH_KEY is not 32 bytes of base64." : "FORGET_HASH_KEY is not set.";
+    problem = secret ? "FORGET_KEY is not 32 bytes of base64." : "FORGET_KEY is not set.";
   } else {
-    // Development and tests: a key kept in the database stands in, and admins are told.
-    await db.appSetting.upsert({ where: { id: "app" }, create: { id: "app", forgetKey: randomBytes(32).toString("base64") }, update: {} });
-    await db.appSetting.updateMany({ where: { id: "app", forgetKey: null }, data: { forgetKey: randomBytes(32).toString("base64") } });
-    const stored = (await db.appSetting.findUniqueOrThrow({ where: { id: "app" }, select: { forgetKey: true } })).forgetKey!;
-    key = Buffer.from(stored, "base64");
-    id = `db:${fingerprint(key)}`;
-    problem = "FORGET_HASH_KEY is not set, so forgotten names are hashed under a key kept in the database. Set it before this album is used for real.";
+    key = Buffer.from(hkdfSync("sha256", salt, Buffer.alloc(0), "forgotten-name v0", 32));
+    version = 0;
+    problem = "FORGET_KEY is not set, so forgotten names are hashed under a key made from the database alone. Set it before this album is used for real.";
   }
-  if (id) {
+  if (key) {
+    const id = `${version}:${fingerprint(key)}`;
     // Only an empty fingerprint is filled, so two first uses agree; a different one means the secret changed.
     await db.appSetting.updateMany({ where: { id: "app", forgetKeyFingerprint: null }, data: { forgetKeyFingerprint: id } });
-    const setting = await db.appSetting.findUnique({ where: { id: "app" }, select: { forgetKeyFingerprint: true } });
-    if (!setting) await db.appSetting.create({ data: { id: "app", forgetKeyFingerprint: id } }).catch(() => undefined);
-    else if (setting.forgetKeyFingerprint !== id) problem = "The key forgotten names are hashed under has changed, so names forgotten before are not recognised. Put the earlier FORGET_HASH_KEY back.";
+    const setting = await db.appSetting.findUniqueOrThrow({ where: { id: "app" }, select: { forgetKeyFingerprint: true } });
+    if (setting.forgetKeyFingerprint !== id) {
+      const [was] = (setting.forgetKeyFingerprint ?? "").split(":");
+      // Moving from the development stand-in to a real key is expected; anything else is the secret having changed.
+      if (!(was === "0" && version === 1)) problem = "The key forgotten names are hashed under has changed, so names forgotten before are not recognised. Put the earlier FORGET_KEY back.";
+      else await db.appSetting.update({ where: { id: "app" }, data: { forgetKeyFingerprint: id } });
+    }
   }
-  return { key, id, problem, paused: production && Boolean(problem) };
+  return { key, version, problem, paused: production && Boolean(problem) };
 }
 
 function hash(key: Buffer, normalized: string): string {
@@ -82,14 +96,14 @@ function normalizedForm(f: string): string {
 /** Remember these names of somebody being forgotten. */
 export async function rememberForgotten(forms: { form: string; capitalizedOnly: boolean }[]): Promise<void> {
   const state = await forgetKeyState();
-  if (!state.key || state.paused || !state.id) throw new Error(`Forgetting is paused: ${state.problem ?? "no key"}`);
-  const rows = new Map<string, { hash: string; keyId: string; capitalizedOnly: boolean }>();
+  if (!state.key || state.paused || state.version === null) throw new Error(`Forgetting is paused: ${state.problem ?? "no key"}`);
+  const rows = new Map<string, { hash: string; keyVersion: number; capitalizedOnly: boolean }>();
   for (const f of forms) {
     const n = normalizedForm(f.form);
     if (!n || n.split(" ").length > MAX_WORDS) continue;
     const h = hash(state.key, n);
     // A spelling stored both ways is matched the stricter way.
-    rows.set(h, { hash: h, keyId: state.id, capitalizedOnly: (rows.get(h)?.capitalizedOnly ?? true) && f.capitalizedOnly });
+    rows.set(h, { hash: h, keyVersion: state.version, capitalizedOnly: (rows.get(h)?.capitalizedOnly ?? true) && f.capitalizedOnly });
   }
   if (rows.size) await db.forgottenName.createMany({ data: [...rows.values()], skipDuplicates: true });
 }
@@ -113,9 +127,9 @@ const EMPTY: Tombstone = { empty: true, scrub: (t) => t, mentions: () => false }
 /** The forgotten names, ready to check text against. */
 export async function loadTombstone(): Promise<Tombstone> {
   const state = await forgetKeyState();
-  if (!state.key || !state.id) return EMPTY;
+  if (!state.key || state.version === null) return EMPTY;
   const key = state.key;
-  const rows = await db.forgottenName.findMany({ where: { keyId: state.id }, select: { hash: true, capitalizedOnly: true } });
+  const rows = await db.forgottenName.findMany({ where: { keyVersion: state.version }, select: { hash: true, capitalizedOnly: true } });
   if (!rows.length) return EMPTY;
   // Anybody the album knows now keeps their own name, whole or word by word.
   const [people, users] = await Promise.all([db.person.findMany({ select: { name: true } }), db.user.findMany({ where: { name: { not: null } }, select: { name: true } })]);

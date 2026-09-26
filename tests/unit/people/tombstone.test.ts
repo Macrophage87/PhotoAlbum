@@ -100,6 +100,14 @@ describe("a forgotten name, after the person's record is gone", () => {
     expect((await db.photo.findUniqueOrThrow({ where: { id: other } })).annotation).not.toBeNull();
   });
 
+  it("is not stored from an answer asked for just before the record was finally deleted", async () => {
+    // Asked for after the scrub, but while the person's record (and so their name) was still somebody's.
+    await forget();
+    const settled = (await db.appSetting.findUniqueOrThrow({ where: { id: "app" } })).lastForgetAt!;
+    await applyAnnotation(photoId, "m", record({ title: "Timothy Kent's day" }), { content: [] }, { requestedAt: new Date(settled.getTime() - 1) });
+    expect((await db.photo.findUniqueOrThrow({ where: { id: photoId } })).annotationError).toBe("names_changed");
+  });
+
   it("stamps a photograph whose members' words name them, and takes the name out of what the helper wrote there", async () => {
     await db.photo.update({ where: { id: photoId }, data: { annotation: record({ caption: "Timothy by the river", description: "Timothy Kent casts a line." }), annotatedAt: new Date() } });
     await forget();

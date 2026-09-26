@@ -58,7 +58,7 @@ const schema = z.object({
   GOOGLE_OAUTH_CLIENT_SECRET: z.string().optional().transform((v) => (v ? v : undefined)),
   TOKEN_ENCRYPTION_KEY: z.string().optional().transform((v) => (v ? v : undefined)),
   // The secret forgotten names are hashed under (32 random bytes, base64). Back it up with the environment, not the database.
-  FORGET_HASH_KEY: z.string().optional().transform((v) => (v ? v : undefined)),
+  FORGET_KEY: z.string().optional().transform((v) => (v ? v : undefined)),
   GOOGLE_ACCOUNTS_URL: urlWithDefault("https://accounts.google.com"),
   GOOGLE_OAUTH_BASE_URL: urlWithDefault("https://oauth2.googleapis.com"),
   GOOGLE_PHOTOS_API_URL: urlWithDefault("https://photospicker.googleapis.com/v1"),

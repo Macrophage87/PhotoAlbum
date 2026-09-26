@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { db } from "@/lib/db";
 import { resetTestDb } from "../helpers/reset";
 
-const env = vi.hoisted(() => ({ NODE_ENV: "test" as string, FORGET_HASH_KEY: undefined as string | undefined }));
+const env = vi.hoisted(() => ({ NODE_ENV: "test" as string, FORGET_KEY: undefined as string | undefined }));
 vi.mock("@/lib/env", async (orig) => {
   const actual = await orig<typeof import("@/lib/env")>();
   return { ...actual, env: () => ({ ...actual.env(), ...env }) };
@@ -17,25 +17,27 @@ describe("the key forgotten names are hashed under", () => {
   beforeEach(async () => {
     await resetTestDb();
     env.NODE_ENV = "test";
-    env.FORGET_HASH_KEY = undefined;
+    env.FORGET_KEY = undefined;
   });
 
-  it("comes from FORGET_HASH_KEY, and is never stored", async () => {
-    env.FORGET_HASH_KEY = KEY;
+  it("comes from FORGET_KEY and this install's salt, and is never stored", async () => {
+    env.FORGET_KEY = KEY;
     const state = await forgetKeyState();
     expect(state.problem).toBeNull();
-    expect(state.id).toMatch(/^env:/);
+    expect(state.version).toBe(1);
     await rememberForgotten([{ form: "Timothy Kent", capitalizedOnly: false }]);
+    // The salt is in the database; the key made with it is not.
     const setting = await db.appSetting.findUniqueOrThrow({ where: { id: "app" } });
-    expect(setting.forgetKey).toBeNull();
-    expect((await db.forgottenName.findFirstOrThrow()).keyId).toBe(state.id);
+    expect(setting.forgetKey).not.toBeNull();
+    expect(Buffer.from(setting.forgetKey!, "base64").equals(state.key!)).toBe(false);
+    expect((await db.forgottenName.findFirstOrThrow()).keyVersion).toBe(1);
     expect((await loadTombstone()).scrub("Timothy Kent waved")).toBe("A family member waved");
   });
 
   it("outside production stands in with a key in the database, and says so", async () => {
     const state = await forgetKeyState();
     expect(state.key).not.toBeNull();
-    expect(state.problem).toMatch(/FORGET_HASH_KEY is not set/);
+    expect(state.problem).toMatch(/FORGET_KEY is not set/);
     expect(state.paused).toBe(false);
   });
 
@@ -47,9 +49,9 @@ describe("the key forgotten names are hashed under", () => {
   });
 
   it("changed, is noticed, and names hashed under the old one are not used", async () => {
-    env.FORGET_HASH_KEY = KEY;
+    env.FORGET_KEY = KEY;
     await rememberForgotten([{ form: "Timothy Kent", capitalizedOnly: false }]);
-    env.FORGET_HASH_KEY = Buffer.alloc(32, 9).toString("base64");
+    env.FORGET_KEY = Buffer.alloc(32, 9).toString("base64");
     env.NODE_ENV = "production";
     const state = await forgetKeyState();
     expect(state.problem).toMatch(/has changed/);

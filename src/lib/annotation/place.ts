@@ -3,7 +3,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { db } from "@/lib/db";
 import { forgetUnderWay, unchangedSince } from "@/lib/people/names-changed";
-import { loadTombstone } from "@/lib/people/tombstone";
+import { loadTombstone, type Tombstone } from "@/lib/people/tombstone";
 import { thinkingParams } from "./client";
 import { placeFromMembersOnly } from "./members-only";
 
@@ -149,13 +149,13 @@ export async function recordPlaceFailure(photoId: string, opts: { terminal?: boo
  * from the camera, from a track or from a Google sidecar always wins; a track imported afterwards replaces it in
  * turn (see geotag-photos). placeEstimatedAt is stamped either way, so a declined item is not asked about again.
  */
-export async function applyPlaceEstimate(photoId: string, estimate: PlaceEstimate, opts: { sent?: boolean | null; requestedAt?: Date } = {}): Promise<"placed" | "declined" | "skipped" | "stale"> {
+export async function applyPlaceEstimate(photoId: string, estimate: PlaceEstimate, opts: { sent?: boolean | null; requestedAt?: Date; tombstone?: Tombstone } = {}): Promise<"placed" | "declined" | "skipped" | "stale"> {
   const requestedAt = opts.requestedAt;
   const current = await db.photo.findUnique({ where: { id: photoId }, select: { lat: true, gpsSource: true, context: true } });
   if (!current) return "skipped";
   // A town-level answer is held to the town before anything is written, name and evidence alike; and nobody
   // forgotten comes back by way of its name or evidence.
-  const tombstone = await loadTombstone();
+  const tombstone = opts.tombstone ?? (await loadTombstone());
   const coarse = estimate && estimate.confidence >= MIN_PLACE_CONFIDENCE ? scrubCoarsePlace(estimate) : null;
   const place = coarse ? { ...coarse, name: tombstone.scrub(coarse.name), evidence: tombstone.scrub(coarse.evidence) } : null;
   const free = current.lat === null && (current.gpsSource === null || current.gpsSource === "ESTIMATE");

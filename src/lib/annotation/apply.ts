@@ -7,7 +7,7 @@ import { applyPlaceEstimate, needsPlaceEstimate } from "./place";
 import { isWeakDate } from "@/lib/photos/date-from-neighbours";
 import { judgeHelperText, knownNames, mentionsAnyName, pastHelperTitles, titleIsHelpers } from "./members-only";
 import { forgetUnderWay, unchangedSince } from "@/lib/people/names-changed";
-import { loadTombstone, scrubRecord } from "@/lib/people/tombstone";
+import { loadTombstone, scrubRecord, type Tombstone } from "@/lib/people/tombstone";
 
 export type ApplyResult = { ok: true } | { ok: false; reason: "refusal" | "invalid" | "max_tokens" };
 
@@ -52,12 +52,12 @@ export function titlesAfter(
  * changed their mind about being named, is not stored: it may name them again. Nothing is kept of it, not even the
  * raw row, and the item stays due to be described again with the names as they are now.
  */
-export async function applyAnnotation(photoId: string, model: string, parsed: Annotation, raw: { usage?: Usage; batched?: boolean } & Record<string, unknown>, opts: { sent?: boolean | null; requestedAt?: Date } = {}): Promise<void> {
+export async function applyAnnotation(photoId: string, model: string, parsed: Annotation, raw: { usage?: Usage; batched?: boolean } & Record<string, unknown>, opts: { sent?: boolean | null; requestedAt?: Date; tombstone?: Tombstone } = {}): Promise<void> {
   const requestedAt = opts.requestedAt;
   const current = await db.photo.findUnique({ where: { id: photoId }, select: { takenAt: true, takenAtSource: true, estimatedDateSource: true, annotationSource: true, title: true, membersTitle: true, titleByHelper: true, annotation: true, kind: true, lat: true, placeEstimatedAt: true, context: true } });
   if (!current) return;
   // Nobody forgotten comes back by way of a new answer, whoever it is about: their names are taken out first.
-  const tombstone = await loadTombstone();
+  const tombstone = opts.tombstone ?? (await loadTombstone());
   const stored = scrubRecord(toStored(parsed), tombstone);
   // Written from names or notes, it is the family's to read: kept off the item's own title and out of public view.
   const judgement = await judgeHelperText(photoId, stored, current.context, opts.sent);
@@ -130,7 +130,7 @@ export async function applyAnnotation(photoId: string, model: string, parsed: An
   // The place guess is only ever recorded for an item that was actually asked, so clearing a position later still
   // leaves it eligible for the backfill.
   // Asked in the same request, so it was written from the same things.
-  if (needsPlaceEstimate(current)) await applyPlaceEstimate(photoId, parsed.estimatedPlace, { sent: membersOnly || opts.sent, requestedAt });
+  if (needsPlaceEstimate(current)) await applyPlaceEstimate(photoId, parsed.estimatedPlace, { sent: membersOnly || opts.sent, requestedAt, tombstone });
   // The description changed, so the semantic index for this item is stale.
   await enqueueEmbedding(photoId, true);
 }

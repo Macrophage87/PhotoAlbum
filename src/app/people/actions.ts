@@ -236,8 +236,9 @@ export async function optOutPerson(personId: string, fd: FormData): Promise<void
     const before = await memberTextMentioning(m, tagged, personId);
     const photoIds = [...new Set([...tagged, ...(await photosMentioning(m)), ...before.photos.map((p) => p.id)])];
     await db.person.update({ where: { id: personId }, data: { faceIndexing: false, nameInDescriptions: false, pendingDecision: false, keepNameOnPhotos: keepName, optedOutAt: person.optedOutAt ?? now, faceIndexingSetAt: now, namingWithdrawnAt: null } });
-    // Their names, hashed, outlive their record: see tombstone.ts.
+    // Their names, hashed, outlive their record: see tombstone.ts. Stamped again once they are remembered.
     if (!keepName) await rememberForgotten(m.tombstoneForms);
+    await db.appSetting.update({ where: { id: "app" }, data: { lastForgetAt: new Date() } });
     await forgetNameInText(photoIds, m, { tagged, personId });
     // What is left mentioning them is what members wrote (or the helper's trip descriptions, where only a name that
     // is also a word is left); it is listed so it can be edited by hand.
@@ -251,6 +252,11 @@ export async function optOutPerson(personId: string, fd: FormData): Promise<void
       // Forgetting entirely also removes the person page; the record of who is in which photo went with the faces.
       await db.person.delete({ where: { id: personId } });
     }
+    // Until the record was gone the remembered names still counted as somebody's; an answer asked for before now
+    // about any of these photographs is thrown away, and the whole album's while the stamp below is newest.
+    const settled = new Date();
+    await db.photo.updateMany({ where: { id: { in: photoIds } }, data: { namesScrubbedAt: settled } });
+    await db.appSetting.update({ where: { id: "app" }, data: { lastForgetAt: settled } });
   } finally {
     await db.appSetting.update({ where: { id: "app" }, data: { forgetFinishedAt: new Date() } });
   }

@@ -142,7 +142,7 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
           {forgetKey.problem && (
             <div className="mt-4 rounded-theme border border-red-300 bg-red-50 p-3 text-sm text-red-900" data-testid="forget-key-problem">
               <p className="font-medium">{forgetKey.paused ? "Forgetting and the AI helper are paused" : "Forgotten names are not protected properly"}</p>
-              <p>{forgetKey.problem} {forgetKey.paused ? "Nobody can be forgotten, and nothing is sent to the AI helper, until it is put right." : ""} See FORGET_HASH_KEY in the deployment guide.</p>
+              <p>{forgetKey.problem} {forgetKey.paused ? "Nobody can be forgotten, and nothing is sent to the AI helper, until it is put right." : ""} See FORGET_KEY in the deployment guide.</p>
             </div>
           )}
           {forgotten.length > 0 && (

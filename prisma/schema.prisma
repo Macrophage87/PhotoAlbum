@@ -603,7 +603,9 @@ model AppSetting {
   lastForgetAt           DateTime?
   /// When the last forget finished: while one is under way (lastForgetAt later than this) no answer is stored.
   forgetFinishedAt       DateTime?
-  /// Outside production only, with FORGET_HASH_KEY unset: a key kept here, with a warning on the Admin page.
+  /// This install's random salt for the key forgotten names are hashed under (with FORGET_KEY from the
+  /// environment, so neither a database copy nor the secret alone is enough); outside production, with FORGET_KEY
+  /// unset, it stands in for the key, with a warning on the Admin page.
   forgetKey              String?
   /// Which key forgotten names are hashed under (a fingerprint, never the key): a different one means the secret
   /// changed, and names forgotten before are no longer recognised until it is put back.
@@ -943,8 +945,8 @@ model VisitSalt {
 /// to be sent to it, is checked against them after the person's own record is gone (see src/lib/people/tombstone.ts).
 model ForgottenName {
   hash            String   @id
-  /// The fingerprint of the key it was hashed under.
-  keyId           String
+  /// Which key it was hashed under: 1 from FORGET_KEY with this install's salt, 0 the development stand-in.
+  keyVersion      Int
   /// Matched only as a name is written (capitalized, or in capitals): a one-word name, or one of everyday words.
   capitalizedOnly Boolean  @default(false)
   createdAt       DateTime @default(now())

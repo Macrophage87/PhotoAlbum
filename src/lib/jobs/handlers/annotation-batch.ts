@@ -3,6 +3,7 @@ import { anthropic } from "@/lib/annotation/client";
 import { annotationGates, notOptedOutWhere } from "@/lib/annotation/eligibility";
 import { buildPlaceRequest, buildRequest, loadItem } from "@/lib/annotation/request";
 import { nameScrubber } from "@/lib/people/unpermitted";
+import { loadTombstone } from "@/lib/people/tombstone";
 import { applyAnnotation, parseMessageContent, recordFailure } from "@/lib/annotation/apply";
 import { applyPlaceEstimate, parsePlaceContent, recordPlaceFailure } from "@/lib/annotation/place";
 import { enqueue } from "../boss";
@@ -342,6 +343,8 @@ export async function annotationBatchPoll(): Promise<void> {
     if (!remote) continue;
     if (remote.processing_status !== "ended") continue;
     let succeeded = 0, errored = 0, canceled = 0;
+    // The forgotten names, read once for the batch rather than for every answer in it.
+    const tombstone = await loadTombstone();
     // Every request in the run was built after its first row was created, so that is the time to judge answers by.
     const requestedAt = b.parentId ? ((await db.annotationBatch.findUnique({ where: { id: b.parentId }, select: { createdAt: true } }))?.createdAt ?? b.createdAt) : b.createdAt;
     for await (const result of await anthropic().messages.batches.results(b.anthropicBatchId)) {
@@ -373,7 +376,7 @@ export async function annotationBatchPoll(): Promise<void> {
           await fail("invalid_output");
           continue;
         }
-        if ((await applyPlaceEstimate(photoId, place, { sent, requestedAt })) === "stale") {
+        if ((await applyPlaceEstimate(photoId, place, { sent, requestedAt, tombstone })) === "stale") {
           errored++;
           continue;
         }
@@ -386,7 +389,7 @@ export async function annotationBatchPoll(): Promise<void> {
         await fail("invalid_output");
         continue;
       }
-      await applyAnnotation(photoId, message.model, parsed, { content: message.content, usage: message.usage, stop_reason: message.stop_reason, batched: true }, { sent, requestedAt });
+      await applyAnnotation(photoId, message.model, parsed, { content: message.content, usage: message.usage, stop_reason: message.stop_reason, batched: true }, { sent, requestedAt, tombstone });
       succeeded++;
     }
     console.log(`[annotation-backfill] batch ${b.anthropicBatchId} ended: ${succeeded} ok, ${errored} failed, ${canceled} cancelled`);
