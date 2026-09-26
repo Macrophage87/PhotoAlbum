@@ -12,6 +12,7 @@ export const collectionCardSelect = {
   slug: true,
   title: true,
   description: true,
+  descriptionMembersOnly: true,
   themeKey: true,
   visibility: true,
   shareToken: true,

@@ -8,6 +8,7 @@ import { canEditMedia, editableMediaIds, NOT_YOURS } from "@/lib/auth/ownership"
 import { applyPhotoInstant } from "@/lib/photos/apply-date";
 import { planDate } from "@/lib/photos/bulk-date";
 import { offsetMinutesInZone } from "@/lib/time/local-day";
+import { rejudgeFromAction } from "@/lib/annotation/rejudge-notice";
 
 export type MoveResult = { ok: true; where: string } | { ok: false; message: string };
 
@@ -80,6 +81,7 @@ export async function bulkPutInActivity(photoIds: string[], activityId: string):
   const activity = await db.activity.findUnique({ where: { id: activityId }, select: { id: true, tripId: true } });
   if (!activity || !list.length) return { n: 0, notYours: asked.length - list.length };
   const r = await db.photo.updateMany({ where: { id: { in: list } }, data: { activityId: activity.id, activitySetById: user.id, tripId: activity.tripId } });
+  await rejudgeFromAction({ tripId: activity.tripId });
   revalidatePath("/trips", "layout");
   revalidatePath("/timeline");
   return { n: r.count, notYours: asked.length - list.length };

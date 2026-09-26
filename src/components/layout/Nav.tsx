@@ -4,6 +4,7 @@ import { UserMenu } from "./UserMenu";
 import { MobileNav, type NavLink } from "./MobileNav";
 import { MoreMenu } from "./MoreMenu";
 import { SearchBox } from "@/components/search/SearchBox";
+import { RejudgeNotice } from "./RejudgeNotice";
 
 /** What a member uses every visit: always in the bar. */
 const everyday: NavLink[] = [
@@ -60,6 +61,7 @@ export function Nav({ viewer }: { viewer: Viewer }) {
         </nav>
         <MobileNav links={all} signedIn={signedIn} name={signedIn ? (viewer.user.name ?? viewer.user.email) : null} />
       </div>
+      {signedIn && <RejudgeNotice />}
     </header>
   );
 }

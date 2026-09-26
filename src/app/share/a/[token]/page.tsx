@@ -22,10 +22,11 @@ export async function generateMetadata({ params }: PageProps<"/share/a/[token]">
   // The activity's cover stands in for it on a link preview — the one chosen for it, or else its first photograph.
   // It is fetched with the token, since whoever is unfurling the link holds no cookie.
   const cover = await activityCover(activity);
+  // The link is to the afternoon, not the trip: a trip's name is only on the card where anybody may read it anyway.
+  const day = formatDateTime(activity.startTime, activity.trip.timezone, "EEEE, MMMM d, yyyy");
   const card = previewCard({
     title: activity.title,
-    // The link is to the activity, not its trip: the trip is named only where anybody may open it anyway.
-    description: [activity.trip.visibility === "PUBLIC" ? activity.trip.title : null, formatDateTime(activity.startTime, activity.trip.timezone, "EEEE, MMMM d, yyyy")].filter(Boolean).join(" · "),
+    description: activity.trip.visibility === "PUBLIC" ? `${activity.trip.title} · ${day}` : day,
     pageUrl: new URL(`/share/a/${token}`, env().APP_URL).toString(),
     cover,
     appUrl: env().APP_URL,

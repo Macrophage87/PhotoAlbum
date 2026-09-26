@@ -41,7 +41,7 @@ export async function loadCandidates(): Promise<Candidate[]> {
 
 export async function loadItem(photoId: string): Promise<Item | null> {
   const [p, vec] = await Promise.all([
-    db.photo.findUnique({ where: { id: photoId }, select: { id: true, takenAt: true, tzOffsetMin: true, lat: true, lng: true, caption: true, context: true, title: true, annotation: true, tripId: true, collections: { select: { collectionId: true } } } }),
+    db.photo.findUnique({ where: { id: photoId }, select: { id: true, takenAt: true, tzOffsetMin: true, lat: true, lng: true, caption: true, context: true, title: true, membersTitle: true, annotation: true, tripId: true, collections: { select: { collectionId: true } } } }),
     db.$queryRaw<{ embedding: string | null }[]>`SELECT "embedding"::text AS embedding FROM "Photo" WHERE id = ${photoId}`.catch(() => [] as { embedding: string | null }[]),
   ]);
   if (!p) return null;
@@ -52,7 +52,7 @@ export async function loadItem(photoId: string): Promise<Item | null> {
     lat: p.lat,
     lng: p.lng,
     tags: new Set(a?.tags ?? []),
-    text: [p.title, p.caption, p.context, a?.caption, a?.searchSummary].filter(Boolean).join(" "),
+    text: [p.title, p.membersTitle, p.caption, p.context, a?.caption, a?.searchSummary].filter(Boolean).join(" "),
     peopleIds: new Set<string>(),
     embedding: vec[0]?.embedding ? (JSON.parse(vec[0].embedding) as number[]) : null,
     tripId: p.tripId,

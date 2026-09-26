@@ -6,6 +6,7 @@ import { NOT_TRASHED } from "@/lib/photos/trash";
 import { NO_FILTER, type GalleryFilter } from "./filters";
 import { boundingBox, MILE_IN_METRES, NO_PICKER_FILTER, type PickerFilter } from "./picker-filter";
 import { idsWithPerson } from "@/lib/people/in-photos";
+import { publicMediaSql } from "@/lib/search/query";
 
 /** Gallery pages load this many items at a time; the client asks for the next page by cursor. */
 export const GALLERY_PAGE = 240;
@@ -17,18 +18,47 @@ export type PhotoPage = { photos: PhotoCard[]; nextCursor: string | null; total:
 export type PhotoOrder = "favorites" | "taken" | "newest";
 
 /**
+ * Where a word search is asked: one trip, the photographs on no trip (`tripId: null`), one collection, or — with
+ * none of those — the whole album, which for anybody but a member is only what sits somewhere public.
+ */
+export type MatchScope = { tripId?: string | null; collectionId?: string; publicOnly?: boolean; /** Only items with a position: a map's words are asked of what it can show. */ placed?: boolean };
+
+/** More matches than this for one set of words is a word that means nothing; the best-ranked are kept. */
+export const MATCH_LIMIT = 5000;
+
+/**
  * Which items a search matches, as a list of ids.
  *
- * The same index the search page uses — captions, titles, notes, the AI's description and tags, and for members the
- * names of the people in the picture — plus the file's own name, because "DSC_0421" is sometimes all anyone
- * remembers. A separate query rather than a join so both ways of ordering a gallery can use it unchanged.
+ * The same index the search page uses — captions, titles, the helper's description and tags, and for members the
+ * notes and the names of the people in the picture — plus the file's own name, because "DSC_0421" is sometimes all
+ * anyone remembers. A separate query rather than a join so both ways of ordering a gallery can use it unchanged.
+ *
+ * Asked inside its scope, so a common word cannot crowd a trip's own matches out of the list: the limit applies
+ * to what is in the trip, and what it keeps is the best-ranked rather than whatever the database reached first.
  */
-export async function idsMatching(q: string): Promise<string[]> {
+export async function idsMatching(q: string, opts: { member: boolean; scope?: MatchScope; limit?: number }): Promise<string[]> {
+  const scope = opts.scope ?? {};
+  const limit = opts.limit ?? MATCH_LIMIT;
+  // The words are looked for as typed: a % or an _ in them is a character, not a pattern.
+  const like = `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+  // Members match what members read; anybody else only what anybody may, so a name or a note never picks out a photograph.
+  const column = opts.member ? Prisma.sql`p."searchVectorMembers"` : Prisma.sql`p."searchVector"`;
+  const titled = opts.member ? Prisma.sql`(p.title ILIKE ${like} OR p."membersTitle" ILIKE ${like})` : Prisma.sql`p.title ILIKE ${like}`;
+  const within: Prisma.Sql[] = [];
+  if (scope.tripId !== undefined) within.push(scope.tripId === null ? Prisma.sql`p."tripId" IS NULL` : Prisma.sql`p."tripId" = ${scope.tripId}`);
+  if (scope.collectionId) within.push(Prisma.sql`EXISTS (SELECT 1 FROM "CollectionItem" ci WHERE ci."photoId" = p.id AND ci."collectionId" = ${scope.collectionId})`);
+  if (scope.publicOnly) within.push(publicMediaSql());
+  if (scope.placed) within.push(Prisma.sql`p.lat IS NOT NULL AND p.lng IS NOT NULL`);
   const rows = await db.$queryRaw<{ id: string }[]>`
     SELECT p.id FROM "Photo" p, LATERAL (SELECT websearch_to_tsquery('english', ${q}) || websearch_to_tsquery('simple', ${q}) AS query) qq
-    WHERE p."trashedAt" IS NULL AND (p."searchVectorMembers" @@ qq.query OR p."originalName" ILIKE ${"%" + q + "%"} OR p.caption ILIKE ${"%" + q + "%"} OR p.title ILIKE ${"%" + q + "%"})
-    LIMIT 5000`;
-  return rows.map((r) => r.id);
+    WHERE p."trashedAt" IS NULL AND ${within.length ? Prisma.join(within, " AND ") : Prisma.sql`TRUE`}
+      AND (${column} @@ qq.query OR p."originalName" ILIKE ${like} OR p.caption ILIKE ${like} OR ${titled})
+    ORDER BY ts_rank_cd(${column}, qq.query) DESC, p.id
+    LIMIT ${limit + 1}`;
+  // Kept quiet from the viewer, who sees the best-ranked matches; said here, without the words (somebody's search is
+  // theirs), so a limit that is too low is noticed.
+  if (rows.length > limit) console.warn(`[search] a word search matched more than ${limit} items in its scope; the best-ranked ${limit} are used`);
+  return rows.slice(0, limit).map((r) => r.id);
 }
 
 /**
@@ -61,7 +91,7 @@ export async function tripPhotoPage(tripId: string, opts: { uploaderId?: string;
   // `uploaderId` predates the filter and still works on its own, so a link somebody kept goes on working.
   const filter: GalleryFilter = { ...NO_FILTER, ...opts.filter, uploaderId: opts.filter?.uploaderId ?? opts.uploaderId ?? null };
   const lists: string[][] = [];
-  if (filter.q) lists.push(await idsMatching(filter.q));
+  if (filter.q) lists.push(await idsMatching(filter.q, { member: filter.member, scope: { tripId } }));
   if (filter.year) lists.push(await idsInLocalYear(tripId, filter.year));
   // One list per name, so two names means the photographs they are both on rather than either.
   for (const id of filter.personIds) lists.push(await idsWithPerson(id));
@@ -155,7 +185,8 @@ export async function idsNear(near: { lat: number; lng: number; miles: number })
 export async function candidatePhotoPage(target: PickerTarget, filter: PickerFilter = NO_PICKER_FILTER, opts: { cursor?: string | null; take?: number } = {}): Promise<PhotoPage> {
   const take = opts.take ?? GALLERY_PAGE;
   const lists: string[][] = [];
-  if (filter.q) lists.push(await idsMatching(filter.q));
+  // The picker is a member's, choosing from the whole album.
+  if (filter.q) lists.push(await idsMatching(filter.q, { member: true }));
   if (filter.near) lists.push(await idsNear(filter.near));
   // One list per name, so two names means the photographs they are both on rather than either.
   for (const id of filter.personIds) lists.push(await idsWithPerson(id));

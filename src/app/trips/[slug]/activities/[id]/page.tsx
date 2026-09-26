@@ -3,7 +3,7 @@ import { db } from "@/lib/db";
 import { loadViewableTrip } from "@/lib/trips/access";
 import { photoCardSelect } from "@/lib/photos/queries";
 import { ActivityDetail } from "@/components/activities/ActivityDetail";
-import { deleteActivity, describeActivityWithAi, setActivityDescription, setActivityShare, updateActivity } from "../actions";
+import { deleteActivity, describeActivityWithAi, setActivityDescription, setActivityDescriptionShared, setActivityShare, updateActivity } from "../actions";
 import { shareableActivityUrl } from "@/lib/share/social";
 import { NOT_TRASHED } from "@/lib/photos/trash";
 import { env } from "@/lib/env";
@@ -42,7 +42,7 @@ export default async function ActivityPage({ params, searchParams }: PageProps<"
           : undefined,
       }
     : undefined;
-  if (!owns) return <ActivityDetail trip={trip} activity={activity} photos={photos} upload={upload} editable={false} />;
+  if (!owns) return <ActivityDetail trip={trip} activity={activity} photos={photos} upload={upload} member={editable} editable={false} />;
   // Sharing an activity shapes what leaves the album, so it belongs with the rest of arranging the trip.
   const cover = await activityCover(activity);
   const share = {
@@ -58,6 +58,7 @@ export default async function ActivityPage({ params, searchParams }: PageProps<"
   const describe = gates.active && photos.length > 0 ? describeActivityWithAi.bind(null, slug, activity.id) : undefined;
   return (
     <ActivityDetail
+      member={editable}
       trip={trip}
       activity={activity}
       photos={photos}
@@ -65,6 +66,8 @@ export default async function ActivityPage({ params, searchParams }: PageProps<"
       share={share}
       save={save}
       describe={describe}
+      shareDescription={setActivityDescriptionShared.bind(null, slug, activity.id)}
+      strangersCanOpen={trip.visibility !== "PRIVATE" || Boolean(activity.shareToken)}
       editable
       editing={sp.edit === "1"}
       members={await familyMembers()}

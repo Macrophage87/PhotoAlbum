@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { Button, Textarea } from "@/components/ui";
+import { Badge, Button, Textarea } from "@/components/ui";
 
 /** What is being described, which decides the wording and the test hooks. */
 export type DescribedKind = "activity" | "trip" | "collection";
@@ -25,6 +25,9 @@ export function DescriptionEditor({
   description,
   save,
   describe,
+  membersOnly = false,
+  share,
+  strangersCanOpen = true,
   className = "",
 }: {
   what: DescribedKind;
@@ -33,6 +36,19 @@ export function DescriptionEditor({
   save?: (text: string) => Promise<void>;
   /** Ask the helper, with whatever is in the box as the note. Absent when the helper is off or there is nothing to look at. */
   describe?: (note: string) => Promise<string>;
+  /**
+   * Shown to the family only: the helper wrote it from names or notes, or it names somebody (see
+   * `descriptionFromMembersOnly`). Only a member ever receives such a description, so the badge is theirs to read.
+   */
+  membersOnly?: boolean;
+  /** Whoever arranges it: show it to everyone who may open this, or keep it for the family. Saving never changes it. */
+  share?: (everyone: boolean) => Promise<void>;
+  /**
+   * Whether anybody outside the family can open this at all (a public or linked trip or collection, an activity with
+   * a link). While nobody can, whether the description is the family's only makes no difference yet, so it is only
+   * mentioned, and there is nothing to show to everyone.
+   */
+  strangersCanOpen?: boolean;
   /** The paragraph is read in a themed header on a trip and a collection, and on a plain page on an activity. */
   className?: string;
 }) {
@@ -41,8 +57,23 @@ export function DescriptionEditor({
   const [error, setError] = useState<string | null>(null);
   const [pending, start] = useTransition();
 
-  const read = <p className={`max-w-3xl whitespace-pre-line ${className}`} data-testid={`${what}-description`}>{description}</p>;
+  const paragraph = <p className={`max-w-3xl whitespace-pre-line ${className}`} data-testid={`${what}-description`}>{description}</p>;
+  const read =
+    membersOnly && description && strangersCanOpen ? (
+      <div className="space-y-1">
+        <span data-testid={`${what}-description-family-only`}><Badge>Family only</Badge></span>
+        {paragraph}
+      </div>
+    ) : (
+      paragraph
+    );
   if (!save) return description ? read : null;
+  // Whoever arranges it is told, in one line, who reads what they wrote.
+  const status = !strangersCanOpen
+    ? `Only the family can open this ${WORD[what]}${membersOnly ? ", and this description stays with the family if that changes" : ""}.`
+    : membersOnly
+      ? "Only the family can read this."
+      : `Everyone who can open this ${WORD[what]} can read this.`;
 
   const run = (work: () => Promise<void>) =>
     start(async () => {
@@ -58,6 +89,23 @@ export function DescriptionEditor({
     return (
       <div className="space-y-2">
         {description && read}
+        {description && <p className="text-xs text-muted" data-testid={`${what}-description-status`}>{status}</p>}
+        {description && share && strangersCanOpen && (
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={pending}
+            data-testid={`${what}-description-share`}
+            onClick={() =>
+              run(async () => {
+                if (membersOnly && !window.confirm(`Show this description to everyone who can open this ${WORD[what]}? Check it names nobody and says nothing only the family should read.`)) return;
+                await share(membersOnly);
+              })
+            }
+          >
+            {membersOnly ? "Show this description to everyone" : "Keep it for the family"}
+          </Button>
+        )}
         <Button
           size="sm"
           variant="secondary"

@@ -52,15 +52,17 @@ import { SimilarStrip } from "@/components/graph/SimilarStrip";
 import { PersonChips } from "@/components/people/PersonChips";
 import { PhotoTagger } from "@/components/people/PhotoTagger";
 import { NOT_TRASHED } from "@/lib/photos/trash";
+import { readableTitle } from "@/lib/photos/readable-text";
 
 /** The tab and link-preview title: the item's title, else its caption, else the file name. Members only, like the page. */
 export async function generateMetadata({ params }: PageProps<"/photos/[id]">): Promise<Metadata> {
   const { id } = await params;
   const viewer = await getViewer();
   if (viewer.kind !== "user") return { title: "Photo" };
-  const photo = await db.photo.findUnique({ where: { id }, select: { title: true, caption: true, originalName: true } });
+  const photo = await db.photo.findUnique({ where: { id }, select: { title: true, membersTitle: true, caption: true, originalName: true } });
   if (!photo) return { title: "Photo" };
-  return { title: photo.title ?? photo.caption ?? photo.originalName, description: photo.title ? (photo.caption ?? undefined) : undefined, robots: { index: false, follow: false } };
+  const title = readableTitle(photo, true);
+  return { title: title ?? photo.caption ?? photo.originalName, description: title ? (photo.caption ?? undefined) : undefined, robots: { index: false, follow: false } };
 }
 
 export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
@@ -213,7 +215,7 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
             <div className="mt-3">
               <FavouriteButton kind="photo" id={photo.id} initial={(await favouritesFor("photo", [photo.id], viewer)).get(photo.id) ?? { mine: false, count: 0 }} withLabel />
             </div>
-            {photo.title && <h1 className="mt-3 text-xl font-semibold font-display">{photo.title}</h1>}
+            {readableTitle(photo, true) && <h1 className="mt-3 text-xl font-semibold font-display" data-testid="photo-title">{readableTitle(photo, true)}</h1>}
             {isClip && photo.durationS && <p className="mt-2 text-sm text-muted">{Math.round(photo.durationS)} second clip{photo.status === "READY" ? " · original kept" : ""}</p>}
             {isVideo && photo.externalStatus === "UNAVAILABLE" && <p className="mt-1 text-sm text-amber-800">This video is no longer available on YouTube (deleted or made private). Replace the link below or delete the item.</p>}
             {photo.caption && <p className="mt-3 text-lg">{photo.caption}</p>}
@@ -254,8 +256,14 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
                 {!isVideo && (
                   <div>
                     <Label htmlFor="photo-title">Title</Label>
-                    <Input id="photo-title" name="title" defaultValue={photo.title ?? ""} placeholder="Mail boat lunch" />
-                    <p className="text-xs text-muted mt-1">Shown when the item is listed or shared. Left empty, the AI helper writes one when it describes the item.</p>
+                    <Input id="photo-title" name="title" defaultValue={photo.title ?? ""} placeholder={photo.membersTitle?.trim() || "Mail boat lunch"} />
+                    {photo.membersTitle?.trim() && !photo.title?.trim() ? (
+                      <p className="text-xs text-muted mt-1" data-testid="photo-members-title">
+                        This title (shown to the family only): {photo.membersTitle}. It names somebody, or came from notes, so anyone else sees no title until you write one here.
+                      </p>
+                    ) : (
+                      <p className="text-xs text-muted mt-1">Shown when the item is listed or shared. Left empty, the AI helper writes one when it describes the item — shown to the family only when it names somebody or comes from notes.</p>
+                    )}
                   </div>
                 )}
                 <div>
@@ -300,7 +308,7 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
             </Card>
             )}
 
-            <AnnotationCard photoId={photo.id} annotation={photo.annotation as StoredAnnotation | null} source={photo.annotationSource} model={photo.annotationModel} error={photo.annotationError} optOut={photo.annotationOptOut} optOutReason={optOutWhy} active={gates.active} editable={mine} />
+            <AnnotationCard photoId={photo.id} annotation={photo.annotation as StoredAnnotation | null} membersOnly={photo.annotationMembersOnly} titleOnly={photo.annotationTitleOnly} revision={photo.annotationRevision} source={photo.annotationSource} model={photo.annotationModel} error={photo.annotationError} optOut={photo.annotationOptOut} optOutReason={optOutWhy} active={gates.active} editable={mine} />
             {/* Where a date came from is worth reading whoever you are; taking one of the readings is not. */}
             <div className="mb-2"><DateTroubleshooter photoId={photo.id} readOnly={!mine} /></div>
             {mine && neighbourGuess && <div className="mb-3"><NeighbourDate photoId={photo.id} guess={{ ...neighbourGuess, takenAt: neighbourGuess.takenAt.toISOString() }} /></div>}

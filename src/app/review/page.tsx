@@ -22,6 +22,7 @@ import { googleStatus } from "@/lib/google/account";
 import { googleConfigured } from "@/lib/google/oauth";
 import { NOT_TRASHED } from "@/lib/photos/trash";
 import { editableMediaWhere, isAdmin } from "@/lib/auth/ownership";
+import { readableTitle } from "@/lib/photos/readable-text";
 
 export const metadata = { title: "Review uploads" };
 
@@ -106,7 +107,7 @@ export default async function ReviewPage({ searchParams }: PageProps<"/review">)
               <section className="space-y-3">
                 <h2 className="font-display text-lg font-semibold">Where these might belong</h2>
                 {photos.filter((p) => suggestions[p.id]?.length).map((p) => (
-                  <SuggestionList key={p.id} photoId={p.id} label={p.caption ?? p.title ?? p.originalName} suggestions={suggestions[p.id]} />
+                  <SuggestionList key={p.id} photoId={p.id} label={p.caption ?? readableTitle(p, true) ?? p.originalName} suggestions={suggestions[p.id]} />
                 ))}
               </section>
             )}
@@ -115,7 +116,7 @@ export default async function ReviewPage({ searchParams }: PageProps<"/review">)
                 const a = p.annotation as StoredAnnotation | null;
                 return (
                   <li key={p.id} className="rounded-theme border border-border p-3 space-y-1">
-                    <Link href={`/photos/${p.id}`} className="text-primary hover:underline font-medium">{a?.caption ?? p.caption ?? p.title ?? p.originalName}</Link>
+                    <Link href={`/photos/${p.id}`} className="text-primary hover:underline font-medium">{a?.caption ?? p.caption ?? readableTitle(p, true) ?? p.originalName}</Link>
                     {p.context && <p className="text-muted">Note: {p.context}</p>}
                     {a && <p>{a.description}{a.tags.length > 0 && <span className="text-muted"> · {a.tags.slice(0, 8).join(", ")}</span>}</p>}
                     {optedOut(p) && <p className="text-xs text-muted">Not sent to the AI helper.</p>}
@@ -128,7 +129,7 @@ export default async function ReviewPage({ searchParams }: PageProps<"/review">)
                 <h2 className="font-display text-lg font-semibold">Dates to confirm</h2>
                 {photos.filter((p) => p.estimatedDate && p.estimatedDateNote).map((p) => (
                   <div key={p.id} className="rounded-theme border border-amber-200 bg-amber-50 p-3 text-amber-900">
-                    <Link href={`/photos/${p.id}`} className="text-sm font-medium hover:underline">{p.caption ?? p.title ?? p.originalName}</Link>
+                    <Link href={`/photos/${p.id}`} className="text-sm font-medium hover:underline">{p.caption ?? readableTitle(p, true) ?? p.originalName}</Link>
                     <EstimatedDate photoId={p.id} estimatedDate={p.estimatedDate} confidence={p.estimatedDateConfidence} note={p.estimatedDateNote} compact />
                     {/* Before agreeing with the helper, a member can see what the file itself claims and why. */}
                     <DateTroubleshooter photoId={p.id} />

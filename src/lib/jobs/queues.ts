@@ -25,6 +25,7 @@ export const QUEUES = {
   googlePickerImport: "google-picker-import",
   purgeVisits: "purge-visits",
   purgeMagicLinks: "purge-magic-links",
+  rejudgeText: "rejudge-text",
 } as const;
 
 export type QueueName = (typeof QUEUES)[keyof typeof QUEUES];

@@ -249,6 +249,11 @@ model Trip {
   slug         String         @unique
   title        String
   description  String?
+  /// The helper wrote the description from names or notes, or it names somebody the album knows: members only.
+  /// Kept while the text is; a member writing it afresh by hand makes the words theirs to publish.
+  descriptionMembersOnly Boolean @default(false)
+  /// When whoever arranges it chose to show the description to everyone; nothing re-flags it until it is rewritten.
+  descriptionSharedAt    DateTime?
   startDate    DateTime       @db.Date
   endDate      DateTime       @db.Date
   timezone     String         @default("UTC")
@@ -286,6 +291,15 @@ model Activity {
   startTime   DateTime
   endTime     DateTime
   description String?
+  /// The helper wrote the description from names or notes, or it names somebody the album knows: members only.
+  /// Kept while the text is; a member writing it afresh by hand makes the words theirs to publish.
+  descriptionMembersOnly Boolean @default(false)
+  /// Members-only only because it repeats a word of its trip's title while the trip is not public.
+  descriptionTitleOnly   Boolean @default(false)
+  /// The words of the trip's title that caused it: lifted only while the trip's own, public title still carries them.
+  descriptionTitleWords  String[] @default([])
+  /// When whoever arranges it chose to show the description to everyone; nothing re-flags it until it is rewritten.
+  descriptionSharedAt    DateTime?
   trackId     String?      @unique
   track       Track?       @relation("ActivityTrack", fields: [trackId], references: [id], onDelete: SetNull)
   photos      Photo[]
@@ -379,6 +393,30 @@ model Photo {
   annotationCacheWriteTokens Int?
   annotationOutputTokens    Int?
   annotationBatched         Boolean?
+  /// The helper's text was written from something members-only — the names the family confirmed, the uploader's
+  /// notes — or names somebody the album knows. It is then read and searched by members only, like what it came from.
+  annotationMembersOnly     Boolean  @default(false)
+  /// The helper's title when it is members-only: shown to members where the item has no title of its own, never to
+  /// anybody else. `title` itself only ever holds what anybody who may see the item may read.
+  membersTitle              String?
+  /// Members-only only because the text repeats a word from the title of a trip or collection strangers cannot
+  /// open: making that trip or collection public lifts it (see src/lib/annotation/rejudge.ts).
+  annotationTitleOnly       Boolean  @default(false)
+  /// For a title-word flag: the words that caused it and the trips/collections they came from (`trip:<id>`,
+  /// `collection:<id>`). It is lifted only when those are public and their titles still carry the words.
+  annotationTitleWords      String[] @default([])
+  annotationTitleFrom       String[] @default([])
+  /// Goes up with every change to `annotation` (a database trigger), so "show it to everyone" and the background
+  /// judging act only on the words that were read.
+  annotationRevision        Int      @default(0)
+  /// When the item last joined a trip or a collection (database triggers), so the nightly sweep judges it again.
+  containersChangedAt       DateTime?
+  /// When the uploader or an admin chose to show the helper's text to everyone. Nothing re-flags it until it is
+  /// written again.
+  annotationSharedAt        DateTime?
+  /// Who wrote `title`: true when the helper's title was put on the item, false when a member typed it, null for a
+  /// title from before the album kept track. A members-only item loses the helper's title, never a typed one.
+  titleByHelper             Boolean?
   /// Darkroom edits, kept as instructions rather than applied to the file: crop, straighten, brightness, contrast,
   /// colour. The original is never touched, the renditions are re-rendered from it whenever this changes, and
   /// clearing it puts the item back exactly as it arrived. Only the uploader or an admin may set it.
@@ -406,15 +444,20 @@ model Photo {
   /// private sits in (never the building or the street), REGION for a wider area.
   placeEstimatePrecision  PlacePrecision?
   placeEstimateNote       String?
+  /// The guess's name and evidence were written from something members-only, or name somebody: members only.
+  /// The position itself is the item's, shown to whoever may see it.
+  placeEstimateMembersOnly Boolean @default(false)
   placeEstimatedAt        DateTime?
   /// For undated items: the helper's estimated year range, kept until a member sets a real date.
   estimatedDate           DateTime?
   estimatedDateConfidence Float?
   estimatedDateSource     EstimatedDateSource?
   estimatedDateNote       String?
-  /// Full-text index over caption, context, title, place and container titles: the only column anonymous search queries.
+  /// Full-text index over caption, title, place, the helper's text when it is not members-only, and the titles of
+  /// public trips and collections: the only column anonymous search queries.
   searchVector        Unsupported("tsvector")?
-  /// Adds people's, pets' and the uploader's names; queried for members only.
+  /// Adds people's, pets' and the uploader's names, the notes, members-only helper text and private container
+  /// titles; queried for members only.
   searchVectorMembers Unsupported("tsvector")?
   /// OpenCLIP ViT-B/32 image embedding (cosine), for similarity, suggestions and the graph.
   embedding     Unsupported("vector(512)")?
@@ -463,6 +506,11 @@ model Collection {
   slug         String         @unique
   title        String
   description  String?
+  /// The helper wrote the description from names or notes, or it names somebody the album knows: members only.
+  /// Kept while the text is; a member writing it afresh by hand makes the words theirs to publish.
+  descriptionMembersOnly Boolean @default(false)
+  /// When whoever arranges it chose to show the description to everyone; nothing re-flags it until it is rewritten.
+  descriptionSharedAt    DateTime?
   themeKey     String         @default("default")
   visibility   TripVisibility @default(PRIVATE)
   shareToken   String?        @unique
@@ -540,6 +588,11 @@ model AppSetting {
   faceDetectionOptInAt   DateTime?
   faceDetectionOptInById String?
   faceDataDeletedAt      DateTime?
+  /// What the last whole-album members-only judging used: the matcher's version and the names it knew, so the
+  /// daily sweep and a restart judge again only what changed (src/lib/annotation/rejudge.ts).
+  membersOnlyMatcher     String?
+  membersOnlyNames       String[]  @default([])
+  membersOnlyJudgedAt    DateTime?
   updatedAt              DateTime  @updatedAt
 }
 

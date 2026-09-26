@@ -18,7 +18,7 @@ export async function collectionTimeline(collectionId: string, filter: GalleryFi
   const total = await db.photo.count({ where: mine });
 
   const lists: string[][] = [];
-  if (filter.q) lists.push(await idsMatching(filter.q));
+  if (filter.q) lists.push(await idsMatching(filter.q, { member: filter.member, scope: { collectionId } }));
   // A collection gathers photographs from any number of trips, so the year is asked of the whole album.
   if (filter.year) lists.push(await idsInLocalYear(null, filter.year));
   // One list per name, so two names means the photographs they are both on rather than either.
