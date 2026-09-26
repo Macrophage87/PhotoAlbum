@@ -4,7 +4,7 @@ import fs from "node:fs";
 import { randomUUID } from "node:crypto";
 import sharp from "sharp";
 import { stillIsBlank } from "@/lib/images/poster";
-import { createTrip, resetDb, setVisibility, signIn, withDb } from "./helpers";
+import { createTrip, inviteFor, magicLinkFor, pressSignIn, resetDb, setVisibility, signIn, withDb } from "./helpers";
 
 // Must match ADMIN_EMAIL as set by scripts/e2e-server.mjs: only that address may bootstrap the admin account.
 const ADMIN = process.env.E2E_ADMIN_EMAIL ?? "e2e-admin@example.com";
@@ -74,6 +74,20 @@ test("a used or bad sign-in link is rejected", async ({ page }) => {
   await page.goto("/auth/verify?token=not-a-real-token");
   await expect(page).toHaveURL(/\/auth\/signin\?error=invalid/);
   await expect(page.getByText("isn't valid")).toBeVisible();
+});
+
+test("opening a sign-in link does not use it up; only its Sign in button does", async ({ page }) => {
+  // A mail scanner fetching the link first must leave it working for the person.
+  const link = await magicLinkFor(ADMIN);
+  await page.goto(link);
+  await page.goto(link);
+  await expect(page.getByText("Signing in as e•••@example.com")).toBeVisible();
+  await pressSignIn(page);
+  await page.waitForURL("**/");
+  // Signed out again, since the sign-in page sends a member straight on.
+  await page.context().clearCookies();
+  await page.goto(link);
+  await expect(page).toHaveURL(/\/auth\/signin\?error=used/);
 });
 
 test("uploading a photo processes it and assigns it to the trip by date", async ({ context, page }) => {
@@ -372,6 +386,8 @@ test("a trip can say who was on it, and stops collecting everybody else's photog
 
   // Nobody named yet: the album files by date alone, so somebody who was never in Maine collects the trip anyway.
   const outside = await browser.newContext();
+  // Only an invited address may turn a sign-in link into an account.
+  await inviteFor(other);
   await signIn(outside, other);
   const theirs = await outside.newPage();
   await theirs.goto("/upload");
@@ -1270,6 +1286,10 @@ test("the uploader crops and color-corrects a photo, and the original stays unto
   const original = await page.request.get(`/api/photos/${id}/original`);
   expect(original.ok()).toBe(true);
   expect(original.headers()["content-type"]).toContain("image/jpeg");
+  // Uploaded bytes opened on their own run nothing, and are never sniffed as anything but what they say.
+  expect(original.headers()["content-security-policy"]).toContain("sandbox");
+  expect(original.headers()["content-security-policy"]).not.toContain("youtube");
+  expect(original.headers()["x-content-type-options"]).toBe("nosniff");
   const edited = await page.request.get(`/api/photos/${id}/edited`);
   expect(edited.ok()).toBe(true);
   expect(edited.headers()["content-type"]).toContain("image/webp");
@@ -1724,6 +1744,7 @@ test("a panorama is recognized, kept long, and shown as a panorama rather than a
 test("a member edits their own photos and reads everyone else's, and a trip is arranged by whoever made it", async ({ browser, context, page }) => {
   await signIn(context, ADMIN);
   const memberEmail = "e2e-member@example.com";
+  await inviteFor(memberEmail);
   const memberContext = await browser.newContext();
   await signIn(memberContext, memberEmail);
   const memberPage = await memberContext.newPage();
@@ -1869,6 +1890,7 @@ test("a cover is chosen from the photographs themselves, by whoever made the tri
 
   // A member who did not make the trip is not offered it, and the page turns them away.
   const memberContext = await context.browser()!.newContext();
+  await inviteFor("e2e-member@example.com");
   await signIn(memberContext, "e2e-member@example.com");
   const memberPage = await memberContext.newPage();
   await memberPage.goto("/trips/acadia/photos");

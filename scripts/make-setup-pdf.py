@@ -146,7 +146,10 @@ docker compose up --build -d
         "with photos in the <b>photos</b> volume mounted at /data/photos. On every start the app applies pending database migrations "
         "before serving, so upgrades need no manual database step. Three optional services live behind compose profiles: <b>worker</b> (background jobs "
         "in their own container), <b>ml</b> (the local ML sidecar) and <b>ml-init</b> (a one-off download of the model weights into the <b>ml-models</b> volume)."),
-      P("Browse to <b>http://&lt;server&gt;:3000</b>. Change the host port with APP_PORT in .env if 3000 is taken."),
+      P("Browse to <b>http://localhost:3000</b> on the server itself. The port is published on the loopback address only "
+        "(APP_BIND=127.0.0.1), so from other machines the album is reached through the reverse proxy (section 7). If you open the album as "
+        "http://&lt;server&gt;:&lt;port&gt; from other devices (no proxy), set APP_BIND=0.0.0.0 in .env and run <b>docker compose up -d</b>. "
+        "Change the host port with APP_PORT in .env if 3000 is taken."),
       P("Reading the sign-in link without email", H2),
       P("If SMTP_HOST is left empty, sign-in and invite links are printed to the container log instead of being sent. "
         "This is fine for first setup and for a purely local install."),
@@ -173,7 +176,9 @@ S += [P("4. Configuration reference (.env)", H1),
       table([
         ["Variable", "Default", "Purpose"],
         ["APP_URL", "http://localhost:3000", "Public URL of the site. Used in every emailed link and in redirects. Set it to your real address (with https) when behind a proxy."],
-        ["ADMIN_EMAIL", "you@example.com", "The first person to sign in with this address becomes an admin. Also allowed to sign in before any invites exist."],
+        ["HSTS_INCLUDE_SUBDOMAINS", "false", "With an https APP_URL, browsers are told to keep to https for a year. true extends that to every subdomain of the album's hostname; only set it if they all serve https."],
+        ["ADMIN_EMAIL", "you@example.com", "The first person to sign in with this address becomes an admin. Allowed to sign in without an invite only while the album has no admin."],
+        ["SIGN_IN_MAIL_PER_HOUR", "200", "Protects the mail provider's quota. Each address holds at most three unused links at a time (asking again says to use the newest one); its first always goes out, and only the second and third count against this hourly total."],
         ["SMTP_HOST", "(empty)", "Mail server hostname. Leave empty to log links instead of sending mail."],
         ["SMTP_PORT", "587", "587 for STARTTLS, 465 for implicit TLS."],
         ["SMTP_USER / SMTP_PASS", "(empty)", "Mail server credentials."],
@@ -181,6 +186,7 @@ S += [P("4. Configuration reference (.env)", H1),
         ["SMTP_FROM", "Family Album<br/>&lt;album@example.com&gt;", "Sender shown in emails. Many providers require it to match the account."],
         ["POSTGRES_USER / _PASSWORD / _DB", "photoalbum", "Database credentials used by both containers. Change the password on an internet-facing host."],
         ["APP_PORT", "3000", "Host port published by Docker."],
+        ["APP_BIND", "127.0.0.1", "Address the port is published on. Keep 127.0.0.1 behind a reverse proxy: Docker's published ports bypass ufw, so 0.0.0.0 exposes the app directly. Use 0.0.0.0 only on a trusted home network without a proxy."],
         ["STORAGE_DRIVER", "local", "Storage backend. Only local is implemented; the code has an interface for adding S3 later."],
         ["PHOTO_STORAGE_ROOT", "/data/photos", "Where originals and renditions are written (inside the container)."],
         ["MAX_UPLOAD_BYTES", "104857600 (100 MB)", "Largest single photo accepted."],
@@ -219,10 +225,12 @@ S += [P("4. Configuration reference (.env)", H1),
 # ---------- 5 ----------
 S += [P("5. Signing in and inviting family", H1),
       P("There are no passwords. A person types their email on the sign-in page and receives a link that is valid for 15 minutes "
-        "and can be used once. The resulting session lasts 90 days on that browser."),
+        "and can be used once: opening it shows a Sign in button, and pressing that is what signs them in (so a mail "
+        "scanner that opens links first does not use it up). They then stay signed in on that browser as long as they "
+        "visit at least once every 12 weeks."),
       P("Who can sign in", H2),
       bullets([
-        "The address in ADMIN_EMAIL, always. The first sign-in with it creates the admin account.",
+        "The address in ADMIN_EMAIL, while the album has no admin yet. The first sign-in with it creates the admin account; once an admin exists it is an ordinary address, so removing that account sticks.",
         "Anyone who already has an account.",
         "Anyone with a pending invite for their address.",
         "Everyone else sees the same 'check your email' message but no email is sent and no account is created, so the site never reveals who is a member.",
@@ -239,6 +247,12 @@ S += [P("5. Signing in and inviting family", H1),
         "The relative opens the invite link, which sends them a sign-in link for that address. From then on they simply sign in with their email.",
         "The Admin page lists members and pending invites. From there you can change roles, revoke an invite, or remove a member.",
       ]),
+      P("If the only admin can no longer read their email", H2),
+      P("ADMIN_EMAIL creates an admin only while the album has none, so changing it later does nothing. Fix it in the database "
+        "instead, from the server: move the admin account to a new address (first command), or make another member an admin "
+        "(second). Addresses are stored in lower case; <b>UPDATE 1</b> means it worked."),
+      code("""docker compose exec -T db sh -c 'psql -U "$POSTGRES_USER" "$POSTGRES_DB" -c "UPDATE \\"User\\" SET email = '"'"'new@example.com'"'"' WHERE email = '"'"'old@example.com'"'"';"'
+docker compose exec -T db sh -c 'psql -U "$POSTGRES_USER" "$POSTGRES_DB" -c "UPDATE \\"User\\" SET role = '"'"'ADMIN'"'"' WHERE email = '"'"'cousin@example.com'"'"';"'"""),
       P("Members can create trips, upload photos, edit anything, and share trips. Admins can additionally manage members. "
         "Every signed-in member sees every trip; the album is a shared family space, not per-user galleries."),
       P("Who has been looking", H2),
@@ -355,6 +369,7 @@ S += [P("7. Running behind a reverse proxy", H1),
       bullets([
         "Set <b>APP_URL</b> in .env to the public address, for example https://album.example.com, so emailed links and redirects use it.",
         "Raise the proxy's request body limit. Photos are up to 100 MB by default and Google exports can be far larger. The app-side caps are MAX_UPLOAD_BYTES and MAX_IMPORT_BYTES.",
+        "The app's port is published on 127.0.0.1 only (APP_BIND), which suits a proxy on the same host. A proxy elsewhere needs APP_BIND set to an address it can reach, and then a firewall that really covers that port: Docker's published ports bypass ufw.",
       ]),
       P("Caddy example (automatic HTTPS):"),
       code("""
@@ -410,7 +425,9 @@ docker compose run --rm ml-init       # only after an upgrade that changes the s
 """),
       P("Database migrations run automatically at container start. Take a database dump before upgrading, as a precaution. "
         "An AI-description backfill still in progress is cut short by an upgrade; the Admin page says so under that run within about an hour. Wait until none of its rows reads in progress, then start the backfill again for what is left (the app refuses a new run while one is open). "
-        "The first upgrade to the media-hub release replaces the database container with the pgvector image; the data in the pgdata volume is kept as it is.")]
+        "The first upgrade to the media-hub release replaces the database container with the pgvector image; the data in the pgdata volume is kept as it is."),
+      P("The app's port is now published on 127.0.0.1 only (APP_BIND). If you open the album as http://&lt;server&gt;:&lt;port&gt; from other devices "
+        "(no proxy), set APP_BIND=0.0.0.0 in .env and run <b>docker compose up -d</b>. Without a proxy, all sign-in requests share one rate-limit bucket.")]
 
 # ---------- 9 ----------
 S += [P("9. Development setup and tests", H1),
@@ -461,7 +478,7 @@ S += [P("10. Troubleshooting", H1),
       table([
         ["Symptom", "Likely cause and fix"],
         ["Sign-in says 'check your email' but nothing arrives for a new person", "Only ADMIN_EMAIL, existing members and invited addresses receive a link; everyone else gets the same message and no email. Invite them from the Admin page, and check .env spelling (restart the app after edits)."],
-        ["No sign-in email arrives", "SMTP_HOST empty (links are in the log: docker compose logs app | grep auth/verify), wrong port/SECURE combination, or the provider rejects SMTP_FROM. Test with Mailpit first."],
+        ["No sign-in email arrives", "SMTP_HOST empty (links are in the log: docker compose logs app | grep auth/verify), wrong port/SECURE combination, or the provider rejects SMTP_FROM. SMTP errors are logged: check docker compose logs app. Test with Mailpit first."],
         ["Links in emails point to localhost", "APP_URL is still the default. Set it to the public URL and restart."],
         ["Uploads fail around 1 MB or 100 MB", "Reverse proxy body limit (raise client_max_body_size / max_size) or MAX_UPLOAD_BYTES."],
         ["Photo stays on the spinner", "Processing job failed; see the app log. A failed photo shows its error on the detail page. HEIC files take several seconds each."],

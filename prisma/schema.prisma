@@ -231,6 +231,7 @@ model MagicLinkToken {
   createdAt DateTime  @default(now())
 
   @@index([email])
+  @@index([expiresAt])
 }
 
 model Session {

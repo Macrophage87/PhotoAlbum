@@ -38,6 +38,7 @@ export async function startWorker(): Promise<void> {
   const { detectAnimalsJob, animalSweep } = await import("./handlers/detect-animals");
   const { proposeAnimalsForPhoto } = await import("@/lib/pets/proposals");
   const { purgeVisits } = await import("@/lib/visits/record");
+  const { purgeExpiredMagicLinks } = await import("@/lib/auth/magic-link");
 
   await boss.work(QUEUES.processPhoto, { batchSize: 1, localConcurrency: 2, pollingIntervalSeconds: 2 }, async ([job]) =>
     processPhoto(job.data as never),
@@ -73,6 +74,7 @@ export async function startWorker(): Promise<void> {
   await boss.work(QUEUES.purgeUnnamedFaces, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60 }, async () => void (await purgeUnnamedFaces()));
   await boss.work(QUEUES.purgeAnnotationRaw, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60 }, async () => void (await purgeAnnotationRaw()));
   await boss.work(QUEUES.purgeVisits, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60 }, async () => void (await purgeVisits()));
+  await boss.work(QUEUES.purgeMagicLinks, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60 }, async () => void (await purgeExpiredMagicLinks({ db })));
   // Schedules (idempotent): weekly video re-check, the annotation quiet-period sweep, batch polling, raw-response purge.
   await boss.schedule(QUEUES.checkExternalVideos, "0 4 * * 1", {}, { retryLimit: 1 });
   await boss.schedule(QUEUES.annotationSweep, "*/5 * * * *", {}, { retryLimit: 0 });
@@ -84,6 +86,8 @@ export async function startWorker(): Promise<void> {
   await boss.schedule(QUEUES.purgeUnnamedFaces, "45 3 * * *", {}, { retryLimit: 0 });
   await boss.schedule(QUEUES.flagNewAdults, "50 3 * * *", {}, { retryLimit: 0 });
   await boss.schedule(QUEUES.purgeVisits, "15 3 * * *", {}, { retryLimit: 0 });
+  // Expired sign-in links, including placeholders for addresses that may not sign in.
+  await boss.schedule(QUEUES.purgeMagicLinks, "20 3 * * *", {}, { retryLimit: 0 });
   console.log("[worker] pg-boss handlers registered");
   await reconcileStalePhotos().catch((err) => console.error("[worker] stale-photo reconciliation failed", err));
 }

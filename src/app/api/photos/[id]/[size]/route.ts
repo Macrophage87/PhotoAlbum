@@ -6,6 +6,7 @@ import type { Renditions } from "@/lib/images/renditions";
 import type { VideoRenditions } from "@/lib/jobs/handlers/transcode-video";
 import { mediaAccessInclude, mediaBytesAllowed, mediaCacheControl, toMediaAccess } from "@/lib/photos/access";
 import { jpegPreview } from "@/lib/images/preview";
+import { MEDIA_CSP } from "@/lib/security/csp";
 
 const MIME: Record<string, string> = { webp: "image/webp", jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", heic: "image/heic", heif: "image/heif", tif: "image/tiff", avif: "image/avif", gif: "image/gif", mp4: "video/mp4" };
 
@@ -120,6 +121,9 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     "Content-Type": contentType,
     "Cache-Control": mediaCacheControl(media, url.searchParams.has("v")),
     "Accept-Ranges": "bytes",
+    // The real guard is next.config.ts's entry for /api/photos/*: when it has set this header, Next keeps it and
+    // this copy is dropped. It only takes effect should that entry ever stop matching; a unit test keeps them equal.
+    "Content-Security-Policy": MEDIA_CSP,
   };
   if (size === "original") headers["Content-Disposition"] = `inline; filename="${encodeURIComponent(photo.originalName)}"`;
 

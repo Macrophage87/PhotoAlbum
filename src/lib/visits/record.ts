@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { db } from "@/lib/db";
 import { env } from "@/lib/env";
 import { shareKey } from "@/lib/auth/access";
+import { forwardedClient } from "@/lib/auth/client-address";
 import type { VisitorKind } from "@/generated/prisma/enums";
 
 /**
@@ -79,11 +80,9 @@ export function visitorHash(salt: string, ip: string, userAgent: string): string
   return createHash("sha256").update(`${salt}\n${ip}\n${userAgent}`).digest("hex").slice(0, 32);
 }
 
-/** The caller's address as the reverse proxy reports it; the first hop is the visitor, the rest are proxies. */
+/** The caller's address as our reverse proxy reports it (the entry it appended, not one the visitor could write). */
 export function callerAddress(headers: Headers): string {
-  const forwarded = headers.get("x-forwarded-for");
-  if (forwarded) return forwarded.split(",")[0]!.trim().slice(0, 64);
-  return (headers.get("x-real-ip") ?? "unknown").slice(0, 64);
+  return forwardedClient(headers) ?? "unknown";
 }
 
 /**

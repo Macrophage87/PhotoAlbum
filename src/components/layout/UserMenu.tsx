@@ -1,13 +1,9 @@
-import Link from "next/link";
 import type { Viewer } from "@/lib/auth/viewer";
+import { SignInLink } from "./SignInLink";
 
 export function UserMenu({ viewer }: { viewer: Viewer }) {
   if (viewer.kind !== "user") {
-    return (
-      <Link href="/auth/signin" className="ml-2 px-3 py-1.5 rounded-theme bg-primary text-primary-fg whitespace-nowrap">
-        Family sign in
-      </Link>
-    );
+    return <SignInLink className="ml-2 px-3 py-1.5 rounded-theme bg-primary text-primary-fg whitespace-nowrap" />;
   }
   return (
     // Who is signed in, and the way to their account, are at the head of the "More" menu beside this.

@@ -31,6 +31,9 @@ export async function inviteMember(_prev: InviteState, fd: FormData): Promise<In
   const email = normalizeEmail(parsed.data.email);
   if (await db.user.findUnique({ where: { email } })) return { status: "error", message: "That person is already a member." };
   await db.invite.deleteMany({ where: { email, acceptedAt: null } });
+  // Links asked for before the invite were never sent (or were placeholders); clearing them means the invitee's
+  // first request is not told a link is already on its way.
+  await db.magicLinkToken.deleteMany({ where: { email, usedAt: null } });
   const { token } = await createInvite(email, admin.id, parsed.data.role, { db });
   const link = new URL(`/invite/${token}`, env().APP_URL).toString();
   await sendMail(inviteEmail(email, link, admin.name ?? admin.email));
@@ -40,7 +43,14 @@ export async function inviteMember(_prev: InviteState, fd: FormData): Promise<In
 
 export async function revokeInvite(id: string): Promise<void> {
   await requireAdminOrThrow();
-  await db.invite.deleteMany({ where: { id, acceptedAt: null } });
+  const invite = await db.invite.findFirst({ where: { id, acceptedAt: null }, select: { email: true } });
+  if (!invite) return;
+  // A sign-in link the invitee already asked for goes too; one that is still out there would otherwise make them a member.
+  const member = await db.user.findUnique({ where: { email: invite.email }, select: { id: true } });
+  await db.$transaction([
+    db.invite.deleteMany({ where: { id, acceptedAt: null } }),
+    ...(member ? [] : [db.magicLinkToken.deleteMany({ where: { email: invite.email } })]),
+  ]);
   revalidatePath("/admin");
 }
 
@@ -54,14 +64,18 @@ export async function setRole(userId: string, role: "ADMIN" | "MEMBER"): Promise
 export async function removeMember(userId: string): Promise<void> {
   const admin = await requireAdminOrThrow();
   if (userId === admin.id) throw new Error("You can't remove yourself.");
+  const member = await db.user.findUnique({ where: { id: userId }, select: { email: true } });
+  if (!member) return;
   // Their Google connection goes with them (revoked at Google when possible, deleted here regardless).
   await disconnectGoogleAccount(userId);
-  // Keep their uploads: reassign ownership to the acting admin, then delete the account and its sessions.
+  // Keep their uploads: reassign ownership to the acting admin, then delete the account, its sessions, and any
+  // sign-in link still outstanding for the address.
   await db.$transaction([
     db.photo.updateMany({ where: { uploaderId: userId }, data: { uploaderId: admin.id } }),
     db.track.updateMany({ where: { uploaderId: userId }, data: { uploaderId: admin.id } }),
     db.trip.updateMany({ where: { createdById: userId }, data: { createdById: admin.id } }),
     db.user.delete({ where: { id: userId } }),
+    db.magicLinkToken.deleteMany({ where: { email: member.email } }),
   ]);
   revalidatePath("/admin");
 }

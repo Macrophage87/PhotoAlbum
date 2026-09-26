@@ -18,9 +18,27 @@ const nextConfig: NextConfig = {
         headers: [
           // Cross-origin requests (tiles, YouTube, link previews) get only our origin, never a path that could carry a share token.
           { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+          // Every response is taken as the type it says it is, so an uploaded file can never be sniffed into HTML.
+          // (HSTS depends on APP_URL, which is only known when the server starts, so src/proxy.ts sends it.)
+          { key: "X-Content-Type-Options", value: "nosniff" },
+        ],
+      },
+      {
+        // Everything but member-uploaded media (below). Next applies these before a route runs, and a route cannot
+        // replace a header already set here, so the two policies must be split by path rather than overridden.
+        source: "/((?!api/photos/).*)",
+        headers: [
           // Frame-related directives only for everything the proxy does not cover (API routes, static files);
           // pages get the full nonce-based policy from src/proxy.ts. Browsers enforce the intersection of both.
           { key: "Content-Security-Policy", value: "frame-src https://www.youtube-nocookie.com; frame-ancestors 'none'; object-src 'none'; base-uri 'self'" },
+        ],
+      },
+      {
+        // Member-uploaded bytes: should one ever be opened as a page of its own, it runs nothing and has no origin.
+        source: "/api/photos/:path*",
+        headers: [
+          // Kept equal to MEDIA_CSP in src/lib/security/csp.ts (the media route sends it too; a unit test compares them).
+          { key: "Content-Security-Policy", value: "default-src 'none'; style-src 'unsafe-inline'; sandbox; frame-ancestors 'none'; object-src 'none'; base-uri 'self'" },
         ],
       },
     ];

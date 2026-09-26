@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { SignInLink } from "./SignInLink";
 
 export type NavLink = { href: string; label: string };
 
@@ -51,9 +52,7 @@ export function MobileNav({ links, signedIn, name }: { links: NavLink[]; signedI
                 </button>
               </form>
             ) : (
-              <Link href="/auth/signin" onClick={close} className="mx-3 my-1 px-3 py-2 text-center rounded-theme bg-primary text-primary-fg">
-                Family sign in
-              </Link>
+              <SignInLink onClick={close} className="mx-3 my-1 px-3 py-2 text-center rounded-theme bg-primary text-primary-fg" />
             )}
           </nav>
         </div>

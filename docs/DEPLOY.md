@@ -98,11 +98,14 @@ Set at least these values:
 
 | Variable | Set to |
 |---|---|
-| `APP_URL` | `https://album.example.com` (your real hostname, with https). This appears in every sign-in email. |
-| `ADMIN_EMAIL` | Your own email address. Only this address can create the first admin account. |
+| `APP_URL` | `https://album.example.com` (your real hostname, with https). This appears in every sign-in email. With https the app also sends HSTS, so browsers keep to https for a year. |
+| `HSTS_INCLUDE_SUBDOMAINS` | Leave at `false`. Set `true` only if every subdomain of the album's hostname serves https, to extend HSTS to them. |
+| `ADMIN_EMAIL` | Your own email address. Only this address can create the first admin account, and only while there is no admin: once one exists it is an ordinary address, so removing that account from the Admin page sticks. |
+| `SIGN_IN_MAIL_PER_HOUR` | Leave at `200`. Protects your mail provider's quota. Each address holds at most three unused sign-in links at a time; its first always goes out, and only the second and third count against this hourly total. Once it is used up, asking for another link while one is still live says to try again later, but anybody without a live link still gets one. |
 | `POSTGRES_PASSWORD` | A long random password, for example the output of `openssl rand -base64 24`. |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM` | Your mail provider's settings. Leave `SMTP_HOST` empty to print links to the log instead. |
 | `APP_PORT` | Leave at `3000`. The reverse proxy in the next step talks to it locally. |
+| `APP_BIND` | Leave at `127.0.0.1`, so the app is reachable only through that proxy (Docker's published ports bypass ufw). |
 
 Gmail example: `SMTP_HOST=smtp.gmail.com`, `SMTP_PORT=587`, `SMTP_SECURE=false`, `SMTP_USER` your address, `SMTP_PASS` an App Password from your Google account security page, `SMTP_FROM` the same address.
 
@@ -142,20 +145,11 @@ The body limit matters: photos are accepted up to 100 MB, short video clips up t
 sudo systemctl reload caddy
 ```
 
-If you prefer nginx, the equivalent needs `client_max_body_size 2g;`, `proxy_read_timeout 600s;` and the usual `proxy_set_header Host`, `X-Forwarded-Proto` and `X-Forwarded-For` lines pointing at `http://127.0.0.1:3000`, plus certbot for certificates.
+If you prefer nginx, the equivalent needs `client_max_body_size 2g;`, `proxy_read_timeout 600s;` and the usual `proxy_set_header Host`, `X-Forwarded-Proto` and `X-Forwarded-For $proxy_add_x_forwarded_for` lines pointing at `http://127.0.0.1:3000` (the app trusts only the last `X-Forwarded-For` entry, the one your proxy adds), plus certbot for certificates.
 
 ### Keep the app off the public interface
 
-By default Compose publishes port 3000 on all interfaces. Since Caddy is the only client, bind it to localhost. Create `docker-compose.override.yml` next to `docker-compose.yml`:
-
-```yaml
-services:
-  app:
-    ports: !override
-      - "127.0.0.1:${APP_PORT:-3000}:3000"
-```
-
-Compose merges this file automatically. The firewall from step 2 blocks port 3000 from outside anyway, so this is a second layer.
+Compose publishes the app's port on `127.0.0.1` only (`APP_BIND` in `.env`), so Caddy on the same host is the only way in. Keep it that way: Docker writes its own firewall rules for published ports, so **ufw from step 2 does not protect a port Docker publishes**; `APP_BIND=0.0.0.0` would put the app on the internet directly, past Caddy, its HTTPS and the `X-Forwarded-For` the app relies on for rate limiting. If an older `docker-compose.override.yml` of yours still sets the ports line, it can go.
 
 ## 7. Build and start
 
@@ -252,11 +246,13 @@ The heavy-work lock (transcoding, embeddings, faces, animals one at a time) is h
 
 1. Open `https://album.example.com` in a browser.
 2. Enter the address you set as `ADMIN_EMAIL` and submit.
-3. Open the emailed link. If SMTP is not configured, read it from the log instead:
+3. Open the emailed link and press **Sign in**. If SMTP is not configured, read the link from the log instead:
 
    ```bash
    docker compose logs app | grep "auth/verify"
    ```
+
+   If no email arrives, check the app's log (`docker compose logs app`): SMTP errors are logged there.
 
 4. You are now the admin. Go to **Admin** in the navigation to invite family members by email.
 
@@ -265,6 +261,22 @@ Optionally load the demo content (two trips, a hike with track and stats, sample
 ```bash
 docker compose exec app node_modules/.bin/tsx prisma/seed.ts
 ```
+
+### If the only admin can no longer read their email
+
+`ADMIN_EMAIL` creates an admin only while the album has none, so once an admin exists, changing it does nothing. If the only admin loses their mailbox, fix it in the database from the server. Either move the admin account to a new address:
+
+```bash
+docker compose exec -T db sh -c 'psql -U "$POSTGRES_USER" "$POSTGRES_DB" -c "UPDATE \"User\" SET email = '"'"'new@example.com'"'"' WHERE email = '"'"'old@example.com'"'"';"'
+```
+
+or make another member an admin:
+
+```bash
+docker compose exec -T db sh -c 'psql -U "$POSTGRES_USER" "$POSTGRES_DB" -c "UPDATE \"User\" SET role = '"'"'ADMIN'"'"' WHERE email = '"'"'cousin@example.com'"'"';"'
+```
+
+Addresses are stored in lower case. `UPDATE 1` means it worked; then sign in with that address as usual.
 
 ## 9. Backups
 
@@ -313,7 +325,11 @@ docker compose up --build -d
 docker image prune -f
 ```
 
-Migrations run automatically at start. Take a database dump first (step 9) before any upgrade. In-flight photo processing is given 45 seconds to finish before the old container stops. A description backfill that is still submitting is cut short by an upgrade: the Admin page says so under that run within about an hour. Wait until no row of that run still reads "in progress" (batches already sent keep processing at Anthropic for up to a day), then run the backfill again for the remaining items; the app refuses to start a new run while one is open, so nothing is sent twice.
+Migrations run automatically at start. Take a database dump first (step 9) before any upgrade.
+
+The app's port is now published on `127.0.0.1` only (`APP_BIND`). If you open the album as `http://<server>:<port>` from other devices (no proxy), set `APP_BIND=0.0.0.0` in `.env` and run `docker compose up -d`; without a proxy, all sign-in requests share one rate-limit bucket.
+
+ In-flight photo processing is given 45 seconds to finish before the old container stops. A description backfill that is still submitting is cut short by an upgrade: the Admin page says so under that run within about an hour. Wait until no row of that run still reads "in progress" (batches already sent keep processing at Anthropic for up to a day), then run the backfill again for the remaining items; the app refuses to start a new run while one is open, so nothing is sent twice.
 
 Two things to know when upgrading an install from before the media-hub release: the database image changed from `postgres:16` to `pgvector/pgvector:pg16` (same data format; compose replaces the container and keeps the `pgdata` volume, and the first start creates the `vector` extension), and if you run the ML sidecar its profile must be part of every `up`. Put `COMPOSE_PROFILES=ml` (plus `worker` if used) in `.env` so `docker compose up --build -d` and `deploy/update.sh` include it, then run `docker compose run --rm ml-init` once to fetch the weights.
 
@@ -426,3 +442,5 @@ until that folder exists.
 ## Security headers
 
 Pages are served with a nonce-based Content-Security-Policy generated per request (see `src/proxy.ts`), so a reverse proxy must pass the `Content-Security-Policy` response header through unchanged and must not add its own. If you use a map tile or style provider, set `NEXT_PUBLIC_TILE_URL`, `NEXT_PUBLIC_MAP_STYLE_URL` and `NEXT_PUBLIC_MAP_GLYPHS_URL` before building the image: the policy allows exactly those hosts. `CSP_REPORT_ONLY=true` switches to reporting while you check a new provider.
+
+Every response also carries `X-Content-Type-Options: nosniff`, and uploaded photos and videos (`/api/photos/…`) get a policy of their own that runs nothing if one is opened directly. When `APP_URL` is https the app sends `Strict-Transport-Security: max-age=31536000`, so the proxy need not add HSTS; set `HSTS_INCLUDE_SUBDOMAINS=true` to extend it to every subdomain of the album's hostname, only if all of them serve https.
