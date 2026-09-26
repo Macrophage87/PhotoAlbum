@@ -13,4 +13,4 @@ BEGIN
 END $$;
 
 -- Photographs a renamed pet was matched on may still carry the old name.
-UPDATE "Photo" SET "updatedAt" = "updatedAt" WHERE id IN (SELECT "photoId" FROM "AnimalDetection" WHERE "personId" IS NOT NULL);
+UPDATE "Photo" SET "updatedAt" = "updatedAt" WHERE id IN (SELECT "photoId" FROM "AnimalDetection" WHERE "personId" IS NOT NULL AND status = 'CONFIRMED');

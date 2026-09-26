@@ -31,18 +31,20 @@ DROP TRIGGER IF EXISTS animal_confirmed_at_trigger ON "AnimalDetection";
 CREATE TRIGGER animal_confirmed_at_trigger BEFORE INSERT OR UPDATE OF status, "personId" ON "AnimalDetection"
   FOR EACH ROW EXECUTE FUNCTION set_confirmed_at();
 
--- Existing rows: nobody recorded when they were confirmed. Where the photograph was described after the face was
--- found and the description does not say the person's name, the confirmation may well have come after it, which
--- is the case the run exists for; those count as confirmed now, and everything else as confirmed when found.
-UPDATE "Face" f SET "confirmedAt" = f."createdAt" WHERE f.status = 'CONFIRMED' AND f."personId" IS NOT NULL;
-UPDATE "AnimalDetection" a SET "confirmedAt" = a."createdAt" WHERE a.status = 'CONFIRMED' AND a."personId" IS NOT NULL;
+-- Existing rows: nobody recorded when they were confirmed, and NULL reads as "when it was found" (the names run
+-- falls back to createdAt), so only the rows that matter are written. Where a face the detector found was on a
+-- photograph described after it was found, and the description does not name the person as a whole word, the
+-- confirmation may well have come after the description, which is the case the run exists for: those count as
+-- confirmed now. Hand tags are rows made confirmed, so their createdAt is already right.
 UPDATE "Face" f SET "confirmedAt" = now()
   FROM "Photo" p, "Person" pe
   WHERE p.id = f."photoId" AND pe.id = f."personId" AND f.status = 'CONFIRMED' AND f.confidence > 0
     AND p."annotatedAt" IS NOT NULL AND p."annotatedAt" > f."createdAt"
-    AND position(lower(pe.name) IN lower(coalesce(p.annotation::text, ''))) = 0;
+    AND NOT (concat_ws(' ', p.annotation->>'title', p.annotation->>'caption', p.annotation->>'description')
+      ~* ('\m' || regexp_replace(pe.name, '([^[:alnum:][:space:]])', '\\\1', 'g') || '\M'));
 UPDATE "AnimalDetection" a SET "confirmedAt" = now()
   FROM "Photo" p, "Person" pe
   WHERE p.id = a."photoId" AND pe.id = a."personId" AND a.status = 'CONFIRMED'
     AND p."annotatedAt" IS NOT NULL AND p."annotatedAt" > a."createdAt"
-    AND position(lower(pe.name) IN lower(coalesce(p.annotation::text, ''))) = 0;
+    AND NOT (concat_ws(' ', p.annotation->>'title', p.annotation->>'caption', p.annotation->>'description')
+      ~* ('\m' || regexp_replace(pe.name, '([^[:alnum:][:space:]])', '\\\1', 'g') || '\M'));
