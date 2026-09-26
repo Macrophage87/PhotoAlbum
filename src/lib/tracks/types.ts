@@ -13,8 +13,9 @@ export type TrackPoint = {
   dist?: number; // cumulative metres from the device
   temp?: number;
   /**
-   * Not a recorded fix but filled in by the importer: "visit" at a Google visit's own place (see fillStays),
-   * "interpolated" where it was worked out from recorded points (a local midnight, the middle of a gap).
+   * Not a recorded fix but filled in by the importer: "visit" anywhere inside a Google visit (see fillStays), at the
+   * visit's place or copied from a fix recorded inside it; "interpolated" where it was worked out between points
+   * outside any visit (a local midnight between two recorded fixes).
    */
   filled?: "visit" | "interpolated";
 };

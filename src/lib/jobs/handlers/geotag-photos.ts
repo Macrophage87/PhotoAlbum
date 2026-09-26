@@ -21,8 +21,6 @@ const LOOSE_TOGETHER_M = 3_000;
  * the park's centre.
  */
 const VISIT_STRAY_M = 5_000;
-/** A guessed position further than this in time from the uploader's nearest recorded fix is no evidence of anything. */
-const GUESS_WITHIN_MS = 10 * 60_000;
 
 type Position = { lat: number; lng: number; ele?: number };
 type Fix<T> = { track: T; pos: Position; kind: PositionKind; points: TrackPoint[] };
@@ -47,11 +45,13 @@ function lastAtOrBefore(points: TrackPoint[], tMs: number): number {
  * - P is at a visit's place, and no member's track came within LOOSE_TOGETHER_M of that place during the visit
  *   while still being within VISIT_STRAY_M (5 km) of it at the photo's moment (Mom in the museum while Dad was out
  *   on his bike; or Dad rode more than 5 km off after they arrived somewhere together);
- * - P is a guess close in time to one of her recorded fixes, and more than LOOSE_TOGETHER_M from all of them.
+ * - P is a guess (snapped across a gap, or interpolated by the importer), and more than LOOSE_TOGETHER_M from all
+ *   of them.
  * If she was elsewhere, her own trace places the photo; otherwise the nearest activity track she was with, the more
  * precise record, does. The limits have accepted costs: a city museum Dad rode within 3 km of while she was in it
- * puts her photos on his route, and a park so big that the trail they walked together never came within 3 km of
- * its centre puts them at the centre. After that, the uploader's own Google trace, others' GPX/FIT, others' Google
+ * puts her photos on his route; after arriving somewhere together, a photo she takes there once he is 4 km off (inside
+ * the 5 km stray limit) goes on his route too; and a park so big that the trail they walked together never came
+ * within 3 km of its centre puts them at the centre. After that, the uploader's own Google trace, others' GPX/FIT, others' Google
  * traces. Within each, start-time order.
  */
 function choose<T extends { source: string; uploaderId: string }>(tracks: T[], uploaderId: string, tMs: number, at: (t: T) => Omit<Fix<T>, "track"> | null): Fix<T> | null {
@@ -78,14 +78,8 @@ function choose<T extends { source: string; uploaderId: string }>(tracks: T[], u
 
   if (ownGoogle.kind === "firm") return away(byDistance[0]) > TOGETHER_M ? ownGoogle : byDistance[0];
 
-  if (ownGoogle.kind === "soft") {
-    // How close in time is the recorded fix the guess rests on?
-    const k = lastAtOrBefore(own, tMs);
-    let nearestFix = Infinity;
-    for (let i = k; i >= 0 && tMs - own[i].t <= nearestFix; i--) if (!own[i].filled) nearestFix = Math.min(nearestFix, tMs - own[i].t);
-    for (let i = k + 1; i < own.length && own[i].t - tMs <= nearestFix; i++) if (!own[i].filled) nearestFix = Math.min(nearestFix, own[i].t - tMs);
-    return away(byDistance[0]) > LOOSE_TOGETHER_M && nearestFix <= GUESS_WITHIN_MS ? ownGoogle : byDistance[0];
-  }
+  // A guess defers only to a track close to it: never to one any distance away.
+  if (ownGoogle.kind === "soft") return away(byDistance[0]) > LOOSE_TOGETHER_M ? ownGoogle : byDistance[0];
 
   // A visit: its span is the run of visit points around the moment, its place where they sit.
   let a = lastAtOrBefore(own, tMs), b = a + 1;

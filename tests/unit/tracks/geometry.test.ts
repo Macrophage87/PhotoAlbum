@@ -154,3 +154,13 @@ describe("filled points in the stored blob", () => {
     expect(positionKindAt(pts, 52 * M)).toBe("soft");
   });
 });
+
+describe("splitByLocalDay labels its midnight points", () => {
+  it("as the visit between two visit points, and as the importer's own guess anywhere else", () => {
+    const at = (iso: string, filled?: "visit") => ({ t: Date.parse(iso), lat: 44, lng: -68, ...(filled ? { filled } : {}) });
+    const inVisit = [...splitByLocalDay([at("2025-08-13T03:57:00Z", "visit"), at("2025-08-13T04:02:00Z", "visit")], "America/New_York").values()].flat();
+    expect(inVisit.filter((p) => p.t === Date.parse("2025-08-13T04:00:00Z")).map((p) => p.filled)).toEqual(["visit"]);
+    const recorded = [...splitByLocalDay([at("2025-08-13T03:57:00Z"), at("2025-08-13T04:02:00Z")], "America/New_York").values()].flat();
+    expect(recorded.filter((p) => p.t === Date.parse("2025-08-13T04:00:00Z")).map((p) => p.filled)).toEqual(["interpolated"]);
+  });
+});

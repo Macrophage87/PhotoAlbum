@@ -168,6 +168,19 @@ describe("geotagPhotos", () => {
       expect(await placed(photo.id)).toEqual({ lat: expect.closeTo(dadAt(125, 43).lat, 6), lng: -68 });
     });
 
+    it("apart: a long hotel visit with one fix recorded inside it, and Dad 55 km away", async () => {
+      await dadTrack(dadId, 600, 100);
+      const hotel = { lat: 44, lng: -68 + E(55_000) };
+      await importTimeline(userId, [
+        move(T0, T0 + 10 * M, { lat: 44.05, lng: hotel.lng }, hotel),
+        visit(T0 + 10 * M, T0 + 600 * M, hotel),
+        recorded([[T0 + 300 * M, { lat: 44.0003, lng: hotel.lng }]]),
+      ]);
+      const photo = await makePhoto(tripId, userId, new Date(T0 + 200 * M));
+      await geotagPhotos({ tripId });
+      expect((await placed(photo.id)).lng).toBeCloseTo(hotel.lng, 6);
+    });
+
     it("apart: her trace only snaps across a signal gap, but Dad is 50 km away", async () => {
       await dadTrack(dadId, 60, 300);
       const far = (min: number) => ({ lat: dadAt(min, 300).lat, lng: -68 + E(50_000) });
@@ -267,6 +280,21 @@ describe("geotagPhotos", () => {
       await geotagPhotos({ tripId });
       expect((await placed(photo.id)).lat).toBeCloseTo(dadAt(4, 300).lat, 6);
     });
+  });
+
+  it("keeps a photo on the uploader's own trace where it is only the importer's guess and every other track is far", async () => {
+    // Points the importer interpolated, half an hour from any recorded fix, 50 km from Dad's ride.
+    const dad = await db.user.create({ data: { email: "far@example.com", role: "MEMBER" } });
+    await makeTrack(tripId, dad.id, line(60), "GPX");
+    const east = -68 + 50_000 / (111_195 * Math.cos((44 * Math.PI) / 180));
+    await makeTrack(tripId, userId, [
+      { t: T0 - 30 * 60_000, lat: 44, lng: east },
+      ...Array.from({ length: 13 }, (_, i) => ({ t: T0 + i * 5 * 60_000, lat: 44, lng: east, filled: "interpolated" as const })),
+      { t: T0 + 90 * 60_000, lat: 44, lng: east },
+    ], "GOOGLE");
+    const mine = await makePhoto(tripId, userId, new Date(T0 + 22 * 60_000));
+    await geotagPhotos({ tripId });
+    expect((await db.photo.findUniqueOrThrow({ where: { id: mine.id } })).lng).toBeCloseTo(east, 6);
   });
 
   it("moves a photo onto its photographer's own Google trace imported after someone else's", async () => {

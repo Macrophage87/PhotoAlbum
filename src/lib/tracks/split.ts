@@ -7,7 +7,9 @@ const BUCKET_MS = 15 * 60_000; // every real-world UTC offset is a multiple of 1
 /** A point on the straight line from a to b at instant t. */
 function between(a: TrackPoint, b: TrackPoint, t: number): TrackPoint {
   const f = (t - a.t) / (b.t - a.t);
-  const p: TrackPoint = { t, lat: a.lat + (b.lat - a.lat) * f, lng: a.lng + (b.lng - a.lng) * f, filled: "interpolated" };
+  // Between two points of the same visit it is still the visit; anywhere else it is the importer's own guess.
+  const filled = a.filled === "visit" && b.filled === "visit" ? "visit" : "interpolated";
+  const p: TrackPoint = { t, lat: a.lat + (b.lat - a.lat) * f, lng: a.lng + (b.lng - a.lng) * f, filled };
   if (a.ele !== undefined && b.ele !== undefined) p.ele = a.ele + (b.ele - a.ele) * f;
   return p;
 }
