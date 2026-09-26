@@ -103,22 +103,28 @@ export async function rebuildCentroids(personId: string): Promise<void> {
   await enqueueMatchAllOpen();
 }
 
-/** Debounced like enqueueEmbedding: a second edit within the minute re-scans in the next one instead of being dropped. */
 /**
  * Recompute these unnamed clusters' centroids and counts from the faces they still hold, the same way rebuildCentroids
- * does for a person's eras. Named clusters are left to the matcher.
+ * does for a person's eras. The count is every face in the cluster, as everywhere else; a cluster left with no
+ * templates loses its centroid rather than keep one made of faces that are gone. Named clusters are left to the matcher.
  */
 export async function rebuildUnnamedCentroids(clusterIds: string[]): Promise<void> {
   if (!clusterIds.length) return;
-  const rows = await db.$queryRaw<{ clusterId: string; c: string; n: number }[]>`
-    SELECT f."clusterId", avg(f.embedding)::text AS c, count(*)::int AS n FROM "Face" f JOIN "FaceCluster" fc ON fc.id = f."clusterId"
-    WHERE f.embedding IS NOT NULL AND fc."personId" IS NULL AND fc.id IN (${Prisma.join(clusterIds)}) GROUP BY f."clusterId"`;
+  const rows = await db.$queryRaw<{ id: string; c: string | null; n: number }[]>`
+    SELECT fc.id, (avg(f.embedding) FILTER (WHERE f.embedding IS NOT NULL))::text AS c, count(f.id)::int AS n
+    FROM "FaceCluster" fc LEFT JOIN "Face" f ON f."clusterId" = fc.id
+    WHERE fc."personId" IS NULL AND fc.id IN (${Prisma.join(clusterIds)}) GROUP BY fc.id`;
   for (const r of rows) {
+    if (r.c === null) {
+      await db.$executeRaw`UPDATE "FaceCluster" SET centroid = NULL, "faceCount" = ${r.n}, "updatedAt" = now() WHERE id = ${r.id}`;
+      continue;
+    }
     const centroid = normalise(JSON.parse(r.c) as number[]);
-    await db.$executeRaw`UPDATE "FaceCluster" SET centroid = ${vectorLiteral(centroid)}::vector, "faceCount" = ${r.n}, "updatedAt" = now() WHERE id = ${r.clusterId}`;
+    await db.$executeRaw`UPDATE "FaceCluster" SET centroid = ${vectorLiteral(centroid)}::vector, "faceCount" = ${r.n}, "updatedAt" = now() WHERE id = ${r.id}`;
   }
 }
 
+/** Debounced like enqueueEmbedding: a second edit within the minute re-scans in the next one instead of being dropped. */
 export async function enqueueFaceDetection(...photoIds: string[]): Promise<void> {
   const gates = await faceGates();
   if (!gates.active) return;

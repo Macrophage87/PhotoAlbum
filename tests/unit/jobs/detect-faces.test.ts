@@ -17,7 +17,7 @@ vi.mock("@/lib/jobs/boss", () => ({ enqueue: async () => {} }));
 const ml = vi.hoisted(() => ({ detect: vi.fn() }));
 vi.mock("@/lib/ml/client", async (orig) => ({ ...(await orig()) as object, detectFaces: ml.detect }));
 
-import { detectFacesJob } from "@/lib/jobs/handlers/detect-faces";
+import { detectFacesJob, rebuildUnnamedCentroids } from "@/lib/jobs/handlers/detect-faces";
 
 /** Two nearby unit vectors, so both land in one unnamed cluster. */
 const near = (tilt: number) => normalise(Array.from({ length: 512 }, (_, i) => (i === 0 ? 1 : i === 1 ? tilt : 0)));
@@ -66,5 +66,17 @@ describe("re-scanning a photo for faces", () => {
     ml.detect.mockResolvedValue([]);
     await detectFacesJob({ photoId: b });
     expect(await cluster()).toEqual(before);
+  });
+
+  it("counts every face a cluster holds, and drops its centroid when none of them has a template left", async () => {
+    const a = await photo("photos/fa");
+    ml.detect.mockResolvedValueOnce([{ box: BOX, confidence: 0.9, embedding: near(0), age: 30 }]);
+    await detectFacesJob({ photoId: a });
+    const [{ id }] = await db.faceCluster.findMany({ select: { id: true } });
+    await db.$executeRaw`UPDATE "Face" SET embedding = NULL`;
+    await db.face.create({ data: { photoId: a, clusterId: id, box: [0.6, 0.6, 0.1, 0.1], confidence: 0.8, status: "DETECTED" } });
+    await rebuildUnnamedCentroids([id]);
+    const [row] = await db.$queryRaw<{ n: number; empty: boolean }[]>`SELECT "faceCount" AS n, centroid IS NULL AS empty FROM "FaceCluster" WHERE id = ${id}`;
+    expect(row).toEqual({ n: 2, empty: true });
   });
 });
