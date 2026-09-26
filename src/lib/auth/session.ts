@@ -1,10 +1,9 @@
 import { cookies } from "next/headers";
 import { db } from "@/lib/db";
 import { generateToken, hashToken } from "./tokens";
-import { SESSION_COOKIE, SESSION_TTL_MS, sessionCookieOptions } from "./session-cookie";
+import { SESSION_COOKIE, SESSION_SLIDE_AFTER_MS, SESSION_TTL_MS, sessionCookieOptions } from "./session-cookie";
 
 export { SESSION_COOKIE, SESSION_TTL_MS };
-const SLIDE_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** Create a DB session and set the cookie. Only callable from a Route Handler or Server Action. */
 export async function createSession(userId: string): Promise<void> {
@@ -33,7 +32,7 @@ export async function readSessionUser() {
   }
   // Sliding expiry: extend in the DB when the session is a week old. Pages cannot set cookies, so the proxy
   // (src/proxy.ts) pushes the cookie's own expiry forward on every page visit instead.
-  if (session.expiresAt.getTime() - Date.now() < SESSION_TTL_MS - SLIDE_AFTER_MS) {
+  if (session.expiresAt.getTime() - Date.now() < SESSION_TTL_MS - SESSION_SLIDE_AFTER_MS) {
     await db.session
       .update({ where: { id: session.id }, data: { expiresAt: new Date(Date.now() + SESSION_TTL_MS) } })
       .catch(() => {});

@@ -23,20 +23,28 @@ describe("proxy", () => {
     expect(set?.httpOnly).toBe(true);
     expect(set?.sameSite).toBe("lax");
     expect(set?.path).toBe("/");
+    // No longer than the database row is sure to last after this page reads it (it slides below 83 days left).
     const expires = new Date(set!.expires as Date).getTime();
-    expect(expires).toBeGreaterThan(Date.now() + 89 * 24 * 60 * 60 * 1000);
+    const day = 24 * 60 * 60 * 1000;
+    expect(expires).toBeGreaterThan(Date.now() + 82 * day);
+    expect(expires).toBeLessThanOrEqual(Date.now() + 83 * day);
   });
 
   it("leaves the cookie alone on a POST (sign-in or sign-out may be replacing it) and when there is none", () => {
     expect(proxy(req("/auth/signout", { method: "POST", cookie: `session=${TOKEN}` })).cookies.get("session")).toBeUndefined();
     expect(proxy(req("/trips")).cookies.get("session")).toBeUndefined();
     expect(proxy(req("/trips", { cookie: "session=not%20a%20token" })).cookies.get("session")).toBeUndefined();
+    expect(proxy(req("/auth/verify?token=x", { cookie: `session=${TOKEN}` })).cookies.get("session")).toBeUndefined();
+    expect(proxy(req("/auth/signin", { cookie: `session=${TOKEN}` })).cookies.get("session")).toBeUndefined();
   });
 
   it("sends HSTS only for an https album", () => {
     process.env.APP_URL = "https://album.example";
     expect(proxy(req("/")).headers.get("strict-transport-security")).toMatch(/max-age=/);
     expect(proxy(req("/upload")).headers.get("strict-transport-security")).toMatch(/max-age=/);
+    process.env.HSTS_INCLUDE_SUBDOMAINS = "true";
+    expect(proxy(req("/")).headers.get("strict-transport-security")).toBe("max-age=31536000; includeSubDomains");
+    delete process.env.HSTS_INCLUDE_SUBDOMAINS;
     process.env.APP_URL = "http://localhost:3200";
     expect(proxy(req("/")).headers.get("strict-transport-security")).toBeNull();
   });

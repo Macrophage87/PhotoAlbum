@@ -120,8 +120,6 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     "Content-Type": contentType,
     "Cache-Control": mediaCacheControl(media, url.searchParams.has("v")),
     "Accept-Ranges": "bytes",
-    // Member-uploaded bytes: should one ever be opened as a page of its own, it runs no script and has no origin.
-    "Content-Security-Policy": "sandbox",
   };
   if (size === "original") headers["Content-Disposition"] = `inline; filename="${encodeURIComponent(photo.originalName)}"`;
 

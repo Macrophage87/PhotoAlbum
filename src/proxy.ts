@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { buildCsp, CSP_HEADER, CSP_REPORT_ONLY_HEADER } from "@/lib/security/csp";
-import { HSTS_HEADER, hstsValue } from "@/lib/security/hsts";
-import { looksLikeSessionToken, SESSION_COOKIE, SESSION_TTL_MS, sessionCookieOptions } from "@/lib/auth/session-cookie";
+import { HSTS_HEADER, hstsIncludesSubdomains, hstsValue } from "@/lib/security/hsts";
+import { looksLikeSessionToken, SESSION_COOKIE, SESSION_REFRESH_MS, sessionCookieOptions } from "@/lib/auth/session-cookie";
 
 /** Paths that always need a member: anonymous requests are bounced to sign-in. Real authorization happens per page/action/route. */
 const PROTECTED = [/^\/upload$/, /^\/admin(\/|$)/, /^\/trips\/new$/, /^\/trips\/[^/]+\/(settings|import|place)$/, /^\/photos(\/|$)/, /^\/collections\/new$/, /^\/collections\/[^/]+\/settings$/, /^\/privacy$/, /^\/review$/, /^\/people(\/|$)/, /^\/graph$/, /^\/favorites$/];
@@ -14,7 +14,7 @@ const PROTECTED = [/^\/upload$/, /^\/admin(\/|$)/, /^\/trips\/new$/, /^\/trips\/
 export function proxy(request: NextRequest) {
   const path = request.nextUrl.pathname;
   const session = request.cookies.get(SESSION_COOKIE)?.value;
-  const hsts = hstsValue(process.env.APP_URL);
+  const hsts = hstsValue(process.env.APP_URL, hstsIncludesSubdomains(process.env.HSTS_INCLUDE_SUBDOMAINS));
   if (!session && PROTECTED.some((re) => re.test(path))) {
     const url = new URL("/auth/signin", request.url);
     url.searchParams.set("next", path + request.nextUrl.search);
@@ -32,10 +32,11 @@ export function proxy(request: NextRequest) {
   response.headers.set(headerName, csp);
   if (hsts) response.headers.set(HSTS_HEADER, hsts);
   // The database slides a session's expiry while it is used, but only a response can move the cookie's, and pages
-  // cannot set cookies: so each page visit re-issues the same cookie for another 90 days. The database stays the
-  // judge of whether it is still good. Only on GET: a POST may be the sign-out or sign-in that replaces this cookie.
-  if (request.method === "GET" && looksLikeSessionToken(session)) {
-    response.cookies.set(SESSION_COOKIE, session, sessionCookieOptions(new Date(Date.now() + SESSION_TTL_MS)));
+  // cannot set cookies: so each page visit re-issues the same cookie, for no longer than the row is sure to last
+  // (the page's own session read slides it). The database stays the judge of whether it is still good. Only on GET
+  // and away from /auth: a POST or a sign-in page may be the sign-out or sign-in that replaces this cookie.
+  if (request.method === "GET" && !/^\/auth(\/|$)/.test(path) && looksLikeSessionToken(session)) {
+    response.cookies.set(SESSION_COOKIE, session, sessionCookieOptions(new Date(Date.now() + SESSION_REFRESH_MS)));
   }
   return response;
 }

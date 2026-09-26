@@ -15,6 +15,8 @@ const urlWithDefault = (fallback: string) => z.string().optional().transform((v)
 const schema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   APP_URL: urlWithDefault("http://localhost:3000"),
+  // Read by src/proxy.ts on each request: HSTS (sent when APP_URL is https) also covers every subdomain.
+  HSTS_INCLUDE_SUBDOMAINS: boolish.transform((v) => v ?? false),
   DATABASE_URL: z.string().min(1),
   ADMIN_EMAIL: z.string().email().optional().or(z.literal("").transform(() => undefined)),
   SMTP_HOST: z.string().optional().transform((v) => (v ? v : undefined)),
