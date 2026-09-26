@@ -153,8 +153,8 @@ export function PlaceStudio({ photos: initial, total, theme, tracks, bounds }: {
   const undo = ({ before, token, guesses }: Undo) =>
     start(async () => {
       try {
-        await restorePlaces(before, token);
-        const back = new Map(before.map((b) => [b.id, b]));
+        // What the server wrote, not what was sent: without its note of the move, a spot comes back as placed by hand.
+        const back = new Map((await restorePlaces(before, token)).map((b) => [b.id, b]));
         setItems((prev) =>
           prev.map((p) => {
             const b = back.get(p.id);

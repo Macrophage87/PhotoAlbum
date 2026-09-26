@@ -116,7 +116,8 @@ function spanMetres(points: [number, number][]): number {
 
 /** What a picture in the list is called: its caption, or which one it is and the day, so each reads differently. */
 function stackLabel(p: PhotoFeatureProps, i: number, n: number): string {
-  const day = p.day ? formatDay(p.day, "long") : p.takenAt ? new Date(p.takenAt).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" }) : null;
+  // The day where it was taken when the map knows it; else the UTC day, never the viewer's own zone.
+  const day = p.day ? formatDay(p.day, "long") : p.takenAt ? new Date(p.takenAt).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric", timeZone: "UTC" }) : null;
   return `${p.caption || `Photo ${i + 1} of ${n}`}${day ? `, ${day}` : ""}`;
 }
 
@@ -322,17 +323,25 @@ export function MapView({ photos, tracks, bounds, theme, className = "", onPhoto
         // Short enough to fit the map it is on, which on a phone is under half the screen.
         const room = Math.min(220, map.getContainer().clientHeight - 80);
         const el = stackList(list, Math.max(72, room), pick, choosing);
-        el.addEventListener("keydown", (e) => {
-          if (e.key === "Escape") { e.stopPropagation(); popupRef.current?.remove(); }
-        });
         const popup = new Popup({ offset: 14, maxWidth: "260px" }).setLngLat(at).setDOMContent(el);
+        // Whether focus is in the list (or on its close button). Removing the popup takes its content out of the page
+        // before "close" fires, so by then the browser can no longer say; it is noted as focus comes and goes instead.
+        let focusInside = false;
         popup.on("close", () => {
           if (stackRef.current === el) stackRef.current = null;
           // Back to the map, not to the top of the page, for whoever is going by keyboard.
-          if (el.contains(document.activeElement)) map.getCanvas().focus();
+          if (focusInside && mapRef.current === map) map.getCanvas().focus();
         });
         popupRef.current = popup.addTo(map);
         stackRef.current = el;
+        const box = popup.getElement();
+        box.addEventListener("focusin", () => { focusInside = true; }, true);
+        // Focus going somewhere else on the page; a focused button taken out with the popup has nowhere to go (null).
+        box.addEventListener("focusout", (e) => { if (e.relatedTarget && !box.contains(e.relatedTarget as Node)) focusInside = false; }, true);
+        box.addEventListener("pointerdown", () => { focusInside = focusInside || box.contains(document.activeElement); }, true);
+        box.addEventListener("keydown", (e) => {
+          if (e.key === "Escape") { e.stopPropagation(); popup.remove(); }
+        });
         el.querySelector("button")?.focus({ preventScroll: true });
       };
 

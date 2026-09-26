@@ -9,7 +9,7 @@ import { enqueue } from "@/lib/jobs/boss";
 import { QUEUES } from "@/lib/jobs/queues";
 import { applyPhotoInstant, requestGeotag } from "@/lib/photos/apply-date";
 import { onActivity, refileByClock } from "@/lib/activities/reassign";
-import { placesFor, rememberPlaces } from "@/lib/photos/place-undo";
+import { forgetPlaces, placesFor, rememberPlaces } from "@/lib/photos/place-undo";
 import { datePlanSchema, isEmptyPlan, planDate } from "@/lib/photos/bulk-date";
 import { offsetMinutesInZone } from "@/lib/time/local-day";
 import { editableMediaIds } from "@/lib/auth/ownership";
@@ -121,7 +121,10 @@ export async function placePhotos(photoIds: string[], lat: number, lng: number, 
  * Without the note (a restart, or an hour gone) the browser's positions are put back, but as the member pressing
  * Undo placing them by hand, since nothing else it says about them can be checked.
  */
-export async function restorePlaces(entries: PlaceBefore[], undo?: string | null): Promise<number> {
+/** Where each photograph was put back to, as it was written, so the screen shows what the album now says. */
+export type PlaceRestored = { id: string; lat: number | null; lng: number | null; gpsSource: PlaceBefore["gpsSource"] };
+
+export async function restorePlaces(entries: PlaceBefore[], undo?: string | null): Promise<PlaceRestored[]> {
   const user = await requireUserOrThrow();
   const all = beforeSchema.parse(entries);
   const mine = new Set(await editableMediaIds(user, all.map((e) => e.id)));
@@ -133,8 +136,10 @@ export async function restorePlaces(entries: PlaceBefore[], undo?: string | null
     if (e.lat === null) return { lat: null, lng: null, altitude: null, gpsSource: null, placeName: e.placeName, placeSetById: e.removedByHand ? user.id : null };
     return { lat: e.lat, lng: e.lng, altitude: null, gpsSource: "MANUAL" as const, placeName: e.placeName, placeSetById: user.id };
   };
-  await db.$transaction(allowed.map((e) => db.photo.update({ where: { id: e.id }, data: restored(e) })));
-  return allowed.length;
+  const writes = allowed.map((e) => ({ id: e.id, data: restored(e) }));
+  await db.$transaction(writes.map((w) => db.photo.update({ where: { id: w.id }, data: w.data })));
+  forgetPlaces(noted ? undo : null);
+  return writes.map((w) => ({ id: w.id, lat: w.data.lat, lng: w.data.lng, gpsSource: w.data.gpsSource }));
 }
 
 /** The instructions stored on a row, where they still make sense; anything unreadable is treated as none. */

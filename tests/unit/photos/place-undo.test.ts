@@ -64,6 +64,17 @@ describe("undoing a place", () => {
     expect(await row(p.id)).toMatchObject({ lat: 5, gpsSource: "MANUAL", altitude: null, placeSetById: alice });
   });
 
+  it("says what it wrote, and uses a note only once", async () => {
+    as(alice, "MEMBER");
+    const p = await photo({ lat: 5, lng: 6, altitude: 10, gpsSource: "EXIF" });
+    const { before, undo } = await placePhotos([p.id], 10, 20);
+    expect(await restorePlaces(before, undo)).toEqual([{ id: p.id, lat: 5, lng: 6, gpsSource: "EXIF" }]);
+    // Pressed again (a stale tab, a double tap), the note is gone: the spot comes back as the presser's own placing.
+    await placePhotos([p.id], 10, 20);
+    expect(await restorePlaces(before, undo)).toEqual([{ id: p.id, lat: 5, lng: 6, gpsSource: "MANUAL" }]);
+    expect(await row(p.id)).toMatchObject({ altitude: null, placeSetById: alice });
+  });
+
   it("restores nobody as the placer when nobody had placed it", async () => {
     const p = await photo({ lat: 5, lng: 6, gpsSource: "TRACK" });
     const { before, undo } = await placePhotos([p.id], 10, 20);

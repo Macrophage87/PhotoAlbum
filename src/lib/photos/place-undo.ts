@@ -39,3 +39,8 @@ export function placesFor(token: string | null | undefined, userId: string, now 
   const s = token ? store.get(token) : undefined;
   return s && s.userId === userId ? s.places : null;
 }
+
+/** Undo is pressed once: a note that has been used is dropped, so it cannot put the places back over later changes. */
+export function forgetPlaces(token: string | null | undefined): void {
+  if (token) store.delete(token);
+}
