@@ -83,7 +83,10 @@ export function Lightbox({ photos, index, onClose, onNavigate, share = null }: {
         anyone having to guess that the page scrolls. On a wide screen the details are a column beside the picture.
       */}
       <div className="flex-1 min-h-0 flex flex-col lg:flex-row lg:overflow-hidden">
-        <div className="relative shrink-0 lg:shrink lg:flex-1 flex flex-col items-center justify-center lg:min-h-0 px-12 py-2 gap-2 lg:gap-3">
+        {/* min-w-0: beside the details, the picture's column is as wide as the screen leaves it, not as wide as what is in
+            it. A panorama drawn at full height is thousands of pixels across, and without this it pushed the column (and
+            its scroller) out to that width, so there was nothing to drag across and the details were cut off. */}
+        <div className="relative shrink-0 lg:shrink lg:flex-1 flex flex-col items-center justify-center min-w-0 lg:min-h-0 px-12 py-2 gap-2 lg:gap-3">
           {photos.length > 1 && (
             <button onClick={(e) => { e.stopPropagation(); prev(); }} className="absolute left-2 top-1/2 -translate-y-1/2 text-white/80 hover:text-white text-3xl p-3" aria-label="Previous">
               ‹
