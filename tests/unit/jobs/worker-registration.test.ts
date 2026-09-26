@@ -7,6 +7,9 @@ const fake = vi.hoisted(() => ({
 }));
 vi.mock("@/lib/jobs/boss", async (orig) => ({
   ...((await orig()) as object),
+  // What the worker queues as it starts (the members-only sweep) goes nowhere: the real queue is never started here,
+  // and its schema must not appear in the test database (see requeue.test.ts).
+  enqueue: async () => null,
   getBoss: async () => ({
     work: async (queue: string, options: Record<string, unknown>) => { fake.work.push({ queue, options }); },
     schedule: async (queue: string, cron: string) => { fake.schedules.push({ queue, cron }); },

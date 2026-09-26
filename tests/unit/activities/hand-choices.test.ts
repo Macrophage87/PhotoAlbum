@@ -367,7 +367,7 @@ describe("filing photographs on activities", () => {
       const stale = await photo(at(10), { activityId: null, activitySetById: me });
       const tripless = await photo(at(10), { tripId: null, activityId: null, activitySetById: me });
       const chosen = await photo(at(10), { activityId: walk, activitySetById: me });
-      const dir = path.join(process.cwd(), "prisma/migrations/20260926140000_forget_stale_activity_setter/migration.sql");
+      const dir = path.join(process.cwd(), "prisma/migrations/20260926150100_forget_stale_activity_setter/migration.sql");
       await db.$executeRawUnsafe(readFileSync(dir, "utf8"));
       expect((await row(stale.id)).activitySetById).toBeNull();
       expect((await row(tripless.id)).activitySetById).toBeNull();
