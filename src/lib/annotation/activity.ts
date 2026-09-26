@@ -72,7 +72,7 @@ export async function loadActivityForDescription(activityId: string) {
     where: { activityId, ...NOT_TRASHED, status: "READY", ...notOptedOut },
     orderBy: [{ takenAt: "asc" }, { id: "asc" }],
     take: ACTIVITY_FRAMES,
-    select: { id: true, renditions: true, caption: true, title: true, annotation: true, context: true },
+    select: { id: true, renditions: true, caption: true, title: true, titleByHelper: true, annotation: true, context: true },
   });
   return { ...activity, photos };
 }
@@ -101,7 +101,7 @@ export function describeActivityItem(activity: ActivityForDescription, permitted
     if (figures.length) lines.push(`The track recorded: ${figures.join(", ")}.`);
   }
   // The family's own words only: a title the helper gave a photograph may name somebody no longer to be named.
-  const written = activity.photos.map((p) => [memberTitle(p.title, p.annotation), p.caption, p.context].filter(Boolean).join(" — ")).filter(Boolean);
+  const written = activity.photos.map((p) => [memberTitle(p.title, p.annotation, p.titleByHelper), p.caption, p.context].filter(Boolean).join(" — ")).filter(Boolean);
   if (written.length) lines.push(`What the album already says about these photographs, in order:\n${written.map((w) => `- ${w}`).join("\n")}`);
   lines.push(
     permittedNames.length

@@ -105,7 +105,7 @@ export async function updateExternalVideo(photoId: string, fd: FormData): Promis
   const id = parseYouTubeUrl(v.url);
   if (!id) throw new Error("That does not look like a YouTube link.");
   const { takenAt, tzOffsetMin } = instantFor(v.date, photo.trip?.timezone ?? null);
-  const data: Parameters<typeof db.photo.update>[0]["data"] = { title: v.title, takenAt, tzOffsetMin, takenAtSource: "MANUAL" };
+  const data: Parameters<typeof db.photo.update>[0]["data"] = { title: v.title, titleByHelper: false, takenAt, tzOffsetMin, takenAtSource: "MANUAL" };
   if (id !== photo.externalId) {
     const meta = await oembed(id);
     const poster = await fetchThumbnail(id);

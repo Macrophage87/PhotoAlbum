@@ -12,6 +12,7 @@ import { permittedNames } from "@/lib/people/gates";
 import { annotationGates, notOptedOutWhere } from "./eligibility";
 import { descriptionFromMembersOnly } from "./members-only";
 import { memberTitle } from "./helper-text";
+import { unpermittedNameScrub } from "@/lib/people/unpermitted";
 import { namesChangedSince } from "@/lib/people/names-changed";
 import { anthropic, thinkingParams } from "./client";
 import { activityDescriptionSchema, parseActivityDescription, type ActivityDescription } from "./activity";
@@ -84,7 +85,7 @@ export async function loadContainerForDescription(kind: ContainerKind, id: strin
   const eligible = await db.photo.findMany({ where, orderBy: [{ takenAt: "asc" }, { id: "asc" }], select: { id: true } });
   const picked = spread(eligible, CONTAINER_FRAMES).map((p) => p.id);
   const photos = picked.length
-    ? await db.photo.findMany({ where: { id: { in: picked } }, orderBy: [{ takenAt: "asc" }, { id: "asc" }], select: { id: true, renditions: true, caption: true, title: true, annotation: true, context: true } })
+    ? await db.photo.findMany({ where: { id: { in: picked } }, orderBy: [{ takenAt: "asc" }, { id: "asc" }], select: { id: true, renditions: true, caption: true, title: true, titleByHelper: true, annotation: true, context: true } })
     : [];
   const dates = "startDate" in container ? { start: container.startDate, end: container.endDate } : null;
   const activities = "activities" in container ? container.activities.map((a) => a.title) : [];
@@ -100,7 +101,7 @@ export function describeContainerItem(container: ContainerForDescription, permit
   lines.push(`It holds ${container.count} photograph${container.count === 1 ? "" : "s"}; you are being shown ${container.photos.length} of them, spread across the whole of it.`);
   if (container.activities.length) lines.push(`The outings the family recorded in it: ${container.activities.join(", ")}`);
   // The family's own words only: a title the helper gave a photograph may name somebody no longer to be named.
-  const written = container.photos.map((p) => [memberTitle(p.title, p.annotation), p.caption, p.context].filter(Boolean).join(" — ")).filter(Boolean);
+  const written = container.photos.map((p) => [memberTitle(p.title, p.annotation, p.titleByHelper), p.caption, p.context].filter(Boolean).join(" — ")).filter(Boolean);
   if (written.length) lines.push(`What the album already says about the photographs you were shown, in order:\n${written.map((w) => `- ${w}`).join("\n")}`);
   lines.push(
     permittedNames.length
@@ -112,6 +113,19 @@ export function describeContainerItem(container: ContainerForDescription, permit
   const said = note?.trim();
   if (said) lines.push(`A note from the family, written by somebody who was there. Treat what it says as true:\n${said}`);
   return lines.join("\n");
+}
+
+/**
+ * What may be described to the helper: photographs' titles only where members gave them, the old description only
+ * where a member wrote it, and neither with the name of anybody the helper may not be told.
+ */
+export async function withoutUnpermittedNames<T extends { description: string | null; descriptionByHelper: boolean; photos: { id: string; title: string | null; titleByHelper: boolean; annotation: unknown }[] }>(c: T): Promise<T> {
+  const scrub = await unpermittedNameScrub(c.photos.map((p) => p.id));
+  return {
+    ...c,
+    description: c.descriptionByHelper ? null : scrub(c.description),
+    photos: c.photos.map((p) => ({ ...p, title: scrub(memberTitle(p.title, p.annotation, p.titleByHelper)), titleByHelper: false, annotation: null })),
+  };
 }
 
 /** Build the request. Images come from the local renditions of its own photographs; nothing is fetched. */
@@ -151,7 +165,7 @@ export async function writeContainerDescription(kind: ContainerKind, id: string,
 
   const requestedAt = new Date();
   const names = [...new Set((await Promise.all(container.photos.map((p) => permittedNames(p.id)))).flat())];
-  const request = await buildContainerRequest(container, gates.model, names, note?.trim() || undefined);
+  const request = await buildContainerRequest(await withoutUnpermittedNames(container), gates.model, names, note?.trim() || undefined);
   const response = await anthropic().messages.create(request);
   console.log(`[annotate-${kind}] ${container.id} model=${response.model} stop=${response.stop_reason} in=${response.usage.input_tokens} out=${response.usage.output_tokens}`);
   if (response.stop_reason === "refusal") throw new Error("The helper declined to describe this one");

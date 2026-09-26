@@ -13,12 +13,26 @@ export async function namesChangedSince(photoIds: string[], since: Date): Promis
   if (!photoIds.length) return false;
   const scrubbed = await db.photo.count({ where: { id: { in: photoIds }, namesScrubbedAt: { gt: since } } });
   if (scrubbed) return true;
-  // Anybody on them whose record changed since: a rename, an opt-out, a consent switch, a birthday.
+  // Anybody on them whose naming changed since: a rename, an opt-out, a consent switch, a birthday (the trigger on
+  // Person sets namesChangedAt for exactly those, and nothing else).
   const changed = await db.person.count({
     where: {
-      updatedAt: { gt: since },
+      namesChangedAt: { gt: since },
       OR: [{ faces: { some: { photoId: { in: photoIds } } } }, { animals: { some: { photoId: { in: photoIds } } } }],
     },
   });
   return changed > 0;
+}
+
+/**
+ * The same condition as a filter on the item itself, so the write that stores an answer can carry it: checked and
+ * written in one statement, nothing can change in between.
+ */
+export function unchangedSince(since: Date) {
+  const person = { namesChangedAt: { gt: since } };
+  return {
+    OR: [{ namesScrubbedAt: null }, { namesScrubbedAt: { lte: since } }],
+    faces: { none: { person } },
+    animals: { none: { person } },
+  };
 }

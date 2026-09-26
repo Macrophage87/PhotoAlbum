@@ -399,6 +399,9 @@ model Photo {
   /// When a forgotten person's name was last taken out of this item's machine-written text. An answer from the
   /// helper to a request built before then is thrown away rather than stored, since it may name them again.
   namesScrubbedAt           DateTime?
+  /// The title the item goes by (its title, or `membersTitle` when it has none) was written by the helper. A member
+  /// typing a different title makes it theirs.
+  titleByHelper             Boolean  @default(false)
   /// Darkroom edits, kept as instructions rather than applied to the file: crop, straighten, brightness, contrast,
   /// colour. The original is never touched, the renditions are re-rendered from it whenever this changes, and
   /// clearing it puts the item back exactly as it arrived. Only the uploader or an admin may set it.
@@ -648,9 +651,15 @@ model Person {
   optedOutAt          DateTime?
   /// Names this person went by before a rename: forgetting them takes every one of them out of the helper's text.
   formerNames         String[]   @default([])
-  /// The helper was told this name when it should not have been (no evidence of an adult); the nightly people job
-  /// takes it out of the helper's text and clears this.
-  namesPendingScrub   Boolean    @default(false)
+  /// When naming them was switched off without anybody saying so: they had been named with no evidence they are an
+  /// adult, or their naming was turned off before turning it off took the name back out. Admins are told; unless an
+  /// admin records a birthday or adult confirmation first, the nightly people job takes the name out of the helper's
+  /// text two weeks later (or at once, when an admin asks) and clears this. Nothing is sent meanwhile.
+  namingWithdrawnAt   DateTime?
+  /// When anything that decides whether or how they may be named last changed: name, former names, opting out, the
+  /// naming and recognition switches, birthday, adult confirmation. Set by a trigger; an answer from the helper to
+  /// a request built before it is not stored.
+  namesChangedAt      DateTime?
   createdById         String
   createdAt           DateTime   @default(now())
   updatedAt           DateTime   @updatedAt

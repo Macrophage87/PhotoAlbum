@@ -13,15 +13,18 @@ export function helperTitle(annotation: unknown): string | null {
   return typeof t === "string" && t.trim() ? t.trim() : null;
 }
 
-/** Whether the item's title is the one the helper gave it. */
-export function isHelperTitle(title: string | null | undefined, annotation: unknown): boolean {
-  const theirs = helperTitle(annotation);
-  return Boolean(theirs) && typeof title === "string" && title.trim() === theirs;
+/**
+ * Whether a title of the item (its own, or `membersTitle`) is the helper's: the one its record gives now, or, with
+ * `byHelper` (Photo.titleByHelper), one it gave before and nobody has changed since.
+ */
+export function isHelperTitle(title: string | null | undefined, annotation: unknown, byHelper = false): boolean {
+  if (typeof title !== "string" || !title.trim()) return false;
+  return byHelper || title.trim() === helperTitle(annotation);
 }
 
 /** The title a member gave the item, if any: what may be handed to the helper as the family's own words. */
-export function memberTitle(title: string | null | undefined, annotation: unknown): string | null {
-  return title?.trim() && !isHelperTitle(title, annotation) ? title : null;
+export function memberTitle(title: string | null | undefined, annotation: unknown, byHelper = false): string | null {
+  return title?.trim() && !isHelperTitle(title, annotation, byHelper) ? title : null;
 }
 
 /**

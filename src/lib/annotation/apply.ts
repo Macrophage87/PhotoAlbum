@@ -4,7 +4,7 @@ import { enqueueEmbedding } from "@/lib/jobs/handlers/embed-photo";
 import { applyPlaceEstimate, needsPlaceEstimate } from "./place";
 import { isWeakDate } from "@/lib/photos/date-from-neighbours";
 import { writtenFromMembersOnly } from "./members-only";
-import { namesChangedSince } from "@/lib/people/names-changed";
+import { unchangedSince } from "@/lib/people/names-changed";
 
 export type ApplyResult = { ok: true } | { ok: false; reason: "refusal" | "invalid" | "max_tokens" };
 
@@ -25,6 +25,15 @@ export function titlesAfter(current: { title: string | null; membersTitle: strin
   return { title, membersTitle };
 }
 
+/** Whether the title the item goes by after this answer is the helper's. */
+function titleIsHelpers(current: { title: string | null; membersTitle: string | null; titleByHelper: boolean }, after: { title: string | null; membersTitle: string | null }, aiTitle: string): boolean {
+  const goesBy = (t: { title: string | null; membersTitle: string | null }) => t.title?.trim() || t.membersTitle?.trim() || null;
+  const now = goesBy(after);
+  if (!now) return false;
+  if (now === goesBy(current)) return current.titleByHelper || now === aiTitle;
+  return now === aiTitle;
+}
+
 /**
  * `sent` is whether the request that produced this answer carried anything members-only, as recorded when it was
  * built (see `requestCarriesMembersOnly`); null when that was not recorded.
@@ -36,11 +45,7 @@ export function titlesAfter(current: { title: string | null; membersTitle: strin
  */
 export async function applyAnnotation(photoId: string, model: string, parsed: Annotation, raw: { usage?: Usage; batched?: boolean } & Record<string, unknown>, opts: { sent?: boolean | null; requestedAt?: Date } = {}): Promise<void> {
   const requestedAt = opts.requestedAt;
-  if (requestedAt && (await namesChangedSince([photoId], requestedAt))) {
-    await recordFailure(photoId, "names_changed", { terminal: false });
-    return;
-  }
-  const current = await db.photo.findUnique({ where: { id: photoId }, select: { takenAt: true, takenAtSource: true, estimatedDateSource: true, annotationSource: true, title: true, membersTitle: true, annotation: true, kind: true, lat: true, placeEstimatedAt: true, context: true } });
+  const current = await db.photo.findUnique({ where: { id: photoId }, select: { takenAt: true, takenAtSource: true, estimatedDateSource: true, annotationSource: true, title: true, membersTitle: true, titleByHelper: true, annotation: true, kind: true, lat: true, placeEstimatedAt: true, context: true } });
   if (!current) return;
   const stored = toStored(parsed);
   // Written from names or notes, it is the family's to read: kept off the item's own title and out of public view.
@@ -50,9 +55,12 @@ export async function applyAnnotation(photoId: string, model: string, parsed: An
   const est = parsed.estimatedYear;
   const noReliableDate = isWeakDate(current.takenAtSource, current.takenAt);
   const keepMemberEstimate = current.estimatedDateSource === "MEMBER";
-  await db.$transaction([
-    db.photo.update({
-      where: { id: photoId },
+  // Stored only if nothing about who may be named on it changed since the request was built, checked in the write
+  // itself; otherwise nothing of it is kept, the raw answer included.
+  const stale = Symbol("stale");
+  const kept = await db.$transaction(async (tx) => {
+    const written = await tx.photo.updateMany({
+      where: { id: photoId, ...(requestedAt ? unchangedSince(requestedAt) : {}) },
       data: {
         annotation: stored,
         annotationModel: model,
@@ -64,6 +72,8 @@ export async function applyAnnotation(photoId: string, model: string, parsed: An
         // Embedded videos keep YouTube's title; see `titlesAfter` for everything else.
         title: titles.title,
         membersTitle: titles.membersTitle,
+        // Whose title it goes by: the helper's when it just gave the one it goes by, a member's own when it kept that.
+        titleByHelper: titleIsHelpers(current, titles, aiTitle),
         annotationInputTokens: raw.usage?.input_tokens ?? null,
         annotationCacheReadTokens: raw.usage?.cache_read_input_tokens ?? null,
         annotationCacheWriteTokens: raw.usage?.cache_creation_input_tokens ?? null,
@@ -73,9 +83,18 @@ export async function applyAnnotation(photoId: string, model: string, parsed: An
           ? { estimatedDate: new Date(Date.UTC(Math.round((est.from + est.to) / 2), 6, 1)), estimatedDateConfidence: est.confidence, estimatedDateSource: "MODEL", estimatedDateNote: `${est.from}–${est.to}: ${est.evidence}` }
           : {}),
       },
-    }),
-    db.mediaAnnotationRaw.create({ data: { photoId, model, response: raw as object } }),
-  ]);
+    });
+    if (written.count === 0) throw stale;
+    await tx.mediaAnnotationRaw.create({ data: { photoId, model, response: raw as object } });
+    return true;
+  }).catch((err: unknown) => {
+    if (err === stale) return false;
+    throw err;
+  });
+  if (!kept) {
+    await recordFailure(photoId, "names_changed", { terminal: false });
+    return;
+  }
   // The place guess is only ever recorded for an item that was actually asked, so clearing a position later still
   // leaves it eligible for the backfill.
   // Asked in the same request, so it was written from the same things.

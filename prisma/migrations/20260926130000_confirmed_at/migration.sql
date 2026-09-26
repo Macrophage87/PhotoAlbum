@@ -32,19 +32,24 @@ CREATE TRIGGER animal_confirmed_at_trigger BEFORE INSERT OR UPDATE OF status, "p
   FOR EACH ROW EXECUTE FUNCTION set_confirmed_at();
 
 -- Existing rows: nobody recorded when they were confirmed, and NULL reads as "when it was found" (the names run
--- falls back to createdAt), so only the rows that matter are written. Where a face the detector found was on a
--- photograph described after it was found, and the description does not name the person as a whole word, the
--- confirmation may well have come after the description, which is the case the run exists for: those count as
--- confirmed now. Hand tags are rows made confirmed, so their createdAt is already right.
+-- falls back to createdAt), so only the rows that matter are written — every write to a Face row rewrites its entry
+-- in the template index. What matters: a face the detector found, of somebody the names run could name (a pet, or
+-- a person named or recognised with evidence they are an adult, not forgotten), on a photograph described after it
+-- was found whose title, caption and description do not name them. Their confirmation may well have come after the
+-- description, which is the case the run exists for: those count as confirmed now. Hand tags are rows made
+-- confirmed, so their createdAt is already right. The name is matched as a whole word by hand rather than with
+-- \m and \M, which fail on a name ending in punctuation ("Jr.", "(Nan)").
 UPDATE "Face" f SET "confirmedAt" = now()
   FROM "Photo" p, "Person" pe
   WHERE p.id = f."photoId" AND pe.id = f."personId" AND f.status = 'CONFIRMED' AND f.confidence > 0
+    AND pe."optedOutAt" IS NULL
+    AND (pe.kind = 'PET' OR ((pe."faceIndexing" OR pe."nameInDescriptions") AND (pe.birthday <= (now() - interval '18 years') OR (pe.birthday IS NULL AND pe."adultAttestedAt" IS NOT NULL))))
     AND p."annotatedAt" IS NOT NULL AND p."annotatedAt" > f."createdAt"
     AND NOT (concat_ws(' ', p.annotation->>'title', p.annotation->>'caption', p.annotation->>'description')
-      ~* ('\m' || regexp_replace(pe.name, '([^[:alnum:][:space:]])', '\\\1', 'g') || '\M'));
+      ~* ('(^|[^[:alnum:]])' || regexp_replace(pe.name, '([^[:alnum:][:space:]])', '\\\1', 'g') || '($|[^[:alnum:]])'));
 UPDATE "AnimalDetection" a SET "confirmedAt" = now()
   FROM "Photo" p, "Person" pe
-  WHERE p.id = a."photoId" AND pe.id = a."personId" AND a.status = 'CONFIRMED'
+  WHERE p.id = a."photoId" AND pe.id = a."personId" AND a.status = 'CONFIRMED' AND pe.kind = 'PET'
     AND p."annotatedAt" IS NOT NULL AND p."annotatedAt" > a."createdAt"
     AND NOT (concat_ws(' ', p.annotation->>'title', p.annotation->>'caption', p.annotation->>'description')
-      ~* ('\m' || regexp_replace(pe.name, '([^[:alnum:][:space:]])', '\\\1', 'g') || '\M'));
+      ~* ('(^|[^[:alnum:]])' || regexp_replace(pe.name, '([^[:alnum:][:space:]])', '\\\1', 'g') || '($|[^[:alnum:]])'));
