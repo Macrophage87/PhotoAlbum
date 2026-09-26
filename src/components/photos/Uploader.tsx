@@ -50,6 +50,13 @@ function readDuration(file: File): Promise<number | null> {
   });
 }
 
+/** The batch line, plus any failures from an earlier batch here that were never tried again, so they are not lost. */
+function withEarlier(line: string, earlier: number): string {
+  if (!earlier) return line;
+  const end = /[.…]$/.test(line) ? line.slice(-1) : "";
+  return `${end ? line.slice(0, -1) : line} (${earlier} earlier ${earlier === 1 ? "file still needs" : "files still need"} attention)${end}`;
+}
+
 export function tooLongMessage(durationS: number, limit: number): string {
   return `This video is ${Math.round(durationS)} seconds long; clips uploaded here are limited to ${limit} seconds. Upload longer videos to YouTube as Unlisted and add the link instead.`;
 }
@@ -234,7 +241,7 @@ export function Uploader({ tripId, activityId, collectionId, scope, onDone, maxC
       */}
       {items.length > 0 && (
         <div className="flex flex-wrap items-center gap-3 text-sm" data-testid="upload-progress">
-          <span aria-live="polite" className={counts.failed ? "font-medium text-red-700" : "text-muted"}>{progressLine(counts)}</span>
+          <span aria-live="polite" className={counts.failed ? "font-medium text-red-700" : "text-muted"}>{withEarlier(progressLine(counts), items.filter((i) => i.status === "failed" && !batch.includes(i)).length)}</span>
           {counts.waiting > 0 && <span className="text-amber-700">The connection dropped; trying again.</span>}
         </div>
       )}
