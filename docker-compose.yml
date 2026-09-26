@@ -38,7 +38,9 @@ services:
       - photos:/data/photos
       - imports:/data/imports
     ports:
-      - "${APP_PORT:-3000}:3000"
+      # Loopback only by default: the reverse proxy on the host is meant to be the only way in. Docker writes its own
+      # firewall rules, so a port published on all interfaces is reachable even where ufw says it is closed.
+      - "${APP_BIND:-127.0.0.1}:${APP_PORT:-3000}:3000"
     networks:
       - default
       - internal

@@ -101,10 +101,11 @@ Set at least these values:
 | `APP_URL` | `https://album.example.com` (your real hostname, with https). This appears in every sign-in email. With https the app also sends HSTS, so browsers keep to https for a year. |
 | `HSTS_INCLUDE_SUBDOMAINS` | Leave at `false`. Set `true` only if every subdomain of the album's hostname serves https, to extend HSTS to them. |
 | `ADMIN_EMAIL` | Your own email address. Only this address can create the first admin account, and only while there is no admin: once one exists it is an ordinary address, so removing that account from the Admin page sticks. |
-| `SIGN_IN_MAIL_PER_HOUR` | Leave at `200`. The most sign-in emails sent in an hour, all addresses together, so a flood of requests cannot use up your mail provider's quota. |
+| `SIGN_IN_MAIL_PER_HOUR` | Leave at `200`. Protects your mail provider's quota. Each address holds at most three unused sign-in links at a time; its first always goes out, and only the second and third count against this hourly total. Once it is used up, asking for another link while one is still live says to try again later, but anybody without a live link still gets one. |
 | `POSTGRES_PASSWORD` | A long random password, for example the output of `openssl rand -base64 24`. |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM` | Your mail provider's settings. Leave `SMTP_HOST` empty to print links to the log instead. |
 | `APP_PORT` | Leave at `3000`. The reverse proxy in the next step talks to it locally. |
+| `APP_BIND` | Leave at `127.0.0.1`, so the app is reachable only through that proxy (Docker's published ports bypass ufw). |
 
 Gmail example: `SMTP_HOST=smtp.gmail.com`, `SMTP_PORT=587`, `SMTP_SECURE=false`, `SMTP_USER` your address, `SMTP_PASS` an App Password from your Google account security page, `SMTP_FROM` the same address.
 
@@ -148,16 +149,7 @@ If you prefer nginx, the equivalent needs `client_max_body_size 2g;`, `proxy_rea
 
 ### Keep the app off the public interface
 
-By default Compose publishes port 3000 on all interfaces. Since Caddy is the only client, bind it to localhost. Create `docker-compose.override.yml` next to `docker-compose.yml`:
-
-```yaml
-services:
-  app:
-    ports: !override
-      - "127.0.0.1:${APP_PORT:-3000}:3000"
-```
-
-Compose merges this file automatically. The firewall from step 2 blocks port 3000 from outside anyway, so this is a second layer.
+Compose publishes the app's port on `127.0.0.1` only (`APP_BIND` in `.env`), so Caddy on the same host is the only way in. Keep it that way: Docker writes its own firewall rules for published ports, so **ufw from step 2 does not protect a port Docker publishes**; `APP_BIND=0.0.0.0` would put the app on the internet directly, past Caddy, its HTTPS and the `X-Forwarded-For` the app relies on for rate limiting. If an older `docker-compose.override.yml` of yours still sets the ports line, it can go.
 
 ## 7. Build and start
 

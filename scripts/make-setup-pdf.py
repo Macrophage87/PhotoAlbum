@@ -146,7 +146,9 @@ docker compose up --build -d
         "with photos in the <b>photos</b> volume mounted at /data/photos. On every start the app applies pending database migrations "
         "before serving, so upgrades need no manual database step. Three optional services live behind compose profiles: <b>worker</b> (background jobs "
         "in their own container), <b>ml</b> (the local ML sidecar) and <b>ml-init</b> (a one-off download of the model weights into the <b>ml-models</b> volume)."),
-      P("Browse to <b>http://&lt;server&gt;:3000</b>. Change the host port with APP_PORT in .env if 3000 is taken."),
+      P("Browse to <b>http://localhost:3000</b> on the server itself. The port is published on the loopback address only "
+        "(APP_BIND=127.0.0.1), so from other machines the album is reached through the reverse proxy (section 7). Change the "
+        "host port with APP_PORT in .env if 3000 is taken."),
       P("Reading the sign-in link without email", H2),
       P("If SMTP_HOST is left empty, sign-in and invite links are printed to the container log instead of being sent. "
         "This is fine for first setup and for a purely local install."),
@@ -175,7 +177,7 @@ S += [P("4. Configuration reference (.env)", H1),
         ["APP_URL", "http://localhost:3000", "Public URL of the site. Used in every emailed link and in redirects. Set it to your real address (with https) when behind a proxy."],
         ["HSTS_INCLUDE_SUBDOMAINS", "false", "With an https APP_URL, browsers are told to keep to https for a year. true extends that to every subdomain of the album's hostname; only set it if they all serve https."],
         ["ADMIN_EMAIL", "you@example.com", "The first person to sign in with this address becomes an admin. Allowed to sign in without an invite only while the album has no admin."],
-        ["SIGN_IN_MAIL_PER_HOUR", "200", "The most sign-in emails sent in an hour, all addresses together. Each address also holds at most three unused links at a time; asking again says to use the newest one."],
+        ["SIGN_IN_MAIL_PER_HOUR", "200", "Protects the mail provider's quota. Each address holds at most three unused links at a time (asking again says to use the newest one); its first always goes out, and only the second and third count against this hourly total."],
         ["SMTP_HOST", "(empty)", "Mail server hostname. Leave empty to log links instead of sending mail."],
         ["SMTP_PORT", "587", "587 for STARTTLS, 465 for implicit TLS."],
         ["SMTP_USER / SMTP_PASS", "(empty)", "Mail server credentials."],
@@ -183,6 +185,7 @@ S += [P("4. Configuration reference (.env)", H1),
         ["SMTP_FROM", "Family Album<br/>&lt;album@example.com&gt;", "Sender shown in emails. Many providers require it to match the account."],
         ["POSTGRES_USER / _PASSWORD / _DB", "photoalbum", "Database credentials used by both containers. Change the password on an internet-facing host."],
         ["APP_PORT", "3000", "Host port published by Docker."],
+        ["APP_BIND", "127.0.0.1", "Address the port is published on. Keep 127.0.0.1 behind a reverse proxy: Docker's published ports bypass ufw, so 0.0.0.0 exposes the app directly. Use 0.0.0.0 only on a trusted home network without a proxy."],
         ["STORAGE_DRIVER", "local", "Storage backend. Only local is implemented; the code has an interface for adding S3 later."],
         ["PHOTO_STORAGE_ROOT", "/data/photos", "Where originals and renditions are written (inside the container)."],
         ["MAX_UPLOAD_BYTES", "104857600 (100 MB)", "Largest single photo accepted."],
@@ -365,6 +368,7 @@ S += [P("7. Running behind a reverse proxy", H1),
       bullets([
         "Set <b>APP_URL</b> in .env to the public address, for example https://album.example.com, so emailed links and redirects use it.",
         "Raise the proxy's request body limit. Photos are up to 100 MB by default and Google exports can be far larger. The app-side caps are MAX_UPLOAD_BYTES and MAX_IMPORT_BYTES.",
+        "The app's port is published on 127.0.0.1 only (APP_BIND), which suits a proxy on the same host. A proxy elsewhere needs APP_BIND set to an address it can reach, and then a firewall that really covers that port: Docker's published ports bypass ufw.",
       ]),
       P("Caddy example (automatic HTTPS):"),
       code("""

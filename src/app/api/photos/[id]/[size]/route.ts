@@ -121,8 +121,8 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     "Content-Type": contentType,
     "Cache-Control": mediaCacheControl(media, url.searchParams.has("v")),
     "Accept-Ranges": "bytes",
-    // The same policy next.config.ts gives /api/photos/*, here too in case that entry ever stops matching; a
-    // browser enforces every policy it is sent, so two copies cost nothing.
+    // The real guard is next.config.ts's entry for /api/photos/*: when it has set this header, Next keeps it and
+    // this copy is dropped. It only takes effect should that entry ever stop matching; a unit test keeps them equal.
     "Content-Security-Policy": MEDIA_CSP,
   };
   if (size === "original") headers["Content-Disposition"] = `inline; filename="${encodeURIComponent(photo.originalName)}"`;
