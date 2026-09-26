@@ -1792,6 +1792,8 @@ test("a member edits their own photos and reads everyone else's, and a trip is a
 test("a member's review queue is their own uploads, and somebody else's batch is theirs to read, not to mark", async ({ browser }) => {
   // A member of their own, so nothing earlier tests uploaded as a member is in their queue.
   const reviewer = "e2e-reviewer@example.com";
+  // Only an invited address may make an account by signing in.
+  await inviteFor(reviewer);
   const memberContext = await browser.newContext();
   await signIn(memberContext, reviewer);
   const memberPage = await memberContext.newPage();
