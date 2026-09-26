@@ -15,8 +15,8 @@ import { safeArchivePath } from "./inbox";
 import { albumFolderOf, captionFromTitle, isMediaName, isVideoName, pairSidecars, parseSidecar, type SidecarData } from "./sidecar";
 import { readStreamToString, walkZip } from "./zip";
 import { describeRepair, planSidecarRepair } from "./repair";
-import { pickActivityByTime, pickTripByDay, whoWasThere } from "@/lib/photos/assign";
-import { localDayFromOffset, offsetMinutesInZone } from "@/lib/time/local-day";
+import { applyPhotoInstant } from "@/lib/photos/apply-date";
+import { offsetMinutesInZone } from "@/lib/time/local-day";
 import { timezoneForCoords } from "@/lib/geo/tz";
 
 export type ImportReport = { albums: { title: string; items: number; created: boolean }[]; duplicates: number; unsupported: number; failures: { file: string; reason: string }[]; noSidecar: number; repairs?: string[] };
@@ -103,7 +103,7 @@ export async function importTakeoutArchive(importId: string): Promise<void> {
         const contentHash = hash.digest("hex");
         const dupe = await db.photo.findFirst({
           where: { OR: [{ contentHash }, ...(meta?.googleId ? [{ sourceKind: "TAKEOUT" as const, sourceId: meta.googleId }] : [])] },
-          select: { id: true, lat: true, lng: true, gpsSource: true, takenAt: true, takenAtSource: true, context: true, caption: true, sourceId: true, originalName: true, tripId: true },
+          select: { id: true, lat: true, lng: true, gpsSource: true, placeSetById: true, takenAt: true, takenAtSource: true, context: true, caption: true, sourceId: true, originalName: true, tripId: true },
         });
         if (dupe) {
           // Already in the album: keep the bytes we have, but let the sidecar fill in whatever is still missing, and
@@ -189,22 +189,13 @@ export async function closeDeadImports(now = new Date()): Promise<number> {
 
 /**
  * A repaired date can mean the photo belongs to a different day, and so to a different trip and activity. Work out
- * the zone the way processing does (the position if there is one, else the trip's, else UTC) and re-file it.
+ * the zone the way processing does (the position if there is one, else the trip's, else UTC) and re-file it through
+ * the same path a date correction takes, so an activity a member chose stays chosen and a pin interpolated from a
+ * track at the old, wrong time is dropped.
  */
 async function refileByDate(photoId: string): Promise<void> {
-  const photo = await db.photo.findUnique({ where: { id: photoId }, select: { id: true, takenAt: true, tripId: true, uploaderId: true, lat: true, lng: true, trip: { select: { timezone: true } } } });
+  const photo = await db.photo.findUnique({ where: { id: photoId }, select: { id: true, takenAt: true, takenAtSource: true, dateSetById: true, tripId: true, uploaderId: true, lat: true, lng: true, gpsSource: true, activityId: true, activitySetById: true, trip: { select: { timezone: true } } } });
   if (!photo?.takenAt) return;
-  const zone = (photo.lat !== null && photo.lng !== null ? timezoneForCoords(photo.lat, photo.lng) : null) ?? photo.trip?.timezone ?? "UTC";
-  const tzOffsetMin = offsetMinutesInZone(photo.takenAt, zone);
-  let tripId = photo.tripId;
-  if (!tripId) {
-    const trips = await db.trip.findMany({ where: whoWasThere(photo.uploaderId), select: { id: true, startDate: true, endDate: true } });
-    tripId = pickTripByDay(trips, localDayFromOffset(photo.takenAt, tzOffsetMin))?.id ?? null;
-  }
-  let activityId: string | null = null;
-  if (tripId) {
-    const acts = await db.activity.findMany({ where: { tripId, ...whoWasThere(photo.uploaderId) }, select: { id: true, startTime: true, endTime: true } });
-    activityId = pickActivityByTime(acts, photo.takenAt)?.id ?? null;
-  }
-  await db.photo.update({ where: { id: photoId }, data: { tzOffsetMin, tripId, activityId } });
+  const zone = (photo.lat !== null && photo.lng !== null && photo.gpsSource !== "TRACK" ? timezoneForCoords(photo.lat, photo.lng) : null) ?? photo.trip?.timezone ?? "UTC";
+  await applyPhotoInstant(photo, photo.takenAt, offsetMinutesInZone(photo.takenAt, zone), photo.takenAtSource ?? "SIDECAR", photo.dateSetById);
 }

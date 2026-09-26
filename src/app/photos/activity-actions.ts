@@ -36,7 +36,8 @@ export async function putInActivity(photoId: string, activityId: string | null):
   if (!photo) return { ok: false, message: "Photo not found" };
   if (!user) return { ok: false, message: NOT_YOURS };
   if (!activityId) {
-    await db.photo.update({ where: { id: photo.id }, data: { activityId: null, activitySetById: null } });
+    // Recorded as the member's choice, so the hours of the activity it came off do not put it straight back.
+    await db.photo.update({ where: { id: photo.id }, data: { activityId: null, activitySetById: photo.tripId ? user.id : null } });
     revalidatePath("/trips", "layout");
     revalidatePath("/timeline");
     return { ok: true, where: "no activity" };
@@ -92,13 +93,16 @@ export async function bulkPutInActivity(photoIds: string[], activityId: string):
  * it just did not happen on that walk. So this clears the filing and nothing else — the trip, the date and
  * everything written on it stay exactly as they were, and the photograph goes back to sitting loose under its own
  * day on the timeline. Dragging it out was already possible, which is no use on a phone.
+ *
+ * Who took it off is kept, as a filing by hand is: otherwise the next edit of the walk — a typo in its title is
+ * enough — would find a loose photograph inside its hours and put it straight back.
  */
 export async function bulkTakeOffActivity(photoIds: string[]): Promise<{ n: number; notYours: number }> {
   const user = await requireUserOrThrow();
   const asked = z.array(z.string().min(1)).min(1).max(500).parse(photoIds);
   const list = await editableMediaIds(user, asked);
   if (!list.length) return { n: 0, notYours: asked.length - list.length };
-  const r = await db.photo.updateMany({ where: { id: { in: list }, activityId: { not: null } }, data: { activityId: null, activitySetById: null } });
+  const r = await db.photo.updateMany({ where: { id: { in: list }, activityId: { not: null } }, data: { activityId: null, activitySetById: user.id } });
   revalidatePath("/trips", "layout");
   revalidatePath("/timeline");
   return { n: r.count, notYours: asked.length - list.length };

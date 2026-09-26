@@ -27,7 +27,7 @@ export function TakeWindow({ count, elsewhere, label, confirmText, doneHref, act
   const router = useRouter();
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
-  const others = elsewhere > 0 ? ` ${elsewhere} more from that time ${elsewhere === 1 ? "is" : "are"} on another trip and ${elsewhere === 1 ? "is" : "are"} left there; search by date below to pick ${elsewhere === 1 ? "it" : "any of them"}.` : "";
+  const others = elsewhere > 0 ? ` ${elsewhere} more from that time ${elsewhere === 1 ? "is" : "are"} already filed somewhere else — another trip, or another activity by hand — and ${elsewhere === 1 ? "is" : "are"} left there; search by date below to pick ${elsewhere === 1 ? "it" : "any of them"}.` : "";
   if (count === 0) {
     return <p className="text-sm text-muted" data-testid={`${testId}-none`}>None of your other photos were taken then.{others}</p>;
   }

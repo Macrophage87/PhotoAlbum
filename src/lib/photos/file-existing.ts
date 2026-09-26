@@ -3,6 +3,7 @@ import { isAdmin } from "@/lib/auth/ownership";
 import type { ViewerUser } from "@/lib/auth/viewer";
 import { enqueue } from "@/lib/jobs/boss";
 import { QUEUES } from "@/lib/jobs/queues";
+import { refileByClock } from "@/lib/activities/reassign";
 
 /** Where somebody was putting what they sent: a trip, one of its activities, a collection, or any of them. */
 export type FilingTarget = { tripId?: string | null; activityId?: string | null; collectionId?: string | null };
@@ -59,6 +60,8 @@ export async function fileExisting(user: Pick<ViewerUser, "id" | "role">, photoI
       // Onto another trip, it comes off its old trip's activity too: an activity is a part of one trip.
       if (photo.tripId !== trip.id) {
         await db.photo.update({ where: { id: photo.id }, data: { tripId: trip.id, activityId: null, activitySetById: null } });
+        // ...and onto whichever of the new trip's activities its time falls in, as an upload into the trip would be.
+        await refileByClock(trip.id, { id: photo.id });
         if (photo.tripId) out.movedFrom = photo.trip?.title ?? null;
         await geotag(trip.id);
       }

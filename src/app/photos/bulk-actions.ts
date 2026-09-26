@@ -8,6 +8,7 @@ import { trashSchema } from "@/lib/photos/trash";
 import { enqueue } from "@/lib/jobs/boss";
 import { QUEUES } from "@/lib/jobs/queues";
 import { applyPhotoInstant, requestGeotag } from "@/lib/photos/apply-date";
+import { refileByClock } from "@/lib/activities/reassign";
 import { datePlanSchema, isEmptyPlan, planDate } from "@/lib/photos/bulk-date";
 import { offsetMinutesInZone } from "@/lib/time/local-day";
 import { editableMediaIds } from "@/lib/auth/ownership";
@@ -17,6 +18,10 @@ import type { AutoColourResult } from "@/lib/photos/auto-colour";
 
 const ids = z.array(z.string().min(1)).min(1).max(500);
 
+/**
+ * File a trip's selection on one of its activities, or on none. Either way it is a member's choice, recorded as one,
+ * so neither the activity's hours nor a corrected date undo it later.
+ */
 export async function bulkAssignActivity(photoIds: string[], activityId: string | null): Promise<void> {
   const user = await requireUserOrThrow();
   // A selection reaches across the family's photos; a bulk change touches only the part of it this member may change.
@@ -25,9 +30,10 @@ export async function bulkAssignActivity(photoIds: string[], activityId: string 
   if (activityId) {
     const activity = await db.activity.findUnique({ where: { id: activityId }, select: { tripId: true } });
     if (!activity) return;
-    await db.photo.updateMany({ where: { id: { in: list }, tripId: activity.tripId }, data: { activityId } });
+    await db.photo.updateMany({ where: { id: { in: list }, tripId: activity.tripId }, data: { activityId, activitySetById: user.id } });
   } else {
-    await db.photo.updateMany({ where: { id: { in: list } }, data: { activityId: null } });
+    // Only a photograph on a trip has activities to stay off.
+    await db.photo.updateMany({ where: { id: { in: list }, tripId: { not: null } }, data: { activityId: null, activitySetById: user.id } });
   }
   revalidatePath("/trips", "layout");
 }
@@ -37,7 +43,11 @@ export async function bulkMoveToTrip(photoIds: string[], tripId: string | null):
   const list = await editableMediaIds(user, ids.parse(photoIds));
   if (!list.length) return;
   if (tripId && !(await db.trip.findUnique({ where: { id: tripId }, select: { id: true } }))) return;
-  await db.photo.updateMany({ where: { id: { in: list } }, data: { tripId, activityId: null } });
+  // A new trip is a fresh start: whatever was chosen about the old trip's activities means nothing on this one, so
+  // each is filed by its time, as an upload into the trip would be. Those already on it stay exactly as they are.
+  const moving = (await db.photo.findMany({ where: { id: { in: list } }, select: { id: true, tripId: true } })).filter((p) => p.tripId !== tripId).map((p) => p.id);
+  await db.photo.updateMany({ where: { id: { in: moving } }, data: { tripId, activityId: null, activitySetById: null } });
+  if (tripId) await refileByClock(tripId, { id: { in: moving } });
   if (tripId) await enqueue(QUEUES.geotagPhotos, { tripId }, { singletonKey: `geotag:${tripId}`, singletonSeconds: 10, singletonNextSlot: true });
   revalidatePath("/", "layout");
 }
@@ -132,7 +142,7 @@ async function planSelection(user: { id: string; role: "ADMIN" | "MEMBER" }, pho
   const p = datePlanSchema.parse(plan);
   const photos = await db.photo.findMany({
     where: { id: { in: list }, trashedAt: null },
-    select: { id: true, tripId: true, gpsSource: true, activityId: true, activitySetById: true, takenAt: true, tzOffsetMin: true, caption: true, title: true, originalName: true, trip: { select: { timezone: true } } },
+    select: { id: true, tripId: true, gpsSource: true, uploaderId: true, activityId: true, activitySetById: true, takenAt: true, tzOffsetMin: true, caption: true, title: true, originalName: true, trip: { select: { timezone: true } } },
     orderBy: dateOrder,
   });
   const rows: (PlannedRow & { photo: (typeof photos)[number] })[] = [];

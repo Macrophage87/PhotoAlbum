@@ -1,11 +1,12 @@
 import { db } from "@/lib/db";
-import { pickActivityByTime, pickTripByDay } from "@/lib/photos/assign";
+import { pickTripByDay, whoWasThere } from "@/lib/photos/assign";
+import { activityFor } from "@/lib/activities/reassign";
 import { localDayFromOffset } from "@/lib/time/local-day";
 import { enqueue } from "@/lib/jobs/boss";
 import { QUEUES } from "@/lib/jobs/queues";
 import type { TakenAtSource } from "@/generated/prisma/enums";
 
-export type DatedPhoto = { id: string; tripId: string | null; gpsSource: string | null; activityId?: string | null; activitySetById?: string | null };
+export type DatedPhoto = { id: string; tripId: string | null; gpsSource: string | null; uploaderId: string; activityId: string | null; activitySetById: string | null };
 
 /**
  * Give one item a new instant, and let everything that hangs off a date follow it: which trip it belongs to, which
@@ -23,15 +24,13 @@ export async function applyPhotoInstant(
 ): Promise<string | null> {
   let tripId = photo.tripId;
   if (!tripId) {
-    const trips = await db.trip.findMany({ select: { id: true, startDate: true, endDate: true } });
+    // Only trips this member was on, where anybody said who was on them; a clock cannot tell two families apart.
+    const trips = await db.trip.findMany({ where: whoWasThere(photo.uploaderId), select: { id: true, startDate: true, endDate: true } });
     tripId = pickTripByDay(trips, localDayFromOffset(takenAt, tzOffsetMin))?.id ?? null;
   }
-  // An activity a member chose stays chosen: a corrected date does not move a photo out of the walk it was on.
-  let activityId: string | null = photo.activitySetById ? photo.activityId ?? null : null;
-  if (!activityId && tripId) {
-    const acts = await db.activity.findMany({ where: { tripId }, select: { id: true, startTime: true, endTime: true } });
-    activityId = pickActivityByTime(acts, takenAt)?.id ?? null;
-  }
+  // An activity a member chose stays chosen, and so does one they took it off: a corrected date does not move a
+  // photo out of the walk it was on, or back onto one somebody said it was not on.
+  const { activityId, activitySetById } = await activityFor(photo, tripId, takenAt);
   await db.photo.update({
     where: { id: photo.id },
     data: {
@@ -41,6 +40,7 @@ export async function applyPhotoInstant(
       dateSetById,
       tripId,
       activityId,
+      activitySetById,
       ...(photo.gpsSource === "TRACK" ? { lat: null, lng: null, altitude: null, gpsSource: null } : {}),
     },
   });

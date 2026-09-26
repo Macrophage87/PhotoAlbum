@@ -77,6 +77,24 @@ describe("importing a Takeout archive", () => {
     expect((await db.photo.findUniqueOrThrow({ where: { id: lake.id } })).context).toBe("Nana wrote this");
     expect((again.report as { repairs: string[] }).repairs).toEqual(["photo-with-gps.jpg: place, date, notes, Google id"]);
   });
+  it("a repaired date keeps an activity a member chose, and drops a pin a track gave the wrong time (#104)", async () => {
+    await run();
+    const gps = await db.photo.findFirstOrThrow({ where: { originalName: "photo-with-gps.jpg" } });
+    const trip = await db.trip.create({ data: { slug: "maine", title: "Maine", startDate: new Date("2025-08-01"), endDate: new Date("2025-09-30"), createdById: userId } });
+    const summit = await db.activity.create({ data: { tripId: trip.id, title: "Cadillac summit hike", startTime: new Date("2025-09-01T00:00:00Z"), endTime: new Date("2025-09-01T01:00:00Z") } });
+    // Dragged onto the hike by hand while it carried only the upload time; the sidecar's real date is outside the hike.
+    await db.photo.update({ where: { id: gps.id }, data: { tripId: trip.id, activityId: summit.id, activitySetById: userId, takenAt: new Date("2025-09-01T00:30:00Z"), takenAtSource: "UPLOAD_TIME" } });
+    await run();
+    const fixed = await db.photo.findUniqueOrThrow({ where: { id: gps.id } });
+    expect(fixed).toMatchObject({ takenAtSource: "SIDECAR", tripId: trip.id, activityId: summit.id, activitySetById: userId });
+  });
+  it("does not give back a place a member deliberately cleared (#72)", async () => {
+    await run();
+    const gps = await db.photo.findFirstOrThrow({ where: { originalName: "photo-with-gps.jpg" } });
+    await db.photo.update({ where: { id: gps.id }, data: { lat: null, lng: null, gpsSource: null, placeSetById: userId } });
+    await run();
+    expect(await db.photo.findUniqueOrThrow({ where: { id: gps.id } })).toMatchObject({ lat: null, lng: null, gpsSource: null });
+  });
   it("puts a photo that is already in the album into its Google album's collection", async () => {
     await run();
     const album = await db.collection.findFirstOrThrow({ where: { title: "Lake House" } });

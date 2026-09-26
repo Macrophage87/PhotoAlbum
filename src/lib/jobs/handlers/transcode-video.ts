@@ -7,7 +7,8 @@ import { env } from "@/lib/env";
 import { storage } from "@/lib/storage";
 import { makeRenditions } from "@/lib/images/renditions";
 import { ffmpeg, posterArgs, probe, transcodeArgs } from "@/lib/video/ffmpeg";
-import { pickActivityByTime, pickTripByDay, whoWasThere } from "@/lib/photos/assign";
+import { pickTripByDay, whoWasThere } from "@/lib/photos/assign";
+import { activityFor } from "@/lib/activities/reassign";
 import { localDayFromOffset, offsetMinutesInZone } from "@/lib/time/local-day";
 import { withHeavyLock } from "../heavy-lock";
 import type { TranscodeVideoJob } from "../queues";
@@ -51,12 +52,13 @@ export async function transcodeVideo(job: TranscodeVideoJob): Promise<void> {
       const { renditions } = await makeRenditions(poster, photo.storageKey, (key, buf) => store.putBuffer(key, buf));
       const bytes = (await stat(mp4)).size;
 
-      // Dates: a Takeout sidecar's date wins (Google's own record of when it was filmed), then the container's
-      // creation time, then the file's modified time sent by the browser, then upload time.
+      // Dates: one a member set by hand wins, then a Takeout sidecar's (Google's own record of when it was filmed),
+      // then the container's creation time, then the file's modified time sent by the browser, then upload time.
       const mtimeHeader = (photo.exif as { fileLastModified?: number } | null)?.fileLastModified;
+      const byHand = photo.takenAtSource === "MANUAL" && photo.takenAt ? photo.takenAt : null;
       const fromSidecar = photo.takenAtSource === "SIDECAR" && photo.takenAt ? photo.takenAt : null;
-      let instant = fromSidecar ?? info.createdAt ?? (mtimeHeader && Number.isFinite(mtimeHeader) ? new Date(mtimeHeader) : photo.createdAt);
-      let takenAtSource: "SIDECAR" | "EXIF_OFFSET" | "FILE_MTIME" | "UPLOAD_TIME" = fromSidecar ? "SIDECAR" : info.createdAt ? "EXIF_OFFSET" : mtimeHeader ? "FILE_MTIME" : "UPLOAD_TIME";
+      let instant = byHand ?? fromSidecar ?? info.createdAt ?? (mtimeHeader && Number.isFinite(mtimeHeader) ? new Date(mtimeHeader) : photo.createdAt);
+      let takenAtSource: "MANUAL" | "SIDECAR" | "EXIF_OFFSET" | "FILE_MTIME" | "UPLOAD_TIME" = byHand ? "MANUAL" : fromSidecar ? "SIDECAR" : info.createdAt ? "EXIF_OFFSET" : mtimeHeader ? "FILE_MTIME" : "UPLOAD_TIME";
       if (Number.isNaN(instant.getTime())) {
         instant = photo.createdAt;
         takenAtSource = "UPLOAD_TIME";
@@ -67,12 +69,10 @@ export async function transcodeVideo(job: TranscodeVideoJob): Promise<void> {
         const matches = candidates.filter((c) => pickTripByDay([c], localDayFromOffset(instant, offsetMinutesInZone(instant, c.timezone))));
         if (matches.length === 1) trip = await db.trip.findUnique({ where: { id: matches[0].id } });
       }
-      const tzOffsetMin = trip ? offsetMinutesInZone(instant, trip.timezone) : 0;
-      let activityId: string | null = null;
-      if (trip) {
-        const activities = await db.activity.findMany({ where: { tripId: trip.id, ...whoWasThere(photo.uploaderId) }, select: { id: true, startTime: true, endTime: true } });
-        activityId = pickActivityByTime(activities, instant)?.id ?? null;
-      }
+      // A hand-set date keeps the zone it was typed in.
+      const tzOffsetMin = byHand && photo.tzOffsetMin !== null ? photo.tzOffsetMin : trip ? offsetMinutesInZone(instant, trip.timezone) : 0;
+      // A clip uploaded into an activity, or filed (or taken off one) by hand, stays where the member put it.
+      const filing = await activityFor(photo, trip?.id ?? null, instant);
       const videoRenditions: VideoRenditions = { mp4: { key: mp4Key, w: out.width ?? 0, h: out.height ?? 0, bytes }, poster: { key: posterKey } };
       const contentHash = photo.contentHash ?? (await sha256File(input));
       await db.photo.update({
@@ -90,7 +90,8 @@ export async function transcodeVideo(job: TranscodeVideoJob): Promise<void> {
           takenAtSource,
           tzOffsetMin,
           tripId: trip?.id ?? null,
-          activityId,
+          activityId: filing.activityId,
+          activitySetById: filing.activitySetById,
           camera: info.videoCodec ? `${info.videoCodec}${info.hdr ? " HDR" : ""}` : null,
         },
       });

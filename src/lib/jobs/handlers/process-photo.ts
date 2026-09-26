@@ -11,7 +11,8 @@ import { makeRenditions } from "@/lib/images/renditions";
 import { applyPhotoInstant } from "@/lib/photos/apply-date";
 import { readGPano } from "@/lib/images/panorama-read";
 import { editsSchema, hasEdits, type PhotoEdits } from "@/lib/images/edits";
-import { pickActivityByTime, pickTripByDay, whoWasThere } from "@/lib/photos/assign";
+import { pickTripByDay, whoWasThere } from "@/lib/photos/assign";
+import { activityFor } from "@/lib/activities/reassign";
 import { localDayFromOffset, offsetMinutesInZone } from "@/lib/time/local-day";
 import { enqueue } from "../boss";
 import { QUEUES, type ProcessPhotoJob } from "../queues";
@@ -40,6 +41,11 @@ export function editsOf(raw: unknown): PhotoEdits | null {
 export async function processPhoto(job: ProcessPhotoJob): Promise<void> {
   const photo = await db.photo.findUnique({ where: { id: job.photoId } });
   if (!photo) return;
+  // A clip is made by the transcoder; sharp cannot read a frame of it, so the photo path would only mark it failed.
+  if (photo.kind === "VIDEO") {
+    await enqueue(QUEUES.transcodeVideo, { photoId: photo.id, tripId: job.tripId ?? photo.tripId });
+    return;
+  }
   await db.photo.update({ where: { id: photo.id }, data: { status: "PROCESSING", error: null } });
 
   try {
@@ -50,12 +56,18 @@ export async function processPhoto(job: ProcessPhotoJob): Promise<void> {
     // A 3D scan has no pixels to read or render: it is dated by the file itself, filed on a trip by that date, and
     // otherwise kept exactly as it arrived. A poster for the grids comes later, from the first member to open it.
     if (photo.kind === "SCAN") {
+      // A date somebody gave it (by hand, or Google's own record) is kept: the file's modified time is only a guess.
+      if (vouchedDate(photo)) {
+        await db.photo.update({ where: { id: photo.id }, data: { status: "READY" } });
+        await applyPhotoInstant(photo, photo.takenAt!, photo.tzOffsetMin ?? 0, photo.takenAtSource!, photo.dateSetById, { geotag: false });
+        return;
+      }
       const mtimeHeader = (photo.exif as { fileLastModified?: number } | null)?.fileLastModified;
       const s = mtimeHeader && Number.isFinite(mtimeHeader) ? null : await stat(localPath).catch(() => null);
       const takenAt = mtimeHeader && Number.isFinite(mtimeHeader) ? new Date(mtimeHeader) : s ? s.mtime : photo.createdAt;
       const takenAtSource = mtimeHeader && Number.isFinite(mtimeHeader) ? "FILE_MTIME" : s ? "FILE_MTIME" : "UPLOAD_TIME";
       await db.photo.update({ where: { id: photo.id }, data: { status: "READY", takenAt, takenAtSource, tzOffsetMin: photo.tzOffsetMin ?? 0 } });
-      await applyPhotoInstant({ id: photo.id, tripId: photo.tripId, gpsSource: photo.gpsSource, activityId: photo.activityId, activitySetById: photo.activitySetById }, takenAt, photo.tzOffsetMin ?? 0, takenAtSource, null, { geotag: false });
+      await applyPhotoInstant(photo, takenAt, photo.tzOffsetMin ?? 0, takenAtSource, null, { geotag: false });
       return;
     }
 
@@ -98,6 +110,8 @@ export async function processPhoto(job: ProcessPhotoJob): Promise<void> {
       resolveDigitizedTakenAt(exif, trip?.timezone ?? null);
     // A Takeout sidecar's date is authoritative (Google's own record of the capture time); EXIF supplies the zone.
     if (photo.takenAtSource === "SIDECAR" && photo.takenAt) resolved = sidecarResolution(photo.takenAt, resolved, exif, trip?.timezone ?? null, photo.gpsSource === "SIDECAR" ? { lat: photo.lat, lng: photo.lng } : null);
+    // A date a member set by hand is their answer to "the camera was wrong": re-reading the camera does not undo it.
+    if (photo.takenAtSource === "MANUAL" && photo.takenAt) resolved = { takenAt: photo.takenAt, tzOffsetMin: photo.tzOffsetMin ?? 0, source: "MANUAL", wallDay: localDayFromOffset(photo.takenAt, photo.tzOffsetMin ?? 0) };
     if (!trip && resolved) {
       // Only trips this member was on, where anybody said who was on them; a clock cannot tell two families apart.
       const candidates = await db.trip.findMany({ where: whoWasThere(photo.uploaderId), select: { id: true, startDate: true, endDate: true, timezone: true } });
@@ -141,17 +155,13 @@ export async function processPhoto(job: ProcessPhotoJob): Promise<void> {
     const gpano = await readGPano(localPath);
     const { width, height, renditions, panorama } = await makeRenditions(source, photo.storageKey, (key, buf) => store.putBuffer(key, buf), editsOf(photo.edits), gpano);
 
-    // 6. Activity assignment within the trip. A member who uploaded this into an activity, or put it there by hand,
-    // has already answered the question — the time window does not get to overrule them.
-    let activityId: string | null = null;
-    const chosen = photo.activitySetById ? await db.activity.findFirst({ where: { id: photo.activityId ?? "", tripId: trip?.id ?? "" }, select: { id: true } }) : null;
-    if (chosen) activityId = chosen.id;
-    else if (trip && takenAt) {
-      const activities = await db.activity.findMany({ where: { tripId: trip.id, ...whoWasThere(photo.uploaderId) }, select: { id: true, startTime: true, endTime: true } });
-      activityId = pickActivityByTime(activities, takenAt)?.id ?? null;
-    }
+    // 6. Activity assignment within the trip. A member who uploaded this into an activity, or put it there (or took
+    // it off) by hand, has already answered the question — the time window does not get to overrule them.
+    const filing = await activityFor(photo, trip?.id ?? null, takenAt);
 
-    const hasGps = exif.lat !== null && exif.lng !== null;
+    // A place a member pinned, or took away, is theirs: the file's own GPS does not come back over it.
+    const placedByHand = photo.gpsSource === "MANUAL" || photo.placeSetById !== null;
+    const hasGps = !placedByHand && exif.lat !== null && exif.lng !== null;
     // A position the album did not read out of this file: Google's sidecar, or the helper's guess at the place. Both
     // survive a re-process, since re-reading the same file will not produce a better one.
     const keptGps = (photo.gpsSource === "SIDECAR" || photo.gpsSource === "ESTIMATE") && photo.lat !== null && photo.lng !== null;
@@ -187,8 +197,8 @@ export async function processPhoto(job: ProcessPhotoJob): Promise<void> {
         panorama,
         panoProjection: gpano?.projection ?? null,
         tripId: trip?.id ?? null,
-        activityId,
-        ...(photo.activitySetById && !chosen ? { activitySetById: null } : {}),
+        activityId: filing.activityId,
+        activitySetById: filing.activitySetById,
       },
     });
 
@@ -207,6 +217,11 @@ export async function processPhoto(job: ProcessPhotoJob): Promise<void> {
     await db.photo.update({ where: { id: photo.id }, data: { status: "FAILED", error: message.slice(0, 500) } });
     throw err;
   }
+}
+
+/** A date somebody vouched for — a member by hand, or Google's sidecar — which reading the file again must not replace. */
+function vouchedDate(photo: { takenAt: Date | null; takenAtSource: string | null }): boolean {
+  return photo.takenAt !== null && (photo.takenAtSource === "MANUAL" || photo.takenAtSource === "SIDECAR");
 }
 
 /**

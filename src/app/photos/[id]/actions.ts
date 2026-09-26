@@ -13,7 +13,7 @@ import { guessDateFromTrip, guessDatesForTrip } from "@/lib/photos/date-guess-qu
 import { dateReport, type DateReport } from "@/lib/photos/date-report";
 import { enqueue } from "@/lib/jobs/boss";
 import { QUEUES } from "@/lib/jobs/queues";
-import { pickActivityByTime, whoWasThere } from "@/lib/photos/assign";
+import { activityFor } from "@/lib/activities/reassign";
 import { applyPhotoInstant } from "@/lib/photos/apply-date";
 import { offsetMinutesInZone, wallTimeWithOffsetToInstant } from "@/lib/time/local-day";
 import { storage } from "@/lib/storage";
@@ -48,11 +48,13 @@ const updateSchema = z.object({
   activityId: z.string().optional().transform((v) => v || null),
 });
 
-/** Who, if anyone, chose this activity: the member making this change, whoever chose it before, or nobody. */
-function activitySetter(activityId: string | null, chosenByHand: boolean, userId: string, photo: { activityId: string | null; activitySetById: string | null }): string | null {
-  if (!activityId) return null;
+/**
+ * Who, if anyone, chose this filing: the member making this change, whoever chose it before, or nobody. "No
+ * activity" is a choice too, when somebody picked it: the photograph then stays off whatever outing covers its time.
+ */
+function activitySetter(activityId: string | null, chosenByHand: boolean, sameTrip: boolean, userId: string, photo: { activityId: string | null; activitySetById: string | null }): string | null {
   if (chosenByHand) return userId;
-  return activityId === photo.activityId ? photo.activitySetById : null;
+  return sameTrip && activityId === photo.activityId ? photo.activitySetById : null;
 }
 
 export async function updatePhoto(id: string, fd: FormData): Promise<void> {
@@ -66,15 +68,14 @@ export async function updatePhoto(id: string, fd: FormData): Promise<void> {
   let activityId = v.activityId;
   // Whether this filing is a person's choice, which an activity's time window must then respect, or the album's own.
   // Only an actual change counts: saving a caption on a photo the album filed by time does not pin it there.
-  let chosenByHand = fd.has("activityId") && v.activityId !== null && v.activityId !== photo.activityId;
-  if (v.tripId !== photo.tripId) {
+  let chosenByHand = fd.has("activityId") && v.activityId !== photo.activityId;
+  const sameTrip = v.tripId === photo.tripId;
+  if (!sameTrip) {
     // Trip changed: re-derive the activity from the new trip's windows.
-    activityId = null;
+    activityId = (await activityFor({ ...photo, activitySetById: null }, v.tripId, photo.takenAt)).activityId;
     chosenByHand = false;
-    if (v.tripId && photo.takenAt) {
-      const acts = await db.activity.findMany({ where: { tripId: v.tripId, ...whoWasThere(photo.uploaderId) }, select: { id: true, startTime: true, endTime: true } });
-      activityId = pickActivityByTime(acts, photo.takenAt)?.id ?? null;
-    }
+  } else if (!v.tripId) {
+    chosenByHand = false;
   } else if (activityId) {
     const act = await db.activity.findFirst({ where: { id: activityId, tripId: v.tripId ?? "" }, select: { id: true } });
     if (!act) { activityId = null; chosenByHand = false; }
@@ -88,7 +89,7 @@ export async function updatePhoto(id: string, fd: FormData): Promise<void> {
     for (const cid of wanted) if (!held.has(cid)) await addToCollection(cid, [id]);
     for (const cid of held) if (!wanted.has(cid)) await removeFromCollection(cid, [id]);
   }
-  await db.photo.update({ where: { id }, data: { title, caption: v.caption, context: v.context, ...(v.context !== photo.context ? { contextUpdatedAt: new Date(), annotationError: null } : {}), tripId: v.tripId, activityId, activitySetById: activitySetter(activityId, chosenByHand, user.id, photo) } });
+  await db.photo.update({ where: { id }, data: { title, caption: v.caption, context: v.context, ...(v.context !== photo.context ? { contextUpdatedAt: new Date(), annotationError: null } : {}), tripId: v.tripId, activityId, activitySetById: activitySetter(activityId, chosenByHand, sameTrip, user.id, photo) } });
   revalidatePath(`/photos/${id}`);
   if (photo.tripId) revalidatePath(`/trips`, "layout");
 }
@@ -112,10 +113,14 @@ export async function trashPhoto(id: string, fd: FormData): Promise<void> {
 
 export async function reprocessPhoto(id: string): Promise<void> {
   await editor(id);
-  const photo = await db.photo.findUnique({ where: { id }, select: { id: true, tripId: true } });
+  const photo = await db.photo.findUnique({ where: { id }, select: { id: true, tripId: true, kind: true } });
   if (!photo) return;
   await db.photo.update({ where: { id }, data: { status: "PENDING", error: null } });
-  await enqueue(QUEUES.processPhoto, { photoId: id, tripId: photo.tripId });
+  // Each kind goes back through what made it: a clip through the transcoder, an embedded video's poster through the
+  // renditions only (its date and trip were set with the link), everything else through the full path.
+  if (photo.kind === "VIDEO") await enqueue(QUEUES.transcodeVideo, { photoId: id, tripId: photo.tripId });
+  else if (photo.kind === "EXTERNAL_VIDEO") await enqueue(QUEUES.processPhoto, { photoId: id, mode: "renditions" });
+  else await enqueue(QUEUES.processPhoto, { photoId: id, tripId: photo.tripId });
   revalidatePath(`/photos/${id}`);
 }
 
@@ -239,12 +244,17 @@ export async function confirmPlaceEstimate(id: string): Promise<PlaceResult> {
  * Forget a hand-set (or any) position; a track covering the moment may place it again. Clearing the helper's guess
  * drops what it recognised with it, but keeps the record that it was asked, so a later backfill does not put the
  * same guess back after a member has rejected it.
+ *
+ * Who cleared it is kept (a place set by hand with no position): a removal is a choice as much as a pin is, and
+ * without it a Takeout repair or a re-process could not tell "taken away" from "never had one" and would put the
+ * file's or Google's coordinates straight back — the home address on a public trip, say.
  */
 export async function clearPhotoPlace(id: string): Promise<PlaceResult> {
-  if (!(await editorOrNull(id))) return { ok: false, message: NOT_YOURS };
+  const user = await editorOrNull(id);
+  if (!user) return { ok: false, message: NOT_YOURS };
   const photo = await db.photo.findUnique({ where: { id }, select: { tripId: true } });
   if (!photo) return { ok: false, message: "Photo not found" };
-  await db.photo.update({ where: { id }, data: { lat: null, lng: null, altitude: null, gpsSource: null, placeSetById: null, placeName: null, placeEstimateName: null, placeEstimateConfidence: null, placeEstimateRadiusM: null, placeEstimatePrecision: null, placeEstimateNote: null } });
+  await db.photo.update({ where: { id }, data: { lat: null, lng: null, altitude: null, gpsSource: null, placeSetById: user.id, placeName: null, placeEstimateName: null, placeEstimateConfidence: null, placeEstimateRadiusM: null, placeEstimatePrecision: null, placeEstimateNote: null } });
   if (photo.tripId) await enqueue(QUEUES.geotagPhotos, { tripId: photo.tripId }, { singletonKey: `geotag:${photo.tripId}`, singletonSeconds: 10, singletonNextSlot: true });
   revalidatePath(`/photos/${id}`);
   revalidatePath("/trips", "layout");
@@ -293,7 +303,7 @@ export async function setDateFromNeighbours(id: string): Promise<DateGuessResult
   if (!user) return { ok: false, message: NOT_YOURS };
   const guess = await guessDateFromTrip(id);
   if (!guess) return { ok: false, message: "The other photos on this trip do not say anything about this one" };
-  const photo = await db.photo.findUnique({ where: { id }, select: { id: true, tripId: true, gpsSource: true, activityId: true, activitySetById: true } });
+  const photo = await db.photo.findUnique({ where: { id }, select: { id: true, tripId: true, gpsSource: true, uploaderId: true, activityId: true, activitySetById: true } });
   if (!photo) return { ok: false, message: "Photo not found" };
   await applyPhotoInstant(photo, guess.takenAt, guess.tzOffsetMin, "MANUAL", user.id);
   return { ok: true, takenAt: guess.takenAt.toISOString(), tzOffsetMin: guess.tzOffsetMin, source: "MANUAL", setBy: uploaderLabel(user.name, user.email) };
@@ -308,7 +318,7 @@ export async function setTripDatesFromNeighbours(tripId: string): Promise<number
   let n = 0;
   for (const g of guesses) {
     if (!mine.has(g.id)) continue;
-    const photo = await db.photo.findUnique({ where: { id: g.id }, select: { id: true, tripId: true, gpsSource: true, activityId: true, activitySetById: true } });
+    const photo = await db.photo.findUnique({ where: { id: g.id }, select: { id: true, tripId: true, gpsSource: true, uploaderId: true, activityId: true, activitySetById: true } });
     if (!photo) continue;
     await applyPhotoInstant(photo, g.guess.takenAt, g.guess.tzOffsetMin, "MANUAL", user.id);
     n += 1;
@@ -329,7 +339,7 @@ export async function applyReportedDate(id: string, iso: string): Promise<DateGu
   if (!user) return { ok: false, message: NOT_YOURS };
   const at = new Date(iso);
   if (Number.isNaN(at.getTime())) return { ok: false, message: "That is not a date" };
-  const photo = await db.photo.findUnique({ where: { id }, select: { id: true, tripId: true, gpsSource: true, activityId: true, activitySetById: true, tzOffsetMin: true, trip: { select: { timezone: true } } } });
+  const photo = await db.photo.findUnique({ where: { id }, select: { id: true, tripId: true, gpsSource: true, uploaderId: true, activityId: true, activitySetById: true, tzOffsetMin: true, trip: { select: { timezone: true } } } });
   if (!photo) return { ok: false, message: "Photo not found" };
   const offset = photo.trip ? offsetMinutesInZone(at, photo.trip.timezone) : photo.tzOffsetMin ?? 0;
   await applyPhotoInstant(photo, at, offset, "MANUAL", user.id);
