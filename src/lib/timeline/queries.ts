@@ -65,6 +65,11 @@ export async function timelineIds(filter: GalleryFilter, tripId: string | null):
   const lists: string[][] = [];
   // Who is asking decides what the words may match (see `idsMatching`); across the whole album a visitor's are
   // asked only of what sits somewhere public, so the limit is spent on what they could be shown.
+  //
+  // Known and left as it is: across the whole album the words keep their best-ranked MATCH_LIMIT (5000) matches, as
+  // on every other surface. "Somewhere public" includes a public collection, so for a visitor a match in a public
+  // collection on a trip they cannot open counts toward the limit without being shown; and a word common enough to
+  // pass the limit shows the best-ranked 5000, with a warning in the log (see `idsMatching`).
   if (filter.q) lists.push(await idsMatching(filter.q, { member: filter.member, scope: tripId ? { tripId } : filter.member ? {} : { publicOnly: true } }));
   if (filter.year) lists.push(await idsInLocalYear(tripId, filter.year));
   // One list per name, so two names means the photographs they are both on rather than either.
