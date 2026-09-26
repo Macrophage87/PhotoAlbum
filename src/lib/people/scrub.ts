@@ -61,6 +61,8 @@ const NOT_A_NAME_WORD = new Set([...KIN, ...NAME_PARTICLES, "and", "the", "of", 
 const EVERYDAY_WORDS = new Set([...EVERYDAY, ...COMMON_WORD_NAMES].filter((w) => !KIN.has(w)));
 /** Words that put a month (or an everyday word) in a date rather than a person in a sentence: "in May", "last May". */
 const DATE_BEFORE = new Set(["in", "on", "by", "since", "until", "till", "early", "late", "mid", "last", "next", "this", "of", "from", "through"]);
+/** Words that put a place, not a person, after them: "a train to Florence", "back in Georgia". */
+const PLACE_BEFORE = new Set(["to", "in", "from", "near", "at", "visiting", "visit", "around", "through", "via", "into", "toward", "towards", "outside", "downtown", "across", "of"]);
 
 /** Whether a name word is a title or kinship word ("Great-Aunt" as much as "Aunt"). */
 function isKin(word: string): boolean {
@@ -180,7 +182,18 @@ export function replaceSpans(text: string, spans: [number, number][]): string {
     out += text.slice(at, a) + (title && s !== STAND_IN.toUpperCase() ? "A Family Member" : s);
     at = b;
   }
-  return out + text.slice(at);
+  return withoutDoubledArticle(out + text.slice(at));
+}
+
+/**
+ * "a a family member", "the a family member": the article in front of a name that was taken out goes with it.
+ */
+export function withoutDoubledArticle(text: string): string {
+  return text.replace(/(?<![\p{L}\p{M}\p{N}])(a|an|the)\s+(a family member)/giu, (_m: string, art: string, stand: string) => {
+    if (stand === STAND_IN.toUpperCase()) return stand;
+    if (stand === "A Family Member") return stand;
+    return /^\p{Lu}/u.test(art) ? STAND_IN[0].toUpperCase() + STAND_IN.slice(1) : STAND_IN;
+  });
 }
 
 /** How names are compared once hashed: accents off, lower case, periods off, hyphens as spaces, one apostrophe. */
@@ -192,7 +205,15 @@ export function normalizeName(s: string): string {
  * Where a text is. `tagged`: on one of the person's own photographs (tagged, or once tagged), or a text about one.
  * `others`: the names of the other people tagged on that photograph, whose words are theirs there, not this person's.
  */
-export type Where = { tagged?: boolean; others?: string[] };
+export type Where = {
+  tagged?: boolean;
+  others?: string[];
+  /**
+   * Away from their photographs, only their full names — never a first name, however unusual. For somebody who is
+   * merely not to be named (not forgotten), whose first name is as likely a place ("Florence", "Georgia").
+   */
+  fullOnly?: boolean;
+};
 
 export type NameMatcher = {
   /** Prose with every mention replaced by "a family member"; anything that is not a string comes back as it was. */
@@ -209,10 +230,11 @@ export type NameMatcher = {
   /** Spellings safe to look for anywhere in the album, for a database pre-filter; empty when there are none. */
   albumForms: string[];
   /**
-   * What is remembered of them once they are forgotten (hashed, see tombstone.ts): their full names, and short names
-   * that could be nobody else's. Never a short name that is also a word.
+   * What is remembered of them once they are forgotten (hashed, see tombstone.ts): their full names, and a one-word
+   * name that is all of their name — never a first name taken from a full one. A full name of everyday words, and
+   * every one-word name, only as a name is written: "Sage", not "sage green".
    */
-  tombstoneForms: string[];
+  tombstoneForms: { form: string; capitalizedOnly: boolean }[];
 };
 
 type Short = { form: string; word: string; everyday: boolean };
@@ -242,7 +264,9 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
   const safe: Short[] = []; // as written, anywhere
   const whole: string[] = []; // a safe short name that is all of their name ("Sam", "Grandma Ruth"'s "Ruth")
   const taggedOnly: Short[] = []; // as written, their photographs only
-  const keywords = new Set<string>(); // any case, in keywords on their photographs
+  const strong = new Set<string>(); // any case, in keywords on their photographs: a first name that is no word
+  const weak = new Set<string>(); // in keywords only as the whole tag, or beside another word of the name
+  const oneWord: string[] = []; // a one-word name that is all of their name, for the tombstone
   const cjkAlbum: string[] = [];
   const cjkTagged: string[] = [];
   const capitalized = (w: string) => w.charAt(0).toUpperCase() + w.slice(1);
@@ -257,8 +281,14 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
   };
   for (const n of list) {
     const { name, nicknames } = splitNickname(n.trim().replace(/\s+/g, " "));
-    for (const s of [name, ...nicknames]) {
+    for (const [ni, s] of [name, ...nicknames].entries()) {
       if (!s || !/[\p{L}\p{N}]/u.test(s)) continue;
+      // "Nan" in "Ann (Nan) Smith": a kinship word, but what the family calls her — on her own photographs.
+      if (ni > 0 && !s.includes(" ") && isKin(s) && letters(s) >= 2) {
+        taggedOnly.push({ form: capitalized(s), word: bare(s), everyday: false });
+        weak.add(s);
+        continue;
+      }
       if (CJK.test(s)) {
         const compact = s.replace(/\s+/g, "");
         // Several parts, or three characters that are not only kana, can only be a name; "さくら" and "春花" are
@@ -273,7 +303,17 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
       let k = 0;
       while (k < tokens.length - 1 && isKin(tokens[k])) k++;
       const core = tokens.slice(k);
-      for (const w of core) if (letters(w) >= 2 && !NOT_A_NAME_WORD.has(bare(w))) for (const part of [w, ...w.split(/[-‐]/)]) if (letters(part) >= 2 && !isKin(part)) keywords.add(part);
+      if (ni === 0 && tokens.length === 1) oneWord.push(s);
+      // In keywords, a first name that is no everyday word counts on its own; a surname, a middle name or an
+      // everyday word ("grace", "byron bay", "wood fire") only as the whole tag or beside another word of the name.
+      core.forEach((w, i) => {
+        if (letters(w) < 2 || NOT_A_NAME_WORD.has(bare(w))) return;
+        for (const part of [w, ...w.split(/[-‐]/)]) {
+          if (letters(part) < 2 || isKin(part)) continue;
+          if (i === 0 && !EVERYDAY_WORDS.has(bare(part)) && !NOT_SAFE.has(bare(part))) strong.add(part);
+          else weak.add(part);
+        }
+      });
       const fulls = [...new Set([tokens.length >= 2 ? s : null, core.length >= 2 ? core.join(" ") : null].filter((f): f is string => Boolean(f)))];
       for (const f of fulls) {
         const ws = f.split(" ");
@@ -291,6 +331,7 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
   const longAnyTest = rx(bounded(variants(longAny)), "iu");
   const longCapRx = rx(bounded(withCaps(longCap)), "gu");
   const wholeTest = rx(bounded(variants(whole)), "iu");
+  const wholeRx = rx(bounded(variants(whole)), "giu");
   const cjkBodies = (forms: string[]) => [...new Set(forms)].sort((a, b) => b.length - a.length).map(cjkBody).join("|");
   const cjkAlbumRx = rx(cjkBodies(cjkAlbum), "gu");
   const cjkAllRx = rx(cjkBodies([...cjkAlbum, ...cjkTagged]), "gu");
@@ -304,7 +345,7 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
   const shortsFor = (where: Where) => {
     const there = new Set((where.others ?? []).flatMap((o) => wordsOf(splitNickname(o).name).map(bare)));
     const extra = where.tagged ? taggedOnly.filter((x) => !there.has(x.word)) : [];
-    const all = [...safe, ...extra];
+    const all = [...(where.tagged || !where.fullOnly ? safe : []), ...extra];
     const byForm = new Map<string, Short>([...all.map((x) => [x.form, x] as const)]);
     return { rx: rx(bounded(withCaps(all.map((x) => x.form))), "gu"), byForm, there, tagged: new Set(extra.map((x) => x.word)) };
   };
@@ -340,8 +381,12 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
         const short = shorts.byForm.get(m) ?? [...shorts.byForm.values()].find((x) => bare(x.form) === bare(m)) ?? safeByForm.get(m);
         // Part of somebody else's name the album knows: "Ada Lovelace", "Mary Grace".
         if ((prev && otherWords.has(bare(prev))) || (next && otherWords.has(bare(next)))) return m;
-        // A month or an everyday word in a date, on their own photographs: "in May", "May 5", "last May".
-        if (short?.everyday && shorts.tagged.has(short.word) && ((prev && DATE_BEFORE.has(bare(prev))) || /^[\s,]*\d/u.test(after))) return m;
+        // A month or an everyday word in a date, on their own photographs: "in May", "May 5", "last May" — but "by
+        // May's side" is her.
+        const possessive = /^['’]s\b/u.test(after);
+        if (short?.everyday && shorts.tagged.has(short.word) && ((prev && DATE_BEFORE.has(bare(prev)) && !(bare(prev) === "by" && possessive)) || /^[\s,]*\d/u.test(after))) return m;
+        // Away from their photographs a first name after "to", "in", "near" is as likely a place: "to Florence".
+        if (!where.tagged && prev && PLACE_BEFORE.has(bare(prev)) && !possessive) return m;
         const caps = isUpperWord(m);
         if (!title && !caps) {
           // "Ann Jones" is somebody else...
@@ -353,15 +398,18 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
         return standInFor(m, before, after, title);
       });
     }
-    return out;
+    return out === text ? out : withoutDoubledArticle(out);
   };
 
-  /** Any word of their name, in any case, as keywords have it; not a word somebody else tagged there shares. */
-  const keywordRx = (where: Where) => {
-    if (!where.tagged) return null;
+  /** Name words in keywords, on their own photographs; not a word somebody else tagged there shares. */
+  const keywordsFor = (where: Where) => {
+    if (!where.tagged) return { strongRx: null, pairRx: null, weakWords: [] as string[] };
     const there = new Set((where.others ?? []).flatMap((o) => wordsOf(splitNickname(o).name).map(bare)));
-    const words = [...keywords].filter((w) => !there.has(bare(w)));
-    return rx(bounded(variants(words)), "giu");
+    const s = [...strong].filter((w) => !there.has(bare(w)));
+    const all = [...new Set([...strong, ...weak])].filter((w) => !there.has(bare(w)));
+    // Two words of the name side by side ("byron ada", "grace hopper") are her, whatever each is on its own.
+    const pairs = all.flatMap((a) => all.filter((b) => b !== a).map((b) => `${a} ${b}`));
+    return { strongRx: rx(bounded(variants(s)), "giu"), pairRx: rx(bounded(variants(pairs)), "giu"), weakWords: all.map((w) => bare(w)) };
   };
 
   const guard = <T,>(text: T, f: (t: string) => string): T => {
@@ -375,17 +423,25 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
   const scrub = <T,>(text: T, where: Where = {}): T => guard(text, (t) => scrubText(t, where));
   const scrubKeywords = <T,>(text: T, where: Where = {}): T =>
     guard(text, (t) => {
-      const out = scrubText(t, where);
-      const k = keywordRx(where);
-      return k ? out.replace(k, (m: string, offset: number, w: string) => standIn(m, w.slice(0, offset), w.slice(offset + m.length))) : out;
+      const put = (m: string, offset: number, w: string) => standIn(m, w.slice(0, offset), w.slice(offset + m.length));
+      let out = scrubText(t, where);
+      const k = keywordsFor(where);
+      if (k.pairRx) out = out.replace(k.pairRx, put);
+      if (k.strongRx) out = out.replace(k.strongRx, put);
+      // A one-word name that is all of theirs is them in lower case too, anywhere: "ximena fishing".
+      if (wholeRx) out = out.replace(wholeRx, put);
+      return out === t ? out : withoutDoubledArticle(out);
     });
   const mentions = (text: unknown, where: Where = {}) => typeof text === "string" && text !== "" && scrub(text, where) !== text;
   const namesTag = (tag: unknown, where: Where = {}) => {
     if (typeof tag !== "string" || !tag.trim()) return false;
     try {
       const t = tag.trim().toLowerCase().replace(/’/g, "'");
-      const k = keywordRx(where);
-      if (k && new RegExp(k.source, "iu").test(tag)) return true;
+      const k = keywordsFor(where);
+      if (k.strongRx && new RegExp(k.strongRx.source, "iu").test(tag)) return true;
+      if (k.pairRx && new RegExp(k.pairRx.source, "iu").test(tag)) return true;
+      const bareTag = bare(t.replace(/'s$/u, ""));
+      if (k.weakWords.includes(bareTag)) return true;
       if ((where.tagged ? [...cjkAlbum, ...cjkTagged] : cjkAlbum).some((f) => t.replace(/\s+/g, "").includes(f.replace(/\s+/g, "")))) return true;
       if (safe.some((x) => t === x.form.toLowerCase() || t === `${x.form.toLowerCase()}'s`)) return true;
       // A safe one-word name is all of their name: a tag containing it ("sam's bike") is about them.
@@ -402,7 +458,12 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
     mentions,
     namesTag,
     albumForms: [...new Set([...albumForms, ...cjkAlbum])],
-    tombstoneForms: [...new Set([...longAny, ...longCap, ...safe.map((x) => x.form), ...cjkAlbum])],
+    tombstoneForms: [
+      ...longAny.map((form) => ({ form, capitalizedOnly: false })),
+      ...longCap.map((form) => ({ form, capitalizedOnly: true })),
+      ...oneWord.map((form) => ({ form, capitalizedOnly: true })),
+      ...cjkAlbum.map((form) => ({ form, capitalizedOnly: false })),
+    ],
   };
 }
 

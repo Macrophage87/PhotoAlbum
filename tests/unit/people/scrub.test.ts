@@ -110,12 +110,26 @@ describe("keywords", () => {
   it("on their own photographs, count every word of their name in any case, surname included", () => {
     const m = nameMatcher(["Ada Byron"]);
     const here = { tagged: true };
-    expect(["ada's birthday", "grandma ada", "byron cake", "lake", "adapter"].filter((t) => !m.namesTag(t, here))).toEqual(["lake", "adapter"]);
-    expect(m.scrubKeywords("ada birthday cake, byron family", here)).toBe("A family member birthday cake, a family member family");
+    // A first name that is no word counts on its own; a surname only as the whole tag, or beside the first name.
+    expect(["ada's birthday", "grandma ada", "byron", "byron ada", "byron bay", "byron cake", "lake", "adapter"].filter((t) => !m.namesTag(t, here))).toEqual(["byron bay", "byron cake", "lake", "adapter"]);
+    expect(m.scrubKeywords("ada birthday cake, byron bay, byron ada", here)).toBe("A family member birthday cake, byron bay, a family member");
     // Elsewhere only the whole name, or a safe name exactly.
     expect(["ada's birthday", "ada byron", "ada", "lake"].filter((t) => !m.namesTag(t))).toEqual(["ada's birthday", "lake"]);
     // Not a word somebody else tagged there shares.
     expect(m.namesTag("ada cake", { tagged: true, others: ["Ada Lovelace"] })).toBe(false);
+  });
+
+  it("leave everyday words, months and surnames alone unless they are plainly the name", () => {
+    const here = { tagged: true };
+    const grace = nameMatcher(["Grace Hopper"]);
+    expect(["saying grace", "grace", "grace's hat", "grace hopper", "lake"].filter((t) => !grace.namesTag(t, here))).toEqual(["saying grace", "grace's hat", "lake"]);
+    const may = nameMatcher(["May Wood"]);
+    expect(["may blossoms", "wood fire", "may", "may's", "wood may", "lake"].filter((t) => !may.namesTag(t, here))).toEqual(["may blossoms", "wood fire", "lake"]);
+    expect(may.scrubKeywords("may blossoms, wood fire, may wood picnic", here)).toBe("may blossoms, wood fire, a family member picnic");
+  });
+
+  it("take a one-word name that is all of theirs out of a search summary anywhere, in any case", () => {
+    expect(nameMatcher(["Ximena"]).scrubKeywords("ximena fishing at dusk")).toBe("A family member fishing at dusk");
   });
 
   it("drop a tag containing a safe one-word name anywhere, but never a common word elsewhere", () => {
@@ -123,6 +137,35 @@ describe("keywords", () => {
     const rose = nameMatcher(["Rose"]);
     expect(["rose", "rose garden"].filter((t) => !rose.namesTag(t))).toEqual(["rose", "rose garden"]);
     expect(nameMatcher(["Sam"]).albumForms).toContain("Sam");
+  });
+});
+
+describe("where a first name is also a place", () => {
+  it("is not taken after 'to', 'in' or 'from' away from their photographs", () => {
+    expect(scrub("Florence Adams", "Train to Florence to see the Duomo; Florence Adams waved")).toBe("Train to Florence to see the Duomo; a family member waved");
+    expect(scrub("Florence Adams", "With Florence at the Duomo")).toBe("With a family member at the Duomo");
+  });
+
+  it("is never taken away from their photographs for somebody merely not to be named", () => {
+    const m = nameMatcher(["Florence Adams"]);
+    expect(m.scrub("Florence and Tuscany 2019; Florence waved", { fullOnly: true })).toBe("Florence and Tuscany 2019; Florence waved");
+    expect(m.scrub("Florence Adams waved", { fullOnly: true })).toBe("A family member waved");
+    expect(m.scrub("Florence waved", { tagged: true, fullOnly: true })).toBe("A family member waved");
+  });
+});
+
+describe("small words around the stand-in", () => {
+  it("takes an article in front of the name with it", () => {
+    expect(scrub("Ada Byron", "He met the Ada Byron everybody knew. A Ada Byron fan.")).toBe("He met a family member everybody knew. A family member fan.");
+  });
+
+  it("keeps a kinship nickname as hers on her own photographs", () => {
+    expect(scrub("Ann (Nan) Smith", "Nan swam", [], true)).toBe("A family member swam");
+    expect(scrub("Ann (Nan) Smith", "Nan swam")).toBe("Nan swam");
+  });
+
+  it("reads 'by May's side' as her, and 'by May' as a date", () => {
+    expect(scrub("May Smith", "By May's side all day; done by May", [], true)).toBe("By a family member's side all day; done by May");
   });
 });
 
