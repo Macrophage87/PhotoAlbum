@@ -27,6 +27,8 @@ export type FoldablePhoto = {
   tripId: string | null;
   activityId: string | null;
   createdAt: Date;
+  /** Processing state, where it is known; a finished copy is kept before one that is not. */
+  status?: string;
 };
 
 /** A date the album guessed rather than read off the photograph; a copy that knows better is worth taking. */
@@ -91,9 +93,14 @@ export function planFold(keeper: FoldablePhoto, copy: FoldablePhoto): FoldPlan {
   return { data, filled };
 }
 
-/** Which of a group of identical files to keep: the one that has been in the album longest. */
-export function keeperOf<T extends { createdAt: Date; id: string }>(group: T[]): T {
-  return [...group].sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.id.localeCompare(b.id))[0];
+/**
+ * Which of a group of identical files to keep: a finished one before any whose processing failed or has not run
+ * (the bytes are the same, but only a finished one has pictures to show, and it takes over the copies' covers),
+ * and among those the one that has been in the album longest.
+ */
+export function keeperOf<T extends { createdAt: Date; id: string; status?: string }>(group: T[]): T {
+  const finished = (p: T) => (p.status === undefined || p.status === "READY" ? 0 : 1);
+  return [...group].sort((a, b) => finished(a) - finished(b) || a.createdAt.getTime() - b.createdAt.getTime() || a.id.localeCompare(b.id))[0];
 }
 
 export function describeFold(count: number, filled: string[]): string {

@@ -46,7 +46,9 @@ export function DuplicatesPanel({ rows, total }: { rows: DuplicateRow[]; total: 
           onClick={() =>
             start(async () => {
               const r = await foldDuplicatePhotos();
-              setDone(`${r.folded} ${r.folded === 1 ? "copy" : "copies"} folded into ${r.groups} ${r.groups === 1 ? "photograph" : "photographs"}.`);
+              // A cover chosen by hand that could not move to the photograph kept is named, not changed silently.
+              const released = r.coversReleased.length ? ` ${r.coversReleased.join(", ")} led with a copy the kept photo is not on, so ${r.coversReleased.length === 1 ? "it chooses its own cover" : "they choose their own covers"} again.` : "";
+              setDone(`${r.folded} ${r.folded === 1 ? "copy" : "copies"} folded into ${r.groups} ${r.groups === 1 ? "photograph" : "photographs"}.${released}`);
               router.refresh();
             })
           }
