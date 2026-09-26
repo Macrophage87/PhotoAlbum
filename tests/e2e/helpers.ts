@@ -1,7 +1,7 @@
 import "dotenv/config";
 import { Client } from "pg";
 import { createHash, randomBytes } from "node:crypto";
-import type { BrowserContext } from "@playwright/test";
+import type { BrowserContext, Page } from "@playwright/test";
 
 const dbUrl = process.env.E2E_DATABASE_URL ?? process.env.DATABASE_URL?.replace(/\/([^/?]+)(\?.*)?$/, "/$1_e2e$2");
 
@@ -31,22 +31,39 @@ export async function magicLinkFor(email: string): Promise<string> {
   return `/auth/verify?token=${token}`;
 }
 
-/** Mint a pending invite, as an admin's "Invite" does, so an address that is not yet a member may be given an account. */
+/**
+ * Mint a pending invite, as an admin's "Invite" does, so an address that is not yet a member may be given an
+ * account. Nothing happens for an address that already is one, so a test may call it whatever ran before.
+ */
 export async function inviteFor(email: string, role: "ADMIN" | "MEMBER" = "MEMBER") {
   const hash = createHash("sha256").update(randomBytes(32)).digest("hex");
   await withDb((c) =>
     c.query(
-      'INSERT INTO "Invite" (id, email, "tokenHash", role, "invitedById", "expiresAt") SELECT $1, $2, $3, $4::"Role", id, now() + interval \'14 days\' FROM "User" WHERE role = \'ADMIN\' LIMIT 1',
+      'INSERT INTO "Invite" (id, email, "tokenHash", role, "invitedById", "expiresAt") SELECT $1, $2, $3, $4::"Role", id, now() + interval \'14 days\' FROM "User" WHERE role = \'ADMIN\' AND NOT EXISTS (SELECT 1 FROM "User" WHERE email = $2) LIMIT 1',
       [randomBytes(12).toString("hex"), email.toLowerCase(), hash, role],
     ),
   );
+}
+
+/**
+ * Press the link page's "Sign in" button once the page has settled, so a click made while React is still hydrating
+ * the form is not lost; press again only if the page is still where it was.
+ */
+export async function pressSignIn(page: Page) {
+  const at = page.url();
+  await page.waitForLoadState("networkidle");
+  const button = page.getByRole("button", { name: "Sign in", exact: true });
+  for (let i = 0; i < 3 && page.url() === at; i++) {
+    await button.click({ timeout: 5_000 }).catch(() => {});
+    await page.waitForURL((u) => u.toString() !== at, { timeout: 15_000 }).catch(() => {});
+  }
 }
 
 /** Open the emailed link and press its "Sign in" button: opening the link alone does not use it up. */
 export async function signIn(context: BrowserContext, email: string) {
   const page = await context.newPage();
   await page.goto(await magicLinkFor(email));
-  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await pressSignIn(page);
   await page.waitForURL("**/");
   await page.close();
 }
