@@ -8,7 +8,7 @@ import type { UploadByteLimits } from "@/lib/media/limits";
  * never had a trip to arrive through: a box of scans, a picture somebody emailed. They go into the collection as
  * they arrive, and onto a trip too if their dates match one, since a collection is a label rather than a place.
  */
-export function CollectionUploader({ collectionId, slug, maxClipSeconds, maxBytes, annotationActive }: { collectionId: string; slug: string; maxClipSeconds: number; maxBytes?: UploadByteLimits; annotationActive: boolean }) {
+export function CollectionUploader({ collectionId, slug, maxClipSeconds, maxBytes, annotationActive }: { collectionId: string; slug: string; maxClipSeconds: number; maxBytes: UploadByteLimits; annotationActive: boolean }) {
   return (
     <InlineUploader
       target={{ collectionId }}

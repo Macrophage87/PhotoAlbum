@@ -25,7 +25,7 @@ export function InlineUploader({ target, openLabel, note, testId, maxClipSeconds
   /** `${testId}-open` for the button, `testId` for the open panel. */
   testId: string;
   maxClipSeconds: number;
-  maxBytes?: UploadByteLimits;
+  maxBytes: UploadByteLimits;
   annotationActive: boolean;
   /** The picker for photographs already in the album. */
   pickHref?: string;

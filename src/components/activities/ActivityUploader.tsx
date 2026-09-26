@@ -11,7 +11,7 @@ import type { UploadByteLimits } from "@/lib/media/limits";
  * lost its date on the way. Adding them here says plainly which activity these belong to, and the album keeps them
  * there even when their dates say otherwise.
  */
-export function ActivityUploader({ activityId, maxClipSeconds, maxBytes, annotationActive, pickHref, takeAll }: { activityId: string; maxClipSeconds: number; maxBytes?: UploadByteLimits; annotationActive: boolean; pickHref: string; takeAll?: ReactNode }) {
+export function ActivityUploader({ activityId, maxClipSeconds, maxBytes, annotationActive, pickHref, takeAll }: { activityId: string; maxClipSeconds: number; maxBytes: UploadByteLimits; annotationActive: boolean; pickHref: string; takeAll?: ReactNode }) {
   return (
     <InlineUploader
       target={{ activityId }}

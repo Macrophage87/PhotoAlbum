@@ -7,7 +7,7 @@ import { Uploader } from "@/components/photos/Uploader";
 import { YouTubeAddForm } from "@/components/videos/YouTubeAddForm";
 import type { UploadByteLimits } from "@/lib/media/limits";
 
-export function UploadPanel({ initialTrip, initialCollection, maxClipSeconds, maxBytes, annotationActive }: { initialTrip?: { id: string; title: string } | null; initialCollection?: { id: string; title: string } | null; maxClipSeconds: number; maxBytes?: UploadByteLimits; annotationActive: boolean }) {
+export function UploadPanel({ initialTrip, initialCollection, maxClipSeconds, maxBytes, annotationActive }: { initialTrip?: { id: string; title: string } | null; initialCollection?: { id: string; title: string } | null; maxClipSeconds: number; maxBytes: UploadByteLimits; annotationActive: boolean }) {
   const [trip, setTrip] = useState<Container | null>(initialTrip ?? null);
   const [collection, setCollection] = useState<Container | null>(initialCollection ?? null);
   const [activity, setActivity] = useState<Container | null>(null);
@@ -38,7 +38,7 @@ export function UploadPanel({ initialTrip, initialCollection, maxClipSeconds, ma
       </div>
       {/* Not started afresh when the choice above changes: a batch already going keeps the place it was sent to, and
           only files added after the change go to the new one. */}
-      <Uploader tripId={trip?.id} activityId={activity?.id} collectionId={collection?.id} maxClipSeconds={maxClipSeconds} maxBytes={maxBytes} annotationActive={annotationActive} />
+      <Uploader scope="upload" tripId={trip?.id} activityId={activity?.id} collectionId={collection?.id} maxClipSeconds={maxClipSeconds} maxBytes={maxBytes} annotationActive={annotationActive} />
       <YouTubeAddForm tripId={trip?.id} defaultDate={new Date().toISOString().slice(0, 10)} />
     </div>
   );

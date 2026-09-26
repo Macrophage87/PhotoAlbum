@@ -1,44 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { usePathname } from "next/navigation";
 import Link from "next/link";
 import { Button, buttonClasses } from "@/components/ui";
-import { albumTakes, isScanPick, isVideoPick, mimeOfPicked, refusalFor } from "@/lib/media/picker";
+import { albumTakes, isScanPick, isVideoPick, mimeAsSent, refusalFor } from "@/lib/media/picker";
 import { maxUploadBytes, tooBigMessage, type UploadByteLimits } from "@/lib/media/limits";
-import { backoffMs, isRetryable, MAX_ATTEMPTS, MAX_BATCH, overCapMessage, progressLine, STATUS_NOTICE_AFTER, statusRetryMs } from "@/lib/media/upload-retry";
-import { AttemptError, attemptUpload, statusAfterUpload, type FiledAnswer, type UploadTarget } from "@/lib/media/upload-one";
-
-type Item = {
-  localId: string;
-  file: File;
-  progress: number; // 0..1 upload progress
-  photoId?: string;
-  status: "queued" | "uploading" | "processing" | "ready" | "failed";
-  error?: string;
-  /** How many goes this file has had, so the queue knows when to stop trying and the tile can say it is retrying. */
-  attempts?: number;
-  /** Set while waiting out a dropped connection before the next go. */
-  retrying?: boolean;
-  /** The album already had this exact file, so nothing was added and the tile points at the one it has. */
-  duplicate?: boolean;
-  /** For a duplicate sent to a particular trip, activity or collection: whether the one the album has was put there. */
-  filed?: FiledAnswer;
-  /** Whose it is, when it is somebody else's and so was left where it was. */
-  owner?: string | null;
-  thumbUrl?: string | null;
-  trip?: { slug: string; title: string } | null;
-  /** Where it was sent and whether it may go to the AI helper, fixed when it was added: choosing another trip part-way
-   * through a batch changes where the files added after that go, not the ones already on their way. */
-  target: UploadTarget;
-  optOut: boolean;
-};
-
-const CONCURRENCY = 3;
-
-/** How many to ask about at once, so a long batch never builds an address longer than something in front will take. */
-const MAX_STATUS_IDS = 60;
-
-const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+import { MAX_BATCH, overCapMessage, progressLine } from "@/lib/media/upload-retry";
+import { inPlay, MAX_STATUS_IDS, useUploadQueue, type UploadItem } from "./UploadQueue";
 
 /**
  * Read a clip's duration in the browser so an over-long file is refused before any bytes are sent.
@@ -86,231 +55,72 @@ export function tooLongMessage(durationS: number, limit: number): string {
   return `This video is ${Math.round(durationS)} seconds long; clips uploaded here are limited to ${limit} seconds. Upload longer videos to YouTube as Unlisted and add the link instead.`;
 }
 
-export function Uploader({ tripId, activityId, collectionId, onDone, maxClipSeconds = 90, maxBytes, annotationActive = false }: { tripId?: string; /** Put what is uploaded straight into this activity, and on its trip. */ activityId?: string; /** Put what is uploaded into this collection as well. */ collectionId?: string; onDone?: (photoIds: string[]) => void; maxClipSeconds?: number; /** The server's size limits, so an oversized file is refused before any of it is sent. */ maxBytes?: UploadByteLimits; /** Whether the AI helper is on, so the opt-out checkbox is worth showing. */ annotationActive?: boolean }) {
+export function Uploader({ tripId, activityId, collectionId, scope, onDone, maxClipSeconds = 90, maxBytes, annotationActive = false }: { tripId?: string; /** Put what is uploaded straight into this activity, and on its trip. */ activityId?: string; /** Put what is uploaded into this collection as well. */ collectionId?: string; /** Which batch this uploader shows; by default the place it sends to. */ scope?: string; onDone?: (photoIds: string[]) => void; maxClipSeconds?: number; /** The server's size limits, so an oversized file is refused before any of it is sent. */ maxBytes: UploadByteLimits; /** Whether the AI helper is on, so the opt-out checkbox is worth showing. */ annotationActive?: boolean }) {
+  // The files themselves go up through the album-wide queue (UploadQueue), which carries on while the member moves
+  // about the album; this is a view onto the ones added here.
+  const queue = useUploadQueue();
+  const here = scope ?? `to:${activityId ?? ""}:${collectionId ?? ""}:${tripId ?? ""}`;
+  const pathname = usePathname();
+  const items = queue.items.filter((i) => i.scope === here);
+  const statusTrouble = queue.statusTrouble;
   const [optOut, setOptOut] = useState(false);
-  const optOutRef = useRef(false);
-  const [items, setItems] = useState<Item[]>([]);
   /** Files turned away before a byte was sent. They never become tiles: nothing of them ever left the device. */
   const [refusals, setRefusals] = useState<{ key: string; name: string; why: string }[]>([]);
   const [dragging, setDragging] = useState(false);
   // Two ways in, because one chooser cannot serve both. See the inputs below.
   const inputRef = useRef<HTMLInputElement>(null);
   const libraryRef = useRef<HTMLInputElement>(null);
-  const active = useRef(0);
-  const queue = useRef<Item[]>([]);
-  /** How to stop each upload that is in the air, so leaving the page does not leave requests running. */
-  const inFlight = useRef(new Map<string, () => void>());
 
   /** The list as it is now, for code that runs outside a render (adding files) and must not read a stale copy. */
-  const itemsRef = useRef<Item[]>([]);
+  const itemsRef = useRef<UploadItem[]>([]);
   useEffect(() => {
-    itemsRef.current = items;
-  }, [items]);
-  /** Set when answers about processing have stopped coming back for a while; says so without failing anything. */
-  const [statusTrouble, setStatusTrouble] = useState<null | "offline" | "signedout">(null);
-
-  const update = useCallback((localId: string, patch: Partial<Item>) => {
-    setItems((prev) => prev.map((it) => (it.localId === localId ? { ...it, ...patch } : it)));
-  }, []);
-
-  const pumpRef = useRef<() => void>(() => {});
+    itemsRef.current = queue.items;
+  }, [queue.items]);
   const targetRef = useRef({ tripId, activityId, collectionId });
   useEffect(() => {
     targetRef.current = { tripId, activityId, collectionId };
   }, [tripId, activityId, collectionId]);
+  const optOutRef = useRef(false);
   useEffect(() => {
     optOutRef.current = optOut;
   }, [optOut]);
-  // The queue runner lives in a ref so async completions can re-enter it without stale closures.
-  useEffect(() => {
-    /** Cleared when the uploader goes away, so nothing carries on sending from a page nobody can see. */
-    let alive = true;
-    /**
-     * Send one file, waiting out anything that was the connection's fault rather than the album's. Whatever
-     * happens, this returns — the slot it holds is given back in the caller's `finally`, and a slot that is never
-     * given back is what used to stop a long batch in its tracks.
-     */
-    const send = async (item: Item) => {
-      for (let attempt = 1; attempt <= MAX_ATTEMPTS && alive; attempt += 1) {
-        update(item.localId, { status: "uploading", attempts: attempt, retrying: false, error: undefined });
-        try {
-          const answer = await attemptUpload(
-            item.file,
-            item.target,
-            item.optOut,
-            (p) => update(item.localId, { progress: p }),
-            (abort) => inFlight.current.set(item.localId, abort),
-            attempt,
-          );
-          const { photoId, duplicate, filed, owner } = answer;
-          // The album already holds these bytes: nothing was added, and the tile points at the one it has rather
-          // than pretending a second copy went up. Only one that is finished is ready; one still being processed (or
-          // this member's own, whose first answer was lost on the way back) is watched like any other.
-          update(item.localId, { photoId, status: statusAfterUpload(answer), progress: 1, retrying: false, duplicate, filed, owner });
-          return;
-        } catch (err) {
-          const failure = err instanceof AttemptError ? err.failure : { kind: "network" as const, message: err instanceof Error ? err.message : "Upload failed" };
-          const last = attempt >= MAX_ATTEMPTS;
-          if (!isRetryable(failure) || last) {
-            const message = isRetryable(failure) ? `${failure.message} Tried ${MAX_ATTEMPTS} times.` : failure.message;
-            update(item.localId, { status: "failed", error: message, retrying: false, progress: 0 });
-            return;
-          }
-          update(item.localId, { status: "queued", retrying: true, progress: 0, error: failure.message });
-          await wait(backoffMs(attempt));
-        } finally {
-          inFlight.current.delete(item.localId);
-        }
-      }
-    };
 
-    pumpRef.current = () => {
-      while (alive && active.current < CONCURRENCY && queue.current.length) {
-        const item = queue.current.shift()!;
-        active.current += 1;
-        void send(item).finally(() => {
-          active.current -= 1;
-          pumpRef.current();
-        });
+  const addFiles = async (files: FileList | File[]) => {
+    const fresh: UploadItem[] = [];
+    const refused: { key: string; name: string; why: string }[] = [];
+    for (const file of Array.from(files)) {
+      const key = `${file.name}-${file.size}-${file.lastModified}-${Math.random().toString(36).slice(2)}`;
+      // Nothing narrows the chooser any more, so say plainly what was left behind rather than dropping it in silence.
+      if (!albumTakes(file)) {
+        refused.push({ key, name: file.name, why: refusalFor(file) });
+        continue;
       }
-    };
-    const sending = inFlight.current;
-    return () => {
-      // Leaving stops what is in the air and what is waiting, rather than letting it go on unseen.
-      alive = false;
-      queue.current = [];
-      for (const abort of sending.values()) abort();
-      sending.clear();
-    };
-  }, [update]);
-
-  const addFiles = useCallback(
-    async (files: FileList | File[]) => {
-      const fresh: Item[] = [];
-      const refused: { key: string; name: string; why: string }[] = [];
-      for (const file of Array.from(files)) {
-        const key = `${file.name}-${file.size}-${file.lastModified}-${Math.random().toString(36).slice(2)}`;
-        // Nothing narrows the chooser any more, so say plainly what was left behind rather than dropping it in silence.
-        if (!albumTakes(file)) {
-          refused.push({ key, name: file.name, why: refusalFor(file) });
+      // Held to the limit the server will use, so it is refused here rather than after it has all been sent.
+      const limit = maxUploadBytes(mimeAsSent({ name: file.name, type: file.type || "application/octet-stream" }) ?? "", maxBytes);
+      if (file.size > limit) {
+        refused.push({ key, name: file.name, why: tooBigMessage(file.size, limit) });
+        continue;
+      }
+      if (isVideoPick(file) && !isScanPick(file)) {
+        const d = await readDuration(file);
+        if (d !== null && d > maxClipSeconds) {
+          refused.push({ key, name: file.name, why: tooLongMessage(d, maxClipSeconds) });
           continue;
         }
-        const limit = maxBytes ? maxUploadBytes(mimeOfPicked(file) ?? "", maxBytes) : null;
-        if (limit !== null && file.size > limit) {
-          refused.push({ key, name: file.name, why: tooBigMessage(file.size, limit) });
-          continue;
-        }
-        if (isVideoPick(file) && !isScanPick(file)) {
-          const d = await readDuration(file);
-          if (d !== null && d > maxClipSeconds) {
-            refused.push({ key, name: file.name, why: tooLongMessage(d, maxClipSeconds) });
-            continue;
-          }
-        }
-        fresh.push({ localId: key, file, progress: 0, status: "queued", target: { ...targetRef.current }, optOut: optOutRef.current });
       }
-      // What is still going counts against the cap too, so adding a hundred, then another hundred, then another
-      // before the first have finished is the same as adding three hundred at once.
-      const inPlay = itemsRef.current.filter((i) => i.status === "queued" || i.status === "uploading" || i.status === "processing").length;
-      const room = Math.max(0, MAX_BATCH - inPlay);
-      if (fresh.length > room) {
-        const over = fresh.splice(room);
-        refused.push({ key: `cap-${over[0].localId}`, name: over.length === 1 ? over[0].file.name : `${over.length} files`, why: overCapMessage(over.length) });
-      }
-      if (!fresh.length && !refused.length) return;
-      if (refused.length) setRefusals((prev) => [...prev, ...refused]);
-      setItems((prev) => [...prev, ...fresh]);
-      queue.current.push(...fresh);
-      pumpRef.current();
-    },
-    [maxClipSeconds, maxBytes],
-  );
-
-  /**
-   * Ask the album how the processing is going, over and over until there is nothing left to ask about.
-   *
-   * Two mistakes are easy here and both have been made. Waiting on the whole list means every progress event — and
-   * a file being sent reports its progress many times a second — cancels the wait and starts it again, so while
-   * anything is going up the question is never asked at all. Waiting on only *which* items are outstanding fixes
-   * that and introduces the opposite: an answer that changes nothing leaves that set the same, so no further wait
-   * is ever scheduled and the asking stops after one go.
-   *
-   * So the timer is neither: it is started once, when something is outstanding, and stopped when nothing is. What
-   * to ask about is read afresh on each tick from a ref, which no amount of re-rendering disturbs.
-   */
-  const pending = items.filter((i) => i.status === "processing" && i.photoId).map((i) => i.photoId!);
-  const pendingRef = useRef<string[]>([]);
-  const pendingKey = pending.join(",");
-  // Kept in a ref so a tick always asks about what is outstanding now, without the timer itself depending on it.
-  useEffect(() => {
-    pendingRef.current = pendingKey ? pendingKey.split(",") : [];
-  }, [pendingKey]);
-  const anyPending = pending.length > 0;
-  useEffect(() => {
-    if (!anyPending) return;
-    // A missed answer is not a failed photograph. The photographs are on the server and being processed whether or
-    // not this page is watching; a batch of a hundred takes minutes, and in minutes a phone will lock its screen or
-    // change networks. This used to mark every photograph still processing as failed at the first missed answer —
-    // and then list all of them as ones the album could not keep. Now a missed answer is waited out, longer each
-    // time, and only the server saying FAILED about a photograph fails it.
-    let stopped = false;
-    let misses = 0;
-    /** One question at a time: a wake-up arriving mid-question must not start a second round of asking. */
-    let asking = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const schedule = (ms: number) => {
-      if (!stopped) timer = setTimeout(tick, ms);
-    };
-    const tick = async () => {
-      // A hundred ids is a long address; ask about the oldest and let the rest follow as these settle.
-      const ids = pendingRef.current.slice(0, MAX_STATUS_IDS);
-      if (!ids.length || asking) return;
-      asking = true;
-      const res = await fetch(`/api/photos/status?ids=${ids.join(",")}`).catch(() => null);
-      asking = false;
-      if (stopped) return;
-      if (res?.status === 401) {
-        // Nothing more can be learned until they sign in again, and asking every second will not change that.
-        setStatusTrouble("signedout");
-        return;
-      }
-      if (!res || !res.ok) {
-        misses += 1;
-        if (misses >= STATUS_NOTICE_AFTER) setStatusTrouble("offline");
-        schedule(statusRetryMs(misses));
-        return;
-      }
-      misses = 0;
-      setStatusTrouble(null);
-      const { photos } = (await res.json()) as { photos: { id: string; status: string; error: string | null; thumbUrl: string | null; trip: Item["trip"] }[] };
-      setItems((prev) =>
-        prev.map((it) => {
-          const p = photos.find((x) => x.id === it.photoId);
-          if (!p) return it;
-          if (p.status === "READY") return { ...it, status: "ready", thumbUrl: p.thumbUrl, trip: p.trip };
-          if (p.status === "FAILED") return { ...it, status: "failed", error: p.error ?? "Processing failed" };
-          return it;
-        }),
-      );
-      schedule(statusRetryMs(0));
-    };
-    schedule(statusRetryMs(0));
-    // A phone coming back from a locked screen, or a laptop from sleep, is exactly when a long wait between
-    // attempts is wrong: ask straight away rather than sitting out the rest of it.
-    const again = () => {
-      if (document.visibilityState !== "visible" || stopped) return;
-      clearTimeout(timer);
-      void tick();
-    };
-    document.addEventListener("visibilitychange", again);
-    window.addEventListener("online", again);
-    return () => {
-      stopped = true;
-      clearTimeout(timer);
-      document.removeEventListener("visibilitychange", again);
-      window.removeEventListener("online", again);
-    };
-  }, [anyPending]);
+      fresh.push({ localId: key, scope: here, from: pathname, file, progress: 0, status: "queued", tries: 0, target: { ...targetRef.current }, optOut: optOutRef.current });
+    }
+    // What is still going counts against the cap too, so adding a hundred, then another hundred, then another
+    // before the first have finished is the same as adding three hundred at once.
+    const room = Math.max(0, MAX_BATCH - itemsRef.current.filter(inPlay).length);
+    if (fresh.length > room) {
+      const over = fresh.splice(room);
+      refused.push({ key: `cap-${over[0].localId}`, name: over.length === 1 ? over[0].file.name : `${over.length} files`, why: overCapMessage(over.length) });
+    }
+    if (!fresh.length && !refused.length) return;
+    if (refused.length) setRefusals((prev) => [...prev, ...refused]);
+    queue.add(fresh);
+  };
 
   /**
    * Everything the album would not keep, in one place a member will actually read. Some of it never left the
@@ -329,37 +139,22 @@ export function Uploader({ tripId, activityId, collectionId, onDone, maxClipSeco
   const failed = items.filter((i) => i.status === "failed" && !i.photoId);
   // A file the album already had is one of three things: put where it was sent instead of copied, left where it is
   // because it is somebody else's, or simply already there with nowhere in particular asked for.
-  const filedHere = items.filter((i) => i.duplicate && i.filed && (i.filed.trip || i.filed.activity || i.filed.collection));
-  const notYours = items.filter((i) => i.duplicate && i.filed?.notYours);
-  const alreadyHere = items.filter((i) => i.duplicate && !filedHere.includes(i) && !notYours.includes(i));
+  // One whose processing failed is in the list of what the album would not keep, and nowhere else.
+  const duplicates = items.filter((i) => i.duplicate && i.status !== "failed");
+  const filedHere = duplicates.filter((i) => i.filed && (i.filed.trip || i.filed.activity || i.filed.collection));
+  const notYours = duplicates.filter((i) => i.filed?.notYours);
+  const alreadyHere = duplicates.filter((i) => !filedHere.includes(i) && !notYours.includes(i));
   const counts = {
-    done: items.filter((i) => Boolean(i.photoId)).length,
-    failed: failed.length,
+    done: items.filter((i) => Boolean(i.photoId) && i.status !== "failed").length,
+    failed: items.filter((i) => i.status === "failed").length,
     waiting: items.filter((i) => i.retrying).length,
     inFlight: items.filter((i) => i.status === "uploading").length,
     total: items.length,
     ready: items.filter((i) => i.status === "ready").length,
     processing: items.filter((i) => i.status === "processing").length,
   };
-  /** Anything a member would want to know before closing the tab, said in one line rather than in a hundred tiles. */
-  const busy = items.some((i) => i.status === "queued" || i.status === "uploading");
-
-  // Closing the tab part-way through a long batch loses whatever has not gone up yet, and a phone is quick to do it.
-  useEffect(() => {
-    if (!busy) return;
-    const warn = (e: BeforeUnloadEvent) => e.preventDefault();
-    window.addEventListener("beforeunload", warn);
-    return () => window.removeEventListener("beforeunload", warn);
-  }, [busy]);
-
-  /** Put the ones that did not make it back on the queue, from the top, with their attempts forgotten. */
-  const retryFailed = () => {
-    const again = failed.map((i) => ({ ...i, status: "queued" as const, error: undefined, attempts: 0, retrying: false, progress: 0 }));
-    if (!again.length) return;
-    setItems((prev) => prev.map((it) => again.find((a) => a.localId === it.localId) ?? it));
-    queue.current.push(...again);
-    pumpRef.current();
-  };
+  /** Put the ones that did not make it back on the queue, from the top. */
+  const retryFailed = () => queue.retry(here);
   useEffect(() => {
     if (allSettled && onDone) onDone(doneIds);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -393,8 +188,8 @@ export function Uploader({ tripId, activityId, collectionId, onDone, maxClipSeco
         <p className="font-medium">Drop photos, short clips or 3D scans here</p>
         <p className="text-sm text-muted mt-1">
           JPEG, PNG, HEIC and more; MP4, MOV or WebM clips up to {maxClipSeconds} seconds (longer videos go on YouTube);
-          3D scans from Scaniverse and the like as GLB, USDZ, PLY or SPZ. Up to {MAX_BATCH} at a time; a big batch takes a
-          few minutes to finish after it arrives, and carries on even if you leave this page.
+          3D scans from Scaniverse and the like as GLB, USDZ, PLY or SPZ. Up to {MAX_BATCH} at a time. You can keep using the
+          album while these go up; don&apos;t close the tab until they&apos;re done.
         </p>
         <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
           <Button type="button" variant="secondary" onClick={() => libraryRef.current?.click()}>
@@ -541,7 +336,7 @@ export function Uploader({ tripId, activityId, collectionId, onDone, maxClipSeco
               Add notes and file {doneIds.length === 1 ? "it" : "them"}
             </Link>
           )}
-          <Button variant="secondary" size="sm" onClick={() => setItems([])}>
+          <Button variant="secondary" size="sm" onClick={() => { queue.clear(here); setRefusals([]); }}>
             Clear
           </Button>
         </div>
