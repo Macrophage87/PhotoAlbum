@@ -11,6 +11,7 @@ import { QUEUES } from "@/lib/jobs/queues";
 import { canonicalUrl, fetchDuration, fetchThumbnail, oembed, parseYouTubeUrl, YouTubeError } from "@/lib/video/youtube";
 import { offsetMinutesInZone } from "@/lib/time/local-day";
 import { addToCollection } from "@/app/collections/actions";
+import { refreshTextEmbedding } from "@/lib/jobs/handlers/embed-photo";
 
 export type VideoFormState = { status: "idle" } | { status: "error"; message: string } | { status: "done"; photoId: string; title: string };
 
@@ -116,6 +117,7 @@ export async function updateExternalVideo(photoId: string, fd: FormData): Promis
   } else {
     await db.photo.update({ where: { id: photoId }, data });
   }
+  if (v.title !== photo.title) await refreshTextEmbedding(photoId);
   revalidatePath(`/photos/${photoId}`);
   revalidatePath("/", "layout");
 }

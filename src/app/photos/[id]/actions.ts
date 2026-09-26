@@ -21,6 +21,7 @@ import { readExif, resolveTakenAt } from "@/lib/images/exif";
 import { parseLatLng, placeNameOf } from "@/lib/geo/parse";
 import { uploaderLabel } from "@/components/photos/toGrid";
 import { addToCollection, removeFromCollection } from "@/app/collections/actions";
+import { refreshTextEmbedding } from "@/lib/jobs/handlers/embed-photo";
 
 /**
  * The member making this change, where the item is theirs to change. Someone else's photograph carries their
@@ -89,6 +90,7 @@ export async function updatePhoto(id: string, fd: FormData): Promise<void> {
     for (const cid of held) if (!wanted.has(cid)) await removeFromCollection(cid, [id]);
   }
   await db.photo.update({ where: { id }, data: { title, caption: v.caption, context: v.context, ...(v.context !== photo.context ? { contextUpdatedAt: new Date(), annotationError: null } : {}), tripId: v.tripId, activityId, activitySetById: activitySetter(activityId, chosenByHand, user.id, photo) } });
+  if (title !== photo.title || v.caption !== photo.caption || v.context !== photo.context) await refreshTextEmbedding(id);
   revalidatePath(`/photos/${id}`);
   if (photo.tripId) revalidatePath(`/trips`, "layout");
 }

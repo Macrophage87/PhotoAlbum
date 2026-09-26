@@ -30,6 +30,8 @@ export async function embedPhoto(job: EmbedPhotoJob): Promise<void> {
     const sets: Prisma.Sql[] = [Prisma.sql`"embeddedAt" = now()`];
     if (image) sets.push(Prisma.sql`"embedding" = ${vectorLiteral(image)}::vector`);
     if (textVec) sets.push(Prisma.sql`"textEmbedding" = ${vectorLiteral(textVec)}::vector`);
+    // Every word taken away: an old vector would keep matching searches for text the item no longer has.
+    else if (!text) sets.push(Prisma.sql`"textEmbedding" = NULL`);
     await db.$executeRaw`UPDATE "Photo" SET ${Prisma.join(sets, ", ")} WHERE id = ${photo.id}`;
     if (image) await upsertNeighbours(photo.id);
   });
@@ -43,6 +45,15 @@ export async function embedPhoto(job: EmbedPhotoJob): Promise<void> {
 export async function enqueueEmbedding(photoId: string, textOnly = false): Promise<void> {
   if (!mlConfigured()) return;
   await enqueue(QUEUES.embedPhoto, { photoId, textOnly }, { singletonKey: `embed:${photoId}:${textOnly ? "t" : "i"}`, singletonSeconds: 60, singletonNextSlot: true });
+}
+
+/**
+ * The family's own words on these items (title, caption or notes) changed: re-embed their text so semantic search
+ * follows. Nothing else notices such an edit (the sweep only looks at annotations), and a queue hiccup must never
+ * fail the save that asked for it.
+ */
+export async function refreshTextEmbedding(...photoIds: string[]): Promise<void> {
+  for (const id of photoIds) await enqueueEmbedding(id, true).catch((err) => console.warn(`[embed] could not queue ${id}:`, err instanceof Error ? err.message : err));
 }
 
 /** Catch-up sweep: ready items with no embedding yet, or described since they were last embedded. */
