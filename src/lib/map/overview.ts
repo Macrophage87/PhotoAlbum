@@ -1,3 +1,5 @@
+import { after } from "next/server";
+import { Prisma } from "@/generated/prisma/client";
 import { db } from "@/lib/db";
 import { shortenLine } from "@/lib/tracks/simplify";
 
@@ -31,8 +33,14 @@ export async function overviewLines(tracks: { id: string; overview: unknown }[])
       lines.set(t.id, overview);
       worked.push({ id: t.id, overview });
     }
-    // Kept in the background: the map does not wait on it, and if it fails the next visit simply works it out again.
-    void saveOverviews(worked).catch(() => {});
+    // Kept once the answer has gone: the map does not wait on it, and if it fails the next visit works it out again.
+    // Outside a request (a script, a test) there is nothing to wait for, so it simply starts now.
+    const write = () => saveOverviews(worked).catch(() => {});
+    try {
+      after(write);
+    } catch {
+      void write();
+    }
   }
   // Five decimal places is about a metre, far finer than a line on this map is drawn, and half the characters.
   const trim = (v: number) => Math.round(v * 1e5) / 1e5;
@@ -40,7 +48,10 @@ export async function overviewLines(tracks: { id: string; overview: unknown }[])
   return lines;
 }
 
-/** Store worked-out short lines, one small write at a time so no other use of the tracks waits behind a batch. */
+/**
+ * Store worked-out short lines, one small write at a time so no other use of the tracks waits behind a batch. Only
+ * where there is still none: two visits at once both work one out, and the second has nothing left to write.
+ */
 export async function saveOverviews(worked: { id: string; overview: [number, number][] }[]): Promise<void> {
-  for (const w of worked) await db.track.updateMany({ where: { id: w.id }, data: { overview: w.overview } });
+  for (const w of worked) await db.track.updateMany({ where: { id: w.id, overview: { equals: Prisma.DbNull } }, data: { overview: w.overview } });
 }

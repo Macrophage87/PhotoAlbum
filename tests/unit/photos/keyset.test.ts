@@ -119,4 +119,13 @@ describe("paging by position rather than by the row the cursor came from", () =>
     expect(decodeCursor("abc", columns)).toBeNull();
     expect(decodeCursor("x.1.abc", columns)).toBeNull();
   });
+
+  it("turns away a cursor whose date is too far off to be one, rather than failing the request", async () => {
+    const columns: KeyColumn[] = [{ field: "createdAt", dir: "desc" }];
+    const huge = "99999999999999999999.abc";
+    expect(decodeCursor(huge, columns)).toBeNull();
+    expect(decodeCursor("8640000000000001.abc", columns)).toBeNull();
+    // Taken for an old id-only cursor that matches nothing, so the gallery simply has nothing more.
+    await expect(unassignedPhotoPage(NO_FILTER, { cursor: huge, take: 4 })).resolves.toMatchObject({ photos: [], nextCursor: null });
+  });
 });

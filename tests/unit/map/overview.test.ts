@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
 import { buildMapPayload } from "@/lib/map/geojson";
-import { OVERVIEW_POINTS, overviewLines } from "@/lib/map/overview";
+import { OVERVIEW_POINTS, overviewLines, saveOverviews } from "@/lib/map/overview";
 import { persistTrack } from "@/lib/tracks/persist";
 import { townWithSpur } from "../helpers/lines";
 import type { Viewer } from "@/lib/auth/viewer";
@@ -49,6 +49,13 @@ describe("track lines on the map of everything", () => {
     expect(lines.get(short)).toEqual(shortLine);
     // Written back without the map waiting for it.
     await expect.poll(async () => ((await db.track.findUniqueOrThrow({ where: { id: old } })).overview as unknown[] | null)?.length ?? 0).toBe(thin.length);
+  });
+
+  it("writes a short line back only where there is still none", async () => {
+    await saveOverviews([{ id: old, overview: [[1, 2], [3, 4]] }, { id: short, overview: [[5, 6], [7, 8]] }]);
+    expect((await db.track.findUniqueOrThrow({ where: { id: old } })).overview).toEqual([[1, 2], [3, 4]]);
+    // This one had its own already, and keeps it.
+    expect((await db.track.findUniqueOrThrow({ where: { id: short } })).overview).toEqual(shortLine);
   });
 
   it("keeps the spur of a track that went into town and out along a straight road", async () => {

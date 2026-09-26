@@ -24,7 +24,8 @@ export function decodeCursor(cursor: string, columns: KeyColumn[]): { values: (D
   const values: (Date | null)[] = [];
   for (const [i, c] of columns.entries()) {
     if (parts[i] === "" && c.nullsLast) values.push(null);
-    else if (/^-?\d+$/.test(parts[i])) values.push(new Date(Number(parts[i])));
+    else if (/^-?\d+$/.test(parts[i]) && Number.isFinite(new Date(Number(parts[i])).getTime())) values.push(new Date(Number(parts[i])));
+    // Anything else, a date too far off to be one included, is not a cursor we wrote.
     else return null;
   }
   return { values, id: parts[columns.length] };
