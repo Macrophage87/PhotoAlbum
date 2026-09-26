@@ -1,6 +1,7 @@
 import { db } from "@/lib/db";
 import { forgetNameInText, matcherFor, memberTextMentioning, photosInContainers, photosMentioning, taggedPhotoIds } from "./forget";
 import { containerKey, forgetKeyState, rememberForgotten } from "./tombstone";
+import { isListedPlace } from "./scrub";
 import { withForgetLock } from "./names-changed";
 
 /**
@@ -32,8 +33,11 @@ export async function forgetPerson(personId: string, opts: { keepName: boolean; 
     // Photographs whose members' words name them too — their own, or their trip's, collection's or activity's: what
     // the helper wrote there was written from those words.
     const before = await memberTextMentioning(m, tagged, personId, Infinity);
-    const photoIds = [...new Set([...tagged, ...(await photosMentioning(m)), ...before.photos.map((p) => p.id), ...(await photosInContainers(before))])];
-    const containerIds = [...before.trips.map((t) => containerKey("trip", t.id)), ...before.collections.map((c) => containerKey("collection", c.id)), ...before.activities.map((a) => containerKey("activity", a.id))];
+    // A one-word name that is also a place ("Florence"): the album's Florence trip is no mention of her. Only her
+    // own photographs, and those whose notes name her where the words around it do not make it the place.
+    const place = isListedPlace(person.name);
+    const photoIds = [...new Set([...tagged, ...before.photos.map((p) => p.id), ...(place ? [] : [...(await photosMentioning(m)), ...(await photosInContainers(before))])])];
+    const containerIds = place ? [] : [...before.trips.map((t) => containerKey("trip", t.id)), ...before.collections.map((c) => containerKey("collection", c.id)), ...before.activities.map((a) => containerKey("activity", a.id))];
     await held.assertHeld();
     await db.person.update({
       where: { id: personId },

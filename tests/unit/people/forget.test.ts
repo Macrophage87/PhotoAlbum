@@ -20,6 +20,7 @@ import { readFileSync } from "node:fs";
 import { scrubWithdrawnNames, withdrawalNotice, withdrawalReason } from "@/lib/people/forget";
 import { setAnnotationShared } from "@/app/annotation/actions";
 import { loadItem, withoutUnpermittedNames } from "@/lib/annotation/request";
+import { unpermittedNameScrub } from "@/lib/people/unpermitted";
 import { withoutUnpermittedNames as withoutContainerNames } from "@/lib/annotation/container";
 
 const annotation: StoredAnnotation = {
@@ -224,6 +225,25 @@ describe("forgetting somebody", () => {
     expect(c.photos[0].title).toBe("A family member's 80th");
     // The helper's own old words are not handed back at all.
     expect((await withoutContainerNames({ ...container, descriptionByHelper: true })).description).toBeNull();
+  });
+
+  it("counts somebody not to be named as on a trip described as a whole, whichever of its photographs are shown", async () => {
+    const sam = await db.person.create({ data: { name: "Sam Lee", createdById: admin } });
+    const trip = await db.trip.create({ data: { slug: "sam5", title: "Sam's 5th birthday", startDate: new Date("2026-07-01"), endDate: new Date("2026-07-01"), createdById: admin } });
+    const shown = (await db.photo.create({ data: { uploaderId: admin, originalName: "s1.jpg", mimeType: "image/jpeg", storageKey: "s1", originalPath: "s1/o.jpg", sizeBytes: 1, status: "READY", tripId: trip.id } })).id;
+    const unshown = (await db.photo.create({ data: { uploaderId: admin, originalName: "s2.jpg", mimeType: "image/jpeg", storageKey: "s2", originalPath: "s2/o.jpg", sizeBytes: 1, status: "READY", tripId: trip.id } })).id;
+    await db.face.create({ data: { photoId: unshown, personId: sam.id, status: "CONFIRMED", box: [0, 0, 1, 1], confidence: 0 } });
+    const scrub = await unpermittedNameScrub([shown], undefined, [{ kind: "trip", id: trip.id }]);
+    expect(scrub("Sam's 5th birthday")).toBe("A family member's 5th birthday");
+  });
+
+  it("takes the first name of somebody waiting to be forgotten out of everything, and out of answers", async () => {
+    await db.person.create({ data: { name: "Ximena Ortiz", forgetPendingAt: new Date(), optedOutAt: new Date(), createdById: admin } });
+    const elsewhere = (await db.photo.create({ data: { uploaderId: admin, originalName: "x.jpg", mimeType: "image/jpeg", storageKey: "x", originalPath: "x/o.jpg", sizeBytes: 1, status: "READY" } })).id;
+    const scrub = await unpermittedNameScrub([elsewhere]);
+    expect(scrub("Ximena's graduation")).toBe("A family member's graduation");
+    await applyAnnotation(elsewhere, "m", annotationSchema.parse({ ...annotation, caption: "Ximena with a trout", estimatedYear: null, estimatedPlace: null }), { content: [] }, { requestedAt: new Date() });
+    expect(((await db.photo.findUniqueOrThrow({ where: { id: elsewhere } })).annotation as StoredAnnotation).caption).toBe("A family member with a trout");
   });
 
   it("away from their photographs, takes only full names out of what the helper is sent", async () => {

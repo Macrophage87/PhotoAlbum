@@ -157,7 +157,7 @@ export async function applyPlaceEstimate(photoId: string, estimate: PlaceEstimat
   // forgotten comes back by way of its name or evidence.
   const tombstone = opts.tombstone ?? (await loadTombstone());
   const coarse = estimate && estimate.confidence >= MIN_PLACE_CONFIDENCE ? scrubCoarsePlace(estimate) : null;
-  const scope = await forgottenScope({ photoIds: [photoId] });
+  const scope = tombstone.empty ? undefined : await forgottenScope({ photoIds: [photoId] }, tombstone);
   let place = coarse ? { ...coarse, name: tombstone.scrub(coarse.name, scope), evidence: tombstone.scrub(coarse.evidence, scope) } : null;
   const free = current.lat === null && (current.gpsSource === null || current.gpsSource === "ESTIMATE");
   const membersOnly = place && free ? await placeFromMembersOnly(photoId, { name: place.name, evidence: place.evidence }, current.context, opts.sent) : false;
@@ -171,7 +171,7 @@ export async function applyPlaceEstimate(photoId: string, estimate: PlaceEstimat
     // Somebody forgotten since the forgotten names were read: read them again.
     if (forget.reload && place) {
       const fresh = await loadTombstone();
-      const now = await forgottenScope({ photoIds: [photoId] });
+      const now = await forgottenScope({ photoIds: [photoId] }, fresh);
       place = { ...place, name: fresh.scrub(place.name, now), evidence: fresh.scrub(place.evidence, now) };
     }
     const guard = { id: photoId, ...(requestedAt ? unchangedSince(requestedAt) : {}) };

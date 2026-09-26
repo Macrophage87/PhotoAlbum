@@ -76,8 +76,10 @@ export async function withForgetLock<T>(fn: (held: ForgetLockHeld) => Promise<T>
     await client.query(`SET lock_timeout = '${Math.max(1, Math.round(wait.ms))}ms'`);
     try {
       await client.query("SELECT pg_advisory_lock($1::bigint)", [FORGET_LOCK]);
-    } catch {
-      throw new ForgetBusyError();
+    } catch (err) {
+      // lock_not_available: the wait ran out. Anything else is a real failure.
+      if ((err as { code?: string }).code === "55P03") throw new ForgetBusyError();
+      throw err;
     }
     await client.query("SET lock_timeout = 0");
     const held: ForgetLockHeld = {

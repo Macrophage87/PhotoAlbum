@@ -43,6 +43,10 @@ CREATE TABLE "ForgottenName" (
   CONSTRAINT "ForgottenName_pkey" PRIMARY KEY ("hash")
 );
 
+-- A one-word name is found by the photographs and containers it was kept with (tombstone.ts, forgottenScope).
+CREATE INDEX "ForgottenName_photoIds_idx" ON "ForgottenName" USING GIN ("photoIds");
+CREATE INDEX "ForgottenName_containerIds_idx" ON "ForgottenName" USING GIN ("containerIds");
+
 CREATE TABLE "ForgetLeftover" (
   "id" TEXT NOT NULL,
   "createdById" TEXT,

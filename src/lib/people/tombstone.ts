@@ -1,6 +1,7 @@
 import { createHash, createHmac, hkdfSync, randomBytes } from "node:crypto";
 import { env } from "@/lib/env";
 import { db } from "@/lib/db";
+import { Prisma } from "@/generated/prisma/client";
 import type { StoredAnnotation } from "@/lib/annotation/schema";
 import { inTitleCase, isEverydayWord, isPlaceOrDateWord, normalizeName, notThePerson, replaceSpans } from "./scrub";
 
@@ -159,33 +160,52 @@ export function containerKey(kind: "trip" | "collection" | "activity", id: strin
   return `${kind}:${id}`;
 }
 
-/** The one-word forgotten names in play for a text (see `forgottenScope`), as `${keyVersion}:${hash}`. */
-export type Scope = ReadonlySet<string>;
+/**
+ * The one-word forgotten names in play for a text (see `forgottenScope`), as `${keyVersion}:${hash}`, and who the
+ * album knows is tagged on its photographs (a living Ximena Ruiz keeps "Ximena" on hers).
+ */
+export type Scope = { rows: ReadonlySet<string>; tagged: ReadonlySet<string> };
+export const NO_SCOPE: Scope = { rows: new Set(), tagged: new Set() };
 
 /**
  * Which one-word forgotten names count in text about these photographs (theirs, and their trips', collections' and
  * activities'), or about these trips, collections and activities (all their photographs, found in the database, not
  * only the few a request shows).
  */
-export async function forgottenScope(where: { photoIds?: string[]; containers?: { kind: "trip" | "collection" | "activity"; id: string }[] }): Promise<Scope> {
+export async function forgottenScope(where: { photoIds?: string[]; containers?: { kind: "trip" | "collection" | "activity"; id: string }[] }, ts?: Pick<Tombstone, "scoped">): Promise<Scope> {
   const photoIds = where.photoIds ?? [];
   const containers = where.containers ?? [];
-  if (!photoIds.length && !containers.length) return new Set();
+  if (!photoIds.length && !containers.length) return NO_SCOPE;
+  // Nothing forgotten is kept by place: nothing to look up (read once per load of the forgotten names).
+  if (!(ts ? ts.scoped : await anyScoped())) return NO_SCOPE;
   const around = photoIds.length ? await db.photo.findMany({ where: { id: { in: photoIds } }, select: { tripId: true, activityId: true, collections: { select: { collectionId: true } } } }) : [];
   const keys = [
     ...containers.map((c) => containerKey(c.kind, c.id)),
     ...around.flatMap((p) => [p.tripId ? containerKey("trip", p.tripId) : null, p.activityId ? containerKey("activity", p.activityId) : null, ...p.collections.map((c) => containerKey("collection", c.collectionId))]).filter((k): k is string => Boolean(k)),
   ];
   const of = (kind: string) => containers.filter((c) => c.kind === kind).map((c) => c.id);
-  const rows = await db.$queryRaw<{ keyVersion: number; hash: string }[]>`
-    SELECT "keyVersion", hash FROM "ForgottenName"
-    WHERE "photoIds" && ${photoIds}::text[]
-       OR "containerIds" && ${keys}::text[]
-       OR "photoIds" && ARRAY(
-         SELECT p.id FROM "Photo" p
-         WHERE p."tripId" = ANY(${of("trip")}::text[]) OR p."activityId" = ANY(${of("activity")}::text[])
-            OR p.id IN (SELECT ci."photoId" FROM "CollectionItem" ci WHERE ci."collectionId" = ANY(${of("collection")}::text[])))`;
-  return new Set(rows.map((r) => `${r.keyVersion}:${r.hash}`));
+  // Each part on its own index; only when a whole container is asked about.
+  const inContainers = containers.length
+    ? Prisma.sql`SELECT id FROM "Photo" WHERE "tripId" = ANY(${of("trip")}::text[])
+        UNION SELECT id FROM "Photo" WHERE "activityId" = ANY(${of("activity")}::text[])
+        UNION SELECT "photoId" FROM "CollectionItem" WHERE "collectionId" = ANY(${of("collection")}::text[])`
+    : null;
+  const [rows, tagged] = await Promise.all([
+    db.$queryRaw<{ keyVersion: number; hash: string }[]>`
+      SELECT "keyVersion", hash FROM "ForgottenName"
+      WHERE "photoIds" && ${photoIds}::text[] OR "containerIds" && ${keys}::text[] ${inContainers ? Prisma.sql`OR "photoIds" && ARRAY(${inContainers})` : Prisma.empty}`,
+    db.$queryRaw<{ personId: string }[]>`
+      SELECT "personId" FROM "Face" WHERE "personId" IS NOT NULL AND "photoId" = ANY(${photoIds}::text[])
+      UNION SELECT "personId" FROM "AnimalDetection" WHERE "personId" IS NOT NULL AND "photoId" = ANY(${photoIds}::text[])
+      ${inContainers ? Prisma.sql`UNION SELECT "personId" FROM "Face" WHERE "personId" IS NOT NULL AND "photoId" IN (${inContainers}) UNION SELECT "personId" FROM "AnimalDetection" WHERE "personId" IS NOT NULL AND "photoId" IN (${inContainers})` : Prisma.empty}`,
+  ]);
+  return { rows: new Set(rows.map((r) => `${r.keyVersion}:${r.hash}`)), tagged: new Set(tagged.map((t) => t.personId)) };
+}
+
+/** Whether any forgotten name is kept with the places it was found. */
+async function anyScoped(): Promise<boolean> {
+  const [{ any }] = await db.$queryRaw<{ any: boolean }[]>`SELECT EXISTS (SELECT 1 FROM "ForgottenName" WHERE cardinality(COALESCE("photoIds", '{}')) > 0 OR cardinality(COALESCE("containerIds", '{}')) > 0) AS any`;
+  return any;
 }
 
 /**
@@ -194,6 +214,8 @@ export async function forgottenScope(where: { photoIds?: string[]; containers?: 
  */
 export type Tombstone = {
   empty: boolean;
+  /** Whether any of them is a one-word name kept with the places it was found (see `forgottenScope`). */
+  scoped: boolean;
   /** When it was read: a forget since then may have added names (see `tombstoneStale`). */
   loadedAt: Date;
   scrub(text: string, scope?: Scope): string;
@@ -204,7 +226,7 @@ export type Tombstone = {
   namesTag(tag: string, scope?: Scope): boolean;
 };
 
-const empty = (loadedAt: Date): Tombstone => ({ empty: true, loadedAt, scrub: (t) => t, mentions: () => false, scrubSummary: (t) => t, namesTag: () => false });
+const empty = (loadedAt: Date): Tombstone => ({ empty: true, scoped: false, loadedAt, scrub: (t) => t, mentions: () => false, scrubSummary: (t) => t, namesTag: () => false });
 
 /** Whether a forget has begun since this was read: its names may be missing from it. */
 export async function tombstoneStale(ts: Tombstone): Promise<boolean> {
@@ -216,24 +238,39 @@ export async function tombstoneStale(ts: Tombstone): Promise<boolean> {
 export async function loadTombstone(): Promise<Tombstone> {
   const loadedAt = new Date();
   const state = await forgetKeyState();
-  const rows = await db.forgottenName.findMany({ where: { keyVersion: { in: state.keys.map((k) => k.version) } }, select: { hash: true, keyVersion: true, capitalizedOnly: true } });
+  const rows = await db.$queryRaw<{ hash: string; keyVersion: number; capitalizedOnly: boolean; scoped: boolean }[]>`
+    SELECT hash, "keyVersion", "capitalizedOnly", (cardinality(COALESCE("photoIds", '{}')) + cardinality(COALESCE("containerIds", '{}')) > 0) AS scoped
+    FROM "ForgottenName" WHERE "keyVersion" = ANY(${state.keys.map((k) => k.version)}::int[])`;
   if (!rows.length) return empty(loadedAt);
   const keys = state.keys.filter((k) => rows.some((r) => r.keyVersion === k.version));
-  // Anybody the album knows now keeps their own name, whole or word by word.
-  const [people, users] = await Promise.all([db.person.findMany({ select: { name: true } }), db.user.findMany({ where: { name: { not: null } }, select: { name: true } })]);
+  // Anybody the album knows now keeps their own name, whole or word by word. A one-word name kept with the places
+  // it was found (scoped) is theirs only where they are tagged: "Ximena" is still taken out of the forgotten
+  // Ximena's photographs while Ximena Ruiz keeps it on hers.
+  const [people, users] = await Promise.all([db.person.findMany({ select: { id: true, name: true } }), db.user.findMany({ where: { name: { not: null } }, select: { name: true } })]);
   const currentForms = new Set<string>();
-  for (const n of [...people.map((p) => p.name), ...users.map((u) => u.name ?? "")]) {
+  const formsOf = (n: string) => {
     const norm = normalizeName(n);
-    if (!norm) continue;
-    currentForms.add(norm);
-    for (const w of norm.split(" ")) currentForms.add(w);
-    if (CJK.test(n)) currentForms.add(n.replace(/\s+/g, ""));
+    if (!norm) return [];
+    return [norm, ...norm.split(" "), ...(CJK.test(n) ? [n.replace(/\s+/g, "")] : [])];
+  };
+  const whoseForm = new Map<string, Set<string>>();
+  for (const p of people) for (const f of formsOf(p.name)) for (const k of keys) {
+    const key = `${k.version}:${hash(k.key, f)}`;
+    whoseForm.set(key, new Set([...(whoseForm.get(key) ?? []), p.id]));
   }
+  for (const n of [...people.map((p) => p.name), ...users.map((u) => u.name ?? "")]) for (const f of formsOf(n)) currentForms.add(f);
   const current = new Set(keys.flatMap((k) => [...currentForms].map((f) => `${k.version}:${hash(k.key, f)}`)));
-  const byHash = new Map(rows.filter((r) => !current.has(`${r.keyVersion}:${r.hash}`)).map((r) => [`${r.keyVersion}:${r.hash}`, { key: `${r.keyVersion}:${r.hash}`, capOnly: r.capitalizedOnly }]));
+  const byHash = new Map(
+    rows
+      .filter((r) => r.scoped || !current.has(`${r.keyVersion}:${r.hash}`))
+      .map((r) => {
+        const key = `${r.keyVersion}:${r.hash}`;
+        return [key, { key, capOnly: r.capitalizedOnly, scoped: r.scoped, people: r.scoped ? whoseForm.get(key) : undefined }] as const;
+      }),
+  );
   if (!byHash.size) return empty(loadedAt);
   /** A forgotten name this normalized run is, if any. */
-  const lookup = (norm: string): { key: string; capOnly: boolean } | undefined => {
+  const lookup = (norm: string): { key: string; capOnly: boolean; scoped: boolean; people?: Set<string> } | undefined => {
     for (const k of keys) {
       const v = byHash.get(`${k.version}:${hash(k.key, norm)}`);
       if (v) return v;
@@ -265,7 +302,9 @@ export async function loadTombstone(): Promise<Tombstone> {
         if (!found) continue;
         if (n === 1) {
           // Only where the forget found them; a row from before that was kept, nowhere.
-          if (!scope?.has(found.key)) continue;
+          if (!scope?.rows.has(found.key)) continue;
+          // Somebody the album knows by that name is on these photographs: it is theirs here.
+          if (found.people && [...found.people].some((id) => scope.tagged.has(id))) continue;
           if (mode === "tag") {
             if (!wholeTag) continue;
           } else if (mode === "summary") {
@@ -302,6 +341,7 @@ export async function loadTombstone(): Promise<Tombstone> {
   };
   return {
     empty: false,
+    scoped: [...byHash.values()].some((v) => v.scoped),
     loadedAt,
     scrub: (text, scope) => (typeof text === "string" && text ? replaceSpans(text, spansIn(text, scope, "prose")) : text),
     mentions: (text, scope) => typeof text === "string" && spansIn(text, scope, "prose").length > 0,

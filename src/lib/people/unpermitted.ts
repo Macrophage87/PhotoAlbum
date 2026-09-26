@@ -1,7 +1,8 @@
 import { db } from "@/lib/db";
-import { nameMatcher, type NameMatcher } from "./scrub";
+import { nameMatcher, scrubAnnotation, type NameMatcher } from "./scrub";
+import type { StoredAnnotation } from "@/lib/annotation/schema";
 import { nameMayLeaveServer } from "./consent";
-import { forgottenScope, loadTombstone, type Scope, type Tombstone } from "./tombstone";
+import { forgottenScope, loadTombstone, NO_SCOPE, type Scope, type Tombstone } from "./tombstone";
 
 export type NameScrub = (text: string | null | undefined) => string | null;
 
@@ -22,38 +23,49 @@ type Containers = { kind: "trip" | "collection" | "activity"; id: string }[];
 
 export async function nameScrubber(): Promise<NameScrubber> {
   const [people, users, tombstone] = await Promise.all([
-    db.person.findMany({ select: { id: true, kind: true, name: true, formerNames: true, birthday: true, adultAttestedAt: true, adultConfirmedAt: true, faceIndexing: true, nameInDescriptions: true, optedOutAt: true } }),
+    db.person.findMany({ select: { id: true, kind: true, name: true, formerNames: true, birthday: true, adultAttestedAt: true, adultConfirmedAt: true, faceIndexing: true, nameInDescriptions: true, optedOutAt: true, forgetPendingAt: true } }),
     db.user.findMany({ where: { name: { not: null } }, select: { name: true } }),
     loadTombstone(),
   ]);
   const everybody = [...people.flatMap((o) => [o.name, ...(o.formerNames ?? [])]), ...users.map((u) => u.name ?? "")];
-  const matchers: { id: string; m: NameMatcher }[] = people
+  const matchers: Matcher[] = people
     .filter((p) => p.kind === "HUMAN" && (p.optedOutAt || !nameMayLeaveServer(p)))
     .map((p) => {
       const own = new Set([p.name, ...(p.formerNames ?? [])]);
-      return { id: p.id, m: nameMatcher([...own], everybody.filter((n) => !own.has(n))) };
+      // Waiting to be forgotten: their first name goes too, anywhere, until the forget is done.
+      return { id: p.id, m: nameMatcher([...own], everybody.filter((n) => !own.has(n))), pending: Boolean(p.forgetPendingAt) };
     });
   return {
     async forPhotos(photoIds, containers = []) {
-      const tagged = photoIds.length && matchers.length ? await taggedOn(photoIds) : new Set<string>();
-      const scope = tombstone.empty ? new Set<string>() : await forgottenScope({ photoIds, containers });
+      // Tagged on any of the photographs, or anywhere in a trip, collection or activity the request is about.
+      const tagged = (photoIds.length || containers.length) && matchers.length ? await taggedOn(photoIds, containers) : new Set<string>();
+      const scope = tombstone.empty ? NO_SCOPE : await forgottenScope({ photoIds, containers }, tombstone);
       return scrubWith(matchers, tagged, tombstone, scope);
     },
   };
 }
 
-async function taggedOn(photoIds: string[]): Promise<Set<string>> {
+async function taggedOn(photoIds: string[], containers: Containers = []): Promise<Set<string>> {
+  const of = (kind: string) => containers.filter((c) => c.kind === kind).map((c) => c.id);
+  const photo = {
+    OR: [
+      { photoId: { in: photoIds } },
+      ...(containers.length ? [{ photo: { OR: [{ tripId: { in: of("trip") } }, { activityId: { in: of("activity") } }, { collections: { some: { collectionId: { in: of("collection") } } } }] } }] : []),
+    ],
+  };
   const [f, a] = await Promise.all([
-    db.face.findMany({ where: { photoId: { in: photoIds } }, select: { personId: true, proposedPersonId: true } }),
-    db.animalDetection.findMany({ where: { photoId: { in: photoIds } }, select: { personId: true, proposedPersonId: true } }),
+    db.face.findMany({ where: photo, select: { personId: true, proposedPersonId: true } }),
+    db.animalDetection.findMany({ where: photo, select: { personId: true, proposedPersonId: true } }),
   ]);
   return new Set([...f, ...a].flatMap((r) => [r.personId, r.proposedPersonId]).filter((x): x is string => Boolean(x)));
 }
 
-function scrubWith(matchers: { id: string; m: NameMatcher }[], tagged: Set<string>, tombstone: Tombstone, scope: Scope): NameScrub {
+type Matcher = { id: string; m: NameMatcher; pending: boolean };
+
+function scrubWith(matchers: Matcher[], tagged: Set<string>, tombstone: Tombstone, scope: Scope): NameScrub {
   return (text) => {
     if (typeof text !== "string" || !text) return text ?? null;
-    const named = matchers.reduce((t, { id, m }) => m.scrub(t, { tagged: tagged.has(id), fullOnly: true }), text);
+    const named = matchers.reduce((t, { id, m, pending }) => m.scrub(t, { tagged: tagged.has(id), fullOnly: !pending }), text);
     // A one-word forgotten name only where its owner was tagged (see tombstone.ts).
     return tombstone.scrub(named, scope);
   };
@@ -62,4 +74,25 @@ function scrubWith(matchers: { id: string; m: NameMatcher }[], tagged: Set<strin
 /** For a single request: build, and ask about these photographs. */
 export async function unpermittedNameScrub(photoIds: string[], scrubber?: NameScrubber, containers?: Containers): Promise<NameScrub> {
   return (scrubber ?? (await nameScrubber())).forPhotos(photoIds, containers);
+}
+
+/**
+ * An answer about a photograph without the names of anybody opted out or waiting to be forgotten whose record is
+ * still there: the helper was never told them, but may have read them in a sign or guessed, and storing them would
+ * write back what the forget is about to take out.
+ */
+export async function withoutOptedOutNames(record: StoredAnnotation, photoId: string): Promise<StoredAnnotation> {
+  const gone = await db.person.findMany({ where: { kind: "HUMAN", OR: [{ optedOutAt: { not: null } }, { forgetPendingAt: { not: null } }] }, select: { id: true, name: true, formerNames: true } });
+  if (!gone.length) return record;
+  const [others, tagged] = await Promise.all([
+    db.person.findMany({ where: { id: { notIn: gone.map((p) => p.id) } }, select: { name: true, formerNames: true } }),
+    taggedOn([photoId]),
+  ]);
+  const everybody = [...others.flatMap((o) => [o.name, ...(o.formerNames ?? [])]), ...gone.flatMap((g) => [g.name, ...(g.formerNames ?? [])])];
+  let out = record;
+  for (const p of gone) {
+    const own = new Set([p.name, ...(p.formerNames ?? [])]);
+    out = scrubAnnotation(out, nameMatcher([...own], everybody.filter((n) => !own.has(n))), { tagged: tagged.has(p.id) });
+  }
+  return out;
 }

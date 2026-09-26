@@ -298,6 +298,58 @@ describe("names that are also words", () => {
     for (const on of [first, second]) expect(ts.scrub("Ximena waved", await sc(on))).toBe("A family member waved");
   });
 
+  it("keeps a one-word name out of her photographs though somebody the album knows shares it, and leaves theirs", async () => {
+    const ruiz = await db.person.create({ data: { name: "Ximena Ruiz", createdById: admin } });
+    const p = await db.person.create({ data: { name: "Ximena", createdById: admin } });
+    const hers = await photo();
+    await db.face.create({ data: { photoId: hers, personId: p.id, status: "CONFIRMED", box: [0, 0, 1, 1], confidence: 0 } });
+    // A trip whose title named her holds a photograph of Ximena Ruiz.
+    const trip = await db.trip.create({ data: { slug: "party", title: "Ximena's party", startDate: new Date("2026-07-01"), endDate: new Date("2026-07-01"), createdById: admin } });
+    const theirs = (await db.photo.create({ data: { uploaderId: admin, originalName: "r.jpg", mimeType: "image/jpeg", storageKey: "r", originalPath: "r/o.jpg", sizeBytes: 1, status: "READY", tripId: trip.id } })).id;
+    await db.face.create({ data: { photoId: theirs, personId: ruiz.id, status: "CONFIRMED", box: [0, 0, 1, 1], confidence: 0 } });
+    await optOutPerson(p.id, new FormData());
+    const ts = await loadTombstone();
+    expect(ts.scrub("Ximena waved", await sc(hers))).toBe("A family member waved");
+    expect(ts.scrub("Ximena waved", await sc(theirs))).toBe("Ximena waved");
+  });
+
+  it("leaves the family's Florence trip alone when a Florence is forgotten", async () => {
+    const p = await db.person.create({ data: { name: "Florence", createdById: admin } });
+    const tripA = await db.trip.create({ data: { slug: "a", title: "Florence and Tuscany 2019", startDate: new Date("2019-05-01"), endDate: new Date("2019-05-09"), createdById: admin } });
+    const tripB = await db.trip.create({ data: { slug: "b", title: "Florence, Italy", startDate: new Date("2021-05-01"), endDate: new Date("2021-05-09"), createdById: admin } });
+    const inTrip = async (tripId: string, caption: string) => (await db.photo.create({ data: { uploaderId: admin, originalName: "d.jpg", mimeType: "image/jpeg", storageKey: "d", originalPath: "d/o.jpg", sizeBytes: 1, status: "READY", tripId, annotation: record({ caption }), annotatedAt: new Date() } })).id;
+    const hers = await inTrip(tripA.id, "Florence waved by the fountain");
+    await db.face.create({ data: { photoId: hers, personId: p.id, status: "CONFIRMED", box: [0, 0, 1, 1], confidence: 0 } });
+    const duomo = await inTrip(tripA.id, "The Duomo in Florence");
+    const skyline = await inTrip(tripB.id, "Florence skyline at dusk");
+    await optOutPerson(p.id, new FormData());
+    const caption = async (id: string) => ((await db.photo.findUniqueOrThrow({ where: { id } })).annotation as StoredAnnotation).caption;
+    expect(await caption(hers)).toBe("A family member waved by the fountain");
+    expect(await caption(duomo)).toBe("The Duomo in Florence");
+    expect(await caption(skyline)).toBe("Florence skyline at dusk");
+    // New answers: her photograph loses the name; the trip's others, trip B and a later upload keep it.
+    const later = await inTrip(tripA.id, "");
+    for (const [id, text, want] of [[hers, "Florence smiling", "A family member smiling"], [duomo, "Florence at sunset", "Florence at sunset"], [skyline, "Florence in spring", "Florence in spring"], [later, "Florence and the Arno", "Florence and the Arno"]] as const) {
+      await applyAnnotation(id, "m", record({ caption: text }), { content: [] }, { requestedAt: new Date() });
+      expect(await caption(id)).toBe(want);
+    }
+    const ts = await loadTombstone();
+    expect(ts.scrub("Florence and Tuscany 2019", await forgottenScope({ containers: [{ kind: "trip", id: tripA.id }] }))).toBe("Florence and Tuscany 2019");
+    expect(ts.scrub("Trip: Florence", await sc(hers))).toBe("Trip: Florence");
+  });
+
+  it("looks nothing up when nothing forgotten is kept by place", async () => {
+    await forget("Timothy Kent");
+    const ts = await loadTombstone();
+    expect(ts.scoped).toBe(false);
+    const client = (globalThis as unknown as { prisma: { $queryRaw: (...a: unknown[]) => unknown } }).prisma;
+    const spy = vi.spyOn(client, "$queryRaw");
+    const scope = await forgottenScope({ photoIds: [await photo()] }, ts);
+    expect(scope.rows.size).toBe(0);
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
   it("never keeps a first name taken from a full one", async () => {
     const on = await forget("Florence Adams");
     const ts = await loadTombstone();

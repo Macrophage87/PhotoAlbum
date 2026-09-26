@@ -164,7 +164,7 @@ function startsSentence(before: string): boolean {
 }
 
 /** Words that put a place after them in the text the helper writes: "a trip to Florence", "the Duomo in Florence". */
-const PLACE_NEAR = new Set(["to", "in", "from", "near", "at", "visiting", "visit", "via", "into", "toward", "towards", "through", "across", "around"]);
+const PLACE_NEAR = new Set(["to", "in", "from", "near", "at", "visiting", "visit", "via", "into", "toward", "towards", "through", "across", "around", "of"]);
 /** Words after "May" that make it the day or the pole, not her. */
 const DAY_AFTER = new Set(["day", "days", "pole", "poles", "queen", "fair", "fayre", "time"]);
 
@@ -176,6 +176,12 @@ function neighbours(before: string, after: string) {
   const next = after.match(/^[ \t]+([\p{L}\p{M}'’-]+)/u)?.[1] ?? null;
   return { prev, next, possessive: /^['’]s(?![\p{L}\p{M}])/u.test(after) };
 }
+
+/**
+ * What follows a place that opens a sentence or a title: "Florence in spring", "Florence and Tuscany 2019",
+ * "Florence, Italy", "Trip: Florence". A person there does something ("Florence waved").
+ */
+const PLACE_OPENING = /^(?:[ \t]*$|[ \t]*[\n,;:.!?)\]–—-]|[ \t]+(?:and|in|of|at|near|from|to|by|trip|trips|holiday|holidays|vacation|visit|getaway|weekend|skyline|streets|sunset|sunrise|at\s+night|\d)(?![\p{L}\p{M}]))/iu;
 
 /** "Florence, Italy", "Paris, TX": a place, then the larger place it is in. */
 const PLACE_COMMA = /^,[ \t]*(\p{Lu}[\p{L}\p{M}'’.-]*)/u;
@@ -233,6 +239,10 @@ export function notThePerson(text: string, start: number, end: number, n: Neighb
     const comma = Boolean(region && !n.own?.has(bare(region)) && !n.isNameWord?.(region));
     if (comma) return true;
     if (place !== "comma" && afterPlaceWord) return true;
+    // Opening a sentence or a title ("Trip: Florence"), with nothing after it that a person would do.
+    const opening = startsSentence(before) || /:[ \t]*$/u.test(before);
+    // ("Left to right: Florence, Ben." lists people.)
+    if (opening && !possessive && !(region && !comma) && PLACE_OPENING.test(after)) return true;
   }
   const caps = isUpperWord(match.replace(/[^\p{L}]/gu, ""));
   if (!n.title && !caps) {
@@ -245,6 +255,12 @@ export function notThePerson(text: string, start: number, end: number, n: Neighb
 }
 
 const WHEN_WORDS = new Set([...MONTHS, ...DATE_BEFORE, "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "spring", "summer", "autumn", "fall", "winter", "christmas", "easter", "today", "yesterday"]);
+
+/** Whether a name is a single word that is also a place the album knows ("Florence", "Georgia"). */
+export function isListedPlace(name: string): boolean {
+  const words = wordsOf(splitNickname(name).name);
+  return words.length === 1 && PLACE_NAMES.has(bare(words[0]));
+}
 
 /** Whether a keyword beside a name makes it a place or a date: "florence duomo italy", "may 2019". */
 export function isPlaceOrDateWord(word: string): boolean {

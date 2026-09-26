@@ -7,6 +7,7 @@ import { applyPlaceEstimate, needsPlaceEstimate } from "./place";
 import { isWeakDate } from "@/lib/photos/date-from-neighbours";
 import { judgeHelperText, knownNames, mentionsAnyName, pastHelperTitles, titleIsHelpers } from "./members-only";
 import { forgetState, unchangedSince } from "@/lib/people/names-changed";
+import { withoutOptedOutNames } from "@/lib/people/unpermitted";
 import { forgottenScope, loadTombstone, scrubRecord, type Tombstone } from "@/lib/people/tombstone";
 
 export type ApplyResult = { ok: true } | { ok: false; reason: "refusal" | "invalid" | "max_tokens" };
@@ -58,8 +59,9 @@ export async function applyAnnotation(photoId: string, model: string, parsed: An
   if (!current) return;
   // Nobody forgotten comes back by way of a new answer, whoever it is about: their names are taken out first.
   const tombstone = opts.tombstone ?? (await loadTombstone());
-  const scope = tombstone.empty ? undefined : await forgottenScope({ photoIds: [photoId] });
-  const stored = scrubRecord(toStored(parsed), tombstone, scope);
+  const scope = tombstone.empty ? undefined : await forgottenScope({ photoIds: [photoId] }, tombstone);
+  // Nor anybody opted out, or waiting to be forgotten, whose record is still there.
+  const stored = await withoutOptedOutNames(scrubRecord(toStored(parsed), tombstone, scope), photoId);
   // Written from names or notes, it is the family's to read: kept off the item's own title and out of public view.
   const judgement = await judgeHelperText(photoId, stored, current.context, opts.sent);
   const membersOnly = judgement.membersOnly;

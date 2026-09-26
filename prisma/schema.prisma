@@ -957,6 +957,9 @@ model ForgottenName {
   photoIds        String[] @default([])
   containerIds    String[] @default([])
   createdAt       DateTime @default(now())
+
+  @@index([photoIds], type: Gin)
+  @@index([containerIds], type: Gin)
 }
 
 /// After somebody was forgotten, the places whose words (a member's, or written before the album kept track) still
