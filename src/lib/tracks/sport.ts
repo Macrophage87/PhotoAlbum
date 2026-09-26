@@ -13,7 +13,9 @@ const MAP: [RegExp, ActivityType][] = [
 const SETTING = /^(outdoor|indoor|street|virtual|treadmill|e)_/;
 
 function normalise(raw: string): string {
-  let s = raw.trim().toLowerCase().replace(/[\s-]+/g, "_");
+  // Strava writes CamelCase ("EMountainBikeRide", "VirtualRun"): split the words before anything else.
+  const words = raw.trim().replace(/([a-z])([A-Z])/g, "$1_$2").replace(/([A-Z])([A-Z][a-z])/g, "$1_$2");
+  let s = words.toLowerCase().replace(/[\s-]+/g, "_");
   while (SETTING.test(s)) s = s.replace(SETTING, "");
   return s;
 }
@@ -28,15 +30,23 @@ export function sportToActivityType(raw: string | null | undefined): ActivityTyp
 
 /** Sports that are recognisably none of ours; a name that is not recognised at all could still be any of them. */
 const KNOWN_OTHER =
-  /^(swim|open_water|pool|lap_swim|schwimm|natation|nata|ski|alpine|cross_country|backcountry|nordic|langlauf|snowboard|golf|climb|rock_climb|boulder|klettern|skat|inline|ice_skat|surf|kitesurf|windsurf|wakeboard|water_ski|div(e|ing)|snorkel|sky_?div|hang_glid|paraglid|horse|equestrian|reit|yoga|pilates|tennis|squash|badminton|soccer|football|american_football|basketball|volleyball|fitness|training|strength|workout|crossfit|elliptical|stair|transition|hunting|tactical|jumpmaster|boxing|floor_climb|snowmobil)/;
+  /^(swim|open_water|pool|lap_swim|schwimm|natation|nata|ski|alpine|cross_country|backcountry|nordic|langlauf|roller_?ski|snowboard|golf|disc_golf|climb|rock_climb|boulder|klettern|skat|inline|ice_skat|surf|kitesurf|windsurf|wakeboard|wakesurf|water_ski|water_tubing|tubing|water_sport|div(e|ing)|snorkel|sky_?div|hang_glid|paraglid|horse|equestrian|reit|wheelchair|handcycl|yoga|pilates|hiit|dance|martial|mixed_martial|tennis|squash|badminton|racket|racquet|pickleball|table_tennis|soccer|football|american_football|basketball|volleyball|team_sport|cricket|rugby|hockey|lacrosse|baseball|softball|fitness|training|weight|strength|workout|crossfit|elliptical|stair|jump_rope|mobility|meditation|transition|hunting|shooting|archery|tactical|jumpmaster|boxing|floor_climb|snowmobil|winter_sport|video_gaming|para_sport|motor_sport)/;
+
+/** FIT's own catch-alls, which say nothing about what was done. */
+const FIT_CATCH_ALL = /^(generic|all|multisport|invalid|\d+)$/;
 
 /**
  * The type for a track whose sport did not map to one of ours. A sport recognisably none of ours (swimming, skiing,
  * golf) is OTHER: guessing from its speed would make a ski run a bike ride. Anything else, from no sport at all or a
- * catch-all like "generic" to a name in a language not listed here, is typed from its speed.
+ * catch-all like "generic" to a name in a language not listed here, is typed from its speed. `fromFit` says the
+ * name came from a FIT file, where every sport but the catch-alls is a named one.
  */
-export function fallbackActivityType(sportRaw: string | null | undefined, avgSpeedMs: number | null): ActivityType {
-  return sportRaw && KNOWN_OTHER.test(normalise(sportRaw)) ? "OTHER" : guessTypeFromSpeed(avgSpeedMs);
+export function fallbackActivityType(sportRaw: string | null | undefined, avgSpeedMs: number | null, fromFit = false): ActivityType {
+  if (!sportRaw) return guessTypeFromSpeed(avgSpeedMs);
+  const s = normalise(sportRaw);
+  // A FIT file's sport is one of Garmin's own list, so anything but its catch-alls is a named sport.
+  if (fromFit && !FIT_CATCH_ALL.test(s)) return "OTHER";
+  return KNOWN_OTHER.test(s) ? "OTHER" : guessTypeFromSpeed(avgSpeedMs);
 }
 
 /** Last resort: guess from average moving speed. */

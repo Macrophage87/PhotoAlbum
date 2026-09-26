@@ -52,6 +52,23 @@ describe("fallbackActivityType", () => {
     expect(sportToActivityType("Vélo")).toBe("BIKE");
     expect(sportToActivityType("Randonnée")).toBe("HIKE");
   });
+  it("splits Strava's CamelCase names", () => {
+    expect(sportToActivityType("EMountainBikeRide")).toBe("BIKE");
+    expect(sportToActivityType("EBikeRide")).toBe("BIKE");
+    expect(sportToActivityType("VirtualRun")).toBe("RUN");
+    expect(sportToActivityType("TrailRun")).toBe("RUN");
+    for (const other of ["IceSkate", "RockClimbing", "WaterSki", "RollerSki", "WeightTraining", "Wakesurfing", "water_tubing", "wheelchair_push_run", "disc_golf", "hiit", "racket", "dance", "mixed_martial_arts", "team_sport"]) {
+      expect(fallbackActivityType(other, 8)).toBe("OTHER");
+    }
+  });
+  it("counts every FIT sport but its catch-alls as named", () => {
+    expect(fallbackActivityType("pool_apnea", 1, true)).toBe("OTHER");
+    expect(fallbackActivityType("grinding", 1, true)).toBe("OTHER");
+    expect(fallbackActivityType("generic", 8, true)).toBe("BIKE");
+    expect(fallbackActivityType("multisport", 8, true)).toBe("BIKE");
+    // From a GPX <type>, an unknown word could be anything, so its speed decides.
+    expect(fallbackActivityType("grinding", 8)).toBe("BIKE");
+  });
   it("does not read a sport's word inside another sport", () => {
     expect(sportToActivityType("horseback_riding")).toBeNull();
     expect(sportToActivityType("motorcycling")).toBe("DRIVE");

@@ -63,7 +63,7 @@ export async function persistTrack(parsed: ParsedTrack, opts: PersistOptions): P
   let activityId: string | null = null;
   let type: ActivityType | null = opts.activityType ?? parsed.sport ?? null;
   if (opts.createActivity) {
-    type = type ?? fallbackActivityType(parsed.sportRaw, stats.avgSpeedMs);
+    type = type ?? fallbackActivityType(parsed.sportRaw, stats.avgSpeedMs, opts.source === "FIT");
     const activity = await db.activity.create({
       data: { tripId: opts.tripId, title: parsed.name, type, startTime: parsed.session?.startTime ?? startTime, endTime: parsed.session?.endTime ?? endTime, trackId: track.id },
     });
