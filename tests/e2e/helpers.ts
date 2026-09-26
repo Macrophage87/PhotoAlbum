@@ -46,17 +46,14 @@ export async function inviteFor(email: string, role: "ADMIN" | "MEMBER" = "MEMBE
 }
 
 /**
- * Press the link page's "Sign in" button once the page has settled, so a click made while React is still hydrating
- * the form is not lost; press again only if the page is still where it was.
+ * Press the link page's "Sign in" button once the page has settled (so the click is not made while React is still
+ * hydrating the form), exactly once: a lost tap should fail the test, not be papered over by a second one.
  */
 export async function pressSignIn(page: Page) {
   const at = page.url();
   await page.waitForLoadState("networkidle");
-  const button = page.getByRole("button", { name: "Sign in", exact: true });
-  for (let i = 0; i < 3 && page.url() === at; i++) {
-    await button.click({ timeout: 5_000 }).catch(() => {});
-    await page.waitForURL((u) => u.toString() !== at, { timeout: 15_000 }).catch(() => {});
-  }
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await page.waitForURL((u) => u.toString() !== at, { timeout: 20_000 });
 }
 
 /** Open the emailed link and press its "Sign in" button: opening the link alone does not use it up. */
