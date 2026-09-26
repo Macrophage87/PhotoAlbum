@@ -878,7 +878,11 @@ test("the AI helper describes reviewed items once an admin opts in, and opted-ou
   // description, and its answer (a different landmark in the stand-in) is what lands.
   await withDb((c) => c.query(`UPDATE "Photo" SET lat = NULL, lng = NULL, "gpsSource" = NULL, "placeSetById" = NULL, "placeEstimatedAt" = NULL, "placeEstimateName" = NULL WHERE id = $1`, [guessed.rows[0].id]));
   await page.goto("/admin");
+  // Chosen only once the page has hydrated: React sets a controlled select back to its own state as it hydrates, so
+  // a choice made before that is quietly undone and the estimate is for describing instead.
+  await page.waitForLoadState("networkidle");
   await page.getByLabel("What to ask for").selectOption("place");
+  await expect(page.getByLabel("What to ask for")).toHaveValue("place");
   await page.getByRole("button", { name: "Estimate" }).click();
   await expect(status).toContainText("would be sent");
   const places = Number((await status.textContent())!.match(/(\d+) items? would be sent/)![1]);
