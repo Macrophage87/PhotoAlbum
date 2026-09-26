@@ -12,6 +12,8 @@ import { describeCount, filterIsActive, filterQuery, parseGalleryFilter } from "
 import { YouTubeAddForm } from "@/components/videos/YouTubeAddForm";
 import { dateColumnToDay } from "@/lib/time/local-day";
 import { peopleInPhotos } from "@/lib/people/in-photos";
+import { PHOTO_SORTS, SORT_COOKIES, sortChoice } from "@/lib/sort-choice";
+import { SortToggle } from "@/components/ui/SortToggle";
 
 export default async function TripPhotosPage({ params, searchParams }: PageProps<"/trips/[slug]/photos">) {
   const { slug } = await params;
@@ -19,17 +21,19 @@ export default async function TripPhotosPage({ params, searchParams }: PageProps
   const { trip, editable, owns } = await loadViewableTrip(slug, `/trips/${slug}/photos`);
   // Who uploaded what is members-only, so an anonymous visitor never sees the member list nor filters by it.
   const filter = parseGalleryFilter(sp, { member: editable });
+  // Favourites first unless this person has asked for the grid by date, either way round.
+  const sort = await sortChoice(sp, SORT_COOKIES.photos, PHOTO_SORTS, "favorites");
   const [page, activities, members, people] = await Promise.all([
-    tripPhotoPage(trip.id, { filter, viewerId: editable ? (await getViewer()).user?.id ?? null : null }),
+    tripPhotoPage(trip.id, { filter, order: sort === "oldest" ? "taken" : sort, viewerId: editable ? (await getViewer()).user?.id ?? null : null }),
     db.activity.findMany({ where: { tripId: trip.id }, orderBy: { startTime: "asc" }, select: { id: true, title: true } }),
     editable ? db.user.findMany({ where: { photos: { some: { tripId: trip.id } } }, orderBy: { name: "asc" }, select: { id: true, name: true, email: true } }) : Promise.resolve([]),
     editable ? peopleInPhotos({ tripId: trip.id }) : Promise.resolve([]),
   ]);
   const photos = page.photos;
   const favourites = await photoFavourites(photos.map((p) => p.id), await getViewer());
-  const query = filterQuery(filter);
-  // Paging keeps the narrowing: the next page of a search is the next page of that same search.
-  const moreUrl = `/api/trips/${trip.slug}/photos${query ? `?${query}` : ""}`;
+  const query = [filterQuery(filter), `order=${sort}`].filter(Boolean).join("&");
+  // Paging keeps the narrowing and the order: the next page of a search is the next page of that same search.
+  const moreUrl = `/api/trips/${trip.slug}/photos?${query}`;
   const active = filterIsActive(filter);
   // What the last tidy-up did, carried in the address so it survives the page being rebuilt around a shorter grid.
   const removed = typeof sp.removed === "string" ? Number(sp.removed) : NaN;
@@ -59,6 +63,13 @@ export default async function TripPhotosPage({ params, searchParams }: PageProps
         people={editable ? people : undefined}
         activities={activities.map((a) => ({ id: a.id, label: a.title }))}
         placeholder="Search this trip"
+      />
+      <SortToggle
+        value={sort}
+        options={[{ value: "favorites", label: "Favorites first" }, { value: "oldest", label: "Oldest first" }, { value: "newest", label: "Newest first" }]}
+        cookie={SORT_COOKIES.photos}
+        label="How the photos are ordered"
+        testId="photos-order"
       />
       {active && page.total === 0 && (
         <p className="text-muted text-sm" data-testid="no-matches">Nothing here matches that. Try fewer words, or clear the filters.</p>

@@ -16,6 +16,9 @@ export async function GET(request: NextRequest, { params }: RouteContext<"/api/t
   const sp = request.nextUrl.searchParams;
   // The next page of a narrowed gallery is the next page of that same narrowing, read the same way the page reads it.
   const filter = parseGalleryFilter(Object.fromEntries(sp.entries()), { member });
-  const page = await tripPhotoPage(trip.id, { cursor: sp.get("cursor"), filter });
+  // The same order the page was built in, or the next page would continue a different list.
+  const asked = sp.get("order");
+  const order = asked === "oldest" ? "taken" : asked === "newest" ? "newest" : "favorites";
+  const page = await tripPhotoPage(trip.id, { cursor: sp.get("cursor"), filter, order, viewerId: member ? viewer.user.id : null });
   return NextResponse.json({ photos: page.photos.map((p) => toGridPhoto(p, null, member)), nextCursor: page.nextCursor, total: page.total }, { headers: { "Cache-Control": "private, no-store" } });
 }

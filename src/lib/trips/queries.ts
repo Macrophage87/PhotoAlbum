@@ -27,7 +27,7 @@ export type TripCardData = Prisma.TripGetPayload<{ select: typeof tripCardSelect
  * Trips for the front page, newest first, optionally narrowed by name. Paged: a family that has been at this for
  * twenty years has more trips than anyone wants rendered at once, and every one of them carries a cover photo.
  */
-export async function listVisibleTrips(viewer: Viewer, opts: { q?: string | null; take?: number; skip?: number } = {}): Promise<TripCardData[]> {
+export async function listVisibleTrips(viewer: Viewer, opts: { q?: string | null; take?: number; skip?: number; order?: "favorites" | "newest" | "oldest" } = {}): Promise<TripCardData[]> {
   const where = { ...visibleTripsWhere(viewer), ...(opts.q ? { title: { contains: opts.q, mode: "insensitive" as const } } : {}) };
   // Favourites lead: this member's first, then the ones most of the family marked, then newest. The order is worked
   // out in SQL because "mine" is not something an ordinary orderBy can express, then the rows are fetched by id.
@@ -35,7 +35,11 @@ export async function listVisibleTrips(viewer: Viewer, opts: { q?: string | null
     SELECT t.id FROM "Trip" t
     WHERE ${viewer.kind === "user" ? Prisma.sql`TRUE` : Prisma.sql`t.visibility = 'PUBLIC'`}
       AND ${opts.q ? Prisma.sql`t.title ILIKE ${"%" + opts.q + "%"}` : Prisma.sql`TRUE`}
-    ${favouriteOrderSql("trip", "t", viewer.kind === "user" ? viewer.user.id : null, Prisma.sql`t."startDate" DESC, t.id DESC`)}
+    ${opts.order === "newest"
+      ? Prisma.sql`ORDER BY t."startDate" DESC, t.id DESC`
+      : opts.order === "oldest"
+        ? Prisma.sql`ORDER BY t."startDate" ASC, t.id ASC`
+        : favouriteOrderSql("trip", "t", viewer.kind === "user" ? viewer.user.id : null, Prisma.sql`t."startDate" DESC, t.id DESC`)}
     LIMIT ${opts.take ?? 1000} OFFSET ${opts.skip ?? 0}`;
   const rows = await db.trip.findMany({ where: { ...where, id: { in: ids.map((i) => i.id) } }, select: tripCardSelect });
   const byId = new Map(rows.map((r) => [r.id, r]));

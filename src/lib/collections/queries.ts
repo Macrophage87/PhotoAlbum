@@ -65,13 +65,22 @@ export async function collectionCoverFor(collection: { id: string; coverPhoto: {
 export type CollectionItemCard = PhotoCard & { itemId: string; position: number };
 
 /** Items in display order. Every status is included so members see processing tiles. */
-export async function listCollectionItems(collectionId: string, opts: { viewerId?: string | null; order?: "favorites" | "arranged" } = {}): Promise<CollectionItemCard[]> {
+export async function listCollectionItems(collectionId: string, opts: { viewerId?: string | null; order?: "favorites" | "arranged" | "oldest" | "newest" } = {}): Promise<CollectionItemCard[]> {
   const items = await db.collectionItem.findMany({
     where: { collectionId, photo: NOT_TRASHED },
     orderBy: [{ position: "asc" }, { createdAt: "asc" }],
     select: { id: true, position: true, photo: { select: photoCardSelect } },
   });
   const cards = items.map((i) => ({ ...i.photo, itemId: i.id, position: i.position }));
+  // By when they were taken, either way round; the undated keep their arranged places at the end, and the
+  // arrangement settles ties.
+  if (opts.order === "oldest" || opts.order === "newest") {
+    const sign = opts.order === "newest" ? -1 : 1;
+    return cards
+      .map((c, i) => ({ c, i, t: c.takenAt?.getTime() ?? null }))
+      .sort((a, b) => (a.t === null ? (b.t === null ? a.i - b.i : 1) : b.t === null ? -1 : sign * (a.t - b.t) || a.i - b.i))
+      .map((x) => x.c);
+  }
   // An empty collection has nothing to order, and asking Postgres about an empty list is an error, not a no-op.
   if (!cards.length || (opts.order ?? "favorites") !== "favorites") return cards;
   // Favourites lead; the collection's own arrangement is the tie-break, so everything else stays where it was put.

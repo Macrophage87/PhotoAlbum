@@ -13,7 +13,8 @@ export const GALLERY_PAGE = 240;
 export type PhotoPage = { photos: PhotoCard[]; nextCursor: string | null; total: number };
 
 /** How a gallery is ordered: favourites first (the default), or straight through in the order the photos were taken. */
-export type PhotoOrder = "favorites" | "taken";
+/** Favourites first; by when they were taken, earliest first ("taken"); or latest first ("newest"). */
+export type PhotoOrder = "favorites" | "taken" | "newest";
 
 /**
  * Which items a search matches, as a list of ids.
@@ -102,10 +103,12 @@ export async function tripPhotoPage(tripId: string, opts: { uploaderId?: string;
     const photos = wanted.map((id) => byId.get(id)).filter((p): p is PhotoCard => Boolean(p));
     return { photos, nextCursor: more ? String(skip + take) : null, total };
   }
+  // Latest first still leaves the undated at the end: "no date" is neither early nor late.
+  const dir = order === "newest" ? "desc" : "asc";
   const [photos, total] = await Promise.all([
     db.photo.findMany({
       where,
-      orderBy: [{ takenAt: { sort: "asc", nulls: "last" } }, { createdAt: "asc" }, { id: "asc" }],
+      orderBy: [{ takenAt: { sort: dir, nulls: "last" } }, { createdAt: dir }, { id: dir }],
       select: photoCardSelect,
       take: take + 1,
       ...(opts.cursor ? { cursor: { id: opts.cursor }, skip: 1 } : {}),

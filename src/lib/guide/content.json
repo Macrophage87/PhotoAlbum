@@ -73,6 +73,10 @@
         },
         {
           "kind": "p",
+          "text": "Lists have the same kind of switch. A trip's **Activities** can be listed **Oldest first** or **Newest first**. A trip's or a collection's **Photos**, and the **Trips** on the front page, start **Favorites first** and can be put in date order either way. Each list remembers its own choice on that phone or computer."
+        },
+        {
+          "kind": "p",
           "text": "Press any photograph to see it big. Press it again to see it at full size. The arrow keys, or a swipe, move to the next one."
         },
         {

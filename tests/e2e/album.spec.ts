@@ -3027,3 +3027,47 @@ test("a timeline can run newest first, and remembers that choice on this device"
   await page.goto("/timeline");
   await expect(page.getByTestId("timeline-order-newest")).toHaveAttribute("aria-current", "true");
 });
+
+test("the activities list, the photos grids and the trips list can each be put in date order, either way round", async ({ context, page }) => {
+  await signIn(context, ADMIN);
+  const trip = (await withDb((c) => c.query(`SELECT id, "startDate" FROM "Trip" WHERE slug = 'acadia'`))).rows[0] as { id: string; startDate: Date };
+  // A second outing a day later, so there is an order to reverse.
+  const extra = `act-${randomUUID()}`;
+  const next = new Date(new Date(trip.startDate).getTime() + 3 * 86_400_000 + 14 * 3_600_000);
+  await withDb((c) => c.query(`INSERT INTO "Activity" (id, "tripId", title, type, "startTime", "endTime", "updatedAt") VALUES ($1, $2, 'Zz later outing', 'HIKE', $3, $4, now())`, [extra, trip.id, next, new Date(next.getTime() + 3_600_000)]));
+  const ids = (loc: Locator) => loc.evaluateAll((els) => els.map((e) => (e.getAttribute("src") ?? "").split("/api/photos/")[1]?.split("/")[0]).filter(Boolean));
+
+  try {
+    // Activities: the order they happened in, or the latest first.
+    await page.goto("/trips/acadia/activities");
+    const titles = () => page.locator("h3").allTextContents();
+    await expect(page.getByTestId("activities-order-oldest")).toHaveAttribute("aria-current", "true");
+    const oldest = await titles();
+    expect(oldest.at(-1)).toBe("Zz later outing");
+    await page.getByTestId("activities-order-newest").click();
+    await expect(page).toHaveURL(/order=newest/);
+    expect(await titles()).toEqual([...oldest].reverse());
+
+    // A trip's photos by date, latest first, which is the database's own answer to "latest first".
+    await page.goto("/trips/acadia/photos");
+    await expect(page.getByTestId("photos-order-favorites")).toHaveAttribute("aria-current", "true");
+    await page.getByTestId("photos-order-newest").click();
+    await expect(page).toHaveURL(/order=newest/);
+    const expected = (await withDb((c) => c.query(`SELECT id FROM "Photo" WHERE "tripId" = $1 AND "trashedAt" IS NULL AND status IN ('READY','PENDING','PROCESSING','FAILED') ORDER BY "takenAt" DESC NULLS LAST, "createdAt" DESC, id DESC`, [trip.id]))).rows.map((r) => r.id as string);
+    await expect.poll(async () => (await ids(page.locator("li.tile-lazy img[src*='/api/photos/']"))).slice(0, 3)).toEqual(expected.slice(0, 3));
+    // Remembered for the next grid, a collection's included.
+    const col = (await withDb((c) => c.query(`SELECT slug FROM "Collection" ORDER BY "createdAt" LIMIT 1`))).rows[0].slug as string;
+    await page.goto(`/collections/${col}/photos`);
+    await expect(page.getByTestId("photos-order-newest")).toHaveAttribute("aria-current", "true");
+
+    // Trips: favorites first by default, or strictly by date either way.
+    await page.goto("/");
+    await expect(page.getByTestId("trips-order-favorites")).toHaveAttribute("aria-current", "true");
+    await page.getByTestId("trips-order-oldest").click();
+    await expect(page).toHaveURL(/order=oldest/);
+    const earliest = (await withDb((c) => c.query(`SELECT title FROM "Trip" ORDER BY "startDate" ASC, id ASC LIMIT 1`))).rows[0].title as string;
+    await expect(page.locator("a[href^='/trips/'] h3").first()).toHaveText(earliest);
+  } finally {
+    await withDb((c) => c.query(`DELETE FROM "Activity" WHERE id = $1`, [extra]));
+  }
+});

@@ -3,13 +3,17 @@ import { loadViewableTrip } from "@/lib/trips/access";
 import { ActivityCard } from "@/components/activities/ActivityCard";
 import { ButtonLink } from "@/components/ui";
 import { NOT_TRASHED } from "@/lib/photos/trash";
+import { DATE_SORTS, SORT_COOKIES, sortChoice } from "@/lib/sort-choice";
+import { SortToggle } from "@/components/ui/SortToggle";
 
-export default async function ActivitiesPage({ params }: PageProps<"/trips/[slug]/activities">) {
+export default async function ActivitiesPage({ params, searchParams }: PageProps<"/trips/[slug]/activities">) {
   const { slug } = await params;
   const { trip, editable } = await loadViewableTrip(slug, `/trips/${slug}/activities`);
+  // The order they happened in, unless this person has asked for the latest first.
+  const sort = await sortChoice(await searchParams, SORT_COOKIES.activities, DATE_SORTS, "oldest");
   const activities = await db.activity.findMany({
     where: { tripId: trip.id },
-    orderBy: { startTime: "asc" },
+    orderBy: { startTime: sort === "newest" ? "desc" : "asc" },
     include: { track: { select: { simplified: true, stats: true } }, _count: { select: { photos: { where: NOT_TRASHED } } } },
   });
   return (
@@ -25,6 +29,15 @@ export default async function ActivitiesPage({ params }: PageProps<"/trips/[slug
           </div>
         )}
       </div>
+      {activities.length > 1 && (
+        <SortToggle
+          value={sort}
+          options={[{ value: "oldest", label: "Oldest first" }, { value: "newest", label: "Newest first" }]}
+          cookie={SORT_COOKIES.activities}
+          label="Which way the activities are listed"
+          testId="activities-order"
+        />
+      )}
       {activities.length === 0 ? (
         <p className="text-muted text-sm">{editable ? "No activities yet. Add one by hand, or import a GPX or FIT file to create one with its track and stats." : "No activities yet."}</p>
       ) : (
