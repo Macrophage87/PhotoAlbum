@@ -3,7 +3,6 @@ import { columnarToPoints, decodePoints } from "@/lib/tracks/encode";
 import { positionAt, positionKindAt, type PositionKind } from "@/lib/tracks/interpolate";
 import type { TrackPoint } from "@/lib/tracks/types";
 import type { GeotagPhotosJob } from "../queues";
-import type { TakenAtSource } from "@/generated/prisma/enums";
 import { NOT_TRASHED } from "@/lib/photos/trash";
 import { TRUSTED_TIME_SOURCES } from "@/lib/photos/date-from-neighbours";
 import { haversine } from "@/lib/geo/haversine";
