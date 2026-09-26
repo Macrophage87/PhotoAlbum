@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatDay } from "@/lib/time/format";
+import { formatDay, formatInstant, formatTakenAt } from "@/lib/time/format";
 
 describe("how a day is written", () => {
   it("carries the year on a timeline heading: an album spans decades, and August 12 alone places nothing", () => {
@@ -15,5 +15,33 @@ describe("how a day is written", () => {
   it("names the weekday in a list of days to go to: a day is often remembered as the Saturday it was", () => {
     expect(formatDay("2025-08-12", "shortDay")).toBe("Tue, Aug 12");
     expect(formatDay("1978-08-12", "shortDay")).toBe("Sat, Aug 12");
+  });
+});
+
+describe("when a photograph was taken (#75)", () => {
+  const at = new Date("2026-07-05T03:00:00Z"); // 8 PM on July 4 in California
+
+  it("reads its own clock, not UTC, when it has no trip", () => {
+    expect(formatTakenAt(at, -420, null)).toBe("Sat, Jul 4, 2026 · 8:00 PM");
+  });
+
+  it("reads its own clock over the trip's zone when the two disagree", () => {
+    expect(formatTakenAt(at, -420, "America/New_York")).toBe("Sat, Jul 4, 2026 · 8:00 PM");
+  });
+
+  it("falls back to the trip's zone, then UTC, when its offset is unknown", () => {
+    expect(formatTakenAt(at, null, "America/New_York")).toBe("Sat, Jul 4, 2026 · 11:00 PM");
+    expect(formatTakenAt(at, null, null)).toBe("Sun, Jul 5, 2026 · 3:00 AM");
+  });
+});
+
+describe("a timestamp on an admin page (#126)", () => {
+  it("writes the same text on the server and during hydration, marked as UTC", () => {
+    expect(formatInstant("2026-09-26T23:15:00Z", "dateTime", "UTC")).toBe("9/26/2026, 11:15 PM UTC");
+    expect(formatInstant("2026-09-27T01:00:00Z", "date", "UTC")).toBe("9/27/2026 UTC");
+  });
+
+  it("uses the zone it is given once the browser's is known", () => {
+    expect(formatInstant("2026-09-26T23:15:00Z", "dateTime", "America/New_York")).toBe("9/26/2026, 7:15 PM");
   });
 });

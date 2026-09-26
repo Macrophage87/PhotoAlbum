@@ -1,4 +1,4 @@
-import { formatBytes, formatDateTime } from "@/lib/time/format";
+import { formatBytes, formatTakenAt } from "@/lib/time/format";
 
 type ExifJson = { exposureTime?: number | null; fNumber?: number | null; iso?: number | null; focalLength?: number | null; offsetTimeOriginal?: string | null };
 
@@ -19,7 +19,7 @@ const takenAtLabel: Record<string, string> = {
 export function ExifPanel({ photo, tripTimezone }: { photo: { takenAt: Date | null; takenAtSource: string | null; tzOffsetMin: number | null; lat: number | null; lng: number | null; altitude: number | null; gpsSource: string | null; camera: string | null; lens: string | null; exif: unknown; width: number | null; height: number | null; sizeBytes: number; originalName: string; mimeType: string }; tripTimezone?: string }) {
   const ex = (photo.exif ?? {}) as ExifJson;
   const rows: [string, string | null][] = [
-    ["Taken", photo.takenAt ? formatDateTime(photo.takenAt, tripTimezone ?? "UTC") + (photo.takenAtSource ? ` · ${takenAtLabel[photo.takenAtSource] ?? ""}` : "") : "Unknown"],
+    ["Taken", photo.takenAt ? formatTakenAt(photo.takenAt, photo.tzOffsetMin, tripTimezone) + (photo.takenAtSource ? ` · ${takenAtLabel[photo.takenAtSource] ?? ""}` : "") : "Unknown"],
     ["Location", photo.lat !== null && photo.lng !== null ? `${photo.lat.toFixed(5)}, ${photo.lng.toFixed(5)}${photo.altitude !== null ? ` · ${Math.round(photo.altitude)} m` : ""}${photo.gpsSource === "TRACK" ? " · from track" : photo.gpsSource === "MANUAL" ? " · set by hand" : ""}` : "None"],
     ["Camera", photo.camera],
     ["Lens", photo.lens],

@@ -89,7 +89,7 @@ export default async function ReviewPage({ searchParams }: PageProps<"/review">)
             ) : (
               <p className="text-sm text-muted" data-testid="review-not-yours">These were uploaded by somebody else. Only they, or an admin, can add notes to them or mark them reviewed.</p>
             )}
-            {editable && <YouTubeAddForm defaultDate={new Date().toISOString().slice(0, 10)} />}
+            {editable && <YouTubeAddForm />}
             {google && <GooglePickerButton status={google} configured next="/review" />}
             <PhotoGrid photos={photos.map((p) => toGridPhoto(p, p.reviewedAt ? null : "unreviewed", true))} />
             {(proposals.length > 0 || unnamedFaces > 0) && (

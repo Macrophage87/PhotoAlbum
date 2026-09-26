@@ -16,6 +16,35 @@ export function localDayInZone(instant: Date, timezone: string): LocalDay {
   return `${z.getFullYear()}-${pad(z.getMonth() + 1)}-${pad(z.getDate())}`;
 }
 
+/** The offset a photograph's clock is read on (see photoDay): its own, else the trip's zone at that instant, else UTC. */
+export function photoOffsetMin(instant: Date, tzOffsetMin: number | null, timezone?: string | null): number {
+  return tzOffsetMin ?? (timezone ? offsetMinutesInZone(instant, timezone) : 0);
+}
+
+/**
+ * The instant and offset for a wall-clock time typed for a photograph: on its own offset when it has one, else in
+ * the trip's zone (resolved as a wall time, so a date across a DST change gets that day's offset), else UTC.
+ */
+export function photoWallTimeToInstant(
+  wall: { year: number; month: number; day: number; hour: number; minute: number; second: number; ms?: number },
+  tzOffsetMin: number | null,
+  timezone?: string | null,
+): { takenAt: Date; tzOffsetMin: number } {
+  if (tzOffsetMin === null && timezone) {
+    const takenAt = wallTimeToInstant(wall, timezone);
+    return { takenAt, tzOffsetMin: offsetMinutesInZone(takenAt, timezone) };
+  }
+  return { takenAt: wallTimeWithOffsetToInstant(wall, tzOffsetMin ?? 0), tzOffsetMin: tzOffsetMin ?? 0 };
+}
+
+/**
+ * Today's date on the clock of whoever is running this: for a default typed into a form in the browser, where
+ * `toISOString().slice(0, 10)` would be the UTC day (tomorrow, on an American evening). Not for server rendering.
+ */
+export function localToday(now = new Date()): LocalDay {
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+}
+
 /** UTC offset (minutes east of UTC) that `timezone` has at `instant`. */
 export function offsetMinutesInZone(instant: Date, timezone: string): number {
   return -new TZDate(instant, timezone).getTimezoneOffset();
@@ -63,4 +92,12 @@ export function isValidTimezone(tz: string): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * The day a photograph was taken, as the album shows it everywhere: on its own clock (the offset it was taken at)
+ * when that is known, else in the trip's zone, else UTC. Timelines, day lists and the photo page all use this rule.
+ */
+export function photoDay(takenAt: Date, tzOffsetMin: number | null, timezone = "UTC"): LocalDay {
+  return tzOffsetMin !== null ? localDayFromOffset(takenAt, tzOffsetMin) : localDayInZone(takenAt, timezone);
 }

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { useLocalTime } from "@/components/time/useLocalTime";
 import Link from "next/link";
 import { Badge, Button, Card } from "@/components/ui";
 import { deleteFromTrash, restoreFromTrash } from "@/app/admin/trash/actions";
@@ -19,6 +20,7 @@ export type TrashItem = {
 };
 
 export function TrashTable({ items }: { items: TrashItem[] }) {
+  const stamp = useLocalTime();
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [pending, start] = useTransition();
   const [message, setMessage] = useState<string | null>(null);
@@ -91,7 +93,7 @@ export function TrashTable({ items }: { items: TrashItem[] }) {
                 </div>
                 <p className="text-muted">{item.reason}</p>
                 <p className="text-muted text-xs">
-                  Trashed {item.trashedBy ? `by ${item.trashedBy} ` : ""}on {new Date(item.trashedAt).toLocaleString("en-US")}
+                  Trashed {item.trashedBy ? `by ${item.trashedBy} ` : ""}on {stamp(item.trashedAt)}
                   {item.uploadedBy ? ` · uploaded by ${item.uploadedBy}` : ""}
                 </p>
               </div>

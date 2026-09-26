@@ -4,9 +4,14 @@ import { useActionState, useState } from "react";
 import Link from "next/link";
 import { Button, FieldError, Input, Label } from "@/components/ui";
 import { addYouTubeVideo, type VideoFormState } from "@/app/videos/actions";
+import { localToday } from "@/lib/time/local-day";
 
-/** "Add a YouTube video" button that opens a small form; the trip or collection is fixed by the page it sits on. */
-export function YouTubeAddForm({ tripId, collectionId, defaultDate }: { tripId?: string; collectionId?: string; defaultDate: string }) {
+/**
+ * "Add a YouTube video" button that opens a small form; the trip or collection is fixed by the page it sits on.
+ * Without a `defaultDate` the date starts at today on the member's own clock; the form only renders once opened in
+ * the browser, so that is never the server's day.
+ */
+export function YouTubeAddForm({ tripId, collectionId, defaultDate }: { tripId?: string; collectionId?: string; defaultDate?: string }) {
   const [open, setOpen] = useState(false);
   const [state, action, pending] = useActionState<VideoFormState, FormData>(addYouTubeVideo, { status: "idle" });
   if (!open) {
@@ -29,7 +34,7 @@ export function YouTubeAddForm({ tripId, collectionId, defaultDate }: { tripId?:
       </div>
       <div className="max-w-xs">
         <Label htmlFor="yt-date">Date it was filmed</Label>
-        <Input id="yt-date" name="date" type="date" required defaultValue={defaultDate} />
+        <Input id="yt-date" name="date" type="date" required defaultValue={defaultDate ?? localToday()} />
       </div>
       {state.status === "error" && <FieldError>{state.message}</FieldError>}
       {state.status === "done" && (

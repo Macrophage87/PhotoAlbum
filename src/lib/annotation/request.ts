@@ -9,7 +9,7 @@ import { storage } from "@/lib/storage";
 import type { Renditions } from "@/lib/images/renditions";
 import type { VideoRenditions } from "@/lib/jobs/handlers/transcode-video";
 import { ffmpeg } from "@/lib/video/ffmpeg";
-import { formatDateTime } from "@/lib/time/format";
+import { formatTakenAt } from "@/lib/time/format";
 import { SYSTEM_INSTRUCTIONS } from "./prompt";
 import { annotationSchema } from "./schema";
 import { memberTitle } from "./helper-text";
@@ -67,7 +67,7 @@ export function describeItem(item: ItemForAnnotation, permittedNames: string[], 
   // A title the helper gave it last time is not the family's word, and may name somebody no longer to be named.
   const title = memberTitle(item.title, item.annotation, item.titleByHelper);
   if (title) lines.push(`Title: ${title}`);
-  if (item.takenAt && !askForDate) lines.push(`Taken: ${formatDateTime(item.takenAt, item.trip?.timezone ?? "UTC", "EEEE, MMMM d, yyyy")}`);
+  if (item.takenAt && !askForDate) lines.push(`Taken: ${formatTakenAt(item.takenAt, item.tzOffsetMin, item.trip?.timezone, "EEEE, MMMM d, yyyy")}`);
   if (item.camera) lines.push(`Camera: ${item.camera}`);
   if (item.trip) lines.push(`Trip: ${item.trip.title}`);
   if (item.collections.length) lines.push(`Collections: ${item.collections.map((c) => c.collection.title).join(", ")}`);
@@ -141,7 +141,7 @@ export function describePlaceItem(item: ItemForAnnotation): string {
   // A title the helper gave it last time is not the family's word, and may name somebody no longer to be named.
   const title = memberTitle(item.title, item.annotation, item.titleByHelper);
   if (title) lines.push(`Title: ${title}`);
-  if (item.takenAt) lines.push(`Taken: ${formatDateTime(item.takenAt, item.trip?.timezone ?? "UTC", "EEEE, MMMM d, yyyy")}`);
+  if (item.takenAt) lines.push(`Taken: ${formatTakenAt(item.takenAt, item.tzOffsetMin, item.trip?.timezone, "EEEE, MMMM d, yyyy")}`);
   if (item.trip) lines.push(`Trip: ${item.trip.title}`);
   if (item.collections.length) lines.push(`Collections: ${item.collections.map((c) => c.collection.title).join(", ")}`);
   lines.push("This item has no location recorded. If it shows a public place you recognize, estimate it; otherwise return null.");

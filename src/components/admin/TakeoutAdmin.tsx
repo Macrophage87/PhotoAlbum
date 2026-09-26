@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { useLocalTime } from "@/components/time/useLocalTime";
 import { Button, Card } from "@/components/ui";
 import { deleteTakeoutArchive, startTakeoutImport } from "@/app/admin/actions";
 
@@ -14,6 +15,7 @@ function size(bytes: number): string {
 }
 
 export function TakeoutAdmin({ configured, dir, archives, imports }: { configured: boolean; dir: string | null; archives: ArchiveRow[]; imports: ImportRow[] }) {
+  const stamp = useLocalTime();
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const running = imports.some((i) => i.status === "RUNNING");
@@ -44,7 +46,7 @@ export function TakeoutAdmin({ configured, dir, archives, imports }: { configure
             <div key={a.name} className="flex flex-wrap items-center justify-between gap-3 p-3 text-sm">
               <div className="min-w-0">
                 <div className="font-medium truncate">{a.name}</div>
-                <div className="text-muted">{size(a.bytes)} · copied {new Date(a.modifiedAt).toLocaleDateString("en-US")}</div>
+                <div className="text-muted">{size(a.bytes)} · copied {stamp(a.modifiedAt, "date")}</div>
               </div>
               <div className="flex gap-2">
                 <Button size="sm" disabled={pending || running} onClick={() => act(() => startTakeoutImport(a.name))}>Import</Button>
@@ -62,7 +64,7 @@ export function TakeoutAdmin({ configured, dir, archives, imports }: { configure
               <div key={i.id} className="p-3 text-sm space-y-1" data-testid="takeout-import" data-status={i.status}>
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <span className="font-medium">{i.archiveName}</span>
-                  <span className="text-muted">{i.status === "RUNNING" ? "in progress" : i.status === "ENDED" ? "done" : "failed"} · started {new Date(i.startedAt).toLocaleString("en-US")}</span>
+                  <span className="text-muted">{i.status === "RUNNING" ? "in progress" : i.status === "ENDED" ? "done" : "failed"} · started {stamp(i.startedAt)}</span>
                 </div>
                 <div className="text-muted">
                   {i.imported} imported · {i.skipped} skipped{i.report?.duplicates ? ` (${i.report.duplicates} already in the album)` : ""}{i.report?.inTrash ? ` (${i.report.inTrash} in the trash, left there)` : ""} · {i.repaired} repaired · {i.failed} failed · {i.collectionsCreated} private collection{i.collectionsCreated === 1 ? "" : "s"} created
