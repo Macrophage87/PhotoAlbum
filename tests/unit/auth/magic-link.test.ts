@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
-import { checkMagicLink, createInvite, requestMagicLink, verifyMagicLink } from "@/lib/auth/magic-link";
+import { checkMagicLink, createInvite, maskEmail, requestMagicLink, verifyMagicLink } from "@/lib/auth/magic-link";
+import type { Db } from "@/lib/db";
 import { resetTestDb } from "../helpers/reset";
 
 const T0 = new Date("2026-01-01T12:00:00Z");
@@ -80,11 +81,41 @@ describe("magic link", () => {
     expect(await db.user.count({ where: { email: "cousin@example.com" } })).toBe(0);
   });
 
+  it("does not create the account when the invite is revoked while the link is being used", async () => {
+    const admin = await db.user.create({ data: { email: "owner@example.com", role: "ADMIN" } });
+    await createInvite("cousin@example.com", admin.id, "MEMBER", deps());
+    const req = await requestMagicLink("cousin@example.com", deps());
+    if (!req.ok) throw new Error();
+    // The admin's revoke lands just after verify has looked the invite up.
+    const racing = new Proxy(db, {
+      get(target, prop) {
+        if (prop !== "invite") return Reflect.get(target, prop);
+        return new Proxy(db.invite, {
+          get(inv, name) {
+            if (name !== "findFirst") return Reflect.get(inv, name);
+            return async (args: Parameters<typeof db.invite.findFirst>[0]) => {
+              const found = await db.invite.findFirst(args);
+              await db.invite.deleteMany({ where: { email: "cousin@example.com" } });
+              return found;
+            };
+          },
+        });
+      },
+    }) as Db;
+    expect(await verifyMagicLink(req.token, { db: racing, now: () => T0 })).toEqual({ ok: false, reason: "invalid" });
+    expect(await db.user.count({ where: { email: "cousin@example.com" } })).toBe(0);
+  });
+
+  it("shows only enough of an address to recognise it", () => {
+    expect(maskEmail("grandma@example.com")).toBe("g•••@example.com");
+    expect(maskEmail("x")).toBe("•••");
+  });
+
   it("looking at a link does not use it up", async () => {
     const req = await requestMagicLink("first@example.com", deps());
     if (!req.ok) throw new Error();
-    expect(await checkMagicLink(req.token, deps())).toEqual({ ok: true });
-    expect(await checkMagicLink(req.token, deps())).toEqual({ ok: true });
+    expect(await checkMagicLink(req.token, deps())).toEqual({ ok: true, email: "first@example.com" });
+    expect(await checkMagicLink(req.token, deps())).toEqual({ ok: true, email: "first@example.com" });
     expect((await verifyMagicLink(req.token, deps())).ok).toBe(true);
     expect(await checkMagicLink(req.token, deps())).toEqual({ ok: false, reason: "used" });
     expect(await checkMagicLink("nope", deps())).toEqual({ ok: false, reason: "invalid" });

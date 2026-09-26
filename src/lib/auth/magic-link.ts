@@ -63,13 +63,23 @@ export type VerifyResult =
  * Look at a magic-link token without using it, for the page the emailed link opens. Mail scanners fetch links
  * before the person does, so only the button on that page (a POST) may consume it.
  */
-export async function checkMagicLink(token: string, deps: MagicLinkDeps): Promise<{ ok: true } | { ok: false; reason: "invalid" | "expired" | "used" }> {
+export async function checkMagicLink(token: string, deps: MagicLinkDeps): Promise<{ ok: true; email: string } | { ok: false; reason: "invalid" | "expired" | "used" }> {
   const now = deps.now?.() ?? new Date();
   const record = token ? await deps.db.magicLinkToken.findUnique({ where: { tokenHash: hashToken(token) } }) : null;
   if (!record) return { ok: false, reason: "invalid" };
   if (record.usedAt) return { ok: false, reason: "used" };
   if (record.expiresAt.getTime() < now.getTime()) return { ok: false, reason: "expired" };
-  return { ok: true };
+  return { ok: true, email: record.email };
+}
+
+/**
+ * An address shown only enough to recognise: "a•••@example.com". The link's page says whose it is, so somebody
+ * handed another person's link notices before signing in as them, without the page spelling the address out.
+ */
+export function maskEmail(email: string): string {
+  const at = email.lastIndexOf("@");
+  if (at <= 0) return "•••";
+  return `${email[0]}•••${email.slice(at)}`;
 }
 
 /**
@@ -101,8 +111,16 @@ export async function verifyMagicLink(token: string, deps: MagicLinkDeps): Promi
   if (!invite && !bootstrap) return { ok: false, reason: "invalid" };
   const role = bootstrap ? "ADMIN" : invite?.role ?? "MEMBER";
 
-  const user = await db.user.create({ data: { email, role } });
-  if (invite) await db.invite.update({ where: { id: invite.id }, data: { acceptedAt: now } });
+  // The invite is claimed in the same transaction that creates the account, and only if it is still pending: an
+  // admin revoking it at this very moment either wins (no account) or finds it already accepted.
+  const user = await db.$transaction(async (tx) => {
+    if (invite) {
+      const accepted = await tx.invite.updateMany({ where: { id: invite.id, acceptedAt: null }, data: { acceptedAt: now } });
+      if (accepted.count === 0 && !bootstrap) return null;
+    }
+    return tx.user.create({ data: { email, role } });
+  });
+  if (!user) return { ok: false, reason: "invalid" };
   return { ok: true, userId: user.id, email, isNewUser: true };
 }
 

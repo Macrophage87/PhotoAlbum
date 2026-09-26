@@ -1,8 +1,9 @@
 import { redirect } from "next/navigation";
 import { db } from "@/lib/db";
-import { checkMagicLink } from "@/lib/auth/magic-link";
+import { checkMagicLink, maskEmail } from "@/lib/auth/magic-link";
 import { safeNextPath } from "@/lib/auth/tokens";
-import { Button, Card } from "@/components/ui";
+import { Card } from "@/components/ui";
+import { SignInButton } from "./SignInButton";
 import { confirmSignIn } from "./actions";
 
 export const metadata = { title: "Sign in", robots: { index: false } };
@@ -24,13 +25,14 @@ export default async function VerifyPage({ searchParams }: PageProps<"/auth/veri
         <div>
           <h1 className="font-display text-2xl font-semibold">Family Album</h1>
           <p className="text-muted mt-1">Press the button to finish signing in.</p>
+          <p className="mt-3">
+            Signing in as <span className="font-medium">{maskEmail(check.email)}</span>
+          </p>
         </div>
         <form action={confirmSignIn}>
           <input type="hidden" name="token" value={token} />
           {next !== "/" && <input type="hidden" name="next" value={next} />}
-          <Button type="submit" size="lg" className="w-full h-16 text-xl">
-            Sign in
-          </Button>
+          <SignInButton />
         </form>
       </Card>
     </div>

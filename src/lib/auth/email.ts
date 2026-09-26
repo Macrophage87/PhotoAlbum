@@ -35,8 +35,8 @@ export function magicLinkEmail(to: string, link: string): Mail {
   return {
     to,
     subject: "Your sign-in link",
-    text: `Sign in to the family album:\n\n${link}\n\nThis link works once and expires in 15 minutes.`,
-    html: `<p>Sign in to the family album:</p><p><a href="${link}">${link}</a></p><p>This link works once and expires in 15 minutes.</p>`,
+    text: `Sign in to the family album:\n\n${link}\n\nOpen the link and press Sign in. It works once and expires in 15 minutes.`,
+    html: `<p>Sign in to the family album:</p><p><a href="${link}">${link}</a></p><p>Open the link and press <b>Sign in</b>. It works once and expires in 15 minutes.</p>`,
   };
 }
 
