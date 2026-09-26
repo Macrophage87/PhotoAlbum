@@ -124,12 +124,17 @@ describe("descriptions that stay in the family", () => {
   });
 
   it("lets the uploader show the helper's description and title to everyone, and take it back", async () => {
-    const annotatedAt = new Date("2026-09-01T00:00:00Z");
-    const p = await photo({ context: "Nana's boat", annotation: { title: "Nana on the boat", caption: "On the boat", description: "Nana steers.", tags: [], searchSummary: "" }, annotatedAt, annotationMembersOnly: true, membersTitle: "Nana on the boat" });
-    const seen = annotatedAt.toISOString();
-    // Described again since the page was opened: the new words have to be read before they are shown.
-    await expect(setAnnotationShared(p.id, "2026-08-01T00:00:00.000Z", true)).rejects.toThrow(/description changed/);
+    const p = await photo({ context: "Nana's boat", annotation: { title: "Nana on the boat", caption: "On the boat", description: "Nana steers.", tags: [], searchSummary: "" }, annotationMembersOnly: true, membersTitle: "Nana on the boat" });
+    const opened = (await db.photo.findUniqueOrThrow({ where: { id: p.id } })).annotationRevision;
+    // Somebody edits the words after the page was opened: the page's click is refused, and nothing is shown.
+    const fd = new FormData();
+    fd.set("caption", "On the boat");
+    fd.set("description", "Nana steers, and Ben waves.");
+    await updateAnnotation(p.id, fd);
+    await expect(setAnnotationShared(p.id, opened, true)).rejects.toThrow(/description changed/);
     expect((await db.photo.findUniqueOrThrow({ where: { id: p.id } })).annotationMembersOnly).toBe(true);
+    const seen = (await db.photo.findUniqueOrThrow({ where: { id: p.id } })).annotationRevision;
+    expect(seen).toBe(opened + 1);
     await setAnnotationShared(p.id, seen, true);
     const shown = await db.photo.findUniqueOrThrow({ where: { id: p.id } });
     expect(shown).toMatchObject({ annotationMembersOnly: false, title: "Nana on the boat", membersTitle: null });
@@ -139,7 +144,7 @@ describe("descriptions that stay in the family", () => {
     // Somebody else's photograph is not theirs to publish.
     const other = await db.user.create({ data: { email: "o@example.com" } });
     const theirs = await db.photo.create({ data: { uploaderId: other.id, originalName: "x.jpg", mimeType: "image/jpeg", storageKey: "k", originalPath: "k/o.jpg", sizeBytes: 1, status: "READY", annotationMembersOnly: true } });
-    await expect(setAnnotationShared(theirs.id, null, true)).rejects.toThrow();
+    await expect(setAnnotationShared(theirs.id, 0, true)).rejects.toThrow();
   });
 
   it("accepts a guessed place without publishing a name that is the family's", async () => {
@@ -159,7 +164,8 @@ describe("descriptions that stay in the family", () => {
     const fd = new FormData();
     fd.set("name", "Biscuit");
     await updatePerson(pet.id, fd);
-    expect(who.queued).toEqual([{ queue: "rejudge-text", data: { names: ["Biscuit"] } }]);
+    // The old name too: what was written with it is still about them.
+    expect(who.queued).toEqual([{ queue: "rejudge-text", data: { names: ["Biscuit", "Rex"] } }]);
     expect((await db.photo.findUniqueOrThrow({ where: { id: p.id } })).annotationMembersOnly).toBe(false);
   });
 });

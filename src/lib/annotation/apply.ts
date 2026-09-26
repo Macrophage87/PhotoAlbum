@@ -96,6 +96,8 @@ export async function applyAnnotation(photoId: string, model: string, parsed: An
         annotationError: null,
         annotationMembersOnly: membersOnly,
         annotationTitleOnly: judgement.titleOnly,
+        annotationTitleWords: judgement.titleOnly ? (judgement.titleWords ?? []) : [],
+        annotationTitleFrom: judgement.titleOnly ? (judgement.titleFrom ?? []) : [],
         // New words: whatever a member chose to show was the old text, and this one is judged afresh.
         annotationSharedAt: null,
         // Embedded videos keep YouTube's title; see `titlesAfter` for everything else.

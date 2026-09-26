@@ -220,7 +220,7 @@ export async function describeActivityWithAi(slug: string, id: string, note?: st
   // forgotten at all: its answer may name them, so it is not kept.
   await db.$transaction(async (tx) => {
     if ((await forgetUnderWay(tx, requestedAt)) || (await namesChangedSince(activity.photos.map((p) => p.id), requestedAt))) throw new Error(NAMES_CHANGED);
-    await tx.activity.update({ where: { id }, data: { description: parsed.description, descriptionMembersOnly: judged.membersOnly, descriptionTitleOnly: judged.titleOnly, descriptionSharedAt: null, descriptionByHelper: true } });
+    await tx.activity.update({ where: { id }, data: { description: parsed.description, descriptionMembersOnly: judged.membersOnly, descriptionTitleOnly: judged.titleOnly, descriptionTitleWords: judged.titleOnly ? (judged.titleWords ?? []) : [], descriptionSharedAt: null, descriptionByHelper: true } });
   });
   revalidatePath(`/trips/${slug}/activities/${id}`);
   return parsed.description;

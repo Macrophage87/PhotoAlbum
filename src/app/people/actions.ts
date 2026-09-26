@@ -305,7 +305,8 @@ export async function updatePerson(personId: string, fd: FormData): Promise<void
   if (!canChangePerson(user, person)) throw new Error(NOT_YOUR_PERSON);
   const v = z.object({ name: z.string().trim().min(1).max(80), relationship: z.string().trim().max(80).transform((x) => x || null) }).parse({ name: fd.get("name"), relationship: fd.get("relationship") ?? "" });
   await db.person.update({ where: { id: personId }, data: { name: v.name, relationship: v.relationship, formerNames: withFormerName(person, v.name) } });
-  if (person.name !== v.name) await rejudgeFromAction({ names: [v.name] });
+  // The old name as well: text written with it is still about them.
+  if (person.name !== v.name) await rejudgeFromAction({ names: [v.name, person.name] });
   revalidatePath("/people", "layout");
 }
 
@@ -529,7 +530,8 @@ export async function updatePet(personId: string, fd: FormData): Promise<void> {
   if (!canChangePerson(user, pet)) throw new Error(NOT_YOUR_PERSON);
   const v = petSchema.parse({ name: fd.get("name"), species: fd.get("species"), livedFrom: fd.get("livedFrom") || undefined, livedTo: fd.get("livedTo") || undefined, isFlock: fd.get("isFlock") === "on", descriptors: fd.get("descriptors") ?? undefined });
   await db.person.update({ where: { id: personId, kind: "PET" }, data: { name: v.name, formerNames: withFormerName(pet, v.name), species: v.species, livedFrom: v.livedFrom, livedTo: v.livedTo, isFlock: v.isFlock, descriptors: v.descriptors } });
-  if (pet.name !== v.name) await rejudgeFromAction({ names: [v.name] });
+  // The old name as well: text written with it is still about them.
+  if (pet.name !== v.name) await rejudgeFromAction({ names: [v.name, pet.name] });
   revalidatePath("/people", "layout");
 }
 

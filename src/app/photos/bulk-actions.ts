@@ -15,6 +15,7 @@ import { Prisma } from "@/generated/prisma/client";
 import { editsSchema, tidyEdits, type PhotoEdits } from "@/lib/images/edits";
 import type { AutoColourResult } from "@/lib/photos/auto-colour";
 import { readableTitle } from "@/lib/photos/readable-text";
+import { rejudgeFromAction } from "@/lib/annotation/rejudge-notice";
 
 const ids = z.array(z.string().min(1)).min(1).max(500);
 
@@ -40,6 +41,7 @@ export async function bulkMoveToTrip(photoIds: string[], tripId: string | null):
   if (tripId && !(await db.trip.findUnique({ where: { id: tripId }, select: { id: true } }))) return;
   await db.photo.updateMany({ where: { id: { in: list } }, data: { tripId, activityId: null } });
   if (tripId) await enqueue(QUEUES.geotagPhotos, { tripId }, { singletonKey: `geotag:${tripId}`, singletonSeconds: 10, singletonNextSlot: true });
+  if (tripId) await rejudgeFromAction({ tripId });
   revalidatePath("/", "layout");
 }
 
