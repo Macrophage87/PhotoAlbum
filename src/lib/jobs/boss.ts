@@ -2,6 +2,7 @@ import { PgBoss } from "pg-boss";
 import { env } from "@/lib/env";
 import { QUEUES, type QueueName } from "./queues";
 import { FFMPEG_TIMEOUT_MS } from "@/lib/video/ffmpeg";
+import { markStopping } from "./shutdown";
 
 const globalForBoss = globalThis as unknown as { boss?: Promise<PgBoss> };
 
@@ -16,11 +17,19 @@ export const JOB_EXPIRE_SECONDS = 15 * 60;
  * signal and stops, so its retry never runs beside it.
  */
 export const HEAVY_JOB_EXPIRE_SECONDS = (2 * FFMPEG_TIMEOUT_MS) / 1000 + 20 * 60;
-const HEAVY_QUEUES: readonly QueueName[] = [QUEUES.transcodeVideo, QUEUES.embedPhoto, QUEUES.detectFaces, QUEUES.detectAnimals];
+/**
+ * That long a window would also leave a job whose worker died waiting 40 minutes for its retry. A live heavy job
+ * instead touches its row every HEAVY_HEARTBEAT_REFRESH_SECONDS, and pg-boss fails (and retries) one that has not
+ * been touched for HEAVY_HEARTBEAT_SECONDS, so a crash is noticed within a few minutes. Six touches per window, so
+ * one slow database round trip never fails a job that is still running.
+ */
+export const HEAVY_HEARTBEAT_SECONDS = 180;
+export const HEAVY_HEARTBEAT_REFRESH_SECONDS = 30;
+export const HEAVY_QUEUES: readonly QueueName[] = [QUEUES.transcodeVideo, QUEUES.embedPhoto, QUEUES.detectFaces, QUEUES.detectAnimals];
 const QUEUE_OPTIONS = { retryLimit: 2, retryDelay: 30, retryBackoff: true, expireInSeconds: JOB_EXPIRE_SECONDS };
 
-export function queueOptions(name: QueueName) {
-  return HEAVY_QUEUES.includes(name) ? { ...QUEUE_OPTIONS, expireInSeconds: HEAVY_JOB_EXPIRE_SECONDS } : QUEUE_OPTIONS;
+export function queueOptions(name: QueueName): typeof QUEUE_OPTIONS & { heartbeatSeconds?: number } {
+  return HEAVY_QUEUES.includes(name) ? { ...QUEUE_OPTIONS, expireInSeconds: HEAVY_JOB_EXPIRE_SECONDS, heartbeatSeconds: HEAVY_HEARTBEAT_SECONDS } : QUEUE_OPTIONS;
 }
 
 async function create(): Promise<PgBoss> {
@@ -59,6 +68,7 @@ export async function getJobState(queue: QueueName, id: string) {
  */
 export async function stopBoss(timeoutMs = 30_000): Promise<void> {
   if (!globalForBoss.boss) return;
+  markStopping();
   const pending = globalForBoss.boss;
   globalForBoss.boss = undefined;
   const boss = await pending;

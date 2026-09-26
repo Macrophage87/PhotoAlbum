@@ -18,6 +18,7 @@ import { QUEUES, type ProcessPhotoJob } from "../queues";
 import { enqueueEmbedding } from "./embed-photo";
 import { enqueueFaceDetection } from "./detect-faces";
 import { enqueueAnimalDetection } from "./detect-animals";
+import { workerStopping } from "../shutdown";
 
 /**
  * Turn an uploaded original into a usable photo: EXIF, timezone-correct takenAt, GPS,
@@ -37,7 +38,8 @@ export function editsOf(raw: unknown): PhotoEdits | null {
   return parsed.success && hasEdits(parsed.data) ? parsed.data : null;
 }
 
-export async function processPhoto(job: ProcessPhotoJob): Promise<void> {
+/** `signal` is pg-boss's: a run it has timed out writes nothing more, so the retry never races it. */
+export async function processPhoto(job: ProcessPhotoJob, signal?: AbortSignal): Promise<void> {
   const photo = await db.photo.findUnique({ where: { id: job.photoId } });
   if (!photo) return;
   await db.photo.update({ where: { id: photo.id }, data: { status: "PROCESSING", error: null } });
@@ -67,6 +69,7 @@ export async function processPhoto(job: ProcessPhotoJob): Promise<void> {
       const from = isHeic(photo.mimeType, photo.originalName) ? await heicSource(store, photo.storageKey, localPath) : localPath;
       const gpano = photo.kind === "PHOTO" ? await readGPano(localPath) : null;
       const { width, height, renditions, panorama } = await makeRenditions(from, photo.storageKey, (key, buf) => store.putBuffer(key, buf), editsOf(photo.edits), gpano);
+      signal?.throwIfAborted();
       await db.photo.update({ where: { id: photo.id }, data: { status: "READY", width, height, renditions, panorama, panoProjection: gpano?.projection ?? null } });
       await enqueueEmbedding(photo.id);
       await enqueueFaceDetection(photo.id);
@@ -140,6 +143,7 @@ export async function processPhoto(job: ProcessPhotoJob): Promise<void> {
     // that what looks like a wide photo is really a sweep of the whole horizon.
     const gpano = await readGPano(localPath);
     const { width, height, renditions, panorama } = await makeRenditions(source, photo.storageKey, (key, buf) => store.putBuffer(key, buf), editsOf(photo.edits), gpano);
+    signal?.throwIfAborted();
 
     // 6. Activity assignment within the trip. A member who uploaded this into an activity, or put it there by hand,
     // has already answered the question — the time window does not get to overrule them.
@@ -202,7 +206,9 @@ export async function processPhoto(job: ProcessPhotoJob): Promise<void> {
       await enqueue(QUEUES.geotagPhotos, { tripId: trip.id }, { singletonKey: `geotag:${trip.id}`, singletonSeconds: 10, singletonNextSlot: true });
     }
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    // Cut short by a shutdown: the job is retried once the worker is back, so the row is left for that run.
+    if (signal?.aborted && workerStopping()) throw err;
+    const message = signal?.aborted ? "Processing took too long and was stopped." : err instanceof Error ? err.message : String(err);
     console.error(`[process-photo] ${photo.id} failed:`, message);
     await db.photo.update({ where: { id: photo.id }, data: { status: "FAILED", error: message.slice(0, 500) } });
     throw err;

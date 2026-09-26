@@ -10,6 +10,7 @@ import { ffmpeg, posterArgs, probe, transcodeArgs } from "@/lib/video/ffmpeg";
 import { pickActivityByTime, pickTripByDay, whoWasThere } from "@/lib/photos/assign";
 import { localDayFromOffset, offsetMinutesInZone } from "@/lib/time/local-day";
 import { withHeavyLock } from "../heavy-lock";
+import { workerStopping } from "../shutdown";
 import type { TranscodeVideoJob } from "../queues";
 import { enqueueEmbedding } from "./embed-photo";
 import { enqueueFaceDetection } from "./detect-faces";
@@ -104,6 +105,8 @@ export async function transcodeVideo(job: TranscodeVideoJob, signal?: AbortSigna
     await enqueueFaceDetection(photo.id).catch(() => undefined);
     await enqueueAnimalDetection(photo.id).catch(() => undefined);
   } catch (err) {
+    // Cut short by a shutdown: the job is retried once the worker is back, so the row is left for that run.
+    if (signal?.aborted && workerStopping()) throw err;
     const message = signal?.aborted ? "Transcoding took too long and was stopped." : err instanceof Error ? err.message : String(err);
     console.error(`[transcode-video] ${photo.id} failed:`, message);
     await db.photo.update({ where: { id: photo.id }, data: { status: "FAILED", error: message.slice(0, 500) } });

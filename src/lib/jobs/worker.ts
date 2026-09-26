@@ -1,5 +1,5 @@
 import { db } from "@/lib/db";
-import { getBoss, HEAVY_JOB_EXPIRE_SECONDS, JOB_EXPIRE_SECONDS } from "./boss";
+import { getBoss, HEAVY_HEARTBEAT_REFRESH_SECONDS, HEAVY_JOB_EXPIRE_SECONDS, JOB_EXPIRE_SECONDS } from "./boss";
 import { QUEUES } from "./queues";
 
 /**
@@ -43,7 +43,7 @@ export async function startWorker(): Promise<void> {
   const { purgeVisits } = await import("@/lib/visits/record");
 
   await boss.work(QUEUES.processPhoto, { batchSize: 1, localConcurrency: 2, pollingIntervalSeconds: 2 }, async ([job]) =>
-    processPhoto(job.data as never),
+    processPhoto(job.data as never, job.signal),
   );
   await boss.work(QUEUES.importTrack, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 2 }, async ([job]) =>
     importTrack(job.data as never),
@@ -55,7 +55,7 @@ export async function startWorker(): Promise<void> {
     deletePhoto(job.data as never),
   );
   // One clip at a time; the handler also takes the heavy-work lock so it never overlaps other heavy jobs.
-  await boss.work(QUEUES.transcodeVideo, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 2 }, async ([job]) => transcodeVideo(job.data as never, job.signal));
+  await boss.work(QUEUES.transcodeVideo, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 2, heartbeatRefreshSeconds: HEAVY_HEARTBEAT_REFRESH_SECONDS }, async ([job]) => transcodeVideo(job.data as never, job.signal));
   await boss.work(QUEUES.checkExternalVideos, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 30 }, async () => checkExternalVideos());
   await boss.work(QUEUES.annotatePhoto, { batchSize: 1, localConcurrency: 2, pollingIntervalSeconds: 3 }, async ([job]) => annotatePhoto(job.data as never));
   await boss.work(QUEUES.annotationSweep, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 30 }, async () => void (await annotationSweep()));
@@ -63,14 +63,14 @@ export async function startWorker(): Promise<void> {
   await boss.work(QUEUES.annotationBatchPoll, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 30 }, async () => annotationBatchPoll());
   // Sidecar calls: one at a time and under the heavy lock, so they never overlap a transcode. The heavy handlers take
   // the job's signal, which pg-boss fires when it times a job out, so a late run stops instead of racing its retry.
-  await boss.work(QUEUES.embedPhoto, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 3 }, async ([job]) => embedPhoto(job.data as never, job.signal));
+  await boss.work(QUEUES.embedPhoto, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 3, heartbeatRefreshSeconds: HEAVY_HEARTBEAT_REFRESH_SECONDS }, async ([job]) => embedPhoto(job.data as never, job.signal));
   await boss.work(QUEUES.embedSweep, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 30 }, async () => void (await embedSweep()));
-  await boss.work(QUEUES.detectFaces, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 3 }, async ([job]) => detectFacesJob(job.data as never, job.signal));
+  await boss.work(QUEUES.detectFaces, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 3, heartbeatRefreshSeconds: HEAVY_HEARTBEAT_REFRESH_SECONDS }, async ([job]) => detectFacesJob(job.data as never, job.signal));
   await boss.work(QUEUES.takeoutImport, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 5 }, async ([job]) => importTakeoutArchive((job.data as { importId: string }).importId));
-  await boss.work(QUEUES.detectAnimals, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 3 }, async ([job]) => detectAnimalsJob(job.data as never, job.signal));
+  await boss.work(QUEUES.detectAnimals, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 3, heartbeatRefreshSeconds: HEAVY_HEARTBEAT_REFRESH_SECONDS }, async ([job]) => detectAnimalsJob(job.data as never, job.signal));
   await boss.work(QUEUES.animalSweep, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 30 }, async () => void (await animalSweep()));
   await boss.work(QUEUES.matchAnimals, { batchSize: 1, localConcurrency: 2, pollingIntervalSeconds: 2 }, async ([job]) => void (await proposeAnimalsForPhoto((job.data as { photoId: string }).photoId)));
-  await boss.work(QUEUES.googlePickerImport, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 2 }, async ([job]) => googlePickerImport(job.data as never));
+  await boss.work(QUEUES.googlePickerImport, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 2 }, async ([job]) => googlePickerImport(job.data as never, job.signal));
   await boss.work(QUEUES.matchPhoto, { batchSize: 1, localConcurrency: 2, pollingIntervalSeconds: 2 }, async ([job]) => matchPhoto(job.data as never));
   await boss.work(QUEUES.faceSweep, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 30 }, async () => void (await faceSweep()));
   await boss.work(QUEUES.flagNewAdults, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60 }, async () => void (await flagNewAdults()));

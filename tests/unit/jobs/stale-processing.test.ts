@@ -13,6 +13,8 @@ vi.mock("node:fs/promises", async (orig) => {
   return { ...real, default: { ...real, mkdtemp }, mkdtemp };
 });
 vi.mock("@/lib/jobs/boss", async (orig) => ({ ...((await orig()) as object), enqueue: async () => {} }));
+const stopping = vi.hoisted(() => ({ now: false }));
+vi.mock("@/lib/jobs/shutdown", () => ({ workerStopping: () => stopping.now, markStopping: () => { stopping.now = true; } }));
 
 import { transcodeVideo } from "@/lib/jobs/handlers/transcode-video";
 import { reconcileStalePhotos } from "@/lib/jobs/worker";
@@ -22,6 +24,7 @@ describe("items stuck in PROCESSING", () => {
   beforeEach(async () => {
     await resetTestDb();
     fsFail.mkdtemp = false;
+    stopping.now = false;
     userId = (await db.user.create({ data: { email: "st@example.com", role: "ADMIN" } })).id;
   });
   const clip = () => db.photo.create({ data: { uploaderId: userId, kind: "VIDEO", originalName: "c.mp4", mimeType: "video/mp4", storageKey: "c", originalPath: "c/original.mp4", sizeBytes: 1, status: "PENDING" } });
@@ -47,5 +50,35 @@ describe("items stuck in PROCESSING", () => {
     expect(await status(stuck.id)).toBe("FAILED");
     expect(await status(queued.id)).toBe("PENDING");
     expect(await status(fresh.id)).toBe("PROCESSING");
+  });
+
+  it("gives clips the heavy queues' longer window before calling them stale", async () => {
+    const photo = (kind: "PHOTO" | "VIDEO") => db.photo.create({ data: { uploaderId: userId, kind, originalName: "a", mimeType: "video/mp4", storageKey: "a", originalPath: "a/o", sizeBytes: 1, status: "PROCESSING" } });
+    const clip = await photo("VIDEO");
+    const still = await photo("PHOTO");
+    // Two hours: long past a photo's window, well inside a clip's (four times the 40-minute heavy expiry).
+    const twoHours = new Date(Date.now() - 2 * 3_600_000);
+    await db.$executeRaw`UPDATE "Photo" SET "updatedAt" = ${twoHours}`;
+    expect(await reconcileStalePhotos()).toBe(1);
+    expect((await db.photo.findUniqueOrThrow({ where: { id: clip.id } })).status).toBe("PROCESSING");
+    expect((await db.photo.findUniqueOrThrow({ where: { id: still.id } })).status).toBe("FAILED");
+    const fourHours = new Date(Date.now() - 4 * 3_600_000);
+    await db.$executeRaw`UPDATE "Photo" SET "updatedAt" = ${fourHours} WHERE id = ${clip.id}`;
+    expect(await reconcileStalePhotos()).toBe(1);
+    expect((await db.photo.findUniqueOrThrow({ where: { id: clip.id } })).status).toBe("FAILED");
+  });
+
+  it("a clip whose job timed out is marked FAILED as too long; one cut short by a shutdown is left for its retry", async () => {
+    const timedOut = await clip();
+    const ac = new AbortController();
+    ac.abort();
+    await expect(transcodeVideo({ photoId: timedOut.id }, ac.signal)).rejects.toThrow();
+    const after = await db.photo.findUniqueOrThrow({ where: { id: timedOut.id } });
+    expect(after).toMatchObject({ status: "FAILED", error: "Transcoding took too long and was stopped." });
+
+    const interrupted = await clip();
+    stopping.now = true;
+    await expect(transcodeVideo({ photoId: interrupted.id }, ac.signal)).rejects.toThrow();
+    expect((await db.photo.findUniqueOrThrow({ where: { id: interrupted.id } })).status).toBe("PROCESSING");
   });
 });
