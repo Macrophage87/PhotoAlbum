@@ -93,13 +93,17 @@ export function fillStays(points: TrackPoint[], stays: Stay[], window: Window, c
       const at = near.length ? near.reduce((a, b) => (Math.abs(a.t - t) <= Math.abs(b.t - t) ? a : b)) : s;
       filler.push({ t, lat: at.lat, lng: at.lng, filled: true });
     }
-    // A gap inside the visit just over the interpolation limit can fall between the steps: fill its middle.
+    // A gap just over the interpolation limit that reaches into the visit can fall between the steps (and between
+    // the visit's end and the next recorded point): fill the middle of its part inside the visit.
     if (s.fill && end > s.start) {
-      for (let i = after(s.start); i + 1 < real.length && real[i + 1].t <= end; i++) {
-        const a = real[i], b = real[i + 1], mid = Math.round((a.t + b.t) / 2);
-        if (b.t - a.t <= MAX_INTERPOLATION_GAP_MS || mid < window.startMs || mid > window.endMs) continue;
+      for (let i = Math.max(0, after(s.start) - 1); i + 1 < real.length && real[i].t <= end; i++) {
+        const a = real[i], b = real[i + 1];
+        if (b.t < s.start || b.t - a.t <= MAX_INTERPOLATION_GAP_MS) continue;
+        const mid = Math.round((Math.max(a.t, s.start) + Math.min(b.t, end)) / 2);
+        if (mid < window.startMs || mid > window.endMs) continue;
         if (claimed.some(([x, y]) => mid >= x && mid <= y) || filler.some((f) => f.t > a.t && f.t < b.t)) continue;
-        filler.push({ t: mid, lat: a.lat, lng: a.lng, filled: true });
+        const at = a.t >= s.start ? a : b.t <= end ? b : s;
+        filler.push({ t: mid, lat: at.lat, lng: at.lng, filled: true });
       }
       claimed.push([s.start, end]);
     }

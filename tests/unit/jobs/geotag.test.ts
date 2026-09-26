@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { db } from "@/lib/db";
 import { encodePoints } from "@/lib/tracks/encode";
 import { geotagPhotos } from "@/lib/jobs/handlers/geotag-photos";
@@ -107,6 +107,24 @@ describe("geotagPhotos", () => {
     const again = await makeTrack(tripId, other.id, line(10).map((p) => ({ ...p, lat: 70 })), "GOOGLE");
     await geotagPhotos({ tripId, trackIds: [again.id] });
     expect((await db.photo.findUniqueOrThrow({ where: { id: mine.id } })).lat).toBe(50);
+  });
+
+  it("never overwrites a place a member set by hand while the run was working", async () => {
+    await makeTrack(tripId, userId, line(10), "GPX");
+    const photo = await makePhoto(tripId, userId, new Date(T0 + 3 * 60_000));
+    const read = db.photo.findMany.bind(db.photo);
+    const spy = vi.spyOn(db.photo, "findMany").mockImplementationOnce((async (args: never) => {
+      const found = await read(args);
+      await db.photo.update({ where: { id: photo.id }, data: { lat: 1, lng: 2, gpsSource: "MANUAL" } });
+      return found;
+    }) as never);
+    try {
+      expect((await geotagPhotos({ tripId })).updated).toBe(0);
+    } finally {
+      spy.mockRestore();
+    }
+    const p = await db.photo.findUniqueOrThrow({ where: { id: photo.id } });
+    expect([p.gpsSource, p.lat]).toEqual(["MANUAL", 1]);
   });
 
   it("is a no-op without tracks or candidates", async () => {

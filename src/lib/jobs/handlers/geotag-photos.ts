@@ -17,9 +17,9 @@ const TRUSTED_TIME_SOURCES: TakenAtSource[] = ["EXIF_OFFSET", "EXIF_TZLOOKUP", "
 /**
  * Give GPS-less photos a position by interpolating along any track that covers the moment they were taken.
  * Never overwrites EXIF or manual positions; a place the AI helper guessed at is replaced, since a track is a
- * record and the guess is not. The photographer's own tracks are preferred over other members', and activity
+ * record and the guess is not. The uploader's own tracks are preferred over other members', and activity
  * tracks (GPX/FIT) over Google traces. When a GPX/FIT track is imported later, photos previously placed inside its
- * time window are looked at again, and so are the photographer's own photos inside a newly imported Google trace, so
+ * time window are looked at again, and so are the uploader's own photos inside a newly imported Google trace, so
  * each ends up on the best track that covers it.
  */
 export async function geotagPhotos(job: GeotagPhotosJob): Promise<{ updated: number }> {
@@ -45,7 +45,7 @@ export async function geotagPhotos(job: GeotagPhotosJob): Promise<{ updated: num
         // A place the helper recognised is a guess; a track that covers the moment is a record, so it wins.
         { gpsSource: "ESTIMATE" as const, ...trusted },
         // Already placed from a track: looked at again inside a new activity track's hours, or inside a new Google
-        // trace's hours when it is the photographer's own.
+        // trace's hours when it is the uploader's own.
         { gpsSource: "TRACK" as const, ...trusted, OR: fresh.map((t) => (t.source === "GOOGLE" ? { uploaderId: t.uploaderId, ...window(t) } : window(t))) },
       ],
     },
@@ -66,8 +66,8 @@ export async function geotagPhotos(job: GeotagPhotosJob): Promise<{ updated: num
   let updated = 0;
   for (const photo of photos) {
     const t = photo.takenAt!.getTime();
-    // The photographer's own tracks come first, activity tracks before Google traces, then everyone else's in the
-    // same order: several members' tracks can cover the same hour, and a photo was taken where its taker was.
+    // The uploader's own tracks come first, activity tracks before Google traces, then everyone else's in the
+    // same order: several members' tracks can cover the same hour, and a photo was most likely taken where its uploader was.
     const candidates = [...tracks].sort((a, b) => rank(a, photo.uploaderId) - rank(b, photo.uploaderId));
     for (const track of candidates) {
       if (t < track.startTime.getTime() || t > track.endTime.getTime()) continue;
@@ -77,7 +77,8 @@ export async function geotagPhotos(job: GeotagPhotosJob): Promise<{ updated: num
       if (same) break;
       // Only while the track still exists: one deleted during this run has had its positions taken back already.
       const r = await db.photo.updateMany({
-        where: { id: photo.id, trip: { tracks: { some: { id: track.id } } } },
+        // And only while the photo is as it was read: a member may have placed it by hand while this ran.
+        where: { id: photo.id, gpsSource: photo.gpsSource, trip: { tracks: { some: { id: track.id } } } },
         data: { lat: pos.lat, lng: pos.lng, altitude: pos.ele ?? null, gpsSource: "TRACK" },
       });
       updated += r.count;

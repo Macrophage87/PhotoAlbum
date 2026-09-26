@@ -153,6 +153,12 @@ describe("google visits", () => {
     });
   });
 
+  it("fill the middle of a gap that runs from inside a visit past its end", () => {
+    const walk = (t: string): Seg => ({ startTime: t, endTime: t, timelinePath: [{ point: "geo:40.78,-73.96", time: t }] });
+    const pts = parse([museum("2025-08-12T14:00:00Z", "2025-08-12T14:59:37Z"), walk("2025-08-12T14:53:02Z"), walk("2025-08-12T15:04:09Z")]);
+    expect(positionAt(pts, at("2025-08-12T14:58:24Z"))).not.toBeNull();
+  });
+
   it("fill the middle of a gap inside a visit that falls between the steps", () => {
     const walk = (t: string): Seg => ({ startTime: t, endTime: t, timelinePath: [{ point: "geo:40.78,-73.96", time: t }] });
     const pts = parse([museum("2025-08-12T13:00:00Z", "2025-08-12T15:00:00Z"), walk("2025-08-12T14:02:00Z"), walk("2025-08-12T14:13:00Z")]);
