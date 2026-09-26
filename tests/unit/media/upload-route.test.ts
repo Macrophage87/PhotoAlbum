@@ -90,7 +90,8 @@ describe("the upload route", () => {
 
   it("queues processing again when the same file arrives for a photo that failed", async () => {
     const first = await (await upload(bytes(30, 9), "f.jpg")).json();
-    await db.photo.update({ where: { id: first.photoId }, data: { status: "FAILED", error: "boom" } });
+    // Failed a while ago, so pg-boss has stopped retrying it. (The same row failing just now is left to those retries.)
+    await db.photo.update({ where: { id: first.photoId }, data: { status: "FAILED", error: "boom", updatedAt: new Date(Date.now() - 10 * 60_000) } });
     queued.jobs.length = 0;
     const again = await (await upload(bytes(30, 9), "g.jpg")).json();
     expect(again).toMatchObject({ photoId: first.photoId, duplicate: true, status: "PENDING" });

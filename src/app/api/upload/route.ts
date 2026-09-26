@@ -112,9 +112,10 @@ export async function POST(request: Request) {
       // particular trip, activity or collection, the one the album has is put there instead of a second copy.
       await storage().deletePrefix(storageKey).catch(() => undefined);
       await db.photo.delete({ where: { id: photo.id } }).catch(() => {});
-      const filed = await fileExisting(viewer.user, already.id, { tripId: tripId ?? null, activityId: activityId ?? null, collectionId: collectionId ?? null });
       // The one the album has never became a picture (or its job was lost): sending it again is the moment to try.
+      // Before filing it, which changes it, so the check sees it as it was read.
       const status = (await processAgainIfStuck(already)) ? "PENDING" : already.status;
+      const filed = await fileExisting(viewer.user, already.id, { tripId: tripId ?? null, activityId: activityId ?? null, collectionId: collectionId ?? null });
       return Response.json({
         photoId: already.id,
         // A retry of this very file whose earlier answer was lost (the phone locked as it came back) finds the row that

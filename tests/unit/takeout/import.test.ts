@@ -145,6 +145,7 @@ describe("importing a Takeout archive", () => {
     const clip = await db.photo.findFirstOrThrow({ where: { originalName: "clip.mp4" } });
     expect(clip).toMatchObject({ status: "FAILED", error: expect.stringMatching(/Re-process/) });
     expect(clip.originalPath).not.toBe("pending");
+    await db.photo.update({ where: { id: clip.id }, data: { updatedAt: new Date(Date.now() - 10 * 60_000) } });
     enqueued.length = 0;
     const again = await run();
     expect(again.imported).toBe(0);

@@ -142,6 +142,9 @@ export async function importTakeoutArchive(importId: string): Promise<void> {
           report.duplicates++;
           skipped++;
           await rm(tmp, { force: true });
+          // Its file is here but it never became a picture (a restart between storing and queueing it): queue it now,
+          // before the repair below changes it.
+          await processAgainIfStuck(dupe);
           const plan = planSidecarRepair(dupe, meta);
           if (plan) {
             await db.photo.update({ where: { id: dupe.id }, data: plan.data });
@@ -150,8 +153,6 @@ export async function importTakeoutArchive(importId: string): Promise<void> {
             if (report.repairs!.length < 200) report.repairs!.push(describeRepair(dupe.originalName, plan.filled));
           }
           await joinAlbum(entry.path, dupe.id);
-          // Its file is here but it never became a picture (a restart between storing and queueing it): queue it now.
-          await processAgainIfStuck(dupe);
           return;
         }
         const isVideo = isVideoName(file);
