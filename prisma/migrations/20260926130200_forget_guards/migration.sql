@@ -14,6 +14,7 @@ ALTER TABLE "Photo" ADD COLUMN "namesScrubbedAt" TIMESTAMP(3),
 ALTER TABLE "Person" ADD COLUMN "formerNames" TEXT[] DEFAULT ARRAY[]::TEXT[],
   ADD COLUMN "namingWithdrawnAt" TIMESTAMP(3),
   ADD COLUMN "namesChangedAt" TIMESTAMP(3);
+ALTER TABLE "AppSetting" ADD COLUMN "helperTitlesMarkedAt" TIMESTAMP(3);
 ALTER TABLE "Trip" ADD COLUMN "descriptionByHelper" BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE "Collection" ADD COLUMN "descriptionByHelper" BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE "Activity" ADD COLUMN "descriptionByHelper" BOOLEAN NOT NULL DEFAULT false;
@@ -56,9 +57,10 @@ BEGIN
 END $$;
 SELECT withdraw_unevidenced_naming();
 
--- Whose title an item goes by. The helper's while it is the one its record gives; otherwise the helper's if one of
--- its kept answers gave that title; otherwise, for an item whose description no member has edited, the helper's if
--- the title names somebody the album knows, since the helper was told names and members' titles rarely changed.
+-- Whose title an item goes by. The helper's while it is the one its record gives, or one of its kept answers gave
+-- that title. The rest — an item no member has edited whose title names somebody the album knows, which is the
+-- helper's more often than not, since it was told names — is marked once, in JavaScript, by the worker on its first
+-- start (src/lib/annotation/title-owner.ts), so this stays one cheap pass with no name matching in SQL.
 CREATE OR REPLACE FUNCTION answer_title(response jsonb) RETURNS text LANGUAGE plpgsql IMMUTABLE AS $$
 BEGIN
   RETURN btrim(((response->'content'->0->>'text')::jsonb)->>'title');
@@ -69,6 +71,6 @@ UPDATE "Photo" p SET "titleByHelper" = true
 WHERE COALESCE(NULLIF(btrim(p.title), ''), NULLIF(btrim(p."membersTitle"), '')) IS NOT NULL AND p.annotation IS NOT NULL AND (
   btrim(COALESCE(NULLIF(btrim(p.title), ''), p."membersTitle")) = btrim(p.annotation->>'title')
   OR EXISTS (SELECT 1 FROM "MediaAnnotationRaw" r WHERE r."photoId" = p.id AND answer_title(r.response) = btrim(COALESCE(NULLIF(btrim(p.title), ''), p."membersTitle")))
-  OR (p."annotationSource" = 'MACHINE' AND COALESCE(NULLIF(btrim(p.title), ''), p."membersTitle") ~* (SELECT name_regex(array_agg(name)) FROM "Person"))
+
 );
 DROP FUNCTION answer_title(jsonb);

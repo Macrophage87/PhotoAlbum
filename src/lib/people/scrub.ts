@@ -21,6 +21,7 @@
  * their parts or not, except inside somebody else's name that contains them.
  */
 import type { StoredAnnotation } from "@/lib/annotation/schema";
+import { COMMON_WORD_NAMES, KINSHIP_WORDS, NAME_PARTICLES } from "@/lib/annotation/names";
 
 export const STAND_IN = "a family member";
 
@@ -46,8 +47,12 @@ const EVERYDAY = [
   "nguyen", "nguyễn", "tran", "trần", "lê", "pham", "phạm", "hoang", "hoàng", "huynh", "huỳnh", "vo", "võ", "dang", "đặng", "bui", "bùi", "do", "đỗ", "ngo", "ngô",
   "duong", "dương", "ly", "lý", "kim", "lee", "park", "choi", "jung", "kang", "cho", "yoon", "wang", "li", "zhang", "liu", "chen", "yang", "zhao", "huang", "zhou", "wu", "sun",
 ];
-const NOT_SAFE = new Set([...KINSHIP, ...EVERYDAY]);
-const KIN = new Set(KINSHIP);
+// The members-only matcher's lists (src/lib/annotation/names.ts) are part of the same judgement: whatever it treats
+// as an everyday word, a particle or a kinship word, so does this.
+const NOT_SAFE = new Set([...KINSHIP, ...EVERYDAY, ...KINSHIP_WORDS, ...COMMON_WORD_NAMES, ...NAME_PARTICLES]);
+const KIN = new Set([...KINSHIP, ...KINSHIP_WORDS]);
+/** A full name needs one word that is more than a title, a kinship word or a particle ("Big Al" is not enough). */
+const NOT_A_NAME_WORD = new Set([...KIN, ...NAME_PARTICLES, "and", "the", "of", "al", "el"]);
 
 /** Capitalized words that say when, or start a sentence, rather than being somebody's name before another. */
 const STARTERS = new Set([
@@ -190,8 +195,8 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
       }
       const words = wordsOf(s);
       if (words.length >= 2) {
-        // A full name made only of titles and everyday words ("Big Al", "The Smiths") is no safer than a short one.
-        if (words.some((w) => letters(w) >= 2 && !NOT_SAFE.has(bare(w)))) longs.push(s);
+        // A full name made only of titles, kinship words and particles ("Big Al") is no safer than a short one.
+        if (words.some((w) => letters(w) >= 2 && !NOT_A_NAME_WORD.has(bare(w)))) longs.push(s);
         else tagged.push(s);
         // Its first word said on its own, when that is safe; otherwise not at all.
         if (i === 0 && safeShort(words[0])) shorts.push(capitalized(words[0]));
