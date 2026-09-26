@@ -9,7 +9,7 @@ import { ACTIVITY_COLOR } from "@/lib/activities/types";
 import { NOT_TRASHED } from "@/lib/photos/trash";
 import { Prisma } from "@/generated/prisma/client";
 import { filterIsActive, NO_FILTER, type GalleryFilter } from "@/lib/photos/filters";
-import { idsInLocalYear, idsMatching, intersectIds } from "@/lib/photos/page";
+import { idsInLocalYear, idsMatching, intersectIds, type MatchScope } from "@/lib/photos/page";
 import { idsWithPerson } from "@/lib/people/in-photos";
 import { localDayFromOffset, localDayInZone } from "@/lib/time/local-day";
 import { uploaderLabel } from "@/components/photos/toGrid";
@@ -46,10 +46,10 @@ export type MapPayload = {
  * search means the same thing on every surface: asking the map for "lighthouse" shows where the lighthouse
  * photographs were taken, which is a thing a map can answer and a list cannot.
  */
-export async function narrowing(filter: GalleryFilter, tripId: string | null): Promise<{ where: Prisma.PhotoWhereInput; nothing: boolean }> {
+export async function narrowing(filter: GalleryFilter, scope: MatchScope): Promise<{ where: Prisma.PhotoWhereInput; nothing: boolean }> {
   const lists: string[][] = [];
-  if (filter.q) lists.push(await idsMatching(filter.q));
-  if (filter.year) lists.push(await idsInLocalYear(tripId, filter.year));
+  if (filter.q) lists.push(await idsMatching(filter.q, { member: filter.member, scope }));
+  if (filter.year) lists.push(await idsInLocalYear(scope.tripId ?? null, filter.year));
   // One list per name, so two names means the photographs they are both on rather than either.
   for (const id of filter.personIds) lists.push(await idsWithPerson(id));
   const restrict = lists.length ? intersectIds(lists) : null;
@@ -72,11 +72,13 @@ export async function narrowing(filter: GalleryFilter, tripId: string | null): P
  * a collection, and those used to be missing from this map while showing up perfectly well on a collection's own map.
  * The filter every other surface uses decides what is here, and a trip is only needed to name and colour what it holds.
  */
-export async function buildMapPayload(viewer: Viewer, tripId?: string, filter: GalleryFilter = NO_FILTER): Promise<MapPayload> {
-  const active = filterIsActive(filter);
-  const narrowed = await narrowing(filter, tripId ?? null);
-  const tripWhere = tripId ? { id: tripId } : visibleTripsWhere(viewer);
+export async function buildMapPayload(viewer: Viewer, tripId?: string, given: GalleryFilter = NO_FILTER): Promise<MapPayload> {
   const member = viewer.kind === "user";
+  const filter = { ...given, member: given.member && member };
+  const active = filterIsActive(filter);
+  // Across every trip, the words are asked of what this viewer may see, so the limit on matches is spent there.
+  const narrowed = await narrowing(filter, tripId ? { tripId } : { publicOnly: !member });
+  const tripWhere = tripId ? { id: tripId } : visibleTripsWhere(viewer);
   const trips = await db.trip.findMany({ where: tripWhere, select: { id: true, slug: true, title: true, themeKey: true, timezone: true }, orderBy: { startDate: "desc" } });
   const tripIds = trips.map((t) => t.id);
   const tripById = new Map(trips.map((t) => [t.id, t]));
@@ -128,10 +130,12 @@ export async function buildMapPayload(viewer: Viewer, tripId?: string, filter: G
         takenAt: p.takenAt?.toISOString() ?? null,
         tripSlug: trip?.slug ?? "",
         tripTitle: trip?.title ?? "",
-        activityId: p.activityId,
+        // An activity belongs to its trip: named only where the trip itself is, which it is not for a photograph
+        // reached through a public collection from a trip this viewer may not open.
+        activityId: trip ? p.activityId : null,
         gpsSource: p.gpsSource,
         day: dayOf(p.takenAt, p.tzOffsetMin, trip?.timezone ?? "UTC"),
-        activityTitle: p.activity?.title ?? null,
+        activityTitle: trip ? (p.activity?.title ?? null) : null,
         ...who(member, p.uploader),
       },
     };
@@ -174,7 +178,7 @@ export async function buildMapPayload(viewer: Viewer, tripId?: string, filter: G
 
 /** Photos in a collection (no tracks). The caller has already checked the viewer may open the collection; a photo's trip is named only when the viewer may open that trip too. */
 export async function buildCollectionMapPayload(viewer: Viewer, collectionId: string, filter: GalleryFilter = NO_FILTER): Promise<MapPayload> {
-  const narrowed = await narrowing(filter, null);
+  const narrowed = await narrowing({ ...filter, member: filter.member && viewer.kind === "user" }, { collectionId });
   const found = narrowed.nothing ? [] : await db.photo.findMany({
     where: { ...NOT_TRASHED, status: "READY", lat: { not: null }, lng: { not: null }, collections: { some: { collectionId } }, ...narrowed.where },
     select: { id: true, lat: true, lng: true, caption: true, takenAt: true, tzOffsetMin: true, updatedAt: true, activityId: true, gpsSource: true, activity: { select: { title: true } }, uploader: { select: { id: true, name: true, email: true } }, trip: { select: { id: true, slug: true, title: true, visibility: true, shareToken: true, timezone: true } } },
@@ -196,7 +200,7 @@ export async function buildCollectionMapPayload(viewer: Viewer, collectionId: st
         takenAt: p.takenAt?.toISOString() ?? null,
         tripSlug: tripOpen ? p.trip!.slug : "",
         tripTitle: tripOpen ? p.trip!.title : "",
-        activityId: p.activityId,
+        activityId: tripOpen ? p.activityId : null,
         gpsSource: p.gpsSource,
         day: dayOf(p.takenAt, p.tzOffsetMin, p.trip?.timezone ?? "UTC"),
         // An activity belongs to its trip: named only where the trip itself may be opened, like the trip's own name.
