@@ -7,6 +7,7 @@ import { ScanViewer } from "@/components/scans/ScanViewer";
 import { panoramaLabel } from "@/lib/images/panorama";
 import { PetTagger } from "@/components/people/PetTagger";
 import { LightboxInfo } from "./LightboxInfo";
+import { trapTab } from "@/components/ui/focus-trap";
 
 export type LightboxPhoto = { id: string; mediumUrl: string; width: number | null; height: number | null; caption: string | null; alt: string; /** Shown to members only; never set for anonymous viewers. */ uploadedBy?: string | null; /** Set for embedded videos: the lightbox shows the click-to-play facade instead of the image. */ youtubeId?: string | null; title?: string | null; /** Set for uploaded clips: plays inline with controls. */ videoUrl?: string | null; durationS?: number | null; /** Members can tag a pet from here. */ canTag?: boolean; /** Full-size file, opened by a second click on the picture. */ originalUrl?: string | null; /** A panorama, shown filling the height and panned sideways rather than shrunk to fit. */ panorama?: { projection: string | null; panoUrl: string } | null; /** A 3D scan, turned in place. */ scan?: { format: string | null; modelUrl: string; hasPoster: boolean } | null };
 
@@ -39,14 +40,8 @@ export function Lightbox({ photos, index, onClose, onNavigate, share = null }: {
     const opener = document.activeElement as HTMLElement | null;
     closeRef.current?.focus();
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Tab" && dialogRef.current) {
-        // Keep keyboard focus inside the dialog.
-        const focusable = Array.from(dialogRef.current.querySelectorAll<HTMLElement>("a[href], button:not([disabled]), input, select, textarea, [tabindex]:not([tabindex='-1'])"));
-        if (!focusable.length) return;
-        const first = focusable[0], last = focusable[focusable.length - 1];
-        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
-        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
-      }
+      // Keep keyboard focus inside the dialog.
+      if (dialogRef.current) trapTab(e, dialogRef.current);
     };
     window.addEventListener("keydown", onKey);
     document.body.style.overflow = "hidden";

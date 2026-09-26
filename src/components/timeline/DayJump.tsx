@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
+import { useEffect, useEffectEvent, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal, flushSync } from "react-dom";
+import { trapTab } from "@/components/ui/focus-trap";
 import { formatDay } from "@/lib/time/format";
 import { monthsOf, type NavDay } from "./TimelineNav";
 
@@ -23,6 +24,12 @@ export function DayJump({ days, current, label }: { days: NavDay[]; current: str
   const trigger = useRef<HTMLButtonElement>(null);
   const dialog = useRef<HTMLDivElement>(null);
 
+  /** Shut the sheet, and put focus on `to` (the heading that opened it, unless a day was chosen). */
+  const close = (to: HTMLElement | null = trigger.current) => {
+    flushSync(() => setOpen(false));
+    to?.focus({ preventScroll: true });
+  };
+
   // Into the sheet on the day being looked at, so the list starts where the reader is; the Close button otherwise.
   const focusStart = useEffectEvent(() => {
     const sheet = dialog.current;
@@ -34,36 +41,41 @@ export function DayJump({ days, current, label }: { days: NavDay[]; current: str
     if (!open) return;
     focusStart();
     const keys = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
-      if (e.key === "Tab" && dialog.current) {
-        // A modal sheet keeps the keyboard inside it, as the lightbox does.
-        const focusable = Array.from(dialog.current.querySelectorAll<HTMLElement>("button:not([disabled]):not([tabindex='-1']), a[href]"));
-        if (!focusable.length) return;
-        const first = focusable[0], last = focusable[focusable.length - 1];
-        const inside = dialog.current.contains(document.activeElement);
-        if (e.shiftKey && (document.activeElement === first || !inside)) { e.preventDefault(); last.focus(); }
-        else if (!e.shiftKey && (document.activeElement === last || !inside)) { e.preventDefault(); first.focus(); }
-      }
+      if (e.key === "Escape") close();
+      // A modal sheet keeps the keyboard inside it, as the lightbox does.
+      else if (dialog.current) trapTab(e, dialog.current);
     };
     document.addEventListener("keydown", keys);
     // Nothing behind the sheet should scroll under it.
     const had = document.body.style.overflow;
     document.body.style.overflow = "hidden";
-    const opener = trigger.current;
     return () => {
       document.removeEventListener("keydown", keys);
       document.body.style.overflow = had;
-      // Back to the heading that opened it, without undoing the scroll to the day just chosen.
-      opener?.focus({ preventScroll: true });
     };
+  }, [open]);
+
+  // The page behind is inert while the sheet is up, so neither Tab nor a screen reader's own cursor wanders into it.
+  // In a layout effect so it is lifted within the commit that closes the sheet, before focus is handed back.
+  useLayoutEffect(() => {
+    if (!open) return;
+    const behind = Array.from(document.body.children).filter((el): el is HTMLElement => el instanceof HTMLElement && el !== dialog.current && !el.inert);
+    for (const el of behind) el.inert = true;
+    return () => { for (const el of behind) el.inert = false; };
   }, [open]);
 
   // One day is not a timeline to navigate, and beside a wide enough path the panel is already there.
   if (days.length < 2) return <span>{label}</span>;
 
   const go = (id: string) => {
-    setOpen(false);
-    document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    const target = document.getElementById(id);
+    // Focus follows the reader to the day chosen: its own heading where it has one on screen, the section otherwise.
+    const heading = target?.querySelector<HTMLElement>("[data-testid=day-jump]");
+    let to: HTMLElement | null = heading && heading.getClientRects().length > 0 ? heading : target;
+    if (to && to === target && !to.hasAttribute("tabindex")) to.setAttribute("tabindex", "-1");
+    if (!to) to = trigger.current;
+    close(to);
+    target?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
   return (
@@ -86,11 +98,11 @@ export function DayJump({ days, current, label }: { days: NavDay[]; current: str
         createPortal(
           <div ref={dialog} className="fixed inset-0 z-50 flex flex-col justify-end" role="dialog" aria-modal="true" aria-label="Go to a day">
             {/* The backdrop closes it on a tap; keyboard users have the Close button, so it is left out of the tab order. */}
-            <button type="button" aria-label="Close" tabIndex={-1} className="absolute inset-0 bg-black/40" onClick={() => setOpen(false)} />
+            <button type="button" aria-label="Close" tabIndex={-1} className="absolute inset-0 bg-black/40" onClick={() => close()} />
             <div data-testid="day-jump-sheet" className="relative max-h-[70vh] overflow-y-auto rounded-t-theme border-t border-border bg-surface font-body text-base font-normal shadow-lg">
               <div className="sticky top-0 flex items-baseline justify-between gap-3 border-b border-border bg-surface px-4 py-3">
                 <p className="font-display text-lg font-semibold">Go to a day</p>
-                <button type="button" data-day-jump-close className="text-sm text-muted hover:text-text" onClick={() => setOpen(false)}>Close</button>
+                <button type="button" data-day-jump-close className="text-sm text-muted hover:text-text" onClick={() => close()}>Close</button>
               </div>
               <div className="p-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
                 {months.map((m) => (
