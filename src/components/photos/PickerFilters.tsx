@@ -94,7 +94,7 @@ export function PickerFilters({ filter, action, initialTrip, members, people, sh
               </optgroup>
             )}
           </Select>
-          <span className="block text-xs text-muted">Choose several for the ones they are all in</span>
+          <span className="block text-xs text-muted">Choose several for the ones they are all in. On a computer, hold Ctrl (Command ⌘ on a Mac) as you click each name.</span>
         </div>
       )}
 

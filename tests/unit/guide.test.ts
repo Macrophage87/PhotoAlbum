@@ -41,6 +41,13 @@ describe("the family's guide", () => {
     expect(photos.length).toBeGreaterThan(0);
     for (const row of photos) expect(row[1]).toMatch(/favorites first/i);
   });
+
+  it("explains that choosing two names on a computer takes Ctrl or Command, which a plain click does not do", () => {
+    const rows = G.sections.flatMap((s) => s.blocks).flatMap((b) => (b.kind === "table" ? b.rows : []));
+    const who = rows.find((r) => r[0] === "Who is in it");
+    expect(who?.[1]).toMatch(/Ctrl/);
+    expect(who?.[1]).toMatch(/Command/);
+  });
 });
 
 describe("the guide's two marks of inline markup", () => {
