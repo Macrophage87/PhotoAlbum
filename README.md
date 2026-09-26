@@ -116,7 +116,7 @@ Only points inside the trip's dates are imported, so uploading a whole export is
 
 ## Development
 
-Requirements: Node 22, pnpm, PostgreSQL 16 with the [pgvector](https://github.com/pgvector/pgvector) extension. A stock PostgreSQL package does not include it, and the migrations stop at `CREATE EXTENSION vector` without it; the `pgvector/pgvector:pg16` image from the compose command below has it. On your own server, install pgvector and let the role create extensions, or have an admin run `CREATE EXTENSION vector;` once in each database (`<db>`, `<db>_test`, `<db>_e2e`).
+Requirements: Node 22, pnpm, PostgreSQL 16 with the [pgvector](https://github.com/pgvector/pgvector) extension. A stock PostgreSQL package does not include it, and the migrations stop at `CREATE EXTENSION vector` without it; the `pgvector/pgvector:pg16` image from the compose command below has it. On your own server, install pgvector as well. The extension is not marked trusted, so only a superuser may create it: either make the app's role a superuser, or have a superuser run `CREATE EXTENSION vector;` once in `template1`, so every database created afterwards has it (including the `<db>_test` and `<db>_e2e` databases the test scripts create). A database that already exists needs the same command run in it.
 
 ```bash
 pnpm install

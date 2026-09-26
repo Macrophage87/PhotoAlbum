@@ -46,7 +46,7 @@ describe("the family's guide", () => {
     const rows = G.sections.flatMap((s) => s.blocks).flatMap((b) => (b.kind === "table" ? b.rows : []));
     const who = rows.find((r) => r[0] === "Who is in it");
     expect(who?.[1]).toMatch(/Ctrl/);
-    expect(who?.[1]).toMatch(/Command/);
+    expect(who?.[1]).toMatch(/hold \*\*Ctrl\*\* \(\*\*Command\*\* on a Mac\) as you click each name/);
   });
 });
 

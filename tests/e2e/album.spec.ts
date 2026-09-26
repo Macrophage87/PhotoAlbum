@@ -376,7 +376,7 @@ test("a trip can say who was on it, and stops collecting everybody else's photog
   // Say who was on the trip: the admin, and not them.
   await page.goto("/trips/acadia/settings");
   await page.getByTestId("trip-who-open").click();
-  await page.getByTestId("trip-who").getByLabel(ADMIN).check();
+  await page.getByTestId("trip-who").getByLabel(ADMIN, { exact: true }).check();
   await page.getByRole("button", { name: "Save changes" }).click();
   await expect(page).toHaveURL(/saved=1/);
   const named = await withDb((c) => c.query(`SELECT u.email FROM "_TripParticipants" tp JOIN "User" u ON u.id = tp."B" JOIN "Trip" t ON t.id = tp."A" WHERE t.slug = 'acadia'`));
@@ -401,7 +401,7 @@ test("a trip can say who was on it, and stops collecting everybody else's photog
 
   // Put it back to everybody, so the rest of the file sees the trip it expects.
   await page.goto("/trips/acadia/settings");
-  await page.getByTestId("trip-who").getByLabel(ADMIN).uncheck();
+  await page.getByTestId("trip-who").getByLabel(ADMIN, { exact: true }).uncheck();
   await page.getByRole("button", { name: "Save changes" }).click();
   await expect(page).toHaveURL(/saved=1/);
   const cleared = await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "_TripParticipants"`));
