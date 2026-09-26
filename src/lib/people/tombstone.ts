@@ -92,7 +92,9 @@ export async function forgetKeyState(): Promise<ForgetKeyState> {
   else if (!v1) problem = "FORGET_KEY is not set, so forgotten names are hashed under a key made from the database alone. Set it before this album is used for real.";
   else if (weak) problem = `${weak} forgotten ${weak === 1 ? "name was" : "names were"} kept before FORGET_KEY was set, under a key made from the database alone. They are still recognised, but a copy of the database is enough to test names against them.`;
   const keys = [v0, ...(v1 && matches ? [v1] : [])];
-  const write = paused ? null : v1 && matches ? v1 : production ? null : v0;
+  // A key that is set but not valid never writes, in any environment: whoever set it meant names to be kept under
+  // it, not under the weaker stand-in, so forgets wait until it is put right.
+  const write = paused || invalid ? null : v1 && matches ? v1 : production ? null : v0;
   return { keys, write, problem, paused, weak, invalid };
 }
 

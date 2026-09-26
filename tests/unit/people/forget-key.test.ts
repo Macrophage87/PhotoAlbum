@@ -10,6 +10,7 @@ vi.mock("@/lib/env", async (orig) => {
 
 import { assertCanForget, forgetKeyState, forgottenScope, loadTombstone, rememberForgotten } from "@/lib/people/tombstone";
 import { unpermittedNameScrub } from "@/lib/people/unpermitted";
+import { completePendingForgets } from "@/lib/people/forget-person";
 import { annotationGates } from "@/lib/annotation/eligibility";
 
 const KEY = Buffer.alloc(32, 7).toString("base64");
@@ -89,6 +90,19 @@ describe("the key forgotten names are hashed under", () => {
     expect(good.write?.version).toBe(1);
     expect(good.invalid).toBe(false);
     expect(good.problem).toBeNull();
+  });
+
+  it("never falls back to the stand-in key for an invalid FORGET_KEY, outside production too", async () => {
+    env.NODE_ENV = "development";
+    env.FORGET_KEY = "e2e-forget-key-not-a-secret";
+    const state = await forgetKeyState();
+    expect(state.write).toBeNull();
+    expect(state.problem).toMatch(/set but not valid/);
+    const admin = (await db.user.create({ data: { email: "admin@example.com", role: "ADMIN" } })).id;
+    const p = await db.person.create({ data: { name: "Timothy Kent", forgetPendingAt: new Date(), optedOutAt: new Date(), createdById: admin } });
+    expect(await completePendingForgets()).toBe(0);
+    expect(await db.person.findUnique({ where: { id: p.id } })).not.toBeNull();
+    expect(await db.forgottenName.count()).toBe(0);
   });
 
   it("recognises a name forgotten before FORGET_KEY was set and again after, on both people's photographs", async () => {
