@@ -19,13 +19,14 @@ const TRUSTED_TIME_SOURCES: TakenAtSource[] = ["EXIF_OFFSET", "EXIF_TZLOOKUP", "
 export async function geotagPhotos(job: GeotagPhotosJob): Promise<{ updated: number }> {
   const tracks = await db.track.findMany({
     where: { tripId: job.tripId, ...(job.trackIds?.length ? { id: { in: job.trackIds } } : {}) },
-    select: { id: true, source: true, startTime: true, endTime: true, pointsBlob: true },
+    select: { id: true, source: true, uploaderId: true, startTime: true, endTime: true, pointsBlob: true },
     orderBy: { startTime: "asc" },
   });
   if (!tracks.length) return { updated: 0 };
   // GPX/FIT first so a real activity track wins over a coarse Google trace covering the same time.
   tracks.sort((a, b) => (a.source === "GOOGLE" ? 1 : 0) - (b.source === "GOOGLE" ? 1 : 0));
   const precise = tracks.filter((t) => t.source !== "GOOGLE");
+  const google = tracks.filter((t) => t.source === "GOOGLE");
 
   const trusted = { takenAt: { not: null }, takenAtSource: { in: TRUSTED_TIME_SOURCES } };
   const photos = await db.photo.findMany({
@@ -40,7 +41,7 @@ export async function geotagPhotos(job: GeotagPhotosJob): Promise<{ updated: num
         ...(precise.length ? [{ gpsSource: "TRACK" as const, ...trusted, OR: precise.map((t) => ({ takenAt: { gte: t.startTime, lte: t.endTime } })) }] : []),
       ],
     },
-    select: { id: true, takenAt: true, gpsSource: true, lat: true, lng: true, altitude: true },
+    select: { id: true, uploaderId: true, takenAt: true, gpsSource: true, lat: true, lng: true, altitude: true },
   });
   if (!photos.length) return { updated: 0 };
 
@@ -58,7 +59,8 @@ export async function geotagPhotos(job: GeotagPhotosJob): Promise<{ updated: num
   for (const photo of photos) {
     const t = photo.takenAt!.getTime();
     // A photo that already has a track position is only moved by a precise (non-Google) track.
-    const candidates = photo.gpsSource === "TRACK" ? precise : tracks;
+    // Among Google traces, the photographer's own comes first: several members' traces can cover the same hour.
+    const candidates = photo.gpsSource === "TRACK" ? precise : [...precise, ...google.filter((g) => g.uploaderId === photo.uploaderId), ...google.filter((g) => g.uploaderId !== photo.uploaderId)];
     for (const track of candidates) {
       if (t < track.startTime.getTime() || t > track.endTime.getTime()) continue;
       const pos = positionAt(pointsOf(track), t);

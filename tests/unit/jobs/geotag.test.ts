@@ -72,6 +72,17 @@ describe("geotagPhotos", () => {
     expect(p.lat).toBeCloseTo(44.003, 5);
   });
 
+  it("prefers the photographer's own Google trace over another member's", async () => {
+    const other = await db.user.create({ data: { email: "o@example.com", role: "MEMBER" } });
+    await makeTrack(tripId, userId, line(10).map((p) => ({ ...p, lat: 50 })), "GOOGLE");
+    await makeTrack(tripId, other.id, line(10).map((p) => ({ ...p, lat: 60 })), "GOOGLE");
+    const theirs = await makePhoto(tripId, other.id, new Date(T0 + 3 * 60_000));
+    const mine = await makePhoto(tripId, userId, new Date(T0 + 3 * 60_000));
+    await geotagPhotos({ tripId });
+    expect((await db.photo.findUniqueOrThrow({ where: { id: theirs.id } })).lat).toBe(60);
+    expect((await db.photo.findUniqueOrThrow({ where: { id: mine.id } })).lat).toBe(50);
+  });
+
   it("is a no-op without tracks or candidates", async () => {
     expect(await geotagPhotos({ tripId })).toEqual({ updated: 0 });
     await makePhoto(tripId, userId, new Date(T0));
