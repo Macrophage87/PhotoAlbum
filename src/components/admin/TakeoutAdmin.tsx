@@ -48,7 +48,7 @@ export function TakeoutAdmin({ configured, dir, archives, imports }: { configure
               </div>
               <div className="flex gap-2">
                 <Button size="sm" disabled={pending || running} onClick={() => act(() => startTakeoutImport(a.name))}>Import</Button>
-                <Button size="sm" variant="danger" disabled={pending} onClick={() => { if (confirm(`Delete ${a.name} from the inbox? It is an unencrypted copy of your Google export; delete it once its photos are in the album.`)) act(() => deleteTakeoutArchive(a.name)); }}>Delete</Button>
+                <Button size="sm" variant="danger" disabled={pending} onClick={() => { if (confirm(`Delete ${a.name} from the inbox? It is an unencrypted copy of your Google export; delete it once its photos are in the album.`)) act(async () => { const refused = await deleteTakeoutArchive(a.name); if (refused) throw new Error(refused); }); }}>Delete</Button>
               </div>
             </div>
           ))}

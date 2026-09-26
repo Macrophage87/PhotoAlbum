@@ -136,7 +136,7 @@ album.example.com {
 }
 ```
 
-The body limit matters: photos are accepted up to 100 MB, short video clips up to 1 GB (`MAX_VIDEO_UPLOAD_BYTES`), and Google Timeline exports can be much larger. Reload Caddy:
+The body limit matters: photos are accepted up to 100 MB, short video clips and 3D scans up to 1 GB (`MAX_VIDEO_UPLOAD_BYTES`, `MAX_SCAN_UPLOAD_BYTES`), and Google Timeline exports can be much larger. Reload Caddy:
 
 ```bash
 sudo systemctl reload caddy
@@ -203,6 +203,7 @@ The basics (`APP_URL`, `ADMIN_EMAIL`, `SMTP_*`, `POSTGRES_*`, `APP_PORT`, `MAX_U
 | --- | --- | --- |
 | `MAX_CLIP_SECONDS` | `90` | Longest clip accepted for upload; longer videos go on YouTube. |
 | `MAX_VIDEO_UPLOAD_BYTES` | `1073741824` (1 GB) | Largest clip file accepted. |
+| `MAX_SCAN_UPLOAD_BYTES` | `1073741824` (1 GB) | Largest 3D scan (GLB, USDZ, PLY, SPZ) accepted. |
 | `YOUTUBE_API_KEY` | empty | Optional Data API key so embedded videos show their length. |
 | `ANNOTATION_ENABLED` | `false` | Operator half of the AI-description switch; the admin opt-in is the other half. |
 | `ANTHROPIC_API_KEY` | empty | Required for descriptions. |
@@ -243,6 +244,12 @@ docker compose cp ~/Downloads/takeout-20260901T120000Z-001.zip app:/data/imports
 ```
 
 The import streams the archive (memory stays flat whatever its size), reads the `.supplemental-metadata.json` sidecars for the capture date, position and description, turns each Google album folder into a private collection, and queues every item through the normal processing pipeline. A photo already in the album (same bytes, or the same Google item) is not imported again; instead the sidecar fills in whatever that photo is still missing and it joins its album's collection. **Importing an export you have already imported is therefore safe, and is the way to repair photos uploaded from a phone:** Android removes GPS from photos handed to any app without the `ACCESS_MEDIA_LOCATION` permission, so phone uploads arrive with an empty GPS block, while Takeout keeps the position in the sidecar. Only gaps are filled: a position the camera recorded or a member set by hand, a date from EXIF, and any notes or caption the family wrote are never overwritten. The run report lists what was filled in. Each import's counts and any failures show on the Admin page. The zip is an unencrypted copy of your whole export: delete it from the inbox from the Admin page once its photos are in. Nothing contacts Google during a Takeout import.
+
+**Takeout inbox permissions.** The app runs as the `node` user and deletes archives from `/data/imports`, so that folder must be writable by it. The image creates it owned by `node`, and a new `imports` volume takes that over. A volume made by an older image belongs to `root`, and deleting an archive from the Admin page then says the inbox is not writable; give it to `node` once:
+
+```bash
+docker compose run --rm --user root --entrypoint chown app -R node:node /data/imports
+```
 
 `ml-init` also fetches the animal detector used for pet spotting (about 80 MB); after upgrading from a version without it, run `docker compose run --rm ml-init` again or the sidecar answers 503 for animals and the app skips spotting.
 
