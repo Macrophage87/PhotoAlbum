@@ -9,7 +9,7 @@ import { storage } from "@/lib/storage";
 import type { Renditions } from "@/lib/images/renditions";
 import type { VideoRenditions } from "@/lib/jobs/handlers/transcode-video";
 import { ffmpeg } from "@/lib/video/ffmpeg";
-import { formatDateTime } from "@/lib/time/format";
+import { formatTakenAt } from "@/lib/time/format";
 import { SYSTEM_INSTRUCTIONS } from "./prompt";
 import { annotationSchema } from "./schema";
 import { thinkingParams } from "./client";
@@ -63,7 +63,7 @@ export function describeItem(item: ItemForAnnotation, permittedNames: string[], 
   if (item.context) lines.push(`Notes from the person who uploaded it: ${item.context}`);
   if (item.caption) lines.push(`Existing caption: ${item.caption}`);
   if (item.title) lines.push(`Title: ${item.title}`);
-  if (item.takenAt && !askForDate) lines.push(`Taken: ${formatDateTime(item.takenAt, item.trip?.timezone ?? "UTC", "EEEE, MMMM d, yyyy")}`);
+  if (item.takenAt && !askForDate) lines.push(`Taken: ${formatTakenAt(item.takenAt, item.tzOffsetMin, item.trip?.timezone, "EEEE, MMMM d, yyyy")}`);
   if (item.camera) lines.push(`Camera: ${item.camera}`);
   if (item.trip) lines.push(`Trip: ${item.trip.title}`);
   if (item.collections.length) lines.push(`Collections: ${item.collections.map((c) => c.collection.title).join(", ")}`);
@@ -115,7 +115,7 @@ export function describePlaceItem(item: ItemForAnnotation): string {
   if (item.context) lines.push(`Notes from the person who uploaded it: ${item.context}`);
   if (item.caption) lines.push(`Existing caption: ${item.caption}`);
   if (item.title) lines.push(`Title: ${item.title}`);
-  if (item.takenAt) lines.push(`Taken: ${formatDateTime(item.takenAt, item.trip?.timezone ?? "UTC", "EEEE, MMMM d, yyyy")}`);
+  if (item.takenAt) lines.push(`Taken: ${formatTakenAt(item.takenAt, item.tzOffsetMin, item.trip?.timezone, "EEEE, MMMM d, yyyy")}`);
   if (item.trip) lines.push(`Trip: ${item.trip.title}`);
   if (item.collections.length) lines.push(`Collections: ${item.collections.map((c) => c.collection.title).join(", ")}`);
   lines.push("This item has no location recorded. If it shows a public place you recognize, estimate it; otherwise return null.");

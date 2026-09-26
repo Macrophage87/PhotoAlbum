@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { localDayFromOffset, localDayInZone, offsetMinutesInZone, parseOffsetString, wallTimeToInstant } from "@/lib/time/local-day";
+import { localDayFromOffset, localDayInZone, offsetMinutesInZone, parseOffsetString, photoDay, wallTimeToInstant } from "@/lib/time/local-day";
 import { formatDayRange } from "@/lib/time/format";
 
 describe("local day helpers", () => {
@@ -31,5 +31,15 @@ describe("local day helpers", () => {
     expect(formatDayRange("2025-08-30", "2025-09-02")).toBe("Aug 30 – Sep 2, 2025");
     expect(formatDayRange("2025-12-28", "2026-01-03")).toBe("Dec 28, 2025 – Jan 3, 2026");
     expect(formatDayRange("2025-08-10", "2025-08-10")).toBe("Aug 10, 2025");
+  });
+});
+
+describe("the day a photograph is shown under", () => {
+  it("uses its own offset, else the trip's zone, else UTC", () => {
+    const at = new Date("2025-08-12T04:45:00Z");
+    expect(photoDay(at, -300, "America/New_York")).toBe("2025-08-11");
+    expect(photoDay(at, null, "America/New_York")).toBe("2025-08-12");
+    expect(photoDay(at, null)).toBe("2025-08-12");
+    expect(photoDay(new Date("2025-08-12T02:00:00Z"), null, "America/New_York")).toBe("2025-08-11");
   });
 });

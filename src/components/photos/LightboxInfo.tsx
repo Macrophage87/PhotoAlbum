@@ -10,6 +10,7 @@ import { resetPhotoDateToCamera, setPhotoDate } from "@/app/photos/[id]/actions"
 import { DateTroubleshooter } from "./DateTroubleshooter";
 import type { PhotoInfo } from "@/app/api/photos/[id]/info/route";
 import { FavouriteButton } from "@/components/favourites/FavouriteButton";
+import { offsetMinutesInZone } from "@/lib/time/local-day";
 
 const SOURCE_LABEL: Record<string, string> = { EXIF_OFFSET: "from the camera", EXIF_TZLOOKUP: "from the camera", TRIP_TZ: "from the camera, in the trip's zone", SIDECAR: "from Google Photos", FILE_NAME: "from the file name", EXIF_CREATED: "from the file\u2019s created-date tag, which may be when it was edited", FILE_MTIME: "from the file's modified time", UPLOAD_TIME: "the upload time" };
 
@@ -23,6 +24,11 @@ function dateSourceLabel(source: string, setBy: string | null): string {
 export function formatTaken(takenAt: string, tzOffsetMin: number | null): string {
   const d = new Date(new Date(takenAt).getTime() + (tzOffsetMin ?? 0) * 60_000);
   return d.toLocaleString("en-US", { timeZone: "UTC", weekday: "short", month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
+/** The offset its clock is read on: its own when known, else the trip's zone at that moment (as the details page and setPhotoDate do), else UTC. */
+function clockOffset(takenAt: string, tzOffsetMin: number | null, timezone: string | null): number {
+  return tzOffsetMin ?? offsetMinutesInZone(new Date(takenAt), timezone ?? "UTC");
 }
 
 /** The value a datetime-local input wants: the wall-clock time in the item's zone. */
@@ -75,7 +81,7 @@ export function LightboxInfo({ photoId, share }: { photoId: string; share?: { to
         <div className="text-white/60 text-xs uppercase tracking-wide">Date</div>
         {info.takenAt ? (
           <p>
-            <time dateTime={info.takenAt}>{formatTaken(info.takenAt, info.tzOffsetMin)}</time>
+            <time dateTime={info.takenAt}>{formatTaken(info.takenAt, clockOffset(info.takenAt, info.tzOffsetMin, info.timezone))}</time>
             {info.takenAtSource && <span className="block text-white/50 text-xs">{dateSourceLabel(info.takenAtSource, info.dateSetBy)}</span>}
           </p>
         ) : (
@@ -90,7 +96,7 @@ export function LightboxInfo({ photoId, share }: { photoId: string; share?: { to
         )}
         {info.editable && editingDate && (
           <form className="mt-2 space-y-2" onSubmit={(e) => { e.preventDefault(); const fd = new FormData(e.currentTarget); apply(() => setPhotoDate(info.id, fd)); }}>
-            <input type="datetime-local" name="takenAt" aria-label="Date taken" defaultValue={info.takenAt ? wallInputValue(info.takenAt, info.tzOffsetMin) : ""} required className="h-8 rounded px-2 bg-white text-black [color-scheme:light] text-sm w-full" />
+            <input type="datetime-local" name="takenAt" aria-label="Date taken" defaultValue={info.takenAt ? wallInputValue(info.takenAt, clockOffset(info.takenAt, info.tzOffsetMin, info.timezone)) : ""} required className="h-8 rounded px-2 bg-white text-black [color-scheme:light] text-sm w-full" />
             <div className="flex flex-wrap gap-2">
               <button type="submit" disabled={pending} className="px-2 py-1 rounded bg-white text-black text-xs font-medium disabled:opacity-60">Save date</button>
               <button type="button" disabled={pending} onClick={() => apply(() => resetPhotoDateToCamera(info.id))} className="px-2 py-1 rounded border border-white/40 text-xs hover:bg-white/10 disabled:opacity-60">Use camera date</button>

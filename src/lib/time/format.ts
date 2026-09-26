@@ -45,6 +45,14 @@ export function formatLocalTime(instant: Date, tz: { offsetMin?: number | null; 
   return format(new TZDate(instant, tz.timezone ?? "UTC"), fmt);
 }
 
+/**
+ * When a photograph was taken, read the way the album reads it everywhere (see photoDay): on its own clock when its
+ * offset is known, else in the trip's zone, else UTC.
+ */
+export function formatTakenAt(takenAt: Date, tzOffsetMin: number | null, timezone?: string | null, fmt = "EEE, MMM d, yyyy · h:mm a"): string {
+  return formatLocalTime(takenAt, { offsetMin: tzOffsetMin, timezone: timezone ?? "UTC" }, fmt);
+}
+
 export function formatDateTime(instant: Date, timezone: string, fmt = "EEE, MMM d, yyyy · h:mm a"): string {
   return format(new TZDate(instant, timezone), fmt);
 }

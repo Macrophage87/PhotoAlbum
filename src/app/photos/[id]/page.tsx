@@ -9,7 +9,7 @@ import { photoUrl } from "@/lib/photos/urls";
 import { AppShell, Container } from "@/components/layout/AppShell";
 import { ExifPanel } from "@/components/photos/ExifPanel";
 import { Button, Card, Label, Select, Textarea } from "@/components/ui";
-import { formatBytes, formatDateTime } from "@/lib/time/format";
+import { formatBytes, formatDateTime, formatTakenAt } from "@/lib/time/format";
 import { reprocessPhoto, resetPhotoDateToCamera, setAsCover, setPhotoDate, shiftPhotoTimezone, trashPhoto, updatePhoto } from "./actions";
 
 const SOURCE_LABEL: Record<string, string> = { EXIF_OFFSET: "from the camera", EXIF_TZLOOKUP: "from the camera", TRIP_TZ: "from the camera, in the trip's zone", SIDECAR: "from Google Photos", FILE_NAME: "from the file name", EXIF_CREATED: "from the file\u2019s created-date tag, which may be when it was edited", FILE_MTIME: "from the file's modified time", UPLOAD_TIME: "the upload time" };
@@ -40,7 +40,7 @@ import { uploaderLabel } from "@/components/photos/toGrid";
 import { YouTubeEmbed } from "@/components/videos/YouTubeEmbed";
 import { updateExternalVideo } from "@/app/videos/actions";
 import { Input } from "@/components/ui";
-import { localDayFromOffset } from "@/lib/time/local-day";
+import { localDayFromOffset, offsetMinutesInZone } from "@/lib/time/local-day";
 import { AnnotationCard } from "@/components/annotation/AnnotationCard";
 import { EstimatedDate } from "@/components/annotation/EstimatedDate";
 import { annotationGates, optOutReason } from "@/lib/annotation/eligibility";
@@ -102,7 +102,9 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
   const isVideo = photo.kind === "EXTERNAL_VIDEO";
   const isClip = photo.kind === "VIDEO";
   const updateVideo = updateExternalVideo.bind(null, id);
-  const filmedDay = photo.takenAt ? localDayFromOffset(photo.takenAt, photo.tzOffsetMin ?? 0) : "";
+  // Its clock as the page shows it, and as setPhotoDate reads a typed time back: own offset, else the trip's zone.
+  const wallOffset = photo.takenAt ? (photo.tzOffsetMin ?? offsetMinutesInZone(photo.takenAt, photo.trip?.timezone ?? "UTC")) : 0;
+  const filmedDay = photo.takenAt ? localDayFromOffset(photo.takenAt, wallOffset) : "";
 
   return (
     <AppShell viewer={viewer}>
@@ -218,7 +220,7 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
             {isVideo && photo.externalStatus === "UNAVAILABLE" && <p className="mt-1 text-sm text-amber-800">This video is no longer available on YouTube (deleted or made private). Replace the link below or delete the item.</p>}
             {photo.caption && <p className="mt-3 text-lg">{photo.caption}</p>}
             <div className="mt-2 space-y-2"><PersonChips photoId={photo.id} faces={faces} people={people} /><ProposalList proposals={proposals} /></div>
-            {photo.takenAt && <p className="text-sm text-muted mt-1">{formatDateTime(photo.takenAt, photo.trip?.timezone ?? "UTC")}</p>}
+            {photo.takenAt && <p className="text-sm text-muted mt-1">{formatTakenAt(photo.takenAt, photo.tzOffsetMin, photo.trip?.timezone)}</p>}
           </div>
 
           <div className="space-y-6">
@@ -321,7 +323,7 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
                   <div className="text-xs font-medium">Date taken</div>
                   <p className="text-xs text-muted">Defaults to what the camera wrote in the file{photo.takenAtSource ? ` (currently ${photo.takenAtSource === "MANUAL" ? `set by ${photo.dateSetBy ? uploaderLabel(photo.dateSetBy.name, photo.dateSetBy.email) : "a family member"}` : SOURCE_LABEL[photo.takenAtSource] ?? photo.takenAtSource})` : ""}. Change it here when the camera was wrong or a scan has no date.</p>
                   <div className="flex flex-wrap gap-2">
-                    <input type="datetime-local" name="takenAt" aria-label="Date taken" defaultValue={photo.takenAt ? new Date(photo.takenAt.getTime() + (photo.tzOffsetMin ?? 0) * 60_000).toISOString().slice(0, 16) : ""} required className="h-8 rounded-theme border border-border bg-surface text-text [color-scheme:light] px-2 text-sm" />
+                    <input type="datetime-local" name="takenAt" aria-label="Date taken" defaultValue={photo.takenAt ? new Date(photo.takenAt.getTime() + wallOffset * 60_000).toISOString().slice(0, 16) : ""} required className="h-8 rounded-theme border border-border bg-surface text-text [color-scheme:light] px-2 text-sm" />
                     <Button type="submit" variant="secondary" size="sm">Save date</Button>
                     <Button type="submit" variant="secondary" size="sm" formAction={async () => { "use server"; await resetPhotoDateToCamera(photo.id); }}>Use camera date</Button>
                   </div>
