@@ -23,6 +23,8 @@ export function toMediaAccess(photo: Loaded): MediaAccessFields {
  */
 export function mediaBytesAllowed(viewer: Viewer, media: MediaAccessFields, share?: { token: string | null; kind: string | null }): boolean {
   if (canViewMedia(viewer, media)) return true;
+  // The trash takes an item off every link at once, so a token in the address is refused like a cookie would be.
+  if (media.trashedAt) return false;
   if (!share?.token) return false;
   // A link preview fetches the cover with no cookie at all, so the token stands in for one — for an activity too,
   // whose link is the only thing that makes its photographs fetchable.
