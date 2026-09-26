@@ -41,7 +41,7 @@ CREATE TABLE "ForgottenName" (
   "containerIds" TEXT[] DEFAULT ARRAY[]::TEXT[],
   "taggedPhotoIds" TEXT[] DEFAULT ARRAY[]::TEXT[],
   "derived" BOOLEAN NOT NULL DEFAULT false,
-  "kinship" TEXT[] DEFAULT ARRAY[]::TEXT[],
+  "kinshipGroups" JSONB NOT NULL DEFAULT '[]',
   "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT "ForgottenName_pkey" PRIMARY KEY ("hash")
 );

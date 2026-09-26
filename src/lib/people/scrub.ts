@@ -373,7 +373,14 @@ export function kinshipKey(run: string): string {
     .split(/[\s\-‐]+/u)
     .filter(Boolean)
     .map((w) => KIN_CANON.get(w) ?? w)
-    .join(" ");
+    .join(" ")
+    // A grand-aunt is a great-aunt.
+    .replace(/(?<![\p{L}])grand (aunt|uncle)(?![\p{L}])/gu, "great $1");
+}
+
+/** A word that only makes the kinship word after it another title ("Great" of "Great Aunt"), not one on its own. */
+export function isTitlePrefix(word: string): boolean {
+  return /^(?:great|step|half|grand)$/iu.test(word);
 }
 
 /** The kinship title right before a name, "Great Aunt" and "Step-Mom" as one. */
@@ -696,7 +703,8 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
         // On their own photograph, a kinship word before their name is them too: "Grandpa Sam at the lake" is "A
         // family member at the lake" — unless their name carries another one ("Aunt Ruth" is not Grandma Ruth).
         const kin = before.match(KIN_BEFORE);
-        if (kin && kin[1].split(/[ \t]+/u).every((w) => isKin(w.replace(/\.$/u, "")))) {
+        // "the Great Ada" has no kinship word: "Great" is one only before another ("Great Aunt").
+        if (kin && !isTitlePrefix(kin[1]) && kin[1].split(/[ \t]+/u).every((w) => isKin(w.replace(/\.$/u, "")))) {
           if (ownKin.size && !ownKin.has(kinshipKey(kin[1]))) return m;
           if (where.tagged && where.onPhoto !== false) {
             const rest = before.slice(0, before.length - kin[0].length);

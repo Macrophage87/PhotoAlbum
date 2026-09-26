@@ -960,9 +960,10 @@ model ForgottenName {
   taggedPhotoIds  String[] @default([])
   /// The first name of a full one ("Sam" of Sam Kent), not all of somebody's name.
   derived         Boolean  @default(false)
-  /// The kinship words of the name it was taken from ("grandma" of Grandma Ruth), hashed like the names (some are
-  /// names: "Tia", "Nan"): with another before it, it is somebody else ("Aunt Ruth").
-  kinship         String[] @default([])
+  /// For each forgotten person it was taken from, the kinship titles of their name ("grandma" of Grandma Ruth), hashed
+  /// like the names (some are names: "Tia", "Nan"), with the photographs they were tagged on: [{ photos, kin }]. On
+  /// those photographs another title before it is somebody else ("Aunt Ruth").
+  kinshipGroups   Json     @default("[]")
   createdAt       DateTime @default(now())
 
   @@index([photoIds], type: Gin)

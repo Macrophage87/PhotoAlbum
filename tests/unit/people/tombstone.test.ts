@@ -542,6 +542,25 @@ describe("names that are also words", () => {
     expect(ts.scrub("Grandpa Sam at the lake", await sc(await photo()))).toBe("Grandpa Sam at the lake");
   });
 
+  it("keeps each forgotten person's kinship title to their own photographs when two share a first name", async () => {
+    const greatAunt = await forget("Great Aunt Ada");
+    const byron = await forget("Ada Byron");
+    const ts = await loadTombstone();
+    for (const text of ["Grandma Ada laughed.", "Step Mom Ada waved.", "Aunt Ada smiled."]) expect(ts.scrub(text, await sc(byron))).toBe(`A family member ${text.split(" ").slice(-1)[0]}`);
+    expect(ts.scrub("Aunt Ada smiled.", await sc(greatAunt))).toBe("Aunt Ada smiled.");
+    expect(ts.scrub("Great Aunt Ada at the lake", await sc(greatAunt))).toBe("A family member at the lake");
+    expect(ts.scrub("Grand-Aunt Ada at the lake", await sc(greatAunt))).toBe("A family member at the lake");
+  });
+
+  it("reads 'Great' as a title only before a kinship word", async () => {
+    const on = await forget("Ada Byron");
+    const ts = await loadTombstone();
+    for (const [text, want] of [["The Great Ada show.", "The Great a family member show."], ["Alexander the Great Ada.", "Alexander the Great a family member."]]) {
+      expect(ts.scrub(text, await sc(on))).toBe(want);
+      expect(nameMatcher(["Ada Byron"]).scrub(text, { tagged: true })).toBe(want);
+    }
+  });
+
   it("visits a place only with a real place after it, on her own photograph", async () => {
     const on = await forget("Charlotte Brown");
     const ts = await loadTombstone();
@@ -592,9 +611,10 @@ describe("names that are also words", () => {
     for (const name of ["Tia Johnson", "Nan Smith", "Oma Lee", "Nana Ama Mensah", "Grand Duke Ivan"]) await forget(name);
     const words = new Set(["tia", "nan", "oma", "nana", "grand", "duke", "grandma", "aunt", "grand duke", "nana ama"]);
     const rows = await db.forgottenName.findMany();
-    expect(rows.some((r) => r.kinship.length > 0)).toBe(true);
-    for (const r of rows) for (const k of r.kinship) expect(words.has(k)).toBe(false);
-    expect(JSON.stringify(rows.map((r) => r.kinship))).not.toMatch(/tia|nan|oma|grand|duke/i);
+    const kin = (r: (typeof rows)[number]) => (r.kinshipGroups as { kin: string[] }[]).flatMap((g) => g.kin);
+    expect(rows.some((r) => kin(r).length > 0)).toBe(true);
+    for (const r of rows) for (const k of kin(r)) expect(words.has(k)).toBe(false);
+    expect(JSON.stringify(rows.map(kin))).not.toMatch(/tia|nan|oma|grand|duke/i);
   });
 
   it("reads 'in the sun' as the place only where the phrase ends", async () => {
