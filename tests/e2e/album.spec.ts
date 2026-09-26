@@ -1345,6 +1345,8 @@ test("a photograph is favorited while looking at it, and turns up under Favorite
     .poll(async () => (await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "PhotoFavorite" f JOIN "User" u ON u.id = f."userId" WHERE f."photoId" = $1 AND u.email = $2`, [id, ADMIN]))).rows[0].n)
     .toBe(1);
   await page.keyboard.press("Escape");
+  // The grid's own heart for it follows the one pressed in the lightbox (#111).
+  await expect(tileOf(page).getByTestId("favorite-photo")).toHaveAttribute("aria-pressed", "true");
 
   // The trip's own Favourites tab, mine and everyone's.
   await page.goto("/trips/acadia");
