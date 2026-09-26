@@ -1,13 +1,14 @@
 import { db } from "@/lib/db";
 import { NOT_TRASHED } from "@/lib/photos/trash";
+import { HAS_PICTURES } from "@/lib/photos/cover";
 
 /** What a cover needs to be drawn and put on a link preview: the preview is often dropped without its size. */
 const select = { id: true, updatedAt: true, width: true, height: true } as const;
 export type ActivityCoverPhoto = { id: string; updatedAt: Date; width: number | null; height: number | null };
 
 /**
- * The picture an activity is known by: the one chosen by hand, while it is still one of the activity's own finished
- * photographs, and otherwise the first photograph taken on it.
+ * The picture an activity is known by: the one chosen by hand, while it is still one of the activity's own
+ * photographs with pictures to draw, and otherwise the first photograph taken on it.
  *
  * The hand-chosen one is checked rather than trusted. A photograph can be taken off an activity, moved to another,
  * or put in the trash long after it was chosen, and a shared link that unfurled with a picture from a different
@@ -16,7 +17,8 @@ export type ActivityCoverPhoto = { id: string; updatedAt: Date; width: number | 
 export async function activityCover(activity: { id: string; coverPhotoId: string | null }): Promise<ActivityCoverPhoto | null> {
   const mine = { activityId: activity.id, status: "READY" as const, ...NOT_TRASHED };
   if (activity.coverPhotoId) {
-    const chosen = await db.photo.findFirst({ where: { id: activity.coverPhotoId, ...mine }, select });
+    // One being processed again still has its pictures, and goes on leading meanwhile, as a trip's cover does.
+    const chosen = await db.photo.findFirst({ where: { id: activity.coverPhotoId, activityId: activity.id, ...NOT_TRASHED, ...HAS_PICTURES }, select });
     if (chosen) return chosen;
   }
   return db.photo.findFirst({ where: mine, orderBy: [{ takenAt: { sort: "asc", nulls: "last" } }, { createdAt: "asc" }], select });

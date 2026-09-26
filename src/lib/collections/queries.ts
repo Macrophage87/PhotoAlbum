@@ -50,9 +50,22 @@ export async function getCollectionBySlug(slug: string) {
 
 export type CollectionWithCounts = NonNullable<Awaited<ReturnType<typeof getCollectionBySlug>>>;
 
-/** The cover chosen by hand where it still stands, or else the first ready item in the collection's saved order. */
-export async function collectionCoverFor(collection: { id: string; coverPhoto: { id: string; updatedAt: Date; width?: number | null; height?: number | null; trashedAt?: Date | null; status: string } | null }) {
+type ChosenCover = { id: string; updatedAt: Date; width: number | null; height?: number | null; trashedAt?: Date | null; status: string };
+
+/**
+ * The cover chosen by hand, while it still stands: with pictures to draw, out of the trash, and still one of the
+ * collection's items, which is the same rule a trip's cover and an activity's follow.
+ */
+export async function chosenCollectionCover<T extends ChosenCover>(collection: { id: string; coverPhoto: T | null }): Promise<T | null> {
   const chosen = standingCover(collection.coverPhoto);
+  if (!chosen) return null;
+  const held = await db.collectionItem.findUnique({ where: { collectionId_photoId: { collectionId: collection.id, photoId: chosen.id } }, select: { id: true } });
+  return held ? chosen : null;
+}
+
+/** The cover chosen by hand where it still stands, or else the first ready item in the collection's saved order. */
+export async function collectionCoverFor(collection: { id: string; coverPhoto: ChosenCover | null }) {
+  const chosen = await chosenCollectionCover(collection);
   if (chosen) return chosen;
   const item = await db.collectionItem.findFirst({
     where: { collectionId: collection.id, photo: { status: "READY", ...NOT_TRASHED } },

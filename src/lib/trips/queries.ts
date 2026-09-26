@@ -60,12 +60,14 @@ export async function getTripBySlug(slug: string) {
 
 export type TripWithCounts = NonNullable<Awaited<ReturnType<typeof getTripBySlug>>>;
 
-type ChosenCover = { id: string; updatedAt: Date; width?: number | null; height?: number | null; trashedAt?: Date | null; status: string; tripId: string | null };
+type ChosenCover = { id: string; updatedAt: Date; width: number | null; height?: number | null; trashedAt?: Date | null; status: string; tripId: string | null };
 
 /**
- * The cover chosen by hand, while it still stands: finished, out of the trash, and still on this trip. A photograph
- * can be moved to another trip from its own page, a bulk move, or filing, long after it was chosen, and the trip it
- * left must not go on leading with a picture that is no longer on it (and may now be private to somebody else).
+ * The cover chosen by hand, while it still stands: with pictures to draw, out of the trash, and still on this trip. A
+ * photograph can be moved to another trip from its own page, a bulk move, or filing, long after it was chosen, and
+ * the trip it left must not go on leading with a picture that is no longer on it (and may now be private to somebody
+ * else). The choice is not forgotten, only set aside, so one that comes back leads again, as one restored from the
+ * trash does. Taking a photograph off the trip on purpose (removeFromTrip) is the owner saying no, and forgets it.
  */
 export function chosenTripCover<T extends ChosenCover>(trip: { id: string; coverPhoto: T | null }): T | null {
   const chosen = standingCover(trip.coverPhoto);

@@ -343,10 +343,11 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
             </Card>
 
             <div className="flex flex-wrap gap-2">
-              {/* Only a finished photograph out of the trash has a picture to lead the trip with. */}
-              {ownsTrip && photo.tripId && photo.status === "READY" && !photo.trashedAt && (
-                <form action={cover}>
-                  <Button type="submit" variant="secondary" size="sm" disabled={isCover}>{isCover ? "Trip cover" : "Set as trip cover"}</Button>
+              {ownsTrip && photo.tripId && (
+                <form action={cover} className="flex items-center gap-2">
+                  {/* Only a finished photograph out of the trash has a picture to lead the trip with. */}
+                  <Button type="submit" variant="secondary" size="sm" disabled={isCover || photo.status !== "READY" || Boolean(photo.trashedAt)}>{isCover ? "Trip cover" : "Set as trip cover"}</Button>
+                  {!isCover && photo.status !== "READY" && !photo.trashedAt && <span className="text-xs text-muted">Available once the photo has finished processing.</span>}
                 </form>
               )}
               {mine && (

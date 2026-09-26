@@ -6,8 +6,7 @@ import { ShareButtons } from "@/components/trips/ShareButtons";
 import { CopyLink } from "@/components/share/CopyLink";
 import { Button, ButtonLink, Card, ConfirmSubmitButton } from "@/components/ui";
 import { photoUrl } from "@/lib/photos/urls";
-import { collectionCoverFor } from "@/lib/collections/queries";
-import { standingCover } from "@/lib/photos/cover";
+import { chosenCollectionCover, collectionCoverFor } from "@/lib/collections/queries";
 import { deleteCollection, detachExposedFromOtherCollections, rotateCollectionShareToken, updateCollection } from "../../actions";
 import { OptOutToggle } from "@/components/annotation/OptOutToggle";
 import { visibilityWarnings } from "@/lib/visibility/settings";
@@ -26,7 +25,7 @@ export default async function CollectionSettingsPage({ params, searchParams }: P
   const update = updateCollection.bind(null, slug);
   const rotate = rotateCollectionShareToken.bind(null, slug);
   const remove = deleteCollection.bind(null, slug);
-  const cover = await collectionCoverFor(collection);
+  const [cover, chosen] = await Promise.all([collectionCoverFor(collection), chosenCollectionCover(collection)]);
   const shareUrl = shareableCollectionUrl(collection, env().APP_URL);
   const warnings = await visibilityWarnings("collection", collection.id, collection.visibility, "this collection");
 
@@ -110,7 +109,7 @@ export default async function CollectionSettingsPage({ params, searchParams }: P
             )}
           </div>
           <div className="text-sm space-y-2">
-            <p className="text-muted">{standingCover(collection.coverPhoto) ? "Chosen by hand." : cover ? "Nobody has chosen one, so the album leads with the first photograph in the collection." : "Nothing to lead with yet."}</p>
+            <p className="text-muted">{chosen ? "Chosen by hand." : cover ? "Nobody has chosen one, so the album leads with the first photograph in the collection." : "Nothing to lead with yet."}</p>
             <ButtonLink href={`/collections/${slug}/cover`} size="sm" variant="secondary">Choose a cover</ButtonLink>
           </div>
         </Card>

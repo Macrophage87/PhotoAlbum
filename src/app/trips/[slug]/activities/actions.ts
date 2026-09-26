@@ -122,12 +122,9 @@ export async function setActivityCover(slug: string, id: string, photoId: string
     // Still processing, failed, or in the trash: there is no picture to lead with.
     if (photo.status !== COVERABLE.status || photo.trashedAt) throw new Error("Only a finished photo can be the cover");
   }
-  // A photograph fronts one activity at most. One moved here from an activity it was the cover of is released there
-  // first; that activity goes back to leading with its own first photograph.
-  await db.$transaction([
-    ...(photoId ? [db.activity.updateMany({ where: { coverPhotoId: photoId, id: { not: id } }, data: { coverPhotoId: null } })] : []),
-    db.activity.update({ where: { id }, data: { coverPhotoId: photoId } }),
-  ]);
+  // An activity it was moved from may still name it; that choice no longer stands there (activityCover checks), so it
+  // is left alone rather than reached into, as with trips.
+  await db.activity.update({ where: { id }, data: { coverPhotoId: photoId } });
   revalidatePath(`/trips/${slug}/activities/${id}`);
 }
 

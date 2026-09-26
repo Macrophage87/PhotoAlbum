@@ -13,8 +13,9 @@ import { setCoverPhoto } from "@/app/trips/[slug]/actions";
 import { setActivityCover } from "@/app/trips/[slug]/activities/actions";
 import { setAsCover } from "@/app/photos/[id]/actions";
 import { chosenTripCover, coverFor } from "@/lib/trips/queries";
-import { collectionCoverFor } from "@/lib/collections/queries";
-import { coverPhotoSelect, standingCover } from "@/lib/photos/cover";
+import { chosenCollectionCover, collectionCoverFor } from "@/lib/collections/queries";
+import { coverPhotoSelect } from "@/lib/photos/cover";
+import { activityCover } from "@/lib/activities/cover";
 
 /**
  * A cover is chosen once and read everywhere, so what is chosen has to be a picture, and what is read has to be one
@@ -91,11 +92,53 @@ describe("covers that stand", () => {
     await setCollectionCover("best", ready);
     await setCoverPhoto("acadia", ready);
     await db.photo.update({ where: { id: ready }, data: { trashedAt: new Date(), trashedById: who.id, trashReason: "DUPLICATE" } });
-    expect(standingCover((await collection(best)).coverPhoto)).toBeNull();
+    // What the cover and settings pages ask to say "chosen by hand".
+    expect(await chosenCollectionCover(await collection(best))).toBeNull();
     expect(chosenTripCover(await trip(acadia))).toBeNull();
     // Restored, it is the cover again, as it was.
     await db.photo.update({ where: { id: ready }, data: { trashedAt: null } });
-    expect(standingCover((await collection(best)).coverPhoto)?.id).toBe(ready);
+    expect((await chosenCollectionCover(await collection(best)))?.id).toBe(ready);
     expect(chosenTripCover(await trip(acadia))?.id).toBe(ready);
+  });
+
+  it("refuses a trashed photograph as a cover", async () => {
+    await db.photo.update({ where: { id: ready }, data: { trashedAt: new Date(), trashedById: who.id, trashReason: "DUPLICATE" } });
+    await expect(setCollectionCover("best", ready)).rejects.toThrow(/finished/);
+    await expect(setCoverPhoto("acadia", ready)).rejects.toThrow(/finished/);
+    await expect(setActivityCover("acadia", activity, ready)).rejects.toThrow(/finished/);
+    await expect(setAsCover(ready)).rejects.toThrow(/finished/);
+  });
+
+  it("goes on leading with a cover while it is processed again, and after a re-process fails", async () => {
+    await db.photo.update({ where: { id: ready }, data: { width: 4000, height: 3000 } });
+    await setCoverPhoto("acadia", ready);
+    await setCollectionCover("best", ready);
+    await setActivityCover("acadia", activity, ready);
+    for (const status of ["PENDING", "PROCESSING", "FAILED"] as const) {
+      await db.photo.update({ where: { id: ready }, data: { status } });
+      expect((await coverFor(await trip(acadia)))?.id).toBe(ready);
+      expect((await collectionCoverFor(await collection(best)))?.id).toBe(ready);
+      expect((await activityCover({ id: activity, coverPhotoId: ready }))?.id).toBe(ready);
+    }
+  });
+
+  it("stops leading a collection with a photograph no longer in it", async () => {
+    await setCollectionCover("best", ready);
+    // Taken out some way that does not tidy the cover up after it.
+    await db.collectionItem.deleteMany({ where: { collectionId: best, photoId: ready } });
+    expect(await chosenCollectionCover(await collection(best))).toBeNull();
+    expect((await collectionCoverFor(await collection(best)))?.id).toBe(other);
+  });
+
+  it("leaves an activity a photograph was moved from alone when it is chosen for another", async () => {
+    const later = (await db.activity.create({ data: { tripId: acadia, title: "Swim", type: "OTHER", startTime: new Date("2025-08-13T08:00:00Z"), endTime: new Date("2025-08-13T18:00:00Z") } })).id;
+    await setActivityCover("acadia", activity, ready);
+    await db.photo.update({ where: { id: ready }, data: { activityId: later } });
+    await setActivityCover("acadia", later, ready);
+    expect((await activityCover({ id: later, coverPhotoId: ready }))?.id).toBe(ready);
+    // The walk still names it, but it is not the walk's any more, so the walk leads with its own first photograph.
+    const walk = await db.activity.findUniqueOrThrow({ where: { id: activity } });
+    expect(walk.coverPhotoId).toBe(ready);
+    expect((await activityCover(walk))?.id).toBe(other);
   });
 });

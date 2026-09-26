@@ -18,14 +18,19 @@ export function coverUnlessTrashed<T extends { trashedAt?: Date | null }>(cover:
 export const coverPhotoSelect = { select: { id: true, updatedAt: true, width: true, height: true, trashedAt: true, status: true, tripId: true } } as const;
 
 /**
- * A hand-chosen cover, while it is still one to lead with: out of the trash, and finished. A photograph still being
- * processed, or whose processing failed, has no pictures to draw, and a cover pointing at one is a broken image on
- * the front page and on every link preview. `status` is required so a caller cannot forget to select it.
+ * A hand-chosen cover, while it is still one to lead with: out of the trash, and with pictures to draw. One that
+ * never finished processing has none, and a cover pointing at it is a broken image on the front page and on every
+ * link preview. One that finished once keeps its pictures while it is re-processed, and even if that fails, so it
+ * goes on leading; the size is written with the pictures, which is how having them is told without reading them.
+ * `status` and `width` are required so a caller cannot forget to select them.
  */
-export function standingCover<T extends { trashedAt?: Date | null; status: string }>(cover: T | null | undefined): T | null {
+export function standingCover<T extends { trashedAt?: Date | null; status: string; width: number | null }>(cover: T | null | undefined): T | null {
   const kept = coverUnlessTrashed(cover);
-  return kept && kept.status === "READY" ? kept : null;
+  return kept && (kept.status === "READY" || kept.width !== null) ? kept : null;
 }
+
+/** The same test, for a query: finished, or finished once and being processed again. */
+export const HAS_PICTURES = { OR: [{ status: "READY" as const }, { width: { not: null } }] };
 
 /** What may be chosen as a cover: the same photographs the cover pages offer, finished and out of the trash. */
 export const COVERABLE = { status: "READY", trashedAt: null } as const;
