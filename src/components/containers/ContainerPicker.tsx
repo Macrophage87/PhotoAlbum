@@ -43,6 +43,25 @@ export function leftFor(box: { contains: (n: Node | null) => boolean } | null, n
   return !box || !next || !box.contains(next as Node);
 }
 
+/**
+ * What Enter does in the single picker. The search results are still loading when `fresh` is false; what is shown
+ * meanwhile is the last answer, with the fixed choices ("No trip", and any extras) under it.
+ *
+ * - On a fixed choice the reader reached with the arrow keys, it is that choice: it does not depend on the search,
+ *   so there is nothing to wait for.
+ * - Otherwise, while loading, it waits for the answer to what was typed (and is carried out against it).
+ * - Loaded, it is the result or fixed choice that is active.
+ *
+ * A fixed choice that is active only because the last answer was empty — typed, then Enter at once — is not one the
+ * reader chose, and waits like any other.
+ */
+export function enterChoice(s: { active: number; hits: number; tail: number; fresh: boolean; byKeys: boolean }): { pick: "hit" | "tail"; index: number } | { pick: "wait" } | null {
+  const onTail = s.active >= s.hits && s.active - s.hits < s.tail;
+  if (onTail && (s.fresh || s.byKeys)) return { pick: "tail", index: s.active - s.hits };
+  if (!s.fresh) return { pick: "wait" };
+  return s.active >= 0 && s.active < s.hits ? { pick: "hit", index: s.active } : null;
+}
+
 function visibilityNote(v?: string): string | null {
   return v === "PUBLIC" ? "public" : v === "LINK" ? "shared by link" : null;
 }
@@ -105,6 +124,8 @@ export function ContainerPicker({ kind, value, onChange, placeholder, allowNone,
   const choose = useCallback((v: Container | null) => { onChange(v); setOpen(false); setQuery(""); }, [onChange]);
   // An Enter pressed before the answer to what was typed has come back, carried out when it does.
   const pendingEnter = useRef(false);
+  // Whether the active option was reached with the arrow keys since the box last changed (see `enterChoice`).
+  const byKeys = useRef(false);
   const { hits, loading, fresh } = useSearch(kind, query, open, tripId, (arrived) => {
     if (!pendingEnter.current) return;
     pendingEnter.current = false;
@@ -137,17 +158,21 @@ export function ContainerPicker({ kind, value, onChange, placeholder, allowNone,
         className="h-8 w-full rounded border border-border bg-surface px-2 text-sm"
         placeholder={value ? value.title : placeholder ?? `Search ${WORD[kind].many}…`}
         value={open ? query : value?.title ?? ""}
-        onFocus={() => { setOpen(true); setActive(0); }}
-        onChange={(e) => { pendingEnter.current = false; setQuery(e.target.value); setOpen(true); setActive(0); }}
+        onFocus={() => { byKeys.current = false; setOpen(true); setActive(0); }}
+        onChange={(e) => { pendingEnter.current = false; byKeys.current = false; setQuery(e.target.value); setOpen(true); setActive(0); }}
         onKeyDown={(e) => {
-          if (e.key === "ArrowDown") { e.preventDefault(); setOpen(true); setActive((a) => Math.min(a + 1, options - 1)); }
-          else if (e.key === "ArrowUp") { e.preventDefault(); setActive((a) => Math.max(a - 1, 0)); }
+          if (e.key === "ArrowDown") { e.preventDefault(); byKeys.current = true; setOpen(true); setActive((a) => Math.min(a + 1, options - 1)); }
+          else if (e.key === "ArrowUp") { e.preventDefault(); byKeys.current = true; setActive((a) => Math.max(a - 1, 0)); }
           else if (e.key === "Enter" && open) {
             e.preventDefault();
-            // Enter straight after typing waits for the answer to what was typed, not the list before it.
-            if (!fresh) { pendingEnter.current = true; return; }
-            if (active >= hits.length) choose(tail[active - hits.length] ?? null);
-            else if (hits[active]) choose(hits[active]);
+            // Enter straight after typing waits for the answer to what was typed, not the list before it; a fixed
+            // choice picked with the arrows is carried out at once.
+            const what = enterChoice({ active, hits: hits.length, tail: tail.length, fresh, byKeys: byKeys.current });
+            if (!what) return;
+            if (what.pick === "wait") { pendingEnter.current = true; return; }
+            pendingEnter.current = false;
+            if (what.pick === "tail") choose(tail[what.index] ?? null);
+            else choose(hits[what.index]);
           } else if (e.key === "Escape") { pendingEnter.current = false; setOpen(false); setQuery(""); }
         }}
       />
