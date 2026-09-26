@@ -98,7 +98,8 @@ Set at least these values:
 
 | Variable | Set to |
 |---|---|
-| `APP_URL` | `https://album.example.com` (your real hostname, with https). This appears in every sign-in email. |
+| `APP_URL` | `https://album.example.com` (your real hostname, with https). This appears in every sign-in email. With https the app also sends HSTS, so browsers keep to https for a year. |
+| `HSTS_INCLUDE_SUBDOMAINS` | Leave at `false`. Set `true` only if every subdomain of the album's hostname serves https, to extend HSTS to them. |
 | `ADMIN_EMAIL` | Your own email address. Only this address can create the first admin account, and only while there is no admin: once one exists it is an ordinary address, so removing that account from the Admin page sticks. |
 | `POSTGRES_PASSWORD` | A long random password, for example the output of `openssl rand -base64 24`. |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM` | Your mail provider's settings. Leave `SMTP_HOST` empty to print links to the log instead. |
@@ -266,6 +267,22 @@ Optionally load the demo content (two trips, a hike with track and stats, sample
 docker compose exec app node_modules/.bin/tsx prisma/seed.ts
 ```
 
+### If the only admin can no longer read their email
+
+`ADMIN_EMAIL` creates an admin only while the album has none, so once an admin exists, changing it does nothing. If the only admin loses their mailbox, fix it in the database from the server. Either move the admin account to a new address:
+
+```bash
+docker compose exec -T db sh -c 'psql -U "$POSTGRES_USER" "$POSTGRES_DB" -c "UPDATE \"User\" SET email = '"'"'new@example.com'"'"' WHERE email = '"'"'old@example.com'"'"';"'
+```
+
+or make another member an admin:
+
+```bash
+docker compose exec -T db sh -c 'psql -U "$POSTGRES_USER" "$POSTGRES_DB" -c "UPDATE \"User\" SET role = '"'"'ADMIN'"'"' WHERE email = '"'"'cousin@example.com'"'"';"'
+```
+
+Addresses are stored in lower case. `UPDATE 1` means it worked; then sign in with that address as usual.
+
 ## 9. Backups
 
 Two Docker volumes hold everything: `photoalbum_pgdata` (database) and `photoalbum_photos` (originals and renditions). Check the exact names with `docker volume ls`; the prefix is the folder name the stack was started from.
@@ -407,3 +424,5 @@ until that folder exists.
 ## Security headers
 
 Pages are served with a nonce-based Content-Security-Policy generated per request (see `src/proxy.ts`), so a reverse proxy must pass the `Content-Security-Policy` response header through unchanged and must not add its own. If you use a map tile or style provider, set `NEXT_PUBLIC_TILE_URL`, `NEXT_PUBLIC_MAP_STYLE_URL` and `NEXT_PUBLIC_MAP_GLYPHS_URL` before building the image: the policy allows exactly those hosts. `CSP_REPORT_ONLY=true` switches to reporting while you check a new provider.
+
+Every response also carries `X-Content-Type-Options: nosniff`, and uploaded photos and videos (`/api/photos/…`) get a policy of their own that runs nothing if one is opened directly. When `APP_URL` is https the app sends `Strict-Transport-Security: max-age=31536000`, so the proxy need not add HSTS; set `HSTS_INCLUDE_SUBDOMAINS=true` to extend it to every subdomain of the album's hostname, only if all of them serve https.

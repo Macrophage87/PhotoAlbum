@@ -173,6 +173,7 @@ S += [P("4. Configuration reference (.env)", H1),
       table([
         ["Variable", "Default", "Purpose"],
         ["APP_URL", "http://localhost:3000", "Public URL of the site. Used in every emailed link and in redirects. Set it to your real address (with https) when behind a proxy."],
+        ["HSTS_INCLUDE_SUBDOMAINS", "false", "With an https APP_URL, browsers are told to keep to https for a year. true extends that to every subdomain of the album's hostname; only set it if they all serve https."],
         ["ADMIN_EMAIL", "you@example.com", "The first person to sign in with this address becomes an admin. Allowed to sign in without an invite only while the album has no admin."],
         ["SMTP_HOST", "(empty)", "Mail server hostname. Leave empty to log links instead of sending mail."],
         ["SMTP_PORT", "587", "587 for STARTTLS, 465 for implicit TLS."],
@@ -221,7 +222,7 @@ S += [P("5. Signing in and inviting family", H1),
       P("There are no passwords. A person types their email on the sign-in page and receives a link that is valid for 15 minutes "
         "and can be used once: opening it shows a Sign in button, and pressing that is what signs them in (so a mail "
         "scanner that opens links first does not use it up). They then stay signed in on that browser as long as they "
-        "visit at least once every 90 days."),
+        "visit at least once every 12 weeks."),
       P("Who can sign in", H2),
       bullets([
         "The address in ADMIN_EMAIL, while the album has no admin yet. The first sign-in with it creates the admin account; once an admin exists it is an ordinary address, so removing that account sticks.",
@@ -241,6 +242,12 @@ S += [P("5. Signing in and inviting family", H1),
         "The relative opens the invite link, which sends them a sign-in link for that address. From then on they simply sign in with their email.",
         "The Admin page lists members and pending invites. From there you can change roles, revoke an invite, or remove a member.",
       ]),
+      P("If the only admin can no longer read their email", H2),
+      P("ADMIN_EMAIL creates an admin only while the album has none, so changing it later does nothing. Fix it in the database "
+        "instead, from the server: move the admin account to a new address (first command), or make another member an admin "
+        "(second). Addresses are stored in lower case; <b>UPDATE 1</b> means it worked."),
+      code("""docker compose exec -T db sh -c 'psql -U "$POSTGRES_USER" "$POSTGRES_DB" -c "UPDATE \\"User\\" SET email = '"'"'new@example.com'"'"' WHERE email = '"'"'old@example.com'"'"';"'
+docker compose exec -T db sh -c 'psql -U "$POSTGRES_USER" "$POSTGRES_DB" -c "UPDATE \\"User\\" SET role = '"'"'ADMIN'"'"' WHERE email = '"'"'cousin@example.com'"'"';"'"""),
       P("Members can create trips, upload photos, edit anything, and share trips. Admins can additionally manage members. "
         "Every signed-in member sees every trip; the album is a shared family space, not per-user galleries."),
       P("Who has been looking", H2),
