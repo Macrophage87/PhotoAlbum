@@ -64,3 +64,11 @@ export function isValidTimezone(tz: string): boolean {
     return false;
   }
 }
+
+/**
+ * The day a photograph was taken, as the album shows it everywhere: on its own clock (the offset it was taken at)
+ * when that is known, else in the trip's zone, else UTC. Timelines, day lists and the photo page all use this rule.
+ */
+export function photoDay(takenAt: Date, tzOffsetMin: number | null, timezone = "UTC"): LocalDay {
+  return tzOffsetMin !== null ? localDayFromOffset(takenAt, tzOffsetMin) : localDayInZone(takenAt, timezone);
+}

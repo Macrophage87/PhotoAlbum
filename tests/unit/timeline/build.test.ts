@@ -42,6 +42,29 @@ describe("buildTimeline", () => {
   });
 });
 
+describe("photographs whose offsets disagree with the trip zone", () => {
+  it("keeps one group per day, in day order, however the offsets interleave (#60)", () => {
+    const photos = [
+      p("a", "2025-08-12T04:30:00Z", null, -240), // Aug 12 00:30 on New York time
+      p("b", "2025-08-12T04:45:00Z", null, -300), // Aug 11 23:45 on Chicago time
+      p("c", "2025-08-12T05:00:00Z", null, -240), // Aug 12 01:00
+    ];
+    const groups = buildTimeline(photos, [], "America/New_York");
+    expect(groups.map((g) => g.dayKey)).toEqual(["2025-08-11", "2025-08-12"]);
+    expect(groups[1].items.flatMap((i) => i.photos.map((x) => x.id))).toEqual(["a", "c"]);
+    expect(groups[1].items).toHaveLength(1);
+  });
+
+  it("files an activity under its trip-zone day alongside a photograph on another clock", () => {
+    const acts = [a("drive", "2025-08-12T04:10:00Z", "2025-08-12T06:00:00Z")]; // Aug 12 00:10 New York
+    const photos = [p("chi", "2025-08-12T04:20:00Z", null, -300), p("ny", "2025-08-12T04:40:00Z", null, -240)];
+    const groups = buildTimeline(photos, acts, "America/New_York");
+    expect(groups.map((g) => g.dayKey)).toEqual(["2025-08-11", "2025-08-12"]);
+    expect(groups[1].items.map((i) => i.kind)).toEqual(["activity", "photos"]);
+    expect(new Set(groups.map((g) => g.dayKey)).size).toBe(groups.length);
+  });
+});
+
 describe("counting a day's photographs", () => {
   it("counts the ones on its activities as well as the loose ones, not one per activity", () => {
     const acts = [a("hike", "2025-08-12T13:00:00Z", "2025-08-12T17:00:00Z"), a("swim", "2025-08-12T18:00:00Z", "2025-08-12T19:00:00Z")];
