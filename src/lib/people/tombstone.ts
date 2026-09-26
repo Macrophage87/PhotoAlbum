@@ -113,7 +113,7 @@ function normalizedForm(f: string): string {
  * trips, collections and activities (see `containerKey`) — ids only — and is only ever looked for there: "Florence"
  * anywhere else is a city.
  */
-/** One forgotten person's kinship titles (hashed) and the photographs they were tagged on. */
+/** One forgotten person's kinship titles and the photographs they were tagged on, both hashed under the row's key. */
 type KinshipGroup = { photos: string[]; kin: string[] };
 
 export async function rememberForgotten(forms: { form: string; capitalizedOnly: boolean; derived?: boolean; kinship?: string[] }[], where: { photoIds?: Iterable<string>; taggedPhotoIds?: Iterable<string>; containerIds?: Iterable<string> } = {}): Promise<void> {
@@ -130,7 +130,7 @@ export async function rememberForgotten(forms: { form: string; capitalizedOnly: 
     const h = hash(w.key, n);
     const oneWord = (!CJK.test(n) && !n.includes(" ")) || Boolean(f.derived);
     // A spelling stored both ways is matched the stricter way.
-    rows.set(h, { hash: h, keyVersion: w.version, capitalizedOnly: (rows.get(h)?.capitalizedOnly ?? true) && f.capitalizedOnly, derived: (rows.get(h)?.derived ?? true) && Boolean(f.derived), kinshipGroups: oneWord ? [{ photos: taggedPhotoIds, kin: [...new Set([...(rows.get(h)?.kinshipGroups[0]?.kin ?? []), ...(f.kinship ?? []).map((k) => hash(w.key, `kin:${kinshipKey(k)}`))])] }] : [], photoIds: oneWord ? photoIds : [], taggedPhotoIds: oneWord ? taggedPhotoIds : [], containerIds: oneWord ? containerIds : [] });
+    rows.set(h, { hash: h, keyVersion: w.version, capitalizedOnly: (rows.get(h)?.capitalizedOnly ?? true) && f.capitalizedOnly, derived: (rows.get(h)?.derived ?? true) && Boolean(f.derived), kinshipGroups: oneWord ? [{ photos: taggedPhotoIds.map((id) => hash(w.key, `photo:${id}`)), kin: [...new Set([...(rows.get(h)?.kinshipGroups[0]?.kin ?? []), ...(f.kinship ?? []).map((k) => hash(w.key, `kin:${kinshipKey(k)}`))])] }] : [], photoIds: oneWord ? photoIds : [], taggedPhotoIds: oneWord ? taggedPhotoIds : [], containerIds: oneWord ? containerIds : [] });
   }
   if (!rows.size) return;
   // From the first name hashed under FORGET_KEY, running without that very key is noticed (see forgetKeyState).
@@ -343,14 +343,18 @@ export async function loadTombstone(): Promise<Tombstone> {
           // Ruth); elsewhere it is somebody else's ("Uncle Sam hat"). Their own "Grandma Ruth" is matched whole.
           let k = i > 0 && isKinWord(tokens[i - 1].raw) && !isTitlePrefix(tokens[i - 1].raw) && /^[\s]+$/u.test(text.slice(tokens[i - 1].end, run[0].start)) ? i - 1 : -1;
           // All of a hyphenated one: "Great-Aunt", "Step-Mom".
-          while (k > 0 && isKinWord(tokens[k - 1].raw) && (/^[-‐]$/u.test(text.slice(tokens[k - 1].end, tokens[k].start)) || (titlePrefix(tokens[k - 1]) && /^[ \t]+$/u.test(text.slice(tokens[k - 1].end, tokens[k].start))))) k--;
+          // A descriptor before a kinship word belongs to the title too: "Big Sister Ada".
+          const joins = (t: { raw: string }) => titlePrefix(t) || /^(?:big|little|baby|old|young)$/iu.test(t.raw);
+          while (k > 0 && isKinWord(tokens[k - 1].raw) && (/^[-‐]$/u.test(text.slice(tokens[k - 1].end, tokens[k].start)) || (joins(tokens[k - 1]) && /^[ \t]+$/u.test(text.slice(tokens[k - 1].end, tokens[k].start))))) k--;
           if (k >= 0) {
             // Kept hashed like the names ("Tia", "Nan" and "Oma" are names too), under the row's own key.
             const kinRun = hash(keyOf(found.key), `kin:${kinshipKey(tokens.slice(k, i).map((t) => t.raw).join(" "))}`);
             // Whoever was tagged on these photographs decides: their title, or any if their name had none. Two
             // forgotten Adas keep their own ("Great Aunt Ada" on hers, "Grandma Ada" on Ada Byron's).
             const accepts = (groups: KinshipGroup[]) => groups.length === 0 || groups.some((g) => g.kin.length === 0 || g.kin.includes(kinRun));
-            const theirs = found.kinshipGroups.filter((g) => g.photos.some((p) => scope.photos.has(p)));
+            // Their photographs are kept hashed too, so the groups say nothing without the key.
+            const here = new Set([...scope.photos].map((id) => hash(keyOf(found.key), `photo:${id}`)));
+            const theirs = found.kinshipGroups.filter((g) => g.photos.some((p) => here.has(p)));
             if (scope.own.has(found.key) && theirs.length) {
               if (!accepts(theirs)) continue;
               start = tokens[k].start;

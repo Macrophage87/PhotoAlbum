@@ -550,6 +550,18 @@ describe("names that are also words", () => {
     expect(ts.scrub("Aunt Ada smiled.", await sc(greatAunt))).toBe("Aunt Ada smiled.");
     expect(ts.scrub("Great Aunt Ada at the lake", await sc(greatAunt))).toBe("A family member at the lake");
     expect(ts.scrub("Grand-Aunt Ada at the lake", await sc(greatAunt))).toBe("A family member at the lake");
+    // Which photographs each forgotten Ada was on is not readable without the key.
+    const groups = JSON.stringify((await db.forgottenName.findMany()).map((r) => r.kinshipGroups));
+    for (const id of [greatAunt, byron]) expect(groups).not.toContain(id);
+  });
+
+  it("takes a half- or step- title, or a descriptor before a kinship word, whole with the name", async () => {
+    const on = await forget("Ada Lee");
+    const ts = await loadTombstone();
+    for (const [text, want] of [["Half-Sister Ada swam.", "A family member swam."], ["Half Sister Ada swam.", "A family member swam."], ["Half Brother Ada sang.", "A family member sang."], ["Step Mom Ada waved.", "A family member waved."], ["Big Sister Ada swam.", "A family member swam."], ["Little Brother Ada swam.", "A family member swam."]]) {
+      expect(ts.scrub(text, await sc(on))).toBe(want);
+      expect(nameMatcher(["Ada Lee"]).scrub(text, { tagged: true })).toBe(want);
+    }
   });
 
   it("reads 'Great' as a title only before a kinship word", async () => {
