@@ -69,13 +69,29 @@ export async function bulkTrash(photoIds: string[], reason: string, note: string
 
 /** Pin every selected item to one spot (a group of prints from the same place). */
 export async function bulkSetPlace(photoIds: string[], lat: number, lng: number, name?: string | null): Promise<number> {
+  return (await setPlaces(photoIds, lat, lng, name)).length;
+}
+
+/**
+ * The same, answering which of them were placed: only the member's own (or anything, for an admin) that are still
+ * in the album. The map a selection was dropped on moves exactly these, so a pin that was not saved stays put.
+ */
+export async function placeOnMap(photoIds: string[], lat: number, lng: number): Promise<string[]> {
+  return setPlaces(photoIds, lat, lng, null);
+}
+
+async function setPlaces(photoIds: string[], lat: number, lng: number, name: string | null | undefined): Promise<string[]> {
   const user = await requireUserOrThrow();
   const list = await editableMediaIds(user, ids.parse(photoIds));
-  if (!list.length) return 0;
+  if (!list.length) return [];
   if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) throw new Error("That is not a place on the map");
-  const r = await db.photo.updateMany({ where: { id: { in: list } }, data: { lat, lng, altitude: null, gpsSource: "MANUAL", placeSetById: user.id, placeName: typeof name === "string" && name.trim() ? name.trim().slice(0, 200) : null } });
+  const placed = await db.$transaction(async (tx) => {
+    const found = (await tx.photo.findMany({ where: { id: { in: list } }, select: { id: true } })).map((p) => p.id);
+    if (found.length) await tx.photo.updateMany({ where: { id: { in: found } }, data: { lat, lng, altitude: null, gpsSource: "MANUAL", placeSetById: user.id, placeName: typeof name === "string" && name.trim() ? name.trim().slice(0, 200) : null } });
+    return found;
+  });
   revalidatePath("/", "layout");
-  return r.count;
+  return placed;
 }
 
 /**

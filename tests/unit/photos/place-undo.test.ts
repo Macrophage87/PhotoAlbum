@@ -6,7 +6,7 @@ const who = vi.hoisted(() => ({ id: "", role: "MEMBER" as "MEMBER" | "ADMIN" }))
 vi.mock("@/lib/auth/viewer", () => ({ requireUserOrThrow: async () => ({ id: who.id, email: "x@example.com", name: "X", role: who.role }) }));
 vi.mock("next/cache", () => ({ revalidatePath: () => undefined }));
 
-import { placePhotos, restorePlaces } from "@/app/photos/bulk-actions";
+import { placeOnMap, placePhotos, restorePlaces } from "@/app/photos/bulk-actions";
 import { clearPhotoPlace, setPhotoPlace } from "@/app/photos/[id]/actions";
 
 /** Undoing a move on the placing screen puts back everything the move changed, from the server's note of it (#97). */
@@ -142,5 +142,17 @@ describe("undoing a place", () => {
       await restorePlaces(before, undo);
       expect(await row(p.id)).toMatchObject({ gpsSource: "ESTIMATE", placeEstimateMembersOnly: false });
     });
+  });
+
+  it("says which photographs a drop on the map placed, so only those move on the screen", async () => {
+    const own = await photo({});
+    const bobs = await photo({ uploaderId: bob, lat: 1, lng: 2, gpsSource: "EXIF" });
+    as(alice, "MEMBER");
+    expect(await placeOnMap([own.id, bobs.id, "no-such-photo"], 10, 20)).toEqual([own.id]);
+    expect(await row(own.id)).toMatchObject({ lat: 10, lng: 20, gpsSource: "MANUAL", placeSetById: alice });
+    expect(await row(bobs.id)).toMatchObject({ lat: 1, lng: 2, gpsSource: "EXIF" });
+    // An admin may place anybody's, but not one that is not there.
+    as(admin, "ADMIN");
+    expect((await placeOnMap([bobs.id, "no-such-photo"], 30, 40)).sort()).toEqual([bobs.id]);
   });
 });

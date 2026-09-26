@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui";
 import { MapViewDynamic } from "./MapViewDynamic";
 import { PHOTO_DRAG_TYPE, photoPickedUp } from "@/components/timeline/TimelineDrop";
-import { bulkSetPlace } from "@/app/photos/bulk-actions";
+import { placeOnMap } from "@/app/photos/bulk-actions";
 import type { MapPayload, PhotoFeatureProps } from "@/lib/map/geojson";
 import type { MapTheme } from "@/lib/map/theme";
 import type { TrayPhoto } from "@/lib/photos/unplaced";
@@ -66,12 +66,14 @@ export function PlaceOnMap({ src, theme, initial, tripTitle }: { src: string; th
   const place = (ids: string[], at: { lat: number; lng: number }) =>
     start(async () => {
       if (!ids.length) return;
-      const n = await bulkSetPlace(ids, at.lat, at.lng);
+      // Only what was saved moves: a photograph somebody else uploaded stays where it was, on the map and in the tray.
+      const saved = await placeOnMap(ids, at.lat, at.lng);
+      const n = saved.length;
       if (n === 0) { setNotice("Nothing was placed: only the member who uploaded an item, or an admin, can place it."); return; }
       // Move the pin itself — one picked up off the map as much as one from the tray — so it is shown once, where it now is.
       setPlaced((prev) => {
         const next = new Map(prev);
-        for (const id of ids) {
+        for (const id of saved) {
           const was = prev.get(id)?.properties ?? data?.photos.features.find((f) => f.properties.id === id)?.properties;
           const t = tray.find((p) => p.id === id);
           const properties: PhotoFeatureProps | null = was
@@ -83,9 +85,10 @@ export function PlaceOnMap({ src, theme, initial, tripTitle }: { src: string; th
         }
         return next;
       });
-      setTray((prev) => prev.filter((p) => !ids.includes(p.id)));
+      setTray((prev) => prev.filter((p) => !saved.includes(p.id)));
       setSelected(new Set());
-      setNotice(`${n} photograph${n === 1 ? "" : "s"} placed. ${at.lat.toFixed(5)}, ${at.lng.toFixed(5)}`);
+      const skipped = ids.length - n;
+      setNotice(`${n} photograph${n === 1 ? "" : "s"} placed. ${at.lat.toFixed(5)}, ${at.lng.toFixed(5)}${skipped ? `. ${skipped} not yours to place, left where ${skipped === 1 ? "it was" : "they were"}.` : ""}`);
       router.refresh();
     });
 
