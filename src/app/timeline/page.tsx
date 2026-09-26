@@ -3,7 +3,7 @@ import { getViewer } from "@/lib/auth/viewer";
 import { canContribute } from "@/lib/auth/access";
 import { listVisibleTrips } from "@/lib/trips/queries";
 import { timelineCounts, timelineIds, tripTimeline } from "@/lib/timeline/queries";
-import { pageNumber, timelinePages } from "@/lib/timeline/paging";
+import { timelinePage, timelinePageHref } from "@/lib/timeline/paging";
 import { formatDayRange } from "@/lib/time/format";
 import { dateColumnToDay } from "@/lib/time/local-day";
 import { AppShell, Container } from "@/components/layout/AppShell";
@@ -37,24 +37,13 @@ export default async function GlobalTimelinePage({ searchParams }: PageProps<"/t
   // so the page can be cut before any trip's timeline is loaded.
   const restrict = !filter && searching ? await timelineIds(narrow, null) : null;
   const counts = await timelineCounts(trips.map((t) => t.id), narrow, restrict);
-  // A search across everything is a short answer from a few trips, so the ones with nothing in them drop out.
-  const candidates = searching ? trips.filter((t) => (counts.get(t.id) ?? 0) > 0) : trips;
-  const pages = timelinePages(candidates.map((t) => counts.get(t.id) ?? 0));
-  const page = pageNumber(sp.page, pages.length);
-  const onPage = pages.length ? candidates.slice(pages[page - 1].start, pages[page - 1].end) : [];
+  const { onPage, page, pages } = timelinePage(trips, counts, { searching, page: sp.page });
   const [all, collectionGroups] = await Promise.all([
     Promise.all(onPage.map((t) => tripTimeline(t.id, t.timezone, narrow, restrict))),
     filter ? collectionTimeline(filter.id, narrow) : Promise.resolve(null),
   ]);
   const shown = onPage.map((trip, i) => ({ trip, result: all[i] }));
-  // The same address a page further on: the search, the order and the collection all stay as they were.
-  const href = (n: number) => {
-    const next = new URLSearchParams();
-    for (const [k, v] of Object.entries(sp)) if (k !== "page") for (const one of Array.isArray(v) ? v : v === undefined ? [] : [v]) next.append(k, one);
-    if (n > 1) next.set("page", String(n));
-    const query = next.toString();
-    return query ? `/timeline?${query}` : "/timeline";
-  };
+  const href = (n: number) => timelinePageHref(sp, n);
   const body = (
     <>
       {filter && collectionGroups && (
@@ -82,11 +71,11 @@ export default async function GlobalTimelinePage({ searchParams }: PageProps<"/t
           </TripTheme>
         ))}
       </div>
-      {!filter && pages.length > 1 && (
+      {!filter && pages > 1 && (
         <nav className="mt-10 flex flex-wrap items-center gap-2 text-sm" aria-label="More trips" data-testid="timeline-pages">
           {page > 1 && <Link href={href(page - 1)} className="text-primary hover:underline">← {order === "oldest" ? "Earlier trips" : "Newer trips"}</Link>}
-          <span className="text-muted">Page {page} of {pages.length}</span>
-          {page < pages.length && <Link href={href(page + 1)} className="text-primary hover:underline">{order === "oldest" ? "Later trips" : "Older trips"} →</Link>}
+          <span className="text-muted">Page {page} of {pages}</span>
+          {page < pages && <Link href={href(page + 1)} className="text-primary hover:underline">{order === "oldest" ? "Later trips" : "Older trips"} →</Link>}
         </nav>
       )}
     </>

@@ -36,3 +36,24 @@ export function pageNumber(value: unknown, pages: number): number {
   const n = Math.floor(Number(Array.isArray(value) ? value[0] : value));
   return Math.min(Math.max(1, Number.isFinite(n) ? n : 1), Math.max(1, pages));
 }
+
+/**
+ * The trips on the page asked for, and how many pages there are. A search across everything is a short answer from
+ * a few trips, so the ones with nothing in them drop out before the pages are cut, and no page is left empty.
+ */
+export function timelinePage<T extends { id: string }>(trips: T[], counts: Map<string, number>, opts: { searching: boolean; page: unknown }): { onPage: T[]; page: number; pages: number } {
+  const candidates = opts.searching ? trips.filter((t) => (counts.get(t.id) ?? 0) > 0) : trips;
+  const pages = timelinePages(candidates.map((t) => counts.get(t.id) ?? 0));
+  const page = pageNumber(opts.page, pages.length);
+  const onPage = pages.length ? candidates.slice(pages[page - 1].start, pages[page - 1].end) : [];
+  return { onPage, page, pages: pages.length };
+}
+
+/** The same address a page further on: the search, the order and the collection all stay as they were. */
+export function timelinePageHref(sp: Record<string, string | string[] | undefined>, page: number): string {
+  const next = new URLSearchParams();
+  for (const [k, v] of Object.entries(sp)) if (k !== "page") for (const one of Array.isArray(v) ? v : v === undefined ? [] : [v]) next.append(k, one);
+  if (page > 1) next.set("page", String(page));
+  const query = next.toString();
+  return query ? `/timeline?${query}` : "/timeline";
+}
