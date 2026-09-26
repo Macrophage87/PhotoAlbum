@@ -56,9 +56,12 @@ export function useLoadMore(url: string, initialCursor: string | null, initialPh
   };
 
   // New props mean the server has refreshed the page after an action; the first page came with them, the rest is asked for.
+  const rereads = useRef(0);
   const reread = useEffectEvent(() => {
     const held = fetched?.photos.map((p) => p.id) ?? [];
     if (!held.length || !url) return;
+    // Two refreshes in quick succession: only the later re-read may land, or an older answer could overwrite a newer one.
+    const seq = ++rereads.current;
     const chunks: string[][] = [];
     for (let i = 0; i < held.length; i += REREAD_CHUNK) chunks.push(held.slice(i, i + REREAD_CHUNK));
     Promise.all(
@@ -69,6 +72,7 @@ export function useLoadMore(url: string, initialCursor: string | null, initialPh
       }),
     )
       .then((pages) => {
+        if (seq !== rereads.current) return;
         const asked = new Set(held);
         setFetched((prev) => prev && { ...prev, photos: patchFetched(prev.photos, asked, pages.flat()) });
       })
