@@ -40,7 +40,24 @@ export async function parseFit(buffer: Buffer): Promise<ParsedTrack[]> {
   }
   if (!points.length) return [];
 
-  const s = (data.sessions?.[0] ?? {}) as Record<string, unknown>;
+  const sessions = (data.sessions ?? []) as Record<string, unknown>[];
+  // A multisport file (a triathlon, a paddle then a hike) holds one session per leg. Each leg becomes its own track
+  // with its own sport, totals and times; lumping them together would describe the whole day by its first leg.
+  if (sessions.length > 1 && sessions.every((x) => x.start_time instanceof Date)) {
+    const legs = [...sessions].sort((a, b) => (a.start_time as Date).getTime() - (b.start_time as Date).getTime());
+    const legPoints = legs.map((): TrackPoint[] => []);
+    for (const p of points) {
+      let i = 0;
+      while (i + 1 < legs.length && (legs[i + 1].start_time as Date).getTime() <= p.t) i++;
+      legPoints[i].push(p);
+    }
+    // Transitions are the minutes spent changing kit between legs, not an outing of their own.
+    return legs.flatMap((leg, i) => (legPoints[i].length && leg.sport !== "transition" ? [toTrack(leg, legPoints[i])] : []));
+  }
+  return [toTrack(sessions[0] ?? {}, points)];
+}
+
+function toTrack(s: Record<string, unknown>, points: TrackPoint[]): ParsedTrack {
   const sportRaw = typeof s.sport === "string" ? s.sport : undefined;
   const subSport = typeof s.sub_sport === "string" ? s.sub_sport : undefined;
   const session: DeviceSession = {
@@ -63,5 +80,5 @@ export async function parseFit(buffer: Buffer): Promise<ParsedTrack[]> {
     calories: num(s.total_calories),
   };
   const sport = sportToActivityType(subSport && /trail|hik|walk|mountain|gravel/i.test(subSport) ? subSport : sportRaw) ?? sportToActivityType(sportRaw);
-  return [{ name: sportRaw ? `${sportRaw[0].toUpperCase()}${sportRaw.slice(1)}` : "Activity", points, sport, sportRaw, session }];
+  return { name: sportRaw ? `${sportRaw[0].toUpperCase()}${sportRaw.slice(1)}` : "Activity", points, sport, sportRaw, session };
 }
