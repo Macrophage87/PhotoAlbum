@@ -38,11 +38,23 @@ export async function nameScrubber(): Promise<NameScrubber> {
   return {
     async forPhotos(photoIds, containers = []) {
       // Tagged on any of the photographs, or anywhere in a trip, collection or activity the request is about.
-      const tagged = (photoIds.length || containers.length) && matchers.length ? await taggedOn(photoIds, containers) : new Set<string>();
+      // A photograph's own trip, activity and collections count too: tagged on one of the birthday's photographs,
+      // "Sam's 5th birthday" is about them on all of them.
+      const tagged = (photoIds.length || containers.length) && matchers.length ? await taggedOn(photoIds, [...containers, ...(await containersOf(photoIds))]) : new Set<string>();
       const scope = tombstone.empty ? NO_SCOPE : await forgottenScope({ photoIds, containers }, tombstone);
       return scrubWith(matchers, tagged, tombstone, scope);
     },
   };
+}
+
+async function containersOf(photoIds: string[]): Promise<Containers> {
+  if (!photoIds.length) return [];
+  const photos = await db.photo.findMany({ where: { id: { in: photoIds } }, select: { tripId: true, activityId: true, collections: { select: { collectionId: true } } } });
+  return photos.flatMap((p) => [
+    ...(p.tripId ? [{ kind: "trip" as const, id: p.tripId }] : []),
+    ...(p.activityId ? [{ kind: "activity" as const, id: p.activityId }] : []),
+    ...p.collections.map((c) => ({ kind: "collection" as const, id: c.collectionId })),
+  ]);
 }
 
 async function taggedOn(photoIds: string[], containers: Containers = []): Promise<Set<string>> {

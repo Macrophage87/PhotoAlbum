@@ -179,6 +179,21 @@ describe("words around a first name", () => {
     expect(f.scrub("Train to Florence; Florence waved", { fullOnly: true })).toBe("Train to Florence; Florence waved");
   });
 
+  it("at the start of a sentence, are a place on their own photographs only where one is plainly meant", () => {
+    const f = nameMatcher(["Florence"]);
+    const c = nameMatcher(["Charlotte"]);
+    expect(f.scrub("Florence at the lake", { tagged: true })).toBe("A family member at the lake");
+    expect(c.scrub("Charlotte at the beach", { tagged: true })).toBe("A family member at the beach");
+    expect(f.scrub("Florence and Ben swam.", { tagged: true })).toBe("A family member and Ben swam.");
+    expect(f.scrub("Florence in the garden", { tagged: true })).toBe("A family member in the garden");
+    for (const t of ["Florence, Italy", "Florence trip", "Florence 2019"]) expect(f.scrub(t, { tagged: true })).toBe(t);
+    // Alone as a title, or ending one, on her photograph it is her.
+    expect(f.scrub("Trip: Florence", { tagged: true })).toBe("Trip: a family member");
+    expect(c.scrub("Charlotte", { tagged: true })).toBe("A family member");
+    // Away from them, the wider guard.
+    for (const t of ["Florence at the lake", "Florence and Tuscany 2019", "Florence in spring", "Florence, Italy", "Trip: Florence"]) expect(f.scrub(t)).toBe(t);
+  });
+
   it("are theirs when they are words of their own name", () => {
     const m = nameMatcher(["Mary Ann Smith"]);
     expect(m.scrub("Mary Ann swam; Mary Smith dived")).toBe("A family member swam; a family member dived");

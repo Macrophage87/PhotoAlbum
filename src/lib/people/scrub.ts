@@ -183,6 +183,12 @@ function neighbours(before: string, after: string) {
  */
 const PLACE_OPENING = /^(?:[ \t]*$|[ \t]*[\n,;:.!?)\]–—-]|[ \t]+(?:and|in|of|at|near|from|to|by|trip|trips|holiday|holidays|vacation|visit|getaway|weekend|skyline|streets|sunset|sunrise|at\s+night|\d)(?![\p{L}\p{M}]))/iu;
 
+/**
+ * On the person's own photographs a name opening a sentence is them unless a place is plainly meant: "Florence
+ * trip", "Florence 2019", or "Florence, Italy" (judged apart). "Charlotte" alone as a title there is her.
+ */
+const PLACE_OPENING_CLEAR = /^[ \t]+(?:trip|trips|holiday|holidays|vacation|visit|getaway|weekend|skyline|\d)(?![\p{L}\p{M}])/iu;
+
 /** "Florence, Italy", "Paris, TX": a place, then the larger place it is in. */
 const PLACE_COMMA = /^,[ \t]*(\p{Lu}[\p{L}\p{M}'’.-]*)/u;
 
@@ -203,6 +209,11 @@ export type Neighbourhood = {
   number?: boolean;
   /** Words of their own name: beside one, a match is still them ("Mary Ann swam" for Mary Ann Smith). */
   own?: Set<string>;
+  /**
+   * Their own photographs (or a forgotten name's own scope): a place opening a sentence only where it is plainly
+   * one, so "Florence at the lake" and "Florence and Ben swam." are her.
+   */
+  ownPhotos?: boolean;
   /** Whether a word is somebody's name the album knows: "Left to right: Ada, Ben" is no place and its region. */
   isNameWord?: (word: string) => boolean;
 };
@@ -242,7 +253,9 @@ export function notThePerson(text: string, start: number, end: number, n: Neighb
     // Opening a sentence or a title ("Trip: Florence"), with nothing after it that a person would do.
     const opening = startsSentence(before) || /:[ \t]*$/u.test(before);
     // ("Left to right: Florence, Ben." lists people.)
-    if (opening && !possessive && !(region && !comma) && PLACE_OPENING.test(after)) return true;
+    if (opening && !possessive && !(region && !comma)) {
+      if (n.ownPhotos ? PLACE_OPENING_CLEAR.test(after) : PLACE_OPENING.test(after)) return true;
+    }
   }
   const caps = isUpperWord(match.replace(/[^\p{L}]/gu, ""));
   if (!n.title && !caps) {
@@ -531,6 +544,7 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
           // as one ("Florence, Italy").
           // A first name taken from a full one is the place after "to" even there ("We flew to Florence.").
           place: !where.tagged ? "wide" : short?.whole ? "comma" : "near",
+          ownPhotos: Boolean(where.tagged),
           number: !where.tagged,
         });
         return somebodyElse ? m : standInFor(m, whole.slice(0, offset), whole.slice(offset + m.length), title);

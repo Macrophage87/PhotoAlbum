@@ -164,7 +164,7 @@ export function containerKey(kind: "trip" | "collection" | "activity", id: strin
  * The one-word forgotten names in play for a text (see `forgottenScope`), as `${keyVersion}:${hash}`, and who the
  * album knows is tagged on its photographs (a living Ximena Ruiz keeps "Ximena" on hers).
  */
-export type Scope = { rows: ReadonlySet<string>; tagged: ReadonlySet<string> };
+export type Scope = { rows: ReadonlySet<string>; tagged: ReadonlySet<string>; whole?: boolean };
 export const NO_SCOPE: Scope = { rows: new Set(), tagged: new Set() };
 
 /**
@@ -199,7 +199,8 @@ export async function forgottenScope(where: { photoIds?: string[]; containers?: 
       UNION SELECT "personId" FROM "AnimalDetection" WHERE "personId" IS NOT NULL AND "photoId" = ANY(${photoIds}::text[])
       ${inContainers ? Prisma.sql`UNION SELECT "personId" FROM "Face" WHERE "personId" IS NOT NULL AND "photoId" IN (${inContainers}) UNION SELECT "personId" FROM "AnimalDetection" WHERE "personId" IS NOT NULL AND "photoId" IN (${inContainers})` : Prisma.empty}`,
   ]);
-  return { rows: new Set(rows.map((r) => `${r.keyVersion}:${r.hash}`)), tagged: new Set(tagged.map((t) => t.personId)) };
+  // A whole trip, collection or activity is about many photographs, few of them hers: the wider place guard there.
+  return { rows: new Set(rows.map((r) => `${r.keyVersion}:${r.hash}`)), tagged: new Set(tagged.map((t) => t.personId)), whole: containers.length > 0 };
 }
 
 /** Whether any forgotten name is kept with the places it was found. */
@@ -310,7 +311,7 @@ export async function loadTombstone(): Promise<Tombstone> {
           } else if (mode === "summary") {
             // Keywords: a word of its own, in any case, but not "florence duomo" or "may 2019".
             const beside = [tokens[i - 1], tokens[i + 1]].filter(Boolean);
-            if (isPlaceOrDateWord(run[0].raw) || beside.some((t) => isPlaceOrDateWord(t.raw) || /^\p{Lu}/u.test(t.raw))) continue;
+            if (beside.some((t) => isPlaceOrDateWord(t.raw) || /^\p{Lu}/u.test(t.raw))) continue;
           } else if (!guarded(text, run, found.capOnly)) continue;
         } else if (found.capOnly && !guarded(text, run, true)) continue;
         spans.push([run[0].start, run[n - 1].end]);
@@ -322,7 +323,7 @@ export async function loadTombstone(): Promise<Tombstone> {
       if (!capOnly) return true;
       if (!run.every((x) => capital(x.raw))) return false;
       title ??= inTitleCase(t, run.map((x) => x.raw));
-      return !notThePerson(t, run[0].start, run[run.length - 1].end, { title, date: isEverydayWord(run[0].raw), place: "near", number: true, own: new Set(run.map((x) => x.norm)), isNameWord });
+      return !notThePerson(t, run[0].start, run[run.length - 1].end, { title, date: isEverydayWord(run[0].raw), place: scope && !scope.whole ? "comma" : "near", number: true, ownPhotos: Boolean(scope && !scope.whole), own: new Set(run.map((x) => x.norm)), isNameWord });
     }
     for (const m of text.matchAll(CJK_RUN)) {
       const chars = [...m[0]];

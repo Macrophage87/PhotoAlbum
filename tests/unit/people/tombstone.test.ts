@@ -238,10 +238,12 @@ describe("names that are also words", () => {
     expect(p.estimatedDateNote).toBe("2019–2019: Taken in May 2019");
   });
 
-  it("leaves a place alone, even on their photographs", async () => {
+  it("leaves a place plainly meant alone, even on their photographs", async () => {
     const on = await forget("Florence");
     const ts = await loadTombstone();
-    for (const t of ["Florence, Italy in spring.", "A trip to Florence, Italy", "Florence Nightingale statue", "The Duomo in Florence", "Florence 2019"]) expect(ts.scrub(t, await sc(on))).toBe(t);
+    for (const t of ["Florence, Italy in spring.", "A trip to Florence, Italy", "Florence Nightingale statue", "Florence 2019", "Florence trip"]) expect(ts.scrub(t, await sc(on))).toBe(t);
+    // On her photographs she is the likelier reading after "in" or "to".
+    expect(ts.scrub("By the pool in Florence", await sc(on))).toBe("By the pool in a family member");
     // Elsewhere, not at all.
     const elsewhere = await photo();
     expect(ts.scrub("Florence in spring", await sc(elsewhere))).toBe("Florence in spring");
@@ -335,7 +337,40 @@ describe("names that are also words", () => {
     }
     const ts = await loadTombstone();
     expect(ts.scrub("Florence and Tuscany 2019", await forgottenScope({ containers: [{ kind: "trip", id: tripA.id }] }))).toBe("Florence and Tuscany 2019");
-    expect(ts.scrub("Trip: Florence", await sc(hers))).toBe("Trip: Florence");
+    expect(ts.scrub("Trip: Florence", await sc(hers))).toBe("Trip: a family member");
+  });
+
+  it("keeps a place-named person's name out of her own photographs unless a place is plainly meant", async () => {
+    const on = await forget("Florence");
+    const ts = await loadTombstone();
+    const scope = await sc(on);
+    for (const [t, want] of [["Florence at the lake", "A family member at the lake"], ["Florence and Ben swam.", "A family member and Ben swam."], ["Florence in the garden", "A family member in the garden"], ["Florence, Italy", "Florence, Italy"], ["Trip: Florence", "Trip: a family member"], ["Florence 2019", "Florence 2019"]]) expect(ts.scrub(t, scope)).toBe(want);
+    // Off her photographs, nothing.
+    expect(ts.scrub("Florence at the lake", await sc(await photo()))).toBe("Florence at the lake");
+  });
+
+  it("scrubs a place-named person out of what the helper wrote on her photographs, keywords included", async () => {
+    for (const name of ["Charlotte Smith", "Madison"]) {
+      const first = name.split(" ")[0];
+      const p = await db.person.create({ data: { name, createdById: admin } });
+      const on = (await db.photo.create({ data: { uploaderId: admin, originalName: "c.jpg", mimeType: "image/jpeg", storageKey: "c", originalPath: "c/o.jpg", sizeBytes: 1, status: "READY", annotation: record({ title: first, caption: `${first} in the garden`, description: `${first} and Ben swam. ${first} at the pool. ${first} smiles.`, searchSummary: `${first.toLowerCase()} garden` }), annotatedAt: new Date() } })).id;
+      await db.face.create({ data: { photoId: on, personId: p.id, status: "CONFIRMED", box: [0, 0, 1, 1], confidence: 0 } });
+      await optOutPerson(p.id, new FormData());
+      expect((await db.photo.findUniqueOrThrow({ where: { id: on } })).annotation).toMatchObject({ title: "A family member", caption: "A family member in the garden", description: "A family member and Ben swam. A family member at the pool. A family member smiles.", searchSummary: "A family member garden" });
+    }
+    // And in later answers, for the one-word name the album remembers.
+    const madison = (await db.forgottenName.findFirstOrThrow({ where: { NOT: { photoIds: { isEmpty: true } } } })).photoIds[0];
+    await applyAnnotation(madison, "m", record({ caption: "Madison in the garden", searchSummary: "madison garden" }), { content: [] }, { requestedAt: new Date() });
+    expect((await db.photo.findUniqueOrThrow({ where: { id: madison } })).annotation).toMatchObject({ caption: "A family member in the garden", searchSummary: "A family member garden" });
+  });
+
+  it("keeps photographs whose notes name her in scope, whatever the words around it", async () => {
+    const p = await db.person.create({ data: { name: "Florence", createdById: admin } });
+    const noted = (await db.photo.create({ data: { uploaderId: admin, originalName: "n.jpg", mimeType: "image/jpeg", storageKey: "n", originalPath: "n/o.jpg", sizeBytes: 1, status: "READY", context: "Florence at the pool" } })).id;
+    await optOutPerson(p.id, new FormData());
+    expect((await db.forgottenName.findFirstOrThrow()).photoIds).toContain(noted);
+    await applyAnnotation(noted, "m", record({ caption: "Florence dives in" }), { content: [] }, { requestedAt: new Date() });
+    expect(((await db.photo.findUniqueOrThrow({ where: { id: noted } })).annotation as StoredAnnotation).caption).toBe("A family member dives in");
   });
 
   it("looks nothing up when nothing forgotten is kept by place", async () => {

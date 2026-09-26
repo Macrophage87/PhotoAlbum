@@ -237,6 +237,17 @@ describe("forgetting somebody", () => {
     expect(scrub("Sam's 5th birthday")).toBe("A family member's 5th birthday");
   });
 
+  it("counts somebody not to be named as on every photograph of a trip they are tagged in", async () => {
+    const sam = await db.person.create({ data: { name: "Sam Kent", createdById: admin } });
+    const trip = await db.trip.create({ data: { slug: "sam5k", title: "Sam's 5th birthday", startDate: new Date("2026-07-01"), endDate: new Date("2026-07-01"), createdById: admin } });
+    const tagged = (await db.photo.create({ data: { uploaderId: admin, originalName: "k1.jpg", mimeType: "image/jpeg", storageKey: "k1", originalPath: "k1/o.jpg", sizeBytes: 1, status: "READY", tripId: trip.id } })).id;
+    const other = (await db.photo.create({ data: { uploaderId: admin, originalName: "k2.jpg", mimeType: "image/jpeg", storageKey: "k2", originalPath: "k2/o.jpg", sizeBytes: 1, status: "READY", tripId: trip.id, caption: "Sam blowing candles" } })).id;
+    await db.face.create({ data: { photoId: tagged, personId: sam.id, status: "CONFIRMED", box: [0, 0, 1, 1], confidence: 0 } });
+    const safe = await withoutUnpermittedNames((await loadItem(other))!);
+    expect(safe.caption).toBe("A family member blowing candles");
+    expect(safe.trip?.title).toBe("A family member's 5th birthday");
+  });
+
   it("takes the first name of somebody waiting to be forgotten out of everything, and out of answers", async () => {
     await db.person.create({ data: { name: "Ximena Ortiz", forgetPendingAt: new Date(), optedOutAt: new Date(), createdById: admin } });
     const elsewhere = (await db.photo.create({ data: { uploaderId: admin, originalName: "x.jpg", mimeType: "image/jpeg", storageKey: "x", originalPath: "x/o.jpg", sizeBytes: 1, status: "READY" } })).id;

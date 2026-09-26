@@ -36,7 +36,10 @@ export async function forgetPerson(personId: string, opts: { keepName: boolean; 
     // A one-word name that is also a place ("Florence"): the album's Florence trip is no mention of her. Only her
     // own photographs, and those whose notes name her where the words around it do not make it the place.
     const place = isListedPlace(person.name);
-    const photoIds = [...new Set([...tagged, ...before.photos.map((p) => p.id), ...(place ? [] : [...(await photosMentioning(m)), ...(await photosInContainers(before))])])];
+    // Notes naming them at all ("Florence at the pool"), whatever the words around it: what the helper writes from
+    // them is about her.
+    const noted = await notesNaming(m.tombstoneForms.map((f) => f.form).filter((f) => !/\s/u.test(f)));
+    const photoIds = [...new Set([...tagged, ...before.photos.map((p) => p.id), ...noted, ...(place ? [] : [...(await photosMentioning(m)), ...(await photosInContainers(before))])])];
     const containerIds = place ? [] : [...before.trips.map((t) => containerKey("trip", t.id)), ...before.collections.map((c) => containerKey("collection", c.id)), ...before.activities.map((a) => containerKey("activity", a.id))];
     await held.assertHeld();
     await db.person.update({
@@ -90,4 +93,12 @@ export async function completePendingForgets(): Promise<number> {
   // Their leftovers were listed when they asked.
   for (const p of waiting) await forgetPerson(p.id, { keepName: false, byUserId: p.forgetPendingById, list: false });
   return waiting.length;
+}
+
+/** Photographs whose notes have one of these one-word names in them, written as a name. */
+async function notesNaming(words: string[]): Promise<string[]> {
+  if (!words.length) return [];
+  const rows = await db.photo.findMany({ where: { OR: words.map((w) => ({ context: { contains: w } })) }, select: { id: true, context: true } });
+  const rx = new RegExp(`(?<![\\p{L}\\p{M}])(?:${words.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})(?![\\p{L}\\p{M}])`, "u");
+  return rows.filter((r) => r.context && rx.test(r.context)).map((r) => r.id);
 }
