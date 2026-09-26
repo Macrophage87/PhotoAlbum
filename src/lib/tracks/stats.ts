@@ -6,6 +6,8 @@ export const MAX_GAP_S = 30;
 export const TELEPORT_SPEED_MS = 50;
 /** A run of fast segments must be longer than this to be travel rather than a glitch. */
 const MIN_TRAVEL_SEGMENTS = 5;
+/** Fast runs separated by at most this many slower segments are judged as one run. */
+const MAX_SLOW_INSIDE_RUN = 2;
 /** A fast run this long is travel even if it ends near where it began (a sightseeing flight's loop). */
 const LONG_RUN_SEGMENTS = 30;
 /** A segment's moving-time gap limit looks at the intervals within this many segments either side. */
@@ -72,34 +74,69 @@ export function normalizedPower(points: TrackPoint[]): number | null {
 
 /**
  * Which segments (points[i - 1] to points[i], flagged at i) are GPS jumps rather than travel. A segment faster than
- * TELEPORT_SPEED_MS is travel only as part of a sustained run of fast segments that gets somewhere: a train or a
- * plane keeps going sample after sample, while a glitch is a lone leap, a spike, or a few fast steps out that pause
- * and come back. A fixed speed limit alone would throw away every segment of a flight or a high-speed train.
+ * TELEPORT_SPEED_MS is travel only as part of a sustained, steady run of fast segments that gets somewhere: a train
+ * or a plane keeps going sample after sample at much the same speed and heading, while a glitch is a lone leap, a
+ * spike, a few fast steps out that pause and come back, or a receiver's first fixes converging from kilometres off.
+ * A fixed speed limit alone would throw away every segment of a flight or a high-speed train.
  */
 function teleportSegments(points: TrackPoint[], dist: number[]): boolean[] {
   const n = points.length;
-  const fast = (i: number) => {
+  const speed = new Array<number>(n).fill(0);
+  for (let i = 1; i < n; i++) {
     const dt = (points[i].t - points[i - 1].t) / 1000;
-    return dt > 0 && dist[i] / dt > TELEPORT_SPEED_MS;
-  };
+    speed[i] = dt > 0 ? dist[i] / dt : 0;
+  }
+  const fast = (i: number) => speed[i] > TELEPORT_SPEED_MS;
   const out = new Array<boolean>(n).fill(false);
   for (let s = 1; s < n; s++) {
     if (!fast(s)) continue;
-    let e = s, path = dist[s];
-    while (e + 1 < n && fast(e + 1)) path += dist[++e];
+    // A pause of a sample or two out there does not split an excursion into two runs that each look like travel.
+    let e = s;
+    for (;;) {
+      while (e + 1 < n && fast(e + 1)) e++;
+      let k = e + 1;
+      while (k < n && k - e <= MAX_SLOW_INSIDE_RUN && !fast(k)) k++;
+      if (k < n && k - e <= MAX_SLOW_INSIDE_RUN + 1 && fast(k)) e = k;
+      else break;
+    }
+    const len = e - s + 1;
+    let path = 0;
+    for (let i = s; i <= e; i++) path += dist[i];
     const net = haversine(points[s - 1].lat, points[s - 1].lng, points[e].lat, points[e].lng);
-    const travel = e - s + 1 > MIN_TRAVEL_SEGMENTS && (net >= path / 2 || e - s + 1 >= LONG_RUN_SEGMENTS);
-    if (!travel) out.fill(true, s, e + 1);
+    // A run at either end of the track has nothing before or after it to agree with: most often a cold start.
+    const atEdge = s === 1 || e === n - 1;
+    const travel = len > MIN_TRAVEL_SEGMENTS && steady(points, dist, speed, s, e) && (len >= LONG_RUN_SEGMENTS || (!atEdge && net >= path / 2));
+    if (!travel) for (let i = s; i <= e; i++) if (fast(i)) out[i] = true;
     s = e;
   }
   return out;
 }
 
+/** Every segment of the run within a factor of three of its median speed, and no turn sharper than a right angle. */
+function steady(points: TrackPoint[], dist: number[], speed: number[], s: number, e: number): boolean {
+  const sorted = speed.slice(s, e + 1).sort((x, y) => x - y);
+  const median = sorted[sorted.length >> 1];
+  if (sorted[0] < median / 3 || sorted[sorted.length - 1] > median * 3) return false;
+  let last: number | null = null;
+  for (let i = s; i <= e; i++) {
+    if (dist[i] < 1) continue;
+    const a = points[i - 1], b = points[i];
+    const heading = Math.atan2((b.lng - a.lng) * Math.cos((a.lat * Math.PI) / 180), b.lat - a.lat);
+    if (last !== null) {
+      const turn = Math.abs(((heading - last + 3 * Math.PI) % (2 * Math.PI)) - Math.PI);
+      if (turn > Math.PI / 2) return false;
+    }
+    last = heading;
+  }
+  return true;
+}
+
 /**
  * The longest step between samples still counted as moving, for each segment. Phones on battery saver and satellite
  * trackers log once a minute or less often, so the limit grows with the usual interval around that segment: a watch
- * that switches to sparse logging halfway through gets each part judged by its own rate. "Usual" is the median by
- * time of the neighbouring intervals, leaving out the segment's own, so one long gap cannot vouch for itself.
+ * that switches to sparse logging halfway through gets each part judged by its own rate. "Usual" is the median of
+ * the neighbouring intervals by count, leaving out the segment's own, so long gaps (pauses) cannot vouch for
+ * themselves or each other.
  */
 function gapLimits(points: TrackPoint[]): number[] {
   const n = points.length;
@@ -109,18 +146,10 @@ function gapLimits(points: TrackPoint[]): number[] {
   const around: number[] = [];
   for (let i = 1; i < n; i++) {
     around.length = 0;
-    let total = 0;
-    for (let j = Math.max(1, i - GAP_WINDOW); j <= Math.min(n - 1, i + GAP_WINDOW); j++) {
-      if (j !== i && dt[j] > 0) {
-        around.push(dt[j]);
-        total += dt[j];
-      }
-    }
+    for (let j = Math.max(1, i - GAP_WINDOW); j <= Math.min(n - 1, i + GAP_WINDOW); j++) if (j !== i && dt[j] > 0) around.push(dt[j]);
     if (!around.length) continue;
     around.sort((x, y) => x - y);
-    let acc = 0, k = 0;
-    while (k < around.length - 1 && (acc += around[k]) < total / 2) k++;
-    out[i] = Math.max(MAX_GAP_S, 3 * around[k]);
+    out[i] = Math.max(MAX_GAP_S, 3 * around[around.length >> 1]);
   }
   return out;
 }

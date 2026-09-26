@@ -171,6 +171,28 @@ describe("computeStats keeps dropping GPS glitches", () => {
     expect(s.distanceM).toBeLessThan(1_300);
     expect(s.maxSpeedMs).toBeLessThan(5);
   });
+  it("a receiver's first fixes converging from kilometres away", () => {
+    const pts = syntheticWalk();
+    [3000, 2600, 2200, 1800, 1400, 1000, 600].forEach((m, k) => (pts[k] = east(pts[k], m)));
+    const s = computeStats(pts);
+    expect(s.distanceM).toBeLessThan(clean.distanceM + 20);
+    expect(s.maxSpeedMs).toBeLessThan(5);
+  });
+  it("an excursion that pauses at its far end for a sample", () => {
+    const s = walkWith([100, 200, 300, 400, 500, 600, 600, 500, 400, 300, 200, 100]);
+    expect(s.distanceM).toBeLessThan(clean.distanceM + 20);
+    expect(s.maxSpeedMs).toBeLessThan(5);
+  });
+  it("a 16-point ramp out and back with a pause in it", () => {
+    const s = walkWith([60, 120, 180, 240, 300, 360, 420, 420, 420, 360, 300, 240, 180, 120, 60, 0]);
+    expect(s.distanceM).toBeLessThan(clean.distanceM + 20);
+    expect(s.maxSpeedMs).toBeLessThan(5);
+  });
+  it("a burst of erratic fast fixes", () => {
+    // Fast steps zig-zagging back and forth: no steady heading, so not travel however far they drift.
+    const s = walkWith([200, -100, 300, 0, 400, 400, 400, 400]);
+    expect(s.maxSpeedMs).toBeLessThan(5);
+  });
   it("a one-way leap in the middle of a walk", () => {
     const pts = syntheticWalk().map((p, i) => (i >= 250 ? east(p, 2_000) : p));
     const s = computeStats(pts);
@@ -192,6 +214,23 @@ describe("computeStats on mixed and gappy sampling", () => {
     const sparse = line(31, 2, 60, fine[600].t, fine[600].lat).slice(1).map((p) => ({ ...p, hr: 150 }));
     // 600 s at 100 bpm and 1800 s at 150 bpm
     expect(computeStats([...fine, ...sparse]).avgHr).toBe(138);
+  });
+  it("does not count a drive's paused stretches as moving, even when two pauses are close together", () => {
+    // Driving at 20 m/s, logged every second, with recording paused twice for 10 minutes while the car kept going.
+    const pts: TrackPoint[] = [];
+    let t = Date.parse("2025-08-12T13:00:00Z"), lat = 44;
+    const step = (dt: number) => {
+      t += dt * 1000;
+      lat += (dt * 20) / 111_195;
+      pts.push({ t, lat, lng: -68 });
+    };
+    pts.push({ t, lat, lng: -68 });
+    for (let i = 0; i < 300; i++) step(1);
+    step(600);
+    for (let i = 0; i < 5; i++) step(1);
+    step(600);
+    for (let i = 0; i < 300; i++) step(1);
+    expect(computeStats(pts).movingTimeS).toBe(605);
   });
   it("never reports an average speed above the maximum", () => {
     const before = line(31, 250, 60);
