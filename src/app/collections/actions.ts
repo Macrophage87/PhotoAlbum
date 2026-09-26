@@ -18,6 +18,7 @@ import { canEditContainer, editableMediaIds, NOT_YOUR_CONTAINER } from "@/lib/au
 import { writeContainerDescription } from "@/lib/annotation/container";
 import type { TripFormState } from "@/app/trips/new/actions";
 import { descriptionStaysMembersOnly } from "@/lib/photos/readable-text";
+import { descriptionStaysHelpers } from "@/lib/annotation/helper-text";
 
 export type CollectionFormState = TripFormState;
 
@@ -64,6 +65,7 @@ export async function updateCollection(slug: string, _prev: CollectionFormState,
       title: v.title,
       description: v.description,
       descriptionMembersOnly: descriptionStaysMembersOnly(collection, v.description),
+      descriptionByHelper: descriptionStaysHelpers(collection, v.description),
       themeKey: v.themeKey,
       // A link is minted the first time this collection is shared that way, and dropped whenever it stops being.
       ...(changed ? { visibility, shareToken: visibility === "LINK" ? (collection.shareToken ?? generateToken()) : null } : {}),
@@ -221,7 +223,7 @@ const DESCRIPTION_TEXT = z.string().max(4000);
 export async function setCollectionDescription(slug: string, text: string): Promise<void> {
   const collection = await loadEditableCollection(slug);
   const description = DESCRIPTION_TEXT.parse(text).trim();
-  await db.collection.update({ where: { id: collection.id }, data: { description: description || null, descriptionMembersOnly: descriptionStaysMembersOnly(collection, description) } });
+  await db.collection.update({ where: { id: collection.id }, data: { description: description || null, descriptionMembersOnly: descriptionStaysMembersOnly(collection, description), descriptionByHelper: descriptionStaysHelpers(collection, description) } });
   revalidatePath(`/collections/${slug}`, "layout");
 }
 

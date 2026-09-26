@@ -251,6 +251,9 @@ model Trip {
   /// The helper wrote the description from names or notes, or it names somebody the album knows: members only.
   /// Kept while the text is; a member writing it afresh by hand makes the words theirs to publish.
   descriptionMembersOnly Boolean @default(false)
+  /// The helper wrote the description as it stands. Saving different words by hand makes it the member's, and
+  /// forgetting somebody then leaves it as they wrote it (the person page lists it for its author to edit).
+  descriptionByHelper    Boolean @default(false)
   startDate    DateTime       @db.Date
   endDate      DateTime       @db.Date
   timezone     String         @default("UTC")
@@ -291,6 +294,9 @@ model Activity {
   /// The helper wrote the description from names or notes, or it names somebody the album knows: members only.
   /// Kept while the text is; a member writing it afresh by hand makes the words theirs to publish.
   descriptionMembersOnly Boolean @default(false)
+  /// The helper wrote the description as it stands. Saving different words by hand makes it the member's, and
+  /// forgetting somebody then leaves it as they wrote it (the person page lists it for its author to edit).
+  descriptionByHelper    Boolean @default(false)
   trackId     String?      @unique
   track       Track?       @relation("ActivityTrack", fields: [trackId], references: [id], onDelete: SetNull)
   photos      Photo[]
@@ -390,6 +396,9 @@ model Photo {
   /// The helper's title when it is members-only: shown to members where the item has no title of its own, never to
   /// anybody else. `title` itself only ever holds what anybody who may see the item may read.
   membersTitle              String?
+  /// When a forgotten person's name was last taken out of this item's machine-written text. An answer from the
+  /// helper to a request built before then is thrown away rather than stored, since it may name them again.
+  namesScrubbedAt           DateTime?
   /// Darkroom edits, kept as instructions rather than applied to the file: crop, straighten, brightness, contrast,
   /// colour. The original is never touched, the renditions are re-rendered from it whenever this changes, and
   /// clearing it puts the item back exactly as it arrived. Only the uploader or an admin may set it.
@@ -479,6 +488,9 @@ model Collection {
   /// The helper wrote the description from names or notes, or it names somebody the album knows: members only.
   /// Kept while the text is; a member writing it afresh by hand makes the words theirs to publish.
   descriptionMembersOnly Boolean @default(false)
+  /// The helper wrote the description as it stands. Saving different words by hand makes it the member's, and
+  /// forgetting somebody then leaves it as they wrote it (the person page lists it for its author to edit).
+  descriptionByHelper    Boolean @default(false)
   themeKey     String         @default("default")
   visibility   TripVisibility @default(PRIVATE)
   shareToken   String?        @unique
@@ -631,6 +643,11 @@ model Person {
   descriptors         String?
   /// Asked to be forgotten by the recogniser: excluded from the members' name index and from every proposal.
   optedOutAt          DateTime?
+  /// Names this person went by before a rename: forgetting them takes every one of them out of the helper's text.
+  formerNames         String[]   @default([])
+  /// The helper was told this name when it should not have been (no evidence of an adult); the nightly people job
+  /// takes it out of the helper's text and clears this.
+  namesPendingScrub   Boolean    @default(false)
   createdById         String
   createdAt           DateTime   @default(now())
   updatedAt           DateTime   @updatedAt

@@ -4,13 +4,24 @@ import { enqueueEmbedding } from "@/lib/jobs/handlers/embed-photo";
 import { applyPlaceEstimate, needsPlaceEstimate } from "./place";
 import { isWeakDate } from "@/lib/photos/date-from-neighbours";
 import { writtenFromMembersOnly } from "./members-only";
+import { namesChangedSince } from "@/lib/people/names-changed";
 
 export type ApplyResult = { ok: true } | { ok: false; reason: "refusal" | "invalid" | "max_tokens" };
 
 /** Persist a parsed record on the item and keep the raw response briefly for debugging. Never logs content. */
 export type Usage = { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null };
 
-export async function applyAnnotation(photoId: string, model: string, parsed: Annotation, raw: { usage?: Usage; batched?: boolean } & Record<string, unknown>): Promise<void> {
+/**
+ * `requestedAt` is when the request was built (for a batch, when its run was started). An answer that comes back
+ * after a forgotten person's name was scrubbed from the item, or after anybody on it was renamed, untagged or
+ * changed their mind about being named, is not stored: it may name them again. Nothing is kept of it, not even the
+ * raw row, and the item stays due to be described again with the names as they are now.
+ */
+export async function applyAnnotation(photoId: string, model: string, parsed: Annotation, raw: { usage?: Usage; batched?: boolean } & Record<string, unknown>, requestedAt?: Date): Promise<void> {
+  if (requestedAt && (await namesChangedSince([photoId], requestedAt))) {
+    await recordFailure(photoId, "names_changed", { terminal: false });
+    return;
+  }
   const current = await db.photo.findUnique({ where: { id: photoId }, select: { takenAt: true, takenAtSource: true, estimatedDateSource: true, annotationSource: true, title: true, kind: true, lat: true, placeEstimatedAt: true, context: true } });
   if (!current) return;
   const stored = toStored(parsed);

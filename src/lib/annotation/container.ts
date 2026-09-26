@@ -11,6 +11,8 @@ import { NOT_TRASHED } from "@/lib/photos/trash";
 import { permittedNames } from "@/lib/people/gates";
 import { annotationGates, notOptedOutWhere } from "./eligibility";
 import { descriptionFromMembersOnly } from "./members-only";
+import { memberTitle } from "./helper-text";
+import { namesChangedSince } from "@/lib/people/names-changed";
 import { anthropic, thinkingParams } from "./client";
 import { activityDescriptionSchema, parseActivityDescription, type ActivityDescription } from "./activity";
 
@@ -71,23 +73,23 @@ export async function loadContainerForDescription(kind: ContainerKind, id: strin
     kind === "trip"
       ? await db.trip.findUnique({
           where: { id },
-          select: { id: true, title: true, description: true, annotationOptOut: true, startDate: true, endDate: true, _count: { select: { photos: { where: NOT_TRASHED } } }, activities: { orderBy: { startTime: "asc" }, take: 20, select: { title: true } } },
+          select: { id: true, title: true, description: true, descriptionByHelper: true, annotationOptOut: true, startDate: true, endDate: true, _count: { select: { photos: { where: NOT_TRASHED } } }, activities: { orderBy: { startTime: "asc" }, take: 20, select: { title: true } } },
         })
       : await db.collection.findUnique({
           where: { id },
-          select: { id: true, title: true, description: true, annotationOptOut: true, _count: { select: { items: true } } },
+          select: { id: true, title: true, description: true, descriptionByHelper: true, annotationOptOut: true, _count: { select: { items: true } } },
         });
   if (!container) return null;
 
   const eligible = await db.photo.findMany({ where, orderBy: [{ takenAt: "asc" }, { id: "asc" }], select: { id: true } });
   const picked = spread(eligible, CONTAINER_FRAMES).map((p) => p.id);
   const photos = picked.length
-    ? await db.photo.findMany({ where: { id: { in: picked } }, orderBy: [{ takenAt: "asc" }, { id: "asc" }], select: { id: true, renditions: true, caption: true, title: true, context: true } })
+    ? await db.photo.findMany({ where: { id: { in: picked } }, orderBy: [{ takenAt: "asc" }, { id: "asc" }], select: { id: true, renditions: true, caption: true, title: true, annotation: true, context: true } })
     : [];
   const dates = "startDate" in container ? { start: container.startDate, end: container.endDate } : null;
   const activities = "activities" in container ? container.activities.map((a) => a.title) : [];
   const count = "photos" in container._count ? container._count.photos : container._count.items;
-  return { kind, id: container.id, title: container.title, description: container.description, annotationOptOut: container.annotationOptOut, dates, activities, count, photos };
+  return { kind, id: container.id, title: container.title, description: container.description, descriptionByHelper: container.descriptionByHelper, annotationOptOut: container.annotationOptOut, dates, activities, count, photos };
 }
 
 /** The text block: what it is, when it was, how big it is, what happened in it, and what the family already wrote. */
@@ -97,14 +99,16 @@ export function describeContainerItem(container: ContainerForDescription, permit
   if (container.dates) lines.push(`When: ${formatDayRange(dateColumnToDay(container.dates.start), dateColumnToDay(container.dates.end))}`);
   lines.push(`It holds ${container.count} photograph${container.count === 1 ? "" : "s"}; you are being shown ${container.photos.length} of them, spread across the whole of it.`);
   if (container.activities.length) lines.push(`The outings the family recorded in it: ${container.activities.join(", ")}`);
-  const written = container.photos.map((p) => [p.title, p.caption, p.context].filter(Boolean).join(" — ")).filter(Boolean);
+  // The family's own words only: a title the helper gave a photograph may name somebody no longer to be named.
+  const written = container.photos.map((p) => [memberTitle(p.title, p.annotation), p.caption, p.context].filter(Boolean).join(" — ")).filter(Boolean);
   if (written.length) lines.push(`What the album already says about the photographs you were shown, in order:\n${written.map((w) => `- ${w}`).join("\n")}`);
   lines.push(
     permittedNames.length
       ? `People confirmed in these photographs — call them by these names rather than by age or role: ${permittedNames.join(", ")}`
       : "No people have been confirmed in these photographs; do not name anyone unless the captions do.",
   );
-  if (container.description) lines.push(`There is already a description, which you are being asked to replace:\n${container.description}`);
+  // Its own earlier words are not handed back to it: they may name somebody who has since been forgotten.
+  if (container.description && !container.descriptionByHelper) lines.push(`There is already a description, which you are being asked to replace:\n${container.description}`);
   const said = note?.trim();
   if (said) lines.push(`A note from the family, written by somebody who was there. Treat what it says as true:\n${said}`);
   return lines.join("\n");
@@ -145,6 +149,7 @@ export async function writeContainerDescription(kind: ContainerKind, id: string,
   if (container.annotationOptOut) throw new Error(`${container.title} is opted out of the AI helper`);
   if (!container.photos.length) throw new Error(`There are no photographs in this ${kind} to describe it from`);
 
+  const requestedAt = new Date();
   const names = [...new Set((await Promise.all(container.photos.map((p) => permittedNames(p.id)))).flat())];
   const request = await buildContainerRequest(container, gates.model, names, note?.trim() || undefined);
   const response = await anthropic().messages.create(request);
@@ -152,9 +157,12 @@ export async function writeContainerDescription(kind: ContainerKind, id: string,
   if (response.stop_reason === "refusal") throw new Error("The helper declined to describe this one");
   const parsed = parseActivityDescription(response.content as { type: string; text?: string }[]);
   if (!parsed) throw new Error("The helper's answer could not be read; try again");
+  // Somebody on these photographs forgotten, renamed or no longer to be named while it was being written: its
+  // answer may name them, so it is not kept.
+  if (await namesChangedSince(container.photos.map((p) => p.id), requestedAt)) throw new Error("Somebody on these photographs changed while the helper was writing; try again");
   // Written from names or notes, it is read by members only; see `descriptionFromMembersOnly`.
   const membersOnly = await descriptionFromMembersOnly(parsed.description, { names, notes: container.photos.some((p) => p.context?.trim()) });
-  const data = { description: parsed.description, descriptionMembersOnly: membersOnly };
+  const data = { description: parsed.description, descriptionMembersOnly: membersOnly, descriptionByHelper: true };
   if (kind === "trip") await db.trip.update({ where: { id }, data });
   else await db.collection.update({ where: { id }, data });
   return parsed.description;

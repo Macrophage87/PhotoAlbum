@@ -146,9 +146,11 @@ export async function recordPlaceFailure(photoId: string, opts: { terminal?: boo
  * from the camera, from a track or from a Google sidecar always wins; a track imported afterwards replaces it in
  * turn (see geotag-photos). placeEstimatedAt is stamped either way, so a declined item is not asked about again.
  */
-export async function applyPlaceEstimate(photoId: string, estimate: PlaceEstimate): Promise<"placed" | "declined" | "skipped"> {
-  const current = await db.photo.findUnique({ where: { id: photoId }, select: { lat: true, gpsSource: true } });
+export async function applyPlaceEstimate(photoId: string, estimate: PlaceEstimate, requestedAt?: Date): Promise<"placed" | "declined" | "skipped" | "stale"> {
+  const current = await db.photo.findUnique({ where: { id: photoId }, select: { lat: true, gpsSource: true, namesScrubbedAt: true } });
   if (!current) return "skipped";
+  // Asked before a forgotten name was taken out of this item: its evidence may quote them, so it is asked again.
+  if (requestedAt && current.namesScrubbedAt && current.namesScrubbedAt > requestedAt) return "stale";
   // A town-level answer is held to the town before anything is written, name and evidence alike.
   const place = estimate && estimate.confidence >= MIN_PLACE_CONFIDENCE ? scrubCoarsePlace(estimate) : null;
   const free = current.lat === null && (current.gpsSource === null || current.gpsSource === "ESTIMATE");

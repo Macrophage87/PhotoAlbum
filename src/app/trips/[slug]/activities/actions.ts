@@ -17,6 +17,8 @@ import { fieldErrors, participantsFromForm } from "@/lib/trips/validation";
 import type { ActivityType } from "@/generated/prisma/enums";
 import type { ActivityFormState } from "@/components/activities/ActivityForm";
 import { descriptionStaysMembersOnly } from "@/lib/photos/readable-text";
+import { descriptionStaysHelpers } from "@/lib/annotation/helper-text";
+import { namesChangedSince } from "@/lib/people/names-changed";
 import { descriptionFromMembersOnly } from "@/lib/annotation/members-only";
 
 /** An activity is part of the shape of a trip, so it is the trip's maker (and admins) who arrange them. */
@@ -56,7 +58,7 @@ export async function updateActivity(slug: string, id: string, _prev: ActivityFo
   const parsed = activityInputFromForm(fd);
   if (!parsed.success) return { status: "error", fieldErrors: fieldErrors(parsed.error) };
   const v = parsed.data;
-  const existing = await db.activity.findFirst({ where: { id, tripId: trip.id }, select: { id: true, description: true, descriptionMembersOnly: true } });
+  const existing = await db.activity.findFirst({ where: { id, tripId: trip.id }, select: { id: true, description: true, descriptionMembersOnly: true, descriptionByHelper: true } });
   if (!existing) return { status: "error", message: "Activity not found" };
   // `set` reconciles to exactly what was ticked, so unticking somebody removes them; a form that never carried the
   // control at all leaves the list as it was.
@@ -70,6 +72,7 @@ export async function updateActivity(slug: string, id: string, _prev: ActivityFo
       endTime: localInputToInstant(v.end, trip.timezone),
       description: v.description,
       descriptionMembersOnly: descriptionStaysMembersOnly(existing, v.description),
+      descriptionByHelper: descriptionStaysHelpers(existing, v.description),
       ...(there ? { participants: { set: there.map((pid) => ({ id: pid })) } } : {}),
     },
   });
@@ -144,9 +147,9 @@ const DESCRIPTION_TEXT = z.string().max(4000);
 export async function setActivityDescription(slug: string, id: string, text: string): Promise<void> {
   const trip = await loadTrip(slug);
   const description = DESCRIPTION_TEXT.parse(text).trim();
-  const activity = await db.activity.findFirst({ where: { id, tripId: trip.id }, select: { id: true, description: true, descriptionMembersOnly: true } });
+  const activity = await db.activity.findFirst({ where: { id, tripId: trip.id }, select: { id: true, description: true, descriptionMembersOnly: true, descriptionByHelper: true } });
   if (!activity) throw new Error("Activity not found");
-  await db.activity.update({ where: { id }, data: { description: description || null, descriptionMembersOnly: descriptionStaysMembersOnly(activity, description) } });
+  await db.activity.update({ where: { id }, data: { description: description || null, descriptionMembersOnly: descriptionStaysMembersOnly(activity, description), descriptionByHelper: descriptionStaysHelpers(activity, description) } });
   revalidatePath(`/trips/${slug}/activities/${id}`);
 }
 
@@ -172,6 +175,7 @@ export async function describeActivityWithAi(slug: string, id: string, note?: st
   if (activity.trip.annotationOptOut) throw new Error(`The trip ${activity.trip.title} is opted out of the AI helper`);
   if (!activity.photos.length) throw new Error("There are no photographs on this activity to describe it from");
 
+  const requestedAt = new Date();
   const names = [...new Set((await Promise.all(activity.photos.map((p) => permittedNames(p.id)))).flat())];
   const request = await buildActivityRequest(activity, gates.model, names, DESCRIPTION_TEXT.parse(note ?? "").trim() || undefined);
   const notes = activity.photos.some((p) => p.context?.trim());
@@ -180,9 +184,12 @@ export async function describeActivityWithAi(slug: string, id: string, note?: st
   if (response.stop_reason === "refusal") throw new Error("The helper declined to describe this one");
   const parsed = parseActivityDescription(response.content as { type: string; text?: string }[]);
   if (!parsed) throw new Error("The helper's answer could not be read; try again");
+  // Somebody on these photographs forgotten, renamed or no longer to be named while it was being written: its
+  // answer may name them, so it is not kept.
+  if (await namesChangedSince(activity.photos.map((p) => p.id), requestedAt)) throw new Error("Somebody on these photographs changed while the helper was writing; try again");
   // Written from names or notes, it is read by members only; see `descriptionFromMembersOnly`.
   const membersOnly = await descriptionFromMembersOnly(parsed.description, { names, notes });
-  await db.activity.update({ where: { id }, data: { description: parsed.description, descriptionMembersOnly: membersOnly } });
+  await db.activity.update({ where: { id }, data: { description: parsed.description, descriptionMembersOnly: membersOnly, descriptionByHelper: true } });
   revalidatePath(`/trips/${slug}/activities/${id}`);
   return parsed.description;
 }

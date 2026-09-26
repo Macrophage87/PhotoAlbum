@@ -11,6 +11,7 @@ import { ACTIVITY_LABEL } from "@/lib/activities/types";
 import { NOT_TRASHED } from "@/lib/photos/trash";
 import { notOptedOutWhere } from "./eligibility";
 import { thinkingParams } from "./client";
+import { memberTitle } from "./helper-text";
 
 /** How many of an activity's photographs are sent. Enough to see how the day went; not the whole roll. */
 export const ACTIVITY_FRAMES = 8;
@@ -59,6 +60,7 @@ export async function loadActivityForDescription(activityId: string) {
       startTime: true,
       endTime: true,
       description: true,
+      descriptionByHelper: true,
       trip: { select: { id: true, title: true, timezone: true, annotationOptOut: true } },
       track: { select: { stats: true } },
     },
@@ -69,7 +71,7 @@ export async function loadActivityForDescription(activityId: string) {
     where: { activityId, ...NOT_TRASHED, status: "READY", ...notOptedOut },
     orderBy: [{ takenAt: "asc" }, { id: "asc" }],
     take: ACTIVITY_FRAMES,
-    select: { id: true, renditions: true, caption: true, title: true, context: true },
+    select: { id: true, renditions: true, caption: true, title: true, annotation: true, context: true },
   });
   return { ...activity, photos };
 }
@@ -97,14 +99,16 @@ export function describeActivityItem(activity: ActivityForDescription, permitted
     if (stats.avgHr) figures.push(`average heart rate ${Math.round(stats.avgHr)}`);
     if (figures.length) lines.push(`The track recorded: ${figures.join(", ")}.`);
   }
-  const written = activity.photos.map((p) => [p.title, p.caption, p.context].filter(Boolean).join(" — ")).filter(Boolean);
+  // The family's own words only: a title the helper gave a photograph may name somebody no longer to be named.
+  const written = activity.photos.map((p) => [memberTitle(p.title, p.annotation), p.caption, p.context].filter(Boolean).join(" — ")).filter(Boolean);
   if (written.length) lines.push(`What the album already says about these photographs, in order:\n${written.map((w) => `- ${w}`).join("\n")}`);
   lines.push(
     permittedNames.length
       ? `People confirmed in these photographs — call them by these names rather than by age or role: ${permittedNames.join(", ")}`
       : "No people have been confirmed in these photographs; do not name anyone unless the captions do.",
   );
-  if (activity.description) lines.push(`There is already a description, which you are being asked to replace:\n${activity.description}`);
+  // Its own earlier words are not handed back to it: they may name somebody who has since been forgotten.
+  if (activity.description && !activity.descriptionByHelper) lines.push(`There is already a description, which you are being asked to replace:\n${activity.description}`);
   const said = note?.trim();
   if (said) lines.push(`A note from the family, written by somebody who was there. Treat what it says as true:\n${said}`);
   return lines.join("\n");

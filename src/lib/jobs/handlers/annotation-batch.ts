@@ -335,6 +335,8 @@ export async function annotationBatchPoll(): Promise<void> {
     if (!remote) continue;
     if (remote.processing_status !== "ended") continue;
     let succeeded = 0, errored = 0, canceled = 0;
+    // Every request in the run was built after its first row was created, so that is the time to judge answers by.
+    const requestedAt = b.parentId ? ((await db.annotationBatch.findUnique({ where: { id: b.parentId }, select: { createdAt: true } }))?.createdAt ?? b.createdAt) : b.createdAt;
     for await (const result of await anthropic().messages.batches.results(b.anthropicBatchId)) {
       const photoId = result.custom_id;
       // A place run never writes annotation state: an item it could not place keeps whatever description it has.
@@ -364,7 +366,10 @@ export async function annotationBatchPoll(): Promise<void> {
           await fail("invalid_output");
           continue;
         }
-        await applyPlaceEstimate(photoId, place);
+        if ((await applyPlaceEstimate(photoId, place, requestedAt)) === "stale") {
+          errored++;
+          continue;
+        }
         succeeded++;
         continue;
       }
@@ -374,7 +379,7 @@ export async function annotationBatchPoll(): Promise<void> {
         await fail("invalid_output");
         continue;
       }
-      await applyAnnotation(photoId, message.model, parsed, { content: message.content, usage: message.usage, stop_reason: message.stop_reason, batched: true });
+      await applyAnnotation(photoId, message.model, parsed, { content: message.content, usage: message.usage, stop_reason: message.stop_reason, batched: true }, requestedAt);
       succeeded++;
     }
     console.log(`[annotation-backfill] batch ${b.anthropicBatchId} ended: ${succeeded} ok, ${errored} failed, ${canceled} cancelled`);

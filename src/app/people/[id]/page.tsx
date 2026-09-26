@@ -8,7 +8,9 @@ import { AppShell, Container } from "@/components/layout/AppShell";
 import { PhotoGrid } from "@/components/photos/PhotoGrid";
 import { toGridPhoto } from "@/components/photos/toGrid";
 import { Badge, Button, Card, ConfirmSubmitButton, Input, Label } from "@/components/ui";
-import { decideIndexing, deletePerson, optOutPerson, setNameInDescriptions, updatePerson } from "../actions";
+import { decideIndexing, deletePerson, optOutPerson, recordAdultAndName, setNameInDescriptions, updatePerson } from "../actions";
+import { matcherFor, memberTextMentioning } from "@/lib/people/forget";
+import { MemberTextList } from "@/components/people/MemberTextList";
 import { PetForm } from "@/components/people/PetForm";
 import { dateColumnToDay } from "@/lib/time/local-day";
 import { namesWaitingFor, refreshNamesFor } from "@/app/annotation/actions";
@@ -31,6 +33,11 @@ export default async function PersonPage({ params }: PageProps<"/people/[id]">) 
   const minor = isMinor(person);
   // Renaming and forgetting belong to whoever added this person, and to admins; consent stays with admins.
   const canChange = canChangePerson(user, person);
+  // Somebody to ask, by name: the member who added them, or failing that an admin.
+  const creator = await db.user.findUnique({ where: { id: person.createdById }, select: { name: true } });
+  const askWhom = creator?.name?.trim() ? `${creator.name.trim()} (who added them) or an admin` : "an admin";
+  // What members wrote by hand that forgetting would leave as it is, shown before anybody presses the button.
+  const memberText = person.kind === "HUMAN" && canChange ? await memberTextMentioning(await matcherFor(person)) : null;
   // Descriptions of this person written before the album could name them, and the one press that redoes them.
   const waiting = await namesWaitingFor(id);
   const refresh = async () => {
@@ -71,7 +78,7 @@ export default async function PersonPage({ params }: PageProps<"/people/[id]">) 
         <div className="grid md:grid-cols-2 gap-6">
           {person.kind === "PET" ? (
             <Card className="p-4 space-y-3">
-              {canChange ? <PetForm pet={person} /> : <p className="text-sm text-muted">Only the family member who added {person.name}, or an admin, can change these details.</p>}
+              {canChange ? <PetForm pet={person} /> : <p className="text-sm text-muted">Only the family member who added {person.name}, or an admin, can change these details; ask {askWhom}.</p>}
               {isAdmin && (
                 <form action={deletePerson.bind(null, id)}>
                   <ConfirmSubmitButton variant="danger" size="sm" confirmMessage={`Remove ${person.name} and every tag of them?`}>Remove this pet</ConfirmSubmitButton>
@@ -93,7 +100,7 @@ export default async function PersonPage({ params }: PageProps<"/people/[id]">) 
               <Button type="submit" size="sm">Save</Button>
             </form>
             ) : (
-              <p className="text-sm text-muted">Only the family member who added {person.name}, or an admin, can rename them.</p>
+              <p className="text-sm text-muted">Only the family member who added {person.name}, or an admin, can rename them; ask {askWhom}.</p>
             )}
           </Card>
           )}
@@ -147,7 +154,32 @@ export default async function PersonPage({ params }: PageProps<"/people/[id]">) 
                   <p className="text-muted">A child is never named in a description, whatever else is set.</p>
                 ) : !knownAdult(person) ? (
                   // No birthday and no attestation could be a child as easily as an adult, and a child is never named.
-                  <p className="text-muted" data-testid="name-needs-age">Not named: with no birthday showing an adult and no adult attestation, {person.name} is treated as a child. {isAdmin ? "Record either under Recognition first." : "An admin can record either."}</p>
+                  <div className="space-y-2" data-testid="name-needs-age">
+                    <p className="text-muted">Not named: with no birthday showing an adult and no confirmation that they are one, {person.name} is treated as a child. {isAdmin ? "Record either here to use their name; this says nothing about recognition, which stays its own decision." : "An admin can record either."}</p>
+                    {isAdmin && (
+                      <form action={recordAdultAndName.bind(null, id)} className="space-y-2">
+                        {!person.birthday && (
+                          <div>
+                            <Label htmlFor="naming-birthday">Birthday</Label>
+                            <Input id="naming-birthday" name="birthday" type="date" className="w-44" />
+                          </div>
+                        )}
+                        {!person.birthday && (
+                          <label className="flex items-start gap-2">
+                            <input type="checkbox" name="attestAdult" className="mt-1" />
+                            <span>I confirm {person.name} is an adult and agrees to be named in descriptions</span>
+                          </label>
+                        )}
+                        <Button type="submit" size="sm" variant="secondary" data-testid="record-adult-and-name">Record and use their name</Button>
+                      </form>
+                    )}
+                    {/* Agreed before the album asked for evidence: the agreement no longer counts, and can be cleared. */}
+                    {isAdmin && person.nameInDescriptions && (
+                      <form action={nameInDescriptions.bind(null, id, false)}>
+                        <Button type="submit" size="sm" variant="secondary">Stop using their name</Button>
+                      </form>
+                    )}
+                  </div>
                 ) : isAdmin ? (
                   <form action={nameInDescriptions.bind(null, id, !person.nameInDescriptions)} className="space-y-2">
                     <p className="text-muted">
@@ -168,7 +200,13 @@ export default async function PersonPage({ params }: PageProps<"/people/[id]">) 
               {canChange ? (
               <form action={optOut} className="space-y-2 border-t border-border pt-3">
                 <p className="font-medium">Forget this person&apos;s face</p>
-                <p className="text-muted">Deletes every face template, group and match for {person.name}, removes the name from AI descriptions and titles (and from the trips, collections and activities described from their photos) and from the name search, and stops the name reaching the AI helper. Captions and notes a member wrote by hand are left as they wrote them.</p>
+                <p className="text-muted">Deletes every face template, group and match for {person.name}, takes the name out of everything the AI helper wrote (descriptions, titles, and the trip, collection and activity descriptions it wrote) and out of the name search, and stops the name reaching the AI helper. What members wrote by hand — titles, captions, notes, descriptions — is left exactly as they wrote it.</p>
+                {memberText && memberText.photos.length + memberText.trips.length + memberText.collections.length + memberText.activities.length > 0 && (
+                  <div className="rounded-theme border border-border bg-surface-alt p-3 space-y-1">
+                    <p>These were written by members and still mention {person.name}; forgetting leaves them as they are, so edit them by hand (or ask whoever wrote them):</p>
+                    <MemberTextList text={memberText} />
+                  </div>
+                )}
                 <label className="flex items-center gap-2"><input type="radio" name="mode" value="remove-all" defaultChecked /> Also remove the record of which photos they appear in</label>
                 <label className="flex items-center gap-2"><input type="radio" name="mode" value="keep-name" /> Keep the name on the photos already confirmed (no face data)</label>
                 <ConfirmSubmitButton variant="danger" size="sm" confirmMessage={`Forget ${person.name}'s face data? This cannot be undone.`}>Forget face data</ConfirmSubmitButton>
@@ -176,7 +214,7 @@ export default async function PersonPage({ params }: PageProps<"/people/[id]">) 
               ) : (
                 <div className="space-y-1 border-t border-border pt-3">
                   <p className="font-medium">Forget this person&apos;s face</p>
-                  <p className="text-muted">If {person.name} wants to be forgotten, ask an admin or the family member who added them: it takes every tag of them off the album and cannot be undone.</p>
+                  <p className="text-muted">If {person.name} wants to be forgotten, ask {askWhom}: it takes every tag of them off the album and cannot be undone.</p>
                 </div>
               )}
             </Card>

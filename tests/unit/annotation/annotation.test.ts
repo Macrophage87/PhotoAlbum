@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
 import { annotationSchema, toStored } from "@/lib/annotation/schema";
 import { actualSpend, estimateCost } from "@/lib/annotation/pricing";
-import { describeItem, needsDateEstimate, requestParams } from "@/lib/annotation/request";
+import { describeItem, describePlaceItem, needsDateEstimate, requestParams } from "@/lib/annotation/request";
 import { applyAnnotation, parseMessageContent } from "@/lib/annotation/apply";
 import { BATCH_CHUNK, chunk, splitByBytes } from "@/lib/jobs/handlers/annotation-batch";
 import { thinkingParams } from "@/lib/annotation/client";
@@ -65,7 +65,7 @@ describe("annotation schema and pricing", () => {
 });
 
 describe("the text block", () => {
-  const base = { id: "p", kind: "PHOTO" as const, status: "READY" as const, storageKey: "k", renditions: null, videoRenditions: null, takenAt: new Date("2025-08-12T12:00:00Z"), takenAtSource: "EXIF_OFFSET" as const, tzOffsetMin: -240, camera: "iPhone 15", lat: null, lng: null, placeEstimatedAt: null, context: "lobster rolls on the mail boat", caption: null, title: null, durationS: null, trip: { title: "Acadia", timezone: "America/New_York" }, collections: [{ collection: { title: "Summer" } }] };
+  const base = { id: "p", kind: "PHOTO" as const, status: "READY" as const, storageKey: "k", renditions: null, videoRenditions: null, takenAt: new Date("2025-08-12T12:00:00Z"), takenAtSource: "EXIF_OFFSET" as const, tzOffsetMin: -240, camera: "iPhone 15", lat: null, lng: null, placeEstimatedAt: null, context: "lobster rolls on the mail boat", caption: null, title: null, annotation: null, durationS: null, trip: { title: "Acadia", timezone: "America/New_York" }, collections: [{ collection: { title: "Summer" } }] };
   it("includes notes, containers and the names rule, and asks for a date only when needed", () => {
     const text = describeItem(base, ["Sam"], false);
     expect(text).toContain("Notes from the person who uploaded it: lobster rolls");
@@ -76,6 +76,14 @@ describe("the text block", () => {
     expect(text).not.toContain("estimate a year");
     expect(describeItem(base, [], true)).toContain("do not name anyone");
     expect(describeItem(base, [], true)).toContain("Please estimate a year range");
+  });
+  it("hands back a title the family gave, never one the helper wrote last time", () => {
+    // The helper's own old title may name somebody who has since been forgotten or may no longer be named.
+    const helpers = { ...base, title: "Ada on the porch", annotation: { title: "Ada on the porch" } };
+    expect(describeItem(helpers, [], false)).not.toContain("Ada");
+    expect(describePlaceItem(helpers)).not.toContain("Ada");
+    const theirs = { ...base, title: "Grandma's 80th", annotation: { title: "A birthday cake" } };
+    expect(describeItem(theirs, [], false)).toContain("Title: Grandma's 80th");
   });
   it("wants a date estimate when the only date is the file or upload time", () => {
     expect(needsDateEstimate({ takenAt: new Date(), takenAtSource: "EXIF_OFFSET" })).toBe(false);
