@@ -83,11 +83,15 @@ function choose<T extends { source: string; uploaderId: string }>(tracks: T[], u
   if (ownGoogle.kind === "firm") return away(byDistance[0]) > TOGETHER_M ? ownGoogle : byDistance[0];
 
   // A guess defers only to a track close to it: never to one any distance away.
-  if (ownGoogle.kind === "soft") return away(byDistance[0]) > LOOSE_TOGETHER_M ? ownGoogle : byDistance[0];
+  const asGuess = () => (away(byDistance[0]) > LOOSE_TOGETHER_M ? ownGoogle : byDistance[0]);
+  if (ownGoogle.kind === "soft") return asGuess();
 
-  // A visit: its span is the run of visit points around the moment, its place where they sit.
+  // A visit: its span is the run of visit points around the moment, its place where they sit. A visit position is
+  // drawn from a visit point at or just after the moment; should neither be one (the trace's last point, say), there
+  // is no place to judge by, and the position is taken as a guess.
   const k = lastAtOrBefore(own, tMs);
-  const vi = own[k]?.filled === "visit" ? k : k + 1;
+  const vi = own[k]?.filled === "visit" ? k : own[k + 1]?.filled === "visit" ? k + 1 : -1;
+  if (vi < 0) return asGuess();
   let first = vi, last = vi;
   while (first > 0 && own[first - 1].filled === "visit") first--;
   while (last + 1 < own.length && own[last + 1].filled === "visit") last++;

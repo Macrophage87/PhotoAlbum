@@ -23,6 +23,9 @@ function between(a: TrackPoint, b: TrackPoint, t: number): TrackPoint {
  * one track's time range, so without that shared point the stretch across midnight would belong to neither day's
  * track. A longer gap (a night indoors, a flight) is left as a gap: a connector would only draw a line across it
  * and add its distance to the day.
+ *
+ * A day with fewer than two of the points it was given (a lone fix at 23:58) keeps only those: the point worked out at
+ * midnight would make it a track of nothing but the stretch to midnight, and the importer skips a day of one point.
  */
 export function splitByLocalDay(points: TrackPoint[], timezone: string): Map<LocalDay, TrackPoint[]> {
   const out = new Map<LocalDay, TrackPoint[]>();
@@ -47,14 +50,23 @@ export function splitByLocalDay(points: TrackPoint[], timezone: string): Map<Loc
     prev = p;
     prevDay = day;
   }
-  const days = [...out.values()];
+  // Only the points given count towards a day: not those worked out at midnight, nor a connector (added below).
+  const given = new Set(points);
+  const realCount = new Map<LocalDay, number>();
+  for (const [day, list] of out) {
+    const real = list.filter((p) => given.has(p));
+    realCount.set(day, real.length);
+    if (real.length < 2 && real.length < list.length) out.set(day, real);
+  }
+  const days = [...out.entries()];
   for (let i = 0; i + 1 < days.length; i++) {
-    const last = days[i][days[i].length - 1], next = days[i + 1][0];
+    const [day, list] = days[i];
+    const last = list[list.length - 1], next = days[i + 1][1][0];
     const gap = next.t - last.t;
     // Already joined at midnight above (the last instant before it, then midnight itself): nothing to bridge.
     if (gap <= 1) continue;
     // A day of one point is skipped on import anyway; a connector would make it a track of nothing but the gap.
-    if (days[i].length > 1 && gap <= MAX_INTERPOLATION_GAP_MS + MAX_SNAP_MS) days[i].push(next);
+    if (realCount.get(day)! > 1 && gap <= MAX_INTERPOLATION_GAP_MS + MAX_SNAP_MS) list.push(next);
   }
   return out;
 }
