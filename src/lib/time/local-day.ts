@@ -16,6 +16,27 @@ export function localDayInZone(instant: Date, timezone: string): LocalDay {
   return `${z.getFullYear()}-${pad(z.getMonth() + 1)}-${pad(z.getDate())}`;
 }
 
+/** The offset a photograph's clock is read on (see photoDay): its own, else the trip's zone at that instant, else UTC. */
+export function photoOffsetMin(instant: Date, tzOffsetMin: number | null, timezone?: string | null): number {
+  return tzOffsetMin ?? (timezone ? offsetMinutesInZone(instant, timezone) : 0);
+}
+
+/**
+ * The instant and offset for a wall-clock time typed for a photograph: on its own offset when it has one, else in
+ * the trip's zone (resolved as a wall time, so a date across a DST change gets that day's offset), else UTC.
+ */
+export function photoWallTimeToInstant(
+  wall: { year: number; month: number; day: number; hour: number; minute: number; second: number; ms?: number },
+  tzOffsetMin: number | null,
+  timezone?: string | null,
+): { takenAt: Date; tzOffsetMin: number } {
+  if (tzOffsetMin === null && timezone) {
+    const takenAt = wallTimeToInstant(wall, timezone);
+    return { takenAt, tzOffsetMin: offsetMinutesInZone(takenAt, timezone) };
+  }
+  return { takenAt: wallTimeWithOffsetToInstant(wall, tzOffsetMin ?? 0), tzOffsetMin: tzOffsetMin ?? 0 };
+}
+
 /**
  * Today's date on the clock of whoever is running this: for a default typed into a form in the browser, where
  * `toISOString().slice(0, 10)` would be the UTC day (tomorrow, on an American evening). Not for server rendering.

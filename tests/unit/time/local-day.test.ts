@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { localDayFromOffset, localDayInZone, offsetMinutesInZone, parseOffsetString, localToday, photoDay, wallTimeToInstant } from "@/lib/time/local-day";
+import { localDayFromOffset, localDayInZone, offsetMinutesInZone, parseOffsetString, localToday, photoDay, photoOffsetMin, photoWallTimeToInstant, wallTimeToInstant } from "@/lib/time/local-day";
 import { formatDayRange } from "@/lib/time/format";
 
 describe("local day helpers", () => {
@@ -55,5 +55,32 @@ describe("today, for a form's default date (#127)", () => {
       if (prev === undefined) delete process.env.TZ;
       else process.env.TZ = prev;
     }
+  });
+});
+
+describe("the clock a photograph is read and set on", () => {
+  const at = new Date("2025-08-12T16:00:00Z");
+
+  it("reads its own offset first, then the trip's zone, then UTC (applyReportedDate, shiftPhotoTimezone)", () => {
+    expect(photoOffsetMin(at, -420, "America/New_York")).toBe(-420);
+    expect(photoOffsetMin(at, null, "America/New_York")).toBe(-240);
+    expect(photoOffsetMin(at, null, null)).toBe(0);
+  });
+
+  it("resolves a typed time in the trip's zone on that day's side of a DST change (setPhotoDate)", () => {
+    // 3 AM on Nov 2, 2025 in New York is EST (the clocks went back at 2 AM). Reading the zone's offset at 03:00Z,
+    // as the old code did, lands on the evening before, still EDT, and put the photograph an hour early.
+    const wall = { year: 2025, month: 11, day: 2, hour: 3, minute: 0, second: 0 };
+    const r = photoWallTimeToInstant(wall, null, "America/New_York");
+    expect(r.tzOffsetMin).toBe(-300);
+    expect(r.takenAt.toISOString()).toBe("2025-11-02T08:00:00.000Z");
+    const spring = photoWallTimeToInstant({ year: 2025, month: 3, day: 9, hour: 12, minute: 0, second: 0 }, null, "America/New_York");
+    expect(spring.tzOffsetMin).toBe(-240);
+    expect(spring.takenAt.toISOString()).toBe("2025-03-09T16:00:00.000Z");
+  });
+
+  it("keeps the photograph's own offset when it has one", () => {
+    const r = photoWallTimeToInstant({ year: 2025, month: 8, day: 12, hour: 12, minute: 0, second: 0 }, -420, "America/New_York");
+    expect(r).toEqual({ takenAt: new Date("2025-08-12T19:00:00Z"), tzOffsetMin: -420 });
   });
 });

@@ -15,7 +15,7 @@ import { enqueue } from "@/lib/jobs/boss";
 import { QUEUES } from "@/lib/jobs/queues";
 import { pickActivityByTime, whoWasThere } from "@/lib/photos/assign";
 import { applyPhotoInstant } from "@/lib/photos/apply-date";
-import { offsetMinutesInZone, wallTimeWithOffsetToInstant } from "@/lib/time/local-day";
+import { offsetMinutesInZone, photoOffsetMin, photoWallTimeToInstant } from "@/lib/time/local-day";
 import { storage } from "@/lib/storage";
 import { readExif, resolveTakenAt } from "@/lib/images/exif";
 import { parseLatLng, placeNameOf } from "@/lib/geo/parse";
@@ -153,7 +153,8 @@ export async function shiftPhotoTimezone(id: string, fd: FormData): Promise<void
     newOffset = Number(raw);
     if (!Number.isFinite(newOffset) || Math.abs(newOffset) > 14 * 60) return;
   }
-  const oldOffset = photo.tzOffsetMin ?? 0;
+  // The clock it was shown on: its own offset, else the trip's zone (what the page displayed), not UTC.
+  const oldOffset = photoOffsetMin(photo.takenAt, photo.tzOffsetMin, photo.trip?.timezone);
   const takenAt = new Date(photo.takenAt.getTime() + (oldOffset - newOffset) * 60_000);
   await applyPhotoInstant(photo, takenAt, newOffset, "MANUAL", user.id);
   revalidatePath(`/photos/${id}`);
@@ -176,8 +177,7 @@ export async function setPhotoDate(id: string, fd: FormData): Promise<DateResult
   if (!m) return { ok: false, message: "Enter a date and time" };
   const wall = { year: Number(m[1]), month: Number(m[2]), day: Number(m[3]), hour: Number(m[4]), minute: Number(m[5]), second: Number(m[6] ?? 0) };
   if (wall.year < 1800 || wall.year > 2100) return { ok: false, message: "That year looks wrong" };
-  const tzOffsetMin = photo.tzOffsetMin ?? (photo.trip ? offsetMinutesInZone(wallTimeWithOffsetToInstant(wall, 0), photo.trip.timezone) : 0);
-  const takenAt = wallTimeWithOffsetToInstant(wall, tzOffsetMin);
+  const { takenAt, tzOffsetMin } = photoWallTimeToInstant(wall, photo.tzOffsetMin, photo.trip?.timezone);
   await applyPhotoInstant(photo, takenAt, tzOffsetMin, "MANUAL", user.id);
   revalidatePath(`/photos/${id}`);
   revalidatePath("/trips", "layout");
@@ -331,7 +331,8 @@ export async function applyReportedDate(id: string, iso: string): Promise<DateGu
   if (Number.isNaN(at.getTime())) return { ok: false, message: "That is not a date" };
   const photo = await db.photo.findUnique({ where: { id }, select: { id: true, tripId: true, gpsSource: true, activityId: true, activitySetById: true, tzOffsetMin: true, trip: { select: { timezone: true } } } });
   if (!photo) return { ok: false, message: "Photo not found" };
-  const offset = photo.trip ? offsetMinutesInZone(at, photo.trip.timezone) : photo.tzOffsetMin ?? 0;
+  // The one rule for a photograph's clock: its own offset, else the trip's zone at that instant, else UTC.
+  const offset = photoOffsetMin(at, photo.tzOffsetMin, photo.trip?.timezone);
   await applyPhotoInstant(photo, at, offset, "MANUAL", user.id);
   return { ok: true, takenAt: at.toISOString(), tzOffsetMin: offset, source: "MANUAL", setBy: uploaderLabel(user.name, user.email) };
 }

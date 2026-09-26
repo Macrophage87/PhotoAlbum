@@ -40,7 +40,7 @@ import { uploaderLabel } from "@/components/photos/toGrid";
 import { YouTubeEmbed } from "@/components/videos/YouTubeEmbed";
 import { updateExternalVideo } from "@/app/videos/actions";
 import { Input } from "@/components/ui";
-import { localDayFromOffset, offsetMinutesInZone } from "@/lib/time/local-day";
+import { localDayFromOffset, photoOffsetMin } from "@/lib/time/local-day";
 import { AnnotationCard } from "@/components/annotation/AnnotationCard";
 import { EstimatedDate } from "@/components/annotation/EstimatedDate";
 import { annotationGates, optOutReason } from "@/lib/annotation/eligibility";
@@ -103,7 +103,7 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
   const isClip = photo.kind === "VIDEO";
   const updateVideo = updateExternalVideo.bind(null, id);
   // Its clock as the page shows it, and as setPhotoDate reads a typed time back: own offset, else the trip's zone.
-  const wallOffset = photo.takenAt ? (photo.tzOffsetMin ?? offsetMinutesInZone(photo.takenAt, photo.trip?.timezone ?? "UTC")) : 0;
+  const wallOffset = photo.takenAt ? photoOffsetMin(photo.takenAt, photo.tzOffsetMin, photo.trip?.timezone) : 0;
   const filmedDay = photo.takenAt ? localDayFromOffset(photo.takenAt, wallOffset) : "";
 
   return (
