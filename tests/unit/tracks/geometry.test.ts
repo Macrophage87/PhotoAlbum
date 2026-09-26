@@ -61,18 +61,35 @@ describe("splitByLocalDay", () => {
 
   it("ends each day on the next day's first point, so the stretch across midnight is covered (#120)", () => {
     const pts: TrackPoint[] = [
-      { t: Date.parse("2025-08-13T03:55:00Z"), lat: 44, lng: -68 }, // 23:55 on the 12th in New York
+      { t: Date.parse("2025-08-13T03:40:00Z"), lat: 43.99, lng: -68 }, // 23:40 on the 12th in New York
+      { t: Date.parse("2025-08-13T03:55:00Z"), lat: 44, lng: -68 }, // 23:55
       { t: Date.parse("2025-08-13T04:04:00Z"), lat: 44.01, lng: -68 }, // 00:04 on the 13th
       { t: Date.parse("2025-08-13T05:00:00Z"), lat: 44.02, lng: -68 },
     ];
     const m = splitByLocalDay(pts, "America/New_York");
     const day1 = m.get("2025-08-12")!;
-    expect(day1.map((p) => p.t)).toEqual([pts[0].t, pts[1].t]);
-    expect(m.get("2025-08-13")!.map((p) => p.t)).toEqual([pts[1].t, pts[2].t]);
+    expect(day1.map((p) => p.t)).toEqual([pts[0].t, pts[1].t, pts[2].t]);
+    expect(m.get("2025-08-13")!.map((p) => p.t)).toEqual([pts[2].t, pts[3].t]);
     // A photograph at 23:59 now falls inside the first day's track and is interpolated across the gap.
     const at = Date.parse("2025-08-13T03:59:00Z");
     expect(at).toBeLessThanOrEqual(day1[day1.length - 1].t);
     expect(positionAt(day1, at)?.lat).toBeCloseTo(44 + 0.01 * (4 / 9), 6);
+  });
+
+  it("draws no connector across a long gap or from a day of a single point", () => {
+    const night: TrackPoint[] = [
+      { t: Date.parse("2025-08-13T02:00:00Z"), lat: 40.7, lng: -74 }, // 22:00 in New York
+      { t: Date.parse("2025-08-13T03:00:00Z"), lat: 40.7, lng: -74 }, // 23:00
+      { t: Date.parse("2025-08-13T12:00:00Z"), lat: 34, lng: -118 }, // 08:00 the next day, across the country
+      { t: Date.parse("2025-08-13T12:10:00Z"), lat: 34, lng: -118 },
+    ];
+    expect(splitByLocalDay(night, "America/New_York").get("2025-08-12")).toHaveLength(2);
+    const lone: TrackPoint[] = [
+      { t: Date.parse("2025-08-13T03:58:00Z"), lat: 44, lng: -68 }, // 23:58, the day's only point
+      { t: Date.parse("2025-08-13T04:02:00Z"), lat: 44, lng: -68 },
+      { t: Date.parse("2025-08-13T04:10:00Z"), lat: 44, lng: -68 },
+    ];
+    expect(splitByLocalDay(lone, "America/New_York").get("2025-08-12")).toHaveLength(1);
   });
 });
 
