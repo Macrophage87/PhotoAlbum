@@ -36,8 +36,8 @@ is the difference between sharing data and quietly corrupting it.
 **The install marker.** `.album-install-id` at the media root names the album and the database it belongs to (the
 same as `AppSetting.installId` and `installBinding`). The album cleans nothing up in a media folder whose marker does
 not match its database, so copy the dot file along with everything else (`rsync -a` and `tar -C … .` both do). If it
-is left behind, the Admin page says so, and restarting the worker with the right database connected writes it
-again. Moving the media leaves the database where it is, so nothing
+is left behind, the Admin page asks for the storage to be claimed (**Claim this storage**), which works as long as
+the album's own database knows what is there. Moving the media leaves the database where it is, so nothing
 else changes. See [DEPLOY.md §9](DEPLOY.md#the-install-marker) for the other cases.
 
 Check how much you are about to move:
@@ -310,7 +310,7 @@ docker compose up -d app
 The dump brings the live album's install id and binding into staging's database, so after each refresh the staging
 Admin page says the storage is bound to another database and staging cleans nothing up. Its storage is its own copy,
 and its marker (kept out of the rsync) carries staging's own heartbeat, so re-bind it there (**Re-bind the storage to
-this database**) after each refresh. Never do that on a staging site that shares the live folder; the live album's
+this database**; the first time, when the copy has no marker yet, **Claim this storage**) after each refresh. Never do that on a staging site that shares the live folder; the live album's
 heartbeat stops it there anyway. A copy costs a second full-size library. If that is what the new drive was for, option A is
 the reason to prefer it.
 

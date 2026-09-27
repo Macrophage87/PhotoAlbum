@@ -15,7 +15,7 @@ const jobs = vi.hoisted(() => ({ importKeys: new Set<string>() as Set<string> | 
 vi.mock("@/lib/jobs/live", () => ({ liveImportKeys: async () => jobs.importKeys }));
 
 import { IMPORT_ABANDONED_MS, ORPHAN_FOLDER_MS, QUARANTINE_KEEP_MS, QUARANTINE_MANIFEST, emptyQuarantine, findOrphanPhotoFolders, quarantineOrphanPhotoFolders, recordOrphanPhotoFolders, sweepImportFiles } from "@/lib/storage/sweep";
-import { databaseBinding, ensureInstallIdentity, HEARTBEAT_STALE_MS, INSTALL_MARKER, installIdentity, rebindInstall, touchHeartbeat } from "@/lib/storage/identity";
+import { databaseBinding, ensureInstallIdentity, forgetCoverage, HEARTBEAT_STALE_MS, INSTALL_MARKER, installIdentity, rebindInstall, touchHeartbeat } from "@/lib/storage/identity";
 
 const now = new Date("2026-09-27T12:00:00Z");
 const DAY = 86_400_000;
@@ -26,6 +26,8 @@ function file(key: string, ageMs: number): string {
   writeFileSync(full, "x");
   const t = new Date(now.getTime() - ageMs);
   utimesSync(full, t, t);
+  // A photo's folder was last written when its file was.
+  if (key.startsWith("photos/")) utimesSync(path.dirname(full), t, t);
   return full;
 }
 let n = 0;
@@ -40,6 +42,7 @@ async function freshInstall() {
   await resetTestDb();
   for (const entry of readdirSync(root)) rmSync(path.join(root, entry), { recursive: true, force: true });
   jobs.importKeys = new Set();
+  forgetCoverage();
   expect((await ensureInstallIdentity()).ok).toBe(true);
 }
 
@@ -56,11 +59,29 @@ describe("the install marker", { timeout: 30_000 }, () => {
     expect(JSON.parse(readFileSync(marker(), "utf8"))).toMatchObject({ installId: written.installId, binding: written.binding });
   });
 
+  /** An album on code from before the marker: its photo folders and rows, and no marker. */
+  async function unmarkedAlbum(count: number, ageMs = 30 * DAY) {
+    const uploaderId = (await db.user.create({ data: { email: `old-${++n}@example.com` } })).id;
+    const ids = Array.from({ length: count }, () => cuid());
+    for (const id of ids) file(`photos/${id}/original.jpg`, ageMs);
+    await db.photo.createMany({ data: ids.map((id) => ({ id, uploaderId, originalName: "a.jpg", mimeType: "image/jpeg", storageKey: `photos/${id}`, originalPath: `photos/${id}/original.jpg`, sizeBytes: 1, status: "READY" as const })) });
+    rmSync(marker());
+    await db.appSetting.deleteMany();
+    forgetCoverage();
+    return { ids, uploaderId };
+  }
+
   it("is not claimed by an empty database facing media that is already there", async () => {
     rmSync(marker());
     await db.appSetting.deleteMany();
     file(`photos/${cuid()}/original.jpg`, DAY);
     expect(await ensureInstallIdentity()).toMatchObject({ ok: false, kind: "unknown-files", problem: expect.stringContaining("This storage holds files this album's database does not know.") });
+    expect(existsSync(marker())).toBe(false);
+  });
+
+  it("is never claimed by itself once it holds media, however well the database knows it", async () => {
+    await unmarkedAlbum(60);
+    expect(await ensureInstallIdentity(now)).toMatchObject({ ok: false, kind: "unclaimed" });
     expect(existsSync(marker())).toBe(false);
   });
 
@@ -79,54 +100,97 @@ describe("the install marker", { timeout: 30_000 }, () => {
     const r = await ensureInstallIdentity(now);
     expect(r).toMatchObject({ ok: false, kind: "unknown-files", problem: expect.stringMatching(/1 of 61 photo folders/) });
     expect(existsSync(marker())).toBe(false);
-    // Its hourly sweep leaves live's file alone, and its admin cannot re-bind the root to it either.
+    // Its hourly sweep leaves live's file alone, and its admin cannot claim the root for it either.
     expect(await sweepImportFiles(now)).toBe(0);
     expect(existsSync(gpx)).toBe(true);
-    expect(await rebindInstall(now)).toMatchObject({ ok: false, message: expect.stringMatching(/does not know/) });
+    expect(await rebindInstall(now)).toMatchObject({ ok: false, message: expect.stringMatching(/^Not claimed\..*does not know/) });
     expect(existsSync(marker())).toBe(false);
   });
 
+  it("is not claimed by a staging clone while live, on the old code, is still adding files", async () => {
+    // Live on main: sixty photos and a GPX kept with its track, no marker, no heartbeat. Staging's database is a
+    // clone of live's, so it has every one of those rows, and boots this code against the same root.
+    const { uploaderId } = await unmarkedAlbum(60);
+    const trip = await db.trip.create({ data: { slug: "t", title: "T", startDate: now, endDate: now, createdById: uploaderId } });
+    const keptGpx = uuidName("gpx");
+    const gpxFile = file(`imports/${keptGpx}`, 30 * DAY);
+    await db.track.create({ data: { tripId: trip.id, uploaderId, source: "GPX", name: "Walk", originalFile: `imports/${keptGpx}`, startTime: now, endTime: now, pointCount: 0, minLat: 0, maxLat: 0, minLng: 0, maxLng: 0, simplified: [], pointsBlob: new Uint8Array() } });
+    expect(await ensureInstallIdentity(now)).toMatchObject({ ok: false, kind: "unclaimed" });
+    expect(existsSync(marker())).toBe(false);
+    expect(await sweepImportFiles(now)).toBe(0);
+    expect(await recordOrphanPhotoFolders(now)).toBeNull();
+    expect(existsSync(gpxFile)).toBe(true);
+    // Live adds a photo, then a GPX, twenty minutes ago: staging knows neither, and its claim is refused each time.
+    const newPhoto = cuid();
+    file(`photos/${newPhoto}/original.jpg`, 20 * 60_000);
+    expect(await rebindInstall(now)).toMatchObject({ ok: false, message: "Not claimed. Files were added here 20 minutes ago that this database doesn't know. Another album is still using this storage; stop it first." });
+    rmSync(path.join(root, "photos", newPhoto), { recursive: true });
+    const newGpx = uuidName("gpx");
+    file(`imports/${newGpx}`, 20 * 60_000);
+    expect(await rebindInstall(now)).toMatchObject({ ok: false, message: expect.stringMatching(/Files were added here 20 minutes ago/) });
+    expect(existsSync(marker())).toBe(false);
+    // Live, promoted, knows its own new photo and GPX (here: the same database, now with their rows), and claims.
+    file(`photos/${newPhoto}/original.jpg`, 20 * 60_000);
+    await db.photo.create({ data: { id: newPhoto, uploaderId, originalName: "b.jpg", mimeType: "image/jpeg", storageKey: `photos/${newPhoto}`, originalPath: `photos/${newPhoto}/original.jpg`, sizeBytes: 1, status: "READY" } });
+    await db.track.create({ data: { tripId: trip.id, uploaderId, source: "GPX", name: "Ride", originalFile: `imports/${newGpx}`, startTime: now, endTime: now, pointCount: 0, minLat: 0, maxLat: 0, minLng: 0, maxLng: 0, simplified: [], pointsBlob: new Uint8Array() } });
+    expect(await rebindInstall(now)).toMatchObject({ ok: true, message: expect.stringMatching(/^The storage is claimed/) });
+    expect(await installIdentity(now)).toMatchObject({ ok: true });
+  });
+
   it("is claimed for an album from before the marker only when the database accounts for the files", async () => {
-    const uploaderId = (await db.user.create({ data: { email: "old@example.com" } })).id;
-    const ids = Array.from({ length: 20 }, () => cuid());
+    const { ids, uploaderId } = await unmarkedAlbum(0);
+    for (let i = 0; i < 20; i++) ids.push(cuid());
     for (const id of ids) file(`photos/${id}/original.jpg`, 30 * DAY);
     const addRows = (list: string[]) => db.photo.createMany({ data: list.map((id) => ({ id, uploaderId, originalName: "a.jpg", mimeType: "image/jpeg", storageKey: `photos/${id}`, originalPath: `photos/${id}/original.jpg`, sizeBytes: 1, status: "READY" as const })) });
-    rmSync(marker());
-    await db.appSetting.deleteMany();
     // Eighteen of twenty is under 95%; nineteen is not.
     await addRows(ids.slice(0, 18));
-    expect((await ensureInstallIdentity(now)).ok).toBe(false);
+    expect(await rebindInstall(now)).toMatchObject({ ok: false, message: expect.stringMatching(/18 of 20 photo folders/) });
     await addRows(ids.slice(18, 19));
-    expect((await ensureInstallIdentity(now)).ok).toBe(true);
+    expect(await rebindInstall(now)).toMatchObject({ ok: true });
     expect(existsSync(marker())).toBe(true);
   });
 
   it("is claimed for a healthy album whose imports/ holds an old failed upload, which the sweep then clears", async () => {
-    const uploaderId = (await db.user.create({ data: { email: "old@example.com" } })).id;
-    const ids = Array.from({ length: 60 }, () => cuid());
-    for (const id of ids) file(`photos/${id}/original.jpg`, 30 * DAY);
-    await db.photo.createMany({ data: ids.map((id) => ({ id, uploaderId, originalName: "a.jpg", mimeType: "image/jpeg", storageKey: `photos/${id}`, originalPath: `photos/${id}/original.jpg`, sizeBytes: 1, status: "READY" as const })) });
+    await unmarkedAlbum(60);
     // Main never deleted a FIT file that gave no tracks.
     const stray = file(`imports/${uuidName("fit")}`, 300 * DAY);
-    rmSync(marker());
-    await db.appSetting.deleteMany();
-    expect((await ensureInstallIdentity(now)).ok).toBe(true);
+    expect(await rebindInstall(now)).toMatchObject({ ok: true });
     expect(await sweepImportFiles(now)).toBe(1);
     expect(existsSync(stray)).toBe(false);
   });
 
   it("weighs the uploaded track files of an album that has no photos at all", async () => {
-    const user = await db.user.create({ data: { email: "tracks@example.com" } });
-    const trip = await db.trip.create({ data: { slug: "t", title: "T", startDate: now, endDate: now, createdById: user.id } });
+    const { uploaderId } = await unmarkedAlbum(0);
+    const trip = await db.trip.create({ data: { slug: "t", title: "T", startDate: now, endDate: now, createdById: uploaderId } });
     const kept = uuidName("gpx");
     file(`imports/${kept}`, 30 * DAY);
     const stray = file(`imports/${uuidName("gpx")}`, 30 * DAY);
+    await db.track.create({ data: { tripId: trip.id, uploaderId, source: "GPX", name: "Walk", originalFile: `imports/${kept}`, startTime: now, endTime: now, pointCount: 0, minLat: 0, maxLat: 0, minLng: 0, maxLng: 0, simplified: [], pointsBlob: new Uint8Array() } });
+    expect(await rebindInstall(now)).toMatchObject({ ok: false, message: expect.stringMatching(/1 of 2 uploaded track files/) });
+    rmSync(stray);
+    expect(await rebindInstall(now)).toMatchObject({ ok: true });
+  });
+
+  it("is claimed by itself on a fresh, empty root", async () => {
     rmSync(marker());
     await db.appSetting.deleteMany();
-    await db.track.create({ data: { tripId: trip.id, uploaderId: user.id, source: "GPX", name: "Walk", originalFile: `imports/${kept}`, startTime: now, endTime: now, pointCount: 0, minLat: 0, maxLat: 0, minLng: 0, maxLng: 0, simplified: [], pointsBlob: new Uint8Array() } });
-    expect(await ensureInstallIdentity(now)).toMatchObject({ ok: false, problem: expect.stringMatching(/1 of 2 uploaded track files/) });
-    rmSync(stray);
+    // Not the album's own names: a folder somebody made there by hand does not make the root anybody's.
+    mkdirSync(path.join(root, "photos", "perf"), { recursive: true });
     expect((await ensureInstallIdentity(now)).ok).toBe(true);
+    expect(existsSync(marker())).toBe(true);
+  });
+
+  it("blocks a claim on a heartbeat that is there but cannot be read", async () => {
+    const { installId } = JSON.parse(readFileSync(marker(), "utf8")) as { installId: string };
+    const other = "7000000000000000001:photoalbum";
+    await db.appSetting.update({ where: { id: "app" }, data: { installBinding: other } });
+    for (const garbled of [{ heartbeatBinding: other, heartbeatAt: "yesterday-ish" }, { heartbeatAt: new Date(now.getTime() - 90 * DAY).toISOString() }, { heartbeatBinding: other, heartbeatAt: 12 }]) {
+      writeFileSync(marker(), JSON.stringify({ installId, binding: other, ...garbled }));
+      expect(await rebindInstall(now)).toMatchObject({ ok: false, message: expect.stringMatching(/heartbeat that cannot be read/) });
+    }
+    // Only one with no heartbeat at all says nobody else is using it.
+    writeFileSync(marker(), JSON.stringify({ installId, binding: other }));
+    expect(await rebindInstall(now)).toMatchObject({ ok: true });
   });
 
   it("is written into a storage root that does not exist yet", async () => {
@@ -200,15 +264,12 @@ describe("the install marker", { timeout: 30_000 }, () => {
     }
   });
 
-  it("is written for an album from before the marker, whose database has its photos", async () => {
-    rmSync(marker());
-    await db.appSetting.deleteMany();
-    const uploaderId = (await db.user.create({ data: { email: "old@example.com" } })).id;
-    const id = cuid();
-    await db.photo.create({ data: { id, uploaderId, originalName: "a.jpg", mimeType: "image/jpeg", storageKey: `photos/${id}`, originalPath: `photos/${id}/original.jpg`, sizeBytes: 1, status: "READY" } });
-    file(`photos/${id}/original.jpg`, DAY);
-    expect((await ensureInstallIdentity()).ok).toBe(true);
+  it("is written when an admin claims an album from before the marker, and says so on the Admin page until then", async () => {
+    await unmarkedAlbum(1, DAY);
+    expect(await installIdentity(now)).toMatchObject({ ok: false, kind: "unclaimed" });
+    expect(await rebindInstall(now)).toMatchObject({ ok: true, message: expect.stringMatching(/^The storage is claimed: it is now this database's \(1 of 1 photo folders/) });
     expect(existsSync(marker())).toBe(true);
+    expect((await ensureInstallIdentity(now)).ok).toBe(true);
   });
 
   it("refuses another database of this album, and lets an admin re-bind after a genuine move once the files are accounted for", async () => {

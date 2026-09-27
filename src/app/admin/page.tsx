@@ -234,7 +234,7 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
         {(!identity.ok || storageFindings?.orphanFolderCount || quarantine.length > 0) && (
           <section className="space-y-3">
             <h2 className="font-display text-xl font-semibold mb-1">Storage</h2>
-            {!identity.ok && <StorageIdentityNotice kind={identity.kind} problem={identity.problem} blockedUntil={rebindBlock ? utcStamp(rebindBlock.until) : null} lastUsedMinutes={rebindBlock?.minutesAgo ?? null} keepHours={HEARTBEAT_STALE_MS / 3600_000} />}
+            {!identity.ok && <StorageIdentityNotice kind={identity.kind} problem={identity.problem} block={!rebindBlock ? null : "unreadable" in rebindBlock ? "unreadable" : { minutesAgo: rebindBlock.minutesAgo, until: utcStamp(rebindBlock.until) }} waitHours={HEARTBEAT_STALE_MS / 3600_000} />}
             <OrphanFoldersAdmin count={identity.ok ? (storageFindings?.orphanFolderCount ?? 0) : 0} sample={storageFindings?.orphanFolderSample ?? []} checkedAt={storageFindings?.orphanFoldersCheckedAt?.toISOString() ?? null} quarantine={quarantine} keepDays={QUARANTINE_KEEP_MS / 86_400_000} />
           </section>
         )}

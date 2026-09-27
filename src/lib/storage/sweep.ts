@@ -5,7 +5,7 @@ import { storage } from "@/lib/storage";
 import { liveImportKeys } from "@/lib/jobs/live";
 import { inboxDir } from "@/lib/takeout/inbox";
 import { installIdentity, touchHeartbeat } from "./identity";
-import { IMPORT_ABANDONED_MS, IMPORT_NAME, PHOTO_FOLDER } from "./layout";
+import { IMPORT_ABANDONED_MS, IMPORT_NAME, newestWrite, PHOTO_FOLDER } from "./layout";
 
 // A Google export among the track files is years of somebody's whereabouts, so it is not kept for ever by accident.
 export { IMPORT_ABANDONED_MS };
@@ -74,17 +74,6 @@ type Manifest = Record<string, string>;
 const SAMPLE = 20;
 
 const DAY_FOLDER = /^\d{4}-\d{2}-\d{2}$/;
-
-/** The latest write anywhere in a folder, in epoch ms. */
-async function newestWrite(folder: string): Promise<number> {
-  const own = await stat(folder).catch(() => null);
-  let latest = own?.mtimeMs ?? Infinity;
-  for (const entry of await readdir(folder, { withFileTypes: true }).catch(() => [])) {
-    const full = path.join(folder, entry.name);
-    latest = Math.max(latest, entry.isDirectory() ? await newestWrite(full) : ((await stat(full).catch(() => null))?.mtimeMs ?? latest));
-  }
-  return latest;
-}
 
 export type OrphanScan = { ok: false; problem: string } | { ok: true; orphans: string[]; folders: number };
 
