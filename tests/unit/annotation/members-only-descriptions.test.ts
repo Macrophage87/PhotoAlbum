@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { db } from "@/lib/db";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { resetTestDb } from "../helpers/reset";
 
 const who = vi.hoisted(() => ({ id: "", reply: "", queued: [] as { queue: string; data: unknown }[] }));
@@ -176,12 +178,16 @@ describe("descriptions that stay in the family", () => {
   });
 
   it("never takes a title a member typed before the album kept track, whoever it names", async () => {
-    // As the members_only_text migration leaves a photograph from before it: notes, so members-only; the helper's
-    // title moved aside; the member's own title, naming somebody the album knows, of unknown origin.
+    // A photograph from before the members_only_text migration: notes, the helper's title in its record, and the
+    // member's own title naming somebody the album knows. The migration's own pass then runs over it.
     await db.person.create({ data: { name: "Rose", createdById: who.id } });
     const helper = { title: "Helper title", caption: "The hut", description: "", tags: [], searchSummary: "" };
-    const p = await photo({ context: "Rose's hut", title: "Rose at the hut", titleByHelper: null, membersTitle: "Helper title", annotationMembersOnly: true, annotation: helper });
+    const p = await photo({ context: "Rose's hut", title: "Rose at the hut", annotation: helper });
+    const migration = readFileSync(path.join(process.cwd(), "prisma/migrations/20260926120100_members_only_text/migration.sql"), "utf8");
+    await db.$executeRawUnsafe(migration.match(/^DO \$\$[\s\S]*?^END \$\$;/m)![0]);
     const titles = async () => db.photo.findUniqueOrThrow({ where: { id: p.id }, select: { title: true, membersTitle: true, titleByHelper: true } });
+    // Members-only, the helper's title moved aside, the member's of unknown origin.
+    expect(await titles()).toEqual({ title: "Rose at the hut", membersTitle: "Helper title", titleByHelper: null });
     // The worker's first sweep.
     await rejudgeSweep();
     expect(await titles()).toEqual({ title: "Rose at the hut", membersTitle: "Helper title", titleByHelper: null });
