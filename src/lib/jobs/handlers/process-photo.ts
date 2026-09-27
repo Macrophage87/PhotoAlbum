@@ -16,7 +16,7 @@ import { pickTripByDay, whoWasThere } from "@/lib/photos/assign";
 import { pickTripByCoverage } from "@/lib/photos/trip-by-coverage";
 import { activityFor } from "@/lib/activities/reassign";
 import { dateByHand, dateMovedSince, lockedPhoto, offsetForKeptDate, placeByHand, tripChangedSinceQueued } from "@/lib/photos/member-owned";
-import { localDayFromOffset, offsetMinutesInZone } from "@/lib/time/local-day";
+import { localDayFromOffset, offsetMinutesInZone, photoOffsetMin } from "@/lib/time/local-day";
 import { enqueue } from "../boss";
 import { QUEUES, type ProcessPhotoJob } from "../queues";
 import { enqueueEmbedding } from "./embed-photo";
@@ -75,18 +75,21 @@ export async function processPhoto(job: ProcessPhotoJob, signal?: AbortSignal): 
       // Taken off its trip meanwhile: only the date and status are written, not filed onto a trip again by the date.
       // One moved to another trip is still filed onto that trip's activity by its date (its trip is kept either way).
       const held = scan.tripId === null && (tripHeld || scan.tripId !== photo.tripId);
+      // With no offset of its own, an instant is read on its trip's clock (see `photoOffsetMin`), never as UTC.
+      const zone = scan.tripId ? (await db.trip.findUnique({ where: { id: scan.tripId }, select: { timezone: true } }))?.timezone : null;
       // A date somebody gave it (by hand, or Google's own record) is kept: the file's modified time is only a guess.
       if (vouchedDate(scan)) {
         await db.photo.update({ where: { id: scan.id }, data: { status: "READY" } });
-        if (!held) await applyPhotoInstant(scan, scan.takenAt!, scan.tzOffsetMin ?? 0, scan.takenAtSource!, scan.dateSetById, { geotag: false });
+        if (!held) await applyPhotoInstant(scan, scan.takenAt!, photoOffsetMin(scan.takenAt!, scan.tzOffsetMin, zone), scan.takenAtSource!, scan.dateSetById, { geotag: false });
         return;
       }
       const mtimeHeader = (scan.exif as { fileLastModified?: number } | null)?.fileLastModified;
       const s = mtimeHeader && Number.isFinite(mtimeHeader) ? null : await stat(localPath).catch(() => null);
       const takenAt = mtimeHeader && Number.isFinite(mtimeHeader) ? new Date(mtimeHeader) : s ? s.mtime : scan.createdAt;
       const takenAtSource = mtimeHeader && Number.isFinite(mtimeHeader) ? "FILE_MTIME" : s ? "FILE_MTIME" : "UPLOAD_TIME";
-      await db.photo.update({ where: { id: scan.id }, data: { status: "READY", takenAt, takenAtSource, tzOffsetMin: scan.tzOffsetMin ?? 0 } });
-      if (!held) await applyPhotoInstant(scan, takenAt, scan.tzOffsetMin ?? 0, takenAtSource, null, { geotag: false });
+      const tzOffsetMin = photoOffsetMin(takenAt, scan.tzOffsetMin, zone);
+      await db.photo.update({ where: { id: scan.id }, data: { status: "READY", takenAt, takenAtSource, tzOffsetMin } });
+      if (!held) await applyPhotoInstant(scan, takenAt, tzOffsetMin, takenAtSource, null, { geotag: false });
       return;
     }
 
@@ -132,7 +135,10 @@ export async function processPhoto(job: ProcessPhotoJob, signal?: AbortSignal): 
       // A Takeout sidecar's date is authoritative (Google's own record of the capture time); EXIF supplies the zone.
       if (photo.takenAtSource === "SIDECAR" && photo.takenAt) r = sidecarResolution(photo.takenAt, r, exif, timezone, photo.gpsSource === "SIDECAR" ? { lat: photo.lat, lng: photo.lng } : null);
       // A date a member set by hand is their answer to "the camera was wrong": re-reading the camera does not undo it.
-      if (photo.takenAtSource === "MANUAL" && photo.takenAt) r = { takenAt: photo.takenAt, tzOffsetMin: photo.tzOffsetMin ?? 0, source: "MANUAL", wallDay: localDayFromOffset(photo.takenAt, photo.tzOffsetMin ?? 0) };
+      if (photo.takenAtSource === "MANUAL" && photo.takenAt) {
+        const tzOffsetMin = photoOffsetMin(photo.takenAt, photo.tzOffsetMin, timezone);
+        r = { takenAt: photo.takenAt, tzOffsetMin, source: "MANUAL", wallDay: localDayFromOffset(photo.takenAt, tzOffsetMin) };
+      }
       return r;
     };
     let resolved = resolveIn(trip?.timezone ?? null);

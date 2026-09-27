@@ -5,6 +5,7 @@ import { isAdmin } from "@/lib/auth/ownership";
 import type { ViewerUser } from "@/lib/auth/viewer";
 import { photoUrl } from "@/lib/photos/urls";
 import { readableTitle } from "@/lib/photos/readable-text";
+import { photoDay } from "@/lib/time/local-day";
 
 /**
  * The photographs waiting to be put on the map.
@@ -16,7 +17,7 @@ import { readableTitle } from "@/lib/photos/readable-text";
 
 export const TRAY_PAGE = 60;
 
-export type TrayPhoto = { id: string; thumbUrl: string; label: string; takenAt: string | null; tripTitle: string | null; guess: string | null; lat: number | null; lng: number | null };
+export type TrayPhoto = { id: string; thumbUrl: string; label: string; takenAt: string | null; /** The day it was taken where it was taken (see `photoDay`). */ day: string | null; tripTitle: string | null; guess: string | null; lat: number | null; lng: number | null };
 
 export async function unplacedForTray(user: ViewerUser, opts: { tripId?: string | null; cursor?: string | null; take?: number } = {}): Promise<{ photos: TrayPhoto[]; nextCursor: string | null; total: number }> {
   const take = opts.take ?? TRAY_PAGE;
@@ -35,7 +36,7 @@ export async function unplacedForTray(user: ViewerUser, opts: { tripId?: string 
       orderBy: [{ takenAt: { sort: "asc", nulls: "last" } }, { createdAt: "asc" }, { id: "asc" }],
       take: take + 1,
       ...(opts.cursor ? { cursor: { id: opts.cursor }, skip: 1 } : {}),
-      select: { id: true, updatedAt: true, caption: true, title: true, membersTitle: true, originalName: true, takenAt: true, lat: true, lng: true, placeEstimateName: true, trip: { select: { title: true } } },
+      select: { id: true, updatedAt: true, caption: true, title: true, membersTitle: true, originalName: true, takenAt: true, tzOffsetMin: true, lat: true, lng: true, placeEstimateName: true, trip: { select: { title: true, timezone: true } } },
     }),
     db.photo.count({ where }),
   ]);
@@ -47,6 +48,7 @@ export async function unplacedForTray(user: ViewerUser, opts: { tripId?: string 
       thumbUrl: photoUrl(p, "thumb"),
       label: p.caption ?? readableTitle(p, true) ?? p.originalName,
       takenAt: p.takenAt?.toISOString() ?? null,
+      day: p.takenAt ? photoDay(p.takenAt, p.tzOffsetMin, p.trip?.timezone) : null,
       tripTitle: p.trip?.title ?? null,
       guess: p.lat !== null ? p.placeEstimateName ?? "somewhere guessed" : null,
       lat: p.lat,

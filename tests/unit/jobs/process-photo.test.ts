@@ -88,6 +88,30 @@ describe("re-processing keeps what a member chose", () => {
     expect(p.takenAt?.toISOString()).toBe("1985-06-01T15:00:00.000Z");
   });
 
+  it("reads a 3D scan's file time on its trip's clock, not as UTC (#144)", async () => {
+    const trip = await db.trip.create({ data: { slug: "la", title: "LA", timezone: "America/Los_Angeles", startDate: new Date("2025-12-29"), endDate: new Date("2026-01-02"), createdById: userId } });
+    // 11:30 PM on New Year's Eve in Los Angeles.
+    const id = await stage("scan.glb", { kind: "SCAN", tripId: trip.id, exif: { fileLastModified: Date.parse("2026-01-01T07:30:00Z") } }, "original.glb");
+    await processPhoto({ photoId: id, tripId: trip.id });
+    const p = await db.photo.findUniqueOrThrow({ where: { id } });
+    expect(p).toMatchObject({ status: "READY", takenAtSource: "FILE_MTIME", tzOffsetMin: -480, tripId: trip.id });
+    expect(p.takenAt?.toISOString()).toBe("2026-01-01T07:30:00.000Z");
+  });
+
+  it("keeps a hand-set date with no offset as set on a photograph, and gives a scan's its trip's offset (#144)", async () => {
+    const trip = await db.trip.create({ data: { slug: "la", title: "LA", timezone: "America/Los_Angeles", startDate: new Date("2025-12-29"), endDate: new Date("2026-01-02"), createdById: userId } });
+    // 11:30 PM on New Year's Eve in Los Angeles, set by hand with no offset of its own.
+    const nye = new Date("2026-01-01T07:30:00Z");
+    const photo = await stage("photo-with-gps.jpg", { tripId: trip.id, takenAt: nye, takenAtSource: "MANUAL", tzOffsetMin: null, dateSetById: userId });
+    const scan = await stage("scan.glb", { kind: "SCAN", tripId: trip.id, takenAt: nye, takenAtSource: "MANUAL", tzOffsetMin: null, dateSetById: userId }, "original.glb");
+    await processPhoto({ photoId: photo, tripId: trip.id });
+    await processPhoto({ photoId: scan, tripId: trip.id });
+    // A photograph's hand-set date is not written at all, so it keeps no offset and is read on its trip's clock.
+    expect(await db.photo.findUniqueOrThrow({ where: { id: photo } })).toMatchObject({ status: "READY", takenAt: nye, takenAtSource: "MANUAL", tzOffsetMin: null, tripId: trip.id });
+    // A scan's is written again, on its trip's clock rather than as UTC.
+    expect(await db.photo.findUniqueOrThrow({ where: { id: scan } })).toMatchObject({ status: "READY", takenAt: nye, takenAtSource: "MANUAL", tzOffsetMin: -480, tripId: trip.id });
+  });
+
   it("does not put back the file's GPS where a member cleared the place (#72)", async () => {
     const id = await stage("photo-with-gps.jpg", { lat: null, lng: null, gpsSource: null, placeSetById: userId });
     await processPhoto({ photoId: id });

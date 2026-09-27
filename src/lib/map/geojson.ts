@@ -11,7 +11,7 @@ import { Prisma } from "@/generated/prisma/client";
 import { filterIsActive, NO_FILTER, type GalleryFilter } from "@/lib/photos/filters";
 import { idsInLocalYear, idsMatching, intersectIds, type MatchScope } from "@/lib/photos/page";
 import { idsWithPerson } from "@/lib/people/in-photos";
-import { localDayFromOffset, localDayInZone } from "@/lib/time/local-day";
+import { localDayInZone, photoDay } from "@/lib/time/local-day";
 import { uploaderLabel } from "@/components/photos/toGrid";
 import { overviewLines } from "./overview";
 
@@ -26,7 +26,7 @@ export type TrackFeatureProps = { trackId: string; activityId: string | null; ac
 /** The day a photograph was taken where it was taken: its own clock's offset when it has one, else the trip's zone. */
 function dayOf(takenAt: Date | null, tzOffsetMin: number | null, timezone: string): string | null {
   if (!takenAt) return null;
-  return tzOffsetMin !== null ? localDayFromOffset(takenAt, tzOffsetMin) : localDayInZone(takenAt, timezone);
+  return photoDay(takenAt, tzOffsetMin, timezone);
 }
 
 type Uploader = { id: string; name: string | null; email: string } | null;

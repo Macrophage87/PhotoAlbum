@@ -13,6 +13,8 @@ export function localDayFromOffset(instant: Date, tzOffsetMin: number): LocalDay
 /** Local calendar day for an instant in an IANA zone. */
 export function localDayInZone(instant: Date, timezone: string): LocalDay {
   const z = new TZDate(instant, timezone);
+  // A zone nothing knows (only a direct write to the database can store one) reads as UTC, as the SQL reads it.
+  if (Number.isNaN(z.getFullYear()) && timezone !== "UTC") return localDayInZone(instant, "UTC");
   return `${z.getFullYear()}-${pad(z.getMonth() + 1)}-${pad(z.getDate())}`;
 }
 
@@ -47,7 +49,9 @@ export function localToday(now = new Date()): LocalDay {
 
 /** UTC offset (minutes east of UTC) that `timezone` has at `instant`. */
 export function offsetMinutesInZone(instant: Date, timezone: string): number {
-  return -new TZDate(instant, timezone).getTimezoneOffset();
+  const offset = -new TZDate(instant, timezone).getTimezoneOffset();
+  // A zone nothing knows reads as UTC (see localDayInZone).
+  return Number.isNaN(offset) ? 0 : offset;
 }
 
 /** Interpret a wall-clock time in `timezone` and return the UTC instant. */
@@ -77,21 +81,87 @@ export function dayToDateColumn(day: LocalDay): Date {
   return new Date(`${day}T00:00:00.000Z`);
 }
 
-/** Parse "+02:00" / "-0400" style offsets into minutes east of UTC. */
+/** No clock on Earth is further from UTC than this (Kiribati's +14:00; Baker Island's -12:00 is inside it). */
+export const MAX_OFFSET_MIN = 14 * 60;
+
+/** Parse "+02:00" / "-0400" style offsets into minutes east of UTC; anything no clock could read is no offset. */
 export function parseOffsetString(s: string): number | null {
   const m = /^([+-])(\d{2}):?(\d{2})$/.exec(s.trim());
-  if (!m) return null;
-  const sign = m[1] === "-" ? -1 : 1;
-  return sign * (Number(m[2]) * 60 + Number(m[3]));
+  if (!m || Number(m[3]) >= 60) return null;
+  const minutes = (m[1] === "-" ? -1 : 1) * (Number(m[2]) * 60 + Number(m[3]));
+  return Math.abs(minutes) <= MAX_OFFSET_MIN ? minutes : null;
+}
+
+/**
+ * Zones the Unicode data (and so every browser's Intl) still calls by an old name after the tz database renamed
+ * them. The old names are links there now, and a Postgres built without the legacy links (Debian's tzdata-legacy
+ * split) does not know them at all, so a trip is always saved under the new one.
+ */
+const RENAMED_ZONES: Record<string, string> = {
+  "Africa/Asmera": "Africa/Asmara",
+  "America/Buenos_Aires": "America/Argentina/Buenos_Aires",
+  "America/Catamarca": "America/Argentina/Catamarca",
+  "America/Cordoba": "America/Argentina/Cordoba",
+  "America/Godthab": "America/Nuuk",
+  "America/Indianapolis": "America/Indiana/Indianapolis",
+  "America/Jujuy": "America/Argentina/Jujuy",
+  "America/Louisville": "America/Kentucky/Louisville",
+  "America/Mendoza": "America/Argentina/Mendoza",
+  "Asia/Calcutta": "Asia/Kolkata",
+  "Asia/Katmandu": "Asia/Kathmandu",
+  "Asia/Rangoon": "Asia/Yangon",
+  "Asia/Saigon": "Asia/Ho_Chi_Minh",
+  "Atlantic/Faeroe": "Atlantic/Faroe",
+  "Europe/Kiev": "Europe/Kyiv",
+  "Pacific/Enderbury": "Pacific/Kanton",
+  "Pacific/Ponape": "Pacific/Pohnpei",
+  "Pacific/Truk": "Pacific/Chuuk",
+};
+
+let namedZones: Set<string> | null = null;
+
+/**
+ * The tz database's own name for a zone, or null when it is not a named zone at all. A link is followed to the zone
+ * it names ("US/Pacific" is "America/Los_Angeles", "Europe/Kiev" is "Europe/Kyiv"); a bare offset like "+05:00" is
+ * refused, because Postgres reads one as a POSIX zone with the sign the other way round, so the album's SQL and its
+ * pages would disagree about which day a photograph was taken.
+ */
+export function canonicalTimezone(tz: string): string | null {
+  let resolved: string;
+  try {
+    resolved = new Intl.DateTimeFormat("en-US", { timeZone: tz }).resolvedOptions().timeZone;
+  } catch {
+    return null;
+  }
+  // UTC and the tz database's fixed-offset zones (Etc/GMT-5 is five hours east), which Postgres reads the same way.
+  if (resolved === "UTC" || /^Etc\/GMT[+-]\d{1,2}$/.test(resolved)) return resolved;
+  namedZones ??= new Set(Intl.supportedValuesOf("timeZone"));
+  if (!namedZones.has(resolved)) return null;
+  return RENAMED_ZONES[resolved] ?? resolved;
 }
 
 export function isValidTimezone(tz: string): boolean {
+  return canonicalTimezone(tz) !== null;
+}
+
+/**
+ * A zone as it should be kept (see `canonicalTimezone`), for one saved before names were checked. A bare offset
+ * becomes the fixed-offset zone that says the same ("+05:00" is Etc/GMT-5: the tz database's signs run the POSIX
+ * way); one with no such zone, or a name nothing knows, becomes UTC.
+ */
+export function normalizedTimezone(tz: string): string {
+  const named = canonicalTimezone(tz);
+  if (named) return named;
+  let resolved: string;
   try {
-    Intl.DateTimeFormat(undefined, { timeZone: tz });
-    return true;
+    resolved = new Intl.DateTimeFormat("en-US", { timeZone: tz }).resolvedOptions().timeZone;
   } catch {
-    return false;
+    return "UTC";
   }
+  const offset = parseOffsetString(resolved);
+  if (offset === null || offset % 60 !== 0) return "UTC";
+  const hours = offset / 60;
+  return canonicalTimezone(hours === 0 ? "UTC" : `Etc/GMT${hours > 0 ? "-" : "+"}${Math.abs(hours)}`) ?? "UTC";
 }
 
 /**

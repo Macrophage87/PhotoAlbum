@@ -6,6 +6,7 @@ import { listVisibleCollections } from "@/lib/collections/queries";
 import { listCollectionItems } from "@/lib/collections/queries";
 import { tripPhotoPage } from "@/lib/photos/page";
 import { tileDate } from "@/components/photos/PhotoGrid";
+import { takenDay } from "@/components/photos/toGrid";
 import type { Viewer } from "@/lib/auth/viewer";
 import { resetTestDb } from "../helpers/reset";
 
@@ -77,7 +78,7 @@ describe("favorites", () => {
   });
 
   it("shows a tile's date in the photo's own zone", () => {
-    expect(tileDate("2025-08-12T02:30:00.000Z", -300)).toBe("Aug 11, 2025");
-    expect(tileDate(null, 0)).toBeNull();
+    expect(tileDate(takenDay({ takenAt: new Date("2025-08-12T02:30:00.000Z"), tzOffsetMin: -300 }))).toBe("Aug 11, 2025");
+    expect(tileDate(takenDay({ takenAt: null, tzOffsetMin: 0 }))).toBeNull();
   });
 });

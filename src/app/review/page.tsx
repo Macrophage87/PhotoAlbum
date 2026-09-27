@@ -43,7 +43,7 @@ export default async function ReviewPage({ searchParams }: PageProps<"/review">)
   const admin = isAdmin(me);
   const mine = editableMediaWhere(me);
   const [photos, unreviewedCount] = await Promise.all([
-    db.photo.findMany({ where: batch ? { id: { in: ids }, ...NOT_TRASHED } : { reviewedAt: null, ...NOT_TRASHED, ...mine }, orderBy: { createdAt: "desc" }, select: { ...photoCardSelect, uploaderId: true, context: true, reviewedAt: true, annotation: true, annotationOptOut: true, annotatedAt: true, estimatedDate: true, estimatedDateConfidence: true, estimatedDateNote: true, takenAtSource: true, trip: { select: { annotationOptOut: true } }, collections: { select: { collection: { select: { slug: true, title: true, annotationOptOut: true } } } } } }),
+    db.photo.findMany({ where: batch ? { id: { in: ids }, ...NOT_TRASHED } : { reviewedAt: null, ...NOT_TRASHED, ...mine }, orderBy: { createdAt: "desc" }, select: { ...photoCardSelect, uploaderId: true, context: true, reviewedAt: true, annotation: true, annotationOptOut: true, annotatedAt: true, estimatedDate: true, estimatedDateConfidence: true, estimatedDateNote: true, takenAtSource: true, trip: { select: { annotationOptOut: true, timezone: true } }, collections: { select: { collection: { select: { slug: true, title: true, annotationOptOut: true } } } } } }),
     db.photo.count({ where: { reviewedAt: null, ...NOT_TRASHED, ...mine } }),
   ]);
   // A batch named in the address can hold somebody else's items: they are shown, but the panel acts on these alone.

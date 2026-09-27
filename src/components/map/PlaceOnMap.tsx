@@ -79,7 +79,7 @@ export function PlaceOnMap({ src, theme, initial, tripTitle }: { src: string; th
           const properties: PhotoFeatureProps | null = was
             ? { ...was, gpsSource: "MANUAL" }
             : t
-              ? { id: t.id, thumbUrl: t.thumbUrl, mediumUrl: t.thumbUrl, caption: t.label, takenAt: t.takenAt, tripSlug: "", tripTitle: t.tripTitle ?? "", activityId: null, gpsSource: "MANUAL", day: null, activityTitle: null, uploaderId: null, uploaderName: null }
+              ? { id: t.id, thumbUrl: t.thumbUrl, mediumUrl: t.thumbUrl, caption: t.label, takenAt: t.takenAt, tripSlug: "", tripTitle: t.tripTitle ?? "", activityId: null, gpsSource: "MANUAL", day: t.day, activityTitle: null, uploaderId: null, uploaderName: null }
               : null;
           if (properties) next.set(id, { type: "Feature", geometry: { type: "Point", coordinates: [at.lng, at.lat] }, properties });
         }

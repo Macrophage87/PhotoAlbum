@@ -1,8 +1,7 @@
 import type { MediaKind } from "@/generated/prisma/enums";
 import { getViewer } from "@/lib/auth/viewer";
-import { normalizeQuery, searchFacets, searchMedia } from "@/lib/search/query";
+import { hitWhen, normalizeQuery, searchFacets, searchMedia } from "@/lib/search/query";
 import { photoUrl } from "@/lib/photos/urls";
-import { formatLocalTime } from "@/lib/time/format";
 import { outsiderAlt, uploaderLabel } from "@/components/photos/toGrid";
 import { AppShell, Container } from "@/components/layout/AppShell";
 import { SearchBox } from "@/components/search/SearchBox";
@@ -10,6 +9,7 @@ import { CollectionFacetField, TripFacetField } from "@/components/containers/Fa
 import { SearchResults, type SearchResult } from "@/components/search/SearchResults";
 import { Button } from "@/components/ui";
 import { SelectionProvider } from "@/components/photos/selection";
+import { isPhotoYear } from "@/lib/photos/filters";
 
 export const metadata = { title: "Search" };
 
@@ -31,7 +31,7 @@ export default async function SearchPage({ searchParams }: PageProps<"/search">)
   const kindRaw = str(sp.kind);
   const kind: MediaKind | undefined = kindRaw === "PHOTO" || kindRaw === "VIDEO" || kindRaw === "EXTERNAL_VIDEO" ? (kindRaw as MediaKind) : undefined;
   const year = Number(str(sp.year));
-  const params = { q, tripId: str(sp.trip), collectionId: str(sp.collection), uploaderId: member ? str(sp.uploader) : undefined, personIds: member ? list(sp.person) : [], year: Number.isInteger(year) && year > 0 ? year : undefined, kind };
+  const params = { q, tripId: str(sp.trip), collectionId: str(sp.collection), uploaderId: member ? str(sp.uploader) : undefined, personIds: member ? list(sp.person) : [], year: isPhotoYear(year) ? year : undefined, kind };
   const [facets, hits] = await Promise.all([
     searchFacets(viewer),
     q ? searchMedia(viewer, params) : Promise.resolve([]),
@@ -48,11 +48,11 @@ export default async function SearchPage({ searchParams }: PageProps<"/search">)
     caption: h.caption,
     title: h.title,
     // A file's own name is the family's; anybody else hears what the item is and when (see `outsiderAlt`).
-    alt: h.caption ?? h.title ?? (member ? h.originalName : outsiderAlt(h)),
+    alt: h.caption ?? h.title ?? (member ? h.originalName : outsiderAlt({ ...h, trip: h.tripTimezone ? { timezone: h.tripTimezone } : null })),
     snippet: h.snippet,
     tripSlug: h.tripSlug,
     tripTitle: h.tripTitle,
-    when: h.takenAt ? formatLocalTime(h.takenAt, { offsetMin: h.tzOffsetMin }, "MMM d, yyyy") : null,
+    when: hitWhen(h),
     uploadedBy: member ? uploaderLabel(h.uploaderName) : null,
     youtubeId: h.kind === "EXTERNAL_VIDEO" ? h.externalId : null,
     videoUrl: h.kind === "VIDEO" ? photoUrl(h, "video") : null,

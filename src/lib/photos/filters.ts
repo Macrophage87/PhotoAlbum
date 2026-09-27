@@ -45,6 +45,11 @@ export const KIND_LABELS: Record<MediaKind, string> = {
 export const MAX_GALLERY_QUERY = 200;
 const FIRST_PHOTOGRAPH = 1826;
 
+/** A year a filter may ask about: from the first photograph to well past any camera's clock. Anything else is no year. */
+export function isPhotoYear(year: number): boolean {
+  return Number.isInteger(year) && year >= FIRST_PHOTOGRAPH && year <= 2200;
+}
+
 type Params = Record<string, string | string[] | undefined>;
 
 const one = (v: string | string[] | undefined): string | null => {
@@ -78,7 +83,7 @@ export function parseGalleryFilter(sp: Params, opts: { member: boolean; inTrip?:
     uploaderId: opts.member ? one(sp.uploader) : null,
     personIds: opts.member ? many(sp.person) : [],
     kind: kind && (KINDS as string[]).includes(kind) ? (kind as MediaKind) : null,
-    year: Number.isInteger(year) && year >= FIRST_PHOTOGRAPH && year <= 2200 ? year : null,
+    year: isPhotoYear(year) ? year : null,
     // An activity is asked about inside its trip. Anywhere else a stranger could use one to learn which public
     // photographs came from an outing on a trip they may not open.
     activityId: opts.member || opts.inTrip ? one(sp.activity) : null,

@@ -26,6 +26,14 @@ describe("local day helpers", () => {
     expect(parseOffsetString("-0430")).toBe(-270);
     expect(parseOffsetString("Z")).toBeNull();
   });
+  it("takes an offset no clock could read as no offset (#144)", () => {
+    expect(parseOffsetString("+14:00")).toBe(840);
+    expect(parseOffsetString("-12:00")).toBe(-720);
+    expect(parseOffsetString("+14:01")).toBeNull();
+    expect(parseOffsetString("-15:00")).toBeNull();
+    expect(parseOffsetString("+99:99")).toBeNull();
+    expect(parseOffsetString("+05:60")).toBeNull();
+  });
   it("formats day ranges", () => {
     expect(formatDayRange("2025-08-10", "2025-08-16")).toBe("Aug 10 – 16, 2025");
     expect(formatDayRange("2025-08-30", "2025-09-02")).toBe("Aug 30 – Sep 2, 2025");

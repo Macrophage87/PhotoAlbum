@@ -1,6 +1,6 @@
 import { db } from "@/lib/db";
 import type { StoredAnnotation } from "@/lib/annotation/schema";
-import { localDayFromOffset } from "@/lib/time/local-day";
+import { photoDay } from "@/lib/time/local-day";
 import { dateColumnToDay } from "@/lib/time/local-day";
 import { suggest, type Candidate, type Item, type Suggestion } from "./score";
 
@@ -41,14 +41,14 @@ export async function loadCandidates(): Promise<Candidate[]> {
 
 export async function loadItem(photoId: string): Promise<Item | null> {
   const [p, vec] = await Promise.all([
-    db.photo.findUnique({ where: { id: photoId }, select: { id: true, takenAt: true, tzOffsetMin: true, lat: true, lng: true, caption: true, context: true, title: true, membersTitle: true, annotation: true, tripId: true, collections: { select: { collectionId: true } } } }),
+    db.photo.findUnique({ where: { id: photoId }, select: { id: true, takenAt: true, tzOffsetMin: true, trip: { select: { timezone: true } }, lat: true, lng: true, caption: true, context: true, title: true, membersTitle: true, annotation: true, tripId: true, collections: { select: { collectionId: true } } } }),
     db.$queryRaw<{ embedding: string | null }[]>`SELECT "embedding"::text AS embedding FROM "Photo" WHERE id = ${photoId}`.catch(() => [] as { embedding: string | null }[]),
   ]);
   if (!p) return null;
   const a = p.annotation as StoredAnnotation | null;
   return {
     id: p.id,
-    day: p.takenAt ? localDayFromOffset(p.takenAt, p.tzOffsetMin ?? 0) : null,
+    day: p.takenAt ? photoDay(p.takenAt, p.tzOffsetMin, p.trip?.timezone) : null,
     lat: p.lat,
     lng: p.lng,
     tags: new Set(a?.tags ?? []),
