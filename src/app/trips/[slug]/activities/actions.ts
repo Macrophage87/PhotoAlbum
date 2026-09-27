@@ -128,7 +128,10 @@ export async function setActivityShare(slug: string, id: string, on: boolean): P
   const trip = await loadTrip(slug);
   const activity = await db.activity.findFirst({ where: { id, tripId: trip.id }, select: { id: true } });
   if (!activity) throw new Error("Activity not found");
-  await db.activity.update({ where: { id }, data: { shareToken: on ? generateToken() : null } });
+  // Only while its trip is not being deleted: a link made by a save that read the trip just before the mark would
+  // otherwise open an afternoon of a trip that is already gone.
+  const shared = await db.activity.updateMany({ where: { id, trip: { deletingAt: null } }, data: { shareToken: on ? generateToken() : null } });
+  if (!shared.count) throw new Error("Trip not found");
   await db.photo.updateMany({ where: { activityId: id }, data: { updatedAt: new Date() } });
   revalidatePath(`/trips/${slug}/activities/${id}`);
 }

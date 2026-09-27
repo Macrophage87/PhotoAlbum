@@ -119,8 +119,9 @@ async function drain(size: number, batch: () => Promise<number>): Promise<void> 
 async function handOver(member: string, heir: string): Promise<void> {
   const set = handedOver(member, heir);
   // Each batch picks and locks its rows in a CTE, which Postgres runs exactly once. The same pick as an IN (...)
-  // subquery may be run again for every row the planner joins it to, and each run passes over the rows this very
-  // statement has just changed and locks the next ones: one "batch" then took every row, however many.
+  // subquery is run again only where the planner re-runs it for every row it joins (a nested-loop semi join that
+  // does not materialize it); each run then passes over the rows this statement has just changed and locks the next
+  // ones, so one "batch" takes far more than its size. Shown with a forced plan, not under the default ones.
   await drain(BATCH, () => db.$executeRaw`WITH picked AS (SELECT id FROM "Photo" WHERE "uploaderId" = ${member} ORDER BY id LIMIT ${BATCH} FOR UPDATE) UPDATE "Photo" SET ${set} FROM picked WHERE "Photo".id = picked.id`);
   await drain(BATCH, () => db.$executeRaw`WITH picked AS (SELECT id FROM "Photo" WHERE ${namesThem(member)} ORDER BY id LIMIT ${BATCH} FOR UPDATE) UPDATE "Photo" SET ${set} FROM picked WHERE "Photo".id = picked.id`);
   await drain(ROW_BATCH, () => db.$executeRaw`WITH picked AS (SELECT id FROM "CollectionItem" WHERE "addedById" = ${member} ORDER BY id LIMIT ${ROW_BATCH} FOR UPDATE) UPDATE "CollectionItem" SET "addedById" = ${heir} FROM picked WHERE "CollectionItem".id = picked.id`);

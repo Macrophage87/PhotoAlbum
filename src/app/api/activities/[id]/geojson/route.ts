@@ -11,7 +11,7 @@ import { buildActivityMapPayload } from "@/lib/map/geojson";
 export async function GET(req: Request, { params }: RouteContext<"/api/activities/[id]/geojson">) {
   const { id } = await params;
   const viewer = await getViewer();
-  const activity = await db.activity.findUnique({ where: { id }, select: { id: true, shareToken: true, trip: { select: { id: true, visibility: true, shareToken: true } } } });
+  const activity = await db.activity.findUnique({ where: { id, trip: { deletingAt: null } }, select: { id: true, shareToken: true, trip: { select: { id: true, visibility: true, shareToken: true } } } });
   if (!activity) return Response.json({ error: "Not found" }, { status: 404 });
   if (!canViewTrip(viewer, activity.trip) && !canViewActivity(viewer, activity)) return Response.json({ error: "Not found" }, { status: 404 });
   // A shared link's map is drawn as anybody holding the link sees it, a member looking at it included: whether the

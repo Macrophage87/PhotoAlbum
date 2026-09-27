@@ -20,6 +20,9 @@ export async function hookedDb() {
           get(delegate, method) {
             const fn = Reflect.get(delegate, method) as unknown;
             if (typeof fn !== "function" || typeof method !== "string") return fn;
+            // Untouched while no hook is set, so the lazy Prisma promise itself is handed back (array-form
+            // $transaction needs it); a test that sets a hook gets an ordinary promise for that call.
+            if (!dbHooks.model) return fn.bind(delegate);
             return async (...args: unknown[]) => {
               await dbHooks.model?.(key, method);
               return fn.apply(delegate, args);
@@ -29,7 +32,7 @@ export async function hookedDb() {
       }
       if (typeof value !== "function") return value;
       const hook = key === "$executeRaw" ? "raw" : key === "$transaction" ? "transaction" : null;
-      if (!hook) return value.bind(target);
+      if (!hook || !dbHooks[hook]) return value.bind(target);
       return async (...args: unknown[]) => {
         await dbHooks[hook]?.();
         return value.apply(target, args);

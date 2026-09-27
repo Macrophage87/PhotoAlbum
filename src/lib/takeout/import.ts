@@ -34,7 +34,7 @@ const IGNORED_JSON = new Set(["metadata.json", "print-subscriptions.json", "shar
 /**
  * What an import says when whoever started it is being removed (see src/lib/auth/remove-member.ts): every photograph
  * it brings in would be theirs, handed over again, and a stranger's archive by then. Asked at the start, so an import
- * queued before the removal began never starts, and with every progress update after that.
+ * queued before the removal began never starts, and every 25 media files after that.
  */
 export const STARTER_REMOVED = "Stopped: the member who started this import is being removed from the album. An admin can import the archive again; what came in so far stays, and is skipped next time.";
 
@@ -110,10 +110,13 @@ export async function importTakeoutArchive(importId: string): Promise<void> {
       if (album && (await db.collectionItem.findFirst({ where: { collectionId: album.id, photoId }, select: { id: true } }))) album.items--;
     };
 
-    // Pass two: the media itself.
+    // Pass two: the media itself. The starter is asked about every 25 media files looked at, whatever became of
+    // them: a re-import that is nearly all duplicates skips most of them, and is no less theirs.
+    let looked = 0;
     await walkZip(archive, async (entry, open) => {
       if (entry.isDirectory) return;
       const file = path.basename(entry.path);
+      if ((isMediaName(file) || isUnsupportedMediaName(file)) && ++looked % 25 === 1 && looked > 1) await starterStays(run.startedById);
       if (!isMediaName(file)) {
         // A camera's raw file or an AVI is a photo or clip all the same: counted as one the album could not take.
         if (isUnsupportedMediaName(file)) { report.unsupported++; skipped++; }
@@ -244,10 +247,7 @@ export async function importTakeoutArchive(importId: string): Promise<void> {
         failed++;
         if (report.failures.length < 50) report.failures.push({ file, reason: err instanceof Error ? err.message.slice(0, 120) : String(err) });
       }
-      if ((imported + skipped + failed) % 25 === 0) {
-        await db.takeoutImport.update({ where: { id: importId }, data: { imported, skipped, failed, repaired, collectionsCreated } }).catch(() => undefined);
-        await starterStays(run.startedById);
-      }
+      if ((imported + skipped + failed) % 25 === 0) await db.takeoutImport.update({ where: { id: importId }, data: { imported, skipped, failed, repaired, collectionsCreated } }).catch(() => undefined);
     });
     report.albums = [...albums.values()].map((a) => ({ title: a.title, items: a.items, created: a.created }));
     await db.takeoutImport.update({ where: { id: importId }, data: { status: "ENDED", imported, skipped, failed, repaired, collectionsCreated, report, endedAt: new Date() } });

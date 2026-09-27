@@ -36,6 +36,21 @@ vi.mock("@/lib/media/content-hash", async (orig) => {
   };
 });
 
+/** The importer's removal beginning as the `at`th duplicate is looked at, in a re-import that finds nothing new. */
+const onDuplicate = vi.hoisted(() => ({ at: 0, seen: 0, userId: "" }));
+vi.mock("@/lib/takeout/repair", async (orig) => {
+  const real = (await orig()) as typeof import("@/lib/takeout/repair");
+  const { db: store } = await import("@/lib/db");
+  return {
+    ...real,
+    planSidecarRepair: (...args: Parameters<typeof real.planSidecarRepair>) => {
+      // Prisma runs a query only once it is awaited or then'd; the import is twenty files from its next look by then.
+      if (++onDuplicate.seen === onDuplicate.at) void store.user.update({ where: { id: onDuplicate.userId }, data: { removingAt: new Date() } }).then(() => undefined);
+      return real.planSidecarRepair(...args);
+    },
+  };
+});
+
 import { closeDeadImports, importTakeoutArchive, STARTER_REMOVED } from "@/lib/takeout/import";
 import { copyFileSync, createWriteStream, readdirSync } from "node:fs";
 import { pipeline } from "node:stream/promises";
@@ -52,6 +67,7 @@ describe("importing a Takeout archive", () => {
     claiming.then = null;
     claiming.claims = 0;
     claiming.removeStarterAt = 0;
+    onDuplicate.at = onDuplicate.seen = 0;
     userId = (await db.user.create({ data: { email: "t@example.com", role: "ADMIN" } })).id;
     copyFileSync(path.join(process.cwd(), "tests/fixtures/takeout.zip"), path.join(inbox, "takeout-001.zip"));
   });
@@ -307,5 +323,25 @@ describe("importing a Takeout archive", () => {
     await importTakeoutArchive(queued.id);
     expect(await db.takeoutImport.findUniqueOrThrow({ where: { id: queued.id } })).toMatchObject({ status: "FAILED", imported: 0 });
     expect(await db.photo.count()).toBe(25);
+  }, 60_000);
+
+  it("stops a re-import that finds nothing but duplicates, too, once the importer's removal begins", async () => {
+    const pixels = sharp({ create: { width: 8, height: 8, channels: 3, background: { r: 90, g: 20, b: 140 } } });
+    const zip = new ZipFile();
+    for (let i = 0; i < 60; i++) zip.addBuffer(await pixels.clone().png({ palette: false }).composite([{ input: Buffer.from([i, 255 - i, i, 255]), raw: { width: 1, height: 1, channels: 4 }, left: 1, top: 1 }]).toBuffer(), `Takeout/Google Photos/Photos from 2024/d${i}.png`);
+    zip.end();
+    await pipeline(zip.outputStream, createWriteStream(path.join(inbox, "takeout-dupes.zip")));
+    const first = await db.takeoutImport.create({ data: { archiveName: "takeout-dupes.zip", startedById: userId } });
+    await importTakeoutArchive(first.id);
+    expect((await db.takeoutImport.findUniqueOrThrow({ where: { id: first.id } })).imported).toBe(60);
+
+    onDuplicate.userId = userId;
+    onDuplicate.at = 5;
+    const again = await db.takeoutImport.create({ data: { archiveName: "takeout-dupes.zip", startedById: userId } });
+    await importTakeoutArchive(again.id);
+    const a = await db.takeoutImport.findUniqueOrThrow({ where: { id: again.id } });
+    expect(a).toMatchObject({ status: "FAILED", imported: 0, skipped: 25 });
+    expect((a.report as { failures: { reason: string }[] }).failures).toContainEqual({ file: "takeout-dupes.zip", reason: STARTER_REMOVED });
+    expect(await db.photo.count()).toBe(60);
   }, 60_000);
 });

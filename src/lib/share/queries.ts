@@ -22,7 +22,8 @@ export async function getSharedTrip(token: string) {
 export async function getSharedActivity(token: string) {
   if (!token || token.length > 128) return null;
   const activity = await db.activity.findUnique({
-    where: { shareToken: token },
+    // Its token goes when its trip is marked for deletion; asked for here as well.
+    where: { shareToken: token, trip: { deletingAt: null } },
     include: { track: { select: { id: true, simplified: true, stats: true } }, participants: { select: { id: true } }, trip: { select: { id: true, slug: true, title: true, themeKey: true, timezone: true, visibility: true } } },
   });
   if (!activity) return null;

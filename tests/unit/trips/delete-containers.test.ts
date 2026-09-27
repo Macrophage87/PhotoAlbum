@@ -4,7 +4,10 @@ import { resetTestDb } from "../helpers/reset";
 import { dbHooks } from "../helpers/hooked-db";
 
 const who = vi.hoisted(() => ({ role: "MEMBER" as "MEMBER" | "ADMIN", id: "", queued: [] as string[] }));
-vi.mock("@/lib/auth/viewer", () => ({ requireUserOrThrow: async () => ({ id: who.id, email: "x@example.com", name: null, role: who.role }) }));
+vi.mock("@/lib/auth/viewer", () => ({
+  requireUserOrThrow: async () => ({ id: who.id, email: "x@example.com", name: null, role: who.role }),
+  getViewer: async () => ({ kind: "user", user: { id: who.id, email: "x@example.com", name: null, role: who.role }, shareTokens: new Map() }),
+}));
 vi.mock("next/cache", () => ({ revalidatePath: () => undefined }));
 vi.mock("next/navigation", () => ({ redirect: (to: string) => { throw new Error(`REDIRECT:${to}`); } }));
 vi.mock("@/lib/jobs/boss", () => ({ enqueue: async (queue: string) => void who.queued.push(queue) }));
@@ -15,6 +18,9 @@ import { bulkPutInActivity } from "@/app/photos/activity-actions";
 import { bulkAssignActivity } from "@/app/photos/bulk-actions";
 import { attachToActivity } from "@/app/photos/attach-actions";
 import { reassignPhotosForActivity } from "@/lib/activities/reassign";
+import { setActivityShare } from "@/app/trips/[slug]/activities/actions";
+import { getSharedActivity } from "@/lib/share/queries";
+import { GET as activityMap } from "@/app/api/activities/[id]/geojson/route";
 import { deleteCollection } from "@/app/collections/actions";
 import { finishPendingTripDeletions } from "@/lib/trips/delete";
 import { applyPhotoInstant } from "@/lib/photos/apply-date";
@@ -217,5 +223,25 @@ describe("deleting trips and collections", () => {
     await reassignPhotosForActivity(activity.id);
     expect(await db.photo.count({ where: { id: { in: [loose.id, onTrip.id] }, activityId: { not: null } } })).toBe(0);
     expect((await db.photo.findUniqueOrThrow({ where: { id: loose.id } })).tripId).toBeNull();
+  });
+
+  it("never shares an activity of a trip marked for deletion while its link was being made", async () => {
+    who.role = "ADMIN";
+    const trip = await db.trip.findUniqueOrThrow({ where: { slug: "gone" } });
+    const activity = await db.activity.findFirstOrThrow({ where: { tripId: trip.id } });
+    // The action read the trip before the mark, and writes the link after it.
+    dbHooks.model = async (model, method) => {
+      if (model !== "activity" || method !== "updateMany") return;
+      dbHooks.model = null;
+      await db.$executeRaw`UPDATE "Trip" SET "deletingAt" = now(), visibility = 'PRIVATE', "shareToken" = NULL WHERE id = ${trip.id}`;
+      await db.$executeRaw`UPDATE "Activity" SET "shareToken" = NULL WHERE "tripId" = ${trip.id}`;
+    };
+    await expect(setActivityShare("gone", activity.id, true)).rejects.toThrow("Trip not found");
+    expect((await db.activity.findUniqueOrThrow({ where: { id: activity.id } })).shareToken).toBeNull();
+    // An activity that somehow kept a link while its trip is marked opens nothing, page or map.
+    await db.activity.update({ where: { id: activity.id }, data: { shareToken: "kept-walk" } });
+    expect(await getSharedActivity("kept-walk")).toBeNull();
+    const res = await activityMap(new Request(`https://album.example/api/activities/${activity.id}/geojson`), { params: Promise.resolve({ id: activity.id }) } as never);
+    expect(res.status).toBe(404);
   });
 });
