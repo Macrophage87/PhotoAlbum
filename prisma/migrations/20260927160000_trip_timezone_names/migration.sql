@@ -127,6 +127,11 @@ UPDATE "Trip" t SET timezone = m.canonical FROM (VALUES
   ('Portugal', 'Europe/Lisbon'),
   ('ROC', 'Asia/Taipei'),
   ('ROK', 'Asia/Seoul'),
+  -- Names Postgres does know, but reads as a fixed offset with no summer time, where the pages read the zone.
+  ('CET', 'Europe/Brussels'),
+  ('EET', 'Europe/Athens'),
+  ('MET', 'Europe/Brussels'),
+  ('WET', 'Europe/Lisbon'),
   ('Singapore', 'Asia/Singapore'),
   ('Turkey', 'Europe/Istanbul'),
   ('UCT', 'UTC'),

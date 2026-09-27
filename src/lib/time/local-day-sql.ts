@@ -29,21 +29,23 @@ function databaseZones(): Promise<Set<string>> {
  */
 export async function databaseZone(tz: string): Promise<string> {
   const known = await databaseZones();
-  if (known.has(tz)) return tz;
   const readAs = normalizedTimezone(tz);
-  return known.has(readAs) ? readAs : "UTC";
+  // A name Postgres knows is still read as the pages read it when they differ: 'CET' is a fixed offset to Postgres
+  // but Europe/Brussels, with its summer time, to the pages.
+  if (known.has(readAs)) return readAs;
+  return known.has(tz) ? tz : "UTC";
 }
 
 /**
- * How to read the trips' zones this database does not know (see `databaseZone`), so that no trip's zone can fail a
+ * How to read the trips' zones this database does not know, or reads differently from the pages (see `databaseZone`), so that no trip's zone can fail a
  * query for the whole album: America/Buenos_Aires where Postgres was built without the legacy links, say. Normally
  * there are none: trips are saved under names Postgres knows (see `canonicalTimezone`), and older ones were tidied
  * by a migration. The trips' own zones are few and read each time.
  */
 export async function tripZoneFixes(): Promise<ZoneFix[]> {
-  const [known, trips] = await Promise.all([databaseZones(), db.trip.findMany({ distinct: ["timezone"], select: { timezone: true } })]);
-  const unknown = trips.map((t) => t.timezone).filter((tz) => !known.has(tz));
-  return Promise.all(unknown.map(async (tz): Promise<ZoneFix> => [tz, await databaseZone(tz)]));
+  const trips = await db.trip.findMany({ distinct: ["timezone"], select: { timezone: true } });
+  const fixes = await Promise.all(trips.map(async (t): Promise<ZoneFix> => [t.timezone, await databaseZone(t.timezone)]));
+  return fixes.filter(([stored, readAs]) => stored !== readAs);
 }
 
 /**

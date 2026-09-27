@@ -9,7 +9,7 @@ import { tripInputSchema } from "@/lib/trips/validation";
 import { COMMON_ZONES } from "@/components/trips/TripForm";
 import { idsInLocalYear } from "@/lib/photos/page";
 import { searchFacets, searchMedia } from "@/lib/search/query";
-import { inLocalYearSql } from "@/lib/time/local-day-sql";
+import { inLocalYearSql, localTakenAtSql, tripZoneFixes } from "@/lib/time/local-day-sql";
 import { isPhotoYear } from "@/lib/photos/filters";
 
 /**
@@ -82,13 +82,22 @@ describe("trips saved under a name Postgres reads differently or not at all", ()
     expect((await searchMedia(member, { q: "fireworks", year: 2026 }, 120, null)).map((h) => h.id)).toEqual([lost.id]);
   });
 
+  it("reads a name Postgres takes as a fixed offset the way the pages do, summer time included", async () => {
+    // 9:30 PM UTC on 31 July is already 1 August in Athens in summer (UTC+3), though 'EET' alone is UTC+2 to Postgres.
+    const eet = await photo((await trip("eet", "EET")).id, "Night swim", new Date("2025-07-31T21:30:00Z"));
+    expect(photoDay(eet.takenAt!, null, "EET")).toBe("2025-08-01");
+    expect(await tripZoneFixes()).toEqual([["EET", "Europe/Athens"]]);
+    const [row] = await db.$queryRaw<{ day: string }[]>`SELECT to_char(${localTakenAtSql(await tripZoneFixes())}, 'YYYY-MM-DD') AS day FROM "Photo" p LEFT JOIN "Trip" t ON t.id = p."tripId" WHERE p.id = ${eet.id}`;
+    expect(row.day).toBe("2025-08-01");
+  });
+
   it("renames trips saved under an old name or a bare offset, in the migration", async () => {
-    const saved = { goa: "Asia/Calcutta", ba: "America/Buenos_Aires", sf: "US/Pacific", east: "+05:00", west: "-0800", half: "+05:30", zero: "+00", la: "America/Los_Angeles" };
+    const saved = { cet: "CET", goa: "Asia/Calcutta", ba: "America/Buenos_Aires", sf: "US/Pacific", east: "+05:00", west: "-0800", half: "+05:30", zero: "+00", la: "America/Los_Angeles" };
     for (const [slug, tz] of Object.entries(saved)) await trip(slug, tz);
     const migration = readFileSync(path.join(process.cwd(), "prisma/migrations/20260927160000_trip_timezone_names/migration.sql"), "utf8");
     for (const statement of migration.replace(/^--.*$/gm, "").split(";").map((x) => x.trim()).filter(Boolean)) await db.$executeRawUnsafe(statement);
     const now = Object.fromEntries((await db.trip.findMany({ select: { slug: true, timezone: true } })).map((t) => [t.slug, t.timezone]));
-    expect(now).toEqual({ goa: "Asia/Kolkata", ba: "America/Argentina/Buenos_Aires", sf: "America/Los_Angeles", east: "Etc/GMT-5", west: "Etc/GMT+8", half: "UTC", zero: "UTC", la: "America/Los_Angeles" });
+    expect(now).toEqual({ cet: "Europe/Brussels", goa: "Asia/Kolkata", ba: "America/Argentina/Buenos_Aires", sf: "America/Los_Angeles", east: "Etc/GMT-5", west: "Etc/GMT+8", half: "UTC", zero: "UTC", la: "America/Los_Angeles" });
     // The migration and the SQL's own reading of a zone Postgres does not know say the same.
     for (const [slug, tz] of Object.entries(saved)) expect([slug, normalizedTimezone(tz)]).toEqual([slug, now[slug]]);
     // 7:30 PM UTC on New Year's Eve is already 1 January five hours east: the pages and the SQL both say so.
