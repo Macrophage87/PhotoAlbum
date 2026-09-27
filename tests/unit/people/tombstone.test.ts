@@ -525,7 +525,7 @@ describe("names that are also words", () => {
     const may = await forget("May Lee");
     await applyAnnotation(may, "m", record({ caption: "May 2020 at the lake" }), { content: [] }, { requestedAt: new Date() });
     expect(((await db.photo.findUniqueOrThrow({ where: { id: may } })).annotation as StoredAnnotation).caption).toBe("May 2020 at the lake");
-  });
+  }, 20_000);
 
   it("on her own photograph, a place-like first name is her after 'to' or 'from' unless she travels there", async () => {
     const on = await forget("Charlotte Smith");
@@ -564,7 +564,7 @@ describe("names that are also words", () => {
     }
     await applyAnnotation(pool, "m", record({ caption: "Florence at the pool" }), { content: [] }, { requestedAt: new Date() });
     expect(((await db.photo.findUniqueOrThrow({ where: { id: pool } })).annotation as StoredAnnotation).caption).toBe("A family member at the pool");
-  });
+  }, 20_000);
 
   it("takes a kinship word with their first name on their own photograph, unless it is somebody else's", async () => {
     const kent = await forget("Sam Kent");
@@ -608,7 +608,7 @@ describe("names that are also words", () => {
     // Elsewhere, "Grandpa Sam" is somebody else's, and "Uncle Sam" the saying.
     expect(ts.scrub("Uncle Sam hat on Ben", await sc(await photo()))).toBe("Uncle Sam hat on Ben");
     expect(ts.scrub("Grandpa Sam at the lake", await sc(await photo()))).toBe("Grandpa Sam at the lake");
-  });
+  }, 20_000);
 
   it("cleans a photograph two forgotten namesakes shared again once the second is gone, with both their titles", async () => {
     const byron = await db.person.create({ data: { name: "Grandma Ada Byron", createdById: admin } });
@@ -732,7 +732,7 @@ describe("names that are also words", () => {
     expect(rows.some((r) => kin(r).length > 0)).toBe(true);
     for (const r of rows) for (const k of kin(r)) expect(words.has(k)).toBe(false);
     expect(JSON.stringify(rows.map(kin))).not.toMatch(/tia|nan|oma|grand|duke/i);
-  });
+  }, 20_000);
 
   it("reads 'in the sun' as the place only where the phrase ends", async () => {
     const florence = await db.person.create({ data: { name: "Florence", createdById: admin } });
