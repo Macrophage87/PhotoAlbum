@@ -2,7 +2,7 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 
 /** What the worker asks of pg-boss: the stale-item sweep on a schedule, and heartbeats and signals for heavy work. */
 const fake = vi.hoisted(() => ({
-  work: [] as { queue: string; options: Record<string, unknown> }[],
+  work: [] as { queue: string; options: Record<string, unknown>; handler: () => Promise<unknown> }[],
   schedules: [] as { queue: string; cron: string }[],
 }));
 vi.mock("@/lib/jobs/boss", async (orig) => ({
@@ -11,10 +11,13 @@ vi.mock("@/lib/jobs/boss", async (orig) => ({
   // and its schema must not appear in the test database (see requeue.test.ts).
   enqueue: async () => null,
   getBoss: async () => ({
-    work: async (queue: string, options: Record<string, unknown>) => { fake.work.push({ queue, options }); },
+    work: async (queue: string, options: Record<string, unknown>, handler: () => Promise<unknown>) => { fake.work.push({ queue, options, handler }); },
     schedule: async (queue: string, cron: string) => { fake.schedules.push({ queue, cron }); },
   }),
 }));
+
+const requeued = vi.hoisted(() => ({ runs: 0 }));
+vi.mock("@/lib/media/requeue", async (orig) => ({ ...((await orig()) as object), requeueStuckPending: async () => (requeued.runs++, 0) }));
 
 // The two slow start-up passes never finish here: registration must not wait for them.
 vi.mock("@/lib/people/forget", async (orig) => ({ ...((await orig()) as object), scrubWithdrawnNames: () => new Promise(() => {}) }));
@@ -35,6 +38,11 @@ describe("the worker's registration", () => {
     expect(fake.schedules).toContainEqual({ queue: QUEUES.reconcilePhotos, cron: "*/15 * * * *" });
     // Every queue that has a schedule also has a handler.
     for (const s of fake.schedules) expect(fake.work.map((w) => w.queue)).toContain(s.queue);
+  });
+
+  it("queues again, on that quarter-hourly run, photos left waiting with no job", async () => {
+    await fake.work.find((w) => w.queue === QUEUES.reconcilePhotos)!.handler();
+    expect(requeued.runs).toBe(1);
   });
 
   it("registers every schedule without waiting for the slow start-up passes, and no two nightly jobs share a minute", async () => {

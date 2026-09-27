@@ -20,6 +20,20 @@ export async function hasLiveProcessingJob(photoId: string): Promise<boolean> {
   }
 }
 
+/** The same for many photos at once: which of them a processing job still names. Unknown counts as all of them. */
+export async function withLiveProcessingJob(photoIds: string[]): Promise<Set<string>> {
+  if (!photoIds.length) return new Set();
+  try {
+    const rows = await db.$queryRaw<{ id: string }[]>`
+      SELECT DISTINCT data->>'photoId' AS id FROM ${bossJobs()}
+      WHERE name IN (${QUEUES.processPhoto}, ${QUEUES.transcodeVideo}) AND state IN ('created', 'retry', 'active') AND data->>'photoId' = ANY(${photoIds}::text[])`;
+    return new Set(rows.map((r) => r.id));
+  } catch (err) {
+    console.error("[jobs] could not read pg-boss's jobs; treating the photos as still queued", err);
+    return new Set(photoIds);
+  }
+}
+
 /**
  * The uploaded files (imports/…) that an import job waiting, running or due a retry will still read. Null when
  * pg-boss's tables cannot be read, so nothing is ever deleted from under a job on a guess.
