@@ -15,7 +15,7 @@ import { EXT_BY_MIME, EXT_MIME } from "@/lib/media/mime";
 import { claimContentHash } from "@/lib/media/content-hash";
 import { processAgainIfStuck } from "@/lib/media/requeue";
 import { safeArchivePath } from "./inbox";
-import { albumFolderOf, captionFromTitle, isMediaName, isVideoName, pairSidecars, parseSidecar, type SidecarData } from "./sidecar";
+import { albumFolderOf, captionFromTitle, isMediaName, isUnsupportedMediaName, isVideoName, pairSidecars, parseSidecar, type SidecarData } from "./sidecar";
 import { readStreamToString, walkZip } from "./zip";
 import { describeRepair, planSidecarRepair } from "./repair";
 import { applyPhotoInstant } from "@/lib/photos/apply-date";
@@ -99,8 +99,13 @@ export async function importTakeoutArchive(importId: string): Promise<void> {
 
     // Pass two: the media itself.
     await walkZip(archive, async (entry, open) => {
-      if (entry.isDirectory || !isMediaName(path.basename(entry.path))) return;
+      if (entry.isDirectory) return;
       const file = path.basename(entry.path);
+      if (!isMediaName(file)) {
+        // A camera's raw file or an AVI is a photo or clip all the same: counted as one the album could not take.
+        if (isUnsupportedMediaName(file)) { report.unsupported++; skipped++; }
+        return;
+      }
       const ext = file.toLowerCase().split(".").pop() ?? "";
       const mime = EXT_MIME[ext];
       if (!mime) { report.unsupported++; skipped++; return; }
@@ -111,8 +116,11 @@ export async function importTakeoutArchive(importId: string): Promise<void> {
         // Stream to a temp file while hashing, then decide.
         const tmp = path.join(work, `${imported + skipped + failed}.${ext}`);
         const hash = createHash("sha256");
-        const tap = new Transform({ transform(chunk, _e, cb) { hash.update(chunk); cb(null, chunk); } });
+        let size = 0;
+        const tap = new Transform({ transform(chunk, _e, cb) { hash.update(chunk); size += chunk.length; cb(null, chunk); } });
         await pipeline(await open(), tap, createWriteStream(tmp));
+        // Every empty file has the same hash, so it would be skipped as a duplicate of the first; it is a failure.
+        if (size === 0) throw new Error("The file in the archive is empty (0 bytes).");
         const contentHash = hash.digest("hex");
         // A row an earlier run made but never finished (it has no file: "pending") is not the photo being in the
         // album; it is left over from a failure, and this run takes its place rather than skipping it for good.
