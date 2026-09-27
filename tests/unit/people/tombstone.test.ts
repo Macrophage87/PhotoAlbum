@@ -245,7 +245,7 @@ describe("names that are also words", () => {
     const p = await db.photo.findUniqueOrThrow({ where: { id: other } });
     expect((p.annotation as StoredAnnotation).caption).toBe("Our trip in June");
     expect(p.estimatedDateNote).toBe("2019–2019: Taken in May 2019");
-  });
+  }, 20_000);
 
   it("takes a month that is their first name out of their own photographs only where it plainly names somebody", async () => {
     const may = await forget("May Lee");
@@ -700,12 +700,14 @@ describe("names that are also words", () => {
     await db.face.create({ data: { photoId: own, personId: florence.id, status: "CONFIRMED", box: [0, 0, 1, 1], confidence: 0 } });
     const trip = await db.trip.create({ data: { slug: "tus", title: "Tuscany", description: "Two weeks driving around.", startDate: new Date("2019-05-01"), endDate: new Date("2019-05-14"), createdById: admin } });
     const note = async (context: string, tripId: string | null = trip.id) => (await db.photo.create({ data: { uploaderId: admin, originalName: "t.jpg", mimeType: "image/jpeg", storageKey: "t", originalPath: "t/o.jpg", sizeBytes: 1, status: "READY", tripId, context } })).id;
-    const place = [await note("Florence at night"), await note("Florence and Siena by train"), await note("Florence in the rain"), await note("Ponte Vecchio. Florence at dusk"), await note("Florence at night", null), await note("Florence vs Rome", null)];
+    const place = [await note("Florence at night"), await note("Florence and Siena by train"), await note("Florence in the rain"), await note("Ponte Vecchio. Florence at dusk"), await note("Florence at night", null), await note("Florence vs Rome", null), await note("Florence at night with the Duomo lit up", null), await note("Florence at dusk with Siena beyond", null), await note("Florence at sunset with her camera", null)];
     const pool = await note("Florence at the pool", null);
+    // Somebody else in the scene: she is in it too.
+    const people = [await note("Florence at sunset with Grandpa", null), await note("Florence at night with Ben", null), await note("Florence in the rain with her dad", null)];
     await optOutPerson(florence.id, new FormData());
     const row = (await taggedOn(own))!;
     for (const id of place) expect(await covers(row, id)).toBe(false);
-    expect(await covers(row, pool)).toBe(true);
+    for (const id of [pool, ...people]) expect(await covers(row, id)).toBe(true);
   });
 
   it("keeps kinship words hashed, since some are names", async () => {

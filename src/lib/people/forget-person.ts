@@ -1,7 +1,7 @@
 import { db } from "@/lib/db";
 import { forgetNameInText, forgetQueuedFileNames, forgetRawAnswers, leftoverItems, matcherFor, memberTextCount, memberTextMentioning, photosInContainers, photosMentioning, recleanShared, taggedPhotoIds } from "./forget";
 import { containerKey, forgetKeyState, hashPlainScopes, rememberForgotten } from "./tombstone";
-import { isListedPlace, nameMatcher, notThePerson, type NameMatcher, type Neighbourhood } from "./scrub";
+import { FUNCTION_WORDS, isKinWord, isListedPlace, nameMatcher, notThePerson, type NameMatcher, type Neighbourhood } from "./scrub";
 import { withForgetLock } from "./names-changed";
 import { dropRejudgeJobs, forgetJudgedNames } from "@/lib/annotation/rejudge";
 
@@ -152,6 +152,26 @@ const TRIP_WORD_AFTER = /^[ \t]+(?:trip|trips|holiday|holidays|vacation|visit|ge
 
 /** The time of day, the weather or the light after a place: "Florence at night", "Florence in the rain". */
 const SCENE_AFTER = /^[ \t]+(?:(?:at|by)[ \t]+(?:night|dusk|dawn|sunset|sunrise|twilight|midnight|daybreak)|in[ \t]+(?:the[ \t]+)?(?:rain|snow|fog|mist|drizzle|sun|sunshine)(?=[ \t]*(?:$|[\n.,;:!?)]|(?:and|with)(?![\p{L}\p{M}]))))(?![\p{L}\p{M}])/iu;
+/**
+ * Somebody in the scene after it: "at sunset with Grandpa", "at night with Ben", "in the rain with her dad". Then the
+ * name before the scene is somebody too, not the city ("Florence at sunset with Grandpa"); "at night with the Duomo
+ * lit up" and "at dusk with Siena beyond" are still the place.
+ */
+const WITH_SOMEBODY = /^[ \t]+with[ \t]+(?:(her|his|their|our|my)[ \t]+)?(\p{L}[\p{L}\p{M}'’.-]*)/iu;
+
+/** The time of day, the weather or the light after the place, with nobody in the scene: see SCENE_AFTER. */
+function sceneOfThePlace(after: string): boolean {
+  const scene = after.match(SCENE_AFTER);
+  if (!scene) return false;
+  const w = after.slice(scene[0].length).match(WITH_SOMEBODY);
+  if (!w) return true;
+  const word = w[2].replace(/\.$/u, "");
+  // ("the", "our" and "my" are kinship words to the members-only rule, which reads "the Duomo" otherwise.)
+  if (FUNCTION_WORDS.has(word.toLowerCase())) return true;
+  if (isKinWord(word)) return false;
+  return Boolean(w[1]) || !/^\p{Lu}/u.test(word) || isListedPlace(word);
+}
+
 /** Another place joined to it: "Florence and Siena", "Florence vs Rome", "Pisa to Florence". */
 const JOINED_AFTER = /^[ \t]+(?:and|&|vs\.?|versus|or|to)[ \t]+(\p{Lu}[\p{L}\p{M}'’.-]*)/u;
 const JOINED_BEFORE = /(\p{Lu}[\p{L}\p{M}'’.-]*)[ \t]+(?:and|&|vs\.?|versus|or|to)[ \t]+$/u;
@@ -164,7 +184,7 @@ function usedAsPlace(text: string | null | undefined, rx: RegExp, rules: Neighbo
     const after = text.slice(end);
     const before = text.slice(0, m.index!);
     const joined = [after.match(JOINED_AFTER)?.[1], before.match(JOINED_BEFORE)?.[1]].some((w) => w && isListedPlace(w));
-    return joined || SCENE_AFTER.test(after) || TRIP_WORD_AFTER.test(after) || notThePerson(text, m.index!, end, rules);
+    return joined || sceneOfThePlace(after) || TRIP_WORD_AFTER.test(after) || notThePerson(text, m.index!, end, rules);
   });
 }
 
