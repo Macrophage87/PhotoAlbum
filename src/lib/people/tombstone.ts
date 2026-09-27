@@ -133,7 +133,7 @@ function placesUnder(keys: VersionKey[]): Places {
   };
 }
 
-/** How a row keeps this photograph, under its key version: for tests and the admin's tools, never the other way. */
+/** How a row under this key version keeps this photograph (for tests); nothing turns a hash back into an id. */
 export async function hashedPhotoId(photoId: string, keyVersion: number): Promise<string | null> {
   const k = (await forgetKeyState()).keys.find((x) => x.version === keyVersion);
   return k ? scopeHash(k.key, photoScope(photoId)) : null;
@@ -328,6 +328,30 @@ export async function hashPlainScopes(): Promise<number> {
     done += written.count;
   }
   return done;
+}
+
+/**
+ * Of these photographs, those tagged with more than one forgotten person under the same name ("Ada" of Ada Byron
+ * and of Ada Lovelace): each forget went only by its own person's names there, so they are cleaned again with
+ * every forgotten entry once the second is gone (see recleanShared).
+ */
+export async function sharedByNamesakes(photoIds: string[]): Promise<string[]> {
+  if (!photoIds.length) return [];
+  const state = await forgetKeyState();
+  const places = placesUnder(state.keys);
+  const out = new Set<string>();
+  for (const version of places.versions) {
+    const hashed = places.under(version, photoIds, "photo");
+    // As they are too, for a row from before places were hashed.
+    const rows = await db.$queryRaw<{ taggedPhotoIds: string[] }[]>`
+      SELECT "taggedPhotoIds" FROM "ForgottenName"
+      WHERE "keyVersion" = ${version} AND jsonb_array_length(COALESCE("kinshipGroups", '[]'::jsonb)) > 1 AND "taggedPhotoIds" && ${[...hashed, ...photoIds]}::text[]`;
+    const kept = new Set(rows.flatMap((r) => r.taggedPhotoIds));
+    photoIds.forEach((id, i) => {
+      if (kept.has(hashed[i]) || kept.has(id)) out.add(id);
+    });
+  }
+  return [...out];
 }
 
 /** Whether any forgotten name is kept with the places it was found. */

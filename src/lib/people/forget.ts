@@ -9,6 +9,7 @@ import { unknownTitleAside, warnStuckTitle } from "@/lib/annotation/members-only
 import { bossJobs } from "@/lib/jobs/schema";
 import { isMinor, knownAdult, nameMayLeaveServer } from "./consent";
 import { annotationMentions, FUNCTION_WORDS, isEverydayWord, isPlaceOrDateWord, nameMatcher, scrubAnnotation, type NameMatcher, type Where } from "./scrub";
+import { forgottenScope, loadTombstone, scrubRecord, sharedByNamesakes } from "./tombstone";
 
 /**
  * Taking a forgotten person's name out of what the helper wrote, and finding what members wrote that still says it.
@@ -400,6 +401,42 @@ export async function forgetNameInText(photoIds: string[], m: NameMatcher, opts:
   for (const t of trips) await settle((data) => db.trip.update({ where: { id: t.id }, data }), t.description, around(near.trips, t.id));
   for (const x of activities) await settle((data) => db.activity.update({ where: { id: x.id }, data }), x.description, around(near.activities, x.id));
   for (const c of collections) await settle((data) => db.collection.update({ where: { id: c.id }, data }), c.description, around(near.collections, c.id));
+}
+
+/**
+ * Photographs somebody forgotten shared with a namesake forgotten too ("Ada" of Ada Byron and of Ada Lovelace, both
+ * tagged there): the first forget left the shared first name to the one still in the album, and each took out only
+ * its own titles ("Aunt Ada", not "Grandma Ada"). Once the second is gone the helper's words there are cleaned again
+ * with every forgotten entry, as a new answer about them would be. Stamped like any photograph a forget rewrote.
+ */
+export async function recleanShared(photoIds: Iterable<string>): Promise<number> {
+  const shared = await sharedByNamesakes([...new Set(photoIds)]);
+  if (!shared.length) return 0;
+  const ts = await loadTombstone();
+  if (ts.empty) return 0;
+  const [photos, given] = await Promise.all([
+    db.photo.findMany({ where: { id: { in: shared } }, select: { id: true, kind: true, title: true, membersTitle: true, titleByHelper: true, annotation: true } }),
+    answerTitles(shared),
+  ]);
+  const touched: string[] = [];
+  for (const p of photos) {
+    const scope = await forgottenScope({ photoIds: [p.id] }, ts);
+    const a = p.annotation && typeof p.annotation === "object" && !Array.isArray(p.annotation) ? (p.annotation as StoredAnnotation) : null;
+    const h = helpersTitles(p, given.get(p.id));
+    const next = {
+      ...(a ? { annotation: scrubRecord(a, ts, scope) } : {}),
+      ...(h.title && p.title ? { title: ts.scrub(p.title, scope) } : {}),
+      ...(h.membersTitle && p.membersTitle ? { membersTitle: ts.scrub(p.membersTitle, scope) } : {}),
+    };
+    if (!Object.entries(next).some(([k, v]) => JSON.stringify(v) !== JSON.stringify((p as Record<string, unknown>)[k]))) continue;
+    await db.photo.update({ where: { id: p.id }, data: { ...next, namesScrubbedAt: new Date() } });
+    touched.push(p.id);
+  }
+  if (touched.length) {
+    await db.$executeRaw`UPDATE "Photo" SET "textEmbedding" = NULL WHERE id IN (${Prisma.join(touched)})`;
+    for (const id of touched) await enqueueEmbedding(id, true);
+  }
+  return touched.length;
 }
 
 export type MemberTextField = "title" | "caption" | "notes" | "place" | "file name" | "trash note" | "link note";

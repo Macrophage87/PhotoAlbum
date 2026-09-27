@@ -581,6 +581,27 @@ describe("names that are also words", () => {
     expect(ts.scrub("Grandpa Sam at the lake", await sc(await photo()))).toBe("Grandpa Sam at the lake");
   });
 
+  it("cleans a photograph two forgotten namesakes shared again once the second is gone, with both their titles", async () => {
+    const byron = await db.person.create({ data: { name: "Grandma Ada Byron", createdById: admin } });
+    const lovelace = await db.person.create({ data: { name: "Aunt Ada Lovelace", createdById: admin } });
+    const caption = "Grandma Ada and Aunt Ada at the lake. Ada waves.";
+    const both = (await db.photo.create({ data: { uploaderId: admin, originalName: "b.jpg", mimeType: "image/jpeg", storageKey: "b", originalPath: "b/o.jpg", sizeBytes: 1, status: "READY", title: "Grandma Ada At The Lake", titleByHelper: true, annotation: record({ title: "Grandma Ada At The Lake", caption }), annotatedAt: new Date() } })).id;
+    for (const p of [byron, lovelace]) await db.face.create({ data: { photoId: both, personId: p.id, status: "CONFIRMED", box: [0, 0, 1, 1], confidence: 0 } });
+    const read = async () => {
+      const p = await db.photo.findUniqueOrThrow({ where: { id: both } });
+      return [p.title, (p.annotation as StoredAnnotation).title, (p.annotation as StoredAnnotation).caption];
+    };
+    // The first forget leaves "Ada" to Ada Lovelace, still in the album and on the photograph.
+    await optOutPerson(byron.id, new FormData());
+    expect(await read()).toEqual(["Grandma Ada At The Lake", "Grandma Ada At The Lake", caption]);
+    // The second takes out her own title and name, and then, with both entries, Grandma Ada's too.
+    await optOutPerson(lovelace.id, new FormData());
+    expect(await read()).toEqual(["A Family Member At The Lake", "A Family Member At The Lake", "A family member and a family member at the lake. A family member waves."]);
+    // A later answer there too: a title is accepted when it is either one's, since it names one of them, not both.
+    await applyAnnotation(both, "m", record({ caption: "Aunt Ada hugs Grandma Ada." }), { content: [] }, { requestedAt: new Date() });
+    expect((await read())[2]).toBe("A family member hugs a family member.");
+  });
+
   it("keeps each forgotten person's kinship title to their own photographs when two share a first name", async () => {
     const greatAunt = await forget("Great Aunt Ada");
     const byron = await forget("Ada Byron");

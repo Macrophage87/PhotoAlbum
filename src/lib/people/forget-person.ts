@@ -1,5 +1,5 @@
 import { db } from "@/lib/db";
-import { forgetNameInText, forgetQueuedFileNames, forgetRawAnswers, leftoverItems, matcherFor, memberTextCount, memberTextMentioning, photosInContainers, photosMentioning, taggedPhotoIds } from "./forget";
+import { forgetNameInText, forgetQueuedFileNames, forgetRawAnswers, leftoverItems, matcherFor, memberTextCount, memberTextMentioning, photosInContainers, photosMentioning, recleanShared, taggedPhotoIds } from "./forget";
 import { containerKey, forgetKeyState, hashPlainScopes, rememberForgotten } from "./tombstone";
 import { isListedPlace, nameMatcher, notThePerson, type NameMatcher, type Neighbourhood } from "./scrub";
 import { withForgetLock } from "./names-changed";
@@ -114,6 +114,12 @@ export async function forgetPerson(personId: string, opts: { keepName: boolean; 
         await forgetJudgedNames(tx, `person:${personId}`);
         await tx.person.delete({ where: { id: personId } });
       }, { timeout: 30_000, maxWait: 10_000 });
+    }
+    // Photographs they shared with a namesake forgotten before them: cleaned again with every forgotten entry, now
+    // that the record is gone and the name counts as nobody's here (see recleanShared).
+    if (!keepName && !later) {
+      await held.assertHeld();
+      await recleanShared(tagged);
     }
     // Until the record was gone the remembered names still counted as somebody's: an answer asked for before now
     // about any of these photographs is thrown away, and names read before now are read again.
