@@ -3,7 +3,7 @@ import { Readable } from "node:stream";
 import { readFile } from "node:fs/promises";
 import { storage } from "@/lib/storage";
 import { scanShareable, type ScanFormat } from "@/lib/media/mime";
-import { PLY_HEADER_MAX, plyHeader, sanitizeScan } from "./sanitize";
+import { PLY_HEADER_MAX, plyFixedLength, plyHeader, sanitizeScan } from "./sanitize";
 
 type ScanFile = { storageKey: string; originalPath: string; scanFormat: string | null };
 
@@ -54,17 +54,22 @@ async function make(scan: ScanFile, key: string): Promise<string | null> {
 async function write(scan: ScanFile, tmp: string): Promise<boolean> {
   const store = storage();
   if (scan.scanFormat === "PLY") {
-    // A PLY is the one format cleaned in its header alone, so its points (which can run to gigabytes) are streamed
-    // across untouched rather than read into memory.
+    // A binary PLY of fixed-size records (what splats are, and they run to gigabytes) is cleaned in its header alone
+    // and its size is known from it, so the records are streamed across untouched and whatever follows them is not.
     const { stream: first, size } = await store.getStream(scan.originalPath, { start: 0, end: PLY_HEADER_MAX - 1 });
-    const parsed = plyHeader(await readAll(first));
-    if (!parsed) return false;
-    const rest = parsed.bodyStart < size ? (await store.getStream(scan.originalPath, { start: parsed.bodyStart, end: size - 1 })).stream : null;
-    await store.putStream(tmp, Readable.from((async function* () {
-      yield parsed.header;
-      if (rest) yield* rest;
-    })()));
-    return true;
+    const layout = plyHeader(await readAll(first));
+    if (!layout) return false;
+    const fixed = plyFixedLength(layout);
+    if (fixed !== null) {
+      if (layout.bodyStart + fixed > size) return false;
+      const rest = fixed > 0 ? (await store.getStream(scan.originalPath, { start: layout.bodyStart, end: layout.bodyStart + fixed - 1 })).stream : null;
+      await store.putStream(tmp, Readable.from((async function* () {
+        yield layout.header;
+        if (rest) yield* rest;
+      })()));
+      return true;
+    }
+    // Text, or records with lists in them: their length is found by reading them, below.
   }
   const local = store.localPath?.(scan.originalPath);
   const original = local ? await readFile(local) : await readAll((await store.getStream(scan.originalPath)).stream);

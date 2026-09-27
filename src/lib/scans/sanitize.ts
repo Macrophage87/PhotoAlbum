@@ -182,6 +182,81 @@ async function cleanImage(bytes: Buffer, mimeType: string): Promise<Buffer> {
 
 const pad4 = (n: number) => (n + 3) & ~3;
 
+const COMPONENT_BYTES: Record<number, number> = { 5120: 1, 5121: 1, 5122: 2, 5123: 2, 5125: 4, 5126: 4 };
+/** Columns and rows of each accessor type; a matrix's columns each start on a four-byte boundary. */
+const SHAPE: Record<string, [number, number]> = { SCALAR: [1, 1], VEC2: [1, 2], VEC3: [1, 3], VEC4: [1, 4], MAT2: [2, 2], MAT3: [3, 3], MAT4: [4, 4] };
+
+type Accessor = { bufferView?: number; byteOffset?: number; componentType?: number; count?: number; type?: string; sparse?: { count?: number; indices?: { bufferView?: number; byteOffset?: number; componentType?: number }; values?: { bufferView?: number; byteOffset?: number } } };
+
+/**
+ * The views accessors read, each made again with only the bytes they read and zeros everywhere else, and cut off
+ * after the last byte read: whatever else a view held (bytes before an accessor's offset, between strided vertices,
+ * past the end of what is read, or belonging to another view it overlaps) is never copied. Null when an accessor
+ * reads outside its view, or cannot be understood.
+ */
+function accessorBytes(g: Cleaned, views: View[], only: Set<number>, source: (i: number) => Buffer | null): Map<number, Buffer> | null {
+  const out = new Map<number, { src: Buffer; dst: Buffer; end: number }>();
+  const target = (i: number) => {
+    let t = out.get(i);
+    if (!t) {
+      const src = source(i);
+      if (!src) return null;
+      t = { src, dst: Buffer.alloc(src.length), end: 0 };
+      out.set(i, t);
+    }
+    return t;
+  };
+  /** Copy `length` bytes at `start` of view `i`; false when that is outside it. */
+  const copy = (i: number, start: number, length: number): boolean => {
+    const t = target(i);
+    if (!t || start < 0 || length < 0 || start + length > t.src.length) return false;
+    t.src.copy(t.dst, start, start, start + length);
+    t.end = Math.max(t.end, start + length);
+    return true;
+  };
+  /** An element's bytes as runs within it (a matrix's columns are padded to four bytes), and its whole span. */
+  const layout = (componentType: number | undefined, type: string | undefined) => {
+    const size = COMPONENT_BYTES[componentType ?? -1];
+    const shape = SHAPE[type ?? ""];
+    if (!size || !shape) return null;
+    const [cols, rows] = shape;
+    const column = cols === 1 ? rows * size : pad4(rows * size);
+    return { runs: Array.from({ length: cols }, (_, c) => [c * column, rows * size] as const), span: cols * column };
+  };
+  for (const a of (g.accessors ?? []) as Accessor[]) {
+    const count = a.count ?? 0;
+    if (!Number.isInteger(count) || count < 0) return null;
+    const el = layout(a.componentType, a.type);
+    if (a.bufferView !== undefined && only.has(a.bufferView)) {
+      if (!el) return null;
+      const stride = views[a.bufferView].byteStride ?? el.span;
+      if (stride < el.span) return null;
+      const base = a.byteOffset ?? 0;
+      if (stride === el.span && el.runs.length === 1) {
+        if (!copy(a.bufferView, base, count * el.span)) return null;
+      } else {
+        for (let n = 0; n < count; n++) for (const [at, len] of el.runs) if (!copy(a.bufferView, base + n * stride + at, len)) return null;
+      }
+    }
+    const sparse = a.sparse;
+    if (sparse) {
+      const n = sparse.count ?? 0;
+      const idx = sparse.indices;
+      if (idx?.bufferView !== undefined && only.has(idx.bufferView)) {
+        const size = COMPONENT_BYTES[idx.componentType ?? -1];
+        if (!size || !copy(idx.bufferView, idx.byteOffset ?? 0, n * size)) return null;
+      }
+      const values = sparse.values;
+      if (values?.bufferView !== undefined && only.has(values.bufferView)) {
+        if (!el || !copy(values.bufferView, values.byteOffset ?? 0, n * el.span)) return null;
+      }
+    }
+  }
+  // A view only ever named by accessors that read nothing of it has nothing in it to keep.
+  for (const i of only) if (!out.has(i) && !target(i)) return null;
+  return new Map([...out].map(([i, t]) => [i, t.dst.subarray(0, Math.max(t.end, 1))]));
+}
+
 /** A cleaned GLB, or null when it holds something this cannot clean (and so must not be handed out). */
 export async function sanitizeGlb(input: Buffer): Promise<Buffer | null> {
   if (input.length < 20 || input.readUInt32LE(0) !== GLB_MAGIC || input.readUInt32LE(4) !== 2) return null;
@@ -221,21 +296,47 @@ export async function sanitizeGlb(input: Buffer): Promise<Buffer | null> {
   const refs = viewRefs(g);
   const used = [...new Set(refs.map((r) => r.get()).filter((i): i is number => i !== undefined))].sort((a, b) => a - b);
   if (used.some((i) => !views[i])) return null;
+  const source = (i: number): Buffer | null => {
+    const start = views[i].byteOffset ?? 0;
+    const bytes = bin!.subarray(start, start + views[i].byteLength);
+    return bytes.length === views[i].byteLength ? bytes : null;
+  };
+
+  // A view is read one way: as a picture (re-encoded whole), as Draco's compressed mesh (opaque, kept whole), or by
+  // accessors (only the bytes they read). One read two ways is not something this can clean.
+  const imageViews = new Set((g.images ?? []).map((img) => img.bufferView).filter((i): i is number => i !== undefined));
+  const dracoViews = new Set<number>();
+  for (const m of g.meshes ?? []) for (const p of m.primitives ?? []) {
+    const i = p.extensions?.KHR_draco_mesh_compression?.bufferView;
+    if (i !== undefined) dracoViews.add(i);
+  }
+  const accessorViews = new Set<number>();
+  for (const a of (g.accessors ?? []) as Accessor[]) for (const i of [a.bufferView, a.sparse?.indices?.bufferView, a.sparse?.values?.bufferView]) if (i !== undefined) accessorViews.add(i);
+  if ([...imageViews].some((i) => dracoViews.has(i) || accessorViews.has(i)) || [...dracoViews].some((i) => accessorViews.has(i))) return null;
+  const read = accessorBytes(g, views, accessorViews, source);
+  if (!read) return null;
 
   // Every picture, embedded or inlined, is re-encoded; one that is neither, or of a kind sharp cannot write, is not handed out.
-  const replaced = new Map<number, Buffer>();
+  const replaced = new Map<number, Buffer>(read);
   for (const image of g.images ?? []) {
     const type = image.mimeType ?? image.uri?.match(/^data:([^;,]+)/)?.[1] ?? "";
     if (!IMAGE_TYPES.has(type)) return null;
     if (image.bufferView !== undefined) {
+      // A loader reads the view and ignores the address, so the address — a whole second picture, perhaps — goes.
+      delete image.uri;
       if (replaced.has(image.bufferView)) continue;
-      const view = views[image.bufferView];
-      const start = view.byteOffset ?? 0;
-      replaced.set(image.bufferView, await cleanImage(bin!.subarray(start, start + view.byteLength), type));
+      const bytes = source(image.bufferView);
+      if (!bytes) return null;
+      replaced.set(image.bufferView, await cleanImage(bytes, type));
     } else if (image.uri?.startsWith("data:")) {
       const encoded = image.uri.slice(image.uri.indexOf(",") + 1);
       image.uri = `data:${type};base64,${(await cleanImage(Buffer.from(encoded, "base64"), type)).toString("base64")}`;
     } else return null;
+  }
+  for (const i of dracoViews) {
+    const bytes = source(i);
+    if (!bytes) return null;
+    replaced.set(i, bytes);
   }
 
   const renumber = new Map(used.map((old, i) => [old, i]));
@@ -243,11 +344,9 @@ export async function sanitizeGlb(input: Buffer): Promise<Buffer | null> {
   const kept: View[] = [];
   let offset = 0;
   for (const old of used) {
-    const view = views[old];
-    const start = view.byteOffset ?? 0;
-    const bytes = replaced.get(old) ?? bin!.subarray(start, start + view.byteLength);
-    if (bytes.length !== view.byteLength && !replaced.has(old)) return null;
-    kept.push({ ...view, buffer: 0, byteOffset: offset, byteLength: bytes.length });
+    const bytes = replaced.get(old);
+    if (!bytes) return null;
+    kept.push({ ...views[old], buffer: 0, byteOffset: offset, byteLength: bytes.length });
     parts.push(bytes);
     const padded = pad4(bytes.length);
     if (padded > bytes.length) parts.push(Buffer.alloc(padded - bytes.length));
@@ -289,15 +388,25 @@ function chunkHeader(length: number, type: number): Buffer {
 
 /** How far into a PLY its header may run. Real ones are a few hundred bytes. */
 export const PLY_HEADER_MAX = 64 * 1024;
-const PLY_KEPT = new Set(["ply", "format", "element", "property"]);
+
+const PLY_TYPE_BYTES: Record<string, number> = { char: 1, uchar: 1, int8: 1, uint8: 1, short: 2, ushort: 2, int16: 2, uint16: 2, int: 4, uint: 4, int32: 4, uint32: 4, float: 4, float32: 4, double: 8, float64: 8 };
+const PLY_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,31}$/;
+const PLY_FORMATS = new Set(["ascii", "binary_little_endian", "binary_big_endian"]);
+
+type PlyProperty = { type: string } | { list: [count: string, item: string] };
+export type PlyLayout = { header: Buffer; bodyStart: number; format: string; elements: { count: number; properties: PlyProperty[] }[] };
 
 /**
- * A PLY's header with only the lines that say how to read its points (`ply`, `format`, `element`, `property`,
- * `end_header`), and where the points start. `comment`, `obj_info` and anything else go, whatever their case. Null
- * when `head` (the file's first bytes) holds no whole header.
+ * A PLY's header made again from only what reading its points needs — `ply`, `format <type> <version>`,
+ * `element <name> <count>`, `property <type> <name>`, `property list <type> <type> <name>`, `end_header` — each line
+ * rebuilt from those tokens alone, and where the points start. `comment`, `obj_info` and anything else go, whatever
+ * their case; a name that is not a plain identifier, or anything malformed, withholds the file. Null too when `head`
+ * (the file's first bytes) holds no whole header.
  */
-export function plyHeader(head: Buffer): { header: Buffer; bodyStart: number } | null {
+export function plyHeader(head: Buffer): PlyLayout | null {
   const lines: string[] = [];
+  const elements: PlyLayout["elements"] = [];
+  let format = "";
   let eol = "\n";
   for (let at = 0; at < Math.min(head.length, PLY_HEADER_MAX); ) {
     const nl = head.indexOf(0x0a, at);
@@ -307,21 +416,110 @@ export function plyHeader(head: Buffer): { header: Buffer; bodyStart: number } |
     if (at === 0) {
       if (line !== "ply") return null;
       if (raw.endsWith("\r")) eol = "\r\n";
+      lines.push("ply");
+      at = nl + 1;
+      continue;
     }
     at = nl + 1;
-    if (line.trim().toLowerCase() === "end_header") {
+    const t = line.trim().split(/\s+/);
+    const word = t[0].toLowerCase();
+    if (word === "end_header" && t.length === 1) {
+      if (!format) return null;
       lines.push("end_header");
-      return { header: Buffer.from(lines.map((l) => l + eol).join(""), "latin1"), bodyStart: at };
+      return { header: Buffer.from(lines.map((l) => l + eol).join(""), "latin1"), bodyStart: at, format, elements };
     }
-    if (PLY_KEPT.has(line.trim().split(/\s+/)[0].toLowerCase())) lines.push(line.trim());
+    if (word === "format") {
+      if (format || !PLY_FORMATS.has(t[1]) || !/^\d+(\.\d+)?$/.test(t[2] ?? "")) return null;
+      format = t[1];
+      lines.push(`format ${t[1]} ${t[2]}`);
+    } else if (word === "element") {
+      if (!PLY_NAME.test(t[1] ?? "") || !/^\d+$/.test(t[2] ?? "")) return null;
+      elements.push({ count: Number(t[2]), properties: [] });
+      lines.push(`element ${t[1]} ${t[2]}`);
+    } else if (word === "property") {
+      const element = elements.at(-1);
+      if (!element) return null;
+      if (t[1] === "list") {
+        if (!PLY_TYPE_BYTES[t[2]] || !PLY_TYPE_BYTES[t[3]] || !PLY_NAME.test(t[4] ?? "")) return null;
+        element.properties.push({ list: [t[2], t[3]] });
+        lines.push(`property list ${t[2]} ${t[3]} ${t[4]}`);
+      } else {
+        if (!PLY_TYPE_BYTES[t[1]] || !PLY_NAME.test(t[2] ?? "")) return null;
+        element.properties.push({ type: t[1] });
+        lines.push(`property ${t[1]} ${t[2]}`);
+      }
+    }
+    // comment, obj_info, and anything this does not know: left behind.
   }
   return null;
 }
 
-/** A PLY with only its reading instructions left in the header; the points themselves are left as they are. */
+/** How long a binary body whose properties are all of fixed size must be; null when it has lists, or is text. */
+export function plyFixedLength(layout: PlyLayout): number | null {
+  if (layout.format === "ascii") return null;
+  let total = 0;
+  for (const e of layout.elements) {
+    let row = 0;
+    for (const p of e.properties) {
+      if ("list" in p) return null;
+      row += PLY_TYPE_BYTES[p.type];
+    }
+    total += e.count * row;
+  }
+  return total;
+}
+
+/**
+ * How much of `body` the header's elements take — a text file's one line per record, a binary file's records walked
+ * property by property, list lengths included — so nothing after the last record is kept. Null when the body is
+ * shorter than the header says.
+ */
+export function plyBodyLength(layout: PlyLayout, body: Buffer): number | null {
+  const fixed = plyFixedLength(layout);
+  if (fixed !== null) return fixed <= body.length ? fixed : null;
+  const records = layout.elements.reduce((n, e) => n + e.count, 0);
+  if (layout.format === "ascii") {
+    let at = 0;
+    for (let n = 0; n < records; n++) {
+      const nl = body.indexOf(0x0a, at);
+      // The last record may end the file without a newline.
+      if (nl < 0) return n === records - 1 && at < body.length ? body.length : null;
+      at = nl + 1;
+    }
+    return at;
+  }
+  const little = layout.format === "binary_little_endian";
+  const readCount = (type: string, at: number): number => {
+    const size = PLY_TYPE_BYTES[type];
+    if (at + size > body.length) return -1;
+    if (type.startsWith("float") || type === "double") return -1; // a list's length is an integer
+    const signed = !type.startsWith("u");
+    const v = size === 1 ? (signed ? body.readInt8(at) : body.readUInt8(at)) : size === 2 ? (little ? (signed ? body.readInt16LE(at) : body.readUInt16LE(at)) : signed ? body.readInt16BE(at) : body.readUInt16BE(at)) : little ? (signed ? body.readInt32LE(at) : body.readUInt32LE(at)) : signed ? body.readInt32BE(at) : body.readUInt32BE(at);
+    return v;
+  };
+  let at = 0;
+  for (const e of layout.elements) {
+    for (let n = 0; n < e.count; n++) {
+      for (const p of e.properties) {
+        if ("list" in p) {
+          const count = readCount(p.list[0], at);
+          if (count < 0) return null;
+          at += PLY_TYPE_BYTES[p.list[0]] + count * PLY_TYPE_BYTES[p.list[1]];
+        } else at += PLY_TYPE_BYTES[p.type];
+        if (at > body.length) return null;
+      }
+    }
+  }
+  return at;
+}
+
+/** A PLY with only its reading instructions left in the header, and its records and nothing after them. */
 export function sanitizePly(input: Buffer): Buffer | null {
-  const parsed = plyHeader(input);
-  return parsed ? Buffer.concat([parsed.header, input.subarray(parsed.bodyStart)]) : null;
+  const layout = plyHeader(input);
+  if (!layout) return null;
+  const body = input.subarray(layout.bodyStart);
+  const length = plyBodyLength(layout, body);
+  return length === null ? null : Buffer.concat([layout.header, body.subarray(0, length)]);
 }
 
 // ---- SPZ -------------------------------------------------------------------------------------------------------------

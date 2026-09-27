@@ -216,6 +216,76 @@ describe("what a GLB keeps: only what is known to draw it", () => {
   });
 });
 
+describe("copying only the bytes something reads", () => {
+  const SECRET = Buffer.from("SECRET-HIDDEN-BYTES!");
+  const quad = () => {
+    const b = Buffer.alloc(48);
+    [-1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 1, 0].forEach((x, i) => b.writeFloatLE(x, i * 4));
+    return b;
+  };
+  /** A GLB of one mesh whose accessors and views the test lays out itself. */
+  const mesh = (bin: Buffer, bufferViews: object[], accessors: object[], extra: object = {}) =>
+    glbOf({ asset: { version: "2.0" }, scene: 0, scenes: [{ nodes: [0] }], nodes: [{ mesh: 0 }], meshes: [{ primitives: [{ attributes: { POSITION: 0 } }] }], accessors, bufferViews, buffers: [{ byteLength: bin.length }], ...extra }, bin);
+  const vec3 = (bufferView: number, byteOffset = 0) => ({ bufferView, byteOffset, componentType: 5126, count: 4, type: "VEC3" });
+  const clean = async (glb: Buffer) => {
+    const out = (await sanitizeGlb(glb))!;
+    expect(out).not.toBeNull();
+    expect(out.includes(SECRET)).toBe(false);
+    return parseGlb(out);
+  };
+
+  it("cuts a view longer than what reads it (oversize view)", async () => {
+    const bin = Buffer.concat([quad(), SECRET]);
+    const { json, view } = await clean(mesh(bin, [{ buffer: 0, byteOffset: 0, byteLength: bin.length }], [vec3(0)]));
+    expect(json.bufferViews[0].byteLength).toBe(48);
+    expect(view(0).equals(quad())).toBe(true);
+  });
+
+  it("copies from a view only its accessor's bytes when views overlap (overlap view)", async () => {
+    // View 1 is the whole buffer, secret included; its accessor reads only the quad at the end.
+    const bin = Buffer.concat([SECRET, quad()]);
+    const views = [{ buffer: 0, byteOffset: SECRET.length, byteLength: 48 }, { buffer: 0, byteOffset: 0, byteLength: bin.length }];
+    const { json, view } = await clean(mesh(bin, views, [vec3(0), vec3(1, SECRET.length)], { meshes: [{ primitives: [{ attributes: { POSITION: 0, NORMAL: 1 } }] }] }));
+    expect(view(1).subarray(json.accessors[1].byteOffset).equals(quad())).toBe(true);
+    expect(view(1).subarray(0, SECRET.length).every((b: number) => b === 0)).toBe(true);
+  });
+
+  it("leaves out what sits before an accessor's offset (accessor offset)", async () => {
+    const bin = Buffer.concat([SECRET, quad()]);
+    const { view } = await clean(mesh(bin, [{ buffer: 0, byteOffset: 0, byteLength: bin.length }], [vec3(0, SECRET.length)]));
+    expect(view(0).subarray(SECRET.length).equals(quad())).toBe(true);
+  });
+
+  it("zeroes what sits between strided vertices (stride)", async () => {
+    const q = quad();
+    const pad = Buffer.from("SECR");
+    // Each vertex followed by four bytes of something else, as an interleaved buffer carries a colour.
+    const bin = Buffer.concat([0, 1, 2, 3].flatMap((i) => [q.subarray(i * 12, i * 12 + 12), pad]));
+    const out = (await sanitizeGlb(mesh(bin, [{ buffer: 0, byteOffset: 0, byteLength: bin.length, byteStride: 16 }], [vec3(0)])))!;
+    expect(out.includes(pad)).toBe(false);
+    const { json, view } = parseGlb(out);
+    expect(json.bufferViews[0].byteStride).toBe(16);
+    for (let i = 0; i < 4; i++) expect(view(0).subarray(i * 16, i * 16 + 12).equals(q.subarray(i * 12, i * 12 + 12))).toBe(true);
+  });
+
+  it("drops an image's address when it also has a view, which is all a loader reads (both uri and bufferView)", async () => {
+    const texture = await phoneJpeg();
+    const { json, bin } = await appGlb(texture);
+    const both = { ...json, images: [{ ...json.images[0], uri: `data:image/jpeg;base64,${texture.toString("base64")}` }] };
+    const out = (await sanitizeGlb(glbOf(both, bin)))!;
+    for (const leak of LEAKS) expect(out.includes(Buffer.from(leak)), leak).toBe(false);
+    expect(parseGlb(out).json.images[0].uri).toBeUndefined();
+  });
+
+  it("withholds a file whose accessor reads past its view, or a view read two ways", async () => {
+    const bin = quad();
+    expect(await sanitizeGlb(mesh(bin, [{ buffer: 0, byteOffset: 0, byteLength: 40 }], [vec3(0)]))).toBeNull();
+    const texture = await phoneJpeg();
+    const { json, bin: withTexture } = await appGlb(texture);
+    expect(await sanitizeGlb(glbOf({ ...json, accessors: [{ ...json.accessors[0], bufferView: 0 }, json.accessors[1]] }, withTexture))).toBeNull();
+  });
+});
+
 describe("cleaning the other formats", () => {
   const points = Buffer.from([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
 
@@ -233,6 +303,33 @@ describe("cleaning the other formats", () => {
     expect(clean).toBe("ply\r\nformat ascii 1.0\r\nelement vertex 1\r\nproperty float x\r\nend_header\r\n1.5\r\n");
     expect(sanitizePly(Buffer.from("ply\nformat ascii 1.0\ncomment end_header\n"))).toBeNull();
     expect(sanitizePly(Buffer.from("not a ply\nend_header\n"))).toBeNull();
+  });
+
+  it("rebuilds each header line from its own tokens, and withholds a name that is not a plain identifier (PLY trailing tokens)", () => {
+    const ply = Buffer.concat([Buffer.from("ply\nformat binary_little_endian 1.0 SECRET-FORMAT\nelement vertex 1 SECRET-ELEMENT\nproperty float x SECRET-PROPERTY\nproperty list uchar int vertex_indices SECRET-LIST\nend_header\n"), Buffer.from([0, 0, 128, 63, 0])]);
+    const clean = sanitizePly(ply)!;
+    expect(clean.toString("latin1")).toBe("ply\nformat binary_little_endian 1.0\nelement vertex 1\nproperty float x\nproperty list uchar int vertex_indices\nend_header\n\u0000\u0000\u0080?\u0000");
+    for (const bad of ["element vertex-44.35 1", "element vertex 1\nproperty float lat=44.35", `element vertex 1\nproperty float ${"x".repeat(33)}`, "element vertex many"]) {
+      expect(sanitizePly(Buffer.from(`ply\nformat ascii 1.0\n${bad}\nend_header\n`)), bad).toBeNull();
+    }
+  });
+
+  it("keeps a PLY's records and nothing after them (SECRETPLYTAIL)", () => {
+    const tail = Buffer.from("SECRETPLYTAIL at 44.35,-68.2");
+    // Binary, fixed-size records.
+    const fixed = Buffer.concat([Buffer.from("ply\nformat binary_little_endian 1.0\nelement vertex 1\nproperty float x\nproperty float y\nproperty float z\nend_header\n"), points, tail]);
+    expect(sanitizePly(fixed)!.subarray(-points.length).equals(points)).toBe(true);
+    expect(sanitizePly(fixed)!.includes(tail)).toBe(false);
+    // Binary with a list: two vertices, one triangle-ish face of three indices, then the tail.
+    const faces = Buffer.concat([Buffer.from("ply\nformat binary_little_endian 1.0\nelement vertex 2\nproperty uchar v\nelement face 1\nproperty list uchar int vertex_indices\nend_header\n"), Buffer.from([7, 8, 3]), Buffer.alloc(12, 1), tail]);
+    const cleanFaces = sanitizePly(faces)!;
+    expect(cleanFaces.includes(tail)).toBe(false);
+    expect(cleanFaces.subarray(-15).equals(Buffer.concat([Buffer.from([7, 8, 3]), Buffer.alloc(12, 1)]))).toBe(true);
+    // Text: two records, one per line.
+    const text = Buffer.from(`ply\nformat ascii 1.0\nelement vertex 2\nproperty float x\nend_header\n1.5\n2.5\n${tail}\n`);
+    expect(sanitizePly(text)!.toString("latin1").endsWith("end_header\n1.5\n2.5\n")).toBe(true);
+    // Shorter than its header says: withheld.
+    expect(sanitizePly(Buffer.concat([Buffer.from("ply\nformat binary_little_endian 1.0\nelement vertex 2\nproperty float x\nend_header\n"), Buffer.alloc(4)]))).toBeNull();
   });
 
   /** An SPZ's decompressed bytes: header for `n` degree-0 version-2 points, then their arrays. */
@@ -335,7 +432,7 @@ describe("a scan's file, for somebody outside the family", () => {
 
   it("streams a PLY's points across under a cleaned header, and puts the copy in place whole", async () => {
     const points = Buffer.alloc(300_000, 9);
-    const ply = Buffer.concat([Buffer.from("ply\nformat binary_little_endian 1.0\ncomment SECRET-APP 44.35,-68.2\nelement vertex 25000\nproperty float x\nproperty float y\nproperty float z\nend_header\n"), points]);
+    const ply = Buffer.concat([Buffer.from("ply\nformat binary_little_endian 1.0\ncomment SECRET-APP 44.35,-68.2\nelement vertex 25000\nproperty float x\nproperty float y\nproperty float z\nend_header\n"), points, Buffer.from("SECRETPLYTAIL")]);
     await storage().putBuffer("scans-test/ply/original.ply", ply);
     const trip = await db.trip.findFirstOrThrow();
     const u = await db.user.findFirstOrThrow();
