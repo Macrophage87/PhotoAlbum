@@ -11,3 +11,17 @@ export function PageSkeleton() {
     </div>
   );
 }
+
+/** The same inside a trip, collection or shared page's own layout, which already gives the width and padding. */
+export function SectionSkeleton() {
+  return (
+    <div className="space-y-4 animate-pulse">
+      <div className="h-8 w-48 bg-surface-alt rounded" />
+      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-5 gap-2">
+        {Array.from({ length: 10 }).map((_, i) => (
+          <div key={i} className="aspect-square bg-surface-alt rounded-theme" />
+        ))}
+      </div>
+    </div>
+  );
+}
