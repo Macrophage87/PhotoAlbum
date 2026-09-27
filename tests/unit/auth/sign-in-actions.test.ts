@@ -124,7 +124,7 @@ describe("sign-in links and the Admin page", () => {
     return answer;
   };
   const TOO_MANY = { status: "error", message: "Too many sign-in links were asked for just now. Please wait 10 minutes and try again." };
-  const RECENT = { status: "error", message: "A sign-in link was sent to this address in the last few minutes. Please use the newest one in your email." };
+  const RECENT = { status: "error", message: "If this address belongs to a family member, sign-in links have already gone to it in the last few minutes. Please use the newest one in that inbox." };
 
   it("the sign-in form keys its per-client limit on the proxy's own X-Forwarded-For entry", async () => {
     // The requester varies the entries it writes itself; the last one, which the proxy appended, stays the same.
@@ -224,6 +224,6 @@ describe("sign-in links and the Admin page", () => {
     // An address that already holds three live links hears that first.
     await db.user.create({ data: { email: "full@example.com", role: "MEMBER" } });
     for (let n = 0; n < 3; n++) await requestMagicLink("full@example.com", { db });
-    expect(await ask("full@example.com", "198.19.0.3")).toEqual({ status: "error", message: "A sign-in link was sent to this address in the last few minutes. Please use the newest one in your email." });
+    expect(await ask("full@example.com", "198.19.0.3")).toEqual({ status: "error", message: "If this address belongs to a family member, sign-in links have already gone to it in the last few minutes. Please use the newest one in that inbox." });
   });
 });
