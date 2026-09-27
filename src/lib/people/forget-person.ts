@@ -19,13 +19,16 @@ import { dropRejudgeJobs, forgetJudgedNames } from "@/lib/annotation/rejudge";
  * from that moment), then the text is scrubbed, and only then does anything get deleted — so a run cut short leaves
  * the faces that say where to scrub, and running it again finds the same photographs.
  */
+/** Faces deleted per statement when somebody is forgotten. */
+const FACE_BATCH = 2000;
+
 export async function forgetPerson(personId: string, opts: { keepName: boolean; byUserId: string | null; later?: boolean; list?: boolean }): Promise<void> {
   const { keepName, later = false } = opts;
   const person = await db.person.findUniqueOrThrow({ where: { id: personId } });
   // One forget at a time, and while it runs no answer from the helper is stored at all (see withForgetLock), so none
   // can bring the name back while the photographs to scrub are still being found. Every step checks the lock is
   // still held: no forget goes on unlocked.
-  const left = await withForgetLock(async (held) => {
+  await withForgetLock(async (held) => {
     await held.assertHeld();
     const now = new Date();
     await db.appSetting.upsert({ where: { id: "app" }, create: { id: "app", lastForgetAt: now }, update: { lastForgetAt: now } });
@@ -54,7 +57,9 @@ export async function forgetPerson(personId: string, opts: { keepName: boolean; 
     await held.assertHeld();
     await db.person.update({
       where: { id: personId },
-      data: { faceIndexing: false, nameInDescriptions: false, pendingDecision: false, keepNameOnPhotos: keepName, optedOutAt: person.optedOutAt ?? now, faceIndexingSetAt: now, namingWithdrawnAt: null, ...(later ? { forgetPendingAt: person.forgetPendingAt ?? now, forgetPendingById: person.forgetPendingById ?? opts.byUserId } : {}) },
+      // Pending until the record is gone, whether it waits for the key or not: a forget cut short anywhere (a lost
+      // connection, a timeout) is finished by the pending-forget pass rather than left half done with the name on it.
+      data: { faceIndexing: false, nameInDescriptions: false, pendingDecision: false, keepNameOnPhotos: keepName, optedOutAt: person.optedOutAt ?? now, faceIndexingSetAt: now, namingWithdrawnAt: null, ...(!keepName ? { forgetPendingAt: person.forgetPendingAt ?? now, forgetPendingById: person.forgetPendingById ?? opts.byUserId } : {}) },
     });
     // Their names, hashed, outlive their record: see tombstone.ts. A one-word name is kept with the photographs,
     // trips, collections and activities that named them, the only place it is looked for. Stamped again once they
@@ -76,6 +81,9 @@ export async function forgetPerson(personId: string, opts: { keepName: boolean; 
     // What is left mentioning them is what members wrote (or the helper's trip descriptions, where only a name that
     // is also a word is left); it is listed so it can be edited by hand.
     const after = await memberTextMentioning(m, tagged, personId);
+    // The list stays until an admin (or whoever forgot them) has seen to it: ids and fields, never the name. Made now,
+    // before anything is deleted, so a forget finished later by the pending pass (which lists nothing) has one.
+    if (!keepName && memberTextCount(after) && opts.list !== false) await db.forgetLeftover.create({ data: { items: leftoverItems(after), createdById: opts.byUserId } });
     await held.assertHeld();
     await db.faceCluster.deleteMany({ where: { personId } });
     await db.face.deleteMany({ where: { proposedPersonId: personId } });
@@ -83,13 +91,17 @@ export async function forgetPerson(personId: string, opts: { keepName: boolean; 
       // Waiting for the key, their tags stay (without templates) to say where to look once it is set.
       await db.$executeRaw`UPDATE "Face" SET embedding = NULL, "clusterId" = NULL WHERE "personId" = ${personId}`;
     } else {
-      // Forgetting entirely also removes the person page; the record of who is in which photo went with the faces.
-      // Their names recorded as judged go with the record, rather than waiting in clear for the next sweep.
+      // Forgetting entirely also removes the person page; the record of who is in which photo goes with the faces,
+      // a batch at a time (somebody can be on thousands), outside any transaction: a run cut short is finished by the
+      // pending pass. Their names recorded as judged go with the record, rather than waiting in clear for the sweep.
+      for (;;) {
+        const gone = await db.$executeRaw`DELETE FROM "Face" WHERE id IN (SELECT id FROM "Face" WHERE "personId" = ${personId} LIMIT ${FACE_BATCH})`;
+        if (gone < FACE_BATCH) break;
+      }
       await db.$transaction(async (tx) => {
-        await tx.face.deleteMany({ where: { personId } });
         await forgetJudgedNames(tx, `person:${personId}`);
         await tx.person.delete({ where: { id: personId } });
-      });
+      }, { timeout: 30_000, maxWait: 10_000 });
     }
     // Until the record was gone the remembered names still counted as somebody's: an answer asked for before now
     // about any of these photographs is thrown away, and names read before now are read again.
@@ -97,12 +109,9 @@ export async function forgetPerson(personId: string, opts: { keepName: boolean; 
     const settled = new Date();
     await db.photo.updateMany({ where: { id: { in: photoIds } }, data: { namesScrubbedAt: settled } });
     await db.appSetting.update({ where: { id: "app" }, data: { lastForgetAt: settled } });
-    return after;
   });
   // Nor in the queue: judging jobs asked for them are dropped, finished ones included.
   if (!keepName && !later) await dropRejudgeJobs(personId, [person.name, ...person.formerNames]);
-  // The list stays until an admin (or whoever forgot them) has seen to it: ids and fields, never the name.
-  if (!keepName && memberTextCount(left) && opts.list !== false) await db.forgetLeftover.create({ data: { items: leftoverItems(left), createdById: opts.byUserId } });
 }
 
 /** Forget everybody waiting on FORGET_KEY, once it is set. At start-up and overnight. */
