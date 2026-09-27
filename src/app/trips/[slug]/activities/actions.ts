@@ -13,7 +13,7 @@ import { permittedNames } from "@/lib/people/gates";
 import { canEditContainer, NOT_YOUR_CONTAINER } from "@/lib/auth/ownership";
 import { activityInputFromForm, formTimeToInstant, localInputToInstant } from "@/lib/activities/validation";
 import { deleteActivityAndRefile, reassignPhotosForActivity } from "@/lib/activities/reassign";
-import { deleteTrackAndItsPositions } from "@/lib/tracks/remove";
+import { deleteTrackAndItsPositions, placeAgain } from "@/lib/tracks/remove";
 import { fieldErrors, participantsFromForm } from "@/lib/trips/validation";
 import type { ActivityType } from "@/generated/prisma/enums";
 import type { ActivityFormState } from "@/components/activities/ActivityForm";
@@ -65,7 +65,7 @@ export async function updateActivity(slug: string, id: string, _prev: ActivityFo
   const parsed = activityInputFromForm(fd);
   if (!parsed.success) return { status: "error", fieldErrors: fieldErrors(parsed.error) };
   const v = parsed.data;
-  const existing = await db.activity.findFirst({ where: { id, tripId: trip.id }, select: { id: true, startTime: true, endTime: true, description: true, descriptionMembersOnly: true, descriptionTitleOnly: true, descriptionSharedAt: true, descriptionByHelper: true } });
+  const existing = await db.activity.findFirst({ where: { id, tripId: trip.id }, select: { id: true, trackId: true, participants: { select: { id: true } }, startTime: true, endTime: true, description: true, descriptionMembersOnly: true, descriptionTitleOnly: true, descriptionSharedAt: true, descriptionByHelper: true } });
   if (!existing) return { status: "error", message: "Activity not found" };
   // `set` reconciles to exactly what was ticked, so unticking somebody removes them; a form that never carried the
   // control at all leaves the list as it was.
@@ -86,6 +86,10 @@ export async function updateActivity(slug: string, id: string, _prev: ActivityFo
     },
   });
   await reassignPhotosForActivity(id);
+  // Who was on it decides whose photographs its track may place (see geotag-photos): naming people takes back the
+  // places it gave everybody else's, and un-naming them lets it place theirs.
+  const before = new Set(existing.participants.map((p) => p.id));
+  if (existing.trackId && there && (there.length !== before.size || there.some((pid) => !before.has(pid)))) await placeAgain(trip.id);
   revalidatePath(`/trips/${slug}`, "layout");
   redirect(`/trips/${slug}/activities/${id}`);
 }

@@ -171,7 +171,7 @@ export async function geotagPhotos(job: GeotagPhotosJob): Promise<{ updated: num
         { gpsSource: "TRACK" as const, ...trusted, OR: fresh.map((t) => (t.source === "GOOGLE" ? { uploaderId: t.uploaderId, ...window(t) } : window(t))) },
       ],
     },
-    select: { id: true, uploaderId: true, takenAt: true, gpsSource: true, lat: true, lng: true, altitude: true },
+    select: { id: true, uploaderId: true, takenAt: true, gpsSource: true, lat: true, lng: true, altitude: true, placeEstimateName: true },
   });
   if (!photos.length) return { updated: 0 };
 
@@ -185,7 +185,7 @@ export async function geotagPhotos(job: GeotagPhotosJob): Promise<{ updated: num
     return pts;
   };
 
-  let updated = 0;
+  let updated = 0, cleared = 0;
   for (const photo of photos) {
     const t = photo.takenAt!.getTime();
     const chosen = choose(tracks.filter((track) => onIt(track, photo.uploaderId)), photo.uploaderId, t, (track) => {
@@ -213,8 +213,18 @@ export async function geotagPhotos(job: GeotagPhotosJob): Promise<{ updated: num
         data: { lat: pos.lat, lng: pos.lng, altitude: pos.ele ?? null, gpsSource: "TRACK" },
       });
       updated += r.count;
+    } else if (photo.gpsSource === "TRACK") {
+      // Placed from a track that may no longer place it: somebody's ride whose activity has since named who was on
+      // it, and not this uploader. No track of the trip gives it a place now, so the one it has is taken back, under
+      // the same guard as placing it; a guess it replaced is asked for again, as when a track is deleted.
+      const r = await db.photo.updateMany({
+        where: { id: photo.id, takenAt: photo.takenAt, placeSetById: null, gpsSource: "TRACK" },
+        data: { lat: null, lng: null, altitude: null, gpsSource: null, ...(photo.placeEstimateName !== null ? { placeEstimatedAt: null } : {}) },
+      });
+      cleared += r.count;
     }
   }
+  if (cleared) console.log(`[geotag-photos] took back ${cleared} track position(s) no track gives any more on trip ${job.tripId}`);
   if (updated) console.log(`[geotag-photos] positioned ${updated} photo(s) on trip ${job.tripId}`);
   return { updated };
 }
