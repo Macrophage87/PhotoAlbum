@@ -22,8 +22,9 @@ import { enqueueAnimalDetection } from "./detect-animals";
 
 export type VideoRenditions = { mp4: { key: string; w: number; h: number; bytes: number }; poster: { key: string } };
 
-export function tooLongMessage(durationS: number, limit: number): string {
-  return `This video is ${Math.round(durationS)} seconds long; clips uploaded here are limited to ${limit} seconds. Upload longer videos to YouTube as Unlisted and add the link instead.`;
+/** `durationS` is null when all that is known is that it runs past the limit. */
+export function tooLongMessage(durationS: number | null, limit: number): string {
+  return `This video is ${durationS === null ? `more than ${limit}` : Math.round(durationS)} seconds long; clips uploaded here are limited to ${limit} seconds. Upload longer videos to YouTube as Unlisted and add the link instead.`;
 }
 
 /**
@@ -51,13 +52,18 @@ export async function transcodeVideo(job: TranscodeVideoJob, signal?: AbortSigna
       const info = await probe(input, signal);
       const limit = env().MAX_CLIP_SECONDS;
       // A clip already accepted is not refused on a Re-process because the limit has since been lowered.
-      if (!photo.videoRenditions && info.durationS !== null && info.durationS > limit) throw new Error(tooLongMessage(info.durationS, limit));
+      const limited = !photo.videoRenditions;
+      if (limited && info.durationS !== null && info.durationS > limit) throw new Error(tooLongMessage(info.durationS, limit));
 
       const mp4 = path.join(dir, "video.mp4");
       const poster = path.join(dir, "poster.jpg");
-      await ffmpeg(transcodeArgs(input, mp4, info), signal);
-      await ffmpeg(posterArgs(mp4, poster, info.durationS), signal);
+      // A container may not say how long it is (WebM straight from a browser's recorder has no duration), or say
+      // wrongly: the clip itself is measured, decoded no further than just past the limit.
+      await ffmpeg(transcodeArgs(input, mp4, info, limited ? limit + 1 : undefined), signal);
       const out = await probe(mp4, signal);
+      // Half a second over is the encoder's padding, not the clip; one too long stops a whole second past the limit.
+      if (limited && out.durationS !== null && out.durationS > limit + 0.5) throw new Error(tooLongMessage(null, limit));
+      await ffmpeg(posterArgs(mp4, poster, info.durationS ?? out.durationS), signal);
       signal?.throwIfAborted();
       const mp4Key = `${photo.storageKey}/video.mp4`;
       const posterKey = `${photo.storageKey}/poster.jpg`;
