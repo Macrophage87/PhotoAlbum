@@ -452,6 +452,9 @@ describe("cleaning the other formats", () => {
     expect(one("float", "3.14159274101257324")).toBe("3.1415927");
     expect(one("float32", "-12.345678")).toBe("-12.345678");
     expect(one("float", "1e39")).toBe("inf");
+    // Too small for a float32 at all: zero, whatever the file wrote.
+    expect(one("float", "4.43186e-200")).toBe("0");
+    expect(one("float", "-4.43186e-200")).toBe("-0");
     expect(one("double", "0.1000000001")).toBe("0.1000000001");
     expect(one("double", "3.14159274101257324")).toBe("3.1415927410125732");
     for (const [token, word] of [["NaN", "nan"], ["-nan", "nan"], ["+INF", "inf"], ["-Infinity", "-inf"], ["inf", "inf"]]) {
@@ -658,6 +661,35 @@ describe("a scan's file, for somebody outside the family", () => {
     for (const leak of LEAKS) expect(body.includes(Buffer.from(leak)), leak).toBe(false);
     const { readdir } = await import("node:fs/promises");
     expect((await readdir(path.dirname(storage().localPath!("scans-test/glb/original.glb")))).sort()).toEqual([`model-public-v${PUBLIC_SCAN_VERSION}.glb`, "original.glb"]);
+  });
+
+  it("writes down a refusal, but not an error, which is tried again on the next request", async () => {
+    who.viewer = anon;
+    const glbFile = { storageKey: "scans-test/glb", originalPath: "scans-test/glb/original.glb", scanFormat: "GLB" };
+    // sharp failing while it re-encodes the texture (out of memory, say) says nothing about the file.
+    const failing = vi.spyOn(sharp.prototype, "toBuffer").mockRejectedValueOnce(new Error("VipsJpeg: out of memory"));
+    expect((await get(glbId, "model")).res.status).toBe(404);
+    failing.mockRestore();
+    expect(await storage().exists(withheldScanKey(glbFile))).toBe(false);
+    expect((await get(glbId, "model")).res.status).toBe(200);
+    // A texture of a kind this cannot clean is a refusal, and is written down.
+    const ktx = Buffer.from(original);
+    Buffer.from('"image/ktx2"').copy(ktx, ktx.indexOf(Buffer.from('"image/jpeg"')));
+    await storage().deletePrefix("scans-test/glb");
+    await storage().putBuffer("scans-test/glb/original.glb", ktx);
+    expect((await get(glbId, "model")).res.status).toBe(404);
+    expect(JSON.parse(await readFile(storage().localPath!(withheldScanKey(glbFile)), "utf8")).reason).toMatch(/GLB/);
+  });
+
+  it("clears away a copy left half-written an hour ago, and leaves one being written now", async () => {
+    const { utimes, readdir } = await import("node:fs/promises");
+    await storage().putBuffer(`scans-test/glb/model-public-v${PUBLIC_SCAN_VERSION}.glb.old.tmp`, Buffer.from("SECRET"));
+    await storage().putBuffer(`scans-test/glb/model-public-v${PUBLIC_SCAN_VERSION}.glb.new.tmp`, Buffer.from("x"));
+    const hoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    await utimes(storage().localPath!(`scans-test/glb/model-public-v${PUBLIC_SCAN_VERSION}.glb.old.tmp`), hoursAgo, hoursAgo);
+    who.viewer = anon;
+    expect((await get(glbId, "model")).res.status).toBe(200);
+    expect((await readdir(path.dirname(storage().localPath!("scans-test/glb/original.glb")))).sort()).toEqual([`model-public-v${PUBLIC_SCAN_VERSION}.glb`, `model-public-v${PUBLIC_SCAN_VERSION}.glb.new.tmp`, "original.glb"]);
   });
 
   it("shows visitors a line of text in place of a USDZ, and a GLB as a scan", () => {

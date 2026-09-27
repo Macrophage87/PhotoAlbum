@@ -18,6 +18,7 @@ import { activityFor, onActivity } from "@/lib/activities/reassign";
 import { applyPhotoInstant } from "@/lib/photos/apply-date";
 import { offsetMinutesInZone, photoOffsetMin, photoWallTimeToInstant } from "@/lib/time/local-day";
 import { storage } from "@/lib/storage";
+import { forgetPublicScanCopy } from "@/lib/scans/public-copy";
 import { readExif, resolveTakenAt } from "@/lib/images/exif";
 import { parseLatLng, placeNameOf } from "@/lib/geo/parse";
 import { uploaderLabel } from "@/components/photos/toGrid";
@@ -118,9 +119,11 @@ export async function trashPhoto(id: string, fd: FormData): Promise<void> {
 
 export async function reprocessPhoto(id: string): Promise<void> {
   await editor(id);
-  const photo = await db.photo.findUnique({ where: { id }, select: { id: true, tripId: true, kind: true } });
+  const photo = await db.photo.findUnique({ where: { id }, select: { id: true, tripId: true, kind: true, storageKey: true, originalPath: true, scanFormat: true } });
   if (!photo) return;
   await db.photo.update({ where: { id }, data: { status: "PENDING", error: null } });
+  // A scan's visitor copy, or the finding that it has none, is made again from the file with everything else.
+  if (photo.kind === "SCAN") await forgetPublicScanCopy(photo);
   // Each kind goes back through what made it: a clip through the transcoder, an embedded video's poster through the
   // renditions only (its date and trip were set with the link), everything else through the full path.
   if (photo.kind === "VIDEO") await enqueue(QUEUES.transcodeVideo, { photoId: id, tripId: photo.tripId }, { singletonKey: `transcode:${id}` });

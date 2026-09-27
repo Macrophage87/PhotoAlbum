@@ -309,8 +309,13 @@ export async function sanitizeGlb(input: Buffer): Promise<Buffer | null> {
     const type = input.readUInt32LE(at + 4);
     const body = input.subarray(at + 8, at + 8 + length);
     if (body.length !== length) return null;
-    if (type === CHUNK_JSON && !json) json = JSON.parse(body.toString("utf8").replace(/[\s\0]+$/, ""));
-    else if (type === CHUNK_BIN && !bin) bin = body;
+    if (type === CHUNK_JSON && !json) {
+      try {
+        json = JSON.parse(body.toString("utf8").replace(/[\s\0]+$/, ""));
+      } catch {
+        return null;
+      }
+    } else if (type === CHUNK_BIN && !bin) bin = body;
     // Any other chunk is somebody's own addition, and is left behind.
     at += 8 + pad4(length);
   }
@@ -603,7 +608,9 @@ function digits(s: string): number {
  */
 function float32Text(f: number, written: string): string {
   let p = Math.min(Math.max(digits(written), 1), 9);
-  if ((f === 0 || Math.abs(f) >= FLOAT32_NORMAL) && p <= 6) return written;
+  // What the file wrote may be a number too small for a float32 at all.
+  if (f === 0) return "0";
+  if (Math.abs(f) >= FLOAT32_NORMAL && p <= 6) return written;
   while (p > 1 && Math.fround(Number(f.toPrecision(p - 1))) === f) p--;
   let s = f.toPrecision(p);
   // Nine digits read back as any float32, so this ends there at the latest. The fewest digits end in no zero.
@@ -832,12 +839,10 @@ export async function sanitizeSpz(input: Buffer): Promise<Buffer | null> {
  * unreadable file of any format is withheld rather than guessed at.
  */
 export async function sanitizeScan(format: ScanFormat | null, input: Buffer): Promise<Buffer | null> {
-  try {
-    if (format === "GLB") return await sanitizeGlb(input);
-    if (format === "PLY") return sanitizePly(input);
-    if (format === "SPZ") return await sanitizeSpz(input);
-  } catch {
-    return null;
-  }
+  // Null is a refusal, and is remembered; an error (sharp running out of memory re-encoding a texture, say) is not an
+  // answer about the file, and is left to the caller, so it is tried again.
+  if (format === "GLB") return sanitizeGlb(input);
+  if (format === "PLY") return sanitizePly(input);
+  if (format === "SPZ") return sanitizeSpz(input);
   return null;
 }

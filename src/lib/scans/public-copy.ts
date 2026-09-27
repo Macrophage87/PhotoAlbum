@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Readable } from "node:stream";
-import { readFile } from "node:fs/promises";
+import path from "node:path";
+import { readFile, readdir, stat } from "node:fs/promises";
 import { storage } from "@/lib/storage";
 import { scanShareable, type ScanFormat } from "@/lib/media/mime";
 import { PLY_HEADER_MAX, PlyWithheld, plyFixedLength, plyHeader, plyTextBody, sanitizeScan } from "./sanitize";
@@ -32,6 +33,15 @@ export function withheldScanKey(scan: ScanFile, version = PUBLIC_SCAN_VERSION): 
   return `${scan.storageKey}/model-public-v${version}.withheld`;
 }
 
+/** Forget a scan's visitor copy, or its refusal, under every cleaning, so it is made again from the file. */
+export async function forgetPublicScanCopy(scan: ScanFile): Promise<void> {
+  const store = storage();
+  for (let v = 1; v <= PUBLIC_SCAN_VERSION; v++) {
+    await store.delete(copyKey(scan, v));
+    await store.delete(withheldScanKey(scan, v));
+  }
+}
+
 async function readAll(stream: Readable): Promise<Buffer> {
   const chunks: Buffer[] = [];
   for await (const chunk of stream) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as string));
@@ -59,6 +69,7 @@ async function make(scan: ScanFile, key: string): Promise<string | null> {
   if (await store.exists(key)) return key;
   const withheld = withheldScanKey(scan);
   if (await store.exists(withheld)) return null;
+  await forgetStaleTmp(scan);
   // Written under a name of its own and moved into place whole, so a crash part-way never leaves a file that
   // looks finished; a leftover goes with the item's folder.
   const tmp = `${key}.${randomUUID()}.tmp`;
@@ -75,6 +86,21 @@ async function make(scan: ScanFile, key: string): Promise<string | null> {
     return reason ? null : key;
   } finally {
     await store.delete(tmp).catch(() => undefined);
+  }
+}
+
+/** A copy being written this long ago was left by a process that died part-way, and nothing will finish it. */
+const STALE_TMP_MS = 60 * 60 * 1000;
+
+/** Delete what a making of this scan's copy that never finished left beside it. */
+async function forgetStaleTmp(scan: ScanFile): Promise<void> {
+  const store = storage();
+  const dir = store.localPath?.(scan.storageKey);
+  if (!dir) return;
+  for (const name of await readdir(dir).catch(() => [] as string[])) {
+    if (!/^model-public.*\.tmp$/.test(name)) continue;
+    const s = await stat(path.join(dir, name)).catch(() => null);
+    if (s && Date.now() - s.mtimeMs > STALE_TMP_MS) await store.delete(`${scan.storageKey}/${name}`).catch(() => undefined);
   }
 }
 

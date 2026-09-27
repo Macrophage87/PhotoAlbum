@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { db } from "@/lib/db";
+import { storage } from "@/lib/storage";
+import { publicScanKey, withheldScanKey } from "@/lib/scans/public-copy";
 import { resetTestDb } from "../helpers/reset";
 
 const who = vi.hoisted(() => ({ id: "" }));
@@ -37,6 +39,21 @@ describe("the Re-process button", () => {
       { queue: "process-photo", data: { photoId: poster.id, mode: "renditions" } },
       { queue: "process-photo", data: { photoId: photo.id, tripId: null } },
     ]);
+  });
+
+  it("makes a scan's visitor copy, or its refusal, again from the file", async () => {
+    const scan = { storageKey: "reprocess-test/scan", originalPath: "reprocess-test/scan/original.glb", scanFormat: "GLB" };
+    const { id } = await db.photo.create({ data: { uploaderId: who.id, kind: "SCAN", ...scan, originalName: "x.glb", mimeType: "model/gltf-binary", sizeBytes: 1, status: "READY" }, select: { id: true } });
+    const store = storage();
+    await store.putBuffer(scan.originalPath, Buffer.from("glb"));
+    await store.putBuffer(publicScanKey(scan), Buffer.from("copy"));
+    await store.putBuffer(withheldScanKey(scan), Buffer.from("{}"));
+    await store.putBuffer("reprocess-test/scan/model-public.glb", Buffer.from("older copy"));
+    await reprocessPhoto(id);
+    for (const key of [publicScanKey(scan), withheldScanKey(scan), "reprocess-test/scan/model-public.glb"]) expect(await store.exists(key), key).toBe(false);
+    expect(await store.exists(scan.originalPath)).toBe(true);
+    expect(enqueued).toEqual([{ queue: "process-photo", data: { photoId: id, tripId: null } }]);
+    await store.deletePrefix("reprocess-test/scan");
   });
 
   it("asks the helper to replace the family's description only when the member confirmed it (#43)", async () => {
