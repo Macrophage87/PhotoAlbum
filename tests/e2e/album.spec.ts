@@ -392,6 +392,9 @@ test("a trip can say who was on it, and stops collecting everybody else's photog
   await inviteFor(other);
   await signIn(outside, other);
   const theirs = await outside.newPage();
+  // A plain member sent away from the admin page is told why, not bounced home in silence.
+  await theirs.goto("/admin");
+  await expect(theirs.getByTestId("admins-only")).toBeVisible();
   await theirs.goto("/upload");
   await chooseFile(theirs, "photo-with-gps.jpg");
   await expect(theirs.getByText("1 of 1 uploaded.")).toBeVisible({ timeout: 30_000 });
