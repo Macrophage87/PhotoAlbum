@@ -6,6 +6,7 @@ import { readableTitle } from "@/lib/photos/readable-text";
 import { canEditMedia } from "@/lib/auth/ownership";
 import type { ViewerUser } from "@/lib/auth/viewer";
 import { formatLocalTime } from "@/lib/time/format";
+import { scanShareable } from "@/lib/media/mime";
 
 /**
  * Uploader names are part of the members-only layer: pass `member` only for signed-in viewers. A member who has not
@@ -43,7 +44,8 @@ export function toGridPhoto(p: PhotoCard, badge?: string | null, viewer: Pick<Vi
     youtubeId: p.kind === "EXTERNAL_VIDEO" ? p.externalId : null,
     videoUrl: p.kind === "VIDEO" && p.status === "READY" ? photoUrl(p, "video") : null,
     // A scan has no picture of its own until somebody has opened it once: until then the tile says what it is.
-    scan: p.kind === "SCAN" ? { format: p.scanFormat, modelUrl: photoUrl(p, "model"), hasPoster: Boolean(p.renditions) } : null,
+    // Outside the family a scan is given only as a copy cleaned of its metadata, and a format that cannot be cleaned not at all.
+    scan: p.kind === "SCAN" ? { format: p.scanFormat, modelUrl: photoUrl(p, "model"), hasPoster: Boolean(p.renditions), withheld: !member && !scanShareable(p.scanFormat) } : null,
     // The full-size view follows the picture as it is now; only a member is linked to the file as uploaded.
     originalUrl: p.kind === "PHOTO" && p.status === "READY" ? fullSizeUrl(p, member) : null,
     durationS: p.durationS,

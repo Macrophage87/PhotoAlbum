@@ -23,7 +23,7 @@ export type GridPhoto = LightboxPhoto & {
   /** A panorama: given a tile of its own shape rather than a square crop of its middle. */
   panorama?: { projection: string | null; panoUrl: string } | null;
   /** A 3D scan, which has no picture of its own until a member has opened it once. */
-  scan?: { format: string | null; modelUrl: string; hasPoster: boolean } | null;
+  scan?: { format: string | null; modelUrl: string; hasPoster: boolean; withheld?: boolean } | null;
 };
 
 /** The date a tile shows on hover, in the photo's own zone rather than the reader's. */
