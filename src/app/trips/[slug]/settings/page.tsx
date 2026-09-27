@@ -5,11 +5,11 @@ import { TripForm } from "@/components/trips/TripForm";
 import { ShareButtons } from "@/components/trips/ShareButtons";
 import { CopyLink } from "@/components/share/CopyLink";
 import { shareableTripUrl } from "@/lib/share/social";
-import { Button, ButtonLink, Card, ConfirmSubmitButton } from "@/components/ui";
+import { Button, ButtonLink, Card, ConfirmSubmitButton, Input, Label } from "@/components/ui";
 import { photoUrl } from "@/lib/photos/urls";
 import { chosenTripCover, coverFor } from "@/lib/trips/queries";
 import { familyMembers } from "@/lib/people/members";
-import { deleteTrip, detachExposedFromCollections, regeotagPhotos, rotateShareToken, updateTrip } from "../actions";
+import { changeTripSlug, deleteTrip, detachExposedFromCollections, regeotagPhotos, rotateShareToken, updateTrip } from "../actions";
 import { OptOutToggle } from "@/components/annotation/OptOutToggle";
 import { visibilityWarnings } from "@/lib/visibility/settings";
 import Link from "next/link";
@@ -30,6 +30,7 @@ export default async function TripSettingsPage({ params, searchParams }: PagePro
   const { user: me, trip } = await requireTripOwnerPage(slug, `/trips/${slug}/settings`);
   const update = updateTrip.bind(null, slug);
   const rotate = rotateShareToken.bind(null, slug);
+  const changeSlug = changeTripSlug.bind(null, slug);
   const remove = deleteTrip.bind(null, slug);
   const regeotag = regeotagPhotos.bind(null, slug);
   const shareUrl = shareableTripUrl(trip, env().APP_URL);
@@ -105,6 +106,18 @@ export default async function TripSettingsPage({ params, searchParams }: PagePro
             <ShareButtons url={shareUrl} />
           </Card>
         )}
+      </section>
+
+      <section>
+        <h2 className="font-display text-xl font-semibold mb-2">Web address</h2>
+        <p className="text-sm text-muted mb-3">Made from the first title, and not changed when the title is. Links to the old address stop working.</p>
+        <form action={changeSlug} className="flex flex-wrap items-end gap-2">
+          <div>
+            <Label htmlFor="slug">Address</Label>
+            <Input id="slug" name="slug" defaultValue={slug} required maxLength={80} />
+          </div>
+          <Button type="submit" variant="secondary">Change address</Button>
+        </form>
       </section>
 
       <section>

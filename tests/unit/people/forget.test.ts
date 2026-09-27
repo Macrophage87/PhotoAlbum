@@ -118,16 +118,30 @@ describe("forgetting somebody", () => {
     // Listed until an admin dismisses it: ids and fields, never the name.
     expect(redirected.to).toBe("/people/forgotten?done=1");
     const [left] = await db.forgetLeftover.findMany();
-    const items = left.items as { photos: { id: string; fields: string[] }[]; trips: { slug: string }[] };
+    const items = left.items as { photos: { id: string; fields: string[] }[]; trips: { id: string }[] };
     expect(items.photos.map((x) => x.id)).toEqual([handTitled]);
     expect(items.photos[0].fields).toEqual(["title", "caption", "notes"]);
-    expect(items.trips.map((t) => t.slug)).toContain("elsewhere");
+    // Trips by id: an address can be the name.
+    expect(items.trips.map((t) => t.id)).toContain(ownTripId);
     expect(JSON.stringify(left.items)).not.toMatch(/ada|byron/i);
     // Stamped too, so no answer already on its way is written over it.
     expect((await db.photo.findUniqueOrThrow({ where: { id: handTitled } })).namesScrubbedAt).not.toBeNull();
 
     expect(await found("searchVectorMembers", "byron")).toEqual([handTitled]);
     expect(await db.person.findUnique({ where: { id: adaId } })).toBeNull();
+  });
+
+  it("never rewrites an embedded video's own title, whatever it was recorded as", async () => {
+    // YouTube's title, which the members_only_text migration recorded as the helper's for matching its record.
+    const video = await photo("v.jpg", { kind: "EXTERNAL_VIDEO", title: "Ada Byron at the lake", titleByHelper: true, annotation, annotatedAt: new Date() });
+    await db.face.create({ data: { photoId: video, personId: adaId, status: "CONFIRMED", box: [0.1, 0.1, 0.2, 0.2], confidence: 0 } });
+    await optOutPerson(adaId, form());
+    const v = await db.photo.findUniqueOrThrow({ where: { id: video } });
+    expect(v.title).toBe("Ada Byron at the lake");
+    expect((v.annotation as StoredAnnotation).caption).toBe("A family member wading in at the lake");
+    // Left as it is, and listed with the rest of what members' words say.
+    const [left] = await db.forgetLeftover.findMany();
+    expect((left.items as { photos: { id: string; fields: string[] }[] }).photos.find((x) => x.id === video)?.fields).toEqual(["title"]);
   });
 
   it("scrubs the same way when they keep their name on the photographs, and can be run again", async () => {
@@ -505,7 +519,7 @@ describe("where short names are used", () => {
     // A whole trip's description is left, and listed for somebody to edit.
     expect((await db.trip.findUniqueOrThrow({ where: { id: trip.id } })).description).toBe("In May we drove north. May waved at every cow.");
     const [left] = await db.forgetLeftover.findMany();
-    expect((left.items as { trips: { slug: string }[] }).trips).toEqual([{ slug: "north" }]);
+    expect((left.items as { trips: { id: string; fields: string[] }[] }).trips).toEqual([{ id: trip.id, fields: ["description"] }]);
   });
 });
 

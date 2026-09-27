@@ -32,7 +32,14 @@ vi.mock("next/server", async (importOriginal) => ({
   ...(await importOriginal<typeof import("next/server")>()),
   after: (fn: () => unknown) => void mailer.pending.push(Promise.resolve().then(fn)),
 }));
-vi.mock("@/lib/google/account", () => ({ disconnectGoogleAccount: async () => {} }));
+const google = vi.hoisted(() => ({ revoked: [] as { userId: string; token: string | null; memberStillThere: boolean }[] }));
+vi.mock("@/lib/google/account", () => ({
+  revokeRemovedConnection: async (userId: string, token: string | null) => {
+    const { db } = await import("@/lib/db");
+    google.revoked.push({ userId, token, memberStillThere: Boolean(await db.user.findUnique({ where: { id: userId } })) });
+    return token ? "revoked" : "none";
+  },
+}));
 vi.mock("next/headers", () => ({ headers: async () => who.headers }));
 vi.mock("next/cache", () => ({ revalidatePath: () => undefined }));
 vi.mock("next/navigation", () => ({ redirect: (to: string) => { throw new Error(`REDIRECT:${to}`); } }));
@@ -71,6 +78,23 @@ describe("sign-in links and the Admin page", () => {
     await expect(confirmSignIn(form({ token: req.token }))).rejects.toThrow("REDIRECT:/auth/signin?error=invalid");
     expect(await db.user.count({ where: { email: "cousin@example.com" } })).toBe(0);
     expect(who.sessions).toEqual([]);
+  });
+
+  it("removes a member who made and filled collections, and revokes their Google connection only once they are gone", async () => {
+    const cousin = await db.user.create({ data: { email: "cousin@example.com", role: "MEMBER" } });
+    await db.googleAccount.create({ data: { userId: cousin.id, encryptedRefreshToken: "sealed" } });
+    const photo = await db.photo.create({ data: { uploaderId: who.id, originalName: "x.jpg", mimeType: "image/jpeg", storageKey: "k", originalPath: "k/o.jpg", sizeBytes: 1, status: "READY" } });
+    const theirs = await db.collection.create({ data: { slug: "theirs", title: "Theirs", createdById: cousin.id } });
+    const mine = await db.collection.create({ data: { slug: "mine", title: "Mine", createdById: who.id } });
+    await db.collectionItem.create({ data: { collectionId: mine.id, photoId: photo.id, addedById: cousin.id } });
+    await db.collectionItem.create({ data: { collectionId: theirs.id, photoId: photo.id, addedById: cousin.id } });
+    google.revoked = [];
+    await removeMember(cousin.id);
+    expect(await db.user.count({ where: { id: cousin.id } })).toBe(0);
+    expect((await db.collection.findUniqueOrThrow({ where: { id: theirs.id } })).createdById).toBe(who.id);
+    expect((await db.collectionItem.findMany({ where: { photoId: photo.id } })).map((i) => i.addedById)).toEqual([who.id, who.id]);
+    expect(await db.googleAccount.count()).toBe(0);
+    expect(google.revoked).toEqual([{ userId: cousin.id, token: "sealed", memberStillThere: false }]);
   });
 
   it("revoking an invite voids the sign-in link the invitee already asked for", async () => {

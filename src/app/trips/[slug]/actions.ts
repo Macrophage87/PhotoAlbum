@@ -18,6 +18,8 @@ import { handWrittenDescription } from "@/lib/annotation/members-only";
 import { rejudgeFromAction } from "@/lib/annotation/rejudge-notice";
 import { descriptionStaysHelpers } from "@/lib/annotation/helper-text";
 import { forgetTrackFiles } from "@/lib/tracks/files";
+import { uniqueSlug } from "@/lib/trips/slug";
+import { NAME_NOT_TO_BE_SHOWN, namesSomebodyRestricted } from "@/lib/people/forget";
 import { isCoverable } from "@/lib/photos/cover";
 
 /** The trip, where this member may change it: whoever made it, and admins. */
@@ -85,6 +87,20 @@ export async function rotateShareToken(slug: string): Promise<void> {
   revalidatePath(`/trips/${slug}/settings`);
 }
 
+/**
+ * A new web address for the trip. It is made from the first title and never follows a rename, so it can still say
+ * what the title no longer does — a forgotten person's name, say. Links to the old address stop working; there is
+ * no redirect, since keeping the old address anywhere would keep what it said.
+ */
+export async function changeTripSlug(slug: string, fd: FormData): Promise<void> {
+  const trip = await loadEditableTrip(slug);
+  const wanted = z.string().trim().min(1).max(80).parse(fd.get("slug"));
+  const next = await uniqueSlug(wanted, async (s) => Boolean(await db.trip.findFirst({ where: { slug: s, id: { not: trip.id } }, select: { id: true } })));
+  if (next !== trip.slug) await db.trip.update({ where: { id: trip.id }, data: { slug: next } });
+  revalidatePath("/", "layout");
+  redirect(`/trips/${next}/settings?saved=1`);
+}
+
 /** Choose (or forget) the picture the trip is known by. The cover belongs to the trip, so it is the trip's to set. */
 export async function setCoverPhoto(slug: string, photoId: string | null): Promise<void> {
   const trip = await loadEditableTrip(slug);
@@ -99,6 +115,9 @@ export async function setCoverPhoto(slug: string, photoId: string | null): Promi
   revalidatePath("/");
 }
 
+/** A trip of many thousand photographs takes seconds to let go of them: well past the five a transaction gets by default. */
+const TRIP_DELETE_TX = { timeout: 120_000, maxWait: 10_000 };
+
 /**
  * Admins only. The trip, its activities and tracks go; every photo stays in the album and becomes a photo without a
  * trip (the schema sets tripId to null), so nothing anyone uploaded is ever lost by deleting a container.
@@ -112,12 +131,23 @@ export async function deleteTrip(slug: string): Promise<void> {
     // the trip is gone — never left behind with a setter.
     await tx.$queryRaw`SELECT id FROM "Trip" WHERE id = ${trip.id} FOR UPDATE`;
     const files = await tx.track.findMany({ where: { tripId: trip.id }, select: { originalFile: true } });
-    // Its activities go with it; a choice about them goes too, or a photo left on no trip would carry a setter that
-    // reads as "kept off by hand" wherever it is filed next.
-    await tx.photo.updateMany({ where: { tripId: trip.id }, data: { activityId: null, activitySetById: null } });
+    // Every photograph leaves the trip in one pass over its rows (a big trip has thousands; the foreign key would
+    // otherwise make a second pass). Its activities go with it, and a choice about them goes too, or a photo left on
+    // no trip would carry a setter that reads as "kept off by hand" wherever it is filed next. Its tracks go as well,
+    // and with them the positions they gave (as deleting a track does, see takeBackTrack): a photo off the trip is
+    // not left pinned to a route the album no longer has.
+    await tx.$executeRaw`
+      UPDATE "Photo" SET "tripId" = NULL, "activityId" = NULL, "activitySetById" = NULL,
+        lat = CASE WHEN "gpsSource" = 'TRACK' THEN NULL ELSE lat END,
+        lng = CASE WHEN "gpsSource" = 'TRACK' THEN NULL ELSE lng END,
+        altitude = CASE WHEN "gpsSource" = 'TRACK' THEN NULL ELSE altitude END,
+        "placeEstimatedAt" = CASE WHEN "gpsSource" = 'TRACK' AND "placeEstimateName" IS NOT NULL THEN NULL ELSE "placeEstimatedAt" END,
+        "gpsSource" = CASE WHEN "gpsSource" = 'TRACK' THEN NULL ELSE "gpsSource" END,
+        "updatedAt" = now()
+      WHERE "tripId" = ${trip.id}`;
     await tx.trip.deleteMany({ where: { id: trip.id } });
     return files;
-  });
+  }, TRIP_DELETE_TX);
   // Its tracks went with it, so the files they were read from have nothing left to belong to.
   await forgetTrackFiles(files.map((f) => f.originalFile));
   revalidatePath("/", "layout");
@@ -195,6 +225,8 @@ export async function setTripDescription(slug: string, text: string): Promise<vo
  */
 export async function setTripDescriptionShared(slug: string, everyone: boolean): Promise<void> {
   const trip = await loadEditableTrip(slug);
+  // Never a description that may name somebody the album may not name (withdrawn, switched off, opted out).
+  if (everyone && (await namesSomebodyRestricted([trip.description]))) throw new Error(NAME_NOT_TO_BE_SHOWN);
   await db.trip.update({ where: { id: trip.id }, data: { descriptionMembersOnly: !everyone, descriptionSharedAt: everyone ? new Date() : null } });
   revalidatePath(`/trips/${slug}`, "layout");
 }

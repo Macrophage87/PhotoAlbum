@@ -98,6 +98,33 @@ export async function withForgetLock<T>(fn: (held: ForgetLockHeld) => Promise<T>
   }
 }
 
+/** The advisory lock the album's own name passes hold (see `withNamePassesLock`). */
+const NAME_PASSES_LOCK = 0x6e706173; // "npas"
+
+/**
+ * Run the album's own name passes — scrubbing withdrawn names, finishing forgets that waited for FORGET_KEY — unless
+ * they are running already: at start-up and from the nightly job they could otherwise overlap, and forget the same
+ * person twice. Tried, not waited for; false when another run holds it (this one is skipped, not queued). Held on a
+ * connection of its own, so it goes with the connection however the run ends.
+ */
+export async function withNamePassesLock(fn: () => Promise<void>): Promise<boolean> {
+  const client = new Client({ connectionString: env().DATABASE_URL });
+  client.on("error", () => undefined);
+  await client.connect();
+  try {
+    const { rows } = await client.query<{ got: boolean }>("SELECT pg_try_advisory_lock($1::bigint) AS got", [NAME_PASSES_LOCK]);
+    if (!rows[0]?.got) return false;
+    try {
+      await fn();
+      return true;
+    } finally {
+      await client.query("SELECT pg_advisory_unlock($1::bigint)", [NAME_PASSES_LOCK]).catch(() => undefined);
+    }
+  } finally {
+    await client.end().catch(() => undefined);
+  }
+}
+
 /**
  * Read inside the transaction that stores an answer. `underWay`: a forget is running. Which photographs it will touch
  * is not known yet, so nothing is stored; once it has finished, the photographs it touched carry `namesScrubbedAt`

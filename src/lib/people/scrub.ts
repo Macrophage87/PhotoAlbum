@@ -84,6 +84,28 @@ const STARTERS = new Set([
   "for", "from", "to", "of", "into", "is", "was", "the", "a", "an", "this", "that", "look", "see", "meet", "oh", "yes", "no", "our", "my", "little", "baby",
 ]);
 
+/**
+ * Words that join a title's words rather than name anybody: "Ximena At The Hut", "Ximena And Ben", "Ximena Beside
+ * The Lake". Beside a name, capitalized or not, they never make it somebody else's; a name-like word does ("Santa
+ * Barbara", "Leo Martinez", "Lake Louise").
+ */
+/** A saint's title just before a name, which away from their photographs makes it a place's ("St. Mary's Church"). */
+const SAINT_BEFORE = /(?<![\p{L}\p{M}])(?:st|ste|saint|san|santa|sankt)\.?[ \t]+$/iu;
+
+/** Nouns of places named "X Of Somebody": "Isle Of Barbara", "Church Of St Barbara", "Bay Of Louise". */
+const PLACE_OF = new Set([
+  "isle", "island", "bay", "port", "lake", "loch", "mount", "cape", "gulf", "sound", "strait", "church", "cathedral", "chapel", "basilica", "abbey",
+  "priory", "parish", "house", "castle", "palace", "hall", "fort", "tower", "bridge", "gate", "street", "square", "school", "college", "university",
+  "hospital", "county", "city", "town", "village", "valley", "river", "park",
+]);
+
+export const FUNCTION_WORDS = new Set([
+  "a", "an", "the", "and", "or", "but", "nor", "&", "at", "in", "on", "with", "without", "within", "by", "beside", "besides", "near", "to", "for", "from",
+  "under", "over", "into", "onto", "upon", "up", "down", "off", "out", "after", "before", "behind", "across", "around", "along", "among", "through", "past",
+  "during", "outside", "inside", "towards", "toward", "against", "via", "vs", "as", "her", "his", "their", "our", "my", "your", "its", "is", "was", "are", "were",
+  "be", "s", "has", "had",
+]);
+
 const WORD = "\\p{L}\\p{M}\\p{N}";
 const CJK = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
 
@@ -253,6 +275,11 @@ export type Neighbourhood = {
   /** Words of their own name: beside one, a match is still them ("Mary Ann swam" for Mary Ann Smith). */
   own?: Set<string>;
   /**
+   * Away from their photographs (Where.away): beside another capitalized word a match is somebody else's name
+   * or a place's however the text is written, in title case or all in capitals ("SANTA BARBARA PIER").
+   */
+  away?: boolean;
+  /**
    * Their own photographs (or a forgotten name's own scope): a place opening a sentence only where it is plainly
    * one, so "Florence at the lake" and "Florence and Ben swam." are her.
    */
@@ -318,11 +345,21 @@ export function notThePerson(text: string, start: number, end: number, n: Neighb
     }
   }
   const caps = isUpperWord(match.replace(/[^\p{L}]/gu, ""));
-  if (!n.title && !caps) {
+  // Away from their own photographs a saint's name is a place's, never a title before theirs: "St Mary's Church",
+  // "Christening at St. Mary's church", "Saint Peter's Basilica". Read from the text itself, so "St." is not taken
+  // for the end of a sentence.
+  if (!n.ownPhotos && SAINT_BEFORE.test(before)) return true;
+  if (n.away) {
+    // "Isle Of Barbara", "Church Of Barbara": a place's noun and "Of" before it make it the place's name ("Of" is no
+    // joining word). Only a place's noun: "Portrait Of Barbara", "The Wedding Of Barbara And Ben" are her.
+    const of = before.match(/(?<![\p{L}\p{M}])(\p{Lu}[\p{L}\p{M}'’-]*)[ \t]+of[ \t]+$/iu);
+    if (of && PLACE_OF.has(bare(of[1]))) return true;
+  }
+  if (n.away || (!n.title && !caps)) {
     // "Ann Jones", "Robin Hood", "Florence Nightingale" (but "Mary Ann swam" is Mary Ann Smith)...
-    if (next && /^\p{Lu}/u.test(next) && !n.own?.has(bare(next))) return true;
+    if (next && /^\p{Lu}/u.test(next) && !n.own?.has(bare(next)) && !FUNCTION_WORDS.has(bare(next))) return true;
     // ..."Mary Ann" and "Union Jack", unless the word before only says when or who she is to them.
-    if (prev && /^\p{Lu}/u.test(prev) && !isKin(prev.replace(/\.$/u, "")) && !STARTERS.has(p!) && !n.own?.has(p!)) return true;
+    if (prev && /^\p{Lu}/u.test(prev) && !isKin(prev.replace(/\.$/u, "")) && !STARTERS.has(p!) && !FUNCTION_WORDS.has(p!) && !n.own?.has(p!)) return true;
   }
   return false;
 }
@@ -353,6 +390,11 @@ function isIdiom(before: string, match: string, after: string, ownPhotos = false
   if (m === "grace" && /(?<![\p{L}])amazing[ \t]+$/iu.test(before)) return true;
   if (m === "jack" && /^[ \t]+in[ \t]+the[ \t]+box(?![\p{L}])/iu.test(after)) return true;
   if (m === "will" && /^[ \t]+(?:you|we|they|it|he|she|i|this|that|there)(?![\p{L}\p{M}'’])/iu.test(after)) return true;
+  // An epithet: "Catherine the Great", "Peter The Great", "Alfred the Great".
+  if (/^[ \t]+the[ \t]+great(?![\p{L}\p{M}])/iu.test(after)) return true;
+  // The apostles: "Saints Peter and Paul", "Peter And Paul Church".
+  if (m === "peter" && /^[ \t]+(?:and|&)[ \t]+paul(?![\p{L}\p{M}])/iu.test(after)) return true;
+  if (m === "paul" && /(?<![\p{L}\p{M}])peter[ \t]+(?:and|&)[ \t]+$/iu.test(before)) return true;
   return false;
 }
 
@@ -485,6 +527,14 @@ export type Where = {
    * is as often a place in a member's title ("Florence and Tuscany 2019").
    */
   fullOnly?: boolean;
+  /**
+   * Away from their photographs, for a forget and a withdrawn naming: their names as anywhere else, a safe first
+   * name included ("Barbara blows out the candles", "Mia blows bubbles"), but one beside another capitalized word is
+   * somebody else's name or a place's however the text is written, in title case or all in capitals ("Santa Barbara
+   * Pier", "Leo Martinez Park", "Lake Louise", "SANTA BARBARA PIER"), and a one-word name inside keywords or a tag
+   * ("santa barbara") is not theirs on its own.
+   */
+  away?: boolean;
   /**
    * With `tagged`: whether they are on this very photograph (the default), or only elsewhere in its trip, collection
    * or activity. Their short names count either way; only on their own photograph is a place-like name taken for
@@ -687,7 +737,11 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
           otherWords,
           own,
           isNameWord: (w) => shared.has(bare(w)) || own.has(bare(w)),
-          title,
+          // Away from their photographs, a one-word name of theirs beside another capitalized word is somebody's or
+          // a place's even in a title written in title case ("Santa Barbara Pier", "Lake Louise"): nothing there
+          // says it is them.
+          title: title && !(where.away && !where.tagged),
+          away: Boolean(where.away && !where.tagged),
           // A month or an everyday word in a date, on their own photographs: "in May", "May 5", "May Day".
           date: everyday,
           // Away from their photographs a first name that is also a place is one after "to", "in", "near" ("to
@@ -741,13 +795,16 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
   const scrub = <T,>(text: T, where: Where = {}): T => guard(text, (t) => scrubText(t, where));
   const scrubKeywords = <T,>(text: T, where: Where = {}): T =>
     guard(text, (t) => {
-      const put = (m: string, offset: number, w: string) => standIn(m, w.slice(0, offset), w.slice(offset + m.length));
+      // Off their own photograph, "st. mary's church" in the keywords is still a church.
+      const saintly = !(where.tagged && where.onPhoto !== false);
+      const put = (m: string, offset: number, w: string) => (saintly && SAINT_BEFORE.test(w.slice(0, offset)) ? m : standIn(m, w.slice(0, offset), w.slice(offset + m.length)));
       let out = scrubText(t, where);
       const k = keywordsFor(where);
       if (k.pairRx) out = out.replace(k.pairRx, put);
       if (k.strongRx) out = out.replace(k.strongRx, put);
-      // A one-word name that is all of theirs is them in lower case too, anywhere: "ximena fishing".
-      if (wholeRx) out = out.replace(wholeRx, put);
+      // A one-word name that is all of theirs is them in lower case too, anywhere: "ximena fishing" — except, away
+      // from their photographs under `away`, where keywords run words together ("santa barbara pier").
+      if (wholeRx && !(where.away && !where.tagged)) out = out.replace(wholeRx, put);
       return out === t ? out : withoutDoubledArticle(out);
     });
   const mentions = (text: unknown, where: Where = {}) => typeof text === "string" && text !== "" && scrub(text, where) !== text;
@@ -756,14 +813,17 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
     try {
       const t = tag.trim().toLowerCase().replace(/’/g, "'");
       const k = keywordsFor(where);
-      if (k.strongRx && new RegExp(k.strongRx.source, "iu").test(tag)) return true;
+      // Off their own photograph a saint's name in a tag is a place's ("st. mary's church").
+      const saintly = !(where.tagged && where.onPhoto !== false);
+      if (k.strongRx && [...tag.matchAll(new RegExp(k.strongRx.source, "giu"))].some((x) => !(saintly && SAINT_BEFORE.test(tag.slice(0, x.index))))) return true;
       if (k.pairRx && new RegExp(k.pairRx.source, "iu").test(tag)) return true;
       const bareTag = bare(t.replace(/'s$/u, ""));
       if (k.weakWords.includes(bareTag)) return true;
       if ((where.tagged ? [...cjkAlbum, ...cjkTagged] : cjkAlbum).some((f) => t.replace(/\s+/g, "").includes(f.replace(/\s+/g, "")))) return true;
       if (safe.some((x) => t === x.form.toLowerCase() || t === `${x.form.toLowerCase()}'s`)) return true;
-      // A safe one-word name is all of their name: a tag containing it ("sam's bike") is about them.
-      return Boolean(wholeTest?.test(tag) || longAnyTest?.test(tag));
+      // A safe one-word name is all of their name: a tag containing it ("sam's bike") is about them — not, away from
+      // their photographs under `away`, one where it is part of something else's name ("santa barbara").
+      return Boolean((!(where.away && !where.tagged) && wholeTest?.test(tag)) || longAnyTest?.test(tag));
     } catch {
       return false;
     }
@@ -794,17 +854,19 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
 export function scrubAnnotation(a: StoredAnnotation, m: NameMatcher, where: Where = {}): StoredAnnotation {
   const text = (v: unknown) => (typeof v === "string" ? m.scrub(v, where) : "");
   const maybe = (v: unknown) => (typeof v === "string" ? m.scrub(v, where) : null);
-  const list = (v: unknown) => (Array.isArray(v) ? v.filter((t): t is string => typeof t === "string" && !m.namesTag(t, where)) : []);
+  const prose = { title: text(a.title), caption: text(a.caption), description: text(a.description), place: maybe(a.place), activity: maybe(a.activity), visibleText: maybe(a.visibleText), mood: maybe(a.mood) };
+  // Away from their photographs (`away`) a one-word name inside keywords or a tag is not taken for them on its
+  // own ("santa barbara").
+  const named = where.away && !where.tagged && (Object.keys(prose) as (keyof typeof prose)[]).some((k) => m.mentions(a[k], where));
+  // Once the record's own words named them, its keywords and tags are cleaned as on their own photographs: any word
+  // of their name, in any case ("barbara's 80th", "barbara birthday candles").
+  // (Not as on their own photograph for anything else: "st. mary's church" there is still a church.)
+  const words: Where = named ? { ...where, away: false, tagged: true, onPhoto: false } : where;
+  const list = (v: unknown) => (Array.isArray(v) ? v.filter((t): t is string => typeof t === "string" && !m.namesTag(t, words)) : []);
   return {
     ...a,
-    title: text(a.title),
-    caption: text(a.caption),
-    description: text(a.description),
-    searchSummary: typeof a.searchSummary === "string" ? m.scrubKeywords(a.searchSummary, where) : "",
-    place: maybe(a.place),
-    activity: maybe(a.activity),
-    visibleText: maybe(a.visibleText),
-    mood: maybe(a.mood),
+    ...prose,
+    searchSummary: typeof a.searchSummary === "string" ? m.scrubKeywords(a.searchSummary, words) : "",
     tags: list(a.tags),
     objects: list(a.objects),
   };

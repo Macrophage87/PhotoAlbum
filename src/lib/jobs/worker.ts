@@ -29,7 +29,9 @@ export async function startWorker(): Promise<void> {
   // First, before anything else starts: the members-only sweep. After a deploy that changed the matcher, text naming
   // somebody that is not tagged stays public until it has run; after that it judges only names the album has learned
   // since, and again every night, so a change whose job could not be queued is judged within a day.
-  const { rejudgeText, enqueueRejudge } = await import("@/lib/annotation/rejudge");
+  const { rejudgeText, enqueueRejudge, dropLegacyRejudgeJobs } = await import("@/lib/annotation/rejudge");
+  // Jobs from before judging was asked for by id carry names; they go before anything could run one.
+  await dropLegacyRejudgeJobs();
   await boss.work(QUEUES.rejudgeText, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 5 }, async ([job]) => {
     const r = await rejudgeText(job.data as never);
     console.log(`[rejudge] ${r.photos} photo(s), ${r.titles} title(s) and ${r.descriptions} description(s) kept for members, ${r.unflagged} shown again, ${r.places} place guess(es)`);
@@ -97,16 +99,26 @@ export async function startWorker(): Promise<void> {
   const { scrubWithdrawnNames } = await import("@/lib/people/forget");
   // And forgets asked for while FORGET_KEY was missing, once it is set.
   const { completePendingForgets } = await import("@/lib/people/forget-person");
+  const { withNamePassesLock } = await import("@/lib/people/names-changed");
+  // One run of the two at a time, whoever starts it: the start-up run below and the nightly job may overlap.
+  const namePasses = (errors: "throw" | "log") =>
+    withNamePassesLock(async () => {
+      for (const [what, pass] of [["withdrawn-name scrub", scrubWithdrawnNames], ["pending forgets", completePendingForgets]] as const) {
+        if (errors === "throw") await pass();
+        else await pass().catch((err) => console.error(`[worker] ${what} failed`, err));
+      }
+    }).then((ran) => void (ran || console.warn("[worker] the name passes are already running; this run is skipped")));
   await boss.work(QUEUES.flagNewAdults, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60 }, async () => {
     await flagNewAdults();
-    await scrubWithdrawnNames();
-    await completePendingForgets();
+    await namePasses("throw");
   });
   await boss.work(QUEUES.purgeUnnamedFaces, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60 }, async () => void (await purgeUnnamedFaces()));
   await boss.work(QUEUES.purgeAnnotationRaw, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60 }, async () => void (await purgeAnnotationRaw()));
   await boss.work(QUEUES.purgeVisits, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60 }, async () => void (await purgeVisits()));
   await boss.work(QUEUES.purgeMagicLinks, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60 }, async () => void (await purgeExpiredMagicLinks({ db })));
   await boss.work(QUEUES.sweepStrandedUploads, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60 }, async () => void (await sweepStrandedUploads()));
+  const { revokeQueuedConnection } = await import("@/lib/google/account");
+  await boss.work(QUEUES.revokeGoogle, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60 }, async ([job]) => revokeQueuedConnection(job.data as never));
   await boss.work(QUEUES.reconcilePhotos, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60 }, async () => void (await reconcileStalePhotos()));
   await boss.work(QUEUES.sweepOrphanFiles, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60 }, async () => sweepOrphanFiles());
   // Schedules (idempotent): weekly video re-check, the annotation quiet-period sweep, batch polling, raw-response purge,
@@ -121,11 +133,9 @@ export async function startWorker(): Promise<void> {
   await boss.schedule(QUEUES.purgeUnnamedFaces, "45 3 * * *", {}, { retryLimit: 0 });
   await boss.schedule(QUEUES.flagNewAdults, "50 3 * * *", {}, { retryLimit: 0 });
   await boss.schedule(QUEUES.purgeVisits, "15 3 * * *", {}, { retryLimit: 0 });
-  // Expired sign-in links, including placeholders for addresses that may not sign in.
-  await boss.schedule(QUEUES.purgeMagicLinks, "20 3 * * *", {}, { retryLimit: 0 });
-  // A naming the album withdrew by itself: what strangers can read loses the name at once, not at the next night.
-  await scrubWithdrawnNames().catch((err) => console.error("[worker] withdrawn-name scrub failed", err));
-  await completePendingForgets().catch((err) => console.error("[worker] pending forgets failed", err));
+  // Expired sign-in links, including placeholders for addresses that may not sign in. Its own minute: the members-only
+  // sweep has 3:20.
+  await boss.schedule(QUEUES.purgeMagicLinks, "25 3 * * *", {}, { retryLimit: 0 });
   await boss.schedule(QUEUES.sweepStrandedUploads, "40 * * * *", {}, { retryLimit: 0 });
   await boss.schedule(QUEUES.reconcilePhotos, "*/15 * * * *", {}, { retryLimit: 0 });
   // Files left behind by work that died part-way: uploaded track files no import will read again are deleted; photo
@@ -134,6 +144,9 @@ export async function startWorker(): Promise<void> {
   console.log("[worker] pg-boss handlers registered");
   // Before anything sweeps the storage root: which album it belongs to (see src/lib/storage/identity.ts).
   await (await import("@/lib/storage/identity")).ensureInstallIdentity().catch((err) => console.error("[worker] could not check the storage's install marker", err));
+  // A naming the album withdrew by itself: what strangers can read loses the name at once, not at the next night.
+  // Both can take a while over a big album, so they run beside the rest of start-up rather than ahead of it.
+  void namePasses("log").catch((err) => console.error("[worker] the name passes could not start", err));
   // Before the reconciliation below, so a Picker download lost in the restart is told to be picked again rather
   // than re-processed (it has no file to process).
   await (await import("@/lib/media/stranded")).sweepStrandedUploads().catch((err) => console.error("[worker] stranded-upload sweep failed", err));

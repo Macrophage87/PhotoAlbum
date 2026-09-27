@@ -5,7 +5,7 @@ import { enqueue } from "@/lib/jobs/boss";
 import { QUEUES } from "@/lib/jobs/queues";
 import { applyPlaceEstimate, needsPlaceEstimate } from "./place";
 import { isWeakDate, WEAK_DATE_SOURCES } from "@/lib/photos/date-from-neighbours";
-import { helperText, judgeHelperText, knownNames, mentionsAnyName, pastHelperTitles, titleIsHelpers, type Judgement } from "./members-only";
+import { helperText, judgeHelperText, knownNames, mentionsAnyName, pastHelperTitles, sameTitle, titleIsHelpers, titleKey, unknownTitleAside, warnStuckTitle, type Judgement } from "./members-only";
 import { forgetState, unchangedSince } from "@/lib/people/names-changed";
 import { withoutOptedOutNames } from "@/lib/people/unpermitted";
 import { forgottenScope, loadTombstone, scrubRecord, type Tombstone } from "@/lib/people/tombstone";
@@ -16,28 +16,36 @@ export type ApplyResult = { ok: true } | { ok: false; reason: "refusal" | "inval
 export type Usage = { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null };
 
 /**
- * Where the helper's title goes. A title of the family's own is never touched. The helper's goes on the item where
+ * Where the helper's title goes. A title of the family's own is never lost. The helper's goes on the item where
  * it has none, unless it is members-only, when it is kept in `membersTitle` for members to read instead; and on a
- * members-only item a title the helper put there before (see `titleIsHelpers`) comes off it too. What is in
- * `membersTitle` already is replaced only when it was the helper's last title.
+ * members-only item a title the helper put there before (see `titleIsHelpers`) comes off it too, while one of unknown
+ * origin that names somebody goes aside for members (see `unknownTitleAside`). What is in `membersTitle` already is
+ * replaced only when it was the helper's last title. An embedded video's own title is YouTube's or a member's.
  */
 export function titlesAfter(
-  current: { title: string | null; membersTitle: string | null; previousAiTitle: string | null; titleByHelper?: boolean | null; pastTitles?: string[]; namesSomebody?: boolean },
+  current: { title: string | null; membersTitle: string | null; previousAiTitle: string | null; titleByHelper?: boolean | null; pastTitles?: string[]; namesSomebody?: boolean; external?: boolean; photoId?: string },
   aiTitle: string,
   membersOnly: boolean,
 ): { title: string | null; membersTitle: string | null; titleByHelper: boolean | null } {
-  const held = current.membersTitle?.trim() || null;
-  const helpers = !held || held === current.previousAiTitle?.trim();
-  let membersTitle = helpers ? (membersOnly && aiTitle ? aiTitle : null) : held;
+  const held = titleKey(current.membersTitle) || null;
+  const helpers = !held || held === titleKey(current.previousAiTitle);
+  let membersTitle = helpers ? (membersOnly && aiTitle ? aiTitle : null) : current.membersTitle;
   let title = current.title;
   let titleByHelper = current.titleByHelper ?? null;
-  if (membersOnly) {
-    if (titleIsHelpers({ title, titleByHelper, aiTitle: current.previousAiTitle, pastTitles: current.pastTitles, namesSomebody: current.namesSomebody })) {
+  if (membersOnly && !current.external) {
+    if (titleIsHelpers({ title, titleByHelper, aiTitle: current.previousAiTitle, pastTitles: current.pastTitles })) {
       membersTitle = membersTitle ?? title;
       title = null;
       titleByHelper = null;
+    } else {
+      // Judged against the members' title as it will be: empty, or the helper's new title (kept in its record).
+      const aside = unknownTitleAside({ title, titleByHelper: current.titleByHelper, membersTitle, aiTitle, namesSomebody: current.namesSomebody });
+      if (aside === "move") {
+        membersTitle = title;
+        title = null;
+      } else if (aside === "stuck" && current.photoId) warnStuckTitle(current.photoId);
     }
-  } else if (!title?.trim() && !membersTitle && aiTitle) {
+  } else if (!membersOnly && !titleKey(title) && !membersTitle && aiTitle) {
     title = aiTitle;
     titleByHelper = true;
   }
@@ -121,25 +129,30 @@ export async function applyAnnotation(photoId: string, model: string, parsed: An
   const membersOnly = judgement.membersOnly;
   const aiTitle = current.kind !== "EXTERNAL_VIDEO" ? stored.title.trim() : "";
   const previousAiTitle = (current.annotation as { title?: string } | null)?.title ?? null;
-  // A title of unknown origin on an item going members-only: the helper's past answers and its words decide.
-  const unknownTitle = membersOnly && current.title?.trim() && current.titleByHelper === null && current.title.trim() !== previousAiTitle?.trim();
+  // A title of unknown origin on an item going members-only: the helper's past answers decide, and failing them
+  // whether it names somebody.
+  const unknownTitle = membersOnly && current.kind !== "EXTERNAL_VIDEO" && titleKey(current.title) && current.titleByHelper === null && !sameTitle(current.title, previousAiTitle);
   const titles = titlesAfter(
     {
       title: current.title,
       membersTitle: current.membersTitle,
       previousAiTitle,
       titleByHelper: current.titleByHelper,
+      external: current.kind === "EXTERNAL_VIDEO",
+      photoId,
       ...(unknownTitle ? { pastTitles: await pastHelperTitles(photoId), namesSomebody: mentionsAnyName(current.title!, await knownNames()) } : {}),
     },
     aiTitle,
     membersOnly,
   );
+  const keptRaw = await rawToKeep(raw, parsed, scrub, tombstone, scope);
   const est = parsed.estimatedYear;
   const noReliableDate = isWeakDate(current.takenAtSource, current.takenAt);
   const keepMemberEstimate = current.estimatedDateSource === "MEMBER";
   // Stored only if nothing about who may be named on it changed since the request was built, checked in the write
   // itself; otherwise nothing of it is kept, the raw answer included.
   const stale = Symbol("stale");
+  const textChanged = Symbol("text changed");
   const reload = Symbol("reload");
   const kept = await db.$transaction(async (tx) => {
     const forget = await forgetState(tx, tombstone.loadedAt);
@@ -147,9 +160,10 @@ export async function applyAnnotation(photoId: string, model: string, parsed: An
     // Somebody was forgotten since the forgotten names were read: read them again, and judge the answer afresh.
     if (forget.reload) throw reload;
     // The text as it was read, too: a member's edit (or anything else that rewrote it) after the read is newer than
-    // this answer's view of it, so the answer is judged again against it rather than written over it.
+    // this answer's view of it, so the answer is judged again against it rather than written over it. The titles as
+    // well, which are written whole from what was read: a title typed meanwhile is not put back to the old one.
     const written = await tx.photo.updateMany({
-      where: { id: photoId, annotationRevision: current.annotationRevision, annotationSource: current.annotationSource, annotationSharedAt: current.annotationSharedAt, ...(requestedAt ? unchangedSince(requestedAt) : {}) },
+      where: { id: photoId, annotationRevision: current.annotationRevision, annotationSource: current.annotationSource, annotationSharedAt: current.annotationSharedAt, title: current.title, membersTitle: current.membersTitle, titleByHelper: current.titleByHelper, ...(requestedAt ? unchangedSince(requestedAt) : {}) },
       data: {
         annotation: stored,
         annotationModel: model,
@@ -175,7 +189,13 @@ export async function applyAnnotation(photoId: string, model: string, parsed: An
         annotationBatched: raw.batched ?? false,
       },
     });
-    if (written.count === 0) throw stale;
+    if (written.count === 0) {
+      // Which it was, for the reason recorded: the text or titles rewritten since the read (a member's edit), or
+      // somebody on it forgotten, renamed or untagged since the request.
+      const now = await tx.photo.findUnique({ where: { id: photoId }, select: { annotationRevision: true, annotationSource: true, annotationSharedAt: true, title: true, membersTitle: true, titleByHelper: true } });
+      const rewritten = now && (now.annotationRevision !== current.annotationRevision || now.annotationSource !== current.annotationSource || now.annotationSharedAt?.getTime() !== current.annotationSharedAt?.getTime() || now.title !== current.title || now.membersTitle !== current.membersTitle || now.titleByHelper !== current.titleByHelper);
+      throw rewritten ? textChanged : stale;
+    }
     // The date guess is written on its own, carrying the state it was judged by: a member who dated the item or
     // settled its estimate after the read is never overwritten. Matching nothing skips only the date; the rest of
     // the answer stands.
@@ -185,10 +205,11 @@ export async function applyAnnotation(photoId: string, model: string, parsed: An
         data: { estimatedDate: new Date(Date.UTC(Math.round((est.from + est.to) / 2), 6, 1)), estimatedDateConfidence: est.confidence, estimatedDateSource: "MODEL", estimatedDateNote: `${est.from}–${est.to}: ${tombstone.scrub(est.evidence, scope)}` },
       });
     }
-    await tx.mediaAnnotationRaw.create({ data: { photoId, model, response: raw as object } });
+    await tx.mediaAnnotationRaw.create({ data: { photoId, model, response: keptRaw as object } });
     return true;
   }).catch((err: unknown) => {
     if (err === stale) return false;
+    if (err === textChanged) return "text_changed" as const;
     if (err === reload) return "reload" as const;
     throw err;
   });
@@ -197,7 +218,7 @@ export async function applyAnnotation(photoId: string, model: string, parsed: An
     if (attempts < 3) return applyAnnotation(photoId, model, parsed, raw, { ...opts, tombstone: await loadTombstone(), attempts: attempts + 1 });
   }
   if (kept !== true) {
-    await recordFailure(photoId, "names_changed", { terminal: false });
+    await recordFailure(photoId, kept === "text_changed" ? "text_changed" : "names_changed", { terminal: false });
     // Asked again once the change has settled, so no item is left undescribed for it. A member's "Describe again,
     // replacing ours" goes on being that, under its own key, as `reannotate` queues it — unless the text was written
     // again since it was read: words a member wrote after asking are not the ones they agreed to lose.
@@ -213,6 +234,24 @@ export async function applyAnnotation(photoId: string, model: string, parsed: An
   if (needsPlaceEstimate(current)) await applyPlaceEstimate(photoId, parsed.estimatedPlace, { sent: membersOnly || opts.sent, requestedAt, tombstone });
   // The description changed, so the semantic index for this item is stale.
   await enqueueEmbedding(photoId, true);
+}
+
+/**
+ * The raw answer as it may be kept for debugging. It is the helper's words as first written, so once anybody has
+ * been forgotten it may still carry their name where the record stored beside it no longer does. When taking the
+ * names out (the scrub the record gets) changes anything in the answer, its text is kept as the scrubbed answer
+ * instead, never as written; the title in it is then the one that went on the item, which is what
+ * `pastHelperTitles` reads it for. Usage and the rest of the envelope are kept as they came.
+ */
+async function rawToKeep(raw: Record<string, unknown>, parsed: Annotation, scrub: (r: StoredAnnotation) => Promise<StoredAnnotation>, tombstone: Tombstone, scope: Awaited<ReturnType<typeof forgottenScope>> | undefined): Promise<Record<string, unknown>> {
+  if (tombstone.empty) return raw;
+  const deep = (v: unknown): unknown =>
+    typeof v === "string" ? tombstone.scrub(v, scope) : Array.isArray(v) ? v.map(deep) : v && typeof v === "object" ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, deep(x)])) : v;
+  const answer = { ...(await scrub(toStored(parsed))), estimatedYear: deep(parsed.estimatedYear), estimatedPlace: deep(parsed.estimatedPlace) };
+  const asWritten = { ...toStored(parsed), estimatedYear: parsed.estimatedYear, estimatedPlace: parsed.estimatedPlace };
+  // The text as it came as well: it may hold more than the parsed answer kept (a caption cut to length).
+  if (JSON.stringify(answer) === JSON.stringify(asWritten) && JSON.stringify(deep(raw.content)) === JSON.stringify(raw.content)) return raw;
+  return { ...raw, content: [{ type: "text", text: JSON.stringify(answer) }], scrubbed: true };
 }
 
 /** Validate a message the way `messages.parse` would, for batch results that come back as plain messages. */

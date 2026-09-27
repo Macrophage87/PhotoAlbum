@@ -12,6 +12,7 @@ import { levelOf } from "@/lib/visibility/exposure";
 import { requireUserOrThrow } from "@/lib/auth/viewer";
 import { generateToken } from "@/lib/auth/tokens";
 import { uniqueSlug } from "@/lib/trips/slug";
+import { NAME_NOT_TO_BE_SHOWN, namesSomebodyRestricted } from "@/lib/people/forget";
 import { fieldErrors } from "@/lib/trips/validation";
 import { collectionInputFromForm } from "@/lib/collections/validation";
 import { canEditContainer, editableMediaIds, NOT_YOUR_CONTAINER } from "@/lib/auth/ownership";
@@ -32,6 +33,19 @@ async function loadEditableCollection(slug: string) {
   if (!collection) throw new Error("Collection not found");
   if (!canEditContainer(user, collection)) throw new Error(NOT_YOUR_CONTAINER);
   return collection;
+}
+
+/**
+ * A new web address for the collection: made from its first title and never following a rename, it can still say
+ * what the title no longer does. Links to the old address stop working; nothing keeps it to redirect from.
+ */
+export async function changeCollectionSlug(slug: string, fd: FormData): Promise<void> {
+  const collection = await loadEditableCollection(slug);
+  const wanted = z.string().trim().min(1).max(80).parse(fd.get("slug"));
+  const next = await uniqueSlug(wanted, async (s) => Boolean(await db.collection.findFirst({ where: { slug: s, id: { not: collection.id } }, select: { id: true } })));
+  if (next !== collection.slug) await db.collection.update({ where: { id: collection.id }, data: { slug: next } });
+  revalidatePath("/", "layout");
+  redirect(`/collections/${next}/settings?saved=1`);
 }
 
 /** Bump the versioned URLs of a collection's items so shared caches stop matching after a change in exposure. */
@@ -255,6 +269,8 @@ export async function setCollectionDescription(slug: string, text: string): Prom
 /** Show the collection's description to everyone who may open it, or keep it for the family; see setTripDescriptionShared. */
 export async function setCollectionDescriptionShared(slug: string, everyone: boolean): Promise<void> {
   const collection = await loadEditableCollection(slug);
+  // Never a description that may name somebody the album may not name (withdrawn, switched off, opted out).
+  if (everyone && (await namesSomebodyRestricted([collection.description]))) throw new Error(NAME_NOT_TO_BE_SHOWN);
   await db.collection.update({ where: { id: collection.id }, data: { descriptionMembersOnly: !everyone, descriptionSharedAt: everyone ? new Date() : null } });
   revalidatePath(`/collections/${slug}`, "layout");
 }

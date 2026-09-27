@@ -17,6 +17,7 @@ import { ForgetBusyError } from "@/lib/people/names-changed";
 import { enqueueFaceDetection, rebuildUnnamedCentroids } from "@/lib/jobs/handlers/detect-faces";
 import { confirmFaceAs, rejectProposal } from "@/lib/people/matching";
 import { rejudgeFromAction } from "@/lib/annotation/rejudge-notice";
+import { forgetJudgedNames } from "@/lib/annotation/rejudge";
 
 async function requireAdmin() {
   const user = await requireUserOrThrow();
@@ -124,7 +125,7 @@ export async function nameCluster(clusterId: string, fd: FormData): Promise<void
   const effective = existing ? { faceIndexing: existing.faceIndexing, nullTemplates: !existing.faceIndexing, pendingDecision: existing.pendingDecision } : outcome;
   if (effective.nullTemplates) await nullTemplatesFor(person.id);
   // A new name: what was written before it was known is judged again, in the background.
-  if (!existing) await rejudgeFromAction({ names: [person.name] });
+  if (!existing) await rejudgeFromAction({ people: [person.id] });
   revalidatePath("/people", "layout");
   revalidatePath("/admin");
 }
@@ -350,7 +351,8 @@ export async function dismissForgetLeftover(id: string): Promise<void> {
   const user = await requireUserOrThrow();
   // Admins, or the member who forgot them: the list is theirs.
   const mine = user.role === "ADMIN" ? {} : { createdById: user.id };
-  await db.forgetLeftover.updateMany({ where: { id, dismissedAt: null, ...mine }, data: { dismissedAt: new Date(), dismissedById: user.id } });
+  // What it listed goes with it: ids and fields only, but nothing is kept about a forgotten person that is not needed.
+  await db.forgetLeftover.updateMany({ where: { id, dismissedAt: null, ...mine }, data: { dismissedAt: new Date(), dismissedById: user.id, items: {} } });
   revalidatePath("/people/forgotten");
   revalidatePath("/admin");
 }
@@ -368,7 +370,7 @@ export async function updatePerson(personId: string, fd: FormData): Promise<void
   const v = z.object({ name: z.string().trim().min(1).max(80), relationship: z.string().trim().max(80).transform((x) => x || null) }).parse({ name: fd.get("name"), relationship: fd.get("relationship") ?? "" });
   await db.person.update({ where: { id: personId }, data: { name: v.name, relationship: v.relationship, formerNames: withFormerName(person, v.name) } });
   // The old name as well: text written with it is still about them.
-  if (person.name !== v.name) await rejudgeFromAction({ names: [v.name, person.name] });
+  if (person.name !== v.name) await rejudgeFromAction({ people: [personId] });
   revalidatePath("/people", "layout");
 }
 
@@ -479,7 +481,7 @@ export async function tagPersonAt(photoId: string, fd: FormData): Promise<void> 
   const person = v.personId
     ? await db.person.findUniqueOrThrow({ where: { id: v.personId } })
     : await db.person.create({ data: { name: v.name!, kind: "HUMAN", createdById: user.id } });
-  if (!v.personId) await rejudgeFromAction({ names: [person.name] });
+  if (!v.personId) await rejudgeFromAction({ people: [person.id] });
   if (person.optedOutAt) throw new Error("This person asked to be forgotten");
   // One tag per person per photograph: tagging somebody twice moves their box rather than stacking another.
   const already = await db.face.findFirst({ where: { photoId, personId: person.id, confidence: 0 }, select: { id: true } });
@@ -585,8 +587,8 @@ const petSchema = z.object({
 export async function createPet(fd: FormData): Promise<void> {
   const user = await requireUserOrThrow();
   const v = petSchema.parse({ name: fd.get("name"), species: fd.get("species"), livedFrom: fd.get("livedFrom") || undefined, livedTo: fd.get("livedTo") || undefined, isFlock: fd.get("isFlock") === "on", descriptors: fd.get("descriptors") ?? undefined });
-  await db.person.create({ data: { kind: "PET", name: v.name, species: v.species, livedFrom: v.livedFrom, livedTo: v.livedTo, isFlock: v.isFlock, descriptors: v.descriptors, createdById: user.id } });
-  await rejudgeFromAction({ names: [v.name] });
+  const pet = await db.person.create({ data: { kind: "PET", name: v.name, species: v.species, livedFrom: v.livedFrom, livedTo: v.livedTo, isFlock: v.isFlock, descriptors: v.descriptors, createdById: user.id } });
+  await rejudgeFromAction({ people: [pet.id] });
   revalidatePath("/people", "layout");
 }
 
@@ -597,7 +599,7 @@ export async function updatePet(personId: string, fd: FormData): Promise<void> {
   const v = petSchema.parse({ name: fd.get("name"), species: fd.get("species"), livedFrom: fd.get("livedFrom") || undefined, livedTo: fd.get("livedTo") || undefined, isFlock: fd.get("isFlock") === "on", descriptors: fd.get("descriptors") ?? undefined });
   await db.person.update({ where: { id: personId, kind: "PET" }, data: { name: v.name, formerNames: withFormerName(pet, v.name), species: v.species, livedFrom: v.livedFrom, livedTo: v.livedTo, isFlock: v.isFlock, descriptors: v.descriptors } });
   // The old name as well: text written with it is still about them.
-  if (pet.name !== v.name) await rejudgeFromAction({ names: [v.name, pet.name] });
+  if (pet.name !== v.name) await rejudgeFromAction({ people: [personId] });
   revalidatePath("/people", "layout");
 }
 
@@ -640,7 +642,12 @@ export async function deletePerson(personId: string): Promise<void> {
   await requireAdmin();
   // Its detections go back to being unclaimed animals rather than confirmed rows pointing at nobody.
   await db.animalDetection.updateMany({ where: { OR: [{ personId }, { proposedPersonId: personId }] }, data: { personId: null, proposedPersonId: null, status: "DETECTED" } });
-  await db.person.delete({ where: { id: personId, kind: "PET" } });
+  // Its judged names go with the record. Judging jobs queued for it carry only its id, which finds nothing once it
+  // is gone; one queued before jobs carried ids holds the name until the next sweep clears it (dropLegacyRejudgeJobs).
+  await db.$transaction(async (tx) => {
+    await forgetJudgedNames(tx, `person:${personId}`);
+    await tx.person.delete({ where: { id: personId, kind: "PET" } });
+  });
   revalidatePath("/people", "layout");
   redirect("/people");
 }

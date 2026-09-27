@@ -26,6 +26,7 @@ import { forgottenScope, loadTombstone } from "@/lib/people/tombstone";
 import { unpermittedNameScrub } from "@/lib/people/unpermitted";
 import { forgetTrackFiles } from "@/lib/tracks/files";
 import { isCoverable } from "@/lib/photos/cover";
+import { NAME_NOT_TO_BE_SHOWN, namesSomebodyRestricted } from "@/lib/people/forget";
 
 /** An activity is part of the shape of a trip, so it is the trip's maker (and admins) who arrange them. */
 async function loadTrip(slug: string) {
@@ -180,8 +181,10 @@ export async function setActivityDescription(slug: string, id: string, text: str
 /** Show the activity's description to everyone who may open it (its link included), or keep it for the family. */
 export async function setActivityDescriptionShared(slug: string, id: string, everyone: boolean): Promise<void> {
   const trip = await loadTrip(slug);
-  const activity = await db.activity.findFirst({ where: { id, tripId: trip.id }, select: { id: true } });
+  const activity = await db.activity.findFirst({ where: { id, tripId: trip.id }, select: { id: true, description: true } });
   if (!activity) throw new Error("Activity not found");
+  // Never a description that may name somebody the album may not name (withdrawn, switched off, opted out).
+  if (everyone && (await namesSomebodyRestricted([activity.description]))) throw new Error(NAME_NOT_TO_BE_SHOWN);
   await db.activity.update({ where: { id }, data: { descriptionMembersOnly: !everyone, descriptionTitleOnly: false, descriptionSharedAt: everyone ? new Date() : null } });
   revalidatePath(`/trips/${slug}/activities/${id}`);
 }

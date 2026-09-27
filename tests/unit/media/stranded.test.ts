@@ -8,7 +8,18 @@ import { resetTestDb } from "../helpers/reset";
 const root = mkdtempSync(path.join(tmpdir(), "stranded-"));
 process.env.PHOTO_STORAGE_ROOT = root;
 
+import { PgBoss } from "pg-boss";
 import { STRANDED_AFTER_MS, sweepStrandedUploads } from "@/lib/media/stranded";
+import { withLivePickerJob } from "@/lib/jobs/live";
+import { QUEUES } from "@/lib/jobs/queues";
+
+const noJobs = async () => new Set<string>();
+// A real queue in a schema of this run's own (see bossSchema), dropped afterwards.
+const SCHEMA = vi.hoisted(() => {
+  const schema = `pgboss_unit_stranded_${process.pid}_${Math.random().toString(36).slice(2, 8)}`;
+  process.env.PGBOSS_SCHEMA = schema;
+  return schema;
+});
 
 describe("rows whose file never arrived", () => {
   let userId: string;
@@ -36,10 +47,43 @@ describe("rows whose file never arrived", () => {
   it("says a Picker download lost with its worker failed, with what to do, and keeps the row", async () => {
     const lost = await row({ sourceKind: "GOOGLE_PICKER", status: "PROCESSING", updatedAt: new Date(Date.now() - 60 * 60_000) });
     const going = await row({ sourceKind: "GOOGLE_PICKER", status: "PROCESSING" });
-    await sweepStrandedUploads();
+    await sweepStrandedUploads(new Date(), { livePickerJobs: noJobs });
     expect(await db.photo.findUniqueOrThrow({ where: { id: lost.id } })).toMatchObject({ status: "FAILED", error: expect.stringMatching(/Pick it again/) });
     expect((await db.photo.findUniqueOrThrow({ where: { id: going.id } })).status).toBe("PROCESSING");
   });
+  it("never deletes a Picker row whose download never came: it says to pick it again, unless a job is still bringing it", async () => {
+    const old = new Date(Date.now() - STRANDED_AFTER_MS - 60_000);
+    const never = await row({ createdAt: old, updatedAt: old, sourceKind: "GOOGLE_PICKER" });
+    const waiting = await row({ createdAt: old, updatedAt: old, sourceKind: "GOOGLE_PICKER" });
+    const dying = await row({ sourceKind: "GOOGLE_PICKER", status: "PROCESSING", updatedAt: new Date(Date.now() - 60 * 60_000) });
+    // The worker was down for a day: the download job naming these two is still in the queue.
+    expect(await sweepStrandedUploads(new Date(), { livePickerJobs: async (ids) => new Set(ids.filter((id) => id === waiting.id || id === dying.id)) })).toBe(1);
+    expect(await db.photo.findUniqueOrThrow({ where: { id: never.id } })).toMatchObject({ status: "FAILED", error: expect.stringMatching(/Pick it again/) });
+    expect(await db.photo.findUniqueOrThrow({ where: { id: waiting.id } })).toMatchObject({ status: "PENDING", error: null });
+    expect((await db.photo.findUniqueOrThrow({ where: { id: dying.id } })).status).toBe("PROCESSING");
+    // Unable to tell (the queue cannot be read): nothing is failed.
+    await db.photo.update({ where: { id: never.id }, data: { status: "PENDING", error: null, updatedAt: old } });
+    expect(await sweepStrandedUploads(new Date(), { livePickerJobs: async (ids) => new Set(ids) })).toBe(0);
+    expect((await db.photo.findUniqueOrThrow({ where: { id: never.id } })).status).toBe("PENDING");
+  });
+
+  it("finds the rows a queued Picker download names, on a real queue", async () => {
+    const boss = new PgBoss({ connectionString: process.env.DATABASE_URL!, schema: SCHEMA, supervise: false, schedule: false });
+    try {
+      await boss.start();
+      await boss.createQueue(QUEUES.googlePickerImport);
+      // One that has finished names nobody still waiting.
+      await boss.send(QUEUES.googlePickerImport, { userId, sessionId: "t", photoIds: ["c"], items: {} });
+      const [done] = await boss.fetch(QUEUES.googlePickerImport);
+      await boss.complete(QUEUES.googlePickerImport, done.id);
+      await boss.send(QUEUES.googlePickerImport, { userId, sessionId: "s", photoIds: ["a", "b"], items: {} });
+      expect([...(await withLivePickerJob(["a", "c", "d"]))].sort()).toEqual(["a"]);
+    } finally {
+      await boss.stop({ graceful: false });
+      await db.$executeRawUnsafe(`DROP SCHEMA IF EXISTS "${SCHEMA}" CASCADE`);
+    }
+  });
+
   it("leaves a row that a download took between being listed and being deleted", async () => {
     const old = new Date(Date.now() - STRANDED_AFTER_MS - 60_000);
     const p = await row({ createdAt: old, updatedAt: old });

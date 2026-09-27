@@ -148,16 +148,48 @@ export async function handWrittenDescription(before: DescriptionBefore, text: st
 }
 
 /**
- * Whether the title on an item is the helper's, so that a members-only item loses it. The album records who wrote
- * a title (`titleByHelper`); a title from before it did is the helper's when it is one the helper gave (now or in a
- * past answer still kept), or when it names somebody — an old helper title such as "Ada's birthday cake" that a later
- * description did not repeat. A title the family typed since is never taken.
+ * A title as titles are compared: runs of whitespace as one space, none at either end. The members_only_text
+ * migration compared with btrim, and a title typed with a double space or a trailing newline is the same title.
  */
-export function titleIsHelpers(p: { title: string | null; titleByHelper: boolean | null; aiTitle: string | null; pastTitles?: string[]; namesSomebody?: boolean }): boolean {
-  const own = p.title?.trim();
+export function titleKey(title: string | null | undefined): string {
+  return (title ?? "").replace(/\s+/g, " ").trim();
+}
+
+/** Two titles that are the same words (see `titleKey`); an empty one is nobody's. */
+export function sameTitle(a: string | null | undefined, b: string | null | undefined): boolean {
+  const k = titleKey(a);
+  return k !== "" && k === titleKey(b);
+}
+
+/**
+ * Whether the title on an item is provably the helper's, so that a members-only item loses it. The album records
+ * who wrote a title (`titleByHelper`); a title from before it did is the helper's when it is one the helper gave
+ * (now or in a past answer still kept). A title the family typed since is never taken. One from before that cannot
+ * be proved either way is `unknownTitleAside`'s to decide.
+ */
+export function titleIsHelpers(p: { title: string | null; titleByHelper: boolean | null; aiTitle: string | null; pastTitles?: string[] }): boolean {
+  const own = titleKey(p.title);
   if (!own || p.titleByHelper === false) return false;
-  if (p.titleByHelper === true || own === p.aiTitle?.trim()) return true;
-  return Boolean(p.pastTitles?.some((t) => t.trim() === own) || p.namesSomebody);
+  if (p.titleByHelper === true || own === titleKey(p.aiTitle)) return true;
+  return Boolean(p.pastTitles?.some((t) => titleKey(t) === own));
+}
+
+/**
+ * A title from before the album recorded who wrote titles, on a members-only item, that is not provably the
+ * helper's (see `titleIsHelpers`) but names somebody the album knows. It may be an old helper title whose answer has
+ * since been purged, or a member's own words: strangers must not read it either way, and nothing a member wrote may
+ * be lost. So it moves to `membersTitle` ("move") when that holds nothing or only the helper's current title, which
+ * the helper's record still keeps; with anything else there it has nowhere to go, and it is left where it is for
+ * somebody to look at ("stuck"). Null when the rule does not apply. Call only once `titleIsHelpers` said no.
+ */
+export function unknownTitleAside(p: { title: string | null; titleByHelper?: boolean | null; membersTitle: string | null; aiTitle: string | null; namesSomebody?: boolean }): "move" | "stuck" | null {
+  if (p.titleByHelper != null || !titleKey(p.title) || !p.namesSomebody) return null;
+  return !titleKey(p.membersTitle) || sameTitle(p.membersTitle, p.aiTitle) ? "move" : "stuck";
+}
+
+/** Said once per pass for a title `unknownTitleAside` had nowhere to put: which item, never the words. */
+export function warnStuckTitle(photoId: string): void {
+  console.warn(`[members-only] ${photoId}: a title of unknown origin names somebody, and its members' title is taken; left as it is`);
 }
 
 /** The titles in the helper's past answers for an item, from the raw responses still kept. */
@@ -169,7 +201,8 @@ export async function pastHelperTitles(photoId: string): Promise<string[]> {
     const text = Array.isArray(content) ? content.filter((b) => b?.type === "text").map((b) => b.text ?? "").join("") : "";
     try {
       const title = (JSON.parse(text) as { title?: unknown }).title;
-      if (typeof title === "string" && title.trim()) titles.push(title.trim());
+      // Cut where the stored title was cut (see clampAnnotation), so a long one still matches what went on the item.
+      if (typeof title === "string" && titleKey(title.slice(0, 80))) titles.push(titleKey(title.slice(0, 80)));
     } catch {
       // Not a record: nothing to learn from it.
     }
@@ -207,10 +240,10 @@ export async function privateTitlesOf(photoId: string): Promise<string[]> {
  * The same, each with who it belongs to (`person:<id>` or `user:<id>`), so that somebody new with an old name, or a
  * rename, is a name the sweep has not judged yet.
  */
-export async function knownNameEntries(): Promise<{ key: string; name: string }[]> {
+export async function knownNameEntries(client: Pick<typeof db, "person" | "user"> = db): Promise<{ key: string; name: string }[]> {
   const [people, members] = await Promise.all([
-    db.person.findMany({ select: { id: true, name: true } }),
-    db.user.findMany({ where: { name: { not: null } }, select: { id: true, name: true } }),
+    client.person.findMany({ select: { id: true, name: true } }),
+    client.user.findMany({ where: { name: { not: null } }, select: { id: true, name: true } }),
   ]);
   return [...people.map((p) => ({ key: `person:${p.id}:${p.name}`, name: p.name })), ...members.map((m) => ({ key: `user:${m.id}:${m.name}`, name: m.name ?? "" }))].filter((e) => e.name.trim());
 }

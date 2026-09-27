@@ -29,6 +29,7 @@ export const QUEUES = {
   sweepStrandedUploads: "sweep-stranded-uploads",
   reconcilePhotos: "reconcile-photos",
   sweepOrphanFiles: "sweep-orphan-files",
+  revokeGoogle: "revoke-google",
 } as const;
 
 export type QueueName = (typeof QUEUES)[keyof typeof QUEUES];

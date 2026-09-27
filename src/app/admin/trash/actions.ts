@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { db } from "@/lib/db";
+import { Prisma } from "@/generated/prisma/client";
 import { requireAdminOrThrow } from "@/lib/auth/viewer";
 import { enqueue } from "@/lib/jobs/boss";
 import { QUEUES } from "@/lib/jobs/queues";
@@ -32,9 +33,10 @@ export async function restoreFromTrash(photoIds: string[]): Promise<number> {
 export async function deleteFromTrash(photoIds: string[]): Promise<number> {
   await requireAdminOrThrow();
   const list = ids.parse(photoIds);
-  const photos = await db.photo.findMany({ where: { id: { in: list }, trashedAt: { not: null } }, select: { id: true, storageKey: true } });
+  // Still in the trash when it is deleted, in the one statement: one restored meanwhile stays, and so do its files.
+  const photos = await db.$queryRaw<{ id: string; storageKey: string }[]>`
+    DELETE FROM "Photo" WHERE id IN (${Prisma.join(list)}) AND "trashedAt" IS NOT NULL RETURNING id, "storageKey"`;
   if (!photos.length) return 0;
-  await db.photo.deleteMany({ where: { id: { in: photos.map((p) => p.id) } } });
   // A Picker item whose download failed has only the "pending" placeholder for a key: its own folder is what goes.
   for (const p of photos) await enqueue(QUEUES.deletePhoto, { storageKey: p.storageKey === "pending" ? `photos/${p.id}` : p.storageKey });
   revalidatePath("/", "layout");

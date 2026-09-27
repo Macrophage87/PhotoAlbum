@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { db } from "@/lib/db";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { resetTestDb } from "../helpers/reset";
 
 const who = vi.hoisted(() => ({ id: "", reply: "", queued: [] as { queue: string; data: unknown }[] }));
@@ -16,12 +18,17 @@ vi.mock("@/lib/annotation/client", async (original) => ({
 import { writeContainerDescription } from "@/lib/annotation/container";
 import { describeActivityWithAi, setActivityDescription } from "@/app/trips/[slug]/activities/actions";
 import { setTripDescription, setTripDescriptionShared } from "@/app/trips/[slug]/actions";
+import { setActivityDescriptionShared } from "@/app/trips/[slug]/activities/actions";
+import { setCollectionDescriptionShared } from "@/app/collections/actions";
 import { setAnnotationShared, updateAnnotation } from "@/app/annotation/actions";
 import { confirmPlaceEstimate } from "@/app/photos/[id]/actions";
 import { updatePerson } from "@/app/people/actions";
 import { tripTimeline } from "@/lib/timeline/queries";
 import { NO_FILTER } from "@/lib/photos/filters";
-import { rejudgeNames } from "@/lib/annotation/rejudge";
+import { rejudgeNames, rejudgeSweep, rejudgeText } from "@/lib/annotation/rejudge";
+import { applyAnnotation } from "@/lib/annotation/apply";
+import { scrubWithdrawnNames } from "@/lib/people/forget";
+import { annotationSchema } from "@/lib/annotation/schema";
 
 /**
  * A trip's, a collection's or an activity's description, when the helper wrote it or a member typed it: members-only
@@ -160,12 +167,117 @@ describe("descriptions that stay in the family", () => {
   it("queues the judging of a new name instead of doing it in the request", async () => {
     const pet = await db.person.create({ data: { name: "Rex", kind: "HUMAN", createdById: who.id } });
     const p = await photo({ annotation: { title: "Biscuit asleep", caption: "Biscuit asleep", description: "", tags: [], searchSummary: "" } });
+    const old = await photo({ annotation: { title: "Rex asleep", caption: "Rex asleep", description: "", tags: [], searchSummary: "" } });
     who.queued.length = 0;
     const fd = new FormData();
     fd.set("name", "Biscuit");
     await updatePerson(pet.id, fd);
-    // The old name too: what was written with it is still about them.
-    expect(who.queued).toEqual([{ queue: "rejudge-text", data: { names: ["Biscuit", "Rex"] } }]);
+    // Who, never the name: a queued job outlives the request.
+    expect(who.queued).toEqual([{ queue: "rejudge-text", data: { people: [pet.id] } }]);
     expect((await db.photo.findUniqueOrThrow({ where: { id: p.id } })).annotationMembersOnly).toBe(false);
+    // The old name too, read when it runs: what was written with it is still about them.
+    expect((await rejudgeText(who.queued[0].data as never)).photos).toBe(2);
+    expect((await db.photo.findUniqueOrThrow({ where: { id: old.id } })).annotationMembersOnly).toBe(true);
+  });
+
+  it("keeps a title a member typed before the album kept track for members when it names somebody, and never erases it", async () => {
+    // A photograph from before the members_only_text migration: notes, the helper's title in its record, and the
+    // member's own title naming somebody the album knows. The migration's own pass then runs over it.
+    await db.person.create({ data: { name: "Rose", createdById: who.id } });
+    const helper = { title: "Helper title", caption: "The hut", description: "", tags: [], searchSummary: "" };
+    const p = await photo({ context: "Rose's hut", title: "Rose at the hut", annotation: helper });
+    const migration = readFileSync(path.join(process.cwd(), "prisma/migrations/20260926120100_members_only_text/migration.sql"), "utf8");
+    await db.$executeRawUnsafe(migration.match(/^DO \$\$[\s\S]*?^END \$\$;/m)![0]);
+    const titles = async () => db.photo.findUniqueOrThrow({ where: { id: p.id }, select: { title: true, membersTitle: true, titleByHelper: true } });
+    // Members-only, the helper's title moved aside, the member's of unknown origin.
+    expect(await titles()).toEqual({ title: "Rose at the hut", membersTitle: "Helper title", titleByHelper: null });
+    // The worker's first sweep: nothing proves it is the helper's, and it names Rose. It is what members read now;
+    // the helper's title is still in its record.
+    await rejudgeSweep();
+    expect(await titles()).toEqual({ title: null, membersTitle: "Rose at the hut", titleByHelper: null });
+    expect((await db.photo.findUniqueOrThrow({ where: { id: p.id } })).annotation).toMatchObject({ title: "Helper title" });
+    // Described again: the helper's new title does not replace the member's.
+    const again = annotationSchema.parse({ ...helper, title: "Hut in the snow", place: null, activity: null, objects: [], visibleText: null, season: "winter", mood: null, estimatedYear: null, estimatedPlace: null });
+    await applyAnnotation(p.id, "m", again, {}, { sent: true });
+    expect(await titles()).toEqual({ title: null, membersTitle: "Rose at the hut", titleByHelper: null });
+    // Shown to everyone and kept for the family again.
+    const seen = (await db.photo.findUniqueOrThrow({ where: { id: p.id } })).annotationRevision;
+    await setAnnotationShared(p.id, seen, true);
+    await setAnnotationShared(p.id, seen, false);
+    expect(await titles()).toEqual({ title: null, membersTitle: "Rose at the hut", titleByHelper: null });
+    await rejudgeNames(["Rose"]);
+    expect((await titles()).membersTitle).toBe("Rose at the hut");
+  });
+
+  it("never puts back a title a member typed while an answer was being stored", async () => {
+    const p = await photo({});
+    const answer = annotationSchema.parse({ title: "Mail boat lunch", caption: "Lobster rolls", description: "", tags: [], place: null, activity: null, objects: [], visibleText: null, season: "summer", mood: null, searchSummary: "", estimatedYear: null, estimatedPlace: null });
+    // The member saves a title of their own after the answer read the row, before it is written.
+    const real = db.photo.findUnique.bind(db.photo);
+    const spy = vi.spyOn(db.photo, "findUnique").mockImplementationOnce((async (args: never) => {
+      const read = await real(args);
+      await db.photo.update({ where: { id: p.id }, data: { title: "Our boat day", titleByHelper: false } });
+      return read;
+    }) as never);
+    who.queued.length = 0;
+    await applyAnnotation(p.id, "m", answer, {});
+    spy.mockRestore();
+    expect(await db.photo.findUniqueOrThrow({ where: { id: p.id } })).toMatchObject({ title: "Our boat day", titleByHelper: false, annotation: null, annotationError: "text_changed" });
+    // Asked again, against the title as it is now.
+    expect(who.queued.map((q) => q.queue)).toContain("annotate-photo");
+    await applyAnnotation(p.id, "m", answer, {});
+    expect(await db.photo.findUniqueOrThrow({ where: { id: p.id } })).toMatchObject({ title: "Our boat day", titleByHelper: false, membersTitle: null });
+  });
+
+  describe("showing words to everyone that may name somebody the album may not name", () => {
+    const helperRecord = (title: string, description = "") => ({ title, caption: "", description, tags: [], searchSummary: "" });
+    const heldPhoto = (title: string, description = "") => photo({ annotation: helperRecord(title, description), annotationMembersOnly: true, membersTitle: title });
+    const share = async (id: string) => setAnnotationShared(id, (await db.photo.findUniqueOrThrow({ where: { id } })).annotationRevision, true);
+
+    it("G1: refuses once a withdrawal's fortnight has passed, for an everyday name and one only the neighbour rule excuses", async () => {
+      await db.person.create({ data: { name: "Rose", namingWithdrawnAt: new Date(Date.now() - 30 * 86_400_000), createdById: who.id } });
+      await db.person.create({ data: { name: "Ximena", namingWithdrawnAt: new Date(Date.now() - 30 * 86_400_000), createdById: who.id } });
+      const rose = await heldPhoto("Rose At The Hut");
+      const ximena = await heldPhoto("Ximena Hut Walk", "Ximena Hut Walk, in the snow.");
+      await scrubWithdrawnNames();
+      expect(await db.person.count({ where: { namingWithdrawnAt: { not: null } } })).toBe(0);
+      for (const p of [rose, ximena]) await expect(share(p.id)).rejects.toThrow(/no longer to be named/);
+      expect(await db.photo.count({ where: { annotationMembersOnly: false } })).toBe(1);
+    });
+
+    it("G2: refuses when an admin has switched naming off, for photographs, trips, collections and activities", async () => {
+      const ximena = await db.person.create({ data: { name: "Ximena", nameInDescriptions: true, adultAttestedAt: new Date(), createdById: who.id } });
+      const p = await heldPhoto("Ximena Hut Walk");
+      await db.trip.update({ where: { id: tripId }, data: { description: "Ximena Hut Walk, in the snow.", descriptionMembersOnly: true } });
+      const collection = await db.collection.create({ data: { slug: "snow", title: "Snow", description: "Ximena in the snow.", descriptionMembersOnly: true, createdById: who.id } });
+      await db.activity.update({ where: { id: activityId }, data: { description: "Ximena leads the walk.", descriptionMembersOnly: true } });
+      // Agreed to be named: shown as asked.
+      await share(p.id);
+      expect((await db.photo.findUniqueOrThrow({ where: { id: p.id } })).annotationMembersOnly).toBe(false);
+      await db.person.update({ where: { id: ximena.id }, data: { nameInDescriptions: false } });
+      const q = await heldPhoto("Ximena Hut Walk");
+      await expect(share(q.id)).rejects.toThrow(/no longer to be named/);
+      await expect(setTripDescriptionShared("acadia", true)).rejects.toThrow(/no longer to be named/);
+      await expect(setCollectionDescriptionShared("snow", true)).rejects.toThrow(/no longer to be named/);
+      await expect(setActivityDescriptionShared("acadia", activityId, true)).rejects.toThrow(/no longer to be named/);
+      expect((await db.collection.findUniqueOrThrow({ where: { id: collection.id } })).descriptionMembersOnly).toBe(true);
+    });
+
+    it("still shows words that name nobody the album may not name", async () => {
+      await db.person.create({ data: { name: "Rose", namingWithdrawnAt: new Date(Date.now() - 30 * 86_400_000), createdById: who.id } });
+      const p = await heldPhoto("a rose by the hut", "The hut in winter.");
+      await share(p.id);
+      expect((await db.photo.findUniqueOrThrow({ where: { id: p.id } })).annotationMembersOnly).toBe(false);
+      await db.trip.update({ where: { id: tripId }, data: { description: "Fog and cliffs.", descriptionMembersOnly: true } });
+      await setTripDescriptionShared("acadia", true);
+      expect((await db.trip.findUniqueOrThrow({ where: { id: tripId } })).descriptionMembersOnly).toBe(false);
+    });
+
+    it("keeps a title of unknown origin that may name her for members, even one already shown to everyone", async () => {
+      await db.person.create({ data: { name: "Rose", namingWithdrawnAt: new Date(), createdById: who.id } });
+      const p = await photo({ title: "Rose At The Hut", titleByHelper: null, annotation: helperRecord("The hut"), annotatedAt: new Date(), annotationSharedAt: new Date() });
+      await scrubWithdrawnNames();
+      expect(await db.photo.findUniqueOrThrow({ where: { id: p.id } })).toMatchObject({ title: null, membersTitle: "Rose At The Hut" });
+    });
   });
 });

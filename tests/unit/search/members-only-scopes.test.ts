@@ -180,13 +180,13 @@ describe("what strangers may search, container by container, and the words' scop
     // Something else moves updatedAt (a trip's visibility bump, a face, processing): the words are the same.
     await new Promise((r) => setTimeout(r, 5));
     await db.photo.update({ where: { id: p.id }, data: { updatedAt: new Date(), caption: "Dock" } });
-    expect(await flagPhoto(stale as never, null, null)).toBe(true);
+    expect(await flagPhoto(stale as never, null)).toBe(true);
     expect((await db.photo.findUniqueOrThrow({ where: { id: p.id } })).annotationMembersOnly).toBe(true);
 
     const q = await photo({ annotation: { title: "", caption: "Ada on the dock", description: "", tags: [], searchSummary: "" } });
     const before = await db.photo.findUniqueOrThrow({ where: { id: q.id }, include: { trip: true, collections: { include: { collection: true } } } });
     await db.photo.update({ where: { id: q.id }, data: { annotation: { title: "", caption: "The dock", description: "", tags: [], searchSummary: "" } } });
-    expect(await flagPhoto(before as never, null, null)).toBe(false);
+    expect(await flagPhoto(before as never, null)).toBe(false);
     expect((await db.photo.findUniqueOrThrow({ where: { id: q.id } })).annotationMembersOnly).toBe(false);
   });
 
@@ -197,7 +197,7 @@ describe("what strangers may search, container by container, and the words' scop
     const real = db.photo.updateMany.bind(db.photo);
     let misses = 1;
     const spy = vi.spyOn(db.photo, "updateMany").mockImplementation(((args: never) => (misses-- > 0 ? Promise.resolve({ count: 0 }) : real(args))) as never);
-    const once = await rejudgeText({ names: ["Ada"] });
+    const once = await rejudgeText({ people: [ada.id] });
     expect(once).toMatchObject({ photos: 1, missed: 0 });
     expect((await db.appSetting.findUniqueOrThrow({ where: { id: "app" } })).membersOnlyNames).toEqual([`person:${ada.id}:Ada`]);
 
@@ -205,7 +205,7 @@ describe("what strangers may search, container by container, and the words' scop
     await db.appSetting.update({ where: { id: "app" }, data: { membersOnlyNames: [] } });
     await db.photo.update({ where: { id: p.id }, data: { annotationMembersOnly: false } });
     spy.mockImplementation((() => Promise.resolve({ count: 0 })) as never);
-    const never = await rejudgeText({ names: ["Ada"] });
+    const never = await rejudgeText({ people: [ada.id] });
     expect(never.missed).toBeGreaterThan(0);
     expect((await db.appSetting.findUniqueOrThrow({ where: { id: "app" } })).membersOnlyNames).toEqual([]);
     spy.mockRestore();
@@ -214,13 +214,23 @@ describe("what strangers may search, container by container, and the words' scop
   it("takes an old helper title off an item that is already members-only, and leaves a typed one", async () => {
     const trip = await db.trip.create({ data: { slug: "c", title: "Cake", visibility: "PUBLIC", startDate: new Date("2025-01-01"), endDate: new Date("2025-01-02"), createdById: dana } });
     await db.person.create({ data: { name: "Ada", createdById: dana } });
-    // Described from notes long ago as "Ada's birthday cake" (the answer since purged), described again as "Cake table".
-    const old = await photo({ tripId: trip.id, context: "Ada turns five", title: "Ada's birthday cake", annotationMembersOnly: true, annotation: { title: "Cake table", caption: "The cake table", description: "", tags: [], searchSummary: "" } });
-    const typed = await photo({ tripId: trip.id, context: "Ada turns five", title: "Ada's day", titleByHelper: false, annotationMembersOnly: true, annotation: { title: "Cake table", caption: "The cake table", description: "", tags: [], searchSummary: "" } });
+    const cake = { title: "Cake table", caption: "The cake table", description: "", tags: [], searchSummary: "" };
+    // Described from notes long ago as "Ada's birthday cake" (that answer still kept), described again as "Cake table".
+    const old = await photo({ tripId: trip.id, context: "Ada turns five", title: "Ada's birthday cake", annotationMembersOnly: true, annotation: cake });
+    await db.mediaAnnotationRaw.create({ data: { photoId: old.id, model: "m", response: { content: [{ type: "text", text: JSON.stringify({ title: "Ada's birthday cake" }) }] } } });
+    // The same, with that answer since purged: nothing proves whose it is, and it names somebody. Strangers do not
+    // read it; members still do.
+    const purged = await photo({ tripId: trip.id, context: "Ada turns five", title: "Ada's birthday cake", annotationMembersOnly: true, annotation: cake });
+    const typed = await photo({ tripId: trip.id, context: "Ada turns five", title: "Ada's day", titleByHelper: false, annotationMembersOnly: true, annotation: cake });
+    // Of unknown origin and naming nobody: left as it is.
+    const plain = await photo({ tripId: trip.id, context: "Ada turns five", title: "At the table", annotationMembersOnly: true, membersTitle: "Cake table", annotation: cake });
     const r = await rejudgeNames();
-    expect(r.titles).toBe(1);
+    expect(r.titles).toBe(2);
     expect(await db.photo.findUniqueOrThrow({ where: { id: old.id } })).toMatchObject({ title: null, membersTitle: "Cake table" });
+    expect(await db.photo.findUniqueOrThrow({ where: { id: purged.id } })).toMatchObject({ title: null, membersTitle: "Ada's birthday cake" });
     expect(await db.photo.findUniqueOrThrow({ where: { id: typed.id } })).toMatchObject({ title: "Ada's day" });
+    expect(await db.photo.findUniqueOrThrow({ where: { id: plain.id } })).toMatchObject({ title: "At the table", membersTitle: "Cake table", titleByHelper: null });
+    expect((await searchMedia(anon, { q: "birthday" }, 120, null)).map((h) => h.id)).toEqual([]);
   });
 
   it("never lifts a flag because a private trip was renamed", async () => {

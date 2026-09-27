@@ -728,6 +728,9 @@ model Person {
   /// as soon as the key is set (at start-up or overnight).
   forgetPendingAt        DateTime?
   forgetPendingById      String?
+  /// When forgetting them made its leftover list (or found nothing to list): a forget cut short before that makes it
+  /// when it is finished, and one that did never makes a second.
+  forgetListedAt         DateTime?
   /// An admin's word that this person is an adult, recorded to name them in descriptions. Evidence for naming only:
   /// recognition still needs its own attestation (adultAttestedAt), which also says they agreed to it.
   adultConfirmedAt    DateTime?

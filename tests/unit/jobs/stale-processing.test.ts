@@ -58,7 +58,7 @@ describe("items stuck in PROCESSING", () => {
     const row = await db.photo.create({ data: { uploaderId: userId, kind: "PHOTO", sourceKind: "GOOGLE_PICKER", originalName: "p.jpg", mimeType: "image/jpeg", storageKey: "pending", originalPath: "pending", sizeBytes: 0, status: "PROCESSING" } });
     await db.$executeRaw`UPDATE "Photo" SET "updatedAt" = ${new Date(Date.now() - 2 * 3_600_000)} WHERE id = ${row.id}`;
     expect(await reconcileStalePhotos()).toBe(0);
-    await sweepStrandedUploads();
+    await sweepStrandedUploads(new Date(), { livePickerJobs: async () => new Set() });
     expect(await db.photo.findUniqueOrThrow({ where: { id: row.id } })).toMatchObject({ status: "FAILED", error: expect.stringMatching(/Pick it again/) });
   });
 

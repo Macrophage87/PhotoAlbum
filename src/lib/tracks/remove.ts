@@ -32,12 +32,15 @@ export async function deleteTrackAndItsPositions(trackId: string): Promise<void>
 export async function takeBackTrack(tx: Prisma.TransactionClient, track: { id: string; tripId: string; startTime: Date; endTime: Date }): Promise<boolean> {
   const { count } = await tx.track.deleteMany({ where: { id: track.id } });
   if (!count) return false;
-  const placed = { tripId: track.tripId, gpsSource: "TRACK" as const, takenAt: { gte: track.startTime, lte: track.endTime } };
+  await clearTrackPositions(tx, { tripId: track.tripId, gpsSource: "TRACK", takenAt: { gte: track.startTime, lte: track.endTime } });
+  return true;
+}
+
+async function clearTrackPositions(tx: Prisma.TransactionClient, placed: Prisma.PhotoWhereInput): Promise<void> {
   const cleared = { lat: null, lng: null, altitude: null, gpsSource: null };
   // A guess was placed once (it has a name); the ask is recorded even where the helper declined, which has none.
   await tx.photo.updateMany({ where: { ...placed, placeEstimateName: { not: null } }, data: { ...cleared, placeEstimatedAt: null } });
   await tx.photo.updateMany({ where: placed, data: cleared });
-  return true;
 }
 
 /** A trip's photos are few enough to place again here; the queue is only a fallback if that fails. */
