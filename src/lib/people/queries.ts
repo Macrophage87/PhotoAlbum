@@ -1,7 +1,8 @@
 import { db } from "@/lib/db";
 import { Prisma } from "@/generated/prisma/client";
 import { NOT_TRASHED } from "@/lib/photos/trash";
-import type { Viewer } from "@/lib/auth/viewer";
+import type { Viewer, ViewerUser } from "@/lib/auth/viewer";
+import { canEditMedia, isAdmin } from "@/lib/auth/ownership";
 import { visibleMediaWhere } from "@/lib/auth/access";
 import { photoCardSelect } from "@/lib/photos/queries";
 import { isMinor, minorsCheckPasses } from "./consent";
@@ -35,11 +36,13 @@ export async function listPeople(): Promise<PersonCard[]> {
   });
 }
 
-export type ClusterFace = { faceId: string; photoId: string; updatedAt: Date; width: number | null; height: number | null; box: [number, number, number, number] };
+export type ClusterFace = { faceId: string; photoId: string; updatedAt: Date; width: number | null; height: number | null; box: [number, number, number, number]; /** On a photograph this member may say who is in: theirs, or any for an admin. */ editable: boolean };
 export type UnnamedCluster = {
   id: string;
   faceCount: number;
   faces: ClusterFace[];
+  /** How many of the group's faces this member may name: those on their own uploads, or all of them for an admin. */
+  editableCount: number;
   oldest: Date;
   /** The named person this group most resembles, when one is close enough to be worth offering. */
   looksLike: { id: string; name: string; kind: "HUMAN" | "PET"; similarity: number } | null;
@@ -56,7 +59,7 @@ export const CLUSTER_FACE_LIMIT = 24;
  * cannot say "that one is not her" about a face you were never shown, and among relatives who look alike that is
  * the difference between naming a group and naming it wrongly.
  */
-export async function listUnnamedClusters(): Promise<UnnamedCluster[]> {
+export async function listUnnamedClusters(user: Pick<ViewerUser, "id" | "role"> | null = null): Promise<UnnamedCluster[]> {
   const clusters = await db.faceCluster.findMany({
     where: { personId: null },
     orderBy: { faceCount: "desc" },
@@ -67,19 +70,27 @@ export async function listUnnamedClusters(): Promise<UnnamedCluster[]> {
         where: { status: { in: ["DETECTED", "REJECTED"] }, photo: { ...NOT_TRASHED, status: "READY" } },
         take: CLUSTER_FACE_LIMIT,
         orderBy: { confidence: "desc" },
-        select: { id: true, photoId: true, box: true, createdAt: true, photo: { select: { updatedAt: true, width: true, height: true } } },
+        select: { id: true, photoId: true, box: true, createdAt: true, photo: { select: { updatedAt: true, width: true, height: true, uploaderId: true } } },
       },
     },
   });
   const usable = clusters.filter((c) => c.faces.length);
-  const suggestions = await suggestedPeople(usable.map((c) => c.id));
+  const [suggestions, own] = await Promise.all([suggestedPeople(usable.map((c) => c.id)), editableFaceCounts(usable.map((c) => c.id), user)]);
   return usable.map((c) => ({
     id: c.id,
     faceCount: c.faceCount,
     oldest: c.faces.reduce((m, f) => (f.createdAt < m ? f.createdAt : m), c.faces[0].createdAt),
     looksLike: suggestions.get(c.id) ?? null,
-    faces: c.faces.map((f) => ({ faceId: f.id, photoId: f.photoId, updatedAt: f.photo.updatedAt, width: f.photo.width, height: f.photo.height, box: f.box as [number, number, number, number] })),
+    editableCount: user && isAdmin(user) ? c.faceCount : own.get(c.id) ?? 0,
+    faces: c.faces.map((f) => ({ faceId: f.id, photoId: f.photoId, updatedAt: f.photo.updatedAt, width: f.photo.width, height: f.photo.height, box: f.box as [number, number, number, number], editable: canEditMedia(user, f.photo) })),
   }));
+}
+
+/** Per group, how many of its faces (every one naming it would name, not only those shown) are on this member's uploads. */
+async function editableFaceCounts(clusterIds: string[], user: Pick<ViewerUser, "id" | "role"> | null): Promise<Map<string, number>> {
+  if (!user || isAdmin(user) || !clusterIds.length) return new Map();
+  const rows = await db.face.groupBy({ by: ["clusterId"], where: { clusterId: { in: clusterIds }, photo: { uploaderId: user.id } }, _count: { _all: true } });
+  return new Map(rows.map((r) => [r.clusterId!, r._count._all]));
 }
 
 /**
@@ -142,33 +153,33 @@ export async function peopleOnPhoto(photoId: string) {
   return faces.map((f) => ({ id: f.id, box: f.box as [number, number, number, number], status: f.status, hand: f.confidence === 0, person: f.person, proposedPerson: f.proposedPerson, clusterId: f.cluster?.id ?? null }));
 }
 
-export type ProposalRow = { faceId: string; photo: { id: string; updatedAt: Date }; box: [number, number, number, number]; person: { id: string; name: string; kind: "HUMAN" | "PET" }; label: string; childhood: boolean };
+export type ProposalRow = { faceId: string; photo: { id: string; updatedAt: Date }; box: [number, number, number, number]; person: { id: string; name: string; kind: "HUMAN" | "PET" }; label: string; childhood: boolean; /** Whether this member may answer it: the photograph's uploader, or an admin. */ editable: boolean };
 
-/** Open proposals for some photos (or all), oldest first. */
-export async function proposalsFor(photoIds?: string[]): Promise<ProposalRow[]> {
+/** Open proposals for some photos (or all), oldest first, marked with whether `user` may answer each. */
+export async function proposalsFor(photoIds?: string[], user: Pick<ViewerUser, "id" | "role"> | null = null): Promise<ProposalRow[]> {
   const faces = await db.face.findMany({
     where: { status: "PROPOSED", proposedPersonId: { not: null }, photo: NOT_TRASHED, ...(photoIds ? { photoId: { in: photoIds } } : {}) },
     orderBy: { createdAt: "asc" },
     take: 200,
-    select: { id: true, box: true, confidence: true, ageAtCaptureYears: true, photo: { select: { id: true, updatedAt: true, caption: true, title: true, membersTitle: true, originalName: true, takenAt: true, estimatedDate: true } }, proposedPerson: { select: { id: true, name: true, kind: true, birthday: true } } },
+    select: { id: true, box: true, confidence: true, ageAtCaptureYears: true, photo: { select: { id: true, uploaderId: true, updatedAt: true, caption: true, title: true, membersTitle: true, originalName: true, takenAt: true, estimatedDate: true } }, proposedPerson: { select: { id: true, name: true, kind: true, birthday: true } } },
   });
   const rows: ProposalRow[] = faces.map((f) => {
     const p = f.proposedPerson!;
     const date = f.photo.takenAt ?? f.photo.estimatedDate;
     const age = p.birthday && date ? Math.floor((date.getTime() - p.birthday.getTime()) / (365.25 * 86_400_000)) : null;
     const label = f.confidence === 0 ? `named in the notes on ${f.photo.caption ?? readableTitle(f.photo, true) ?? f.photo.originalName}` : age !== null ? `about ${age} years old in ${f.photo.caption ?? readableTitle(f.photo, true) ?? f.photo.originalName}` : (f.photo.caption ?? readableTitle(f.photo, true) ?? f.photo.originalName);
-    return { faceId: f.id, photo: { id: f.photo.id, updatedAt: f.photo.updatedAt }, box: f.box as [number, number, number, number], person: { id: p.id, name: p.name, kind: p.kind }, label, childhood: age !== null && age < 13 };
+    return { faceId: f.id, photo: { id: f.photo.id, updatedAt: f.photo.updatedAt }, box: f.box as [number, number, number, number], person: { id: p.id, name: p.name, kind: p.kind }, label, childhood: age !== null && age < 13, editable: canEditMedia(user, f.photo) };
   });
   // Animal proposals ride in the same list under an `animal:` id; the actions tell the two apart by the prefix.
   const animals = await db.animalDetection.findMany({
     where: { status: "PROPOSED", proposedPersonId: { not: null }, photo: NOT_TRASHED, ...(photoIds ? { photoId: { in: photoIds } } : {}) },
     orderBy: { createdAt: "asc" },
     take: 200,
-    select: { id: true, box: true, species: true, createdAt: true, photo: { select: { id: true, updatedAt: true, caption: true, title: true, membersTitle: true, originalName: true } }, proposedPerson: { select: { id: true, name: true, kind: true } } },
+    select: { id: true, box: true, species: true, createdAt: true, photo: { select: { id: true, uploaderId: true, updatedAt: true, caption: true, title: true, membersTitle: true, originalName: true } }, proposedPerson: { select: { id: true, name: true, kind: true } } },
   });
   for (const a of animals) {
     const p = a.proposedPerson!;
-    rows.push({ faceId: `animal:${a.id}`, photo: { id: a.photo.id, updatedAt: a.photo.updatedAt }, box: a.box as [number, number, number, number], person: { id: p.id, name: p.name, kind: p.kind }, label: `a ${a.species.toLowerCase()} spotted in ${a.photo.caption ?? readableTitle(a.photo, true) ?? a.photo.originalName}`, childhood: false });
+    rows.push({ faceId: `animal:${a.id}`, photo: { id: a.photo.id, updatedAt: a.photo.updatedAt }, box: a.box as [number, number, number, number], person: { id: p.id, name: p.name, kind: p.kind }, label: `a ${a.species.toLowerCase()} spotted in ${a.photo.caption ?? readableTitle(a.photo, true) ?? a.photo.originalName}`, childhood: false, editable: canEditMedia(user, a.photo) });
   }
   return rows;
 }
