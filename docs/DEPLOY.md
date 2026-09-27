@@ -338,7 +338,7 @@ docker image prune -f
 
 Migrations run automatically at start. Take a database dump first (step 9) before any upgrade. Upgrading from a release without `FORGET_KEY` in `.env.example`? Set it first: see [Upgrading from before the forget key](#upgrading-from-before-the-forget-key).
 
-The app's port is now published on `127.0.0.1` only (`APP_BIND`). If you open the album as `http://<server>:<port>` from other devices (no proxy), set `APP_BIND=0.0.0.0` in `.env` and run `docker compose up -d`; without a proxy, all sign-in requests share one rate-limit bucket.
+The app's port is now published on `127.0.0.1` only (`APP_BIND`). If other devices used to open the album as `http://<server>:<port>`, put Caddy in front instead (step 6); `APP_BIND=0.0.0.0` does not bring plain http back. Signing in needs https, since the session cookie is `Secure` in production, and without a proxy anyone can forge the `X-Forwarded-For` the sign-in rate limits go by. A proxy on another machine needs `APP_BIND` set to an address it can reach, a firewall that really covers the port (Docker's published ports bypass ufw), and to set `X-Forwarded-For` itself.
 
  In-flight photo processing is given 45 seconds to finish before the old container stops. A description backfill that is still submitting is cut short by an upgrade: the Admin page says so under that run within about an hour. Wait until no row of that run still reads "in progress" (batches already sent keep processing at Anthropic for up to a day), then run the backfill again for the remaining items; the app refuses to start a new run while one is open, so nothing is sent twice.
 

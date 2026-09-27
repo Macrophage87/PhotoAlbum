@@ -64,7 +64,7 @@ Open <http://localhost:3000>, enter the admin email, and follow the sign-in link
 docker compose logs -f app | grep "auth/verify"
 ```
 
-The port is published on `127.0.0.1` only. If you open the album as `http://<server>:<port>` from other devices (no proxy), set `APP_BIND=0.0.0.0` in `.env` and run `docker compose up -d` (only on a trusted network: without a proxy, all sign-in requests share one rate-limit bucket).
+The port is published on `127.0.0.1` only: open the album at <http://localhost:3000> on that machine. Other devices, even on a home network, need https in front of it, from a reverse proxy such as Caddy ([Behind a reverse proxy](#behind-a-reverse-proxy)). Plain `http://<server>:<port>` does not work, and `APP_BIND=0.0.0.0` does not make it: the image runs in production mode, where the session cookie is `Secure` and browsers keep it only over https (or on localhost), and without a proxy in front anyone can forge the `X-Forwarded-For` header the sign-in rate limits go by.
 
 To load demo content (two trips, a hike with stats, sample photos, a collection, a short clip, a YouTube embed, two named people, a pet and AI-style descriptions):
 
@@ -100,7 +100,7 @@ Every page is served with a nonce-based Content-Security-Policy: scripts only fr
 
 For a full walkthrough of a fresh server (Docker, deploy key, HTTPS with Caddy, backups, updates) see [docs/DEPLOY.md](docs/DEPLOY.md). When the photographs outgrow the disk, [docs/MOVE-MEDIA.md](docs/MOVE-MEDIA.md) moves them to another drive without downtime worth speaking of, and covers having the staging site and the live site work from one set of data.
 
-Set `APP_URL` to the public URL (used in emails and redirects) and raise the proxy's body size limit (e.g. `client_max_body_size 2g;` in nginx, `max_size 2GB` in Caddy) so large photos, 1 GB clips (`MAX_VIDEO_UPLOAD_BYTES`) and Google exports get through. `MAX_UPLOAD_BYTES`, `MAX_VIDEO_UPLOAD_BYTES` and `MAX_IMPORT_BYTES` cap sizes on the app side.
+Set `APP_URL` to the public URL (used in emails and redirects) and raise the proxy's body size limit (e.g. `client_max_body_size 2g;` in nginx, `max_size 2GB` in Caddy) so large photos, 1 GB clips (`MAX_VIDEO_UPLOAD_BYTES`) and Google exports get through. `MAX_UPLOAD_BYTES`, `MAX_VIDEO_UPLOAD_BYTES` and `MAX_IMPORT_BYTES` cap sizes on the app side. The proxy must also pass the client's address in `X-Forwarded-For` (Caddy does by itself; nginx needs `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for`): the app trusts only the last entry, the one the proxy adds, for its sign-in rate limits.
 
 ### Maps
 

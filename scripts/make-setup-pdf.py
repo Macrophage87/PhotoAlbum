@@ -147,8 +147,10 @@ docker compose up --build -d
         "before serving, so upgrades need no manual database step. Three optional services live behind compose profiles: <b>worker</b> (background jobs "
         "in their own container), <b>ml</b> (the local ML sidecar) and <b>ml-init</b> (a one-off download of the model weights into the <b>ml-models</b> volume)."),
       P("Browse to <b>http://localhost:3000</b> on the server itself. The port is published on the loopback address only "
-        "(APP_BIND=127.0.0.1), so from other machines the album is reached through the reverse proxy (section 7). If you open the album as "
-        "http://&lt;server&gt;:&lt;port&gt; from other devices (no proxy), set APP_BIND=0.0.0.0 in .env and run <b>docker compose up -d</b>. "
+        "(APP_BIND=127.0.0.1), so from other machines the album is reached through an https reverse proxy (section 7), even on a home network. "
+        "Plain http://&lt;server&gt;:&lt;port&gt; from another device does not work, and APP_BIND=0.0.0.0 does not make it: the app runs in production "
+        "mode, where the sign-in cookie is marked Secure and browsers keep it only over https (or on localhost), and without a proxy in front anyone "
+        "can forge the X-Forwarded-For header the sign-in rate limits go by. "
         "Change the host port with APP_PORT in .env if 3000 is taken."),
       P("Reading the sign-in link without email", H2),
       P("If SMTP_HOST is left empty, sign-in and invite links are printed to the container log instead of being sent. "
@@ -186,7 +188,7 @@ S += [P("4. Configuration reference (.env)", H1),
         ["SMTP_FROM", "Family Album<br/>&lt;album@example.com&gt;", "Sender shown in emails. Many providers require it to match the account."],
         ["POSTGRES_USER / _PASSWORD / _DB", "photoalbum", "Database credentials used by both containers. Change the password on an internet-facing host."],
         ["APP_PORT", "3000", "Host port published by Docker."],
-        ["APP_BIND", "127.0.0.1", "Address the port is published on. Keep 127.0.0.1 behind a reverse proxy: Docker's published ports bypass ufw, so 0.0.0.0 exposes the app directly. Use 0.0.0.0 only on a trusted home network without a proxy."],
+        ["APP_BIND", "127.0.0.1", "Address the port is published on. Keep 127.0.0.1 with a reverse proxy on the same host. A proxy on another machine needs an address it can reach, a firewall that really covers the port (Docker's published ports bypass ufw), and to set X-Forwarded-For itself. Never 0.0.0.0 for plain http from other devices: sign-in needs https, and without a proxy the X-Forwarded-For behind the sign-in rate limits can be forged."],
         ["STORAGE_DRIVER", "local", "Storage backend. Only local is implemented; the code has an interface for adding S3 later."],
         ["PHOTO_STORAGE_ROOT", "/data/photos", "Where originals and renditions are written (inside the container)."],
         ["MAX_UPLOAD_BYTES", "104857600 (100 MB)", "Largest single photo accepted."],
@@ -434,8 +436,9 @@ docker compose run --rm ml-init       # only after an upgrade that changes the s
         "instance (staging and live never share one), and back it up separately from the database dumps. deploy/update.sh makes one when .env has none, "
         "but an older checkout's first deploy runs the older script, which does not; until there is a key nobody can be forgotten for good. "
         "If the album has already forgotten somebody and the key is lost, never make a new one: put the original back (the deployment guide, step 10)."),
-      P("The app's port is now published on 127.0.0.1 only (APP_BIND). If you open the album as http://&lt;server&gt;:&lt;port&gt; from other devices "
-        "(no proxy), set APP_BIND=0.0.0.0 in .env and run <b>docker compose up -d</b>. Without a proxy, all sign-in requests share one rate-limit bucket.")]
+      P("The app's port is now published on 127.0.0.1 only (APP_BIND). If other devices used to open the album as http://&lt;server&gt;:&lt;port&gt;, "
+        "put an https reverse proxy in front instead (section 7); APP_BIND=0.0.0.0 does not bring plain http back. Signing in needs https, since the "
+        "session cookie is marked Secure, and without a proxy anyone can forge the X-Forwarded-For header the sign-in rate limits go by.")]
 
 # ---------- 9 ----------
 S += [P("9. Development setup and tests", H1),
