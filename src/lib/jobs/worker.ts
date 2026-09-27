@@ -57,6 +57,7 @@ export async function startWorker(): Promise<void> {
   const { purgeVisits } = await import("@/lib/visits/record");
   const { purgeExpiredMagicLinks } = await import("@/lib/auth/magic-link");
   const { sweepStrandedUploads } = await import("@/lib/media/stranded");
+  const { sweepOrphanFiles } = await import("@/lib/storage/sweep");
 
   await boss.work(QUEUES.processPhoto, { batchSize: 1, localConcurrency: 2, pollingIntervalSeconds: 2 }, async ([job]) =>
     processPhoto(job.data as never, job.signal),
@@ -107,6 +108,7 @@ export async function startWorker(): Promise<void> {
   await boss.work(QUEUES.purgeMagicLinks, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60 }, async () => void (await purgeExpiredMagicLinks({ db })));
   await boss.work(QUEUES.sweepStrandedUploads, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60 }, async () => void (await sweepStrandedUploads()));
   await boss.work(QUEUES.reconcilePhotos, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60 }, async () => void (await reconcileStalePhotos()));
+  await boss.work(QUEUES.sweepOrphanFiles, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60 }, async () => sweepOrphanFiles());
   // Schedules (idempotent): weekly video re-check, the annotation quiet-period sweep, batch polling, raw-response purge,
   // and the stale-photo reconciliation.
   await boss.schedule(QUEUES.checkExternalVideos, "0 4 * * 1", {}, { retryLimit: 1 });
@@ -126,6 +128,8 @@ export async function startWorker(): Promise<void> {
   await completePendingForgets().catch((err) => console.error("[worker] pending forgets failed", err));
   await boss.schedule(QUEUES.sweepStrandedUploads, "40 * * * *", {}, { retryLimit: 0 });
   await boss.schedule(QUEUES.reconcilePhotos, "*/15 * * * *", {}, { retryLimit: 0 });
+  // Files left behind by work that died part-way: uploaded track files no import will read again, and so on.
+  await boss.schedule(QUEUES.sweepOrphanFiles, "25 * * * *", {}, { retryLimit: 0 });
   console.log("[worker] pg-boss handlers registered");
   // Before the reconciliation below, so a Picker download lost in the restart is told to be picked again rather
   // than re-processed (it has no file to process).

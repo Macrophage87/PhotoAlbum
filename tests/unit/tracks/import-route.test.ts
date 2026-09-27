@@ -131,4 +131,18 @@ describe("an import's progress is its importer's", () => {
   it("treats an id that is not a job id as not found, not a crash", async () => {
     expect((await poll("not-a-uuid")).status).toBe(404);
   });
+
+  it("tells the importer why it failed, wherever pg-boss put the reason", async () => {
+    const failed = async (output: unknown) => {
+      boss.jobs.set(mine, { state: "failed", data: { userId: "me" }, output });
+      return (await (await poll(mine)).json()).error;
+    };
+    // An Error is stored as its own fields; anything else thrown (a bare string) under `value`.
+    expect(await failed({ name: "Error", message: "No track points found in this file.", stack: "…" })).toBe("No track points found in this file.");
+    expect(await failed({ value: "This FIT file is incomplete or damaged." })).toBe("This FIT file is incomplete or damaged.");
+    expect(await failed({ value: { message: "Unreadable export" } })).toBe("Unreadable export");
+    // pg-boss's own words for a job it stopped are put in the album's.
+    expect(await failed({ name: "Error", message: "handler execution exceeded 3600s" })).toBe("The import took too long and was stopped.");
+    expect(await failed(null)).toBe("Import failed");
+  });
 });
