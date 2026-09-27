@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Button, buttonClasses } from "@/components/ui";
 import { albumTakes, isScanPick, isVideoPick, mimeAsSent, refusalFor } from "@/lib/media/picker";
-import { maxUploadBytes, tooBigMessage, type UploadByteLimits } from "@/lib/media/limits";
+import { EMPTY_FILE_MESSAGE, maxUploadBytes, tooBigMessage, type UploadByteLimits } from "@/lib/media/limits";
 import { MAX_BATCH, overCapMessage, progressLine } from "@/lib/media/upload-retry";
 import { inPlay, MAX_STATUS_IDS, scopeFor, useUploadQueue, type UploadItem } from "./UploadQueue";
 
@@ -98,6 +98,10 @@ export function Uploader({ tripId, activityId, collectionId, scope, onDone, maxC
       // Nothing narrows the chooser any more, so say plainly what was left behind rather than dropping it in silence.
       if (!albumTakes(file)) {
         refused.push({ key, name: file.name, why: refusalFor(file) });
+        continue;
+      }
+      if (file.size === 0) {
+        refused.push({ key, name: file.name, why: EMPTY_FILE_MESSAGE });
         continue;
       }
       // Held to the limit the server will use, so it is refused here rather than after it has all been sent.

@@ -9,6 +9,9 @@ export function maxUploadBytes(mime: string, limits: UploadByteLimits): number {
   return kind === "VIDEO" ? limits.video : kind === "SCAN" ? limits.scan : limits.photo;
 }
 
+/** An empty file is nothing to keep: a copy that failed on the phone, or a placeholder a cloud drive never filled in. */
+export const EMPTY_FILE_MESSAGE = "This file is empty (0 bytes), so there is nothing to upload. Check that it opens on your device, then try again.";
+
 /** Said before a byte is sent, in the same terms the server would use afterwards. */
 export function tooBigMessage(bytes: number, limit: number): string {
   return `This file is ${Math.ceil(bytes / 1048576)} MB; the album takes files of this kind up to ${Math.round(limit / 1048576)} MB.`;

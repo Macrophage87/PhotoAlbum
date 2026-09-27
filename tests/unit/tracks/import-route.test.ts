@@ -67,6 +67,16 @@ describe("importing tracks is arranging the trip", () => {
     expect(boss.sent).toHaveLength(2);
   });
 
+  it("refuses an empty file with a reason, keeping and queuing nothing", async () => {
+    who.id = maker;
+    const before = await stored();
+    const res = await POST(new Request("https://album.example/api/tracks/import", { method: "POST", body: new Uint8Array(0), headers: { "x-file-name": "walk.gpx", "x-trip-id": tripId } }));
+    expect(res.status).toBe(422);
+    expect((await res.json()).error).toMatch(/empty \(0 bytes\)/);
+    expect(boss.sent).toEqual([]);
+    expect(await stored()).toBe(before);
+  });
+
   it("answers a malformed file name with 400, not a crash", async () => {
     who.id = maker;
     expect((await post(tripId, "%E0.gpx")).status).toBe(400);

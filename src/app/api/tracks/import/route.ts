@@ -18,11 +18,13 @@ const headerSchema = z.object({
   sourceHint: z.enum(["auto", "gpx", "fit", "google"]).default("auto"),
 });
 
+const EMPTY_IMPORT = "This file is empty (0 bytes), so there is nothing to import.";
+
 /** Streams a GPX / FIT / Google JSON file to disk and queues the import job. */
 export async function POST(request: Request) {
   const viewer = await getViewer();
   if (viewer.kind !== "user") return Response.json({ error: "Unauthorized" }, { status: 401 });
-  if (!request.body) return Response.json({ error: "Empty body" }, { status: 400 });
+  if (!request.body) return Response.json({ error: EMPTY_IMPORT }, { status: 422 });
   const parsed = headerSchema.safeParse({
     // A name that will not decode fails the schema, and so is a bad request rather than a crash.
     fileName: decodeHeaderName(request.headers.get("x-file-name")) ?? "",
@@ -41,7 +43,11 @@ export async function POST(request: Request) {
   const importKey = `imports/${randomUUID()}.${ext}`;
   try {
     // With the request's signal, so a client that goes away mid-file ends this instead of leaving it waiting.
-    await storage().putStream(importKey, Readable.fromWeb(request.body as never, { signal: request.signal }), { maxBytes: env().MAX_IMPORT_BYTES });
+    const { bytes } = await storage().putStream(importKey, Readable.fromWeb(request.body as never, { signal: request.signal }), { maxBytes: env().MAX_IMPORT_BYTES });
+    if (!bytes) {
+      await storage().delete(importKey).catch(() => {});
+      return Response.json({ error: EMPTY_IMPORT }, { status: 422 });
+    }
   } catch (err) {
     await storage().delete(importKey).catch(() => {});
     if (err instanceof StorageLimitError) return Response.json({ error: `File is larger than ${Math.round(err.maxBytes / 1048576)} MB` }, { status: 413 });
