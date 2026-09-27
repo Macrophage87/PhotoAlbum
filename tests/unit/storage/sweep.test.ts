@@ -5,14 +5,14 @@ import path from "node:path";
 import { db } from "@/lib/db";
 import { resetTestDb } from "../helpers/reset";
 
-/** Files that work which died part-way left behind: uploaded track files no import will read again. */
+/** Files that work which died part-way left behind: uploaded track files no import will read again, and photo folders. */
 const root = mkdtempSync(path.join(tmpdir(), "storage-sweep-"));
 process.env.PHOTO_STORAGE_ROOT = root;
 const jobs = vi.hoisted(() => ({ importKeys: new Set<string>() as Set<string> | null }));
 // No pg-boss here: what its live import jobs would read is given by each test.
 vi.mock("@/lib/jobs/live", () => ({ liveImportKeys: async () => jobs.importKeys }));
 
-import { IMPORT_ABANDONED_MS, sweepImportFiles } from "@/lib/storage/sweep";
+import { IMPORT_ABANDONED_MS, ORPHAN_FOLDER_MS, sweepImportFiles, sweepOrphanPhotoFolders } from "@/lib/storage/sweep";
 
 const now = new Date("2026-09-27T12:00:00Z");
 /** A file under the storage root, last written `ageMs` before `now`. */
@@ -57,5 +57,43 @@ describe("the sweep of uploaded track files", () => {
     jobs.importKeys = null;
     expect(await sweepImportFiles(now)).toBe(0);
     expect(existsSync(stale)).toBe(true);
+  });
+});
+
+describe("the sweep of photo folders", () => {
+  let uploaderId: string;
+  beforeEach(async () => {
+    await resetTestDb();
+    rmSync(path.join(root, "photos"), { recursive: true, force: true });
+    uploaderId = (await db.user.create({ data: { email: "u@example.com" } })).id;
+  });
+  const row = (id: string) => db.photo.create({ data: { id, uploaderId, originalName: "a.jpg", mimeType: "image/jpeg", storageKey: `photos/${id}`, originalPath: `photos/${id}/original.jpg`, sizeBytes: 1, status: "READY" } });
+  /** A folder of files, the folder itself and each file last written `ageMs` before `now`. */
+  const folder = (id: string, ageMs: number) => {
+    for (const name of ["original.jpg", "thumb.webp"]) file(`photos/${id}/${name}`, ageMs);
+    const t = new Date(now.getTime() - ageMs);
+    utimesSync(path.join(root, "photos", id), t, t);
+    return path.join(root, "photos", id);
+  };
+
+  it("deletes a folder whose item was deleted for good, once it has been left a day", async () => {
+    const orphan = folder("gone-long-ago", ORPHAN_FOLDER_MS + 60_000);
+    expect(await sweepOrphanPhotoFolders(now)).toBe(1);
+    expect(existsSync(orphan)).toBe(false);
+  });
+
+  it("never touches a folder whose row exists, however old", async () => {
+    await row("still-here");
+    const kept = folder("still-here", 30 * ORPHAN_FOLDER_MS);
+    expect(await sweepOrphanPhotoFolders(now)).toBe(0);
+    expect(existsSync(kept)).toBe(true);
+  });
+
+  it("leaves a folder written to recently, even with no row", async () => {
+    const recent = folder("just-written", ORPHAN_FOLDER_MS + 60_000);
+    // A rendition written an hour ago into an otherwise old folder.
+    file("photos/just-written/medium.webp", 3600_000);
+    expect(await sweepOrphanPhotoFolders(now)).toBe(0);
+    expect(existsSync(recent)).toBe(true);
   });
 });

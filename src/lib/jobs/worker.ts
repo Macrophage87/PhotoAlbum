@@ -128,7 +128,8 @@ export async function startWorker(): Promise<void> {
   await completePendingForgets().catch((err) => console.error("[worker] pending forgets failed", err));
   await boss.schedule(QUEUES.sweepStrandedUploads, "40 * * * *", {}, { retryLimit: 0 });
   await boss.schedule(QUEUES.reconcilePhotos, "*/15 * * * *", {}, { retryLimit: 0 });
-  // Files left behind by work that died part-way: uploaded track files no import will read again, and so on.
+  // Files left behind by work that died part-way: uploaded track files no import will read again, and photo folders
+  // whose item was deleted for good.
   await boss.schedule(QUEUES.sweepOrphanFiles, "25 * * * *", {}, { retryLimit: 0 });
   console.log("[worker] pg-boss handlers registered");
   // Before the reconciliation below, so a Picker download lost in the restart is told to be picked again rather

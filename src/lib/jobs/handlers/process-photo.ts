@@ -22,6 +22,7 @@ import { enqueueEmbedding } from "./embed-photo";
 import { enqueueFaceDetection } from "./detect-faces";
 import { enqueueAnimalDetection } from "./detect-animals";
 import { workerStopping } from "../shutdown";
+import { forgetFilesIfGone } from "@/lib/storage/sweep";
 
 /**
  * Turn an uploaded original into a usable photo: EXIF, timezone-correct takenAt, GPS,
@@ -44,7 +45,8 @@ export function editsOf(raw: unknown): PhotoEdits | null {
 /** `signal` is pg-boss's: a run it has timed out writes nothing more, so the retry never races it. */
 export async function processPhoto(job: ProcessPhotoJob, signal?: AbortSignal): Promise<void> {
   const photo = await db.photo.findUnique({ where: { id: job.photoId } });
-  if (!photo) return;
+  // Deleted for good before its job ran, or while an earlier run of it was writing renditions (its retry lands here).
+  if (!photo) return void (await forgetFilesIfGone(job.photoId));
   // A clip is made by the transcoder; sharp cannot read a frame of it, so the photo path would only mark it failed.
   if (photo.kind === "VIDEO") {
     await enqueue(QUEUES.transcodeVideo, { photoId: photo.id, tripId: job.tripId ?? photo.tripId }, { singletonKey: `transcode:${photo.id}` });
@@ -253,7 +255,8 @@ export async function processPhoto(job: ProcessPhotoJob, signal?: AbortSignal): 
       });
       return { tripId, takenAt: date.takenAt, positioned: hasGps || (keptGps && now.gpsSource === "SIDECAR") };
     });
-    if (!settled) return;
+    // Deleted for good while it was being rendered: what was just written has nothing to belong to.
+    if (!settled) return void (await forgetFilesIfGone(photo.id));
 
     await enqueueEmbedding(photo.id);
     await enqueueFaceDetection(photo.id);
@@ -272,11 +275,15 @@ export async function processPhoto(job: ProcessPhotoJob, signal?: AbortSignal): 
       // fail it only while it is still this run's.
       console.error(`[process-photo] ${photo.id} timed out`);
       await db.photo.updateMany({ where: { id: photo.id, status: "PROCESSING", updatedAt: claimedAt }, data: { status: "FAILED", error: "Processing took too long and was stopped." } });
+      await forgetFilesIfGone(photo.id);
       throw err;
     }
     const message = err instanceof Error ? err.message : String(err);
+    // No row to fail (it was deleted for good mid-run, which is also what failed the write): nothing is left to retry,
+    // and whatever this run wrote goes.
+    const failed = await db.photo.updateMany({ where: { id: photo.id }, data: { status: "FAILED", error: message.slice(0, 500) } });
+    if (!failed.count && (await forgetFilesIfGone(photo.id))) return;
     console.error(`[process-photo] ${photo.id} failed:`, message);
-    await db.photo.update({ where: { id: photo.id }, data: { status: "FAILED", error: message.slice(0, 500) } });
     throw err;
   }
 }
