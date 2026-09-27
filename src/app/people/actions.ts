@@ -29,8 +29,9 @@ const day = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().transform((v) => 
 
 /** Set the templates of a person's faces and clusters to NULL, keeping rows, boxes and confirmations. */
 async function nullTemplatesFor(personId: string, client: Prisma.TransactionClient = db) {
-  await client.$executeRaw`UPDATE "Face" SET embedding = NULL WHERE "personId" = ${personId}`;
+  // Groups before faces, the order every other writer of both takes them in (leaveCluster, naming, detection).
   await client.$executeRaw`UPDATE "FaceCluster" SET centroid = NULL WHERE "personId" = ${personId}`;
+  await client.$executeRaw`UPDATE "Face" SET embedding = NULL WHERE "personId" = ${personId}`;
 }
 
 const nameSchema = z
@@ -73,8 +74,10 @@ export async function nameCluster(clusterId: string, fd: FormData): Promise<void
   const person = await retryOnDeadlock(() => db.$transaction(async (tx) => {
     // Somebody already named is read again, held until this commits: an admin switching their recognition off
     // meanwhile either comes first and is seen here, or waits and nulls what this attaches.
-    const [known] = existing ? await tx.$queryRaw<{ faceIndexing: boolean; kind: string }[]>`SELECT "faceIndexing", kind::text AS kind FROM "Person" WHERE id = ${existing.id} FOR SHARE` : [];
+    const [known] = existing ? await tx.$queryRaw<{ faceIndexing: boolean; kind: string; forgetting: boolean }[]>`SELECT "faceIndexing", kind::text AS kind, ("optedOutAt" IS NOT NULL OR "forgetPendingAt" IS NOT NULL) AS forgetting FROM "Person" WHERE id = ${existing.id} FOR SHARE` : [];
     if (existing && !known) throw new Error("That person is no longer in the album");
+    // Asked to be forgotten since the page was drawn: their faces are being taken away, not added to.
+    if (known?.forgetting) throw new Error("This person asked to be forgotten");
     const cluster = await lockCluster(tx, clusterId);
     if (!cluster || cluster.personId) throw new Error("Cluster not found or already named");
     // Read under the lock: exactly the faces the group holds now, none of them named.

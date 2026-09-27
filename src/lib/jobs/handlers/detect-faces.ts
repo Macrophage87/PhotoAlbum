@@ -35,7 +35,8 @@ export async function detectFacesJob(job: DetectFacesJob, signal?: AbortSignal):
     // The groups come from the delete itself, so a face moved between a read and the delete is still counted.
     const lightened = [
       ...new Set(
-        (await db.$queryRaw<{ clusterId: string | null }[]>`DELETE FROM "Face" WHERE "photoId" = ${photo.id} AND status IN ('DETECTED', 'PROPOSED') RETURNING "clusterId"`)
+        // The rows locked in id order first, as naming locks faces, so the two wait for each other rather than deadlock.
+        (await db.$queryRaw<{ clusterId: string | null }[]>`DELETE FROM "Face" WHERE id IN (SELECT id FROM "Face" WHERE "photoId" = ${photo.id} AND status IN ('DETECTED', 'PROPOSED') ORDER BY id FOR UPDATE) AND status IN ('DETECTED', 'PROPOSED') RETURNING "clusterId"`)
           .map((r) => r.clusterId)
           .filter((c): c is string => c !== null),
       ),
@@ -48,16 +49,21 @@ export async function detectFacesJob(job: DetectFacesJob, signal?: AbortSignal):
     for (const k of kept) {
       const again = detected.find((f) => k.confidence > 0 && boxIou(k.box as [number, number, number, number], f.box) > 0.5);
       if (!again || !k.personId) continue;
-      const person = await db.person.findUnique({ where: { id: k.personId }, select: { faceIndexing: true, birthday: true } });
-      if (!person?.faceIndexing) continue;
-      const n = await db.$executeRaw`UPDATE "Face" SET embedding = ${vectorLiteral(again.embedding)}::vector WHERE id = ${k.id} AND embedding IS NULL`;
-      if (n > 0) restoredFor.add(k.personId);
-      // A face named while recognition was off has no era cluster yet; give it one now so the matcher can find this person.
-      if (!k.clusterId) {
-        restoredFor.add(k.personId);
-        const realDate = photo.takenAt && photo.takenAtSource !== "FILE_MTIME" && photo.takenAtSource !== "UPLOAD_TIME" ? photo.takenAt : null;
-        await joinEraCluster(k.id, k.personId, again.embedding, ageAtCapture(person.birthday, realDate, photo.estimatedDate, k.ageAtCaptureYears));
-      }
+      const personId = k.personId;
+      // Their recognition read under a lock until the template is back (person, then face, then era group): switched
+      // off meanwhile, the switch either comes first and is seen here, or waits and nulls what this restores.
+      await db.$transaction(async (tx) => {
+        const [person] = await tx.$queryRaw<{ faceIndexing: boolean; birthday: Date | null }[]>`SELECT "faceIndexing", birthday FROM "Person" WHERE id = ${personId} FOR SHARE`;
+        if (!person?.faceIndexing) return;
+        const n = await tx.$executeRaw`UPDATE "Face" SET embedding = ${vectorLiteral(again.embedding)}::vector WHERE id = ${k.id} AND embedding IS NULL`;
+        if (n > 0) restoredFor.add(personId);
+        // A face named while recognition was off has no era cluster yet; give it one now so the matcher can find this person.
+        if (!k.clusterId) {
+          restoredFor.add(personId);
+          const realDate = photo.takenAt && photo.takenAtSource !== "FILE_MTIME" && photo.takenAtSource !== "UPLOAD_TIME" ? photo.takenAt : null;
+          await joinEraCluster(k.id, personId, again.embedding, ageAtCapture(person.birthday, realDate, photo.estimatedDate, k.ageAtCaptureYears), tx);
+        }
+      });
     }
     for (const personId of restoredFor) await rebuildCentroids(personId);
     // Deleted faces leave their unnamed clusters lighter: their counts, and running means that still carry the faces

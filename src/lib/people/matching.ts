@@ -1,4 +1,5 @@
 import { db } from "@/lib/db";
+import type { Prisma } from "@/generated/prisma/client";
 import { vectorLiteral } from "@/lib/ml/client";
 import { ageAtCapture, chooseEraCluster, pickMatch, vetoes, widenedBand, type AgeAtCapture, type CandidateCluster } from "./match";
 import { namesMentioned } from "./text";
@@ -98,35 +99,38 @@ async function ageFor(faceId: string, personId: string): Promise<AgeAtCapture> {
  */
 export async function confirmFaceAs(faceId: string, personId: string): Promise<void> {
   const face = await db.face.findUniqueOrThrow({ where: { id: faceId }, select: { id: true, clusterId: true, cluster: { select: { personId: true } } } });
-  const person = await db.person.findUniqueOrThrow({ where: { id: personId }, select: { faceIndexing: true, kind: true } });
+  const person = await db.person.findUniqueOrThrow({ where: { id: personId }, select: { kind: true } });
   const age = person.kind === "HUMAN" ? await ageFor(faceId, personId) : null;
   if (face.clusterId && !face.cluster?.personId) await leaveCluster(face.id, face.clusterId);
-  const confirm = db.face.update({ where: { id: faceId }, data: { personId, proposedPersonId: null, status: "CONFIRMED", clusterId: null, ageAtCaptureYears: age ? Math.round(age.years * 10) / 10 : undefined } });
-  if (!person.faceIndexing) {
-    // In one commit: never a face of somebody whose recognition is off that keeps its template.
-    await db.$transaction([confirm, db.$executeRaw`UPDATE "Face" SET embedding = NULL WHERE id = ${faceId}`]);
-    return;
-  }
-  await confirm;
-  const row = await db.$queryRaw<{ embedding: string | null }[]>`SELECT embedding::text AS embedding FROM "Face" WHERE id = ${faceId}`;
-  const embedding = row[0]?.embedding ? (JSON.parse(row[0].embedding) as number[]) : null;
-  if (!embedding) return;
-  await joinEraCluster(faceId, personId, embedding, age);
+  // Their recognition read under a lock until this commits (person, then face, then era group, as everywhere): an
+  // admin switching it off meanwhile either comes first and is seen here, or waits and nulls what this keeps.
+  await db.$transaction(async (tx) => {
+    const [now] = await tx.$queryRaw<{ faceIndexing: boolean }[]>`SELECT "faceIndexing" FROM "Person" WHERE id = ${personId} FOR SHARE`;
+    if (!now) throw new Error("That person is no longer in the album");
+    await tx.face.update({ where: { id: faceId }, data: { personId, proposedPersonId: null, status: "CONFIRMED", clusterId: null, ageAtCaptureYears: age ? Math.round(age.years * 10) / 10 : undefined } });
+    if (!now.faceIndexing) {
+      await tx.$executeRaw`UPDATE "Face" SET embedding = NULL WHERE id = ${faceId}`;
+      return;
+    }
+    const row = await tx.$queryRaw<{ embedding: string | null }[]>`SELECT embedding::text AS embedding FROM "Face" WHERE id = ${faceId}`;
+    const embedding = row[0]?.embedding ? (JSON.parse(row[0].embedding) as number[]) : null;
+    if (embedding) await joinEraCluster(faceId, personId, embedding, age, tx);
+  });
 }
 
 /** Put a confirmed face with a template into the person's era cluster for its age, or start a new era. */
-export async function joinEraCluster(faceId: string, personId: string, embedding: number[], age: AgeAtCapture): Promise<void> {
-  const eras = await db.$queryRaw<{ id: string; ageBandMin: number | null; ageBandMax: number | null; centroid: string | null; faceCount: number }[]>`SELECT id, "ageBandMin", "ageBandMax", centroid::text AS centroid, "faceCount" FROM "FaceCluster" WHERE "personId" = ${personId}`;
+export async function joinEraCluster(faceId: string, personId: string, embedding: number[], age: AgeAtCapture, client: Prisma.TransactionClient = db): Promise<void> {
+  const eras = await client.$queryRaw<{ id: string; ageBandMin: number | null; ageBandMax: number | null; centroid: string | null; faceCount: number }[]>`SELECT id, "ageBandMin", "ageBandMax", centroid::text AS centroid, "faceCount" FROM "FaceCluster" WHERE "personId" = ${personId}`;
   const era = chooseEraCluster(eras, age);
   const band = widenedBand(era ?? { ageBandMin: null, ageBandMax: null }, age);
   if (era) {
     const centroid = era.centroid ? updatedCentroid(JSON.parse(era.centroid) as number[], era.faceCount, embedding) : embedding;
-    await db.$executeRaw`UPDATE "FaceCluster" SET centroid = ${vectorLiteral(centroid)}::vector, "faceCount" = "faceCount" + 1, "ageBandMin" = ${band.ageBandMin}, "ageBandMax" = ${band.ageBandMax}, "updatedAt" = now() WHERE id = ${era.id}`;
-    await db.face.update({ where: { id: faceId }, data: { clusterId: era.id } });
+    await client.$executeRaw`UPDATE "FaceCluster" SET centroid = ${vectorLiteral(centroid)}::vector, "faceCount" = "faceCount" + 1, "ageBandMin" = ${band.ageBandMin}, "ageBandMax" = ${band.ageBandMax}, "updatedAt" = now() WHERE id = ${era.id}`;
+    await client.face.update({ where: { id: faceId }, data: { clusterId: era.id } });
   } else {
-    const created = await db.faceCluster.create({ data: { personId, faceCount: 1, ageBandMin: band.ageBandMin, ageBandMax: band.ageBandMax }, select: { id: true } });
-    await db.$executeRaw`UPDATE "FaceCluster" SET centroid = ${vectorLiteral(embedding)}::vector WHERE id = ${created.id}`;
-    await db.face.update({ where: { id: faceId }, data: { clusterId: created.id } });
+    const created = await client.faceCluster.create({ data: { personId, faceCount: 1, ageBandMin: band.ageBandMin, ageBandMax: band.ageBandMax }, select: { id: true } });
+    await client.$executeRaw`UPDATE "FaceCluster" SET centroid = ${vectorLiteral(embedding)}::vector WHERE id = ${created.id}`;
+    await client.face.update({ where: { id: faceId }, data: { clusterId: created.id } });
   }
 }
 
