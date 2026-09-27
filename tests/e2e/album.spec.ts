@@ -3459,6 +3459,8 @@ test("a collection arranged by hand opens in its saved order, for its owner and 
     // And so for somebody holding the link, who has no order to choose.
     const theirs = await anon.newPage();
     await theirs.goto(`/share/c/${token}`);
+    // A first visit loads the page again once the link's cookie is kept; read the grid of the album, not the placeholder.
+    await expect(theirs.getByText("Shared with you")).toBeVisible();
     await expect.poll(() => grid(theirs), { timeout: 20_000 }).toEqual(saved);
   } finally {
     await anon.close();
