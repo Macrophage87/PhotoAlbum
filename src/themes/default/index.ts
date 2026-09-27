@@ -10,7 +10,7 @@ export const defaultTheme: Theme = {
     surface: "#ffffff",
     surfaceAlt: "#f1f5f9",
     text: "#0f172a",
-    textMuted: "#64748b",
+    textMuted: "#617085",
     primary: "#2563eb",
     primaryFg: "#ffffff",
     accent: "#0ea5e9",

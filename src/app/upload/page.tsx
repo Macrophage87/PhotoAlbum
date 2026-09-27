@@ -32,8 +32,8 @@ export default async function UploadPage({ searchParams }: PageProps<"/upload">)
         <div>
           <h1 className="font-display text-3xl font-semibold">Upload photos and clips</h1>
           <p className="text-muted mt-1">
-            Photos are matched to a trip by the date they were taken unless you pick one; the rest wait under <Link href="/photos" className="text-primary underline-offset-2 hover:underline">photos without a trip</Link>. {selected && <>Uploading to <Link href={`/trips/${selected.slug}`} className="text-primary underline-offset-2 hover:underline">{selected.title}</Link>.</>}{" "}
-            {collection && <>Adding to the collection <Link href={`/collections/${collection.slug}`} className="text-primary underline-offset-2 hover:underline">{collection.title}</Link>.</>}{" "}
+            Photos are matched to a trip by the date they were taken unless you pick one; the rest wait under <Link href="/photos" className="text-primary underline underline-offset-2">photos without a trip</Link>. {selected && <>Uploading to <Link href={`/trips/${selected.slug}`} className="text-primary underline underline-offset-2">{selected.title}</Link>.</>}{" "}
+            {collection && <>Adding to the collection <Link href={`/collections/${collection.slug}`} className="text-primary underline underline-offset-2">{collection.title}</Link>.</>}{" "}
             Anything the album already has is put where you choose rather than copied.
           </p>
         </div>

@@ -28,7 +28,7 @@ export function FavouriteButton({ kind, id, initial, dark = false, size = "md", 
   }, [kind, id, self]);
   const tell = (next: FavouriteState) => window.dispatchEvent(new CustomEvent<Changed>(CHANGED, { detail: { kind, id, state: next, from: self } }));
   const label = state.mine ? `Remove this ${NOUN[kind]} from your favorites` : `Make this one of your favorite ${NOUN[kind]}s`;
-  const tone = dark ? "text-white/70 hover:text-white" : "text-muted hover:text-foreground";
+  const tone = dark ? "text-white/70 hover:text-white" : "text-muted hover:text-text";
 
   return (
     <button

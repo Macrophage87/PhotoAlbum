@@ -10,7 +10,7 @@ export const desertTheme: Theme = {
     surface: "#fffdf9",
     surfaceAlt: "#f2e8dc",
     text: "#3b2a1e",
-    textMuted: "#7d6a5a",
+    textMuted: "#786555",
     primary: "#b5542a",
     primaryFg: "#ffffff",
     accent: "#2aa1a8",
