@@ -336,6 +336,15 @@ docker compose up --build -d
 docker image prune -f
 ```
 
+**Check free disk space before every upgrade or deploy.** A deploy writes a full database dump next to the checkout, builds a new image (a few GB of build cache, pruned to one day's worth afterwards), and some migrations rewrite a whole table, which needs room for a second copy of it until Postgres reclaims the old one. Leave several GB free on the disk holding Docker's data plus about twice the database's size:
+
+```bash
+df -h / /var/lib/docker .
+docker compose exec -T db sh -c 'psql -U "$POSTGRES_USER" "$POSTGRES_DB" -Atc "SELECT pg_size_pretty(pg_database_size(current_database()))"'
+```
+
+The `members_only_text` migration is one of those: it rewrites every row of the `Photo` table under an exclusive lock, about 30 seconds per 60,000 photos, and the album does not answer until it is done. A deploy waits `HEALTH_TIMEOUT` (180 s by default) for the new container, so on a very large album run `deploy/update.sh` by hand with a longer one for that release.
+
 Migrations run automatically at start. Take a database dump first (step 9) before any upgrade. Upgrading from a release without `FORGET_KEY` in `.env.example`? Set it first: see [Upgrading from before the forget key](#upgrading-from-before-the-forget-key).
 
 The app's port is now published on `127.0.0.1` only (`APP_BIND`). If other devices used to open the album as `http://<server>:<port>`, put Caddy in front instead (step 6); `APP_BIND=0.0.0.0` does not bring plain http back. Signing in needs https, since the session cookie is `Secure` in production, and without a proxy anyone can forge the `X-Forwarded-For` the sign-in rate limits go by. A proxy on another machine needs `APP_BIND` set to an address it can reach, a firewall that really covers the port (Docker's published ports bypass ufw), and to set `X-Forwarded-For` itself.
@@ -423,7 +432,9 @@ untracked and survive), runs `docker compose up --build -d`, waits for
 branch (force-pushed away) is skipped with a note; if the branch was
 rewound past what is deployed, the older commit is deployed. A deploy rebuilds the image, so expect a short
 outage of a minute or two per push; in-flight photo processing gets 45
-seconds to finish first.
+seconds to finish first. Check the server's free disk space before
+pushing a release (see step 10): a deploy that fills the disk can take
+Postgres down with it.
 
 | Branch | Workflow | Checkout | Port |
 |---|---|---|---|
