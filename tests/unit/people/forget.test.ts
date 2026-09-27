@@ -398,6 +398,28 @@ describe("a name handed over without evidence of an adult", () => {
     expect((await db.person.findUniqueOrThrow({ where: { id: sam.id } })).namingWithdrawnAt).toBeNull();
   });
 
+  it("leaves an admin's decision alone when naming is turned back on while the fortnight's pass runs", async () => {
+    await resetTestDb();
+    const admin = (await db.user.create({ data: { email: "admin@example.com", role: "ADMIN" } })).id;
+    const sam = await db.person.create({ data: { name: "Sam Lee", namingWithdrawnAt: new Date(Date.now() - 20 * 86_400_000), createdById: admin } });
+    const decided = new Date();
+    const read = db.person.findMany.bind(db.person);
+    // The admin's answer lands after the pass has read who is withdrawn, while it is still working through the album.
+    const spy = vi.spyOn(db.person, "findMany").mockImplementationOnce((async (args: Parameters<typeof db.person.findMany>[0]) => {
+      const rows = await read(args);
+      await db.person.update({ where: { id: sam.id }, data: { nameInDescriptions: true, nameInDescriptionsSetAt: decided, namingWithdrawnAt: null } });
+      return rows;
+    }) as unknown as typeof db.person.findMany);
+    try {
+      await scrubWithdrawnNames();
+    } finally {
+      spy.mockRestore();
+    }
+    const after = await db.person.findUniqueOrThrow({ where: { id: sam.id } });
+    expect(after.nameInDescriptions).toBe(true);
+    expect(after.nameInDescriptionsSetAt?.getTime()).toBe(decided.getTime());
+  });
+
   it("in the nightly pass, reaches text shown to everyone since, and photographs tagged since", async () => {
     await resetTestDb();
     const admin = (await db.user.create({ data: { email: "admin@example.com", role: "ADMIN" } })).id;

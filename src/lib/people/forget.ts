@@ -749,7 +749,9 @@ export async function scrubWithdrawnNames(now = new Date()): Promise<number> {
       await forgetNameEverywhere(p);
       // Taken back for good: recorded as a naming decided and not allowed, so what is shown to everyone still keeps
       // their name out (see restrictedPeople).
-      await db.person.update({ where: { id: p.id }, data: { namingWithdrawnAt: null, namingPublicScrubbedAt: null, nameInDescriptions: false, nameInDescriptionsSetAt: p.nameInDescriptionsSetAt ?? new Date() } });
+      // Only if the withdrawal still stands: an admin who recorded evidence and turned naming back on while the
+      // pass ran has decided, and that decision is not overwritten.
+      await db.person.updateMany({ where: { id: p.id, namingWithdrawnAt: p.namingWithdrawnAt }, data: { namingWithdrawnAt: null, namingPublicScrubbedAt: null, nameInDescriptions: false, nameInDescriptionsSetAt: p.nameInDescriptionsSetAt ?? new Date() } });
       done += 1;
     } else {
       // The whole album the first time; after that only what the helper has written since.
