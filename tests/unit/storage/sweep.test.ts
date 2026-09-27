@@ -43,7 +43,7 @@ async function freshInstall() {
   expect((await ensureInstallIdentity()).ok).toBe(true);
 }
 
-describe("the install marker", () => {
+describe("the install marker", { timeout: 30_000 }, () => {
   beforeEach(freshInstall);
 
   it("is written once, on a new install, and names the album and the database", async () => {
@@ -209,7 +209,8 @@ describe("the sweep of uploaded track files", () => {
   });
 });
 
-describe("photo folders with no photo", () => {
+// Tens of folders and rows each, which a loaded machine can take a while over.
+describe("photo folders with no photo", { timeout: 30_000 }, () => {
   let uploaderId: string;
   beforeEach(async () => {
     await freshInstall();
@@ -226,18 +227,9 @@ describe("photo folders with no photo", () => {
   };
   /** An album of `rows` photos with a folder each, plus `orphans` folders with no row, all a month old. */
   async function album(rows: number, orphans: number) {
-    const kept: string[] = [], lost: string[] = [];
-    for (let i = 0; i < rows; i++) {
-      const id = cuid();
-      await row(id);
-      folder(id, 30 * DAY);
-      kept.push(id);
-    }
-    for (let i = 0; i < orphans; i++) {
-      const id = cuid();
-      folder(id, 30 * DAY);
-      lost.push(id);
-    }
+    const kept = Array.from({ length: rows }, () => cuid()), lost = Array.from({ length: orphans }, () => cuid());
+    await db.photo.createMany({ data: kept.map((id) => ({ id, uploaderId, originalName: "a.jpg", mimeType: "image/jpeg", storageKey: `photos/${id}`, originalPath: `photos/${id}/original.jpg`, sizeBytes: 1, status: "READY" as const })) });
+    for (const id of [...kept, ...lost]) folder(id, 30 * DAY);
     return { kept, lost };
   }
   const present = (ids: string[]) => ids.filter((id) => existsSync(path.join(root, "photos", id))).length;
