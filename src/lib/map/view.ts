@@ -76,9 +76,12 @@ export type Cell<R> = { lat: number; lng: number; n: number; box: [number, numbe
 export function gridCells<R extends { lat: number; lng: number; x: number; y: number }>(rows: R[], zoom: number): Cell<R>[] {
   for (let z = Math.min(Math.floor(zoom), MAX_GRID_ZOOM); ; z--) {
     const across = (TILE_PX * 2 ** z) / CELL_PX;
+    // The edges of the square belong to the cells inside them: a pole sits exactly on the bottom edge (or a hair past
+    // the top), and a row past the last would be numbered as the first row of the next column over.
+    const at = (v: number) => Math.min(across - 1, Math.max(0, Math.floor(v * across)));
     const cells = new Map<number, Cell<R>>();
     for (const r of rows) {
-      const key = Math.floor(r.x * across) * across + Math.floor(r.y * across);
+      const key = at(r.x) * across + at(r.y);
       const c = cells.get(key);
       // The middle is summed here and divided once the cell is whole.
       if (!c) cells.set(key, { lat: r.lat, lng: r.lng, n: 1, box: [r.lng, r.lat, r.lng, r.lat], members: [r] });

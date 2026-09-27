@@ -510,8 +510,6 @@ model Photo {
   @@index([provider, externalId])
   @@index([reviewedAt])
   @@index([trashedAt])
-  /// The map of the album asks for the latest change on every view, to know whether what it worked out still holds.
-  @@index([updatedAt])
 }
 
 /// A named, themed, shareable set of media that is independent of trips. A photo may sit in any number of collections.
@@ -1011,4 +1009,13 @@ model ForgetLeftover {
   dismissedById String?
 
   @@index([dismissedAt])
+}
+
+/// One row: bumped by triggers whenever something a map shows changes, so a map worked out once can be answered from
+/// until then (src/lib/map/cache.ts, and the map_version migration for what counts). `access` counts only the changes
+/// that can take something off a map for somebody.
+model MapVersion {
+  id      Int    @id @default(1)
+  version BigInt @default(0)
+  access  BigInt @default(0)
 }

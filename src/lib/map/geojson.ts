@@ -271,21 +271,27 @@ async function buildTripsState(viewer: Viewer, tripId: string | undefined, narro
  * what it holds or names is in the key: the map, whether the viewer is a member, and what the filter narrowed it to.
  * Share cookies are not: they never widen the map of everything, and a trip's map is the trip's for whoever may open it.
  */
-async function tripsState(viewer: Viewer, tripId: string | undefined, given: GalleryFilter): Promise<MapState> {
+/** How a map is asked for: `fresh` never takes one worked out before the album's latest change (see `cache.ts`). */
+export type MapAsk = { fresh?: boolean };
+
+/** Worth keeping between requests: a map big enough to be asked for a view at a time. */
+const keepState = (s: MapState) => s.rows.length > POINT_LIMIT;
+
+async function tripsState(viewer: Viewer, tripId: string | undefined, given: GalleryFilter, { fresh }: MapAsk = {}): Promise<MapState> {
   const member = viewer.kind === "user";
   const filter = { ...given, member: given.member && member };
   // Across every trip, the words are asked of what this viewer may see, so the limit on matches is spent there.
   const narrowed = await narrowing(filter, tripId ? { tripId, placed: true } : { publicOnly: !member, placed: true });
   const active = filterIsActive(filter);
-  return cachedMapState(`trips:${tripId ?? "*"}:${member ? "member" : "visitor"}:${digest([narrowed, active])}`, () => buildTripsState(viewer, tripId, narrowed, active));
+  return cachedMapState(`trips:${tripId ?? "*"}:${member ? "member" : "visitor"}:${digest([narrowed, active])}`, () => buildTripsState(viewer, tripId, narrowed, active), { keep: keepState, fresh });
 }
 
 /**
  * The map of one trip, or of everything the viewer may see: its tracks, its trips, its legends, and its photographs
  * when there are few enough to send at once (else they are asked for a view at a time, `buildMapView`).
  */
-export async function buildMapPayload(viewer: Viewer, tripId?: string, given: GalleryFilter = NO_FILTER): Promise<MapPayload> {
-  const state = await tripsState(viewer, tripId, given);
+export async function buildMapPayload(viewer: Viewer, tripId?: string, given: GalleryFilter = NO_FILTER, ask: MapAsk = {}): Promise<MapPayload> {
+  const state = await tripsState(viewer, tripId, given, ask);
   const { rows, tracks, trackSlots, trips, rings, version } = state;
   // The lines are only for this first answer, so they are read here rather than kept. Across every trip each line is
   // a thinned copy; one trip's map draws its lines whole.
@@ -344,8 +350,8 @@ export async function buildMapPayload(viewer: Viewer, tripId?: string, given: Ga
 }
 
 /** The photographs of `buildMapPayload`'s map that are in one view, one by one or grouped into cells. */
-export async function buildMapView(viewer: Viewer, tripId: string | undefined, given: GalleryFilter, view: MapViewport): Promise<MapPhotos> {
-  return photosFor(await tripsState(viewer, tripId, given), view);
+export async function buildMapView(viewer: Viewer, tripId: string | undefined, given: GalleryFilter, view: MapViewport, ask: MapAsk = {}): Promise<MapPhotos> {
+  return photosFor(await tripsState(viewer, tripId, given, ask), view);
 }
 
 /** A collection's map worked out afresh (no tracks): a photo's activity is coloured by only when the viewer may open its trip too. */
@@ -378,23 +384,23 @@ async function buildCollectionState(viewer: Viewer, collectionId: string, narrow
  * open the collection. A visitor's link cookies are part of the key (as a digest), since a trip's link decides whether
  * that trip's activities colour its photographs here.
  */
-async function collectionState(viewer: Viewer, collectionId: string, given: GalleryFilter): Promise<MapState> {
+async function collectionState(viewer: Viewer, collectionId: string, given: GalleryFilter, { fresh }: MapAsk = {}): Promise<MapState> {
   const member = viewer.kind === "user";
   const narrowed = await narrowing({ ...given, member: given.member && member }, { collectionId, placed: true });
   const who = member ? "member" : `visitor-${digest([...viewer.shareTokens].sort())}`;
-  return cachedMapState(`collection:${collectionId}:${who}:${digest(narrowed)}`, () => buildCollectionState(viewer, collectionId, narrowed));
+  return cachedMapState(`collection:${collectionId}:${who}:${digest(narrowed)}`, () => buildCollectionState(viewer, collectionId, narrowed), { keep: keepState, fresh });
 }
 
-export async function buildCollectionMapPayload(viewer: Viewer, collectionId: string, filter: GalleryFilter = NO_FILTER): Promise<MapPayload> {
-  const state = await collectionState(viewer, collectionId, filter);
+export async function buildCollectionMapPayload(viewer: Viewer, collectionId: string, filter: GalleryFilter = NO_FILTER, ask: MapAsk = {}): Promise<MapPayload> {
+  const state = await collectionState(viewer, collectionId, filter, ask);
   let all: Bounds | null = null;
   for (const p of state.rows) all = mergeBounds(all, { minLat: p.lat, maxLat: p.lat, minLng: p.lng, maxLng: p.lng });
   return { photos: photosFor(state, null), version: state.version, total: state.rows.length, rings: state.rings, tracks: { type: "FeatureCollection", features: [] }, bounds: toPair(all), trips: [] };
 }
 
 /** The photographs of a collection's map that are in one view. */
-export async function buildCollectionMapView(viewer: Viewer, collectionId: string, filter: GalleryFilter, view: MapViewport): Promise<MapPhotos> {
-  return photosFor(await collectionState(viewer, collectionId, filter), view);
+export async function buildCollectionMapView(viewer: Viewer, collectionId: string, filter: GalleryFilter, view: MapViewport, ask: MapAsk = {}): Promise<MapPhotos> {
+  return photosFor(await collectionState(viewer, collectionId, filter, ask), view);
 }
 
 /**

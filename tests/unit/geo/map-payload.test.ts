@@ -10,6 +10,10 @@ import type { Viewer } from "@/lib/auth/viewer";
 import { shareKey } from "@/lib/auth/access";
 import { resetTestDb } from "../helpers/reset";
 
+// A map is sent a view at a time past fifty photographs here, rather than past fifteen hundred: the same behaviour,
+// from a few dozen rows rather than a few thousand.
+vi.mock("@/lib/map/view", async (original) => ({ ...(await original<typeof import("@/lib/map/view")>()), POINT_LIMIT: 50 }));
+
 const member: Viewer = { kind: "user", user: { id: "u", email: "m@example.com", name: null, role: "MEMBER" }, shareTokens: new Map() };
 const stranger: Viewer = { kind: "anonymous", user: null, shareTokens: new Map() };
 const idsOf = (photos: MapPhotos) => photos.points.map((p) => p[0]);
@@ -195,9 +199,16 @@ describe("a map bigger than one answer", () => {
   }, 30_000);
 });
 
+/** Every photograph an answer accounts for, one by one or in its cells. */
+const countOf = (photos: MapPhotos) => photos.points.length + photos.cells.reduce((n, c) => n + c.n, 0);
+const everywhere = { west: -180, south: -85, east: 180, north: 85, zoom: 2 };
+/** A few hundred metres round a spot, zoomed in far enough for single photographs. */
+const near = (lat: number, lng: number) => ({ west: lng - 0.01, south: lat - 0.01, east: lng + 0.01, north: lat + 0.01, zoom: 15 });
+/** More photographs than one answer holds (POINT_LIMIT is 50 in this file), so the map is one worth keeping. */
+const MANY = 60;
+
 describe("a map kept from one view to the next", () => {
   let tripId: string, photoId: string, uploaderId: string;
-  const everywhere = { west: -180, south: -85, east: 180, north: 85, zoom: 2 };
   beforeEach(async () => {
     await resetTestDb();
     forgetMapStates();
@@ -205,37 +216,53 @@ describe("a map kept from one view to the next", () => {
     tripId = (await db.trip.create({ data: { slug: "t", title: "T", startDate: new Date("2025-08-10"), endDate: new Date("2025-08-16"), createdById: uploaderId, visibility: "PUBLIC" } })).id;
     const base = { uploaderId, tripId, mimeType: "image/jpeg", storageKey: "k", originalPath: "k/o.jpg", sizeBytes: 1, status: "READY" as const, gpsSource: "EXIF" as const };
     photoId = (await db.photo.create({ data: { ...base, originalName: "a.jpg", lat: 44.35, lng: -68.2, takenAt: new Date("2025-08-12T15:00:00Z") } })).id;
-    await db.photo.create({ data: { ...base, originalName: "b.jpg", lat: 44.36, lng: -68.21, takenAt: new Date("2025-08-12T16:00:00Z") } });
+    await db.photo.createMany({ data: Array.from({ length: MANY - 1 }, (_, i) => ({ ...base, originalName: `${i}.jpg`, lat: 44.36 + i * 0.0001, lng: -68.21, takenAt: new Date("2025-08-12T16:00:00Z") })) });
   });
   afterEach(() => vi.restoreAllMocks());
 
   it("answers a view from the map already worked out, without reading every photograph again", async () => {
     await buildMapPayload(stranger);
     const read = vi.spyOn(db.photo, "findMany");
-    expect(idsOf(await buildMapView(stranger, undefined, NO_FILTER, everywhere))).toHaveLength(2);
+    expect(countOf(await buildMapView(stranger, undefined, NO_FILTER, everywhere))).toBe(MANY);
     expect(read).not.toHaveBeenCalled();
   });
 
+  it("does not keep a map small enough to send whole", async () => {
+    await db.photo.deleteMany({ where: { id: { not: photoId } } });
+    await buildMapPayload(stranger);
+    const read = vi.spyOn(db.photo, "findMany");
+    expect((await buildMapPayload(stranger)).photos.points.map((p) => p[0])).toEqual([photoId]);
+    expect(read).toHaveBeenCalled();
+  });
+
   it("stops showing a visitor a trip the moment it is made private", async () => {
-    expect(idsOf(await buildMapView(stranger, undefined, NO_FILTER, everywhere))).toHaveLength(2);
+    expect(countOf(await buildMapView(stranger, undefined, NO_FILTER, everywhere))).toBe(MANY);
     await db.trip.update({ where: { id: tripId }, data: { visibility: "PRIVATE" } });
-    expect(idsOf(await buildMapView(stranger, undefined, NO_FILTER, everywhere))).toEqual([]);
+    expect(countOf(await buildMapView(stranger, undefined, NO_FILTER, everywhere))).toBe(0);
   });
 
-  it("shows a photograph where it was just put, and says when the legends have changed", async () => {
-    const before = await buildMapView(member, undefined, NO_FILTER, everywhere);
-    await db.photo.update({ where: { id: photoId }, data: { lat: 10, lng: 10, takenAt: new Date("2025-08-14T12:00:00Z") } });
-    const after = await buildMapView(member, undefined, NO_FILTER, everywhere);
-    expect(after.points.find((p) => p[0] === photoId)!.slice(1, 4)).toEqual([10, 10, "2025-08-14"]);
-    // A new day in the legend: the map is told its legends are not the ones these slots are numbered by.
-    expect(after.version).not.toBe(before.version);
-    expect((await buildMapPayload(member)).version).toBe(after.version);
-  });
-
-  it("drops a photograph in the trash from the next view, for a member too", async () => {
+  it("drops a photograph in the trash from the very next view, for a member too", async () => {
     await buildMapView(member, undefined, NO_FILTER, everywhere);
     await db.photo.update({ where: { id: photoId }, data: { trashedAt: new Date(), trashedById: uploaderId, trashReason: "BLURRY" } });
-    expect(idsOf(await buildMapView(member, undefined, NO_FILTER, everywhere))).not.toContain(photoId);
+    expect(idsOf(await buildMapView(member, undefined, NO_FILTER, near(44.35, -68.2)))).not.toContain(photoId);
+  });
+
+  it("answers from the kept map while a photograph's new place is worked in, once, unless asked for it fresh", async () => {
+    const before = await buildMapView(member, undefined, NO_FILTER, everywhere);
+    await db.photo.update({ where: { id: photoId }, data: { lat: 10, lng: 10, takenAt: new Date("2025-08-14T12:00:00Z") } });
+    // Nothing was taken off the map for anybody, so the map kept from before answers at once; however many ask, the
+    // new one is worked out only once.
+    const read = vi.spyOn(db.photo, "findMany");
+    const stale = await Promise.all([1, 2, 3].map(() => buildMapView(member, undefined, NO_FILTER, near(10, 10))));
+    for (const answer of stale) expect(idsOf(answer)).toEqual([]);
+    expect(read.mock.calls.length).toBeLessThanOrEqual(1);
+    // The placing screen asks for it fresh, and sees the photograph where it was put.
+    const fresh = await buildMapView(member, undefined, NO_FILTER, near(10, 10), { fresh: true });
+    expect(fresh.points.find((p) => p[0] === photoId)!.slice(1, 4)).toEqual([10, 10, "2025-08-14"]);
+    // A new day in the legend: the map is told its legends are not the ones these slots are numbered by.
+    expect(fresh.version).not.toBe(before.version);
+    expect((await buildMapPayload(member)).version).toBe(fresh.version);
+    expect(idsOf(await buildMapView(member, undefined, NO_FILTER, near(10, 10)))).toEqual([photoId]);
   });
 });
 
@@ -246,9 +273,10 @@ describe("a collection's map kept for its visitors", () => {
     const user = await db.user.create({ data: { email: "m@example.com", role: "ADMIN" } });
     const trip = await db.trip.create({ data: { slug: "linked", title: "Linked", startDate: new Date("2025-08-10"), endDate: new Date("2025-08-16"), createdById: user.id, visibility: "LINK", shareToken: "ttok" } });
     const activity = await db.activity.create({ data: { tripId: trip.id, title: "Secret swim", startTime: new Date("2025-08-11T10:00:00Z"), endTime: new Date("2025-08-11T12:00:00Z") } });
-    const photo = await db.photo.create({ data: { uploaderId: user.id, tripId: trip.id, activityId: activity.id, mimeType: "image/jpeg", storageKey: "k", originalPath: "k/o.jpg", sizeBytes: 1, status: "READY", gpsSource: "EXIF", originalName: "a.jpg", lat: 44.35, lng: -68.2, takenAt: new Date("2025-08-11T11:00:00Z") } });
+    // Enough of them for the map to be one that is kept.
+    await db.photo.createMany({ data: Array.from({ length: MANY }, (_, i) => ({ uploaderId: user.id, tripId: trip.id, activityId: activity.id, mimeType: "image/jpeg", storageKey: "k", originalPath: "k/o.jpg", sizeBytes: 1, status: "READY" as const, gpsSource: "EXIF" as const, originalName: `${i}.jpg`, lat: 44.35 + i * 0.001, lng: -68.2, takenAt: new Date("2025-08-11T11:00:00Z") })) });
     const collection = await db.collection.create({ data: { slug: "c", title: "C", createdById: user.id, visibility: "PUBLIC" } });
-    await db.collectionItem.create({ data: { collectionId: collection.id, photoId: photo.id, addedById: user.id } });
+    await db.collectionItem.createMany({ data: (await db.photo.findMany({ select: { id: true } })).map((p) => ({ collectionId: collection.id, photoId: p.id, addedById: user.id })) });
     const activities = async (viewer: Viewer) => (await buildCollectionMapPayload(viewer, collection.id)).rings.activity.groups.map((g) => g.label);
 
     // Holding the trip's link, a visitor may colour this collection's map by the trip's activities…
@@ -256,7 +284,7 @@ describe("a collection's map kept for its visitors", () => {
     expect(await activities(holder)).toContain("Secret swim");
     // …and the next visitor, without it, is not handed the map worked out for the first.
     expect(await activities(stranger)).not.toContain("Secret swim");
-    expect(JSON.stringify(await buildCollectionMapView(stranger, collection.id, NO_FILTER, { west: -180, south: -85, east: 180, north: 85, zoom: 2 }))).not.toContain("Secret swim");
+    expect(JSON.stringify(await buildCollectionMapView(stranger, collection.id, NO_FILTER, everywhere))).not.toContain("Secret swim");
     expect(JSON.stringify(await buildCollectionMapPayload(stranger, collection.id))).not.toContain("Secret swim");
   });
 });
@@ -277,6 +305,20 @@ describe("views and cells", () => {
     expect(inViewport(pacific, 0, 175)).toBe(true);
     expect(inViewport(pacific, 0, 160)).toBe(false);
     expect(inViewport(pacific, 40, 175)).toBe(false);
+  });
+
+  it("keeps the poles in cells of their own, rather than in the next column's", () => {
+    const at = (lat: number, lng: number) => {
+      const [x, y] = mercator(lat, lng);
+      return { lat, lng, x, y };
+    };
+    // At zoom 0 the South Pole under 0° and 84°N at 50°E used to be numbered as one cell, drawn in between; so did
+    // the North Pole at 50°E and 84°S under 0°.
+    for (const pair of [[at(-90, 0), at(84, 50)], [at(90, 50), at(-84, 0)]]) {
+      const cells = gridCells(pair, 0);
+      expect(cells).toHaveLength(2);
+      expect(cells.map((c) => c.lat).sort((a, b) => a - b)).toEqual(pair.map((p) => p.lat).sort((a, b) => a - b));
+    }
   });
 
   it("never makes more cells than an answer may hold, however far in the view says it is zoomed", () => {
