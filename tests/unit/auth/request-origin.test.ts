@@ -88,6 +88,8 @@ describe("hstsValue", () => {
   it("covers subdomains only when HSTS_INCLUDE_SUBDOMAINS asks", () => {
     expect(hstsIncludesSubdomains("true")).toBe(true);
     expect(hstsIncludesSubdomains("1")).toBe(true);
+    expect(hstsIncludesSubdomains("yes")).toBe(true);
+    expect(hstsIncludesSubdomains("On")).toBe(true);
     expect(hstsIncludesSubdomains("false")).toBe(false);
     expect(hstsIncludesSubdomains(undefined)).toBe(false);
   });

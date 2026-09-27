@@ -38,6 +38,26 @@ describe("proxy", () => {
     expect(proxy(req("/auth/signin", { cookie: `session=${TOKEN}` })).cookies.get("session")).toBeUndefined();
   });
 
+  it("reads CSP_REPORT_ONLY as the rest of the app reads a flag", () => {
+    const report = "content-security-policy-report-only";
+    try {
+      for (const on of ["true", "1", "yes", "on", "YES", "On"]) {
+        process.env.CSP_REPORT_ONLY = on;
+        const res = proxy(req("/"));
+        expect(res.headers.get(report), on).toMatch(/script-src/);
+        expect(res.headers.get("content-security-policy"), on).toBeNull();
+      }
+      for (const off of ["false", "0", "no", "off", ""]) {
+        process.env.CSP_REPORT_ONLY = off;
+        const res = proxy(req("/"));
+        expect(res.headers.get("content-security-policy"), off).toMatch(/script-src/);
+        expect(res.headers.get(report), off).toBeNull();
+      }
+    } finally {
+      delete process.env.CSP_REPORT_ONLY;
+    }
+  });
+
   it("sends HSTS only for an https album", () => {
     process.env.APP_URL = "https://album.example";
     expect(proxy(req("/")).headers.get("strict-transport-security")).toMatch(/max-age=/);

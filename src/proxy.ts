@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { buildCsp, CSP_HEADER, CSP_REPORT_ONLY_HEADER } from "@/lib/security/csp";
 import { HSTS_HEADER, hstsIncludesSubdomains, hstsValue } from "@/lib/security/hsts";
 import { looksLikeSessionToken, SESSION_COOKIE, SESSION_REFRESH_MS, sessionCookieOptions } from "@/lib/auth/session-cookie";
+import { envFlag } from "@/lib/env-flag";
 
 /** Paths that always need a member: anonymous requests are bounced to sign-in. Real authorization happens per page/action/route. */
 const PROTECTED = [/^\/upload$/, /^\/admin(\/|$)/, /^\/trips\/new$/, /^\/trips\/[^/]+\/(settings|import|place)$/, /^\/photos(\/|$)/, /^\/collections\/new$/, /^\/collections\/[^/]+\/settings$/, /^\/privacy$/, /^\/review$/, /^\/people(\/|$)/, /^\/graph$/, /^\/favorites$/];
@@ -24,7 +25,8 @@ export function proxy(request: NextRequest) {
   }
   const nonce = Buffer.from(crypto.randomUUID()).toString("base64");
   const csp = buildCsp({ nonce, dev: process.env.NODE_ENV === "development", tileUrl: process.env.NEXT_PUBLIC_TILE_URL, styleUrl: process.env.NEXT_PUBLIC_MAP_STYLE_URL, glyphsUrl: process.env.NEXT_PUBLIC_MAP_GLYPHS_URL });
-  const headerName = process.env.CSP_REPORT_ONLY === "true" || process.env.CSP_REPORT_ONLY === "1" ? CSP_REPORT_ONLY_HEADER : CSP_HEADER;
+  // Read as env.ts reads it, so CSP_REPORT_ONLY=yes (or on) reports here just as the rest of the app takes it to.
+  const headerName = envFlag(process.env.CSP_REPORT_ONLY) ? CSP_REPORT_ONLY_HEADER : CSP_HEADER;
   const requestHeaders = new Headers(request.headers);
   requestHeaders.set("x-nonce", nonce);
   requestHeaders.set(CSP_HEADER, csp);
