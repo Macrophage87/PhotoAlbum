@@ -153,6 +153,24 @@ describe("a photograph from a ride that runs past a trip's last midnight", () =>
     expect(await applyPhotoInstant({ ...other }, new Date("2025-08-17T04:40:00Z"), -240, "UPLOAD_TIME", null)).toBeNull();
   });
 
+  it("is filed on the trip and the ride from a camera left on home time, although its clock says the day after", async () => {
+    // The same trip in Denver (MDT, UTC-6), with a ride from 19:00 to 23:00 on its last evening.
+    await db.trip.update({ where: { id: tripId }, data: { timezone: "America/Denver" } });
+    const r = await ride(tripId, Date.parse("2025-08-17T01:00:00Z"), Date.parse("2025-08-17T05:00:00Z"));
+    // The camera still on New York time: 00:30 on the 17th there is 22:30 on the 16th in Denver, mid-ride.
+    const p = await upload("2025:08:17 00:30:00", "-04:00");
+    expect(p.takenAt?.toISOString()).toBe("2025-08-17T04:30:00.000Z");
+    expect(p).toMatchObject({ tripId, activityId: r.id });
+    // A track alone (the activity deleted, its track kept) takes it as well.
+    await db.activity.delete({ where: { id: r.id } });
+    expect(await upload("2025:08:17 00:35:00", "-04:00")).toMatchObject({ tripId, activityId: null });
+    // And the same for a date set by hand.
+    const photo = await db.photo.create({ data: { uploaderId: userId, originalName: "x.jpg", mimeType: "image/jpeg", storageKey: "k", originalPath: "k/o.jpg", sizeBytes: 1, status: "READY" } });
+    expect(await applyPhotoInstant({ ...photo }, new Date("2025-08-17T04:30:00Z"), -240, "MANUAL", userId)).toBe(tripId);
+    // Not once the ride is over: 23:30 in Denver.
+    expect(await upload("2025:08:17 01:30:00", "-04:00")).toMatchObject({ tripId: null });
+  });
+
   it("follows a date set by hand onto the trip the ride was on", async () => {
     const r = await ride(tripId, RIDE_START, RIDE_END);
     const photo = await db.photo.create({ data: { uploaderId: userId, originalName: "x.jpg", mimeType: "image/jpeg", storageKey: "k", originalPath: "k/o.jpg", sizeBytes: 1, status: "READY" } });

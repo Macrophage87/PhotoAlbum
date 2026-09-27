@@ -9,6 +9,7 @@ import { parseFit } from "./fit";
 import { parseGoogleExport, readHead } from "./google";
 import { splitByLocalDay } from "./split";
 import { persistTrack, type PersistedTrack } from "./persist";
+import { cleanPoints } from "./clean";
 import { placeAgain, takeBackTrack } from "./remove";
 import type { Prisma } from "@/generated/prisma/client";
 import type { ParsedTrack } from "./types";
@@ -115,6 +116,19 @@ export async function importTrackFile(args: ImportArgs): Promise<ImportSummary> 
     return summary;
   }
   for (const parsed of parsedTracks) {
+    // The same file imported twice (or the same ride exported again) would put a second copy of the ride and its
+    // activity on the trip. What is saved is the cleaned points, so a copy has the same start, end and count.
+    const points = cleanPoints(parsed.points);
+    if (points.length >= 2) {
+      const copy = await db.track.findFirst({
+        where: { tripId: trip.id, source: { in: ["GPX", "FIT"] }, startTime: new Date(points[0].t), endTime: new Date(points.at(-1)!.t), pointCount: points.length },
+        select: { id: true },
+      });
+      if (copy) {
+        summary.skipped.push(`${parsed.name}: already on this trip (the same track was imported before), so it was not added again`);
+        continue;
+      }
+    }
     const saved = await persistTrack(parsed, { tripId: trip.id, userId: args.userId, source: kind === "gpx" ? "GPX" : "FIT", originalFile: args.importKey, createActivity: true });
     if (saved) summary.tracks.push(saved);
     else summary.skipped.push(`${parsed.name}: fewer than two usable points`);

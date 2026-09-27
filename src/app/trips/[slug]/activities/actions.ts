@@ -11,9 +11,9 @@ import { annotationGates } from "@/lib/annotation/eligibility";
 import { buildActivityRequest, loadActivityForDescription, parseActivityDescription } from "@/lib/annotation/activity";
 import { permittedNames } from "@/lib/people/gates";
 import { canEditContainer, NOT_YOUR_CONTAINER } from "@/lib/auth/ownership";
-import { activityInputFromForm, keepSeconds, localInputToInstant } from "@/lib/activities/validation";
+import { activityInputFromForm, formTimeToInstant, localInputToInstant } from "@/lib/activities/validation";
 import { deleteActivityAndRefile, reassignPhotosForActivity } from "@/lib/activities/reassign";
-import { deleteTrackAndItsPositions } from "@/lib/tracks/remove";
+import { deleteTrackAndItsPositions, placeAgain } from "@/lib/tracks/remove";
 import { fieldErrors, participantsFromForm } from "@/lib/trips/validation";
 import type { ActivityType } from "@/generated/prisma/enums";
 import type { ActivityFormState } from "@/components/activities/ActivityForm";
@@ -65,7 +65,7 @@ export async function updateActivity(slug: string, id: string, _prev: ActivityFo
   const parsed = activityInputFromForm(fd);
   if (!parsed.success) return { status: "error", fieldErrors: fieldErrors(parsed.error) };
   const v = parsed.data;
-  const existing = await db.activity.findFirst({ where: { id, tripId: trip.id }, select: { id: true, startTime: true, endTime: true, description: true, descriptionMembersOnly: true, descriptionTitleOnly: true, descriptionSharedAt: true, descriptionByHelper: true } });
+  const existing = await db.activity.findFirst({ where: { id, tripId: trip.id }, select: { id: true, trackId: true, participants: { select: { id: true } }, startTime: true, endTime: true, description: true, descriptionMembersOnly: true, descriptionTitleOnly: true, descriptionSharedAt: true, descriptionByHelper: true } });
   if (!existing) return { status: "error", message: "Activity not found" };
   // `set` reconciles to exactly what was ticked, so unticking somebody removes them; a form that never carried the
   // control at all leaves the list as it was.
@@ -75,9 +75,10 @@ export async function updateActivity(slug: string, id: string, _prev: ActivityFo
     data: {
       title: v.title,
       type: v.type as ActivityType,
-      // The form shows whole minutes; an imported track's seconds survive a save that did not move them.
-      startTime: keepSeconds(localInputToInstant(v.start, trip.timezone), existing.startTime),
-      endTime: keepSeconds(localInputToInstant(v.end, trip.timezone), existing.endTime),
+      // The form shows whole minutes of a wall clock: a time it sends back as it was shown stays exactly as stored, its
+      // seconds (an imported track's) and its side of a DST change (the autumn night's second 01:30) included.
+      startTime: formTimeToInstant(v.start, existing.startTime, trip.timezone),
+      endTime: formTimeToInstant(v.end, existing.endTime, trip.timezone),
       description: v.description,
       ...(await activityHandWritten(existing, v.description)),
       descriptionByHelper: descriptionStaysHelpers(existing, v.description),
@@ -85,6 +86,10 @@ export async function updateActivity(slug: string, id: string, _prev: ActivityFo
     },
   });
   await reassignPhotosForActivity(id);
+  // Who was on it decides whose photographs its track may place (see geotag-photos): naming people takes back the
+  // places it gave everybody else's, and un-naming them lets it place theirs.
+  const before = new Set(existing.participants.map((p) => p.id));
+  if (existing.trackId && there && (there.length !== before.size || there.some((pid) => !before.has(pid)))) await placeAgain(trip.id);
   revalidatePath(`/trips/${slug}`, "layout");
   redirect(`/trips/${slug}/activities/${id}`);
 }

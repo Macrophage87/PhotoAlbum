@@ -340,16 +340,22 @@ export async function loadDateReport(id: string): Promise<DateReport | null> {
   return dateReport(id);
 }
 
-/** Take one of the readings the report lists, recorded as set by the member who agreed with it. */
-export async function applyReportedDate(id: string, iso: string): Promise<DateGuessResult> {
+/**
+ * Take one of the readings the report lists (by its key), recorded as set by the member who agreed with it. The
+ * reading is worked out again here rather than taken from the browser, so a camera's wall time keeps the offset it
+ * was read on.
+ */
+export async function applyReportedDate(id: string, key: string): Promise<DateGuessResult> {
   const user = await editorOrNull(id);
   if (!user) return { ok: false, message: NOT_YOURS };
-  const at = new Date(iso);
-  if (Number.isNaN(at.getTime())) return { ok: false, message: "That is not a date" };
   const photo = await db.photo.findUnique({ where: { id }, select: { id: true, tripId: true, gpsSource: true, uploaderId: true, activityId: true, activitySetById: true, tzOffsetMin: true, trip: { select: { timezone: true } } } });
   if (!photo) return { ok: false, message: "Photo not found" };
-  // The one rule for a photograph's clock: its own offset, else the trip's zone at that instant, else UTC.
-  const offset = photoOffsetMin(at, photo.tzOffsetMin, photo.trip?.timezone);
+  const reading = (await dateReport(id))?.witnesses.find((w) => w.key === key && w.usable);
+  const at = reading?.at;
+  if (!at || Number.isNaN(at.getTime())) return { ok: false, message: "That reading has nothing to say any more" };
+  // A wall time keeps the offset it was read on; an instant takes the one rule for a photograph's clock: its own
+  // offset, else the trip's zone at that instant, else UTC.
+  const offset = reading.tzOffsetMin ?? photoOffsetMin(at, photo.tzOffsetMin, photo.trip?.timezone);
   await applyPhotoInstant(photo, at, offset, "MANUAL", user.id, { releaseKeptOff: true });
   return { ok: true, takenAt: at.toISOString(), tzOffsetMin: offset, source: "MANUAL", setBy: uploaderLabel(user.name, user.email) };
 }

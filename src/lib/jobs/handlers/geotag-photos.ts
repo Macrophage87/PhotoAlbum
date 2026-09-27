@@ -6,6 +6,7 @@ import type { GeotagPhotosJob } from "../queues";
 import { NOT_TRASHED } from "@/lib/photos/trash";
 import { TRUSTED_TIME_SOURCES } from "@/lib/photos/date-from-neighbours";
 import { haversine } from "@/lib/geo/haversine";
+import { openTo } from "@/lib/photos/assign";
 
 /** A recorded position of the uploader's own farther than this from another member's activity track: not together. */
 const TOGETHER_M = 300;
@@ -108,8 +109,9 @@ function choose<T extends { source: string; uploaderId: string }>(tracks: T[], u
       const dy = (points[i].lat - place.lat) * mPerLat, dx = (points[i].lng - place.lng) * mPerLng;
       if (dx * dx + dy * dy <= limit2) return true;
     }
+    // `points` is another member's activity track here (never a Google trace), so a stop on it counts.
     for (const edge of [nearFrom, nearTo]) {
-      const p = positionAt(points, edge);
+      const p = positionAt(points, edge, { stops: true });
       if (p && dist(p) <= LOOSE_TOGETHER_M) return true;
     }
     return false;
@@ -141,9 +143,14 @@ export async function geotagPhotos(job: GeotagPhotosJob): Promise<{ updated: num
   // worth looking at again.
   const tracks = await db.track.findMany({
     where: { tripId: job.tripId },
-    select: { id: true, source: true, uploaderId: true, startTime: true, endTime: true, pointsBlob: true },
+    select: { id: true, source: true, uploaderId: true, startTime: true, endTime: true, pointsBlob: true, activity: { select: { participants: { select: { id: true } } } } },
     orderBy: { startTime: "asc" },
   });
+  // Another member's track places only the photographs of those its activity names, where it names anybody: a ride
+  // Dad did with one of the children says nothing about where Mom was, however well it covers her photo's moment.
+  // One with no activity, or nobody named, stays everybody's, as before. The uploader's own track is always theirs.
+  const onIt = (track: (typeof tracks)[number], uploaderId: string) =>
+    track.uploaderId === uploaderId || !track.activity || openTo([track.activity], uploaderId).length > 0;
   if (!tracks.length) return { updated: 0 };
   const fresh = job.trackIds?.length ? tracks.filter((t) => job.trackIds!.includes(t.id)) : tracks;
   if (!fresh.length) return { updated: 0 };
@@ -164,7 +171,7 @@ export async function geotagPhotos(job: GeotagPhotosJob): Promise<{ updated: num
         { gpsSource: "TRACK" as const, ...trusted, OR: fresh.map((t) => (t.source === "GOOGLE" ? { uploaderId: t.uploaderId, ...window(t) } : window(t))) },
       ],
     },
-    select: { id: true, uploaderId: true, takenAt: true, gpsSource: true, lat: true, lng: true, altitude: true },
+    select: { id: true, uploaderId: true, takenAt: true, gpsSource: true, lat: true, lng: true, altitude: true, placeEstimateName: true },
   });
   if (!photos.length) return { updated: 0 };
 
@@ -178,13 +185,15 @@ export async function geotagPhotos(job: GeotagPhotosJob): Promise<{ updated: num
     return pts;
   };
 
-  let updated = 0;
+  let updated = 0, cleared = 0;
   for (const photo of photos) {
     const t = photo.takenAt!.getTime();
-    const chosen = choose(tracks, photo.uploaderId, t, (track) => {
+    const chosen = choose(tracks.filter((track) => onIt(track, photo.uploaderId)), photo.uploaderId, t, (track) => {
       if (t < track.startTime.getTime() || t > track.endTime.getTime()) return null;
-      const points = pointsOf(track), pos = positionAt(points, t);
-      return pos && { pos, kind: positionKindAt(points, t) ?? "soft", points };
+      // An auto-paused stop is read as one only on an activity's track (see STOP_RADIUS_M).
+      const points = pointsOf(track), reading = { stops: track.source !== "GOOGLE" };
+      const pos = positionAt(points, t, reading);
+      return pos && { pos, kind: positionKindAt(points, t, reading) ?? "soft", points };
     });
     if (chosen) {
       const { track, pos } = chosen;
@@ -204,8 +213,20 @@ export async function geotagPhotos(job: GeotagPhotosJob): Promise<{ updated: num
         data: { lat: pos.lat, lng: pos.lng, altitude: pos.ele ?? null, gpsSource: "TRACK" },
       });
       updated += r.count;
+    } else if (photo.gpsSource === "TRACK") {
+      // Placed from a track that may no longer place it: somebody's ride whose activity has since named who was on
+      // it, and not this uploader. No track of the trip gives it a place now, so the one it has is taken back, under
+      // the same guard as placing it; a guess it replaced is asked for again, as when a track is deleted.
+      const r = await db.photo.updateMany({
+        // Only the position this run judged: another run may have placed it again meanwhile, from a track imported
+        // after this one read the trip's tracks.
+        where: { id: photo.id, takenAt: photo.takenAt, placeSetById: null, gpsSource: "TRACK", lat: photo.lat, lng: photo.lng },
+        data: { lat: null, lng: null, altitude: null, gpsSource: null, ...(photo.placeEstimateName !== null ? { placeEstimatedAt: null } : {}) },
+      });
+      cleared += r.count;
     }
   }
+  if (cleared) console.log(`[geotag-photos] took back ${cleared} track position(s) no track gives any more on trip ${job.tripId}`);
   if (updated) console.log(`[geotag-photos] positioned ${updated} photo(s) on trip ${job.tripId}`);
   return { updated };
 }

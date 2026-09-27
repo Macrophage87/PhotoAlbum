@@ -92,3 +92,49 @@ describe("parseFit with several sessions", () => {
     expect(tracks[1].session?.startTime?.getTime()).toBe(T0 + 35 * MIN);
   });
 });
+
+/** Records a minute apart for `minutes`, then one session per leg: [from, to, sport, metres, write its start and elapsed time]. */
+function sessionsFit(minutes: number, legs: [number, number, number, number, boolean][]): Buffer {
+  const enc = new FitEncoder();
+  enc.writeMessage(0, [
+    { number: 0, size: 1, baseType: FitBaseType.Enum, value: 4 },
+    { number: 4, size: 4, baseType: FitBaseType.Uint32, value: ts(T0) },
+  ]);
+  for (let m = 0; m <= minutes; m++) {
+    enc.writeMessage(20, [
+      { number: 253, size: 4, baseType: FitBaseType.Uint32, value: ts(T0 + m * MIN) },
+      { number: 0, size: 4, baseType: FitBaseType.Sint32, value: semi(44 + m * 0.001) },
+      { number: 1, size: 4, baseType: FitBaseType.Sint32, value: semi(-68) },
+    ], 1);
+  }
+  for (const [from, to, sport, distanceM, timed] of legs) {
+    enc.writeMessage(18, [
+      { number: 253, size: 4, baseType: FitBaseType.Uint32, value: ts(T0 + to * MIN) },
+      ...(timed ? [{ number: 2, size: 4, baseType: FitBaseType.Uint32, value: ts(T0 + from * MIN) }, { number: 7, size: 4, baseType: FitBaseType.Uint32, value: (to - from) * 60 * 1000 }] : []),
+      { number: 5, size: 1, baseType: FitBaseType.Enum, value: sport },
+      { number: 9, size: 4, baseType: FitBaseType.Uint32, value: distanceM * 100 },
+    ], timed ? 2 : 3);
+  }
+  return Buffer.from(enc.close());
+}
+
+describe("parseFit with several sessions of one sport", () => {
+  it("joins rides back to back into one, with their totals added up", async () => {
+    // Two rides and a third after a long café stop, then a hike.
+    const tracks = await parseFit(sessionsFit(150, [[0, 40, 2, 15000, true], [40, 70, 2, 9000, true], [90, 120, 2, 10000, true], [120, 150, 17, 2000, true]]));
+    expect(tracks.map((t) => t.sport)).toEqual(["BIKE", "HIKE"]);
+    const [ride] = tracks;
+    expect(ride.points).toHaveLength(120);
+    expect(ride.session).toMatchObject({ distanceM: 34000, elapsedTimeS: undefined });
+    expect(ride.session?.startTime?.getTime()).toBe(T0);
+    expect(ride.session?.endTime?.getTime()).toBe(T0 + 120 * MIN);
+  });
+
+  it("takes nothing from the first session's totals when a session's start cannot be worked out", async () => {
+    const [t, ...rest] = await parseFit(sessionsFit(60, [[0, 20, 2, 7000, true], [20, 60, 2, 14000, false]]));
+    expect(rest).toEqual([]);
+    expect(t.sport).toBe("BIKE");
+    expect(t.points).toHaveLength(61);
+    expect(t.session).toMatchObject({ distanceM: undefined, startTime: undefined });
+  });
+});

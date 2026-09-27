@@ -1,10 +1,31 @@
 import type { TrackPoint } from "./types";
+import { haversine } from "@/lib/geo/haversine";
 
 export const MAX_INTERPOLATION_GAP_MS = 10 * 60_000;
 export const MAX_SNAP_MS = 5 * 60_000;
+/**
+ * In an activity's track (GPX/FIT), a gap whose two ends are this close together is a stop, not a lost signal: a bike
+ * computer auto-pauses at a café and records nothing until it moves again. Photos taken during it were taken there.
+ * Not in a Google trace, which records sparsely whether anybody moves or not: two fixes at home hours apart say
+ * nothing about where she went in between.
+ */
+export const STOP_RADIUS_M = 50;
+/** Up to a long lunch: two fixes at the same spot longer apart than this say nothing about the hours between. */
+export const MAX_STOP_MS = 3 * 60 * 60_000;
+
+/** `stops`: read a gap between two recorded fixes in one place as a stop (see STOP_RADIUS_M); GPX/FIT tracks only. */
+export type TrackReading = { stops?: boolean };
+
+/**
+ * Whether the gap from a to b is a stop in one place (see STOP_RADIUS_M), which is placed whatever its length up to
+ * MAX_STOP_MS. Only between two recorded fixes, and only where the track is an activity's.
+ */
+function stopBetween(a: TrackPoint, b: TrackPoint, opts: TrackReading): boolean {
+  return Boolean(opts.stops) && !a.filled && !b.filled && b.t - a.t <= MAX_STOP_MS && haversine(a.lat, a.lng, b.lat, b.lng) <= STOP_RADIUS_M;
+}
 
 /** Position at an instant along a time-sorted track, or null when the track doesn't cover it. */
-export function positionAt(points: TrackPoint[], tMs: number): { lat: number; lng: number; ele?: number } | null {
+export function positionAt(points: TrackPoint[], tMs: number, opts: TrackReading = {}): { lat: number; lng: number; ele?: number } | null {
   const n = points.length;
   if (n === 0) return null;
   if (tMs < points[0].t || tMs > points[n - 1].t) return null;
@@ -18,7 +39,7 @@ export function positionAt(points: TrackPoint[], tMs: number): { lat: number; ln
   if (a.t === tMs || lo === n - 1) return { lat: a.lat, lng: a.lng, ele: a.ele };
   const b = points[lo + 1];
   const gap = b.t - a.t;
-  if (gap <= MAX_INTERPOLATION_GAP_MS) {
+  if (gap <= MAX_INTERPOLATION_GAP_MS || stopBetween(a, b, opts)) {
     const f = (tMs - a.t) / gap;
     const ele = a.ele !== undefined && b.ele !== undefined ? a.ele + (b.ele - a.ele) * f : undefined;
     return { lat: a.lat + (b.lat - a.lat) * f, lng: a.lng + (b.lng - a.lng) * f, ele };
@@ -30,14 +51,15 @@ export function positionAt(points: TrackPoint[], tMs: number): { lat: number; ln
 
 /**
  * How much a track's position at an instant says about where the person was:
- * - "firm": a recorded fix, or interpolated between two recorded fixes (within MAX_INTERPOLATION_GAP_MS of each other);
+ * - "firm": a recorded fix, or interpolated between two recorded fixes (within MAX_INTERPOLATION_GAP_MS of each other,
+ *   or either end of a stop in one place);
  * - "visit": drawn from points filled in at a Google visit's place, which may be the middle of somewhere big;
  * - "soft": snapped across a signal gap, or drawn from points the importer interpolated itself.
  * Null where the track has no position at all.
  */
 export type PositionKind = "firm" | "visit" | "soft";
 
-export function positionKindAt(points: TrackPoint[], tMs: number): PositionKind | null {
+export function positionKindAt(points: TrackPoint[], tMs: number, opts: TrackReading = {}): PositionKind | null {
   const n = points.length;
   if (n === 0 || tMs < points[0].t || tMs > points[n - 1].t) return null;
   let lo = 0, hi = n - 1;
@@ -50,7 +72,7 @@ export function positionKindAt(points: TrackPoint[], tMs: number): PositionKind 
   const a = points[lo];
   if (a.t === tMs || lo === n - 1) return kindOf(a);
   const b = points[lo + 1];
-  if (b.t - a.t > MAX_INTERPOLATION_GAP_MS) return Math.min(tMs - a.t, b.t - tMs) <= MAX_SNAP_MS ? "soft" : null;
+  if (b.t - a.t > MAX_INTERPOLATION_GAP_MS && !stopBetween(a, b, opts)) return Math.min(tMs - a.t, b.t - tMs) <= MAX_SNAP_MS ? "soft" : null;
   const kinds = [kindOf(a), kindOf(b)];
   return kinds.includes("soft") ? "soft" : kinds.includes("visit") ? "visit" : "firm";
 }
