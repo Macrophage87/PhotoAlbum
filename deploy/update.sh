@@ -89,12 +89,15 @@ fi
 # 2. restore point (only if the stack is already running)
 if as_root docker compose ps --status running --services 2>/dev/null | grep -qx db; then
   as_root mkdir -p "$BACKUP_DIR"
-  DUMP="$BACKUP_DIR/db-pre-deploy-$(date +%F-%H%M).sql.gz"
+  # Every member's email and every name in the album: readable by root only, including dumps from before that rule.
+  as_root find "$BACKUP_DIR" -maxdepth 1 -name 'db-pre-deploy-*.sql.gz' -perm /077 -exec chmod 600 {} +
+  # To the second, so a quick redeploy never writes over the restore point of the deploy before it.
+  DUMP="$BACKUP_DIR/db-pre-deploy-$(date +%F-%H%M%S).sql.gz"
   # Written under a temporary name and renamed once checked, so a failed dump never sits there looking like a backup.
   PARTIAL="$DUMP.partial"
   # The container's own POSTGRES_USER/POSTGRES_DB, so a role or database renamed in .env is dumped too. pipefail
   # (set above) makes a failing pg_dump fail the pipeline instead of leaving gzip's empty file as "the backup".
-  if ! as_root docker compose exec -T db sh -c 'exec pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' | gzip | as_root tee "$PARTIAL" >/dev/null; then
+  if ! as_root docker compose exec -T db sh -c 'exec pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' | gzip | as_root sh -c 'umask 077 && exec cat > "$1"' sh "$PARTIAL"; then
     as_root rm -f "$PARTIAL"
     echo "!! pg_dump failed — not deploying without a restore point" >&2
     exit 1

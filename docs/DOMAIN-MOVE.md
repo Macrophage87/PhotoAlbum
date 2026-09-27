@@ -26,7 +26,8 @@ The deployment layout this ends at is the one `DEPLOY.md` already describes:
 - [ ] **Back up.** On the server, in the current checkout:
       ```bash
       set -o pipefail   # so a failed pg_dump is an error, not a tiny .gz
-      docker compose exec -T db sh -c 'exec pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' | gzip > ~/album-before-move.sql.gz
+      # umask in a subshell: the dump is readable by you only, and later commands are not affected
+      (umask 077 && docker compose exec -T db sh -c 'exec pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' | gzip > ~/album-before-move.sql.gz)
       gzip -cd ~/album-before-move.sql.gz | tail -n 20 | grep -c 'PostgreSQL database dump complete'   # 1, or the dump is incomplete
       docker run --rm -v photoalbum_photos:/data:ro -v ~:/backup alpine \
         tar czf /backup/album-photos-before-move.tgz -C /data .

@@ -296,6 +296,8 @@ Create a backup script at `~/backup-album.sh`:
 #!/bin/bash
 # pipefail: without it a failed pg_dump still leaves a small, useless .gz and the script carries on.
 set -eo pipefail
+# The dumps hold every member's address and every name in the album: readable by this user only.
+umask 077
 DEST=/home/album/backups
 mkdir -p "$DEST"
 STAMP=$(date +%F)

@@ -279,6 +279,7 @@ when you like. `~/refresh-staging.sh`:
 ```bash
 #!/bin/bash
 set -eo pipefail
+umask 077   # the dump below is the whole album: readable by this user only
 cd ~/photoalbum-staging
 docker compose stop app
 # The database, as it is right now.
