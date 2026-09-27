@@ -819,6 +819,8 @@ test("the AI helper describes reviewed items once an admin opts in, and opted-ou
   await page.goto("/admin");
   // Exactly the badge on the annotation panel: the Admin page is long, and a loose match finds other prose.
   await expect(page.getByText("nothing is sent", { exact: true })).toBeVisible();
+  // The test album's storage belongs to its database: the reset keeps the install marker in step.
+  await expect(page.getByTestId("install-identity-problem")).toHaveCount(0);
   await page.getByRole("button", { name: "Turn on annotation" }).click();
   await expect(page.getByText("sending new items after review")).toBeVisible();
 
