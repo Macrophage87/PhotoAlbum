@@ -383,12 +383,43 @@ describe("cleaning the other formats", () => {
     expect(sanitizePly(Buffer.from("not a ply\nend_header\n"))).toBeNull();
   });
 
-  it("rebuilds each header line from its own tokens, and withholds a name that is not a plain identifier (PLY trailing tokens)", () => {
+  it("rebuilds each header line from its own tokens (PLY trailing tokens)", () => {
     const ply = Buffer.concat([Buffer.from("ply\nformat binary_little_endian 1.0 SECRET-FORMAT\nelement vertex 1 SECRET-ELEMENT\nproperty float x SECRET-PROPERTY\nproperty list uchar int vertex_indices SECRET-LIST\nend_header\n"), Buffer.from([0, 0, 128, 63, 0])]);
     const clean = sanitizePly(ply)!;
     expect(clean.toString("latin1")).toBe("ply\nformat binary_little_endian 1.0\nelement vertex 1\nproperty float x\nproperty list uchar int vertex_indices\nend_header\n\u0000\u0000\u0080?\u0000");
-    for (const bad of ["element vertex-44.35 1", "element vertex 1\nproperty float lat=44.35", `element vertex 1\nproperty float ${"x".repeat(33)}`, "element vertex many"]) {
-      expect(sanitizePly(Buffer.from(`ply\nformat ascii 1.0\n${bad}\nend_header\n`)), bad).toBeNull();
+    expect(sanitizePly(Buffer.from("ply\nformat ascii 1.0\nelement vertex many\nend_header\n"))).toBeNull();
+  });
+
+  it("shows a PLY whose names have hyphens, dots or run long, under names of its own making (PLY names)", () => {
+    // As CloudCompare and other exporters write them, beside the names readers draw by, which are kept.
+    const names = ["x", "y", "z", "red", "scalar_Return-number", "Jo-Smith.44.35,-68.2", `scalar_${"Illuminance".repeat(4)}`, "property_4", "f_dc_0"];
+    const header = `ply\nformat binary_little_endian 1.0\nelement vertex 1\n${names.map((n, i) => `property ${i < 3 ? "float" : "uchar"} ${n}`).join("\n")}\nelement cam-era.1 0\nend_header\n`;
+    const records = Buffer.from([0, 0, 128, 63, 0, 0, 0, 64, 0, 0, 64, 64, 1, 2, 3, 4, 5, 6]);
+    const clean = sanitizePly(Buffer.concat([Buffer.from(header), records, Buffer.from("SECRET")]))!;
+    expect(clean.toString("latin1")).toBe("ply\nformat binary_little_endian 1.0\nelement vertex 1\nproperty float x\nproperty float y\nproperty float z\nproperty uchar red\n"
+      + "property uchar property_4_\nproperty uchar property_5\nproperty uchar property_6\nproperty uchar property_4\nproperty uchar f_dc_0\nelement element_1 0\nend_header\n" + records.toString("latin1"));
+    for (const leak of ["Return", "Smith", "44.35", "Illuminance", "cam"]) expect(clean.includes(Buffer.from(leak)), leak).toBe(false);
+    // Up to 64 characters of printable ASCII: anything else is not a name any exporter writes.
+    for (const bad of [`s${"x".repeat(64)}`, "caf\u00e9", "x\u007f"]) {
+      expect(sanitizePly(Buffer.from(`ply\nformat ascii 1.0\nelement vertex 1\nproperty float ${bad}\nend_header\n1\n`, "latin1")), bad).toBeNull();
+    }
+    expect(sanitizePly(Buffer.from(`ply\nformat ascii 1.0\nelement vertex 1\nproperty float s${"x".repeat(63)}\nend_header\n1\n`))!.toString()).toContain("property float property_0\n");
+  });
+
+  it("makes each text record again from the values its header declares, and nothing else (PLY text rows)", () => {
+    const head = "ply\nformat ascii 1.0\ncomment VCGLIB generated\nelement vertex 2\nproperty float x\nproperty float y\nproperty uchar red\nelement face 1\nproperty list uchar int vertex_indices\nend_header\n";
+    const ply = Buffer.from(`${head}13.6601 -0 255 SECRET 44.35\n\n0.500000 1.00000000000000000000000000000000443500682 007 \n3 0 1 1 SECRET-FACE\nSECRETPLYTAIL\n`);
+    const clean = sanitizePly(ply)!.toString("latin1");
+    expect(clean).toBe("ply\nformat ascii 1.0\nelement vertex 2\nproperty float x\nproperty float y\nproperty uchar red\nelement face 1\nproperty list uchar int vertex_indices\nend_header\n13.6601 -0 255\n0.5 1 7\n3 0 1 1\n");
+    // Read back, every value is the same number it was.
+    const values = (text: string) => text.slice(text.indexOf("end_header\n") + 11).trim().split(/\s+/).slice(0, 10).map(Number);
+    expect(values(clean)).toEqual([13.6601, -0, 255, 0.5, 1, 7, 3, 0, 1, 1]);
+    expect(values(ply.toString().replace(" SECRET 44.35", "").replace("\n\n", "\n"))).toEqual(values(clean));
+    // Words that stand for numbers are numbers.
+    expect(sanitizePly(Buffer.from(`${head}nan -inf 1\n1 2 3\n3 0 1 1\n`))!.toString()).toContain("end_header\nnan -inf 1\n");
+    // Too few values, or a word where a number goes: withheld.
+    for (const body of ["1 2 3\n1 2\n3 0 1 1\n", "1 2 3\n1 2 3\n3 0 1\n", "1 2 3\n1 SECRET 3\n3 0 1 1\n", "1 2 3\n1 2 3.5\n3 0 1 1\n", "1 2 3\n1 2 3\n-1\n", "1 2 3\n1 2 3\n"]) {
+      expect(sanitizePly(Buffer.from(head + body)), body).toBeNull();
     }
   });
 

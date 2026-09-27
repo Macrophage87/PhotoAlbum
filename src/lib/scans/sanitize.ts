@@ -438,23 +438,44 @@ function chunkHeader(length: number, type: number): Buffer {
 export const PLY_HEADER_MAX = 64 * 1024;
 
 const PLY_TYPE_BYTES: Record<string, number> = { char: 1, uchar: 1, int8: 1, uint8: 1, short: 2, ushort: 2, int16: 2, uint16: 2, int: 4, uint: 4, int32: 4, uint32: 4, float: 4, float32: 4, double: 8, float64: 8 };
-const PLY_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,31}$/;
+/** What a name may be at all: printable ASCII without spaces, as exporters write them (CloudCompare's hyphens, dots). */
+const PLY_NAME = /^[\x21-\x7e]{1,64}$/;
+/** A name passed on as it is: a plain identifier, which every name a reader looks for (x, red, f_dc_0, vertex_indices) is. */
+const PLY_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]{0,31}$/;
 const PLY_FORMATS = new Set(["ascii", "binary_little_endian", "binary_big_endian"]);
 
 type PlyProperty = { type: string } | { list: [count: string, item: string] };
-export type PlyLayout = { header: Buffer; bodyStart: number; format: string; elements: { count: number; properties: PlyProperty[] }[] };
+export type PlyLayout = { header: Buffer; bodyStart: number; format: string; eol: string; elements: { count: number; properties: PlyProperty[] }[] };
+
+/**
+ * The names an element's properties (or a file's elements) are given in the copy: a plain identifier as it is, and
+ * anything else — a hyphen, a dot, more than 32 characters — as `<fallback>_<position>`, taking nothing from the name
+ * itself. No reader draws by a name like that, so nothing is lost, and allowing them adds nothing to what a name in the
+ * copy can say.
+ */
+function plyNames(names: string[], fallback: string): string[] {
+  const taken = new Set(names.filter((n) => PLY_IDENTIFIER.test(n)));
+  return names.map((n, i) => {
+    if (PLY_IDENTIFIER.test(n)) return n;
+    let out = `${fallback}_${i}`;
+    while (taken.has(out)) out += "_";
+    taken.add(out);
+    return out;
+  });
+}
 
 /**
  * A PLY's header made again from only what reading its points needs — `ply`, `format <type> <version>`,
  * `element <name> <count>`, `property <type> <name>`, `property list <type> <type> <name>`, `end_header` — each line
- * rebuilt from those tokens alone, and where the points start. `comment`, `obj_info` and anything else go, whatever
- * their case; a name that is not a plain identifier, or anything malformed, withholds the file. Null too when `head`
- * (the file's first bytes) holds no whole header.
+ * rebuilt from those tokens alone, with names that are not plain identifiers renamed, and where the points start.
+ * `comment`, `obj_info` and anything else go, whatever their case; a name that is not printable ASCII of at most 64
+ * characters, or anything malformed, withholds the file. Null too when `head` (the file's first bytes) holds no whole
+ * header.
  */
 export function plyHeader(head: Buffer): PlyLayout | null {
-  const lines: string[] = [];
-  const elements: PlyLayout["elements"] = [];
+  const elements: { name: string; count: number; properties: { def: PlyProperty; name: string }[] }[] = [];
   let format = "";
+  let version = "";
   let eol = "\n";
   for (let at = 0; at < Math.min(head.length, PLY_HEADER_MAX); ) {
     const nl = head.indexOf(0x0a, at);
@@ -464,7 +485,6 @@ export function plyHeader(head: Buffer): PlyLayout | null {
     if (at === 0) {
       if (line !== "ply") return null;
       if (raw.endsWith("\r")) eol = "\r\n";
-      lines.push("ply");
       at = nl + 1;
       continue;
     }
@@ -473,28 +493,33 @@ export function plyHeader(head: Buffer): PlyLayout | null {
     const word = t[0].toLowerCase();
     if (word === "end_header" && t.length === 1) {
       if (!format) return null;
+      const lines = ["ply", `format ${format} ${version}`];
+      const elementNames = plyNames(elements.map((e) => e.name), "element");
+      elements.forEach((e, i) => {
+        lines.push(`element ${elementNames[i]} ${e.count}`);
+        const names = plyNames(e.properties.map((p) => p.name), "property");
+        e.properties.forEach(({ def }, j) => lines.push("list" in def ? `property list ${def.list[0]} ${def.list[1]} ${names[j]}` : `property ${def.type} ${names[j]}`));
+      });
       lines.push("end_header");
-      return { header: Buffer.from(lines.map((l) => l + eol).join(""), "latin1"), bodyStart: at, format, elements };
+      const header = Buffer.from(lines.map((l) => l + eol).join(""), "latin1");
+      return { header, bodyStart: at, format, eol, elements: elements.map((e) => ({ count: e.count, properties: e.properties.map((p) => p.def) })) };
     }
     if (word === "format") {
       if (format || !PLY_FORMATS.has(t[1]) || !/^\d+(\.\d+)?$/.test(t[2] ?? "")) return null;
       format = t[1];
-      lines.push(`format ${t[1]} ${t[2]}`);
+      version = t[2];
     } else if (word === "element") {
       if (!PLY_NAME.test(t[1] ?? "") || !/^\d+$/.test(t[2] ?? "")) return null;
-      elements.push({ count: Number(t[2]), properties: [] });
-      lines.push(`element ${t[1]} ${t[2]}`);
+      elements.push({ name: t[1], count: Number(t[2]), properties: [] });
     } else if (word === "property") {
       const element = elements.at(-1);
       if (!element) return null;
       if (t[1] === "list") {
         if (!PLY_TYPE_BYTES[t[2]] || !PLY_TYPE_BYTES[t[3]] || !PLY_NAME.test(t[4] ?? "")) return null;
-        element.properties.push({ list: [t[2], t[3]] });
-        lines.push(`property list ${t[2]} ${t[3]} ${t[4]}`);
+        element.properties.push({ def: { list: [t[2], t[3]] }, name: t[4] });
       } else {
         if (!PLY_TYPE_BYTES[t[1]] || !PLY_NAME.test(t[2] ?? "")) return null;
-        element.properties.push({ type: t[1] });
-        lines.push(`property ${t[1]} ${t[2]}`);
+        element.properties.push({ def: { type: t[1] }, name: t[2] });
       }
     }
     // comment, obj_info, and anything this does not know: left behind.
@@ -518,24 +543,13 @@ export function plyFixedLength(layout: PlyLayout): number | null {
 }
 
 /**
- * How much of `body` the header's elements take — a text file's one line per record, a binary file's records walked
- * property by property, list lengths included — so nothing after the last record is kept. Null when the body is
- * shorter than the header says.
+ * How much of a binary `body` the header's elements take, its records walked property by property, list lengths
+ * included, so nothing after the last record is kept. Null when the body is shorter than the header says.
  */
 export function plyBodyLength(layout: PlyLayout, body: Buffer): number | null {
   const fixed = plyFixedLength(layout);
   if (fixed !== null) return fixed <= body.length ? fixed : null;
-  const records = layout.elements.reduce((n, e) => n + e.count, 0);
-  if (layout.format === "ascii") {
-    let at = 0;
-    for (let n = 0; n < records; n++) {
-      const nl = body.indexOf(0x0a, at);
-      // The last record may end the file without a newline.
-      if (nl < 0) return n === records - 1 && at < body.length ? body.length : null;
-      at = nl + 1;
-    }
-    return at;
-  }
+  if (layout.format === "ascii") return null;
   const little = layout.format === "binary_little_endian";
   const readCount = (type: string, at: number): number => {
     const size = PLY_TYPE_BYTES[type];
@@ -561,11 +575,75 @@ export function plyBodyLength(layout: PlyLayout, body: Buffer): number | null {
   return at;
 }
 
+const isReal = (type: string) => type.startsWith("float") || type === "double";
+const PLY_INTEGER = /^[+-]?\d+$/;
+const PLY_REAL = /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/;
+const PLY_NOT_FINITE = /^[+-]?(nan|inf|infinity)$/i;
+
+/**
+ * One text value, written again as the number it is: the shortest digits that read back as the same value, so a value
+ * stretched out with digits nobody reads cannot carry anything, and one with 15 significant digits or fewer (what
+ * exporters write) keeps its exact decimal value. Null for anything that is not a number of `type`'s kind.
+ */
+function plyValue(token: string, type: string): string | null {
+  if (isReal(type) && PLY_NOT_FINITE.test(token)) return token; // one of a few fixed words, left as the file wrote it
+  if (!(isReal(type) ? PLY_REAL : PLY_INTEGER).test(token)) return null;
+  const n = Number(token);
+  return Object.is(n, -0) ? "-0" : String(n);
+}
+
+/**
+ * A text body's records, one line each, made again from exactly the values the header declares for them (a list's
+ * length, then that many items) and nothing after the last: a record's extra tokens are left behind, and a record
+ * with too few values, or one that is not a number, withholds the file. Blank lines are skipped.
+ */
+function plyAsciiRecords(layout: PlyLayout, body: Buffer): Buffer | null {
+  const parts: Buffer[] = [];
+  let rows: string[] = [];
+  let at = 0;
+  for (const e of layout.elements) {
+    for (let n = 0; n < e.count; ) {
+      if (at >= body.length) return null;
+      let nl = body.indexOf(0x0a, at);
+      if (nl < 0) nl = body.length; // the last record may end the file without a newline
+      const t = body.toString("latin1", at, nl).trim().split(/\s+/);
+      at = nl + 1;
+      if (t[0] === "") continue;
+      const row: string[] = [];
+      let i = 0;
+      const take = (type: string) => {
+        const v = i < t.length ? plyValue(t[i++], type) : null;
+        if (v !== null) row.push(v);
+        return v;
+      };
+      for (const p of e.properties) {
+        if ("list" in p) {
+          const count = take("int");
+          if (count === null || Number(count) < 0) return null;
+          for (let k = 0; k < Number(count); k++) if (take(p.list[1]) === null) return null;
+        } else if (take(p.type) === null) return null;
+      }
+      rows.push(row.join(" ") + layout.eol);
+      n++;
+      if (rows.length === 65536) {
+        parts.push(Buffer.from(rows.join(""), "latin1"));
+        rows = [];
+      }
+    }
+  }
+  parts.push(Buffer.from(rows.join(""), "latin1"));
+  return Buffer.concat(parts);
+}
+
 /** A PLY with only its reading instructions left in the header, and its records and nothing after them. */
 export function sanitizePly(input: Buffer): Buffer | null {
   const layout = plyHeader(input);
   if (!layout) return null;
   const body = input.subarray(layout.bodyStart);
+  if (layout.format === "ascii") {
+    const records = plyAsciiRecords(layout, body);
+    return records && Buffer.concat([layout.header, records]);
+  }
   const length = plyBodyLength(layout, body);
   return length === null ? null : Buffer.concat([layout.header, body.subarray(0, length)]);
 }
