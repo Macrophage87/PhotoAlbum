@@ -29,7 +29,9 @@ export async function startWorker(): Promise<void> {
   // First, before anything else starts: the members-only sweep. After a deploy that changed the matcher, text naming
   // somebody that is not tagged stays public until it has run; after that it judges only names the album has learned
   // since, and again every night, so a change whose job could not be queued is judged within a day.
-  const { rejudgeText, enqueueRejudge } = await import("@/lib/annotation/rejudge");
+  const { rejudgeText, enqueueRejudge, dropLegacyRejudgeJobs } = await import("@/lib/annotation/rejudge");
+  // Jobs from before judging was asked for by id carry names; they go before anything could run one.
+  await dropLegacyRejudgeJobs();
   await boss.work(QUEUES.rejudgeText, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 5 }, async ([job]) => {
     const r = await rejudgeText(job.data as never);
     console.log(`[rejudge] ${r.photos} photo(s), ${r.titles} title(s) and ${r.descriptions} description(s) kept for members, ${r.unflagged} shown again, ${r.places} place guess(es)`);

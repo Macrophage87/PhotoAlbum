@@ -549,6 +549,8 @@ export async function deletePerson(personId: string): Promise<void> {
   await requireAdmin();
   // Its detections go back to being unclaimed animals rather than confirmed rows pointing at nobody.
   await db.animalDetection.updateMany({ where: { OR: [{ personId }, { proposedPersonId: personId }] }, data: { personId: null, proposedPersonId: null, status: "DETECTED" } });
+  // Its judged names go with the record. Judging jobs queued for it carry only its id, which finds nothing once it
+  // is gone; one queued before jobs carried ids holds the name until the next sweep clears it (dropLegacyRejudgeJobs).
   await db.$transaction(async (tx) => {
     await forgetJudgedNames(tx, personId);
     await tx.person.delete({ where: { id: personId, kind: "PET" } });

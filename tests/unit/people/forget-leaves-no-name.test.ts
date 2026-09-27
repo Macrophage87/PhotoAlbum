@@ -96,6 +96,17 @@ describe("forgetting somebody leaves their name nowhere", () => {
     expect(await tablesMentioning("Quince")).toEqual([]);
   }, 30_000);
 
+  it("clears every judging job that carries names with each sweep, finished ones too, and leaves the rest", async () => {
+    await real.boss.deleteAllJobs(QUEUES.rejudgeText);
+    await real.boss.send(QUEUES.rejudgeText, { names: ["Old Name"] }, { singletonKey: "rejudge:names:Old Name" });
+    const [finished] = await real.boss.fetch(QUEUES.rejudgeText);
+    await real.boss.complete(QUEUES.rejudgeText, finished.id);
+    await real.boss.send(QUEUES.rejudgeText, { names: ["Other Name"] });
+    await real.boss.send(QUEUES.rejudgeText, { people: ["p1"] });
+    await rejudgeSweep();
+    expect((await real.boss.findJobs(QUEUES.rejudgeText)).map((j) => j.data)).toEqual([{ people: ["p1"] }]);
+  });
+
   it("runs a job for somebody forgotten since it was queued as nothing to do", async () => {
     const person = await db.person.create({ data: { name: NAME, createdById: real.admin } });
     await forgetPerson(person.id, { keepName: false, byUserId: real.admin });

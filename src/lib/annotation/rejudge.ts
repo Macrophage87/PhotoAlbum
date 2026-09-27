@@ -405,6 +405,20 @@ export async function dropRejudgeJobs(personId: string, names: string[]): Promis
 }
 
 /**
+ * Delete every judging job that carries names, in any state: nothing queues that form any more, and one left from
+ * before (or one a forget could not clear, see `dropRejudgeJobs`; or one for a pet deleted since) would keep a name in
+ * clear for days. What they asked about is judged by the sweep anyway. At worker start and with every sweep.
+ */
+export async function dropLegacyRejudgeJobs(): Promise<number> {
+  try {
+    return await db.$executeRaw`DELETE FROM pgboss.job WHERE name = ${QUEUES.rejudgeText} AND jsonb_exists(data, 'names')`;
+  } catch (err) {
+    console.error("[rejudge] could not clear judging jobs that carry names", err instanceof Error ? err.message : err);
+    return 0;
+  }
+}
+
+/**
  * The names a job asks about, read now: each person's name and former names, each member's name, and any older name
  * of theirs recorded as judged (a rename). Somebody deleted since has none.
  */
@@ -428,6 +442,7 @@ async function namesOfJob(job: RejudgeJob): Promise<{ names: string[]; owners: S
  */
 export async function rejudgeSweep(): Promise<RejudgeResult> {
   const started = new Date();
+  await dropLegacyRejudgeJobs();
   const setting = await db.appSetting.findUnique({ where: { id: "app" }, select: { membersOnlyMatcher: true, membersOnlyNames: true, membersOnlyJudgedAt: true } });
   const entries = await knownNameEntries();
   const judged = new Set(setting?.membersOnlyNames ?? []);
