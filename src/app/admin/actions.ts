@@ -105,7 +105,9 @@ export async function removeMember(userId: string): Promise<void> {
     }, REMOVE_MEMBER_TX);
   // A write conflict or deadlock with something else changing their photographs is tried once more.
   const done = await remove().catch((err: unknown) => {
-    if ((err as { code?: string }).code === "P2034") return remove();
+    const e = err as { code?: string; meta?: { code?: string } };
+    // Prisma's own code, or Postgres's through a raw statement (deadlock, serialization failure).
+    if (e.code === "P2034" || e.meta?.code === "40P01" || e.meta?.code === "40001") return remove();
     throw err;
   });
   // Revoked at Google only once they are gone: a removal that failed leaves them connected as they were. One Google
