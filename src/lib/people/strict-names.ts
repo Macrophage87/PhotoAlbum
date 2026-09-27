@@ -69,8 +69,11 @@ const CJK = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hang
 export const MONTHS = new Set(["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"]);
 /** Words before a month and a year that make a comma between them a date's: "late June, 2019". */
 const DATE_WORDS = new Set(["in", "during", "since", "until", "till", "early", "late", "mid"]);
-/** Words in "-ing" that are no one doing something: "May 2019 during the holidays", "June 2019 wedding". */
-const NOT_DOING = new Set(["during", "morning", "evening", "spring", "wedding", "outing", "gathering", "meeting", "christening", "housewarming", "thanksgiving", "clothing", "building", "king", "thing", "something", "nothing", "everything", "anything", "ring", "string", "wing", "swing"]);
+/**
+ * Words in "-ing", "-ed" or "-s" after a month and a year that are no one doing something: "May 2019 during the
+ * holidays", "June 2019 wedding", "May 2019 photos".
+ */
+const NOT_DOING = new Set(["photos", "pictures", "pics", "memories", "holidays", "vacations", "highlights", "adventures", "events", "trips", "plans", "news", "games", "classes", "lessons", "results", "festivities", "during", "morning", "evening", "spring", "wedding", "outing", "gathering", "meeting", "christening", "housewarming", "thanksgiving", "clothing", "building", "king", "thing", "something", "nothing", "everything", "anything", "ring", "string", "wing", "swing"]);
 /** Words before a month and an ordinal day at the end that make them a date: "On May 5th.", "until June 1st!". */
 const ORDINAL_DATE_WORDS = new Set([...DATE_WORDS, "on", "by", "before", "after", "from", "through"]);
 /** A person after a month and a year: "June 2019 champion!", "May 2020 graduate". */
@@ -122,10 +125,12 @@ export function strictForms(names: string[], others: Set<string> = new Set()): s
 }
 
 /**
- * A month used as a date, in normalized text, only in these shapes (the language review's fourth round):
- * - with a year: "May 2019", and after a date word with a comma too ("late June, 2019"); not before something a
- *   person does ("May 2020 swims", "smiling"), an age or a birth ("June 2019 months", "May 2016 born") or a person
- *   ("June 2019 champion!"), and not joined to a name by "&", "and" or a comma ("Ben & May 2019", "Ben, May 2019");
+ * A month used as a date, in normalized text, only in these shapes (the language review's fourth to seventh rounds):
+ * - with a year, opening the text, a sentence or a line, or right after a date word ("May 2019", "In May 2019 we",
+ *   "Since June 2021.", and with a comma "Late June, 2019"); after anything else it is them ("Grandpa with May
+ *   2019.", "Ben + May 2019", "ben, may 2019"); and not before something a person does ("May 2020 swims",
+ *   "smiling", "learned"), an age or a birth ("June 2019 months", "May 2016 born") or a person ("June 2019
+ *   champion!");
  * - with a day and a year: "May 5, 2019"; or an ordinal day with a year ("May 5th, 2019"), or at the end after a date
  *   word or opening the text ("On May 5th.", "May 5th."), never in a list of names or places ("Ben 1st, May 3rd!");
  *   "the 5th of May.";
@@ -133,20 +138,21 @@ export function strictForms(names: string[], others: Set<string> = new Set()): s
  * Anything else is them: "A swim in May.", "Late June at the lake", "May 5 at the beach", "Leo 7, May 5.", "Up next
  * June!". Over-refusal there is accepted; the photographs they were never tagged on keep the language rules.
  */
-export function monthAsDate(before: string, after: string, originalAfter?: string, originalBefore?: string): boolean {
+export function monthAsDate(before: string, after: string, originalAfter?: string): boolean {
   if (/^'?s(?![\p{L}])/u.test(after)) return false;
   const prevWord = /(\p{L}+)[ \t-]+$/u.exec(before)?.[1] ?? "";
   const year = /^[ \t]+\d{4}(?![\p{L}\p{N}])/u.exec(after) ?? (DATE_WORDS.has(/(\p{L}+)[ \t-]+$/u.exec(before)?.[1] ?? "") ? /^[ \t]*,[ \t]*\d{4}(?![\p{L}\p{N}])/u.exec(after) : null);
   if (year) {
     const rest = after.slice(year[0].length);
     const w = /^[ \t]+(\p{L}+)/u.exec(rest)?.[1];
-    // Joined to a name before it: "Ben & May 2019", "Leo and June 2021", "Ben, May 2019".
-    if (/(?:&|(?:^|[^\p{L}])and)[ \t]*$/u.test(before)) return false;
-    if (/(?:^|[^\p{L}])\p{Lu}[\p{L}\p{M}'’]*[ \t]*,[ \t]*$/u.test(originalBefore ?? "")) return false;
+    // Only opening the text, a sentence or a line, or right after a date word ("In May 2019", "Since June 2021."):
+    // after anything else it is her ("Grandpa with May 2019.", "Ben + May 2019", "ben, may 2019").
+    const opens = /(?:^|[\n.!?;:])[\s"'“‘(\[*_#>•-]*$/u.test(before);
+    if (!opens && !ORDINAL_DATE_WORDS.has(prevWord)) return false;
     // Nor before an age, a birth, a person or something going on: "May 2016 born", "May 1999 age 5", "June 2019
-    // champion!", "May 2020 smiling".
+    // champion!", "May 2020 smiling", "May 2020 loses her first tooth!", "May 2019 learned to ride".
     if (/^[ \t]+(?:months?|years?|weeks?|days?|old|born|age|aged)(?![\p{L}])/u.test(rest) || PERSON_AFTER.test(rest)) return false;
-    return !(w && (isPersonVerb(w) || (/ing$/u.test(w) && !NOT_DOING.has(w))));
+    return !(w && (isPersonVerb(w) || (/(?:ing|ed|s)$/u.test(w) && !NOT_DOING.has(w))));
   }
   const end = /^[ \t]*[.!?]*[ \t]*(?:$|\n)/u;
   const withYear = /^[ \t]*,[ \t]*\d{4}(?![\p{L}\p{N}])/u;
@@ -199,7 +205,7 @@ export type StrictFinder = {
 export function hashtagSpans(text: string, forms: string[]): [number, number][] {
   const out: [number, number][] = [];
   const joined = forms.filter((f) => !CJK.test(f)).map((f) => ({ f, run: f.replace(/[\s-]+/gu, "") }));
-  for (const h of text.matchAll(/#([\p{L}\p{M}\p{N}_\p{Cf}]+)/gu)) {
+  for (const h of text.matchAll(/[#＃]([\p{L}\p{M}\p{N}_\p{Cf}]+)/gu)) {
     const body = strictNormalize(h[1]).replace(/[_\d]+/gu, "");
     const words = splitCamel(h[1].replace(/\p{Cf}/gu, "")).split(/[^\p{L}\p{M}]+/u).filter(Boolean);
     const spaced = ` ${words.map(strictNormalize).join(" ")} `;
@@ -281,7 +287,7 @@ export function strictFinder(names: string[], others: string[] = [], skip: Set<s
       if (lake.some(([a, b]) => start >= a && end <= b)) continue;
       // "An", not "an": a small word is only a name written with a capital.
       if (small.has(word) && !/^\p{Lu}/u.test(text.slice(start, end).replace(/\p{Cf}/gu, ""))) continue;
-      if (MONTHS.has(m[0]) && monthAsDate(t.slice(0, m.index), t.slice(m.index! + m[0].length), text.slice(end), text.slice(0, start))) continue;
+      if (MONTHS.has(m[0]) && monthAsDate(t.slice(0, m.index), t.slice(m.index! + m[0].length), text.slice(end))) continue;
       // A possessive's "'s" stays outside the span ("May's side" is "a family member's side"); a plural goes with it.
       out.push([start, /'s$/u.test(m[0]) ? from[m.index! + m[0].length - 2] : end]);
     }

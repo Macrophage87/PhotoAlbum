@@ -952,7 +952,7 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
     if (ownPhoto(where)) return scrubOwn(text, where, keywords);
     // A hashtag holding a name of theirs goes whole: on a photograph about them any of their names ("#TeamMay",
     // "#happybirthdaymay"), elsewhere only a full name ("#AdaByron").
-    if (text.includes("#")) {
+    if (/[#＃]/u.test(text)) {
       const tags = (tagFinder ??= strictFinder(list, otherNames)).hashtags(text, !where.tagged);
       if (tags.length) text = replaceSpans(text, tags);
     }

@@ -117,7 +117,7 @@ export function nameMatcher(patterns: NamePattern[]): ((text: string) => boolean
     if (!text) return false;
     if (cjkRes.some((r) => r.test(text))) return true;
     const folded = foldAccents(text);
-    const tags = [...folded.matchAll(/#([\p{L}\p{N}_]+)/gu)].map((m) => m[1]);
+    const tags = [...folded.matchAll(/[#＃]([\p{L}\p{N}_]+)/gu)].map((m) => m[1]);
     if (tags.length) {
       if (tags.some((t) => inTags.some((w) => t.toLowerCase().includes(w)))) return true;
       // Written in camel case, word by word: "#MayTheBirthdayGirl" is "May The Birthday Girl".

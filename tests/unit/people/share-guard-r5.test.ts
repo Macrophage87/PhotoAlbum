@@ -70,6 +70,16 @@ const REFUSED: [string, string][] = [
   ["June Carter", "June 2019 champion!"],
   ["May Chen", "Race results: Ben 1st, Leo 2nd, May 3rd!"],
   ["May Chen", "Ben came 2nd and May 1st!"],
+  // Round seven: a month and a year are a date only opening the words or after a date word; a verb after them.
+  ["May Chen", "Grandpa with May 2019."],
+  ["June Carter", "Grandma with June 2021 🌸"],
+  ["April Reyes", "Cousins Leo and Ben with April 2020."],
+  ["May Chen", "Ben + May 2019"],
+  ["May Chen", "Ben / May 2019"],
+  ["May Chen", "May 2020 loses her first tooth!"],
+  ["May Chen", "May 2019 learned to ride without training wheels."],
+  ["May Chen", "ben, may 2019"],
+  ["May Chen", "＃HappyBirthdayMay on the cake"],
 ];
 
 const SHARED: [string, string][] = [
@@ -85,7 +95,10 @@ const SHARED: [string, string][] = [
   ["June Carter", "June 2019 wedding."],
   ["May Chen", "On May 5th."],
   ["May Chen", "May 5th."],
-  ["May Chen", "The lake that summer, May 2019."],
+  ["May Chen", "In May 2019 we went to the lake."],
+  ["May Chen", "May 2019"],
+  ["May Chen", "Our trip. May 2019 photos from the cabin."],
+  ["June Carter", "Since June 2021."],
   ["Do Kim", "#dothedishes"],
 ];
 

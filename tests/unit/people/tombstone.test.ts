@@ -332,7 +332,9 @@ describe("names that are also words", () => {
     for (const [on, text, want] of cases) expect([text, ts.scrub(text, await sc(on))]).toEqual([text, want]);
     // In keywords and tags too, on her own photograph; not off their photographs.
     expect(ts.scrubSummary("may lake swim", await sc(may))).toBe("A family member lake swim");
-    expect(ts.scrubSummary("lake swim may 2019", await sc(may))).toBe("lake swim may 2019");
+    // A month and a year are a date only opening the words or after a date word (the language review's seventh round).
+    expect(ts.scrubSummary("lake swim may 2019", await sc(may))).toBe("lake swim a family member 2019");
+    expect(ts.scrubSummary("may 2019 lake swim", await sc(may))).toBe("may 2019 lake swim");
     expect(ts.namesTag("may", await sc(may))).toBe(true);
     expect(ts.namesTag("may", await sc(await photo()))).toBe(false);
     expect(ts.scrub("May at the lake", await sc(await photo()))).toBe("May at the lake");

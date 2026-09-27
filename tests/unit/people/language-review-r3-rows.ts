@@ -1,5 +1,6 @@
 /**
- * The language review's third to fifth rounds: the mention rows of table_3 to table_6. [..] marks her; a hashtag row
+ * The language review's third to seventh rounds: the mention rows of table_3 to table_7 (table_7's "@MayChen" and
+ * "HAPPYBIRTHDAYMAY" are a follow-up). [..] marks her; a hashtag row
  * (table_6) holds her name inside the hashtag.
  */
 export const TABLE_3: [string, string][] = [
@@ -151,4 +152,23 @@ export const TABLE_6: [string, string][] = [
   ["Paris Moreau", "#ParisIsFive"],
   ["Paris Moreau", "[Paris]/Ben/Leo: the three musketeers."],
   ["Madison Clark", "Team [Madison] 🏆"],
+];
+
+export const TABLE_7: [string, string][] = [
+  ["May Chen", "Grandpa with [May] 2019."],
+  ["May Chen", "Ben + [May] 2019"],
+  ["May Chen", "[May] 2020 loses her first tooth!"],
+  ["May Chen", "[May] 2019 learned to ride without training wheels."],
+  ["May Chen", "ben, [may] 2019"],
+  ["May Chen", "Ben / [May] 2019"],
+  ["May Chen", "‘[May]’ and Ben at the zoo."],
+  ["May Chen", "'[May]' on her cake in pink icing."],
+  ["June Carter", "Grandma with [June] 2021 🌸"],
+  ["June Carter", "Ben (2nd) and [June] (1st)!"],
+  ["June Carter", "Podium: Ben 2nd, [June] 1st."],
+  ["April Reyes", "Cousins Leo and Ben with [April] 2020."],
+  ["May Chen", "＃HappyBirthdayMay on the cake"],
+  ["May Chen", "#May's_party"],
+  ["May Chen", "#Team_May"],
+  ["May Chen", "#mAyThEbEsT"],
 ];

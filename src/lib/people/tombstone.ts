@@ -548,18 +548,23 @@ export async function loadTombstone(): Promise<Tombstone> {
     const usable = (f: Found, n: number) => {
       if (f.people && scope && [...f.people].some((id) => scope.tagged.has(id))) return false;
       if (ownRow(f)) return !((n === 1 || f.scoped) && !scope!.rows.has(f.key));
+      // A name kept with this photograph (one its notes plainly name them on), as the forget reads it there.
+      if (scope && !scope.whole && scope.rows.has(f.key)) return true;
       return n > 1 && !f.scoped && !f.derived;
     };
     const tagSpans: [number, number][] = [];
-    for (const h of text.matchAll(/#([\p{L}\p{M}\p{N}_\p{Cf}]+)/gu)) {
+    for (const h of text.matchAll(/[#＃]([\p{L}\p{M}\p{N}_\p{Cf}]+)/gu)) {
       const words = splitCamel(h[1].replace(/\p{Cf}/gu, "")).split(/[^\p{L}\p{M}]+/u).filter(Boolean);
       let hit = false;
       for (let a = 0; a < words.length && !hit; a++) {
         for (let n = Math.min(MAX_WORDS, words.length - a); n >= 1 && !hit; n--) hit = lookupAll(normalizeName(words.slice(a, a + n).join(" "))).some((f) => usable(f, n));
       }
       const letters = normalizeName(h[1].replace(/[\p{N}_\p{Cf}]+/gu, "")).replace(/\s+/gu, "");
-      for (let a = 0; a + 3 <= letters.length && a < 60 && !hit; a++) {
-        for (let b = Math.min(letters.length, a + 30); b >= a + 3 && !hit; b--) hit = lookupAll(letters.slice(a, b)).some((f) => ownRow(f) && usable(f, 1));
+      // Only where a name is kept with this photograph at all: the lookups are many.
+      if (scope && !scope.whole && scope.rows.size) {
+        for (let a = 0; a + 3 <= letters.length && a < 60 && !hit; a++) {
+          for (let b = Math.min(letters.length, a + 30); b >= a + 3 && !hit; b--) hit = lookupAll(letters.slice(a, b)).some((f) => scope.rows.has(f.key) && usable(f, 1));
+        }
       }
       if (hit) tagSpans.push([h.index!, h.index! + h[0].length]);
     }
@@ -587,7 +592,7 @@ export async function loadTombstone(): Promise<Tombstone> {
             if (found.people && [...found.people].some((id) => scope!.tagged.has(id))) return null;
             // "Lake Geneva at dawn.", as the forget reads it there (strict-names.ts).
             if (lakes().some(([a, b]) => run[0].start >= a && run[n - 1].end <= b)) return null;
-            if (n === 1 && !plural && isMonth(run[0].raw) && monthAsDate(strictNormalize(text.slice(0, run[0].start)), strictNormalize(text.slice(run[0].end)), text.slice(run[0].end), text.slice(0, run[0].start))) return null;
+            if (n === 1 && !plural && isMonth(run[0].raw) && monthAsDate(strictNormalize(text.slice(0, run[0].start)), strictNormalize(text.slice(run[0].end)), text.slice(run[0].end))) return null;
             let k = i;
             // "Great", "Grand", "Step" or "Half" only as part of a kinship word taken already: "The Great Ada show."
             while (k > 0 && isKinWord(tokens[k - 1].raw) && !FUNCTION_WORDS.has(tokens[k - 1].norm) && /^(?:[ \t]+|[-‐])$/u.test(text.slice(tokens[k - 1].end, tokens[k].start)) && (k < i || !titlePrefix(tokens[k - 1]))) k--;

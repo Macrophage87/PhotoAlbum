@@ -167,4 +167,17 @@ describe("round five", () => {
     // Elsewhere a hashtag holding only her first name is not hers.
     expect(ts.scrub("#TeamMay", await forgottenScope({ photoIds: [(await mk("o")).id] }))).toBe("#TeamMay");
   });
+
+  it("finds a one-word name in a hashtag in a later answer on a photograph only its notes name, as the forget does (round seven)", async () => {
+    const ximena = await db.person.create({ data: { name: "Ximena", createdById: admin } });
+    const noted = await mk("n", { namesScrubbedAt: null, context: "Ximena at the lake", annotation: record({ caption: "#TeamXimena at the lake" }), annotatedAt: new Date() });
+    const elsewhere = await mk("e", { namesScrubbedAt: null });
+    await forgetPerson(ximena.id, { keepName: false, byUserId: admin });
+    expect(((await db.photo.findUniqueOrThrow({ where: { id: noted.id } })).annotation as StoredAnnotation).caption).toBe("A family member at the lake");
+    const ts = await loadTombstone();
+    expect(ts.scrub("#TeamXimena at the lake", await forgottenScope({ photoIds: [noted.id] }))).toBe("A family member at the lake");
+    expect(ts.scrub("＃happybirthdayximena", await forgottenScope({ photoIds: [noted.id] }))).toBe("A family member");
+    // Where no name is kept with the photograph, nothing is looked up inside it.
+    expect(ts.scrub("#TeamXimena", await forgottenScope({ photoIds: [elsewhere.id] }))).toBe("#TeamXimena");
+  });
 });
