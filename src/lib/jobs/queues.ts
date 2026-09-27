@@ -30,6 +30,7 @@ export const QUEUES = {
   reconcilePhotos: "reconcile-photos",
   sweepOrphanFiles: "sweep-orphan-files",
   revokeGoogle: "revoke-google",
+  finishRemovals: "finish-removals",
 } as const;
 
 export type QueueName = (typeof QUEUES)[keyof typeof QUEUES];

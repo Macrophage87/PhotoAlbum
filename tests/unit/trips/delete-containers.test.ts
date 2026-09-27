@@ -1,19 +1,33 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { db } from "@/lib/db";
 import { resetTestDb } from "../helpers/reset";
+import { dbHooks } from "../helpers/hooked-db";
 
 const who = vi.hoisted(() => ({ role: "MEMBER" as "MEMBER" | "ADMIN", id: "" }));
 vi.mock("@/lib/auth/viewer", () => ({ requireUserOrThrow: async () => ({ id: who.id, email: "x@example.com", name: null, role: who.role }) }));
 vi.mock("next/cache", () => ({ revalidatePath: () => undefined }));
 vi.mock("next/navigation", () => ({ redirect: (to: string) => { throw new Error(`REDIRECT:${to}`); } }));
 vi.mock("@/lib/jobs/boss", () => ({ enqueue: async () => {} }));
+vi.mock("@/lib/db", async () => (await import("../helpers/hooked-db")).hookedDb());
 
 import { deleteTrip } from "@/app/trips/[slug]/actions";
 import { deleteCollection } from "@/app/collections/actions";
+import { finishPendingTripDeletions } from "@/lib/trips/delete";
+import { applyPhotoInstant } from "@/lib/photos/apply-date";
+
+/** The worker dying part-way: the `n`th raw statement never runs (the first is the mark), nor anything after it. */
+const dieAt = (n: number) => {
+  let calls = 0;
+  dbHooks.raw = async () => {
+    if (++calls === n) throw new Error("the worker died");
+  };
+  return { mockRestore: () => void (dbHooks.raw = null) };
+};
 
 describe("deleting trips and collections", () => {
   let photoId: string;
   beforeEach(async () => {
+    dbHooks.raw = dbHooks.transaction = null;
     await resetTestDb();
     const user = await db.user.create({ data: { email: "x@example.com", role: "ADMIN" } });
     who.id = user.id;
@@ -69,4 +83,46 @@ describe("deleting trips and collections", () => {
     expect(await db.collectionItem.count()).toBe(0);
     expect((await db.photo.findUniqueOrThrow({ where: { id: photoId } })).tripId).not.toBeNull();
   });
+
+  it("finishes a deletion interrupted half-way from its mark, and files nothing onto the trip meanwhile", async () => {
+    who.role = "ADMIN";
+    const trip = await db.trip.findUniqueOrThrow({ where: { slug: "gone" } });
+    const rows = Array.from({ length: 1200 }, (_, i) => ({ uploaderId: who.id, tripId: trip.id, originalName: `${i}.jpg`, mimeType: "image/jpeg", storageKey: `k${i}`, originalPath: `k${i}/o.jpg`, sizeBytes: 1, status: "READY" as const, ...(i % 3 === 0 ? { lat: 44.3, lng: -68.2, gpsSource: "TRACK" as const } : {}) }));
+    await db.photo.createMany({ data: rows });
+    const spy = dieAt(3);
+    await expect(deleteTrip("gone")).rejects.toThrow("the worker died");
+    spy.mockRestore();
+    // Decided and under way: marked, and one batch let go of.
+    expect((await db.trip.findUniqueOrThrow({ where: { id: trip.id } })).deletingAt).toBeInstanceOf(Date);
+    const left = await db.photo.count({ where: { tripId: trip.id } });
+    expect(left).toBeGreaterThan(0);
+    expect(left).toBeLessThan(1201);
+    // A photograph dated inside it is not filed onto it any more.
+    const dated = await db.photo.create({ data: { uploaderId: who.id, originalName: "d.jpg", mimeType: "image/jpeg", storageKey: "d", originalPath: "d/o.jpg", sizeBytes: 1, status: "READY" } });
+    await applyPhotoInstant({ ...dated, activityId: null, activitySetById: null }, new Date("2025-08-12T12:00:00Z"), 0, "EXIF_OFFSET", null);
+    expect((await db.photo.findUniqueOrThrow({ where: { id: dated.id } })).tripId).toBeNull();
+
+    expect(await finishPendingTripDeletions()).toBe(1);
+    expect(await db.trip.count()).toBe(0);
+    expect(await db.activity.count()).toBe(0);
+    expect(await db.photo.count({ where: { OR: [{ tripId: { not: null } }, { activityId: { not: null } }, { gpsSource: "TRACK" }] } })).toBe(0);
+    expect(await db.photo.count()).toBe(1202);
+    expect(await finishPendingTripDeletions()).toBe(0);
+  }, 60_000);
+
+  it("lets go of a photograph filed onto the trip while it was being deleted", async () => {
+    who.role = "ADMIN";
+    const trip = await db.trip.findUniqueOrThrow({ where: { slug: "gone" } });
+    const activity = await db.activity.findFirstOrThrow({ where: { tripId: trip.id } });
+    await db.photo.createMany({ data: Array.from({ length: 700 }, (_, i) => ({ uploaderId: who.id, tripId: trip.id, originalName: `${i}.jpg`, mimeType: "image/jpeg", storageKey: `k${i}`, originalPath: `k${i}/o.jpg`, sizeBytes: 1, status: "READY" as const })) });
+    const late = await db.photo.create({ data: { uploaderId: who.id, originalName: "late.jpg", mimeType: "image/jpeg", storageKey: "late", originalPath: "late/o.jpg", sizeBytes: 1, status: "READY" } });
+    // Filed by hand onto the trip and its activity once the batches have all gone by.
+    dbHooks.transaction = async () => {
+      dbHooks.transaction = null;
+      await db.photo.update({ where: { id: late.id }, data: { tripId: trip.id, activityId: activity.id, activitySetById: who.id } });
+    };
+    await expect(deleteTrip("gone")).rejects.toThrow("REDIRECT:/photos");
+    expect(await db.trip.count()).toBe(0);
+    expect(await db.photo.findUniqueOrThrow({ where: { id: late.id } })).toMatchObject({ tripId: null, activityId: null, activitySetById: null });
+  }, 60_000);
 });

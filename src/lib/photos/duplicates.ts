@@ -82,9 +82,10 @@ async function foldGroup(group: DuplicateGroup, byUserId: string, report: FoldRe
   // Planned from the keeper and its copies as they are under row locks (taken in id order, so two folds cannot
   // deadlock with each other), so a caption, title or date a member saved meanwhile is what the plan sees, one saved
   // while it is written waits for it and then stands, and a setter copied is one still there. A keeper put in the
-  // trash meanwhile is not folded into. A member's removal takes the same rows in its own order and can deadlock
-  // with this: Postgres ends one of the two, and a fold that loses is caught with its group (see foldDuplicates) and
-  // tried again next run, while the removal tries once more by itself.
+  // trash meanwhile is not folded into. A member's removal takes the same rows in id order too, but can still
+  // deadlock with this through the account it locks last (a setter copied here waits on it): Postgres ends one of
+  // the two, and a fold that loses is caught with its group (see foldDuplicates) and tried again next run, while the
+  // removal tries again by itself.
   const locked = await db.$transaction(async (tx) => {
     const rows = await tx.$queryRaw<{ id: string }[]>`SELECT id FROM "Photo" WHERE id = ANY(${photos.map((p) => p.id)}::text[]) AND "trashedAt" IS NULL ORDER BY id FOR UPDATE`;
     if (!rows.some((r) => r.id === keeper.id)) return null;

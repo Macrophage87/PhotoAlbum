@@ -3,6 +3,7 @@ import { Prisma } from "@/generated/prisma/client";
 import { enqueue } from "@/lib/jobs/boss";
 import { QUEUES } from "@/lib/jobs/queues";
 import { bossJobs } from "@/lib/jobs/schema";
+import { withTryLock } from "@/lib/advisory-lock";
 import type { StoredAnnotation } from "./schema";
 import { helperText, knownNameEntries, knownNames, pastHelperTitles, sameTitle, titleHits, titleIsHelpers, titleKey, unknownTitleAside, warnStuckTitle, type PrivateContainer } from "./members-only";
 import { nameMatcher, namePatterns, spokenWords, titleWords } from "./names";
@@ -57,6 +58,8 @@ const BATCH = 200;
 const YIELD_EVERY = 50;
 /** How many times a missed write is read and judged again. */
 const ATTEMPTS = 4;
+/** One sweep at a time (see withTryLock), whoever runs it. */
+const SWEEP_LOCK = 0x726a7377; // "rjsw"
 
 type Container = { id: string; title: string; visibility: string };
 type Row = {
@@ -75,19 +78,25 @@ const rowSelect = {
 /** Lets a request in: the worker may share its process with the web server. */
 const breathe = () => new Promise<void>((resolve) => setImmediate(resolve));
 let judgedSinceYield = 0;
-async function pace(): Promise<void> {
+/**
+ * Between rows. `signal`: the job's, which pg-boss fires once it has given up on the run and queued its retry; the
+ * run then stops here rather than go on beside the retry. What it wrote stands (every write is guarded), and nothing
+ * is recorded as judged.
+ */
+async function pace(signal?: AbortSignal): Promise<void> {
+  signal?.throwIfAborted();
   if (++judgedSinceYield % YIELD_EVERY === 0) await breathe();
 }
 
 /** Every annotated photograph matching `where`, a batch at a time; nothing is kept between batches. */
-async function* annotated(where: Prisma.PhotoWhereInput = {}): AsyncGenerator<Row> {
+async function* annotated(where: Prisma.PhotoWhereInput = {}, signal?: AbortSignal): AsyncGenerator<Row> {
   let cursor: string | null = null;
   for (;;) {
     const rows: Row[] = await db.photo.findMany({ where: { NOT: { annotation: { equals: Prisma.DbNull } }, ...where }, orderBy: { id: "asc" }, take: BATCH, ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}), select: rowSelect });
     if (!rows.length) return;
     for (const r of rows) {
+      await pace(signal);
       yield r;
-      await pace();
     }
     cursor = rows[rows.length - 1].id;
   }
@@ -188,7 +197,7 @@ const HELD_GUESS = { OR: [{ placeEstimateName: { not: null } }, { placeEstimateN
  * Names: flag what mentions them and is not members-only yet (or is only because of a title word, which a name
  * outranks), and take the helper's titles off members-only items. `names` absent means everybody the album knows.
  */
-export async function rejudgeNames(names?: string[]): Promise<RejudgeResult> {
+export async function rejudgeNames(names?: string[], signal?: AbortSignal): Promise<RejudgeResult> {
   const result = empty();
   const test = nameMatcher((names ?? (await knownNames())).flatMap(namePatterns));
   if (!test) return result;
@@ -202,7 +211,7 @@ export async function rejudgeNames(names?: string[]): Promise<RejudgeResult> {
     if (r.annotationMembersOnly && r.title?.trim() && r.titleByHelper !== false) return "title" as const;
     return null;
   };
-  for await (const r of annotated()) await settle(r, decide, test, result);
+  for await (const r of annotated({}, signal)) await settle(r, decide, test, result);
 
   // Place guesses, guarded on the words of the guess: every guess the album holds, whether or not it is the item's
   // place right now. One under a place set by hand comes back when that move is undone, with whatever flag it had.
@@ -220,7 +229,7 @@ export async function rejudgeNames(names?: string[]): Promise<RejudgeResult> {
         g = await db.photo.findFirst({ where: { id: g.id, ...HELD_GUESS, placeEstimateMembersOnly: false }, select: { id: true, placeEstimateName: true, placeEstimateNote: true } });
       }
       if (!settled) miss(result, first.id);
-      await pace();
+      await pace(signal);
     }
     cursor = guesses[guesses.length - 1].id;
   }
@@ -236,7 +245,7 @@ export async function rejudgeNames(names?: string[]): Promise<RejudgeResult> {
         d = await reload(d.id);
       }
       if (!settled) miss(result, first.id);
-      await pace();
+      await pace(signal);
     }
   };
   const unshown = { description: { not: null }, descriptionSharedAt: null };
@@ -308,7 +317,7 @@ async function tagged(photoId: string): Promise<boolean> {
  * may not have run yet), no notes, nobody tagged. A trip's activities' descriptions are judged against the trip's
  * title the same way.
  */
-export async function rejudgeTitles(scope: { tripId?: string; collectionId?: string; photoIds?: string[] } = {}): Promise<RejudgeResult> {
+export async function rejudgeTitles(scope: { tripId?: string; collectionId?: string; photoIds?: string[] } = {}, signal?: AbortSignal): Promise<RejudgeResult> {
   const result = empty();
   const where: Prisma.PhotoWhereInput = scope.photoIds ? { id: { in: scope.photoIds } } : scope.tripId ? { tripId: scope.tripId } : scope.collectionId ? { collections: { some: { collectionId: scope.collectionId } } } : {};
   const privateWords = await privateTitleWords();
@@ -323,7 +332,7 @@ export async function rejudgeTitles(scope: { tripId?: string; collectionId?: str
     const from = new Set(r.annotationTitleFrom);
     return r.annotationTitleOnly && (hits.words.some((w) => !known.has(w)) || hits.from.some((k) => !from.has(k))) ? ("merge" as const) : null;
   };
-  for await (const r of annotated(where)) {
+  for await (const r of annotated(where, signal)) {
     await settle(r, decide, names, result, hitsOf);
     if (r.annotationSharedAt || !r.annotationMembersOnly || !r.annotationTitleOnly) continue;
     if (hitsOf(r).from.length || !(await titleWordsArePublic(r.annotationTitleWords, r.annotationTitleFrom, privateWords))) continue;
@@ -346,7 +355,7 @@ export async function rejudgeTitles(scope: { tripId?: string; collectionId?: str
     select: { id: true, tripId: true, updatedAt: true, description: true, descriptionMembersOnly: true, descriptionTitleOnly: true, descriptionTitleWords: true, trip: { select: { title: true, visibility: true } } },
   });
   for (const a of activities) {
-    await pace();
+    await pace(signal);
     const words = a.trip.visibility !== "PUBLIC" ? titleHits(a.description!, [{ key: `trip:${a.tripId}`, title: a.trip.title }]).words : [];
     if (words.length && !a.descriptionMembersOnly) {
       result.descriptions += (await db.activity.updateMany({ where: { id: a.id, description: a.description, descriptionMembersOnly: false, descriptionSharedAt: null }, data: { descriptionMembersOnly: true, descriptionTitleOnly: true, descriptionTitleWords: words } })).count;
@@ -440,8 +449,18 @@ async function namesOfJob(job: RejudgeJob): Promise<{ names: string[]; owners: S
  * one, otherwise the names it has not judged (a rename whose job could not be queued included), the trips and
  * collections changed since, and the photographs that joined a trip or collection since. Nothing is recorded while
  * any write missed, so the next sweep tries again.
+ *
+ * One at a time, whoever runs it: a second one (a retry pg-boss started beside a sweep it had given up on, another
+ * worker's) is skipped rather than read the whole album again alongside — the running one records its result.
  */
-export async function rejudgeSweep(): Promise<RejudgeResult> {
+export async function rejudgeSweep(signal?: AbortSignal): Promise<RejudgeResult> {
+  const run = await withTryLock({ space: SWEEP_LOCK }, () => sweepOnce(signal));
+  if (run.ran) return run.value;
+  console.warn("[rejudge] a sweep is already running; this one is skipped");
+  return empty();
+}
+
+async function sweepOnce(signal?: AbortSignal): Promise<RejudgeResult> {
   const started = new Date();
   await dropLegacyRejudgeJobs();
   const setting = await db.appSetting.findUnique({ where: { id: "app" }, select: { membersOnlyMatcher: true, membersOnlyNames: true, membersOnlyJudgedAt: true } });
@@ -450,23 +469,23 @@ export async function rejudgeSweep(): Promise<RejudgeResult> {
   let result = empty();
   const full = setting?.membersOnlyMatcher !== MATCHER_VERSION;
   if (full) {
-    result = add(await rejudgeNames(entries.map((e) => e.name)), await rejudgeTitles());
+    result = add(await rejudgeNames(entries.map((e) => e.name), signal), await rejudgeTitles({}, signal));
   } else {
     const fresh = entries.filter((e) => !judged.has(e.key));
     // Somebody renamed since: their old name is looked for too, in case the rename's own job never ran.
     const current = new Set(entries.map((e) => e.key));
     const previous = [...judged].filter((k) => !current.has(k) && entries.some((e) => keyOwner(e.key) === keyOwner(k))).map(keyName);
     const names = [...new Set([...fresh.map((e) => e.name), ...previous])];
-    if (names.length) result = await rejudgeNames(names);
+    if (names.length) result = await rejudgeNames(names, signal);
     const since = setting?.membersOnlyJudgedAt ?? new Date(0);
     const [trips, collections, moved] = await Promise.all([
       db.trip.findMany({ where: { updatedAt: { gt: since } }, select: { id: true } }),
       db.collection.findMany({ where: { updatedAt: { gt: since } }, select: { id: true } }),
       db.photo.findMany({ where: { containersChangedAt: { gt: since } }, select: { id: true } }),
     ]);
-    for (const t of trips) result = add(result, await rejudgeTitles({ tripId: t.id }));
-    for (const c of collections) result = add(result, await rejudgeTitles({ collectionId: c.id }));
-    for (let i = 0; i < moved.length; i += BATCH) result = add(result, await rejudgeTitles({ photoIds: moved.slice(i, i + BATCH).map((p) => p.id) }));
+    for (const t of trips) result = add(result, await rejudgeTitles({ tripId: t.id }, signal));
+    for (const c of collections) result = add(result, await rejudgeTitles({ collectionId: c.id }, signal));
+    for (let i = 0; i < moved.length; i += BATCH) result = add(result, await rejudgeTitles({ photoIds: moved.slice(i, i + BATCH).map((p) => p.id) }, signal));
   }
   if (!result.missed) await recordJudged(entries.map((e) => e.key), { membersOnlyMatcher: MATCHER_VERSION, membersOnlyJudgedAt: started });
   else console.warn(`[rejudge] ${result.missed} write(s) kept missing (${(result.missedIds ?? []).slice(0, 50).join(", ")}); the next sweep judges them again`);
@@ -503,27 +522,27 @@ export async function rejudgeLater(job: RejudgeJob): Promise<boolean> {
 
 /**
  * The job: the sweep, one trip's or collection's title words, the names of the people and members given, or — with
- * nothing given — all of it.
+ * nothing given — all of it. `signal`: the job's (see `pace`).
  */
-export async function rejudgeText(job: RejudgeJob): Promise<RejudgeResult> {
-  if (job.sweep) return rejudgeSweep();
-  if (job.tripId || job.collectionId) return rejudgeTitles({ tripId: job.tripId, collectionId: job.collectionId });
+export async function rejudgeText(job: RejudgeJob, signal?: AbortSignal): Promise<RejudgeResult> {
+  if (job.sweep) return rejudgeSweep(signal);
+  if (job.tripId || job.collectionId) return rejudgeTitles({ tripId: job.tripId, collectionId: job.collectionId }, signal);
   if (job.people || job.members) {
     const { names, owners } = await namesOfJob(job);
     // Forgotten, or gone, since it was asked: nothing of theirs is left to look for.
     if (!names.length) return empty();
-    const result = await rejudgeNames(names);
+    const result = await rejudgeNames(names, signal);
     // A name is recorded as judged only once every write for it has landed; otherwise the next sweep tries again.
     if (!result.missed) await recordJudged((await knownNameEntries()).filter((e) => owners.has(keyOwner(e.key))).map((e) => e.key));
     return result;
   }
   if (job.names) {
-    const result = await rejudgeNames(job.names);
+    const result = await rejudgeNames(job.names, signal);
     if (!result.missed) {
       const asked = new Set(job.names);
       await recordJudged((await knownNameEntries()).filter((e) => asked.has(e.name)).map((e) => e.key));
     }
     return result;
   }
-  return add(await rejudgeNames(), await rejudgeTitles());
+  return add(await rejudgeNames(undefined, signal), await rejudgeTitles({}, signal));
 }

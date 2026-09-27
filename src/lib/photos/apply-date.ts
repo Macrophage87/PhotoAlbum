@@ -26,7 +26,7 @@ export async function applyPhotoInstant(
   let tripId = photo.tripId;
   if (!tripId) {
     // Only trips this member was on, where anybody said who was on them; a clock cannot tell two families apart.
-    const trips = await db.trip.findMany({ where: whoWasThere(photo.uploaderId), select: { id: true, startDate: true, endDate: true, timezone: true } });
+    const trips = await db.trip.findMany({ where: { deletingAt: null, ...whoWasThere(photo.uploaderId) }, select: { id: true, startDate: true, endDate: true, timezone: true } });
     const day = localDayFromOffset(takenAt, tzOffsetMin);
     tripId = pickTripByDay(trips, day)?.id ?? null;
     // On no trip's days (a ride on the last evening that runs past midnight): the trip out on an activity or a track

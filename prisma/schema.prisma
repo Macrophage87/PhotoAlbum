@@ -186,6 +186,12 @@ model User {
   name      String?
   role      Role     @default(MEMBER)
   createdAt DateTime @default(now())
+  /// Being removed: signed out, no longer an admin, and what they uploaded and chose passing to `removingBy` a batch
+  /// at a time (see src/lib/auth/remove-member.ts). Never cleared: the account goes once everything is handed over.
+  removingAt   DateTime?
+  removingById String?
+  removingBy   User?    @relation("RemovingBy", fields: [removingById], references: [id], onDelete: Restrict)
+  takingOver   User[]   @relation("RemovingBy")
 
   sessions Session[]
   googleAccount GoogleAccount?
@@ -271,6 +277,8 @@ model Trip {
   createdBy    User           @relation(fields: [createdById], references: [id])
   createdAt    DateTime       @default(now())
   updatedAt    DateTime       @updatedAt
+  /// Being deleted: its photographs leave it a batch at a time, then it goes (see src/lib/trips/delete.ts).
+  deletingAt   DateTime?
 
   activities Activity[]
   photos     Photo[]
@@ -500,6 +508,7 @@ model Photo {
   visits            Visit[]
 
   @@index([takenAt])
+  @@index([uploaderId])
   @@index([tripId, takenAt])
   @@index([activityId])
   @@index([lat, lng])

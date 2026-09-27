@@ -22,7 +22,7 @@ vi.mock("@/lib/people/forget-person", async (orig) => ({ ...((await orig()) as o
 vi.mock("@/lib/people/names-changed", async (orig) => ({ ...((await orig()) as object), withNamePassesLock: async (fn: () => Promise<void>) => (await fn(), true) }));
 
 import { startWorker } from "@/lib/jobs/worker";
-import { HEAVY_HEARTBEAT_REFRESH_SECONDS, HEAVY_HEARTBEAT_SECONDS, HEAVY_QUEUES, queueOptions } from "@/lib/jobs/boss";
+import { HEAVY_HEARTBEAT_REFRESH_SECONDS, HEAVY_HEARTBEAT_SECONDS, HEAVY_QUEUES, LONG_QUEUES, queueOptions } from "@/lib/jobs/boss";
 import { QUEUES } from "@/lib/jobs/queues";
 
 describe("the worker's registration", () => {
@@ -50,5 +50,13 @@ describe("the worker's registration", () => {
     }
     expect(HEAVY_HEARTBEAT_SECONDS / HEAVY_HEARTBEAT_REFRESH_SECONDS).toBeGreaterThanOrEqual(4);
     expect(queueOptions(QUEUES.processPhoto).heartbeatSeconds).toBeUndefined();
+  });
+
+  it("keeps the album-wide passes alive by heartbeat, and finishes interrupted removals every quarter hour", async () => {
+    for (const q of LONG_QUEUES) {
+      expect(queueOptions(q).heartbeatSeconds).toBe(HEAVY_HEARTBEAT_SECONDS);
+      expect(fake.work.find((w) => w.queue === q)?.options.heartbeatRefreshSeconds).toBe(HEAVY_HEARTBEAT_REFRESH_SECONDS);
+    }
+    expect(fake.schedules.find((s) => s.queue === QUEUES.finishRemovals)?.cron).toMatch(/\/15 \* \* \* \*$/);
   });
 });

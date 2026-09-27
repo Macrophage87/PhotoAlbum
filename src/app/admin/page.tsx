@@ -272,6 +272,7 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
                     {m.name ?? m.email}
                     <Badge tone={m.role === "ADMIN" ? "primary" : "neutral"}>{m.role === "ADMIN" ? "Admin" : "Member"}</Badge>
                     {m.id === me.id && <Badge tone="accent">You</Badge>}
+                    {m.removingAt && <Badge tone="neutral">Being removed</Badge>}
                   </div>
                   <div className="text-muted truncate">
                     {m.email} · {m._count.photos} photo{m._count.photos === 1 ? "" : "s"} · {m._count.trips} trip{m._count.trips === 1 ? "" : "s"}
@@ -283,11 +284,14 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
                 </form>
                 {m.id !== me.id && (
                   <div className="flex gap-2">
-                    <form action={setRole.bind(null, m.id, m.role === "ADMIN" ? "MEMBER" : "ADMIN")}>
-                      <Button type="submit" variant="secondary" size="sm">{m.role === "ADMIN" ? "Make member" : "Make admin"}</Button>
-                    </form>
+                    {!m.removingAt && (
+                      <form action={setRole.bind(null, m.id, m.role === "ADMIN" ? "MEMBER" : "ADMIN")}>
+                        <Button type="submit" variant="secondary" size="sm">{m.role === "ADMIN" ? "Make member" : "Make admin"}</Button>
+                      </form>
+                    )}
+                    {/* A removal interrupted half-way carries on from where it stopped; the worker also finishes it. */}
                     <form action={removeMember.bind(null, m.id)}>
-                      <Button type="submit" variant="danger" size="sm">Remove</Button>
+                      <Button type="submit" variant="danger" size="sm">{m.removingAt ? "Finish removing" : "Remove"}</Button>
                     </form>
                   </div>
                 )}

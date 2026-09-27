@@ -92,7 +92,7 @@ export async function transcodeVideo(job: TranscodeVideoJob, signal?: AbortSigna
       // activity or a track at that moment is chosen once the row is locked, from what is there then.
       let dayless: { id: string; startDate: Date; endDate: Date; timezone: string }[] | null = null;
       if (!trip) {
-        const candidates = await db.trip.findMany({ where: whoWasThere(photo.uploaderId), select: { id: true, startDate: true, endDate: true, timezone: true } });
+        const candidates = await db.trip.findMany({ where: { deletingAt: null, ...whoWasThere(photo.uploaderId) }, select: { id: true, startDate: true, endDate: true, timezone: true } });
         const matches = candidates.filter((c) => pickTripByDay([c], localDayFromOffset(instant, offsetMinutesInZone(instant, c.timezone))));
         if (matches.length === 1) trip = await db.trip.findUnique({ where: { id: matches[0].id } });
         if (matches.length === 0) dayless = candidates;

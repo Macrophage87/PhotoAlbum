@@ -32,8 +32,10 @@ export async function startWorker(): Promise<void> {
   const { rejudgeText, enqueueRejudge, dropLegacyRejudgeJobs } = await import("@/lib/annotation/rejudge");
   // Jobs from before judging was asked for by id carry names; they go before anything could run one.
   await dropLegacyRejudgeJobs();
-  await boss.work(QUEUES.rejudgeText, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 5 }, async ([job]) => {
-    const r = await rejudgeText(job.data as never);
+  // A sweep over a big album runs long: its heartbeat, not a short expiry, tells pg-boss the worker is still alive,
+  // and the signal stops it should pg-boss give up on it all the same (see LONG_QUEUES).
+  await boss.work(QUEUES.rejudgeText, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 5, heartbeatRefreshSeconds: HEAVY_HEARTBEAT_REFRESH_SECONDS }, async ([job]) => {
+    const r = await rejudgeText(job.data as never, job.signal);
     console.log(`[rejudge] ${r.photos} photo(s), ${r.titles} title(s) and ${r.descriptions} description(s) kept for members, ${r.unflagged} shown again, ${r.places} place guess(es)`);
   });
 
@@ -120,6 +122,15 @@ export async function startWorker(): Promise<void> {
   const { revokeQueuedConnection } = await import("@/lib/google/account");
   await boss.work(QUEUES.revokeGoogle, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60 }, async ([job]) => revokeQueuedConnection(job.data as never));
   await boss.work(QUEUES.reconcilePhotos, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60 }, async () => void (await reconcileStalePhotos()));
+  // Removals of members and deletions of trips that a restart or a crash interrupted half-way, finished from their
+  // mark; one still running elsewhere is left to that run.
+  const { finishPendingRemovals } = await import("@/lib/auth/remove-member");
+  const { finishPendingTripDeletions } = await import("@/lib/trips/delete");
+  const finishRemovals = async () => {
+    await finishPendingRemovals();
+    await finishPendingTripDeletions();
+  };
+  await boss.work(QUEUES.finishRemovals, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60, heartbeatRefreshSeconds: HEAVY_HEARTBEAT_REFRESH_SECONDS }, async () => finishRemovals());
   await boss.work(QUEUES.sweepOrphanFiles, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60 }, async () => sweepOrphanFiles());
   // Schedules (idempotent): weekly video re-check, the annotation quiet-period sweep, batch polling, raw-response purge,
   // and the stale-photo reconciliation.
@@ -138,6 +149,7 @@ export async function startWorker(): Promise<void> {
   await boss.schedule(QUEUES.purgeMagicLinks, "25 3 * * *", {}, { retryLimit: 0 });
   await boss.schedule(QUEUES.sweepStrandedUploads, "40 * * * *", {}, { retryLimit: 0 });
   await boss.schedule(QUEUES.reconcilePhotos, "*/15 * * * *", {}, { retryLimit: 0 });
+  await boss.schedule(QUEUES.finishRemovals, "7-59/15 * * * *", {}, { retryLimit: 0 });
   // Files left behind by work that died part-way: uploaded track files no import will read again are deleted; photo
   // folders with no row are only counted, for an admin to move to the quarantine.
   await boss.schedule(QUEUES.sweepOrphanFiles, "25 * * * *", {}, { retryLimit: 0 });
@@ -151,5 +163,6 @@ export async function startWorker(): Promise<void> {
   // than re-processed (it has no file to process).
   await (await import("@/lib/media/stranded")).sweepStrandedUploads().catch((err) => console.error("[worker] stranded-upload sweep failed", err));
   await reconcileStalePhotos().catch((err) => console.error("[worker] stale-photo reconciliation failed", err));
+  void finishRemovals().catch((err) => console.error("[worker] could not finish interrupted removals", err));
   await (await import("@/lib/tracks/files")).forgetGoogleExports().catch((err) => console.error("[worker] could not delete old Google exports", err));
 }

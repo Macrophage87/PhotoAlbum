@@ -156,6 +156,8 @@ export async function verifyMagicLink(token: string, deps: MagicLinkDeps): Promi
 
   const email = record.email;
   const existing = await db.user.findUnique({ where: { email } });
+  // Being removed: the address has no account to sign in to any more.
+  if (existing?.removingAt) return { ok: false, reason: "invalid" };
   if (existing) return { ok: true, userId: existing.id, email, isNewUser: false };
 
   const invite = await db.invite.findFirst({ where: { email, acceptedAt: null, expiresAt: { gt: now } } });
