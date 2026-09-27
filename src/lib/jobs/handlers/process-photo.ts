@@ -72,8 +72,9 @@ export async function processPhoto(job: ProcessPhotoJob, signal?: AbortSignal): 
       // now. Deleted for good meanwhile, the copy just made has nothing to belong to.
       const scan = await db.photo.findUnique({ where: { id: photo.id } });
       if (!scan) return void (await forgetFilesIfGone(photo.id));
-      // Moved or taken off its trip meanwhile: only the date and status are written, not filed again by the date.
-      const held = tripHeld || scan.tripId !== photo.tripId;
+      // Taken off its trip meanwhile: only the date and status are written, not filed onto a trip again by the date.
+      // One moved to another trip is still filed onto that trip's activity by its date (its trip is kept either way).
+      const held = scan.tripId === null && (tripHeld || scan.tripId !== photo.tripId);
       // A date somebody gave it (by hand, or Google's own record) is kept: the file's modified time is only a guess.
       if (vouchedDate(scan)) {
         await db.photo.update({ where: { id: scan.id }, data: { status: "READY" } });
