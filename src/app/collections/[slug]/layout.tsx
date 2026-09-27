@@ -18,8 +18,10 @@ import { readableContainerDescription, withReadableDescription } from "@/lib/pho
 
 export async function generateMetadata({ params }: LayoutProps<"/collections/[slug]">): Promise<Metadata> {
   const { slug } = await params;
-  const collection = await getCollectionBySlug(slug);
+  const [viewer, collection] = await Promise.all([getViewer(), getCollectionBySlug(slug)]);
   if (!collection) return { title: "Collection" };
+  // As on a trip: the tab title is written before the body redirects, so it names a private collection to nobody.
+  if (!canViewCollection(viewer, collection)) return { title: "Collection", robots: { index: false, follow: false } };
   const isPublic = collection.visibility === "PUBLIC";
   const card = isPublic ? await collectionCard(collection, new URL(`/collections/${slug}`, env().APP_URL).toString()) : null;
   return {
