@@ -234,7 +234,7 @@ export async function forgetNameInText(photoIds: string[], m: NameMatcher, opts:
   for (const c of collections) if (m.mentions(c.description)) await db.collection.update({ where: { id: c.id }, data: { description: m.scrub(c.description) } });
 }
 
-export type MemberTextField = "title" | "caption" | "notes" | "file name" | "trash note" | "link note";
+export type MemberTextField = "title" | "caption" | "notes" | "place" | "file name" | "trash note" | "link note";
 export type ContainerTextField = "title" | "description" | "web address";
 export type PersonTextField = "relationship" | "descriptors" | "former names";
 export type TrackTextField = "name" | "file name";
@@ -320,11 +320,11 @@ export async function memberTextMentioning(m: NameMatcher, tagged: Set<string> =
   const linkNotes = new Map<string, string[]>();
   for (const l of linked) linkNotes.set(l.photoAId, [...(linkNotes.get(l.photoAId) ?? []), l.note ?? ""]);
   const anywhere = words.length ? Prisma.sql`(${likeAny(Prisma.sql`title`, words)} OR ${likeAny(Prisma.sql`"membersTitle"`, words)} OR ${likeAny(Prisma.sql`caption`, words)} OR ${likeAny(Prisma.sql`context`, words)})` : Prisma.sql`false`;
-  const typed = anyCase.length ? Prisma.sql`(${likeAny(Prisma.sql`"originalName"`, anyCase)} OR ${likeAny(Prisma.sql`"trashNote"`, anyCase)})` : Prisma.sql`false`;
+  const typed = anyCase.length ? Prisma.sql`(${likeAny(Prisma.sql`"originalName"`, anyCase)} OR ${likeAny(Prisma.sql`"trashNote"`, anyCase)} OR ${likeAny(Prisma.sql`"placeName"`, anyCase)})` : Prisma.sql`false`;
   const theirs = taggedIds.length ? Prisma.sql`id IN (${Prisma.join(taggedIds)})` : Prisma.sql`false`;
   const links = linkNotes.size ? Prisma.sql`id IN (${Prisma.join([...linkNotes.keys()])})` : Prisma.sql`false`;
-  const photos = await db.$queryRaw<{ id: string; kind: string; title: string | null; membersTitle: string | null; titleByHelper: boolean | null; caption: string | null; context: string | null; annotation: unknown; originalName: string; trashNote: string | null; trashedAt: Date | null }[]>`
-    SELECT id, kind::text AS kind, title, "membersTitle", "titleByHelper", caption, context, annotation, "originalName", "trashNote", "trashedAt" FROM "Photo"
+  const photos = await db.$queryRaw<{ id: string; kind: string; title: string | null; membersTitle: string | null; titleByHelper: boolean | null; caption: string | null; context: string | null; annotation: unknown; originalName: string; trashNote: string | null; trashedAt: Date | null; placeName: string | null }[]>`
+    SELECT id, kind::text AS kind, title, "membersTitle", "titleByHelper", caption, context, annotation, "originalName", "trashNote", "trashedAt", "placeName" FROM "Photo"
     WHERE ("trashedAt" IS NULL AND (${anywhere} OR ${theirs})) OR ${typed} OR ${links}
     ORDER BY "createdAt" ASC`;
   const [others, given] = await Promise.all([othersOn(taggedIds, personId), answerTitles(photos.map((p) => p.id))]);
@@ -337,6 +337,9 @@ export async function memberTextMentioning(m: NameMatcher, tagged: Set<string> =
       if ((!h.title && m.mentions(p.title, where)) || (!h.membersTitle && m.mentions(p.membersTitle, where))) fields.push("title");
       if (m.mentions(p.caption, where)) fields.push("caption");
       if (m.mentions(p.context, where)) fields.push("notes");
+      // The place's name, from the address lookup or a guess a member accepted ("Zebulon Quince's cabin"): shown
+      // with the photograph and searched by it, and changed by setting the place again.
+      if (m.mentions(p.placeName, where) || loose(p.placeName)) fields.push("place");
     }
     if (loose(p.originalName)) fields.push("file name");
     if (loose(p.trashNote)) fields.push("trash note");

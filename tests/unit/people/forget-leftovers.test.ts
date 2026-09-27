@@ -29,6 +29,11 @@ describe("what a forget lists besides titles, captions and notes", () => {
   it("lists file names, trash and link notes, web addresses, other people's records, tracks and import reports", async () => {
     const zeb = await db.person.create({ data: { name: "Zebulon Quince", createdById: who.id } });
     const plain = await photo("pier.jpg");
+    // The place's name holds it, from the address lookup or an accepted guess: on a photograph they are tagged on,
+    // and one they are not.
+    const cabin = await photo("cabin.jpg", { lat: 44.3, lng: -68.2, gpsSource: "MANUAL", placeName: "Zebulon Quince's cabin" });
+    await db.face.create({ data: { photoId: cabin.id, personId: zeb.id, status: "CONFIRMED", box: [0.1, 0.1, 0.2, 0.2], confidence: 0 } });
+    const road = await photo("road.jpg", { lat: 44.4, lng: -68.1, gpsSource: "EXIF", placeName: "Quince Road, near Zebulon Quince's cabin" });
     const named = await photo("zebulon_quince_80th.jpg");
     const binned = await photo("dup.jpg", { trashedAt: new Date(), trashNote: "Same as Zebulon Quince's cake photo" });
     const linked = await photo("left.jpg");
@@ -47,6 +52,7 @@ describe("what a forget lists besides titles, captions and notes", () => {
     expect(JSON.stringify(items)).not.toMatch(/zebulon|quince/i);
     expect(items.photos).toEqual(expect.arrayContaining([{ id: named.id, fields: ["file name"] }, { id: binned.id, fields: ["trash note"] }, { id: linked.id, fields: ["link note"] }]));
     expect(items.photos.map((p) => p.id)).not.toContain(plain.id);
+    expect(items.photos).toEqual(expect.arrayContaining([{ id: cabin.id, fields: ["place"] }, { id: road.id, fields: ["place"] }]));
     expect(items.trips).toEqual([{ id: trip.id, fields: ["web address"] }]);
     expect(items.collections).toEqual([{ id: collection.id, fields: ["web address"] }]);
     // A former name that is only a surname they share is nobody's full name: the relationship is listed, not it.
