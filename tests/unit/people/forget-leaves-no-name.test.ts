@@ -22,6 +22,8 @@ import { QUEUES } from "@/lib/jobs/queues";
 import { tagPersonAt } from "@/app/people/actions";
 import { rejudgeSweep, rejudgeText, type RejudgeJob } from "@/lib/annotation/rejudge";
 import { forgetPerson } from "@/lib/people/forget-person";
+import { forgetQueuedFileNames } from "@/lib/people/forget";
+import { nameMatcher } from "@/lib/people/scrub";
 import { applyAnnotation } from "@/lib/annotation/apply";
 import { annotationSchema } from "@/lib/annotation/schema";
 import { resetTestDb } from "../helpers/reset";
@@ -121,6 +123,17 @@ describe("forgetting somebody leaves their name nowhere", () => {
     await real.boss.send(QUEUES.rejudgeText, { people: ["p1"] });
     await rejudgeSweep();
     expect((await real.boss.findJobs(QUEUES.rejudgeText)).map((j) => j.data)).toEqual([{ people: ["p1"] }]);
+  });
+
+  it("leaves a relative's lookalike file names in the queue alone", async () => {
+    await real.boss.deleteAllJobs(QUEUES.importTrack);
+    await real.boss.deleteAllJobs(QUEUES.googlePickerImport);
+    await real.boss.send(QUEUES.importTrack, { importKey: "k", tripId: "t", userId: real.admin, sourceHint: "auto", originalName: "BrianSmith_ride.gpx" });
+    await real.boss.send(QUEUES.googlePickerImport, { userId: real.admin, sessionId: "s", photoIds: ["ph1"], items: { ph1: { id: "g1", filename: "Brian_Smith_80.jpg" } } });
+    await real.boss.send(QUEUES.importTrack, { importKey: "k2", tripId: "t", userId: real.admin, sourceHint: "auto", originalName: "IanSmith_ride.gpx" });
+    expect(await forgetQueuedFileNames(nameMatcher(["Ian Smith"], []))).toBe(1);
+    expect((await real.boss.findJobs(QUEUES.importTrack)).map((j) => (j.data as { originalName: string }).originalName).sort()).toEqual(["BrianSmith_ride.gpx", "track.gpx"]);
+    expect((await real.boss.findJobs(QUEUES.googlePickerImport)).map((j) => (j.data as { items: { ph1: { filename: string } } }).items.ph1.filename)).toEqual(["Brian_Smith_80.jpg"]);
   });
 
   it("runs a job for somebody forgotten since it was queued as nothing to do", async () => {

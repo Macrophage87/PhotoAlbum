@@ -6,7 +6,7 @@ import { enqueueEmbedding } from "@/lib/jobs/handlers/embed-photo";
 import { QUEUES } from "@/lib/jobs/queues";
 import { bossJobs } from "@/lib/jobs/schema";
 import { isMinor, knownAdult } from "./consent";
-import { annotationMentions, nameMatcher, scrubAnnotation, type NameMatcher, type Where } from "./scrub";
+import { annotationMentions, isEverydayWord, isPlaceOrDateWord, nameMatcher, scrubAnnotation, type NameMatcher, type Where } from "./scrub";
 
 /**
  * Taking a forgotten person's name out of what the helper wrote, and finding what members wrote that still says it.
@@ -344,18 +344,44 @@ function hyphenated(text: string): string {
  * web address, a note. By the rules for prose, or by one of their full names spelled out in any case — never by a
  * first name alone, or a one-word name that is also a word.
  */
-function looseMatcher(m: NameMatcher): (text: string | null | undefined) => boolean {
+export function looseMatcher(m: NameMatcher): (text: string | null | undefined) => boolean {
   const names = [...new Set([...m.albumForms, ...m.tombstoneForms.filter((f) => !f.derived && !f.capitalizedOnly).map((f) => f.form)])];
   const forms = names.map(hyphenated).filter((f) => f.length > 4);
-  // A full name run together ("zebulonquince", "ZebulonQuince80"): only names of more than one word, whose joined
-  // spelling is no everyday word.
-  const joined = names.map(hyphenated).filter((f) => f.slice(1, -1).includes("-")).map((f) => f.replace(/-/g, "")).filter((f) => f.length >= 8);
+  // A full name run together ("zebulonquince80", "ZebulonQuince.jpg"): only a name of more than one word, and only
+  // when its joined spelling is no everyday word, herb or place ("Rose Mary" is rosemary, "Mary Land" Maryland).
+  const joined = [...new Set(names.map((n) => piecesOf(n)).filter((w) => w.length > 1).map((w) => w.join("")))].filter((j) => j.length >= 6 && !isEverydayWord(j) && !isPlaceOrDateWord(j));
   return (text) => {
     if (!text?.trim()) return false;
-    if (m.mentions(text)) return true;
+    // An underscore is a space in a file name; the rules for prose would read "Leo_Martinez" as Leo alone.
+    if (m.mentions(text.replace(/_/g, " "))) return true;
     const h = hyphenated(text);
-    return forms.some((f) => h.includes(f)) || joined.some((f) => h.replace(/-/g, "").includes(f));
+    return forms.some((f) => h.includes(f)) || (joined.length > 0 && runsTogether(piecesOf(text), joined));
   };
+}
+
+/**
+ * A text's word pieces, lower-cased: split at anything that is not a letter or a digit, between letters and digits,
+ * and where a lower-case letter meets a capital. "ZebulonQuince80" is zebulon, quince, 80; "zebulonquince" is one.
+ */
+function piecesOf(text: string): string[] {
+  const plain = text.normalize("NFKD").replace(/\p{M}/gu, "");
+  return (plain.match(/\p{Lu}?\p{Ll}+|\p{Lu}+(?!\p{Ll})|\p{Lo}+|\p{N}+/gu) ?? []).map((p) => p.toLowerCase());
+}
+
+/**
+ * Whether some run of consecutive pieces, joined, is exactly one of the joined names: whole pieces only, so Brian
+ * Smith is not Ian Smith, nor Leo Martinez Leo Martin.
+ */
+function runsTogether(pieces: string[], joined: string[]): boolean {
+  for (let i = 0; i < pieces.length; i++) {
+    let run = "";
+    for (let k = i; k < pieces.length; k++) {
+      run += pieces[k];
+      if (joined.includes(run)) return true;
+      if (!joined.some((j) => j.startsWith(run))) break;
+    }
+  }
+  return false;
 }
 
 /**
