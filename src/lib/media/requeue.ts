@@ -1,7 +1,7 @@
 import { db } from "@/lib/db";
 import { enqueue } from "@/lib/jobs/boss";
 import { QUEUES } from "@/lib/jobs/queues";
-import { hasLiveProcessingJob } from "@/lib/jobs/live";
+import { hasLiveProcessingJob, withLiveProcessingJob } from "@/lib/jobs/live";
 
 /** Past pg-boss's own retries of a failed processing job (two, thirty seconds apart and backing off). */
 const FAILED_SETTLED_MS = 5 * 60_000;
@@ -36,4 +36,24 @@ export async function processAgainIfStuck(photo: Stuck, opts: { now?: number; li
     await db.photo.update({ where: { id: photo.id }, data: { status: "FAILED", error: "Could not queue processing; use Re-process on the photo page." } }).catch(() => undefined);
     return false;
   }
+}
+
+/**
+ * The same for every PENDING row an hour on with its file in place, run with the stale-photo reconciliation: a
+ * photo whose job was never queued (the process died between storing it and queueing it) otherwise stays
+ * "Processing…" until somebody happens to send the same file again or press Re-process. A Google Photos row still
+ * waiting for its download has no file ("pending"), so it is never one of these. Returns how many were queued.
+ */
+export async function requeueStuckPending(now = Date.now(), opts: { liveJobs?: (ids: string[]) => Promise<Set<string>> } = {}): Promise<number> {
+  const rows = await db.photo.findMany({
+    where: { status: "PENDING", originalPath: { not: "pending" }, updatedAt: { lt: new Date(now - PENDING_STUCK_MS) } },
+    select: { id: true, kind: true, tripId: true, status: true, originalPath: true, updatedAt: true },
+  });
+  if (!rows.length) return 0;
+  // One look at the queue for all of them: behind a big import most are simply still waiting their turn.
+  const live = await (opts.liveJobs ?? withLiveProcessingJob)(rows.map((r) => r.id));
+  let queued = 0;
+  for (const row of rows) if (await processAgainIfStuck(row, { now, liveJob: async (id) => live.has(id) })) queued++;
+  if (queued) console.warn(`[worker] queued processing again for ${queued} photo(s) left waiting with no job`);
+  return queued;
 }

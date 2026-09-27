@@ -1,4 +1,5 @@
 import type { Prisma } from "@/generated/prisma/client";
+import { offsetMinutesInZone } from "@/lib/time/local-day";
 
 /**
  * What a processing job may and may not write back over, once its slow part (reading the file, rendering, ffmpeg) is
@@ -38,6 +39,15 @@ export function placeByHand(p: Pick<MemberFields, "gpsSource" | "placeSetById">)
   return p.gpsSource === "MANUAL" || p.placeSetById !== null;
 }
 
+/**
+ * Whether a member moved the item to another trip, or took it off one, after its job was queued with the trip the
+ * row had then. A job can wait a long while behind an import; the row's trip is the member's answer and stands, and
+ * an item taken off a trip is not filed again by its day.
+ */
+export function tripChangedSinceQueued(job: { tripId?: string | null }, row: Pick<MemberFields, "tripId">): boolean {
+  return Boolean(job.tripId) && job.tripId !== row.tripId;
+}
+
 /** Whether the date changed after the job read the row: whoever changed it answered with newer information. */
 export function dateMovedSince(before: MemberFields, now: MemberFields): boolean {
   return (
@@ -46,4 +56,15 @@ export function dateMovedSince(before: MemberFields, now: MemberFields): boolean
     before.tzOffsetMin !== now.tzOffsetMin ||
     before.dateSetById !== now.dateSetById
   );
+}
+
+/**
+ * The offset for a kept date that has none recorded: the zone of the trip the item ends up on, at that instant, as the
+ * job would have given it. Only the offset is filled in, never the date. Null when it has one already, or there is no
+ * trip to take one from.
+ */
+export async function offsetForKeptDate(tx: Prisma.TransactionClient, now: Pick<MemberFields, "takenAt" | "tzOffsetMin">, tripId: string | null): Promise<number | null> {
+  if (now.tzOffsetMin !== null || !now.takenAt || !tripId) return null;
+  const trip = await tx.trip.findUnique({ where: { id: tripId }, select: { timezone: true } });
+  return trip ? offsetMinutesInZone(now.takenAt, trip.timezone) : null;
 }
