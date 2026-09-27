@@ -47,6 +47,9 @@ describe("what a forget lists besides titles, captions and notes", () => {
     const other = await db.person.create({ data: { name: "Mabel", relationship: "Zebulon Quince's sister", formerNames: ["Mabel Quince"], createdById: who.id } });
     const track = await db.track.create({ data: { tripId: trip.id, uploaderId: who.id, source: "GPX", name: "Walk", originalFile: "Zebulon-Quince-walk.gpx", startTime: new Date("2025-08-10T10:00:00Z"), endTime: new Date("2025-08-10T11:00:00Z"), pointCount: 0, minLat: 0, maxLat: 0, minLng: 0, maxLng: 0, simplified: [], pointsBlob: new Uint8Array() } });
     const report = await db.takeoutImport.create({ data: { archiveName: "takeout-1.zip", startedById: who.id, report: { skipped: ["Photos from 2019/ZEBULON QUINCE 80.jpg"] } } });
+    // Run together, in a web address and an archive's name.
+    const joined = await db.collection.create({ data: { slug: "zebulonquince80", title: "Party", createdById: who.id } });
+    const archive = await db.takeoutImport.create({ data: { archiveName: "takeout-ZebulonQuince.zip", startedById: who.id } });
     // Nothing that names nobody.
     await db.trip.create({ data: { slug: "coast", title: "Coast", startDate: new Date("2025-08-10"), endDate: new Date("2025-08-11"), createdById: who.id } });
 
@@ -58,11 +61,11 @@ describe("what a forget lists besides titles, captions and notes", () => {
     expect(items.photos.map((p) => p.id)).not.toContain(plain.id);
     expect(items.photos).toEqual(expect.arrayContaining([{ id: cabin.id, fields: ["place"] }, { id: road.id, fields: ["place"] }]));
     expect(items.trips).toEqual([{ id: trip.id, fields: ["web address"] }]);
-    expect(items.collections).toEqual([{ id: collection.id, fields: ["web address"] }]);
+    expect(items.collections).toEqual(expect.arrayContaining([{ id: collection.id, fields: ["web address"] }, { id: joined.id, fields: ["web address"] }]));
     // A former name that is only a surname they share is nobody's full name: the relationship is listed, not it.
     expect(items.people).toEqual([{ id: other.id, fields: ["relationship"] }]);
     expect(items.tracks).toEqual([{ id: track.id, fields: ["file name"] }]);
-    expect(items.imports).toEqual([{ id: report.id }]);
+    expect(items.imports).toEqual(expect.arrayContaining([{ id: report.id }, { id: archive.id }]));
     // Listed, never changed.
     expect((await db.photo.findUniqueOrThrow({ where: { id: named.id } })).originalName).toBe("zebulon_quince_80th.jpg");
 

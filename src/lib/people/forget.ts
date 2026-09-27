@@ -345,8 +345,17 @@ function hyphenated(text: string): string {
  * first name alone, or a one-word name that is also a word.
  */
 function looseMatcher(m: NameMatcher): (text: string | null | undefined) => boolean {
-  const forms = [...new Set([...m.albumForms, ...m.tombstoneForms.filter((f) => !f.derived && !f.capitalizedOnly).map((f) => f.form)])].map(hyphenated).filter((f) => f.length > 4);
-  return (text) => Boolean(text?.trim()) && (m.mentions(text) || forms.some((f) => hyphenated(text!).includes(f)));
+  const names = [...new Set([...m.albumForms, ...m.tombstoneForms.filter((f) => !f.derived && !f.capitalizedOnly).map((f) => f.form)])];
+  const forms = names.map(hyphenated).filter((f) => f.length > 4);
+  // A full name run together ("zebulonquince", "ZebulonQuince80"): only names of more than one word, whose joined
+  // spelling is no everyday word.
+  const joined = names.map(hyphenated).filter((f) => f.slice(1, -1).includes("-")).map((f) => f.replace(/-/g, "")).filter((f) => f.length >= 8);
+  return (text) => {
+    if (!text?.trim()) return false;
+    if (m.mentions(text)) return true;
+    const h = hyphenated(text);
+    return forms.some((f) => h.includes(f)) || joined.some((f) => h.replace(/-/g, "").includes(f));
+  };
 }
 
 /**
@@ -433,8 +442,9 @@ export async function memberTextMentioning(m: NameMatcher, tagged: Set<string> =
       if (fields.length && out.tracks.length < limit) out.tracks.push({ id: t.id, label: t.name, href: t.activity ? `/trips/${t.trip.slug}/activities/${t.activity.id}` : `/trips/${t.trip.slug}`, fields });
     }
     const imports = await db.$queryRaw<{ id: string; report: string; archiveName: string }[]>`
-      SELECT id, report::text AS report, "archiveName" FROM "TakeoutImport" WHERE ${likeAny(Prisma.sql`report::text`, anyCase)} ORDER BY "startedAt" ASC`;
-    out.imports = imports.filter((i) => loose(i.report)).slice(0, limit).map((i) => ({ id: i.id, label: i.archiveName }));
+      SELECT id, COALESCE(report::text, '') AS report, "archiveName" FROM "TakeoutImport" WHERE ${likeAny(Prisma.sql`COALESCE(report::text, '')`, anyCase)} OR ${likeAny(Prisma.sql`"archiveName"`, anyCase)} ORDER BY "startedAt" ASC`;
+    // The archive's own name too, which is the file the admin put in the inbox.
+    out.imports = imports.filter((i) => loose(i.report) || loose(i.archiveName)).slice(0, limit).map((i) => ({ id: i.id, label: i.archiveName }));
   }
   return out;
 }
