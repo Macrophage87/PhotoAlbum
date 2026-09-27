@@ -152,6 +152,7 @@ export async function applyAnnotation(photoId: string, model: string, parsed: An
   // Stored only if nothing about who may be named on it changed since the request was built, checked in the write
   // itself; otherwise nothing of it is kept, the raw answer included.
   const stale = Symbol("stale");
+  const textChanged = Symbol("text changed");
   const reload = Symbol("reload");
   const kept = await db.$transaction(async (tx) => {
     const forget = await forgetState(tx, tombstone.loadedAt);
@@ -188,7 +189,13 @@ export async function applyAnnotation(photoId: string, model: string, parsed: An
         annotationBatched: raw.batched ?? false,
       },
     });
-    if (written.count === 0) throw stale;
+    if (written.count === 0) {
+      // Which it was, for the reason recorded: the text or titles rewritten since the read (a member's edit), or
+      // somebody on it forgotten, renamed or untagged since the request.
+      const now = await tx.photo.findUnique({ where: { id: photoId }, select: { annotationRevision: true, annotationSource: true, annotationSharedAt: true, title: true, membersTitle: true, titleByHelper: true } });
+      const rewritten = now && (now.annotationRevision !== current.annotationRevision || now.annotationSource !== current.annotationSource || now.annotationSharedAt?.getTime() !== current.annotationSharedAt?.getTime() || now.title !== current.title || now.membersTitle !== current.membersTitle || now.titleByHelper !== current.titleByHelper);
+      throw rewritten ? textChanged : stale;
+    }
     // The date guess is written on its own, carrying the state it was judged by: a member who dated the item or
     // settled its estimate after the read is never overwritten. Matching nothing skips only the date; the rest of
     // the answer stands.
@@ -202,6 +209,7 @@ export async function applyAnnotation(photoId: string, model: string, parsed: An
     return true;
   }).catch((err: unknown) => {
     if (err === stale) return false;
+    if (err === textChanged) return "text_changed" as const;
     if (err === reload) return "reload" as const;
     throw err;
   });
@@ -210,7 +218,7 @@ export async function applyAnnotation(photoId: string, model: string, parsed: An
     if (attempts < 3) return applyAnnotation(photoId, model, parsed, raw, { ...opts, tombstone: await loadTombstone(), attempts: attempts + 1 });
   }
   if (kept !== true) {
-    await recordFailure(photoId, "names_changed", { terminal: false });
+    await recordFailure(photoId, kept === "text_changed" ? "text_changed" : "names_changed", { terminal: false });
     // Asked again once the change has settled, so no item is left undescribed for it. A member's "Describe again,
     // replacing ours" goes on being that, under its own key, as `reannotate` queues it — unless the text was written
     // again since it was read: words a member wrote after asking are not the ones they agreed to lose.

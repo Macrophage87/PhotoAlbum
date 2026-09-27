@@ -219,7 +219,7 @@ describe("descriptions that stay in the family", () => {
     who.queued.length = 0;
     await applyAnnotation(p.id, "m", answer, {});
     spy.mockRestore();
-    expect(await db.photo.findUniqueOrThrow({ where: { id: p.id } })).toMatchObject({ title: "Our boat day", titleByHelper: false, annotation: null });
+    expect(await db.photo.findUniqueOrThrow({ where: { id: p.id } })).toMatchObject({ title: "Our boat day", titleByHelper: false, annotation: null, annotationError: "text_changed" });
     // Asked again, against the title as it is now.
     expect(who.queued.map((q) => q.queue)).toContain("annotate-photo");
     await applyAnnotation(p.id, "m", answer, {});
