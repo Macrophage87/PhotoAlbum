@@ -84,6 +84,57 @@ describe("folding the identical copies already in the album", () => {
     expect(kept.takenAt?.toISOString()).toBe("2019-08-12T14:00:00.000Z");
   });
 
+  it("skips a group whose keeper went to the trash meanwhile, copies a setter as it is now, and folds the rest when one group fails", async () => {
+    const user = await db.user.create({ data: { email: "fold@example.com", role: "ADMIN" } });
+    const cousin = await db.user.create({ data: { email: "cousin@example.com", role: "MEMBER" } });
+    const mk = (name: string, hash: string, extra: Record<string, unknown> = {}) =>
+      db.photo.create({ data: { uploaderId: user.id, originalName: name, mimeType: "image/jpeg", storageKey: name, originalPath: `${name}/o.jpg`, sizeBytes: 1, status: "READY", contentHash: hash, ...extra } });
+    const aKeeper = await mk("a1.jpg", "a", { createdAt: new Date("2024-01-01") });
+    const aCopy = await mk("a2.jpg", "a", { createdAt: new Date("2025-01-01"), caption: "From a" });
+    const bKeeper = await mk("b1.jpg", "b", { createdAt: new Date("2024-01-01"), takenAt: new Date("2025-06-01"), takenAtSource: "FILE_MTIME" });
+    await mk("b2.jpg", "b", { createdAt: new Date("2025-01-01"), takenAt: new Date("2019-08-12T14:00:00Z"), takenAtSource: "MANUAL", tzOffsetMin: -240, dateSetById: cousin.id });
+    const cKeeper = await mk("c1.jpg", "c", { createdAt: new Date("2024-01-01") });
+    const cCopy = await mk("c2.jpg", "c", { createdAt: new Date("2025-01-01"), caption: "From c" });
+    const dKeeper = await mk("d1.jpg", "d", { createdAt: new Date("2024-01-01") });
+    await mk("d2.jpg", "d", { createdAt: new Date("2025-01-01"), caption: "From d" });
+    const groups = await duplicateGroups();
+    const order = ["a", "b", "c", "d"];
+    groups.sort((x, y) => order.indexOf(x.contentHash) - order.indexOf(y.contentHash));
+
+    const real = db.photo.findMany.bind(db.photo);
+    const realItems = db.collectionItem.findMany.bind(db.collectionItem);
+    let reads = 0;
+    const spy = vi.spyOn(db.photo, "findMany").mockImplementation((async (args: never) => {
+      const read = await real(args);
+      reads++;
+      // Group a: its keeper goes to the trash after the group was read. Group b: the member who dated the copy is
+      // removed after it was read.
+      if (reads === 1) await db.photo.update({ where: { id: aKeeper.id }, data: { trashedAt: new Date() } });
+      if (reads === 2) await db.user.delete({ where: { id: cousin.id } });
+      return read;
+    }) as never);
+    // Group c fails part-way (after its keeper was filled): the others are still folded.
+    let items = 0;
+    const itemsSpy = vi.spyOn(db.collectionItem, "findMany").mockImplementation((async (args: never) => {
+      if (++items === 2) throw new Error("connection reset");
+      return realItems(args);
+    }) as never);
+    const report = await foldDuplicates(user.id, groups);
+    spy.mockRestore();
+    itemsSpy.mockRestore();
+
+    expect(report).toMatchObject({ groups: 2, failed: 1 });
+    // a: nothing folded into a keeper in the trash; its copy stays.
+    expect(await db.photo.findUniqueOrThrow({ where: { id: aCopy.id } })).toMatchObject({ trashedAt: null });
+    expect((await db.photo.findUniqueOrThrow({ where: { id: aKeeper.id } })).caption).toBeNull();
+    // b: the date came over with its zone, and no setter who is gone.
+    expect(await db.photo.findUniqueOrThrow({ where: { id: bKeeper.id } })).toMatchObject({ takenAtSource: "MANUAL", tzOffsetMin: -240, dateSetById: null });
+    // c failed and is tried again next time; d was folded all the same.
+    expect((await db.photo.findUniqueOrThrow({ where: { id: cCopy.id } })).trashedAt).toBeNull();
+    expect((await db.photo.findUniqueOrThrow({ where: { id: cKeeper.id } })).caption).toBe("From c");
+    expect((await db.photo.findUniqueOrThrow({ where: { id: dKeeper.id } })).caption).toBe("From d");
+  });
+
   it("puts the kept photograph wherever a copy of it had been chosen as the cover", async () => {
     const user = await db.user.create({ data: { email: "fold3@example.com", role: "ADMIN" } });
     const mkTrip = (slug: string) => db.trip.create({ data: { slug, title: slug, startDate: new Date("2025-08-10"), endDate: new Date("2025-08-16"), createdById: user.id } });
