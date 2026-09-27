@@ -16,7 +16,11 @@ function coord(v: unknown): number | undefined {
 export async function parseFit(buffer: Buffer): Promise<ParsedTrack[]> {
   const fit = new FitParser({ force: true, speedUnit: "m/s", lengthUnit: "m", temperatureUnit: "celsius", elapsedRecordField: false, mode: "list" });
   const ab = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer;
-  const data = await fit.parseAsync(ab);
+  // The parser rejects a cut-off or corrupt file with a bare string ("File data exceeds input length"), which would
+  // reach the member as nothing at all.
+  const data = await fit.parseAsync(ab).catch((err: unknown) => {
+    throw new Error("This FIT file is incomplete or damaged. Copy it from the device again and import that.", { cause: err });
+  });
   const records = data.records ?? [];
   const points: TrackPoint[] = [];
   for (const r of records) {
