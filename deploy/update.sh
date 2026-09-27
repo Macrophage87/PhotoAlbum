@@ -20,12 +20,14 @@
 #      stops the deploy and is not kept,
 #   3. `git reset --hard <commit>` (the branch is the source of truth; .env
 #      and the compose override are untracked and survive the reset),
-#   3b. make FORGET_KEY in .env if it has none (printed loudly: back it up),
+#   3b. make FORGET_KEY in .env if it has none (printed loudly: back it up), unless the database already
+#      keeps forgotten names under one: then stop, for the original to be put back,
 #   4. `docker compose up --build -d` (the container applies migrations at
 #      start; in-flight photo processing gets 45 s to finish),
 #   5. wait for /api/health, then prune dangling images and day-old build cache.
 #
 # Runs as a user with sudo (the deploy login) or as root.
+# shellcheck disable=SC2016 # the single-quoted sh -c scripts expand in the container or root's shell, on purpose
 set -euo pipefail
 
 : "${APP_DIR:?set APP_DIR, e.g. /cieply/sites/cieply.com/PhotoAlbum}"
@@ -117,11 +119,47 @@ echo "== at $(as_owner git rev-parse --short HEAD) =="
 
 # 3b. FORGET_KEY: the secret forgotten people's names are hashed under (docs/DEPLOY.md). Made once if .env has none.
 # It is not in the database dumps above, so it has to be backed up with .env; lost or changed, names forgotten under
-# it are no longer recognised, and forgetting and the AI helper pause until it is put back.
+# it are no longer recognized, and forgetting and the AI helper pause until it is put back.
 if as_root test -f .env && ! as_root grep -qE '^FORGET_KEY=.+' .env; then
+  # A database that already keeps names under a key needs that key put back, never a new one. Ask it (step 4 starts
+  # it anyway); to_jsonb, so a database from before the forget key, without those columns, reads as having none.
+  KEPT=$(as_root docker compose up -d --wait db >/dev/null 2>&1 &&
+    as_root docker compose exec -T db sh -c 'exec psql -XAtq -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' <<'SQL'
+SELECT to_regclass('"AppSetting"') IS NOT NULL AS has_setting, to_regclass('"ForgottenName"') IS NOT NULL AS has_names \gset
+\if :has_setting
+SELECT count(*) AS fingerprints FROM "AppSetting" s WHERE to_jsonb(s)->>'forgetKeyFingerprint' LIKE '1:%' \gset
+\else
+\set fingerprints 0
+\endif
+\if :has_names
+SELECT count(*) AS v1_names FROM "ForgottenName" n WHERE (to_jsonb(n)->>'keyVersion')::int = 1 \gset
+\else
+\set v1_names 0
+\endif
+SELECT CASE WHEN :fingerprints + :v1_names > 0 THEN 'kept' ELSE 'none' END;
+SQL
+  ) || KEPT=
+  case "$KEPT" in
+    none) ;;
+    kept)
+      echo "!! $APP_DIR/.env has no FORGET_KEY, but its database already keeps forgotten names under one. Not making a" >&2
+      echo "!! new key: put the original FORGET_KEY back in .env from its backup, then deploy again. Under any other key" >&2
+      echo "!! those names are not recognized, and forgetting and the AI helper stay paused. Nothing was rebuilt." >&2
+      exit 1
+      ;;
+    *)
+      echo "!! $APP_DIR/.env has no FORGET_KEY, and the database could not be asked whether it keeps names under one." >&2
+      echo "!! Not making a key blind: put the original back from its backup (or, if this album never had one, add" >&2
+      echo "!! FORGET_KEY= with the output of openssl rand -base64 32), then deploy again. Nothing was rebuilt." >&2
+      exit 1
+      ;;
+  esac
   KEY=$(openssl rand -base64 32)
+  # Handed over on stdin (printf is a bash builtin), never as an argument, so it shows in neither ps nor sudo's log.
   # Written in place (not replaced), so .env keeps its owner and mode.
-  as_root sh -c "tmp=\$(mktemp) && grep -vE '^FORGET_KEY=' .env > \"\$tmp\"; printf 'FORGET_KEY=%s\n' '$KEY' >> \"\$tmp\" && cat \"\$tmp\" > .env && rm -f \"\$tmp\""
+  printf 'FORGET_KEY=%s\n' "$KEY" |
+    as_root sh -c 'tmp=$(mktemp) && grep -vE "^FORGET_KEY=" .env > "$tmp"; cat >> "$tmp" && cat "$tmp" > .env && rm -f "$tmp"'
+  unset KEY
   echo "!! made a new FORGET_KEY in $APP_DIR/.env. Back it up now, somewhere other than $BACKUP_DIR (the database dumps do not contain it)." >&2
 fi
 
