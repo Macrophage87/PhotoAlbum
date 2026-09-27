@@ -224,6 +224,16 @@ describe("words around a first name", () => {
     expect(nameMatcher(["Grace Kelly"]).scrub("Singing Amazing Grace with Grace Kelly")).toBe("Singing Amazing Grace with a family member");
     expect(nameMatcher(["Grandma Ruth"]).scrub("Aunt Ruth waves", { tagged: true })).toBe("Aunt Ruth waves");
     expect(nameMatcher(["Will Turner"]).scrub("Will you look at that!", { tagged: true })).toBe("Will you look at that!");
+    // A name that is also a verb, used as one, on their own photograph; anything a person does is still them.
+    for (const [name, text, want] of [
+      ["Will Turner", "Will be fun. Will anyone swim?", "Will be fun. Will anyone swim?"],
+      ["May Lee", "May you have many more.", "May you have many more."],
+      ["Hope Kent", "Hope you like it!", "Hope you like it!"],
+      ["Will Turner", "Will swam faster than Ben.", "A family member swam faster than Ben."],
+      ["Will Turner", "Will and Ben at the lake.", "A family member and Ben at the lake."],
+      ["Hope Kent", "Hope hugs the dog.", "A family member hugs the dog."],
+      ["May Lee", "May waves at the camera.", "A family member waves at the camera."],
+    ]) expect([name, nameMatcher([name]).scrub(text, { tagged: true })]).toEqual([name, want]);
     expect(nameMatcher(["Jack Brown"]).scrub("Jack in the box", { tagged: true })).toBe("Jack in the box");
   });
 

@@ -407,6 +407,13 @@ export function isPlaceOrDateWord(word: string): boolean {
   return /^\d/u.test(w) || PLACE_NAMES.has(w) || WHEN_WORDS.has(w);
 }
 
+/** The words after a name that make it the verb it also is: a pronoun, or "be" and "not" after "Will". */
+const VERB_USES: Record<string, RegExp> = {
+  will: /^[ \t]+(?:you|we|they|it|he|she|i|this|that|these|those|there|be|not|anyone|anybody|everyone|everybody|someone|somebody)(?![\p{L}\p{M}'’])/iu,
+  may: /^[ \t]+(?:you|we|they|it|he|she|i|all|be)(?![\p{L}\p{M}'’])/iu,
+  hope: /^[ \t]+(?:you|we|they|it|he|she|i|so|everyone|everybody)(?![\p{L}\p{M}'’])/iu,
+};
+
 /**
  * Sayings and words that happen to be a first name: "Uncle Sam", "the Book of Ruth", "Amazing Grace", "Jack in the
  * box", and "Will" asking something ("Will you look at that!").
@@ -418,7 +425,10 @@ function isIdiom(before: string, match: string, after: string, ownPhotos = false
   if (m === "ruth" && /(?<![\p{L}])book[ \t]+of[ \t]+$/iu.test(before)) return true;
   if (m === "grace" && /(?<![\p{L}])amazing[ \t]+$/iu.test(before)) return true;
   if (m === "jack" && /^[ \t]+in[ \t]+the[ \t]+box(?![\p{L}])/iu.test(after)) return true;
-  if (m === "will" && /^[ \t]+(?:you|we|they|it|he|she|i|this|that|there)(?![\p{L}\p{M}'’])/iu.test(after)) return true;
+  // A name that is also a verb, used as one ("Will you…", "May it be…", "Hope you like it"): only before words that
+  // can follow the verb and never a person's name, so "Will swam faster" and "Hope the dog" are still them.
+  const verb = VERB_USES[m];
+  if (verb && verb.test(after)) return true;
   // An epithet: "Catherine the Great", "Peter The Great", "Alfred the Great".
   if (/^[ \t]+the[ \t]+great(?![\p{L}\p{M}])/iu.test(after)) return true;
   // The apostles: "Saints Peter and Paul", "Peter And Paul Church".
