@@ -427,8 +427,10 @@ CI tested). The script skips a commit older than the one already deployed
 copy of `update.sh` (when it is new enough to take it), dumps the database
 to a `backups/` folder next to the checkout and stops if the dump fails,
 resets the checkout to the commit (`.env` and `docker-compose.override.yml` are
-untracked and survive), runs `docker compose up --build -d`, waits for
-`/api/health`, and prunes old images. A commit that is no longer on the
+untracked and survive), makes a `FORGET_KEY` in `.env` if there is none
+(and stops instead if the database already keeps names forgotten under
+one), runs `docker compose up --build -d`, waits for `/api/health`, and
+prunes old images. A commit that is no longer on the
 branch (force-pushed away) is skipped with a note; if the branch was
 rewound past what is deployed, the older commit is deployed. A deploy rebuilds the image, so expect a short
 outage of a minute or two per push; in-flight photo processing gets 45
