@@ -130,7 +130,9 @@ export function CollectionGallery({ collectionId, slug, photos, editable, emptyM
           )}
           {mode === "arrange" && (
             <>
-              <span className="text-muted">Drag photos into order</span>
+              {/* A phone cannot drag, so it is told about the arrows instead. */}
+              <span className="text-muted pointer-coarse:hidden" data-testid="arrange-hint">Drag photos into order, or use the ‹ › arrows</span>
+              <span className="text-muted hidden pointer-coarse:inline" data-testid="arrange-hint-touch">Use the ‹ › arrows on each photo to put them in order</span>
               <Button size="sm" disabled={pending} onClick={() => arrangeAnd(() => reorderCollection(slug, order.map((p) => p.itemId)))}>Save order</Button>
               <Button variant="ghost" size="sm" onClick={() => setMode("view")}>Cancel</Button>
             </>
@@ -154,10 +156,11 @@ export function CollectionGallery({ collectionId, slug, photos, editable, emptyM
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src={p.thumbUrl} alt="" className="w-full h-full object-cover pointer-events-none" />
               <span className="absolute top-1 left-1 text-[10px] bg-black/60 text-white rounded px-1.5 py-0.5">{i + 1}</span>
-              {/* Dragging does not exist on a phone and is awkward with a keyboard, so the same move is a button. */}
+              {/* Dragging does not exist on a phone and is awkward with a keyboard, so the same move is a button: at
+                  least 24px to aim a mouse at, and a full 44px for a finger. */}
               <span className="absolute inset-x-1 bottom-1 flex justify-between">
-                <button type="button" aria-label={`Move ${p.caption ?? p.alt} earlier`} disabled={i === 0} className="rounded bg-black/60 text-white px-1.5 text-xs disabled:opacity-30" onClick={() => swap(i, i - 1)}>‹</button>
-                <button type="button" aria-label={`Move ${p.caption ?? p.alt} later`} disabled={i === order.length - 1} className="rounded bg-black/60 text-white px-1.5 text-xs disabled:opacity-30" onClick={() => swap(i, i + 1)}>›</button>
+                <button type="button" aria-label={`Move ${p.caption ?? p.alt} earlier`} disabled={i === 0} className="inline-flex items-center justify-center min-w-6 min-h-6 pointer-coarse:min-w-11 pointer-coarse:min-h-11 rounded bg-black/60 text-white px-1.5 text-sm pointer-coarse:text-lg disabled:opacity-30" onClick={() => swap(i, i - 1)}>‹</button>
+                <button type="button" aria-label={`Move ${p.caption ?? p.alt} later`} disabled={i === order.length - 1} className="inline-flex items-center justify-center min-w-6 min-h-6 pointer-coarse:min-w-11 pointer-coarse:min-h-11 rounded bg-black/60 text-white px-1.5 text-sm pointer-coarse:text-lg disabled:opacity-30" onClick={() => swap(i, i + 1)}>›</button>
               </span>
             </li>
           ))}
