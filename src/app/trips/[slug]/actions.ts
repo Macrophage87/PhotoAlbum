@@ -20,6 +20,7 @@ import { descriptionStaysHelpers } from "@/lib/annotation/helper-text";
 import { deleteTripById } from "@/lib/trips/delete";
 import { uniqueSlug } from "@/lib/trips/slug";
 import { NAME_NOT_TO_BE_SHOWN, namesSomebodyRestricted } from "@/lib/people/forget";
+import { albumNameCheck, NAME_CHECKS, tripNameCheck } from "@/lib/people/name-check";
 import { isCoverable } from "@/lib/photos/cover";
 
 /** The trip, where this member may change it: whoever made it, and admins. One being deleted is gone already. */
@@ -209,10 +210,33 @@ export async function setTripDescription(slug: string, text: string): Promise<vo
  */
 export async function setTripDescriptionShared(slug: string, everyone: boolean): Promise<void> {
   const trip = await loadEditableTrip(slug);
-  // Never the helper's description while it names somebody who may not be named there (see namesSomebodyRestricted);
-  // a member's own words are theirs to show, as their captions are.
-  if (everyone && trip.descriptionByHelper && (await namesSomebodyRestricted([trip.description]))) throw new Error(NAME_NOT_TO_BE_SHOWN);
+  // Never the helper's description while it names somebody who may not be named there (see namesSomebodyRestricted),
+  // checked at the trip's level (name-check.ts); a member's own words are theirs to show, as their captions are.
+  if (everyone && trip.descriptionByHelper && (await namesSomebodyRestricted([trip.description], [], tripNameCheck(trip, await albumNameCheck())))) throw new Error(NAME_NOT_TO_BE_SHOWN);
   await db.trip.update({ where: { id: trip.id }, data: { descriptionMembersOnly: !everyone, descriptionSharedAt: everyone ? new Date() : null } });
+  revalidatePath(`/trips/${slug}`, "layout");
+}
+
+/**
+ * How names are checked before this trip's words are shown to everyone: the album's ("INHERIT"), or its own (see
+ * lib/people/name-check). Whoever arranges the trip decides, recorded with who and when. Made stricter than it was,
+ * what the trip already shows is checked again in the background at once (and by the nightly sweep, should that not
+ * run); made relaxed, nothing kept for the family is let out by it.
+ */
+export async function setTripNameCheck(slug: string, fd: FormData): Promise<void> {
+  const user = await requireUserOrThrow();
+  const trip = await loadEditableTrip(slug);
+  const chosen = z.enum(["INHERIT", ...NAME_CHECKS]).parse(fd.get("nameCheck"));
+  const level = chosen === "INHERIT" ? null : chosen;
+  const album = await albumNameCheck();
+  const stricter = tripNameCheck(trip, album) === "RELAXED" && tripNameCheck({ nameCheck: level }, album) === "STRICT";
+  const now = new Date();
+  await db.trip.update({ where: { id: trip.id, deletingAt: null }, data: { nameCheck: level, nameCheckSetAt: now, nameCheckSetById: user.id } }).catch(tripGone);
+  if (stricter) {
+    // Noted album-wide too, so the nightly sweep checks again should the job below never run.
+    await db.appSetting.upsert({ where: { id: "app" }, create: { id: "app", nameCheckTightenedAt: now }, update: { nameCheckTightenedAt: now } });
+    await rejudgeFromAction({ recheck: { tripId: trip.id } });
+  }
   revalidatePath(`/trips/${slug}`, "layout");
 }
 

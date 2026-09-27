@@ -7,7 +7,9 @@ import { withTryLock } from "@/lib/advisory-lock";
 import type { StoredAnnotation } from "./schema";
 import { helperText, knownNameEntries, knownNames, pastHelperTitles, sameTitle, titleHits, titleIsHelpers, titleKey, unknownTitleAside, warnStuckTitle, type PrivateContainer } from "./members-only";
 import { nameMatcher, namePatterns, spokenWords, titleWords } from "./names";
-import { namesSomebodyRestricted } from "@/lib/people/restricted";
+import { namesSomebodyRestricted, restrictedMatchers } from "@/lib/people/restricted";
+import { albumNameCheck, anyRelaxed, photoNameCheck, tripNameCheck, type NameCheck } from "@/lib/people/name-check";
+import type { StrictOptions } from "@/lib/people/strict-names";
 
 /**
  * Judging again what was written before something changed.
@@ -40,6 +42,11 @@ export type RejudgeJob = {
   tripId?: string;
   collectionId?: string;
   sweep?: boolean;
+  /**
+   * A name check made stricter (name-check.ts): what is shown to everyone, on the trip given or album-wide, checked
+   * again at the level it has now (see `rejudgeNameCheck`).
+   */
+  recheck?: { tripId?: string };
 };
 
 /** `missed`: writes that could not land after judging again; while there are any, nothing is recorded as judged. */
@@ -66,14 +73,14 @@ type Container = { id: string; title: string; visibility: string };
 type Row = {
   id: string; updatedAt: Date; kind: string; context: string | null; title: string | null; titleByHelper: boolean | null; membersTitle: string | null; annotation: unknown; annotationRevision: number;
   annotationMembersOnly: boolean; annotationTitleOnly: boolean; annotationTitleWords: string[]; annotationTitleFrom: string[]; annotationSharedAt: Date | null;
-  trip: Container | null; collections: { collection: Container }[];
+  trip: (Container & { nameCheck: NameCheck | null }) | null; collections: { collection: Container }[];
 };
 
 const container = { select: { id: true, title: true, visibility: true } } as const;
 const rowSelect = {
   id: true, updatedAt: true, kind: true, context: true, title: true, titleByHelper: true, membersTitle: true, annotation: true, annotationRevision: true,
   annotationMembersOnly: true, annotationTitleOnly: true, annotationTitleWords: true, annotationTitleFrom: true, annotationSharedAt: true,
-  trip: container, collections: { select: { collection: container } },
+  trip: { select: { id: true, title: true, visibility: true, nameCheck: true } }, collections: { select: { collection: container } },
 } as const;
 
 /** Lets a request in: the worker may share its process with the web server. */
@@ -319,10 +326,12 @@ async function tagged(photoId: string): Promise<boolean> {
  * title the same way.
  */
 export async function rejudgeTitles(scope: { tripId?: string; collectionId?: string; photoIds?: string[] } = {}, signal?: AbortSignal): Promise<RejudgeResult> {
-  const result = empty();
+  // What joined a stricter place is checked at its level too (see `rejudgeNameCheck`), while anything is relaxed.
+  const result = (await anyRelaxed()) ? await rejudgeNameCheck(scope, signal) : empty();
   const where: Prisma.PhotoWhereInput = scope.photoIds ? { id: { in: scope.photoIds } } : scope.tripId ? { tripId: scope.tripId } : scope.collectionId ? { collections: { some: { collectionId: scope.collectionId } } } : {};
   const privateWords = await privateTitleWords();
   const names = nameMatcher((await knownNames()).flatMap(namePatterns));
+  const album = await albumNameCheck();
   const hitsOf = (r: Row) => titleHits(textOf(r), privateContainers(r));
   const decide = async (r: Row) => {
     if (r.annotationSharedAt) return null;
@@ -342,8 +351,9 @@ export async function rejudgeTitles(scope: { tripId?: string; collectionId?: str
     // on it), any name the album knows, the notes, anybody tagged.
     const text = textOf(r);
     if ([...spokenWords(text)].some((w) => privateWords.has(w))) continue;
-    // (All of its fields run together here, keywords too: judged as a list, where nobody else's full name excuses.)
-    if (r.context?.trim() || names?.(text) || (await tagged(r.id)) || (await namesSomebodyRestricted([], [text]))) {
+    // (All of its fields run together here, keywords too: judged as a list, where nobody else's full name excuses; at
+    // the item's level, name-check.ts.)
+    if (r.context?.trim() || names?.(text) || (await tagged(r.id)) || (await namesSomebodyRestricted([], [text], photoNameCheck(r, album)))) {
       await db.photo.updateMany({ where: { id: r.id, updatedAt: r.updatedAt, annotationTitleOnly: true }, data: { annotationTitleOnly: false, annotationTitleWords: [], annotationTitleFrom: [] } });
       continue;
     }
@@ -366,6 +376,106 @@ export async function rejudgeTitles(scope: { tripId?: string; collectionId?: str
       result.descriptions += (await db.activity.updateMany({ where: { id: a.id, updatedAt: a.updatedAt, descriptionTitleOnly: true }, data: named ? { descriptionTitleOnly: false, descriptionTitleWords: [] } : { descriptionMembersOnly: false, descriptionTitleOnly: false, descriptionTitleWords: [] } })).count;
     }
   }
+  return result;
+}
+
+/**
+ * The words of an item that are shown to everyone, as the check that let them out read them: the share guard's for
+ * words a member showed (withoutWithdrawnNames: the helper's text, its title on the item, keywords, tags and objects),
+ * the judgement's for the rest (judgeHelperText). A title a member typed is theirs to publish and is not asked about.
+ */
+function shownOf(r: Row): { texts: string[]; lists: string[] } {
+  const a = (r.annotation ?? {}) as Partial<StoredAnnotation>;
+  const title = r.kind !== "EXTERNAL_VIDEO" && r.titleByHelper !== false ? r.title : null;
+  const texts = r.annotationSharedAt ? [title, a.caption, a.description, a.place, a.activity, a.visibleText, a.mood] : [title, a.title, a.caption, a.description, a.place];
+  const lists = r.annotationSharedAt ? [a.searchSummary, ...(a.tags ?? []), ...(a.objects ?? [])] : [a.searchSummary, ...(a.tags ?? [])];
+  const present = (l: unknown[]) => l.filter((t): t is string => typeof t === "string" && t.trim() !== "");
+  return { texts: present(texts), lists: present(lists) };
+}
+
+/**
+ * A name check made stricter (a trip, or the album; name-check.ts), or an item newly shown where the check is
+ * stricter (a photograph joining a public collection, a collection made public, a photograph moving trips): what is
+ * shown to everyone there — the helper's text (shown by a member or judged public by itself), its place guesses, the
+ * helper's descriptions of trips, activities and collections — is checked again by the strict matcher, and whatever it
+ * holds is taken back for the family: shown to everyone no more (`annotationSharedAt`, `descriptionSharedAt` cleared),
+ * the helper's title off the item. Only where the level is STRICT now; what is still RELAXED is left as it is.
+ *
+ * This is the one place a member's "show to everyone" is undone by the album: the words were let out under a check
+ * that no longer applies there. Nothing is ever made public here. Writes are guarded on the words and flags as read,
+ * and one that misses is read and judged again, as `settle` does.
+ */
+export async function rejudgeNameCheck(scope: { tripId?: string; collectionId?: string; photoIds?: string[] } = {}, signal?: AbortSignal): Promise<RejudgeResult> {
+  const result = empty();
+  const tests = await restrictedMatchers("STRICT");
+  if (!tests.length) return result;
+  const album = await albumNameCheck();
+  const holds = (texts: string[], lists: string[] = []) => tests.some((finds) => texts.some((t) => finds(t)) || lists.some((t) => finds(t, { list: true } satisfies StrictOptions)));
+  const where: Prisma.PhotoWhereInput = scope.photoIds ? { id: { in: scope.photoIds } } : scope.tripId ? { tripId: scope.tripId } : scope.collectionId ? { collections: { some: { collectionId: scope.collectionId } } } : {};
+
+  for await (const first of annotated({ ...where, annotationMembersOnly: false }, signal)) {
+    let r: Row | null = first;
+    let settled = false;
+    for (let attempt = 0; attempt < ATTEMPTS && r; attempt++) {
+      if (r.annotationMembersOnly || photoNameCheck(r, album) !== "STRICT") { settled = true; break; }
+      const shown = shownOf(r);
+      if (!holds(shown.texts, shown.lists)) { settled = true; break; }
+      const data = { annotationMembersOnly: true, annotationTitleOnly: false, annotationTitleWords: [], annotationTitleFrom: [], annotationSharedAt: null, ...(await titleData(r, (t) => holds([t]))) };
+      const landed = await db.photo.updateMany({ where: { id: r.id, annotationRevision: r.annotationRevision, annotationSharedAt: r.annotationSharedAt, annotationMembersOnly: false, title: r.title, titleByHelper: r.titleByHelper, membersTitle: r.membersTitle }, data });
+      if (landed.count) { result.photos++; settled = true; break; }
+      r = await reread(r.id);
+    }
+    if (r && !settled) miss(result, first.id);
+  }
+
+  // Place guesses shown beside the pin, guarded on their words.
+  let cursor: string | null = null;
+  for (;;) {
+    const guesses: { id: string; placeEstimateName: string | null; placeEstimateNote: string | null; trip: { nameCheck: NameCheck | null } | null; collections: { collection: { visibility: string } }[] }[] = await db.photo.findMany({ where: { ...where, ...HELD_GUESS, placeEstimateMembersOnly: false }, orderBy: { id: "asc" }, take: BATCH, ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}), select: { id: true, placeEstimateName: true, placeEstimateNote: true, trip: { select: { nameCheck: true } }, collections: { select: { collection: { select: { visibility: true } } } } } });
+    if (!guesses.length) break;
+    for (const g of guesses) {
+      await pace(signal);
+      if (photoNameCheck(g, album) !== "STRICT" || !holds([[g.placeEstimateName, g.placeEstimateNote].filter(Boolean).join("\n")])) continue;
+      const done = await db.photo.updateMany({ where: { id: g.id, ...HELD_GUESS, placeEstimateMembersOnly: false, placeEstimateName: g.placeEstimateName, placeEstimateNote: g.placeEstimateNote }, data: { placeEstimateMembersOnly: true } });
+      // Rewritten since it was read: a new guess is judged when it is written.
+      result.places += done.count;
+    }
+    cursor = guesses[guesses.length - 1].id;
+  }
+
+  // The helper's descriptions (a member's own are theirs to show, as at "show to everyone"), at their own level: a
+  // trip's and its activities' by the trip, a collection's by the album.
+  if (scope.photoIds || scope.collectionId) return result;
+  const open = { descriptionByHelper: true, descriptionMembersOnly: false, description: { not: null } } as const;
+  const trips = await db.trip.findMany({ where: { ...(scope.tripId ? { id: scope.tripId } : {}) }, select: { id: true, nameCheck: true, description: true, descriptionMembersOnly: true, descriptionByHelper: true, descriptionSharedAt: true } });
+  for (const t of trips) {
+    await pace(signal);
+    if (tripNameCheck(t, album) !== "STRICT") continue;
+    if (t.descriptionByHelper && !t.descriptionMembersOnly && t.description && holds([t.description])) {
+      result.descriptions += (await db.trip.updateMany({ where: { id: t.id, ...open, description: t.description, descriptionSharedAt: t.descriptionSharedAt }, data: { descriptionMembersOnly: true, descriptionSharedAt: null } })).count;
+    }
+    for (const a of await db.activity.findMany({ where: { tripId: t.id, ...open }, select: { id: true, description: true, descriptionSharedAt: true } })) {
+      if (!holds([a.description!])) continue;
+      result.descriptions += (await db.activity.updateMany({ where: { id: a.id, ...open, description: a.description, descriptionSharedAt: a.descriptionSharedAt }, data: { descriptionMembersOnly: true, descriptionTitleOnly: false, descriptionTitleWords: [], descriptionSharedAt: null } })).count;
+    }
+  }
+  if (scope.tripId || album !== "STRICT") return result;
+  for (const c of await db.collection.findMany({ where: open, select: { id: true, description: true, descriptionSharedAt: true } })) {
+    await pace(signal);
+    if (!holds([c.description!])) continue;
+    result.descriptions += (await db.collection.updateMany({ where: { id: c.id, ...open, description: c.description, descriptionSharedAt: c.descriptionSharedAt }, data: { descriptionMembersOnly: true, descriptionSharedAt: null } })).count;
+  }
+  return result;
+}
+
+/**
+ * The whole album checked again after a name check was made stricter, recorded once nothing missed; the sweep does
+ * it while a tightening is later than the last such check (a job that could not be queued, or did not finish).
+ */
+async function recheckAlbum(signal?: AbortSignal): Promise<RejudgeResult> {
+  const started = new Date();
+  const result = await rejudgeNameCheck({}, signal);
+  if (!result.missed) await db.appSetting.upsert({ where: { id: "app" }, create: { id: "app", nameCheckRecheckedAt: started }, update: { nameCheckRecheckedAt: started } });
   return result;
 }
 
@@ -465,7 +575,7 @@ export async function rejudgeSweep(signal?: AbortSignal): Promise<RejudgeResult>
 async function sweepOnce(signal?: AbortSignal): Promise<RejudgeResult> {
   const started = new Date();
   await dropLegacyRejudgeJobs();
-  const setting = await db.appSetting.findUnique({ where: { id: "app" }, select: { membersOnlyMatcher: true, membersOnlyNames: true, membersOnlyJudgedAt: true } });
+  const setting = await db.appSetting.findUnique({ where: { id: "app" }, select: { membersOnlyMatcher: true, membersOnlyNames: true, membersOnlyJudgedAt: true, nameCheckTightenedAt: true, nameCheckRecheckedAt: true } });
   const entries = await knownNameEntries();
   const judged = new Set(setting?.membersOnlyNames ?? []);
   let result = empty();
@@ -489,6 +599,8 @@ async function sweepOnce(signal?: AbortSignal): Promise<RejudgeResult> {
     for (const c of collections) result = add(result, await rejudgeTitles({ collectionId: c.id }, signal));
     for (let i = 0; i < moved.length; i += BATCH) result = add(result, await rejudgeTitles({ photoIds: moved.slice(i, i + BATCH).map((p) => p.id) }, signal));
   }
+  // A name check made stricter since the album was last checked again after one: the whole album, now.
+  if (setting?.nameCheckTightenedAt && (!setting.nameCheckRecheckedAt || setting.nameCheckTightenedAt > setting.nameCheckRecheckedAt)) result = add(result, await recheckAlbum(signal));
   if (!result.missed) await recordJudged(entries.map((e) => e.key), { membersOnlyMatcher: MATCHER_VERSION, membersOnlyJudgedAt: started });
   else console.warn(`[rejudge] ${result.missed} write(s) kept missing (${(result.missedIds ?? []).slice(0, 50).join(", ")}); the next sweep judges them again`);
   return result;
@@ -501,7 +613,7 @@ async function sweepOnce(signal?: AbortSignal): Promise<RejudgeResult> {
  */
 export async function enqueueRejudge(job: RejudgeJob): Promise<void> {
   const ids = (xs?: string[]) => [...(xs ?? [])].sort().join("|");
-  const key = job.sweep ? "sweep" : job.tripId ? `trip:${job.tripId}` : job.collectionId ? `collection:${job.collectionId}` : job.people || job.members ? `people:${ids(job.people)}:members:${ids(job.members)}` : "all";
+  const key = job.sweep ? "sweep" : job.recheck ? `recheck:${job.recheck.tripId ?? "album"}` : job.tripId ? `trip:${job.tripId}` : job.collectionId ? `collection:${job.collectionId}` : job.people || job.members ? `people:${ids(job.people)}:members:${ids(job.members)}` : "all";
   await enqueue(QUEUES.rejudgeText, job, { singletonKey: `rejudge:${key}`.slice(0, 200), singletonSeconds: 10, singletonNextSlot: true, retryLimit: 3, retryDelay: 30 });
 }
 
@@ -528,6 +640,7 @@ export async function rejudgeLater(job: RejudgeJob): Promise<boolean> {
  */
 export async function rejudgeText(job: RejudgeJob, signal?: AbortSignal): Promise<RejudgeResult> {
   if (job.sweep) return rejudgeSweep(signal);
+  if (job.recheck) return job.recheck.tripId ? rejudgeNameCheck({ tripId: job.recheck.tripId }, signal) : recheckAlbum(signal);
   if (job.tripId || job.collectionId) return rejudgeTitles({ tripId: job.tripId, collectionId: job.collectionId }, signal);
   if (job.people || job.members) {
     const { names, owners } = await namesOfJob(job);

@@ -27,6 +27,7 @@ import { unpermittedNameScrub } from "@/lib/people/unpermitted";
 import { forgetTrackFiles } from "@/lib/tracks/files";
 import { isCoverable } from "@/lib/photos/cover";
 import { NAME_NOT_TO_BE_SHOWN, namesSomebodyRestricted } from "@/lib/people/forget";
+import { nameCheckForContainer, nameCheckForTrip } from "@/lib/people/name-check";
 
 /** An activity is part of the shape of a trip, so it is the trip's maker (and admins) who arrange them. */
 async function loadTrip(slug: string) {
@@ -186,9 +187,9 @@ export async function setActivityDescriptionShared(slug: string, id: string, eve
   const trip = await loadTrip(slug);
   const activity = await db.activity.findFirst({ where: { id, tripId: trip.id }, select: { id: true, description: true, descriptionByHelper: true } });
   if (!activity) throw new Error("Activity not found");
-  // Never the helper's description while it names somebody who may not be named there (see namesSomebodyRestricted);
-  // a member's own words are theirs to show, as their captions are.
-  if (everyone && activity.descriptionByHelper && (await namesSomebodyRestricted([activity.description]))) throw new Error(NAME_NOT_TO_BE_SHOWN);
+  // Never the helper's description while it names somebody who may not be named there (see namesSomebodyRestricted),
+  // checked at its trip's level (name-check.ts); a member's own words are theirs to show, as their captions are.
+  if (everyone && activity.descriptionByHelper && (await namesSomebodyRestricted([activity.description], [], await nameCheckForTrip(trip.id)))) throw new Error(NAME_NOT_TO_BE_SHOWN);
   await db.activity.update({ where: { id }, data: { descriptionMembersOnly: !everyone, descriptionTitleOnly: false, descriptionSharedAt: everyone ? new Date() : null } });
   revalidatePath(`/trips/${slug}/activities/${id}`);
 }
@@ -240,6 +241,7 @@ export async function describeActivityWithAi(slug: string, id: string, note?: st
     // alone does not open.
     previous: Boolean(activity.description && !activity.descriptionByHelper && activity.descriptionMembersOnly),
     privateTitles: activity.trip.visibility === "PUBLIC" ? [] : [activity.trip.title],
+    level: await nameCheckForContainer("activity", id),
   });
   // Somebody on these photographs forgotten, renamed or no longer to be named while it was being written, or anybody
   // forgotten at all: its answer may name them, so it is not kept.

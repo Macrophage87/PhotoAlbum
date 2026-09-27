@@ -9,7 +9,9 @@ import { Button, ButtonLink, Card, ConfirmSubmitButton, Input, Label } from "@/c
 import { photoUrl } from "@/lib/photos/urls";
 import { chosenTripCover, coverFor } from "@/lib/trips/queries";
 import { familyMembers } from "@/lib/people/members";
-import { changeTripSlug, deleteTrip, detachExposedFromCollections, regeotagPhotos, rotateShareToken, updateTrip } from "../actions";
+import { changeTripSlug, deleteTrip, detachExposedFromCollections, regeotagPhotos, rotateShareToken, setTripNameCheck, updateTrip } from "../actions";
+import { NameCheckChoice } from "@/components/people/NameCheckChoice";
+import { albumNameCheck } from "@/lib/people/name-check";
 import { OptOutToggle } from "@/components/annotation/OptOutToggle";
 import { visibilityWarnings } from "@/lib/visibility/settings";
 import Link from "next/link";
@@ -41,6 +43,8 @@ export default async function TripSettingsPage({ params, searchParams }: PagePro
   const detach = detachExposedFromCollections.bind(null, slug);
   // What the trip's own photos say about the ones that arrived without a date.
   const undated = await guessDatesForTrip(trip.id);
+  const nameCheck = await db.trip.findUnique({ where: { id: trip.id }, select: { nameCheck: true, nameCheckSetAt: true, nameCheckSetById: true } });
+  const nameCheckBy = nameCheck?.nameCheckSetById ? await db.user.findUnique({ where: { id: nameCheck.nameCheckSetById }, select: { name: true, email: true } }) : null;
 
   return (
     <div className="max-w-2xl space-y-10">
@@ -139,6 +143,17 @@ export default async function TripSettingsPage({ params, searchParams }: PagePro
       <section>
         <h2 className="font-display text-xl font-semibold mb-2">AI descriptions</h2>
         <OptOutToggle target={{ kind: "trip", id: trip.id }} initial={trip.annotationOptOut} />
+      </section>
+
+      <section>
+        <h2 className="font-display text-xl font-semibold mb-2">Names in shared words</h2>
+        <NameCheckChoice
+          action={setTripNameCheck.bind(null, slug)}
+          current={nameCheck?.nameCheck ?? "INHERIT"}
+          inherit={await albumNameCheck()}
+          changed={nameCheck?.nameCheckSetAt ? { by: nameCheckBy ? (nameCheckBy.name ?? nameCheckBy.email) : "a former member", at: nameCheck.nameCheckSetAt } : null}
+          testId="trip-name-check"
+        />
       </section>
 
       <section>

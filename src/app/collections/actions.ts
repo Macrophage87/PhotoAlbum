@@ -13,6 +13,7 @@ import { requireUserOrThrow } from "@/lib/auth/viewer";
 import { generateToken } from "@/lib/auth/tokens";
 import { uniqueSlug } from "@/lib/trips/slug";
 import { NAME_NOT_TO_BE_SHOWN, namesSomebodyRestricted } from "@/lib/people/forget";
+import { albumNameCheck } from "@/lib/people/name-check";
 import { fieldErrors } from "@/lib/trips/validation";
 import { collectionInputFromForm } from "@/lib/collections/validation";
 import { canEditContainer, editableMediaIds, NOT_YOUR_CONTAINER } from "@/lib/auth/ownership";
@@ -274,9 +275,9 @@ export async function setCollectionDescription(slug: string, text: string): Prom
 /** Show the collection's description to everyone who may open it, or keep it for the family; see setTripDescriptionShared. */
 export async function setCollectionDescriptionShared(slug: string, everyone: boolean): Promise<void> {
   const collection = await loadEditableCollection(slug);
-  // Never the helper's description while it names somebody who may not be named there (see namesSomebodyRestricted);
-  // a member's own words are theirs to show, as their captions are.
-  if (everyone && collection.descriptionByHelper && (await namesSomebodyRestricted([collection.description]))) throw new Error(NAME_NOT_TO_BE_SHOWN);
+  // Never the helper's description while it names somebody who may not be named there (see namesSomebodyRestricted),
+  // checked at the album's level, which is a collection's (name-check.ts); a member's own words are theirs to show.
+  if (everyone && collection.descriptionByHelper && (await namesSomebodyRestricted([collection.description], [], await albumNameCheck()))) throw new Error(NAME_NOT_TO_BE_SHOWN);
   await db.collection.update({ where: { id: collection.id }, data: { descriptionMembersOnly: !everyone, descriptionSharedAt: everyone ? new Date() : null } });
   revalidatePath(`/collections/${slug}`, "layout");
 }

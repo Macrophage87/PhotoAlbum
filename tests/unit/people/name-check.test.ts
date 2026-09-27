@@ -1,0 +1,288 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { db } from "@/lib/db";
+import { resetTestDb } from "../helpers/reset";
+
+const who = vi.hoisted(() => ({ id: "", role: "ADMIN" as "ADMIN" | "MEMBER", queued: [] as { queue: string; data: unknown }[] }));
+vi.mock("@/lib/auth/viewer", () => ({
+  requireUserOrThrow: async () => ({ id: who.id, email: "x@example.com", name: "X", role: who.role }),
+  requireAdminOrThrow: async () => {
+    if (who.role !== "ADMIN") throw new Error("Admins only");
+    return { id: who.id, email: "x@example.com", name: "X", role: who.role };
+  },
+}));
+vi.mock("next/cache", () => ({ revalidatePath: () => undefined }));
+vi.mock("next/headers", () => ({ cookies: async () => ({ set: () => undefined }) }));
+vi.mock("@/lib/jobs/boss", () => ({ enqueue: async (queue: string, data: unknown) => void who.queued.push({ queue, data }) }));
+
+import { setAlbumNameCheck } from "@/app/admin/actions";
+import { setTripDescriptionShared, setTripNameCheck } from "@/app/trips/[slug]/actions";
+import { setCollectionDescriptionShared } from "@/app/collections/actions";
+import { setAnnotationShared } from "@/app/annotation/actions";
+import { NOT_YOUR_CONTAINER } from "@/lib/auth/ownership";
+import { NAME_NOT_TO_BE_SHOWN, namesSomebodyRestricted, withoutWithdrawnNames } from "@/lib/people/forget";
+import { nameCheckForContainer, nameCheckForPhoto, photoNameCheck, strictest } from "@/lib/people/name-check";
+import { judgeHelperText } from "@/lib/annotation/members-only";
+import { rejudgeSweep, rejudgeText, rejudgeTitles, type RejudgeJob } from "@/lib/annotation/rejudge";
+import type { StoredAnnotation } from "@/lib/annotation/schema";
+import { QUEUES } from "@/lib/jobs/queues";
+
+const CHILD = { birthday: new Date("2019-05-01") };
+const record = (caption: string, extra: Partial<StoredAnnotation> = {}): StoredAnnotation => ({ title: "", caption, description: "", tags: [], place: null, activity: null, objects: [], visibleText: null, season: "summer", mood: null, searchSummary: "", ...extra });
+const fd = (nameCheck: string) => {
+  const f = new FormData();
+  f.set("nameCheck", nameCheck);
+  return f;
+};
+const rechecks = () => who.queued.filter((q) => q.queue === QUEUES.rejudgeText && (q.data as RejudgeJob).recheck).map((q) => (q.data as RejudgeJob).recheck);
+
+describe("the name check setting", () => {
+  let admin: string, member: string, tripId: string, otherTripId: string;
+  const photo = (data: Record<string, unknown>) => db.photo.create({ data: { uploaderId: admin, originalName: "x.jpg", mimeType: "image/jpeg", storageKey: "k", originalPath: "k/o.jpg", sizeBytes: 1, status: "READY", ...data } });
+  const album = (nameCheck: "STRICT" | "RELAXED") => db.appSetting.upsert({ where: { id: "app" }, create: { id: "app", nameCheck }, update: { nameCheck } });
+
+  beforeEach(async () => {
+    await resetTestDb();
+    who.queued = [];
+    admin = (await db.user.create({ data: { email: "admin@example.com", role: "ADMIN" } })).id;
+    member = (await db.user.create({ data: { email: "member@example.com", name: "Dana", role: "MEMBER" } })).id;
+    who.id = admin;
+    who.role = "ADMIN";
+    tripId = (await db.trip.create({ data: { slug: "lake", title: "The lake", visibility: "PUBLIC", startDate: new Date("2025-08-10"), endDate: new Date("2025-08-16"), createdById: member } })).id;
+    otherTripId = (await db.trip.create({ data: { slug: "coast", title: "The coast", visibility: "PUBLIC", startDate: new Date("2025-07-10"), endDate: new Date("2025-07-16"), createdById: admin } })).id;
+    await db.person.create({ data: { name: "Summer Reyes", createdById: admin, ...CHILD } });
+  });
+
+  describe("the effective level", () => {
+    it("takes the trip's own level, else the album's", async () => {
+      const p = await photo({ tripId });
+      const loose = await photo({});
+      expect(await nameCheckForPhoto(p.id)).toBe("STRICT");
+      await album("RELAXED");
+      expect(await nameCheckForPhoto(p.id)).toBe("RELAXED");
+      expect(await nameCheckForPhoto(loose.id)).toBe("RELAXED");
+      await db.trip.update({ where: { id: tripId }, data: { nameCheck: "STRICT" } });
+      expect(await nameCheckForPhoto(p.id)).toBe("STRICT");
+      await album("STRICT");
+      await db.trip.update({ where: { id: tripId }, data: { nameCheck: "RELAXED" } });
+      expect(await nameCheckForPhoto(p.id)).toBe("RELAXED");
+      expect(await nameCheckForPhoto(loose.id)).toBe("STRICT");
+    });
+
+    it("takes the strictest of the places strangers can see an item", async () => {
+      await db.trip.update({ where: { id: tripId }, data: { nameCheck: "RELAXED" } });
+      const p = await photo({ tripId });
+      const collection = await db.collection.create({ data: { slug: "best", title: "Best", visibility: "PRIVATE", createdById: admin } });
+      await db.collectionItem.create({ data: { collectionId: collection.id, photoId: p.id, addedById: admin } });
+      // A private collection shows it to nobody new.
+      expect(await nameCheckForPhoto(p.id)).toBe("RELAXED");
+      for (const visibility of ["LINK", "PUBLIC"] as const) {
+        await db.collection.update({ where: { id: collection.id }, data: { visibility } });
+        expect(await nameCheckForPhoto(p.id)).toBe("STRICT");
+      }
+      // With the album relaxed as well, nowhere it is seen is strict.
+      await album("RELAXED");
+      expect(await nameCheckForPhoto(p.id)).toBe("RELAXED");
+      expect(photoNameCheck({ trip: { nameCheck: "STRICT" }, collections: [{ collection: { visibility: "PUBLIC" } }] }, "RELAXED")).toBe("STRICT");
+      expect(strictest([])).toBe("STRICT");
+    });
+
+    it("gives a trip's description and its activities the trip's level, and a collection the album's", async () => {
+      await db.trip.update({ where: { id: tripId }, data: { nameCheck: "RELAXED" } });
+      const activity = await db.activity.create({ data: { tripId, title: "Swim", startTime: new Date("2025-08-12T13:00:00Z"), endTime: new Date("2025-08-12T15:00:00Z") } });
+      const collection = await db.collection.create({ data: { slug: "best", title: "Best", createdById: admin } });
+      expect(await nameCheckForContainer("trip", tripId)).toBe("RELAXED");
+      expect(await nameCheckForContainer("activity", activity.id)).toBe("RELAXED");
+      expect(await nameCheckForContainer("collection", collection.id)).toBe("STRICT");
+      expect(await nameCheckForContainer("trip", otherTripId)).toBe("STRICT");
+    });
+  });
+
+  describe("who it is relaxed for", () => {
+    const texts = ["Summer vacation at the lake."];
+
+    it("relaxes the check for a child", async () => {
+      expect(await namesSomebodyRestricted(texts)).toBe(true);
+      expect(await namesSomebodyRestricted(texts, [], "RELAXED")).toBe(false);
+    });
+
+    it("keeps it strict for somebody who opted out, said no, or is waiting to be forgotten, child or not", async () => {
+      await db.person.deleteMany();
+      for (const data of [{ optedOutAt: new Date() }, { ...CHILD, optedOutAt: new Date() }, { ...CHILD, nameInDescriptions: false, nameInDescriptionsSetAt: new Date() }, { nameInDescriptions: false, nameInDescriptionsSetAt: new Date() }, { ...CHILD, forgetPendingAt: new Date() }]) {
+        await db.person.deleteMany();
+        await db.person.create({ data: { name: "Summer Reyes", createdById: admin, ...data } });
+        expect([data, await namesSomebodyRestricted(texts, [], "RELAXED")]).toEqual([data, true]);
+      }
+      // A child whose naming a parent agreed to (which a child's naming cannot be) is restricted for being a child.
+      await db.person.deleteMany();
+      await db.person.create({ data: { name: "Summer Reyes", createdById: admin, ...CHILD, nameInDescriptions: true, nameInDescriptionsSetAt: new Date() } });
+      expect(await namesSomebodyRestricted(texts, [], "RELAXED")).toBe(false);
+    });
+
+    it("keeps a withdrawn naming strict, on a relaxed trip too", async () => {
+      await db.trip.update({ where: { id: tripId }, data: { nameCheck: "RELAXED" } });
+      const annotation = record("Summer vacation at the lake.");
+      const p = await photo({ tripId, annotation });
+      // A child alone: relaxed there.
+      expect((await withoutWithdrawnNames(p.id, { annotation, title: null })).hold).toBe(false);
+      // Withdrawn, a child's too: strict, whatever the trip says.
+      await db.person.updateMany({ data: { namingWithdrawnAt: new Date() } });
+      expect((await withoutWithdrawnNames(p.id, { annotation, title: null })).hold).toBe(true);
+      expect(await namesSomebodyRestricted(["Summer vacation at the lake."], [], "RELAXED")).toBe(true);
+      await db.person.updateMany({ data: { namingWithdrawnAt: null, birthday: null } });
+      await db.person.updateMany({ data: { namingWithdrawnAt: new Date() } });
+      expect((await withoutWithdrawnNames(p.id, { annotation, title: null })).hold).toBe(true);
+    });
+  });
+
+  describe("where it is used", () => {
+    it("judges the helper's words at the item's level", async () => {
+      // (Written with a capital, "Summer" is also a name the album knows to the members-only rule, names.ts, which
+      // holds it at any level.)
+      const text = record("Pictures from our summer vacation.");
+      const p = await photo({ tripId });
+      expect((await judgeHelperText(p.id, text, null)).membersOnly).toBe(true);
+      await db.trip.update({ where: { id: tripId }, data: { nameCheck: "RELAXED" } });
+      expect((await judgeHelperText(p.id, text, null)).membersOnly).toBe(false);
+    });
+
+    it("lets a member show the words to everyone only where the level allows it", async () => {
+      const p = await photo({ tripId, annotation: record("Late June at the lake with Summer vacation."), annotationMembersOnly: true });
+      const { annotationRevision } = await db.photo.findUniqueOrThrow({ where: { id: p.id } });
+      await expect(setAnnotationShared(p.id, annotationRevision, true)).rejects.toThrow(NAME_NOT_TO_BE_SHOWN);
+      await db.trip.update({ where: { id: tripId }, data: { nameCheck: "RELAXED" } });
+      // "with Summer vacation": never after "with".
+      await expect(setAnnotationShared(p.id, annotationRevision, true)).rejects.toThrow(NAME_NOT_TO_BE_SHOWN);
+      await db.photo.update({ where: { id: p.id }, data: { annotation: record("Late June at the lake, summer vacation at last.") } });
+      const { annotationRevision: next } = await db.photo.findUniqueOrThrow({ where: { id: p.id } });
+      await setAnnotationShared(p.id, next, true);
+      expect((await db.photo.findUniqueOrThrow({ where: { id: p.id } })).annotationMembersOnly).toBe(false);
+    });
+
+    it("shows a trip's description by the trip's level, and a collection's by the album's", async () => {
+      await db.trip.update({ where: { id: tripId }, data: { description: "Summer vacation at the lake.", descriptionByHelper: true, descriptionMembersOnly: true } });
+      await expect(setTripDescriptionShared("lake", true)).rejects.toThrow(NAME_NOT_TO_BE_SHOWN);
+      await db.trip.update({ where: { id: tripId }, data: { nameCheck: "RELAXED" } });
+      await setTripDescriptionShared("lake", true);
+      expect((await db.trip.findUniqueOrThrow({ where: { id: tripId } })).descriptionMembersOnly).toBe(false);
+      await db.collection.create({ data: { slug: "best", title: "Best", description: "Summer vacation at the lake.", descriptionByHelper: true, descriptionMembersOnly: true, createdById: admin } });
+      await expect(setCollectionDescriptionShared("best", true)).rejects.toThrow(NAME_NOT_TO_BE_SHOWN);
+      await album("RELAXED");
+      await setCollectionDescriptionShared("best", true);
+    });
+  });
+
+  describe("who may change it", () => {
+    it("lets only an admin change the album's, and records who and when", async () => {
+      who.id = member;
+      who.role = "MEMBER";
+      await expect(setAlbumNameCheck(fd("RELAXED"))).rejects.toThrow("Admins only");
+      expect((await db.appSetting.findUnique({ where: { id: "app" } }))?.nameCheck ?? "STRICT").toBe("STRICT");
+      who.id = admin;
+      who.role = "ADMIN";
+      await setAlbumNameCheck(fd("RELAXED"));
+      expect(await db.appSetting.findUniqueOrThrow({ where: { id: "app" } })).toMatchObject({ nameCheck: "RELAXED", nameCheckSetById: admin, nameCheckSetAt: expect.any(Date) });
+      await expect(setAlbumNameCheck(fd("LOOSE"))).rejects.toThrow();
+    });
+
+    it("lets only whoever made the trip, or an admin, change a trip's", async () => {
+      // Another member: not theirs to arrange.
+      const other = (await db.user.create({ data: { email: "other@example.com", role: "MEMBER" } })).id;
+      who.id = other;
+      who.role = "MEMBER";
+      await expect(setTripNameCheck("lake", fd("RELAXED"))).rejects.toThrow(NOT_YOUR_CONTAINER);
+      expect((await db.trip.findUniqueOrThrow({ where: { id: tripId } })).nameCheck).toBeNull();
+      // Whoever made it.
+      who.id = member;
+      await setTripNameCheck("lake", fd("RELAXED"));
+      expect(await db.trip.findUniqueOrThrow({ where: { id: tripId } })).toMatchObject({ nameCheck: "RELAXED", nameCheckSetById: member });
+      // An admin, back to the album's.
+      who.id = admin;
+      who.role = "ADMIN";
+      await setTripNameCheck("lake", fd("INHERIT"));
+      expect(await db.trip.findUniqueOrThrow({ where: { id: tripId } })).toMatchObject({ nameCheck: null, nameCheckSetById: admin });
+    });
+  });
+
+  describe("making it stricter", () => {
+    const summer = "Summer vacation at the lake.";
+    /** Words shown to everyone under the relaxed check, every way the album shows them. */
+    const shownUnderRelaxed = async (trip: string) => {
+      const shared = await photo({ tripId: trip, annotation: record(summer, { title: "Summer vacation" }), title: "Summer vacation", titleByHelper: true, annotationSharedAt: new Date() });
+      const judged = await photo({ tripId: trip, annotation: record("Pictures from our summer vacation."), placeEstimateName: "The lake", placeEstimateNote: "Sunshine on the dock all summer", placeEstimateMembersOnly: false });
+      const plain = await photo({ tripId: trip, annotation: record("A sailboat on the lake.") });
+      await db.trip.update({ where: { id: trip }, data: { description: summer, descriptionByHelper: true, descriptionSharedAt: new Date() } });
+      const activity = await db.activity.create({ data: { tripId: trip, title: "Swim", description: summer, descriptionByHelper: true, startTime: new Date("2025-08-12T13:00:00Z"), endTime: new Date("2025-08-12T15:00:00Z") } });
+      return { shared, judged, plain, activity };
+    };
+    const runQueued = async () => {
+      for (const recheck of rechecks()) await rejudgeText({ recheck: recheck! });
+    };
+
+    it("checks again, album-wide, what was shown under the relaxed check, and takes back what the strict one holds", async () => {
+      await album("RELAXED");
+      const here = await shownUnderRelaxed(tripId);
+      const collection = await db.collection.create({ data: { slug: "best", title: "Best", visibility: "PUBLIC", description: summer, descriptionByHelper: true, createdById: admin } });
+      // A trip that says Relaxed itself stays as it is.
+      await db.trip.update({ where: { id: otherTripId }, data: { nameCheck: "RELAXED" } });
+      const kept = await photo({ tripId: otherTripId, annotation: record(summer), annotationSharedAt: new Date() });
+
+      await setAlbumNameCheck(fd("STRICT"));
+      expect(rechecks()).toEqual([{}]);
+      expect((await db.appSetting.findUniqueOrThrow({ where: { id: "app" } })).nameCheckTightenedAt).not.toBeNull();
+      await runQueued();
+
+      expect(await db.photo.findUniqueOrThrow({ where: { id: here.shared.id } })).toMatchObject({ annotationMembersOnly: true, annotationSharedAt: null, title: null, membersTitle: "Summer vacation" });
+      expect(await db.photo.findUniqueOrThrow({ where: { id: here.judged.id } })).toMatchObject({ annotationMembersOnly: true, placeEstimateMembersOnly: true });
+      expect((await db.photo.findUniqueOrThrow({ where: { id: here.plain.id } })).annotationMembersOnly).toBe(false);
+      expect(await db.trip.findUniqueOrThrow({ where: { id: tripId } })).toMatchObject({ descriptionMembersOnly: true, descriptionSharedAt: null });
+      expect((await db.activity.findUniqueOrThrow({ where: { id: here.activity.id } })).descriptionMembersOnly).toBe(true);
+      expect((await db.collection.findUniqueOrThrow({ where: { id: collection.id } })).descriptionMembersOnly).toBe(true);
+      expect(await db.photo.findUniqueOrThrow({ where: { id: kept.id } })).toMatchObject({ annotationMembersOnly: false, annotationSharedAt: expect.any(Date) });
+      expect((await db.appSetting.findUniqueOrThrow({ where: { id: "app" } })).nameCheckRecheckedAt).not.toBeNull();
+    });
+
+    it("checks again one trip made stricter, and nothing else", async () => {
+      await db.trip.updateMany({ data: { nameCheck: "RELAXED" } });
+      const here = await shownUnderRelaxed(tripId);
+      const there = await photo({ tripId: otherTripId, annotation: record(summer), annotationSharedAt: new Date() });
+      who.id = member;
+      who.role = "MEMBER";
+      await setTripNameCheck("lake", fd("STRICT"));
+      expect(rechecks()).toEqual([{ tripId }]);
+      await runQueued();
+      expect((await db.photo.findUniqueOrThrow({ where: { id: here.shared.id } })).annotationMembersOnly).toBe(true);
+      expect((await db.trip.findUniqueOrThrow({ where: { id: tripId } })).descriptionMembersOnly).toBe(true);
+      expect((await db.photo.findUniqueOrThrow({ where: { id: there.id } })).annotationMembersOnly).toBe(false);
+    });
+
+    it("is caught up by the nightly sweep when the job never ran", async () => {
+      await album("RELAXED");
+      const here = await shownUnderRelaxed(tripId);
+      await setAlbumNameCheck(fd("STRICT"));
+      who.queued = [];
+      await rejudgeSweep();
+      expect((await db.photo.findUniqueOrThrow({ where: { id: here.shared.id } })).annotationMembersOnly).toBe(true);
+      expect((await db.trip.findUniqueOrThrow({ where: { id: tripId } })).descriptionMembersOnly).toBe(true);
+    });
+
+    it("takes back what joins a place checked strictly: a relaxed trip's photograph put in a public collection", async () => {
+      await db.trip.update({ where: { id: tripId }, data: { nameCheck: "RELAXED" } });
+      const p = await photo({ tripId, annotation: record(summer), annotationSharedAt: new Date() });
+      const collection = await db.collection.create({ data: { slug: "best", title: "Best", visibility: "PUBLIC", createdById: admin } });
+      await db.collectionItem.create({ data: { collectionId: collection.id, photoId: p.id, addedById: admin } });
+      await rejudgeTitles({ collectionId: collection.id });
+      expect(await db.photo.findUniqueOrThrow({ where: { id: p.id } })).toMatchObject({ annotationMembersOnly: true, annotationSharedAt: null });
+    });
+
+    it("lets nothing out when made relaxed: what is held stays held until it is judged or shown again", async () => {
+      const held = await photo({ tripId, annotation: record(summer), annotationMembersOnly: true });
+      await db.trip.update({ where: { id: tripId }, data: { description: summer, descriptionByHelper: true, descriptionMembersOnly: true } });
+      await setAlbumNameCheck(fd("RELAXED"));
+      expect(rechecks()).toEqual([]);
+      await rejudgeSweep();
+      await rejudgeTitles({ tripId });
+      expect((await db.photo.findUniqueOrThrow({ where: { id: held.id } })).annotationMembersOnly).toBe(true);
+      expect((await db.trip.findUniqueOrThrow({ where: { id: tripId } })).descriptionMembersOnly).toBe(true);
+    });
+  });
+});

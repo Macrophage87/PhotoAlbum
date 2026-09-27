@@ -2,6 +2,7 @@ import { db } from "@/lib/db";
 import type { StoredAnnotation } from "./schema";
 import { mentionsAnyName, mentionsAnyTitle, titleWordsIn } from "./names";
 import { namesSomebodyRestricted } from "@/lib/people/restricted";
+import { nameCheckForPhoto, type NameCheck } from "@/lib/people/name-check";
 
 export { foldForNames, mentionsAnyName, mentionsAnyTitle, NAME_PARTICLES, namePatterns } from "./names";
 
@@ -55,8 +56,9 @@ export function titleHits(text: string, containers: PrivateContainer[]): { words
  */
 export async function judgeHelperText(photoId: string, text: Pick<StoredAnnotation, "title" | "caption" | "description" | "searchSummary" | "place" | "tags">, context: string | null, sent?: boolean | null): Promise<Judgement> {
   const said = helperText(text);
-  // And anybody who may not be named, found strictly (any case, any spelling): "HAPPY BIRTHDAY ROSE" on a banner.
-  const hard = Boolean(sent || context?.trim()) || (await taggedOn(photoId)) || mentionsAnyName(said, await knownNames()) || (await namesSomebodyRestricted([text.title, text.caption, text.description, text.place], [text.searchSummary, ...(text.tags ?? [])]));
+  // And anybody who may not be named, found strictly (any case, any spelling): "HAPPY BIRTHDAY ROSE" on a banner; at
+  // the item's level (name-check.ts).
+  const hard = Boolean(sent || context?.trim()) || (await taggedOn(photoId)) || mentionsAnyName(said, await knownNames()) || (await namesSomebodyRestricted([text.title, text.caption, text.description, text.place], [text.searchSummary, ...(text.tags ?? [])], await nameCheckForPhoto(photoId)));
   const hits = titleHits(said, await privateContainersOf(photoId));
   return { ...judged(hard, hits.from.length > 0), ...(hits.from.length ? { titleWords: hits.words, titleFrom: hits.from } : {}) };
 }
@@ -79,7 +81,7 @@ export function helperText(text: Partial<Pick<StoredAnnotation, "title" | "capti
 export async function placeFromMembersOnly(photoId: string, place: { name: string | null; evidence: string | null }, context: string | null, sent?: boolean | null): Promise<boolean> {
   if (sent || context?.trim()) return true;
   const said = [place.name, place.evidence].filter(Boolean).join("\n");
-  return mentionsAnyName(said, await knownNames()) || mentionsAnyTitle(said, await privateTitlesOf(photoId)) || (await namesSomebodyRestricted([said]));
+  return mentionsAnyName(said, await knownNames()) || mentionsAnyTitle(said, await privateTitlesOf(photoId)) || (await namesSomebodyRestricted([said], [], await nameCheckForPhoto(photoId)));
 }
 
 /**
@@ -108,16 +110,17 @@ export function parseAnnotationCustomId(customId: string): { photoId: string; se
 /**
  * The same judgement for a trip's, a collection's or an activity's description: the helper was handed names, the
  * notes on the photographs it was shown, the description it is replacing when that was members-only, or the title
- * of a trip strangers cannot open; or what it wrote names somebody the album knows.
+ * of a trip strangers cannot open; or what it wrote names somebody the album knows. `level`: the container's
+ * (name-check.ts), strict when not given.
  */
-export async function judgeDescription(description: string, given: { names: string[]; notes: boolean; previous?: boolean; privateTitles?: string[] }): Promise<Judgement> {
-  const hard = Boolean(given.names.length || given.notes || given.previous) || mentionsAnyName(description, await knownNames()) || (await namesSomebodyRestricted([description]));
+export async function judgeDescription(description: string, given: { names: string[]; notes: boolean; previous?: boolean; privateTitles?: string[]; level?: NameCheck }): Promise<Judgement> {
+  const hard = Boolean(given.names.length || given.notes || given.previous) || mentionsAnyName(description, await knownNames()) || (await namesSomebodyRestricted([description], [], given.level));
   const words = titleWordsIn(description, given.privateTitles ?? []);
   return { ...judged(hard, words.length > 0), ...(words.length ? { titleWords: words } : {}) };
 }
 
 /** `judgeDescription`, as a yes or no. */
-export async function descriptionFromMembersOnly(description: string, given: { names: string[]; notes: boolean; previous?: boolean; privateTitles?: string[] }): Promise<boolean> {
+export async function descriptionFromMembersOnly(description: string, given: { names: string[]; notes: boolean; previous?: boolean; privateTitles?: string[]; level?: NameCheck }): Promise<boolean> {
   return (await judgeDescription(description, given)).membersOnly;
 }
 

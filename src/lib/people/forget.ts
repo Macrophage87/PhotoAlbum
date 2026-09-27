@@ -12,6 +12,7 @@ import { annotationMentions, FUNCTION_WORDS, isEverydayWord, isListedPlace, isPl
 import { forgottenScope, loadTombstone, scrubRecord, sharedByNamesakes } from "./tombstone";
 import { strictMatcher } from "./strict-names";
 import { namesSomebodyRestricted } from "./restricted";
+import { nameCheckForPhoto } from "./name-check";
 import { stampScrubbed } from "./names-changed";
 
 export { namesSomebodyRestricted };
@@ -767,7 +768,8 @@ function shownLists(record: StoredAnnotation | null): string[] {
  * The helper's text on an item, and its title, without the name of anybody whose naming the album withdrew by itself:
  * for text a member is about to show to everyone, which the nightly public pass would otherwise not reach for days.
  * What is certainly them is taken out, as for a forget. The words are held back, and never shown, if what is left
- * may still name them by any of: the strict matcher (strict-names.ts, as the share guard), the forget's rules for
+ * may still name them by any of: the strict matcher (strict-names.ts, as the share guard, and strict whatever the
+ * level: they asked to be un-named, see name-check.ts), the forget's rules for
  * this photograph, the members-only rule's look (stillNames, as the nightly pass), or their name in the keywords or
  * tags. A name used as a thing's ("The Austin skyline"), or off their photographs one that is also a place, is not
  * rewritten at all, which would garble it.
@@ -778,7 +780,9 @@ export async function withoutWithdrawnNames(photoId: string, text: { annotation:
   let title = text.title;
   let hold = false;
   const recordOf = (a: unknown) => (a && typeof a === "object" && !Array.isArray(a) ? (a as StoredAnnotation) : null);
-  if (!people.length) return { annotation, title, changed: false, hold: await namesSomebodyRestricted(shownWords(title, recordOf(annotation)), shownLists(recordOf(annotation))) };
+  // Everybody else is checked at the item's level (name-check.ts); the withdrawn below, strictly whatever it is.
+  const level = await nameCheckForPhoto(photoId);
+  if (!people.length) return { annotation, title, changed: false, hold: await namesSomebodyRestricted(shownWords(title, recordOf(annotation)), shownLists(recordOf(annotation)), level) };
   const tagged = await db.face.findMany({ where: { photoId, OR: [{ personId: { in: people.map((p) => p.id) } }, { proposedPersonId: { in: people.map((p) => p.id) } }] }, select: { personId: true, proposedPersonId: true } });
   const on = new Set(tagged.flatMap((f) => [f.personId, f.proposedPersonId]));
   const [everybody, members] = await Promise.all([db.person.findMany({ select: { name: true, formerNames: true } }), db.user.findMany({ where: { name: { not: null } }, select: { name: true } })]);
@@ -811,7 +815,8 @@ export async function withoutWithdrawnNames(photoId: string, text: { annotation:
     if (holds(title, recordOf(annotation))) hold = true;
   }
   // And everybody else the album may not name, withdrawn long ago or never agreed: not rewritten here, just not shown.
-  if (!hold && (await namesSomebodyRestricted(shownWords(title, recordOf(annotation)), shownLists(recordOf(annotation))))) hold = true;
+  // (The withdrawn are among them, and restricted.ts checks them strictly at any level.)
+  if (!hold && (await namesSomebodyRestricted(shownWords(title, recordOf(annotation)), shownLists(recordOf(annotation)), level))) hold = true;
   return { annotation, title, changed: JSON.stringify(annotation) !== JSON.stringify(text.annotation) || title !== text.title, hold };
 }
 

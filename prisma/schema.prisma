@@ -18,6 +18,14 @@ enum TripVisibility {
   PUBLIC
 }
 
+/// How names are checked before words are shown to everyone (src/lib/people/name-check.ts). STRICT: any mention of
+/// somebody who may not be named holds the words (strict-names.ts). RELAXED: the strict matcher and a closed list of
+/// excuses for a child's name read as an everyday word, a month or season, or a place (relaxed-names.ts).
+enum NameCheck {
+  STRICT
+  RELAXED
+}
+
 /// Who was looking, as far as the album can tell: a signed-in family member, somebody holding a secret link, or
 /// anyone at all looking at something marked public.
 enum VisitorKind {
@@ -273,6 +281,11 @@ model Trip {
   visibility   TripVisibility @default(PRIVATE)
   shareToken   String?        @unique
   annotationOptOut Boolean    @default(false)
+  /// How names are checked before this trip's words are shown to everyone; null follows the album's
+  /// (AppSetting.nameCheck). Changed by whoever arranges the trip, recorded with who and when.
+  nameCheck      NameCheck?
+  nameCheckSetAt DateTime?
+  nameCheckSetById String?
   createdById  String
   createdBy    User           @relation(fields: [createdById], references: [id])
   createdAt    DateTime       @default(now())
@@ -650,6 +663,15 @@ model AppSetting {
   orphanFolderCount      Int?
   orphanFolderSample     String[]  @default([])
   orphanFoldersCheckedAt DateTime?
+  /// How names are checked before words are shown to everyone, album-wide (a trip may say otherwise): an admin's
+  /// decision, recorded with who and when.
+  nameCheck              NameCheck @default(STRICT)
+  nameCheckSetAt         DateTime?
+  nameCheckSetById       String?
+  /// When a check was last made stricter (album-wide or on a trip), and when what was shown to everyone was last
+  /// checked again after it: while the first is later, the sweep checks the whole album (src/lib/annotation/rejudge.ts).
+  nameCheckTightenedAt   DateTime?
+  nameCheckRecheckedAt   DateTime?
   updatedAt              DateTime  @updatedAt
 }
 

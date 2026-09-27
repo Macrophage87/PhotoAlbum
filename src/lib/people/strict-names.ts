@@ -26,6 +26,7 @@
 import { PLACE_NAMES } from "./places";
 import { isKinWord, isNotANameWord, isPersonVerb, isWordSurname, splitNickname } from "./scrub";
 import { splitCamel } from "@/lib/annotation/names";
+import { relaxedExcuse } from "./relaxed-names";
 
 /** Letters that do not come apart into a plain letter and an accent, spelled the way a keyboard without them does. */
 const TRANSLIT: Record<string, string> = { ł: "l", ø: "o", æ: "ae", œ: "oe", ß: "ss", đ: "d", þ: "th", ı: "i" };
@@ -229,9 +230,10 @@ export function hashtagSpans(text: string, forms: string[], opts: { minSubstring
 /**
  * A finder for one person's names in words strangers may read, or on their own photographs. `others`: everybody
  * else's names, whose surnames are not this person's alone. `skip`: words not to look for (a word of the name of
- * somebody else tagged on the same photograph).
+ * somebody else tagged on the same photograph). `relaxed`: the relaxed check's excuses as well (relaxed-names.ts),
+ * only ever for what is shown to everyone, and only for a child (name-check.ts).
  */
-export function strictFinder(names: string[], others: string[] = [], skip: Set<string> = new Set()): StrictFinder {
+export function strictFinder(names: string[], others: string[] = [], skip: Set<string> = new Set(), finder: { relaxed?: boolean } = {}): StrictFinder {
   const otherWords = new Set(others.flatMap((o) => strictNormalize(splitNickname(o).name).split(/[\s-]+/)).filter((w) => w && !isKinWord(w)));
   // Somebody else's name written without spaces that holds one of theirs: "花子" is not found inside "山田花子".
   const otherCjk = others.map((o) => strictNormalize(o).replace(/\s+/g, "")).filter((o) => CJK.test(o));
@@ -250,6 +252,7 @@ export function strictFinder(names: string[], others: string[] = [], skip: Set<s
   const cjk = forms.filter((f) => CJK.test(f));
   const small = new Set(forms.filter((f) => SMALL_WORDS.has(f)));
   const words = forms.filter((f) => !CJK.test(f)).sort((a, b) => b.length - a.length);
+  const exact = new Set(words);
   // Whole words, letters only at the edges (digits or a hyphen run against a name do not hide it).
   const rx = words.length ? new RegExp(`(?<![\\p{L}])(?:${words.map((w) => escape(w).replace(/[ -]/g, "[\\s\\-]+")).join("|")})(?:'?s)?(?![\\p{L}])`, "gu") : null;
   // Written as one person's name: each word with a capital, and exactly one space or tab between them, as written.
@@ -295,6 +298,8 @@ export function strictFinder(names: string[], others: string[] = [], skip: Set<s
       // "An", not "an": a small word is only a name written with a capital.
       if (small.has(word) && !/^\p{Lu}/u.test(text.slice(start, end).replace(/\p{Cf}/gu, ""))) continue;
       if (MONTHS.has(m[0]) && monthAsDate(t.slice(0, m.index), t.slice(m.index! + m[0].length), text.slice(end))) continue;
+      // Exactly one of their forms, never a plural or possessive of it.
+      if (finder.relaxed && exact.has(m[0]) && relaxedExcuse({ text, start, end, norm: t, at: m.index!, to: m.index! + m[0].length, list: Boolean(opts.list) }, m[0])) continue;
       // A possessive's "'s" stays outside the span ("May's side" is "a family member's side"); a plural goes with it.
       out.push([start, /'s$/u.test(m[0]) ? from[m.index! + m[0].length - 2] : end]);
     }
@@ -304,6 +309,6 @@ export function strictFinder(names: string[], others: string[] = [], skip: Set<s
 }
 
 /** A test for any mention of one person in words strangers may read (see `strictFinder`). */
-export function strictMatcher(names: string[], others: string[] = []): (text: unknown, opts?: StrictOptions) => boolean {
-  return strictFinder(names, others).finds;
+export function strictMatcher(names: string[], others: string[] = [], opts: { relaxed?: boolean } = {}): (text: unknown, opts?: StrictOptions) => boolean {
+  return strictFinder(names, others, new Set(), opts).finds;
 }
