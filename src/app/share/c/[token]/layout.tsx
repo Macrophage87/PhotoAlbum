@@ -52,7 +52,7 @@ export default async function SharedCollectionLayout({ params, children }: Layou
       </div>
       <CollectionHeader collection={withReadableDescription(collection, false)} shareUrl={shareableCollectionUrl(collection, env().APP_URL)} />
       <TripTabs tabs={tabs} />
-      <main className="mx-auto max-w-6xl px-4 sm:px-6 py-8">{children}</main>
+      <main id="main" tabIndex={-1} className="mx-auto max-w-6xl px-4 sm:px-6 py-8">{children}</main>
     </TripTheme>
   );
 }

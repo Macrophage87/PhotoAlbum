@@ -75,7 +75,7 @@ export default async function TripLayout({ params, children }: LayoutProps<"/tri
         {...(owns ? { save: setTripDescription.bind(null, slug), share: setTripDescriptionShared.bind(null, slug), ...((await annotationGates()).active ? { describe: describeTripWithAi.bind(null, slug) } : {}) } : {})}
       />
       <TripTabs tabs={tabs} />
-      <main className="mx-auto max-w-6xl px-4 sm:px-6 py-8">{children}</main>
+      <main id="main" tabIndex={-1} className="mx-auto max-w-6xl px-4 sm:px-6 py-8">{children}</main>
     </TripTheme>
   );
 }

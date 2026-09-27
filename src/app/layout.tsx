@@ -62,6 +62,10 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html lang="en" className={`${fontVars} h-full antialiased`}>
       <body className="min-h-full flex flex-col">
+        {/* The first thing a keyboard reaches: past the navigation to the page itself (every page's <main id="main">). */}
+        <a href="#main" className="sr-only focus:not-sr-only focus:fixed focus:left-3 focus:top-3 focus:z-[100] focus:rounded-theme focus:bg-surface focus:px-4 focus:py-2 focus:text-sm focus:font-medium focus:text-text focus:shadow-lg focus:outline-none focus:ring-2 focus:ring-ring">
+          Skip to content
+        </a>
         {/* Uploads carry on from page to page, so their queue lives above every page. Always mounted: a layout is not
             rendered again on navigation, so a tab opened before signing in must already have it. Until something is
             added it renders nothing and asks the server nothing. */}
