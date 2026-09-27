@@ -10,7 +10,7 @@ import { ffmpeg, posterArgs, probe, transcodeArgs } from "@/lib/video/ffmpeg";
 import { pickTripByDay, whoWasThere } from "@/lib/photos/assign";
 import { pickTripByCoverage } from "@/lib/photos/trip-by-coverage";
 import { activityFor } from "@/lib/activities/reassign";
-import { dateByHand, dateMovedSince, lockedPhoto, offsetForKeptDate } from "@/lib/photos/member-owned";
+import { dateByHand, dateMovedSince, lockedPhoto, offsetForKeptDate, tripChangedSinceQueued } from "@/lib/photos/member-owned";
 import { localDayFromOffset, offsetMinutesInZone } from "@/lib/time/local-day";
 import { withHeavyLock } from "../heavy-lock";
 import { workerStopping } from "../shutdown";
@@ -87,11 +87,13 @@ export async function transcodeVideo(job: TranscodeVideoJob, signal?: AbortSigna
         instant = photo.createdAt;
         takenAtSource = "UPLOAD_TIME";
       }
-      let trip = job.tripId ? await db.trip.findUnique({ where: { id: job.tripId } }) : photo.tripId ? await db.trip.findUnique({ where: { id: photo.tripId } }) : null;
+      // The row's trip wins: the job's is only what the row said when it was queued, and a member may have moved the
+      // clip, or taken it off its trip, while it waited (one taken off is not filed again by its day).
+      let trip = photo.tripId ? await db.trip.findUnique({ where: { id: photo.tripId } }) : null;
       // On none of the uploader's trips' days (a ride on the last evening that runs past midnight): the trip out on an
       // activity or a track at that moment is chosen once the row is locked, from what is there then.
       let dayless: { id: string; startDate: Date; endDate: Date; timezone: string }[] | null = null;
-      if (!trip) {
+      if (!trip && !tripChangedSinceQueued(job, photo)) {
         const candidates = await db.trip.findMany({ where: whoWasThere(photo.uploaderId), select: { id: true, startDate: true, endDate: true, timezone: true } });
         const matches = candidates.filter((c) => pickTripByDay([c], localDayFromOffset(instant, offsetMinutesInZone(instant, c.timezone))));
         if (matches.length === 1) trip = await db.trip.findUnique({ where: { id: matches[0].id } });

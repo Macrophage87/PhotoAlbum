@@ -39,6 +39,15 @@ export function placeByHand(p: Pick<MemberFields, "gpsSource" | "placeSetById">)
   return p.gpsSource === "MANUAL" || p.placeSetById !== null;
 }
 
+/**
+ * Whether a member moved the item to another trip, or took it off one, after its job was queued with the trip the
+ * row had then. A job can wait a long while behind an import; the row's trip is the member's answer and stands, and
+ * an item taken off a trip is not filed again by its day.
+ */
+export function tripChangedSinceQueued(job: { tripId?: string | null }, row: Pick<MemberFields, "tripId">): boolean {
+  return Boolean(job.tripId) && job.tripId !== row.tripId;
+}
+
 /** Whether the date changed after the job read the row: whoever changed it answered with newer information. */
 export function dateMovedSince(before: MemberFields, now: MemberFields): boolean {
   return (

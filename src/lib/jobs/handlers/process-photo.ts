@@ -15,7 +15,7 @@ import { editsSchema, hasEdits, type PhotoEdits } from "@/lib/images/edits";
 import { pickTripByDay, whoWasThere } from "@/lib/photos/assign";
 import { pickTripByCoverage } from "@/lib/photos/trip-by-coverage";
 import { activityFor } from "@/lib/activities/reassign";
-import { dateByHand, dateMovedSince, lockedPhoto, offsetForKeptDate, placeByHand } from "@/lib/photos/member-owned";
+import { dateByHand, dateMovedSince, lockedPhoto, offsetForKeptDate, placeByHand, tripChangedSinceQueued } from "@/lib/photos/member-owned";
 import { localDayFromOffset, offsetMinutesInZone } from "@/lib/time/local-day";
 import { enqueue } from "../boss";
 import { QUEUES, type ProcessPhotoJob } from "../queues";
@@ -53,6 +53,8 @@ export async function processPhoto(job: ProcessPhotoJob, signal?: AbortSignal): 
     await enqueue(QUEUES.transcodeVideo, { photoId: photo.id, tripId: job.tripId ?? photo.tripId }, { singletonKey: `transcode:${photo.id}` });
     return;
   }
+  // Moved to another trip, or taken off one, while the job waited: the row's trip stands.
+  const tripHeld = tripChangedSinceQueued(job, photo);
   // The stamp marks the row as this run's: a retry of a timed-out run stamps it again.
   const { updatedAt: claimedAt } = await db.photo.update({ where: { id: photo.id }, data: { status: "PROCESSING", error: null }, select: { updatedAt: true } });
 
@@ -70,10 +72,12 @@ export async function processPhoto(job: ProcessPhotoJob, signal?: AbortSignal): 
       // now. Deleted for good meanwhile, the copy just made has nothing to belong to.
       const scan = await db.photo.findUnique({ where: { id: photo.id } });
       if (!scan) return void (await forgetFilesIfGone(photo.id));
+      // Moved or taken off its trip meanwhile: only the date and status are written, not filed again by the date.
+      const held = tripHeld || scan.tripId !== photo.tripId;
       // A date somebody gave it (by hand, or Google's own record) is kept: the file's modified time is only a guess.
       if (vouchedDate(scan)) {
         await db.photo.update({ where: { id: scan.id }, data: { status: "READY" } });
-        await applyPhotoInstant(scan, scan.takenAt!, scan.tzOffsetMin ?? 0, scan.takenAtSource!, scan.dateSetById, { geotag: false });
+        if (!held) await applyPhotoInstant(scan, scan.takenAt!, scan.tzOffsetMin ?? 0, scan.takenAtSource!, scan.dateSetById, { geotag: false });
         return;
       }
       const mtimeHeader = (scan.exif as { fileLastModified?: number } | null)?.fileLastModified;
@@ -81,7 +85,7 @@ export async function processPhoto(job: ProcessPhotoJob, signal?: AbortSignal): 
       const takenAt = mtimeHeader && Number.isFinite(mtimeHeader) ? new Date(mtimeHeader) : s ? s.mtime : scan.createdAt;
       const takenAtSource = mtimeHeader && Number.isFinite(mtimeHeader) ? "FILE_MTIME" : s ? "FILE_MTIME" : "UPLOAD_TIME";
       await db.photo.update({ where: { id: scan.id }, data: { status: "READY", takenAt, takenAtSource, tzOffsetMin: scan.tzOffsetMin ?? 0 } });
-      await applyPhotoInstant(scan, takenAt, scan.tzOffsetMin ?? 0, takenAtSource, null, { geotag: false });
+      if (!held) await applyPhotoInstant(scan, takenAt, scan.tzOffsetMin ?? 0, takenAtSource, null, { geotag: false });
       return;
     }
 
@@ -111,9 +115,9 @@ export async function processPhoto(job: ProcessPhotoJob, signal?: AbortSignal): 
     // 2. EXIF from the original file (conversion can strip it)
     const exif = await readExif(localPath);
 
-    // 3. Trip candidates: explicit trip wins, otherwise match by the photo's wall-clock day
-    const explicitTrip = job.tripId ? await db.trip.findUnique({ where: { id: job.tripId } }) : photo.tripId ? await db.trip.findUnique({ where: { id: photo.tripId } }) : null;
-    let trip = explicitTrip;
+    // 3. Trip candidates: the row's trip wins (the job's is only what the row said when it was queued), otherwise
+    // match by the photo's wall-clock day — unless a member took it off its trip while the job waited.
+    let trip = photo.tripId ? await db.trip.findUnique({ where: { id: photo.tripId } }) : null;
     // The name is read only when the file itself says nothing: a phone's IMG_20250812_143015 is the capture time,
     // where the file's modified time is usually just when it was copied onto something.
     // In order of how much each can be trusted: when the shutter fired, then the capture time in the file's name,
@@ -135,7 +139,7 @@ export async function processPhoto(job: ProcessPhotoJob, signal?: AbortSignal): 
     // on an activity or a track at that moment is chosen once the row is locked (step 6), from what is there then.
     type Candidate = { id: string; startDate: Date; endDate: Date; timezone: string };
     let dayless: { candidates: Candidate[]; inZone: (timezone: string) => Pick<TakenAtResolution, "takenAt" | "tzOffsetMin" | "source"> | null } | null = null;
-    if (!trip && resolved) {
+    if (!trip && resolved && !tripHeld) {
       // Only trips this member was on, where anybody said who was on them; a clock cannot tell two families apart.
       const candidates = await db.trip.findMany({ where: whoWasThere(photo.uploaderId), select: { id: true, startDate: true, endDate: true, timezone: true } });
       const day = resolved.wallDay;
@@ -167,7 +171,7 @@ export async function processPhoto(job: ProcessPhotoJob, signal?: AbortSignal): 
         takenAtSource = s ? "FILE_MTIME" : "UPLOAD_TIME";
       }
       // No camera zone to go on: interpret the instant in the trip zone when we know it, else in UTC.
-      if (!trip) {
+      if (!trip && !tripHeld) {
         const candidates = await db.trip.findMany({ where: whoWasThere(photo.uploaderId), select: { id: true, startDate: true, endDate: true, timezone: true } });
         // Each trip judges the instant in its own zone; still require exactly one match.
         const matches = candidates.filter((c) => pickTripByDay([c], localDayFromOffset(takenAt!, offsetMinutesInZone(takenAt!, c.timezone))));

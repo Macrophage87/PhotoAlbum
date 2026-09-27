@@ -95,7 +95,10 @@ describe("the quarter-hourly pass over photos left waiting with no job", () => {
     expect(queued).toHaveLength(4);
   });
 
-  it("keeps a row's trip on the job, as the upload queued it", async () => {
+  // The job only uses it while the row still has it: a member who moves the photo while the job waits wins (see
+  // "a trip changed while the job waited" in process-race.test.ts). It is sent so that a photo taken off its trip
+  // meanwhile can be told from one that never had one.
+  it("sends the trip the row has, as the upload did", async () => {
     const tripId = (await db.trip.create({ data: { slug: "t", title: "T", startDate: new Date("2025-01-01"), endDate: new Date("2025-01-02"), createdById: userId } })).id;
     const id = await row({ tripId });
     expect(await requeueStuckPending(Date.now(), { liveJobs: noJobs })).toBe(1);

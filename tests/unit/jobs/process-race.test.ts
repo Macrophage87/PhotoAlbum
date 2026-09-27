@@ -183,4 +183,54 @@ describe("choices a member makes while an item is processed", () => {
       expect(queued).toContain("geotag-photos");
     });
   });
+
+  describe("a trip changed while the job waited", () => {
+    // Queued with the trip it had then (as the upload, Re-process and the quarter-hourly pass queue it).
+    const dated = (on: string | null) => ({ takenAt: handDate, takenAtSource: "MANUAL", tzOffsetMin: 0, dateSetById: memberId, tripId: on });
+    const other = async () => (await db.trip.create({ data: { slug: "b", title: "B", startDate: new Date("2001-01-01"), endDate: new Date("2001-01-02"), createdById: memberId } })).id;
+
+    it("keeps a photo on the trip a member moved it to", async () => {
+      const b = await other();
+      const id = await stage("photo-with-gps.jpg", dated(b), "original.jpg");
+      await processPhoto({ photoId: id, tripId });
+      expect(await db.photo.findUniqueOrThrow({ where: { id } })).toMatchObject({ status: "READY", tripId: b });
+    });
+
+    it("keeps a photo a member took off its trip off it, where its day alone would file it there", async () => {
+      const off = await stage("photo-with-gps.jpg", dated(null), "original.jpg");
+      await processPhoto({ photoId: off, tripId });
+      expect(await db.photo.findUniqueOrThrow({ where: { id: off } })).toMatchObject({ status: "READY", tripId: null });
+      // One queued with no trip is still filed by its day.
+      const never = await stage("photo-with-gps.jpg", dated(null), "original.jpg");
+      await processPhoto({ photoId: never });
+      expect(await db.photo.findUniqueOrThrow({ where: { id: never } })).toMatchObject({ tripId });
+    });
+
+    it("does the same for a clip", async () => {
+      const b = await other();
+      const moved = await stage("clip.mp4", { kind: "VIDEO", ...dated(b) }, "original.mp4");
+      await transcodeVideo({ photoId: moved, tripId });
+      expect(await db.photo.findUniqueOrThrow({ where: { id: moved } })).toMatchObject({ status: "READY", tripId: b });
+      const off = await stage("clip.mp4", { kind: "VIDEO", ...dated(null) }, "original.mp4");
+      // Through the photo queue too, which hands a clip on to the transcoder.
+      await processPhoto({ photoId: off, tripId });
+      await transcodeVideo({ photoId: off, tripId });
+      expect(await db.photo.findUniqueOrThrow({ where: { id: off } })).toMatchObject({ status: "READY", tripId: null });
+    }, 120_000);
+
+    it("keeps a 3D scan a member took off its trip off it, whether before the job or while its copy was made", async () => {
+      const scan = (data: Record<string, unknown>) => stage("scan.glb", { kind: "SCAN", mimeType: "model/gltf-binary", scanFormat: "GLB", ...data }, "original.glb");
+      // A date by hand, and one from the file's modified time: both on the trip's days.
+      const byHand = await scan(dated(tripId));
+      meanwhile.run = async () => void (await db.photo.update({ where: { id: byHand }, data: { tripId: null } }));
+      await processPhoto({ photoId: byHand, tripId });
+      const fileTime = await scan({ tripId, exif: { fileLastModified: handDate.getTime() } });
+      meanwhile.run = async () => void (await db.photo.update({ where: { id: fileTime }, data: { tripId: null } }));
+      await processPhoto({ photoId: fileTime, tripId });
+      const before = await scan(dated(null));
+      await processPhoto({ photoId: before, tripId });
+      for (const id of [byHand, fileTime, before]) expect(await db.photo.findUniqueOrThrow({ where: { id } })).toMatchObject({ status: "READY", tripId: null });
+      expect((await db.photo.findUniqueOrThrow({ where: { id: fileTime } })).takenAt?.toISOString()).toBe(handDate.toISOString());
+    });
+  });
 });
