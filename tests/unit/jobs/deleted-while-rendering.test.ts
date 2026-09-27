@@ -105,6 +105,8 @@ describe("an item deleted for good while it is processed", () => {
     expect(existsSync(folder)).toBe(false);
   });
 
+  // Guards behaviour the code already had: before the scan's row was read again after its copy, the failed write
+  // that followed removed the folder the same way. The copy is made where the delete lands, as rendering is above.
   it("leaves no visitor copy of a 3D scan behind", async () => {
     const { id, folder } = await stage("scan.glb", "original.glb");
     await db.photo.update({ where: { id }, data: { kind: "SCAN", mimeType: "model/gltf-binary", scanFormat: "GLB" } });
