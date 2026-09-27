@@ -813,17 +813,16 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
 export function scrubAnnotation(a: StoredAnnotation, m: NameMatcher, where: Where = {}): StoredAnnotation {
   const text = (v: unknown) => (typeof v === "string" ? m.scrub(v, where) : "");
   const maybe = (v: unknown) => (typeof v === "string" ? m.scrub(v, where) : null);
-  const list = (v: unknown) => (Array.isArray(v) ? v.filter((t): t is string => typeof t === "string" && !m.namesTag(t, where)) : []);
+  const prose = { title: text(a.title), caption: text(a.caption), description: text(a.description), place: maybe(a.place), activity: maybe(a.activity), visibleText: maybe(a.visibleText), mood: maybe(a.mood) };
+  // Away from their photographs (wholeOnly) a one-word name inside keywords or a tag is not taken for them on its
+  // own ("santa barbara"); once the record's own words named them ("Sam at the fair"), it is ("sam's pony").
+  const named = where.wholeOnly && !where.tagged && (Object.keys(prose) as (keyof typeof prose)[]).some((k) => m.mentions(a[k], where));
+  const words: Where = named ? { ...where, wholeOnly: false, fullOnly: true } : where;
+  const list = (v: unknown) => (Array.isArray(v) ? v.filter((t): t is string => typeof t === "string" && !m.namesTag(t, words)) : []);
   return {
     ...a,
-    title: text(a.title),
-    caption: text(a.caption),
-    description: text(a.description),
-    searchSummary: typeof a.searchSummary === "string" ? m.scrubKeywords(a.searchSummary, where) : "",
-    place: maybe(a.place),
-    activity: maybe(a.activity),
-    visibleText: maybe(a.visibleText),
-    mood: maybe(a.mood),
+    ...prose,
+    searchSummary: typeof a.searchSummary === "string" ? m.scrubKeywords(a.searchSummary, words) : "",
     tags: list(a.tags),
     objects: list(a.objects),
   };
