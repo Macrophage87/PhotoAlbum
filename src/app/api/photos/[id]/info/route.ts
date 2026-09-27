@@ -1,5 +1,6 @@
 import { db } from "@/lib/db";
 import { getViewer } from "@/lib/auth/viewer";
+import { viewerFor } from "@/lib/auth/access";
 import { canEditMedia } from "@/lib/auth/ownership";
 import { mediaAccessInclude, mediaBytesAllowed, mediaTripNameable, toMediaAccess } from "@/lib/photos/access";
 import { readableDescription, readablePlaceGuess, readableTitle } from "@/lib/photos/readable-text";
@@ -63,8 +64,10 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   if (!mediaBytesAllowed(viewer, media, share)) {
     return Response.json({ error: "Forbidden" }, { status: viewer.kind === "user" ? 403 : 401 });
   }
-  const member = viewer.kind === "user";
-  const tripOpen = mediaTripNameable(viewer, photo.trip, share);
+  // A member reading a share page is answered as the page's visitors are: no names, notes, hearts or originals.
+  const shown = viewerFor(viewer, url.searchParams.get("view"));
+  const member = shown.kind === "user";
+  const tripOpen = mediaTripNameable(shown, photo.trip, share);
   const info: PhotoInfo = {
     id: photo.id,
     title: readableTitle(photo, member),
@@ -90,10 +93,10 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     themeKey: tripOpen ? photo.trip!.themeKey : null,
     originalUrl: photo.kind === "PHOTO" ? fullSizeUrl(photo, member) : null,
     // Editing is the uploader's and an admin's; everyone else in the family gets the same panel, read-only.
-    editable: canEditMedia(viewer.user, photo),
+    editable: canEditMedia(shown.user, photo),
     uploadedBy: member ? uploaderLabel(photo.uploader?.name, photo.uploader?.email) : null,
     trip: tripOpen ? { slug: photo.trip!.slug, title: photo.trip!.title } : null,
-    favourite: member ? (await favouritesFor("photo", [photo.id], viewer)).get(photo.id) ?? { mine: false, count: 0 } : null,
+    favourite: member ? (await favouritesFor("photo", [photo.id], shown)).get(photo.id) ?? { mine: false, count: 0 } : null,
   };
   return Response.json(info, { headers: { "Cache-Control": "private, max-age=0, must-revalidate" } });
 }
