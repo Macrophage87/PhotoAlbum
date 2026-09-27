@@ -8,6 +8,7 @@ import { encodePoints } from "@/lib/tracks/encode";
 import { deleteTrackAndItsPositions } from "@/lib/tracks/remove";
 import { geotagPhotos } from "@/lib/jobs/handlers/geotag-photos";
 import { needsPlaceEstimate } from "@/lib/annotation/place";
+import { rejudgeNames } from "@/lib/annotation/rejudge";
 import type { TrackPoint } from "@/lib/tracks/types";
 import { resetTestDb } from "../helpers/reset";
 
@@ -99,6 +100,19 @@ describe("deleteTrackAndItsPositions", () => {
     expect(needsPlaceEstimate(back)).toBe(true);
     expect(needsPlaceEstimate(await db.photo.findUniqueOrThrow({ where: { id: declined.id } }))).toBe(false);
     expect(await db.photo.findUniqueOrThrow({ where: { id: never.id } })).toMatchObject({ lat: null, placeEstimatedAt: null });
+  });
+
+  it("judges a guess the track covers, and keeps that judgement when the track is taken back to ask again", async () => {
+    const gpx = await track(line(10, 44), "GPX");
+    const guessed = await photo(3, { lat: 41.9, lng: 12.45, gpsSource: "ESTIMATE", placeEstimateName: "Biscuit's beach", placeEstimateNote: "the dunes", placeEstimatedAt: new Date() });
+    await geotagPhotos({ tripId });
+    expect(await db.photo.findUniqueOrThrow({ where: { id: guessed.id } })).toMatchObject({ gpsSource: "TRACK", placeEstimateName: "Biscuit's beach", placeEstimateMembersOnly: false });
+    // A name the guess mentions becomes known while the track's position covers it: the guess is judged all the same.
+    expect((await rejudgeNames(["Biscuit"])).places).toBe(1);
+    await deleteTrackAndItsPositions(gpx.id);
+    const back = await db.photo.findUniqueOrThrow({ where: { id: guessed.id } });
+    expect(back).toMatchObject({ lat: null, gpsSource: null, placeEstimatedAt: null, placeEstimateMembersOnly: true });
+    expect(needsPlaceEstimate(back)).toBe(true);
   });
 
   it("does not ask again about a guess another track places once more", async () => {

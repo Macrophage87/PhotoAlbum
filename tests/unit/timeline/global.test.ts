@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
 import { timelineCounts, timelineIds, tripTimeline } from "@/lib/timeline/queries";
 import { NO_FILTER } from "@/lib/photos/filters";
+import { photosOnDay } from "@/lib/timeline/build";
+import { timelinePage } from "@/lib/timeline/paging";
 import { resetTestDb } from "../helpers/reset";
 
 describe("the timeline of everything", () => {
@@ -51,5 +53,48 @@ describe("the timeline of everything", () => {
     expect(ids).toEqual([]);
     expect((await timelineCounts([a, b, c], filter, ids)).size).toBe(0);
     expect((await tripTimeline(a, "UTC", filter, ids)).matched).toBe(0);
+  });
+
+  describe("a ride past midnight, on a page of the timeline of everything", () => {
+    let ride: string, night: string;
+    beforeEach(async () => {
+      const user = await db.user.findFirstOrThrow();
+      night = (await db.trip.create({ data: { slug: "night", title: "night", timezone: "America/New_York", startDate: new Date("2025-08-12"), endDate: new Date("2025-08-13"), createdById: user.id } })).id;
+      // 22:30 on the 12th to 01:15 on the 13th in New York, with a photograph each side of midnight, and breakfast.
+      ride = (await db.activity.create({ data: { tripId: night, title: "Night ride", type: "BIKE", startTime: new Date("2025-08-13T02:30:00Z"), endTime: new Date("2025-08-13T05:15:00Z") } })).id;
+      const photo = (caption: string, at: string, activityId: string | null) => ({ tripId: night, activityId, uploaderId: user.id, originalName: `${caption}.jpg`, caption, mimeType: "image/jpeg", storageKey: "k", originalPath: "k/o.jpg", sizeBytes: 1, status: "READY" as const, takenAt: new Date(at), tzOffsetMin: -240 });
+      await db.photo.createMany({ data: [photo("dusk ride", "2025-08-13T02:45:00Z", ride), photo("lighthouse by night", "2025-08-13T04:40:00Z", ride), photo("lighthouse breakfast", "2025-08-13T12:00:00Z", null)] });
+    });
+
+    const onItsPage = async (filter: typeof NO_FILTER) => {
+      const trips = [{ id: night, timezone: "America/New_York" }, { id: a, timezone: "UTC" }, { id: b, timezone: "UTC" }, { id: c, timezone: "UTC" }];
+      const searching = Boolean(filter.q);
+      const restrict = searching ? await timelineIds(filter, null) : null;
+      const counts = await timelineCounts(trips.map((t) => t.id), filter, restrict);
+      const { onPage } = timelinePage(trips, counts, { searching, page: 1 });
+      expect(onPage.map((t) => t.id)).toContain(night);
+      return { count: counts.get(night), groups: (await tripTimeline(night, "America/New_York", filter, restrict)).groups };
+    };
+
+    it("keeps the ride under the day it began, points back from the next day, and counts each photograph once", async () => {
+      const { count, groups } = await onItsPage(NO_FILTER);
+      expect(groups.map((g) => [g.dayKey, g.items.map((i) => i.kind).join(",")])).toEqual([["2025-08-12", "activity"], ["2025-08-13", "continued,photos"]]);
+      expect(groups[1].items[0]).toMatchObject({ kind: "continued", from: "2025-08-12", activity: { id: ride } });
+      expect(groups.map(photosOnDay)).toEqual([2, 1]);
+      expect(groups.map(photosOnDay).reduce((x, y) => x + y)).toBe(count);
+    });
+
+    it("still points back when a search narrows the page, and counts what matched", async () => {
+      const { count, groups } = await onItsPage({ ...NO_FILTER, q: "lighthouse", member: true });
+      expect(groups.map((g) => [g.dayKey, g.items.map((i) => i.kind).join(",")])).toEqual([["2025-08-12", "activity"], ["2025-08-13", "continued,photos"]]);
+      expect(groups.map(photosOnDay)).toEqual([1, 1]);
+      expect(count).toBe(2);
+    });
+
+    it("points back from nothing when the search leaves the later day empty", async () => {
+      const { count, groups } = await onItsPage({ ...NO_FILTER, q: "dusk", member: true });
+      expect(groups.map((g) => [g.dayKey, g.items.map((i) => i.kind).join(",")])).toEqual([["2025-08-12", "activity"]]);
+      expect(count).toBe(1);
+    });
   });
 });
