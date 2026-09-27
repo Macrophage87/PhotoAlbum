@@ -156,6 +156,24 @@ describe("a first name in prose away from her photographs is still hers", () => 
     expect(mia.id).toBeTruthy();
   });
 
+  it("a saint's name with a dot stays a church's, in the words, the keywords and the tags, where her name is taken out", async () => {
+    const mary = await db.person.create({ data: { name: "Mary Kemp", createdById: admin } });
+    const p = await photo({ annotation: { ...record("Mary holds the baby. Christening at St. Mary's church.", ["st. mary's church", "mary's baby"]), searchSummary: "mary baby christening st. mary's church" }, annotatedAt: new Date() });
+    await forgetPerson(mary.id, { keepName: false, byUserId: admin });
+    const a = (await db.photo.findUniqueOrThrow({ where: { id: p.id } })).annotation as StoredAnnotation;
+    expect(a.caption).toBe("A family member holds the baby. Christening at St. Mary's church.");
+    expect(a.searchSummary).toContain("st. mary's church");
+    expect(a.searchSummary).not.toMatch(/^mary/);
+    expect(a.tags).toEqual(["st. mary's church"]);
+  });
+
+  it("the withdrawn pass reaches a helper's trip description that gives only her first name", async () => {
+    await db.person.create({ data: { name: "Mia Kent", birthday: new Date("2019-01-01"), namingWithdrawnAt: new Date(Date.now() - 30 * 86_400_000), createdById: admin } });
+    const trip = await db.trip.create({ data: { slug: "lake", title: "The lake", description: "Mia's party at the lake, with bubbles.", descriptionByHelper: true, startDate: new Date("2025-08-10"), endDate: new Date("2025-08-11"), createdById: admin } });
+    await scrubWithdrawnNames();
+    expect((await db.trip.findUniqueOrThrow({ where: { id: trip.id } })).description).toBe("A family member's party at the lake, with bubbles.");
+  });
+
   it("S3: once the record's words name her, her first name leaves its keywords and tags too", async () => {
     const barbara = await db.person.create({ data: { name: "Barbara Jones", createdById: admin } });
     const p = await photo({ annotation: { ...record("Barbara blows out the candles on her 80th", ["barbara's 80th", "cake"]), searchSummary: "barbara birthday 80th candles" }, annotatedAt: new Date() });
@@ -192,9 +210,13 @@ describe("a first name in prose away from her photographs is still hers", () => 
     const text = (name: string, t: string) => nameMatcher([name], []).scrub(t, { away: true });
     for (const [name, t] of [
       ["Barbara Jones", "Santa Barbara Pier"], ["Barbara Jones", "SANTA BARBARA PIER"], ["Leo Martin", "Leo Martinez Park At Dusk"], ["Louise Penny", "Sunrise At Lake Louise"], ["Barbara", "Santa Barbara Pier"],
-      ["Mary Kemp", "Wedding At St Mary's Church"], ["Peter Hale", "Saint Peter's Basilica"], ["Barbara Jones", "Isle Of Barbara"], ["Barbara Jones", "Barbara Of Cleves Street"], ["Catherine Wells", "Catherine The Great Palace"],
+      ["Mary Kemp", "Wedding At St Mary's Church"], ["Mary Kemp", "Christening at St. Mary's church"], ["Mary Kemp", "Ste. Marie's Chapel"], ["Peter Hale", "Saint Peter's Basilica"],
+      ["Barbara Jones", "Isle Of Barbara"], ["Barbara Jones", "Church Of St Barbara"], ["Barbara Jones", "Barbara Of Cleves Street"], ["Catherine Wells", "Catherine The Great Palace"],
     ]) expect([name, text(name, t)]).toEqual([name, t]);
-    for (const [name, t, want] of [["Barbara Jones", "Barbara And Ben At The Lake", "A Family Member And Ben At The Lake"], ["Barbara Jones", "Barbara At The Party", "A Family Member At The Party"]]) expect([name, text(name, t)]).toEqual([name, want]);
+    for (const [name, t, want] of [
+      ["Barbara Jones", "Barbara And Ben At The Lake", "A Family Member And Ben At The Lake"], ["Barbara Jones", "Barbara At The Party", "A Family Member At The Party"],
+      ["Barbara Jones", "Portrait Of Barbara", "Portrait Of A Family Member"], ["Barbara Jones", "The Wedding Of Barbara And Ben", "The Wedding Of A Family Member And Ben"], ["Barbara Jones", "Birthday Cake Of Barbara", "Birthday Cake Of A Family Member"],
+    ]) expect([name, text(name, t)]).toEqual([name, want]);
     const loose = looseMatcher(nameMatcher(["Barbara"], []));
     expect(loose("SANTA BARBARA PIER")).toBe(false);
   });

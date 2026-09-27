@@ -89,8 +89,15 @@ const STARTERS = new Set([
  * The Lake". Beside a name, capitalized or not, they never make it somebody else's; a name-like word does ("Santa
  * Barbara", "Leo Martinez", "Lake Louise").
  */
-/** A saint's title, which away from their photographs makes a place of the name after it ("St Mary's Church"). */
-const SAINT = new Set(["st", "saint", "ste", "san", "santa", "sankt"]);
+/** A saint's title just before a name, which away from their photographs makes it a place's ("St. Mary's Church"). */
+const SAINT_BEFORE = /(?<![\p{L}\p{M}])(?:st|ste|saint|san|santa|sankt)\.?[ \t]+$/iu;
+
+/** Nouns of places named "X Of Somebody": "Isle Of Barbara", "Church Of St Barbara", "Bay Of Louise". */
+const PLACE_OF = new Set([
+  "isle", "island", "bay", "port", "lake", "loch", "mount", "cape", "gulf", "sound", "strait", "church", "cathedral", "chapel", "basilica", "abbey",
+  "priory", "parish", "house", "castle", "palace", "hall", "fort", "tower", "bridge", "gate", "street", "square", "school", "college", "university",
+  "hospital", "county", "city", "town", "village", "valley", "river", "park",
+]);
 
 export const FUNCTION_WORDS = new Set([
   "a", "an", "the", "and", "or", "but", "nor", "&", "at", "in", "on", "with", "without", "within", "by", "beside", "besides", "near", "to", "for", "from",
@@ -338,13 +345,15 @@ export function notThePerson(text: string, start: number, end: number, n: Neighb
     }
   }
   const caps = isUpperWord(match.replace(/[^\p{L}]/gu, ""));
+  // Away from their own photographs a saint's name is a place's, never a title before theirs: "St Mary's Church",
+  // "Christening at St. Mary's church", "Saint Peter's Basilica". Read from the text itself, so "St." is not taken
+  // for the end of a sentence.
+  if (!n.ownPhotos && SAINT_BEFORE.test(before)) return true;
   if (n.away) {
-    // Away from their photographs a saint's name is a place's, never a title before theirs: "St Mary's Church",
-    // "Saint Peter's Basilica".
-    if (p && SAINT.has(p)) return true;
-    // "Isle Of Barbara", "Bay Of Louise": a capitalized word and "Of" before it make it a place's name. ("Of" is no
-    // joining word: "X Of Y" is how places and historical names are written.)
-    if (p === "of" && /(?<![\p{L}\p{M}])\p{Lu}[\p{L}\p{M}'’.-]*[ \t]+of[ \t]+$/iu.test(before) && /(?<![\p{L}\p{M}])\p{Lu}[\p{L}\p{M}'’.-]*[ \t]+\p{Lu}[\p{L}\p{M}]*[ \t]+$/u.test(before)) return true;
+    // "Isle Of Barbara", "Church Of Barbara": a place's noun and "Of" before it make it the place's name ("Of" is no
+    // joining word). Only a place's noun: "Portrait Of Barbara", "The Wedding Of Barbara And Ben" are her.
+    const of = before.match(/(?<![\p{L}\p{M}])(\p{Lu}[\p{L}\p{M}'’-]*)[ \t]+of[ \t]+$/iu);
+    if (of && PLACE_OF.has(bare(of[1]))) return true;
   }
   if (n.away || (!n.title && !caps)) {
     // "Ann Jones", "Robin Hood", "Florence Nightingale" (but "Mary Ann swam" is Mary Ann Smith)...
@@ -786,7 +795,9 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
   const scrub = <T,>(text: T, where: Where = {}): T => guard(text, (t) => scrubText(t, where));
   const scrubKeywords = <T,>(text: T, where: Where = {}): T =>
     guard(text, (t) => {
-      const put = (m: string, offset: number, w: string) => standIn(m, w.slice(0, offset), w.slice(offset + m.length));
+      // Off their own photograph, "st. mary's church" in the keywords is still a church.
+      const saintly = !(where.tagged && where.onPhoto !== false);
+      const put = (m: string, offset: number, w: string) => (saintly && SAINT_BEFORE.test(w.slice(0, offset)) ? m : standIn(m, w.slice(0, offset), w.slice(offset + m.length)));
       let out = scrubText(t, where);
       const k = keywordsFor(where);
       if (k.pairRx) out = out.replace(k.pairRx, put);
@@ -802,7 +813,9 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
     try {
       const t = tag.trim().toLowerCase().replace(/’/g, "'");
       const k = keywordsFor(where);
-      if (k.strongRx && new RegExp(k.strongRx.source, "iu").test(tag)) return true;
+      // Off their own photograph a saint's name in a tag is a place's ("st. mary's church").
+      const saintly = !(where.tagged && where.onPhoto !== false);
+      if (k.strongRx && [...tag.matchAll(new RegExp(k.strongRx.source, "giu"))].some((x) => !(saintly && SAINT_BEFORE.test(tag.slice(0, x.index))))) return true;
       if (k.pairRx && new RegExp(k.pairRx.source, "iu").test(tag)) return true;
       const bareTag = bare(t.replace(/'s$/u, ""));
       if (k.weakWords.includes(bareTag)) return true;
@@ -847,7 +860,8 @@ export function scrubAnnotation(a: StoredAnnotation, m: NameMatcher, where: Wher
   const named = where.away && !where.tagged && (Object.keys(prose) as (keyof typeof prose)[]).some((k) => m.mentions(a[k], where));
   // Once the record's own words named them, its keywords and tags are cleaned as on their own photographs: any word
   // of their name, in any case ("barbara's 80th", "barbara birthday candles").
-  const words: Where = named ? { ...where, away: false, tagged: true } : where;
+  // (Not as on their own photograph for anything else: "st. mary's church" there is still a church.)
+  const words: Where = named ? { ...where, away: false, tagged: true, onPhoto: false } : where;
   const list = (v: unknown) => (Array.isArray(v) ? v.filter((t): t is string => typeof t === "string" && !m.namesTag(t, words)) : []);
   return {
     ...a,

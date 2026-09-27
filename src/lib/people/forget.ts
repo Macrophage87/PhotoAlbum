@@ -332,7 +332,9 @@ export async function forgetNameInText(photoIds: string[], m: NameMatcher, opts:
   // Descriptions of whole trips are written from many photographs, and say "in May" of the month: only names that
   // could be nobody else's are taken out of them. What is left naming them is listed (see memberTextMentioning).
   const near = await containersOf([...tagged]);
-  const words = probes(m.albumForms);
+  // Deciding what may be read, every word of their names is looked for, a first name alone included ("Mia's party at
+  // the lake"), as for photographs (see photosNamingAnyWay).
+  const words = [...new Set([...probes(m.albumForms), ...(opts.strict ? nameWords(opts.names ?? []) : [])])];
   const byHelper = (ids: string[]) => ({ descriptionByHelper: true, ...(opts.publicOnly ? { descriptionMembersOnly: false } : {}), ...(opts.since ? { updatedAt: { gt: opts.since } } : {}), OR: [{ id: { in: ids } }, ...words.map((w) => ({ description: { contains: w, mode: "insensitive" as const } }))] });
   const [trips, activities, collections] = await Promise.all([
     db.trip.findMany({ where: byHelper(near.trips), select: { id: true, description: true } }),
@@ -632,8 +634,13 @@ export async function forgetNameEverywhere(person: PersonNames, opts: { publicOn
  * Photographs whose helper's text or title may name them in any way: pre-filtered by every word of their names, then
  * judged strictly (see `stillNames`). For deciding what everyone may read, where a first name alone counts.
  */
+/** Every word of these names of three letters or more, for a text search that errs towards finding too much. */
+function nameWords(names: string[]): string[] {
+  return [...new Set(names.flatMap((n) => n.normalize("NFC").split(/[\s\-‐]+/u)).map((w) => w.replace(/[^\p{L}\p{M}\p{N}'’]/gu, "")).filter((w) => [...w].length >= 3))];
+}
+
 async function photosNamingAnyWay(m: NameMatcher, names: string[]): Promise<string[]> {
-  const words = [...new Set(names.flatMap((n) => n.normalize("NFC").split(/[\s\-‐]+/u)).filter((w) => [...w].length >= 3))];
+  const words = nameWords(names);
   if (!words.length) return [];
   const rows = await db.$queryRaw<MachineText[]>`
     SELECT id, kind::text AS kind, title, "membersTitle", "titleByHelper", annotation, "placeEstimateName", "placeEstimateNote", "estimatedDateNote" FROM "Photo"
