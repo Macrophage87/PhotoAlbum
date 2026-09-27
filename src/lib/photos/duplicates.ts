@@ -79,10 +79,12 @@ async function foldGroup(group: DuplicateGroup, byUserId: string, report: FoldRe
   const listed = photos.filter((p) => p.id !== keeper.id);
 
   // Take what the keeper is missing, copy by copy, so an earlier copy's caption is not overwritten by a later one.
-  // Planned from the keeper and its copies as they are under row locks (taken in id order, so two folds, or a
-  // member's removal, cannot deadlock with this), so a caption, title or date a member saved meanwhile is what the
-  // plan sees, one saved while it is written waits for it and then stands, and a setter copied is one still there.
-  // A keeper put in the trash meanwhile is not folded into.
+  // Planned from the keeper and its copies as they are under row locks (taken in id order, so two folds cannot
+  // deadlock with each other), so a caption, title or date a member saved meanwhile is what the plan sees, one saved
+  // while it is written waits for it and then stands, and a setter copied is one still there. A keeper put in the
+  // trash meanwhile is not folded into. A member's removal takes the same rows in its own order and can deadlock
+  // with this: Postgres ends one of the two, and a fold that loses is caught with its group (see foldDuplicates) and
+  // tried again next run, while the removal tries once more by itself.
   const locked = await db.$transaction(async (tx) => {
     const rows = await tx.$queryRaw<{ id: string }[]>`SELECT id FROM "Photo" WHERE id = ANY(${photos.map((p) => p.id)}::text[]) AND "trashedAt" IS NULL ORDER BY id FOR UPDATE`;
     if (!rows.some((r) => r.id === keeper.id)) return null;
@@ -90,18 +92,23 @@ async function foldGroup(group: DuplicateGroup, byUserId: string, report: FoldRe
     let filling = now.find((p) => p.id === keeper.id)!;
     const copies = listed.flatMap((c) => now.filter((p) => p.id === c.id));
     const data: Record<string, unknown> = {};
+    const filled: string[] = [];
+    let conflict = false;
     for (const copy of copies) {
       const plan = planFold(filling, copy);
       Object.assign(data, plan.data);
       filling = { ...filling, ...(plan.data as Partial<FoldablePhoto>) };
-      for (const f of plan.filled) if (!report.filled.includes(f)) report.filled.push(f);
-      if (plan.conflict && !report.conflicts.includes(keeper.id)) report.conflicts.push(keeper.id);
+      filled.push(...plan.filled);
+      conflict ||= Boolean(plan.conflict);
     }
     if (Object.keys(data).length) await tx.photo.update({ where: { id: keeper.id }, data });
-    return { filling, copies };
+    return { filling, copies, filled, conflict };
   });
   if (!locked || !locked.copies.length) return;
   const { filling, copies } = locked;
+  // Reported only once the keeper's fill has committed: a group that rolled back filled nothing.
+  for (const f of locked.filled) if (!report.filled.includes(f)) report.filled.push(f);
+  if (locked.conflict && !report.conflicts.includes(keeper.id)) report.conflicts.push(keeper.id);
 
   // Wherever a copy was gathered, the keeper belongs instead.
   const memberships = await db.collectionItem.findMany({ where: { photoId: { in: copies.map((c) => c.id) } }, select: { collectionId: true, addedById: true, position: true } });

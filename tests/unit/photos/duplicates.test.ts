@@ -124,6 +124,8 @@ describe("folding the identical copies already in the album", () => {
     itemsSpy.mockRestore();
 
     expect(report).toMatchObject({ groups: 2, failed: 1 });
+    // What the folded groups filled, and only theirs: a's never committed a fill.
+    expect(report.filled.sort()).toEqual(["caption", "date"]);
     // a: nothing folded into a keeper in the trash; its copy stays.
     expect(await db.photo.findUniqueOrThrow({ where: { id: aCopy.id } })).toMatchObject({ trashedAt: null });
     expect((await db.photo.findUniqueOrThrow({ where: { id: aKeeper.id } })).caption).toBeNull();
@@ -133,6 +135,25 @@ describe("folding the identical copies already in the album", () => {
     expect((await db.photo.findUniqueOrThrow({ where: { id: cCopy.id } })).trashedAt).toBeNull();
     expect((await db.photo.findUniqueOrThrow({ where: { id: cKeeper.id } })).caption).toBe("From c");
     expect((await db.photo.findUniqueOrThrow({ where: { id: dKeeper.id } })).caption).toBe("From d");
+  });
+
+  it("reports nothing filled from a group whose fill rolled back", async () => {
+    const user = await db.user.create({ data: { email: "fold@example.com", role: "ADMIN" } });
+    const mk = (name: string, extra: Record<string, unknown> = {}) =>
+      db.photo.create({ data: { uploaderId: user.id, originalName: name, mimeType: "image/jpeg", storageKey: name, originalPath: `${name}/o.jpg`, sizeBytes: 1, status: "READY", contentHash: "same-bytes", ...extra } });
+    const keeper = await mk("first.jpg", { createdAt: new Date("2024-01-01") });
+    await mk("second.jpg", { createdAt: new Date("2025-01-01"), caption: "Biscuit in the kayak" });
+    // The keeper's write fails inside the transaction.
+    await db.$executeRawUnsafe(`CREATE OR REPLACE FUNCTION fold_test_refuse() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.id = '${keeper.id}' AND NEW.caption IS NOT NULL THEN RAISE EXCEPTION 'refused'; END IF; RETURN NEW; END $$`);
+    await db.$executeRawUnsafe(`CREATE TRIGGER fold_test_refuse BEFORE UPDATE ON "Photo" FOR EACH ROW EXECUTE FUNCTION fold_test_refuse()`);
+    try {
+      const report = await foldDuplicates(user.id);
+      expect(report).toMatchObject({ groups: 0, failed: 1, filled: [] });
+    } finally {
+      await db.$executeRawUnsafe(`DROP TRIGGER IF EXISTS fold_test_refuse ON "Photo"`);
+      await db.$executeRawUnsafe(`DROP FUNCTION IF EXISTS fold_test_refuse()`);
+    }
+    expect((await db.photo.findUniqueOrThrow({ where: { id: keeper.id } })).caption).toBeNull();
   });
 
   it("puts the kept photograph wherever a copy of it had been chosen as the cover", async () => {

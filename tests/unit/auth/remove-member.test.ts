@@ -9,7 +9,7 @@ vi.mock("next/cache", () => ({ revalidatePath: () => undefined }));
 vi.mock("@/lib/jobs/boss", () => ({ enqueue: async (queue: string, data: unknown) => void who.queued.push({ queue, data }) }));
 vi.mock("@/lib/google/account", () => ({ revokeRemovedConnection: async (_: string, token: string | null) => (token ? who.revoke : "none") }));
 
-import { removeMember } from "@/app/admin/actions";
+import { removeMember, setRole } from "@/app/admin/actions";
 
 describe("removing a member", () => {
   let admin: string;
@@ -55,6 +55,21 @@ describe("removing a member", () => {
     await db.user.update({ where: { id: admin }, data: { role: "MEMBER" } });
     await expect(removeMember(m.id)).rejects.toThrow(/no longer an admin/);
     expect(await db.user.count({ where: { id: m.id } })).toBe(1);
+  });
+
+  it("never lets two admins demoting each other at once leave no admin, and refuses a demoted or removed actor", async () => {
+    const other = await member("other@example.com", "ADMIN");
+    who.next = [admin, other.id];
+    const results = await Promise.allSettled([setRole(other.id, "MEMBER"), setRole(admin, "MEMBER")]);
+    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+    expect(await db.user.count({ where: { role: "ADMIN" } })).toBe(1);
+    // The one left is refused once demoted in turn by somebody else's hand, as is a removed one.
+    const m = await member();
+    const actor = (await db.user.findFirstOrThrow({ where: { role: "ADMIN" } })).id;
+    await db.user.update({ where: { id: actor }, data: { role: "MEMBER" } });
+    who.next = [actor];
+    await expect(setRole(m.id, "ADMIN")).rejects.toThrow(/no longer an admin/);
+    expect((await db.user.findUniqueOrThrow({ where: { id: m.id } })).role).toBe("MEMBER");
   });
 
   it("takes their judged name with them, and queues the revocation again when Google cannot be told", async () => {

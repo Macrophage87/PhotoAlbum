@@ -59,7 +59,18 @@ export async function revokeInvite(id: string): Promise<void> {
 export async function setRole(userId: string, role: "ADMIN" | "MEMBER"): Promise<void> {
   const admin = await requireAdminOrThrow();
   if (userId === admin.id) throw new Error("You can't change your own role.");
-  await db.user.update({ where: { id: userId }, data: { role } });
+  await db.$transaction(async (tx) => {
+    // As removeMember: both accounts locked in one order, the actor still an admin, and never the last admin gone —
+    // two admins demoting each other at once demote one.
+    const users = await tx.$queryRaw<{ id: string; role: string }[]>`SELECT id, role::text AS role FROM "User" WHERE id IN (${admin.id}, ${userId}) ORDER BY id FOR UPDATE`;
+    if (!users.some((u) => u.id === userId)) throw new Error("That member is no longer in the album.");
+    if (users.find((u) => u.id === admin.id)?.role !== "ADMIN") throw new Error("Your account is no longer an admin's.");
+    if (role !== "ADMIN") {
+      const [{ admins }] = await tx.$queryRaw<{ admins: number }[]>`SELECT count(*)::int AS admins FROM "User" WHERE role = 'ADMIN' AND id <> ${userId}`;
+      if (!admins) throw new Error("The album needs at least one admin.");
+    }
+    await tx.user.update({ where: { id: userId }, data: { role } });
+  });
   revalidatePath("/admin");
 }
 
