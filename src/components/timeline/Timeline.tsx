@@ -1,5 +1,5 @@
 import { photosOnDay, type DayGroup } from "@/lib/timeline/build";
-import { orderTimeline, type TimelineOrder } from "@/lib/timeline/order";
+import { orderTimeline, timeSpan, type TimelineOrder } from "@/lib/timeline/order";
 import type { PhotoCard } from "@/lib/photos/queries";
 import { formatDay, formatLocalTime } from "@/lib/time/format";
 import { toGridPhoto } from "@/components/photos/toGrid";
@@ -63,13 +63,16 @@ export async function Timeline({ groups: built, tripSlug, timezone, member, idPr
                     </TimelineDrop>
                   ) : (
                     <div>
-                      {g.dayKey && (
-                        <div className="text-xs text-muted mb-2">
-                          {formatLocalTime(item.photos[0].takenAt!, { offsetMin: item.photos[0].tzOffsetMin, timezone })}
-                          {item.photos.length > 1 && <> – {formatLocalTime(item.photos[item.photos.length - 1].takenAt!, { offsetMin: item.photos[item.photos.length - 1].tzOffsetMin, timezone })}</>}
-                          <span className="ml-2">· {item.photos.length} photo{item.photos.length === 1 ? "" : "s"}</span>
-                        </div>
-                      )}
+                      {g.dayKey && (() => {
+                        const span = timeSpan(item.photos);
+                        return (
+                          <div className="text-xs text-muted mb-2">
+                            {span && formatLocalTime(span.first.takenAt!, { offsetMin: span.first.tzOffsetMin, timezone })}
+                            {span && span.last !== span.first && <> – {formatLocalTime(span.last.takenAt!, { offsetMin: span.last.tzOffsetMin, timezone })}</>}
+                            <span className="ml-2">· {item.photos.length} photo{item.photos.length === 1 ? "" : "s"}</span>
+                          </div>
+                        );
+                      })()}
                       {/* Dropped here, a photograph comes off whatever activity it was on and stays on this day. */}
                       <TimelineDrop kind="loose" target={null} label="this day">
                         <PhotoGrid photos={item.photos.map(tile)} draggable={member} />
