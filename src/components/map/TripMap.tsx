@@ -35,6 +35,8 @@ export function TripMap({ src, theme, showTripList = false, activityHrefBase, na
   const nav = useRef<ReturnType<typeof lightboxNav> | null>(null);
   /** Photographs asked about and not described: no longer there for this viewer. */
   const gone = useRef(new Set<string>());
+  /** Photographs whose details could not be fetched, twice: said so in the lightbox rather than left loading. */
+  const [unloaded, setUnloaded] = useState<ReadonlySet<string>>(new Set());
   const [hover, setHover] = useState<string | null>(null);
   const [focus, setFocus] = useState<MapPayload["bounds"]>(null);
   // The choice is remembered on this device, so somebody who likes seeing the days keeps seeing them. Read as the
@@ -76,9 +78,10 @@ export function TripMap({ src, theme, showTripList = false, activityHrefBase, na
     () =>
       (lightbox?.ids ?? []).map((id) => {
         const d = known.get(id);
+        if (!d && unloaded.has(id)) return { id, mediumUrl: LOADING, width: null, height: null, caption: "Couldn't load this photo.", alt: "Couldn't load this photo" };
         return { id, mediumUrl: d?.mediumUrl ?? LOADING, width: null, height: null, caption: d?.caption ?? null, alt: d ? (d.caption ?? "Photo") : "Loading" };
       }),
-    [lightbox, known],
+    [lightbox, known, unloaded],
   );
 
   /** Open the lightbox on one of these at once; its picture, and its neighbours', are looked up as it opens. */
@@ -92,13 +95,17 @@ export function TripMap({ src, theme, showTripList = false, activityHrefBase, na
       },
       prefetch: (few) =>
         void describe(few)
+          // Asked twice before giving up, as the map's own previews are.
+          .catch(() => describe(few))
           .then((found) => {
             const missing = few.filter((id) => !found.has(id));
             for (const id of missing) gone.current.add(id);
+            setUnloaded((was) => (few.some((id) => was.has(id)) ? new Set([...was].filter((id) => !few.includes(id))) : was));
             if (missing.length && nav.current === mine) mine.recheck();
           })
-          // Not answered is not gone: the photograph stays, and is asked about again on the next step.
-          .catch(() => {}),
+          // Not answered is not gone: the photograph stays, says it could not be loaded, and is asked about again
+          // when it is stepped onto.
+          .catch(() => setUnloaded((was) => new Set([...was, ...few]))),
     });
     nav.current = mine;
     mine.open();

@@ -90,4 +90,28 @@ describe("asking for the view a map is on", () => {
     expect(await done).toBe(true);
     expect(shown).toEqual(["before", "after"]);
   });
+
+  it("counts a view moved to before the refreshed answer came as the answer the album's change is in", async () => {
+    const { asked, fetchView } = server();
+    const shown: string[] = [];
+    const asker = viewAsker({ fetchView, onAnswer: (p) => shown.push(p.points[0][0]) });
+    asker.ask(view(0, 0));
+    await vi.advanceTimersByTimeAsync(VIEW_SETTLE_MS);
+    asked[0].land(answer("before"));
+    await vi.runAllTimersAsync();
+    let settled: boolean | null = null;
+    void asker.refresh().then((d) => (settled = d));
+    // Panned away before the refreshed answer came: that question is taken back…
+    asker.ask(view(40, 40));
+    await vi.advanceTimersByTimeAsync(VIEW_SETTLE_MS);
+    expect(asked[1].signal.aborted).toBe(true);
+    asked[1].land(answer("refreshed"));
+    await vi.runAllTimersAsync();
+    expect(settled).toBeNull();
+    // …and the pan's answer, asked after the change, is the one that settles it.
+    asked[2].land(answer("panned"));
+    await vi.runAllTimersAsync();
+    expect(settled).toBe(true);
+    expect(shown).toEqual(["before", "panned"]);
+  });
 });

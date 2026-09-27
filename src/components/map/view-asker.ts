@@ -29,6 +29,10 @@ export function viewAsker({ fetchView, onAnswer, settleMs = VIEW_SETTLE_MS }: { 
   /** The last view the map settled on. */
   let last: MapViewport | null = null;
   let latest = 0;
+  /** How many questions have been sent, so an answer can say whether its question went after a given moment. */
+  let sent = 0;
+  /** Waiting for the first answer to any question sent after `after`. */
+  let waiters: { after: number; resolve: (drawn: boolean) => void }[] = [];
   let timer: ReturnType<typeof setTimeout> | null = null;
   let pending: AbortController | null = null;
 
@@ -41,21 +45,24 @@ export function viewAsker({ fetchView, onAnswer, settleMs = VIEW_SETTLE_MS }: { 
     pending = null;
   };
 
-  const send = (v: MapViewport): Promise<boolean> => {
+  const send = (v: MapViewport) => {
     const mine = latest;
+    const number = ++sent;
     const ctl = new AbortController();
     pending = ctl;
     const wide = widen(v);
-    return fetchView(wide, ctl.signal)
+    fetchView(wide, ctl.signal)
       .then((photos) => {
-        if (mine !== latest) return false;
+        if (mine !== latest) return;
         pending = null;
         shown = { view: wide, grouped: photos.cells.length > 0 };
         onAnswer(photos);
-        return true;
+        const done = waiters.filter((w) => number > w.after);
+        waiters = waiters.filter((w) => number <= w.after);
+        for (const w of done) w.resolve(true);
       })
       // Given up for a newer view, or failed: the map keeps what it has, and the next move asks again.
-      .catch(() => false);
+      .catch(() => {});
   };
 
   return {
@@ -67,15 +74,26 @@ export function viewAsker({ fetchView, onAnswer, settleMs = VIEW_SETTLE_MS }: { 
       const mine = latest;
       timer = setTimeout(() => {
         timer = null;
-        if (mine === latest) void send(v);
+        if (mine === latest) send(v);
       }, settleMs);
     },
-    /** Ask for the view the map is on again, now, whatever was answered before: the album has changed under it. Resolves once the answer is on the map (true), or when there is none to be had (false). */
+    /**
+     * Ask for the view the map is on again, now, whatever was answered before: the album has changed under it.
+     * Resolves (true) with the first answer drawn to any question sent from now on — this one's, or a later view's
+     * if the map is moved before it comes — or at once (false) when there is no view to ask about.
+     */
     refresh(): Promise<boolean> {
       withdraw();
       shown = null;
-      return last ? send(last) : Promise.resolve(false);
+      if (!last) return Promise.resolve(false);
+      const drawn = new Promise<boolean>((resolve) => waiters.push({ after: sent, resolve }));
+      send(last);
+      return drawn;
     },
-    dispose: withdraw,
+    dispose() {
+      withdraw();
+      for (const w of waiters) w.resolve(false);
+      waiters = [];
+    },
   };
 }
