@@ -428,6 +428,11 @@ docker compose run --rm ml-init       # only after an upgrade that changes the s
       P("Database migrations run automatically at container start. Take a database dump before upgrading, as a precaution. "
         "An AI-description backfill still in progress is cut short by an upgrade; the Admin page says so under that run within about an hour. Wait until none of its rows reads in progress, then start the backfill again for what is left (the app refuses a new run while one is open). "
         "The first upgrade to the media-hub release replaces the database container with the pgvector image; the data in the pgdata volume is kept as it is."),
+      P("<b>Upgrading from a release without FORGET_KEY.</b> Before the first upgrade to the release that brought it, add "
+        "<font face='Courier'>FORGET_KEY=</font> with the output of <font face='Courier'>openssl rand -base64 32</font> to .env, a different key for each "
+        "instance (staging and live never share one), and back it up separately from the database dumps. deploy/update.sh makes one when .env has none, "
+        "but an older checkout's first deploy runs the older script, which does not; until there is a key nobody can be forgotten for good. "
+        "If the album has already forgotten somebody and the key is lost, never make a new one: put the original back (the deployment guide, step 10)."),
       P("The app's port is now published on 127.0.0.1 only (APP_BIND). If you open the album as http://&lt;server&gt;:&lt;port&gt; from other devices "
         "(no proxy), set APP_BIND=0.0.0.0 in .env and run <b>docker compose up -d</b>. Without a proxy, all sign-in requests share one rate-limit bucket.")]
 

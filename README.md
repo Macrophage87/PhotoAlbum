@@ -54,7 +54,7 @@ A self-hosted photo album for family trips. Photos are grouped into **trips** an
 
 ```bash
 cp .env.example .env
-# edit .env: set ADMIN_EMAIL, SMTP_* if you want real emails, and a new POSTGRES_PASSWORD
+# edit .env: set ADMIN_EMAIL, SMTP_* if you want real emails, a new POSTGRES_PASSWORD and FORGET_KEY (openssl rand -base64 32)
 docker compose up --build
 ```
 
@@ -190,6 +190,7 @@ See `.env.example` for every variable. The important ones:
 | `PET_MATCHING_ENABLED` | Animal spotting through the sidecar (default true) |
 | `GEOCODER_ENABLED`, `GEOCODER_URL` | Address lookup when setting a photo's place by hand (OpenStreetMap Nominatim by default; false keeps it to map clicks) |
 | `VISITOR_STATS_ENABLED`, `VISITOR_STATS_RETENTION_DAYS` | Who-has-been-looking counts on the Admin page (default true, 90 days); false counts nothing |
+| `FORGET_KEY` | 32 random bytes, base64 (`openssl rand -base64 32`), one per instance: the secret forgotten people's names are hashed under. Required in production for forgetting. Back it up apart from the database dumps and never change it; upgrading from a release without it, set it before the first deploy ([DEPLOY.md](docs/DEPLOY.md#upgrading-from-before-the-forget-key)) |
 | `POSTGRES_PASSWORD` | Database password for the `db` container; change it from the default |
 | `NEXT_PUBLIC_TILE_URL`, `NEXT_PUBLIC_MAP_STYLE_URL`, `NEXT_PUBLIC_MAP_GLYPHS_URL` | Map basemap. Compiled into the browser bundle, so rebuild the image after changing them |
 
