@@ -3,7 +3,7 @@ import { Prisma } from "@/generated/prisma/client";
 import { enqueue } from "@/lib/jobs/boss";
 import { QUEUES } from "@/lib/jobs/queues";
 import type { StoredAnnotation } from "./schema";
-import { helperText, knownNameEntries, knownNames, pastHelperTitles, titleHits, titleIsHelpers, type PrivateContainer } from "./members-only";
+import { helperText, knownNameEntries, knownNames, pastHelperTitles, sameTitle, titleHits, titleIsHelpers, titleKey, unknownTitleAside, warnStuckTitle, type PrivateContainer } from "./members-only";
 import { nameMatcher, namePatterns, spokenWords, titleWords } from "./names";
 
 /**
@@ -49,7 +49,7 @@ const miss = (result: RejudgeResult, id: string) => {
 };
 
 /** Bump when the rules in names.ts or the ones here change: the next sweep then judges the whole album again. */
-export const MATCHER_VERSION = "2026-09-26.6";
+export const MATCHER_VERSION = "2026-09-27.1";
 
 const BATCH = 200;
 /** How many rows are judged between yields to the event loop. */
@@ -95,20 +95,30 @@ async function* annotated(where: Prisma.PhotoWhereInput = {}): AsyncGenerator<Ro
 const reread = (id: string) => db.photo.findUnique({ where: { id }, select: rowSelect }) as Promise<Row | null>;
 const aiTitleOf = (r: Pick<Row, "annotation" | "kind">) => (r.kind === "EXTERNAL_VIDEO" ? null : ((r.annotation as StoredAnnotation | null)?.title ?? "").trim() || null);
 const textOf = (r: Row) => helperText((r.annotation ?? {}) as StoredAnnotation);
+/** The item's titles that may be the helper's words: its own (unless recorded as a member's), and the members' one. */
+const titlesOf = (r: Row) => [r.kind !== "EXTERNAL_VIDEO" && r.titleByHelper !== false ? r.title : null, r.membersTitle].filter(Boolean).join("\n");
 const privateContainers = (r: Row): PrivateContainer[] => [
   ...(r.trip && r.trip.visibility !== "PUBLIC" ? [{ key: `trip:${r.trip.id}`, title: r.trip.title }] : []),
   ...r.collections.flatMap(({ collection: c }) => (c.visibility !== "PUBLIC" ? [{ key: `collection:${c.id}`, title: c.title }] : [])),
 ];
 
-/** The title fields once the item is members-only: the helper's title (see `titleIsHelpers`) comes off it. */
-async function titleData(r: Row): Promise<{ title?: null; membersTitle?: string; titleByHelper?: null }> {
+/**
+ * The title fields once the item is members-only: the helper's title (see `titleIsHelpers`) comes off it, and a
+ * title of unknown origin naming somebody goes aside for members (see `unknownTitleAside`). `names` is the pass's
+ * name matcher, null for none.
+ */
+async function titleData(r: Row, names: ((text: string) => boolean) | null): Promise<{ title?: null; membersTitle?: string; titleByHelper?: null }> {
   if (r.kind === "EXTERNAL_VIDEO") return {};
   const ai = aiTitleOf(r);
-  const own = r.title?.trim() || null;
-  const unknown = own && r.titleByHelper === null && own !== ai;
+  const own = titleKey(r.title) || null;
+  const unknown = own && r.titleByHelper === null && own !== titleKey(ai);
   const helpers = titleIsHelpers({ title: r.title, titleByHelper: r.titleByHelper, aiTitle: ai, ...(unknown ? { pastTitles: await pastHelperTitles(r.id) } : {}) });
-  const kept = r.membersTitle?.trim() || null;
+  const kept = titleKey(r.membersTitle) || null;
   if (helpers) return { title: null, titleByHelper: null, ...(kept ? {} : { membersTitle: ai ?? own! }) };
+  const aside = unknownTitleAside({ title: r.title, titleByHelper: r.titleByHelper, membersTitle: r.membersTitle, aiTitle: ai, namesSomebody: Boolean(unknown && names?.(own!)) });
+  // The helper's current title stays in its record; the member's words (or an old helper's) are what members read.
+  if (aside === "move") return { title: null, titleByHelper: null, membersTitle: r.title! };
+  if (aside === "stuck") warnStuckTitle(r.id);
   return ai && !kept ? { membersTitle: ai } : {};
 }
 
@@ -128,7 +138,7 @@ const asJudged = (r: Row): Prisma.PhotoWhereInput => ({
  * Flag a photograph: for a name or anything else stronger (`hits` null), or for a private title's words, which are
  * remembered with the containers they came from. Returns whether the write landed.
  */
-export async function flagPhoto(r: Row, hits: { words: string[]; from: string[] } | null): Promise<boolean> {
+export async function flagPhoto(r: Row, hits: { words: string[]; from: string[] } | null, names: ((text: string) => boolean) | null = null): Promise<boolean> {
   const hardNow = r.annotationMembersOnly && !r.annotationTitleOnly;
   const titleOnly = !hardNow && hits !== null;
   const data = {
@@ -136,7 +146,7 @@ export async function flagPhoto(r: Row, hits: { words: string[]; from: string[] 
     annotationTitleOnly: titleOnly,
     annotationTitleWords: titleOnly ? [...new Set([...r.annotationTitleWords, ...hits!.words])] : [],
     annotationTitleFrom: titleOnly ? [...new Set([...r.annotationTitleFrom, ...hits!.from])] : [],
-    ...(await titleData(r)),
+    ...(await titleData(r, names)),
   };
   return (await db.photo.updateMany({ where: asJudged(r), data })).count > 0;
 }
@@ -145,7 +155,7 @@ export async function flagPhoto(r: Row, hits: { words: string[]; from: string[] 
  * Judge one photograph, and write what that decides; when the write misses because the row changed, read it again
  * and judge it again. `decide` returns what to write for a row, or null for nothing.
  */
-async function settle(first: Row, decide: (r: Row) => Promise<"flag" | "hits" | "merge" | "title" | null>, result: RejudgeResult, hitsOf?: (r: Row) => { words: string[]; from: string[] }): Promise<void> {
+async function settle(first: Row, decide: (r: Row) => Promise<"flag" | "hits" | "merge" | "title" | null>, names: ((text: string) => boolean) | null, result: RejudgeResult, hitsOf?: (r: Row) => { words: string[]; from: string[] }): Promise<void> {
   let r: Row | null = first;
   for (let attempt = 0; attempt < ATTEMPTS && r; attempt++) {
     const what = await decide(r);
@@ -156,12 +166,12 @@ async function settle(first: Row, decide: (r: Row) => Promise<"flag" | "hits" | 
       const hits = hitsOf!(r);
       landed = (await db.photo.updateMany({ where: asJudged(r), data: { annotationTitleWords: [...new Set([...r.annotationTitleWords, ...hits.words])], annotationTitleFrom: [...new Set([...r.annotationTitleFrom, ...hits.from])] } })).count > 0;
     } else if (what === "title") {
-      const data = await titleData(r);
+      const data = await titleData(r, names);
       if (!("title" in data)) return;
       landed = (await db.photo.updateMany({ where: asJudged(r), data })).count > 0;
       if (landed) result.titles++;
     } else {
-      landed = await flagPhoto(r, what === "hits" ? hitsOf!(r) : null);
+      landed = await flagPhoto(r, what === "hits" ? hitsOf!(r) : null, names);
       if (landed) result.photos++;
     }
     if (landed) return;
@@ -184,11 +194,14 @@ export async function rejudgeNames(names?: string[]): Promise<RejudgeResult> {
   const decide = async (r: Row) => {
     if (r.annotationSharedAt) return null;
     const hard = r.annotationMembersOnly && !r.annotationTitleOnly;
-    if (!hard && test(textOf(r))) return "flag" as const;
+    // The titles too, not only the helper's text as it is now: a title the helper gave in an earlier answer ("Ada's
+    // birthday cake", from notes since cleared) outlives the text that is judged. A title a member typed since the
+    // album kept track, and an embedded video's own, are theirs to publish and hold nothing back.
+    if (!hard && (test(textOf(r)) || test(titlesOf(r)))) return "flag" as const;
     if (r.annotationMembersOnly && r.title?.trim() && r.titleByHelper !== false) return "title" as const;
     return null;
   };
-  for await (const r of annotated()) await settle(r, decide, result);
+  for await (const r of annotated()) await settle(r, decide, test, result);
 
   // Place guesses, guarded on the words of the guess: every guess the album holds, whether or not it is the item's
   // place right now. One under a place set by hand comes back when that move is undone, with whatever flag it had.
@@ -310,7 +323,7 @@ export async function rejudgeTitles(scope: { tripId?: string; collectionId?: str
     return r.annotationTitleOnly && (hits.words.some((w) => !known.has(w)) || hits.from.some((k) => !from.has(k))) ? ("merge" as const) : null;
   };
   for await (const r of annotated(where)) {
-    await settle(r, decide, result, hitsOf);
+    await settle(r, decide, names, result, hitsOf);
     if (r.annotationSharedAt || !r.annotationMembersOnly || !r.annotationTitleOnly) continue;
     if (hitsOf(r).from.length || !(await titleWordsArePublic(r.annotationTitleWords, r.annotationTitleFrom, privateWords))) continue;
     // Lifting is the one thing that shows text to strangers, so it asks everything else first — the whole text
@@ -323,7 +336,7 @@ export async function rejudgeTitles(scope: { tripId?: string; collectionId?: str
       continue;
     }
     const ai = aiTitleOf(r);
-    const back = ai && !r.title?.trim() && r.membersTitle?.trim() === ai;
+    const back = ai && !titleKey(r.title) && sameTitle(r.membersTitle, ai);
     result.unflagged += (await db.photo.updateMany({ where: { id: r.id, updatedAt: r.updatedAt, annotationTitleOnly: true }, data: { annotationMembersOnly: false, annotationTitleOnly: false, annotationTitleWords: [], annotationTitleFrom: [], ...(back ? { title: ai, membersTitle: null, titleByHelper: true } : {}) } })).count;
   }
   if (scope.collectionId || scope.photoIds) return result;

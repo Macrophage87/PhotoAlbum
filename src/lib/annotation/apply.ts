@@ -5,7 +5,7 @@ import { enqueue } from "@/lib/jobs/boss";
 import { QUEUES } from "@/lib/jobs/queues";
 import { applyPlaceEstimate, needsPlaceEstimate } from "./place";
 import { isWeakDate, WEAK_DATE_SOURCES } from "@/lib/photos/date-from-neighbours";
-import { helperText, judgeHelperText, knownNames, mentionsAnyName, pastHelperTitles, titleIsHelpers, type Judgement } from "./members-only";
+import { helperText, judgeHelperText, knownNames, mentionsAnyName, pastHelperTitles, sameTitle, titleIsHelpers, titleKey, unknownTitleAside, warnStuckTitle, type Judgement } from "./members-only";
 import { forgetState, unchangedSince } from "@/lib/people/names-changed";
 import { withoutOptedOutNames } from "@/lib/people/unpermitted";
 import { forgottenScope, loadTombstone, scrubRecord, type Tombstone } from "@/lib/people/tombstone";
@@ -16,28 +16,36 @@ export type ApplyResult = { ok: true } | { ok: false; reason: "refusal" | "inval
 export type Usage = { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null };
 
 /**
- * Where the helper's title goes. A title of the family's own is never touched. The helper's goes on the item where
+ * Where the helper's title goes. A title of the family's own is never lost. The helper's goes on the item where
  * it has none, unless it is members-only, when it is kept in `membersTitle` for members to read instead; and on a
- * members-only item a title the helper put there before (see `titleIsHelpers`) comes off it too. What is in
- * `membersTitle` already is replaced only when it was the helper's last title.
+ * members-only item a title the helper put there before (see `titleIsHelpers`) comes off it too, while one of unknown
+ * origin that names somebody goes aside for members (see `unknownTitleAside`). What is in `membersTitle` already is
+ * replaced only when it was the helper's last title. An embedded video's own title is YouTube's or a member's.
  */
 export function titlesAfter(
-  current: { title: string | null; membersTitle: string | null; previousAiTitle: string | null; titleByHelper?: boolean | null; pastTitles?: string[] },
+  current: { title: string | null; membersTitle: string | null; previousAiTitle: string | null; titleByHelper?: boolean | null; pastTitles?: string[]; namesSomebody?: boolean; external?: boolean; photoId?: string },
   aiTitle: string,
   membersOnly: boolean,
 ): { title: string | null; membersTitle: string | null; titleByHelper: boolean | null } {
-  const held = current.membersTitle?.trim() || null;
-  const helpers = !held || held === current.previousAiTitle?.trim();
-  let membersTitle = helpers ? (membersOnly && aiTitle ? aiTitle : null) : held;
+  const held = titleKey(current.membersTitle) || null;
+  const helpers = !held || held === titleKey(current.previousAiTitle);
+  let membersTitle = helpers ? (membersOnly && aiTitle ? aiTitle : null) : current.membersTitle;
   let title = current.title;
   let titleByHelper = current.titleByHelper ?? null;
-  if (membersOnly) {
+  if (membersOnly && !current.external) {
     if (titleIsHelpers({ title, titleByHelper, aiTitle: current.previousAiTitle, pastTitles: current.pastTitles })) {
       membersTitle = membersTitle ?? title;
       title = null;
       titleByHelper = null;
+    } else {
+      // Judged against the members' title as it will be: empty, or the helper's new title (kept in its record).
+      const aside = unknownTitleAside({ title, titleByHelper: current.titleByHelper, membersTitle, aiTitle, namesSomebody: current.namesSomebody });
+      if (aside === "move") {
+        membersTitle = title;
+        title = null;
+      } else if (aside === "stuck" && current.photoId) warnStuckTitle(current.photoId);
     }
-  } else if (!title?.trim() && !membersTitle && aiTitle) {
+  } else if (!membersOnly && !titleKey(title) && !membersTitle && aiTitle) {
     title = aiTitle;
     titleByHelper = true;
   }
@@ -121,15 +129,18 @@ export async function applyAnnotation(photoId: string, model: string, parsed: An
   const membersOnly = judgement.membersOnly;
   const aiTitle = current.kind !== "EXTERNAL_VIDEO" ? stored.title.trim() : "";
   const previousAiTitle = (current.annotation as { title?: string } | null)?.title ?? null;
-  // A title of unknown origin on an item going members-only: the helper's past answers decide.
-  const unknownTitle = membersOnly && current.title?.trim() && current.titleByHelper === null && current.title.trim() !== previousAiTitle?.trim();
+  // A title of unknown origin on an item going members-only: the helper's past answers decide, and failing them
+  // whether it names somebody.
+  const unknownTitle = membersOnly && current.kind !== "EXTERNAL_VIDEO" && titleKey(current.title) && current.titleByHelper === null && !sameTitle(current.title, previousAiTitle);
   const titles = titlesAfter(
     {
       title: current.title,
       membersTitle: current.membersTitle,
       previousAiTitle,
       titleByHelper: current.titleByHelper,
-      ...(unknownTitle ? { pastTitles: await pastHelperTitles(photoId) } : {}),
+      external: current.kind === "EXTERNAL_VIDEO",
+      photoId,
+      ...(unknownTitle ? { pastTitles: await pastHelperTitles(photoId), namesSomebody: mentionsAnyName(current.title!, await knownNames()) } : {}),
     },
     aiTitle,
     membersOnly,

@@ -214,17 +214,23 @@ describe("what strangers may search, container by container, and the words' scop
   it("takes an old helper title off an item that is already members-only, and leaves a typed one", async () => {
     const trip = await db.trip.create({ data: { slug: "c", title: "Cake", visibility: "PUBLIC", startDate: new Date("2025-01-01"), endDate: new Date("2025-01-02"), createdById: dana } });
     await db.person.create({ data: { name: "Ada", createdById: dana } });
+    const cake = { title: "Cake table", caption: "The cake table", description: "", tags: [], searchSummary: "" };
     // Described from notes long ago as "Ada's birthday cake" (that answer still kept), described again as "Cake table".
-    const old = await photo({ tripId: trip.id, context: "Ada turns five", title: "Ada's birthday cake", annotationMembersOnly: true, annotation: { title: "Cake table", caption: "The cake table", description: "", tags: [], searchSummary: "" } });
+    const old = await photo({ tripId: trip.id, context: "Ada turns five", title: "Ada's birthday cake", annotationMembersOnly: true, annotation: cake });
     await db.mediaAnnotationRaw.create({ data: { photoId: old.id, model: "m", response: { content: [{ type: "text", text: JSON.stringify({ title: "Ada's birthday cake" }) }] } } });
-    const typed = await photo({ tripId: trip.id, context: "Ada turns five", title: "Ada's day", titleByHelper: false, annotationMembersOnly: true, annotation: { title: "Cake table", caption: "The cake table", description: "", tags: [], searchSummary: "" } });
-    // From before the album kept track, and none of the helper's answers: the family's, names and all.
-    const unknown = await photo({ tripId: trip.id, context: "Ada turns five", title: "Ada at the table", annotationMembersOnly: true, membersTitle: "Cake table", annotation: { title: "Cake table", caption: "The cake table", description: "", tags: [], searchSummary: "" } });
+    // The same, with that answer since purged: nothing proves whose it is, and it names somebody. Strangers do not
+    // read it; members still do.
+    const purged = await photo({ tripId: trip.id, context: "Ada turns five", title: "Ada's birthday cake", annotationMembersOnly: true, annotation: cake });
+    const typed = await photo({ tripId: trip.id, context: "Ada turns five", title: "Ada's day", titleByHelper: false, annotationMembersOnly: true, annotation: cake });
+    // Of unknown origin and naming nobody: left as it is.
+    const plain = await photo({ tripId: trip.id, context: "Ada turns five", title: "At the table", annotationMembersOnly: true, membersTitle: "Cake table", annotation: cake });
     const r = await rejudgeNames();
-    expect(r.titles).toBe(1);
+    expect(r.titles).toBe(2);
     expect(await db.photo.findUniqueOrThrow({ where: { id: old.id } })).toMatchObject({ title: null, membersTitle: "Cake table" });
+    expect(await db.photo.findUniqueOrThrow({ where: { id: purged.id } })).toMatchObject({ title: null, membersTitle: "Ada's birthday cake" });
     expect(await db.photo.findUniqueOrThrow({ where: { id: typed.id } })).toMatchObject({ title: "Ada's day" });
-    expect(await db.photo.findUniqueOrThrow({ where: { id: unknown.id } })).toMatchObject({ title: "Ada at the table", membersTitle: "Cake table", titleByHelper: null });
+    expect(await db.photo.findUniqueOrThrow({ where: { id: plain.id } })).toMatchObject({ title: "At the table", membersTitle: "Cake table", titleByHelper: null });
+    expect((await searchMedia(anon, { q: "birthday" }, 120, null)).map((h) => h.id)).toEqual([]);
   });
 
   it("never lifts a flag because a private trip was renamed", async () => {

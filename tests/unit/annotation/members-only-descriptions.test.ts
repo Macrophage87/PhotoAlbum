@@ -177,7 +177,7 @@ describe("descriptions that stay in the family", () => {
     expect((await db.photo.findUniqueOrThrow({ where: { id: old.id } })).annotationMembersOnly).toBe(true);
   });
 
-  it("never takes a title a member typed before the album kept track, whoever it names", async () => {
+  it("keeps a title a member typed before the album kept track for members when it names somebody, and never erases it", async () => {
     // A photograph from before the members_only_text migration: notes, the helper's title in its record, and the
     // member's own title naming somebody the album knows. The migration's own pass then runs over it.
     await db.person.create({ data: { name: "Rose", createdById: who.id } });
@@ -188,20 +188,22 @@ describe("descriptions that stay in the family", () => {
     const titles = async () => db.photo.findUniqueOrThrow({ where: { id: p.id }, select: { title: true, membersTitle: true, titleByHelper: true } });
     // Members-only, the helper's title moved aside, the member's of unknown origin.
     expect(await titles()).toEqual({ title: "Rose at the hut", membersTitle: "Helper title", titleByHelper: null });
-    // The worker's first sweep.
+    // The worker's first sweep: nothing proves it is the helper's, and it names Rose. It is what members read now;
+    // the helper's title is still in its record.
     await rejudgeSweep();
-    expect(await titles()).toEqual({ title: "Rose at the hut", membersTitle: "Helper title", titleByHelper: null });
-    // Described again: the helper's new title replaces its old one, and the member's stays.
+    expect(await titles()).toEqual({ title: null, membersTitle: "Rose at the hut", titleByHelper: null });
+    expect((await db.photo.findUniqueOrThrow({ where: { id: p.id } })).annotation).toMatchObject({ title: "Helper title" });
+    // Described again: the helper's new title does not replace the member's.
     const again = annotationSchema.parse({ ...helper, title: "Hut in the snow", place: null, activity: null, objects: [], visibleText: null, season: "winter", mood: null, estimatedYear: null, estimatedPlace: null });
     await applyAnnotation(p.id, "m", again, {}, { sent: true });
-    expect(await titles()).toEqual({ title: "Rose at the hut", membersTitle: "Hut in the snow", titleByHelper: null });
+    expect(await titles()).toEqual({ title: null, membersTitle: "Rose at the hut", titleByHelper: null });
     // Shown to everyone and kept for the family again.
     const seen = (await db.photo.findUniqueOrThrow({ where: { id: p.id } })).annotationRevision;
     await setAnnotationShared(p.id, seen, true);
     await setAnnotationShared(p.id, seen, false);
-    expect(await titles()).toEqual({ title: "Rose at the hut", membersTitle: "Hut in the snow", titleByHelper: null });
+    expect(await titles()).toEqual({ title: null, membersTitle: "Rose at the hut", titleByHelper: null });
     await rejudgeNames(["Rose"]);
-    expect((await titles()).title).toBe("Rose at the hut");
+    expect((await titles()).membersTitle).toBe("Rose at the hut");
   });
 
   it("never puts back a title a member typed while an answer was being stored", async () => {

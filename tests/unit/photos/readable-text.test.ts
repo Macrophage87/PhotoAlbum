@@ -141,6 +141,14 @@ describe("where the helper's title goes", () => {
     expect(titlesAfter({ title: "Ada's birthday cake", membersTitle: null, previousAiTitle: "Cake table", titleByHelper: null, pastTitles: ["Ada's birthday cake"] }, "Cake table", true)).toMatchObject({ title: null });
     // From before the album kept track and none of the helper's: the family's, whatever it names.
     expect(titlesAfter({ title: "Ada's birthday cake", membersTitle: null, previousAiTitle: "Cake table", titleByHelper: null, pastTitles: [] }, "Cake table", true)).toEqual({ title: "Ada's birthday cake", membersTitle: "Cake table", titleByHelper: null });
+    // The same naming somebody: kept for members instead of the helper's new title, which its record keeps.
+    expect(titlesAfter({ title: "Ada's birthday cake", membersTitle: null, previousAiTitle: "Cake table", titleByHelper: null, pastTitles: [], namesSomebody: true }, "Cake table", true)).toEqual({ title: null, membersTitle: "Ada's birthday cake", titleByHelper: null });
+    // Nowhere to put it without losing the members' title a member's words are already in: left as it is.
+    expect(titlesAfter({ title: "Ada's birthday cake", membersTitle: "Nana's 80th", previousAiTitle: "Cake table", titleByHelper: null, namesSomebody: true }, "Cake table", true)).toEqual({ title: "Ada's birthday cake", membersTitle: "Nana's 80th", titleByHelper: null });
+    // An embedded video's own title is never moved.
+    expect(titlesAfter({ title: "Ada's recital", membersTitle: null, previousAiTitle: "Ada's recital", titleByHelper: true, external: true }, "", true)).toMatchObject({ title: "Ada's recital" });
+    // Whitespace is not a difference.
+    expect(titlesAfter({ title: " Cake  table\n", membersTitle: null, previousAiTitle: "Cake table", titleByHelper: null }, "Candles", true)).toMatchObject({ title: null });
     // Typed by a member since the album kept track: theirs to publish, names and all.
     expect(titlesAfter({ title: "Ada's birthday cake", membersTitle: null, previousAiTitle: "Cake table", titleByHelper: false }, "Cake table", true)).toMatchObject({ title: "Ada's birthday cake" });
   });

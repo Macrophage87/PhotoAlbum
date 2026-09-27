@@ -15,7 +15,7 @@ import { estimateCost, TOKENS_PER_PLACE, type Estimate } from "@/lib/annotation/
 import { BACKFILL_CAP, backfillCandidates, backfillExclusions, taskOf, type BackfillScope, type BackfillTask } from "@/lib/jobs/handlers/annotation-batch";
 import { annotationSchema, toStored, type StoredAnnotation } from "@/lib/annotation/schema";
 import { anthropic } from "@/lib/annotation/client";
-import { helperText, judgeHelperText, knownNames, mentionsAnyName, pastHelperTitles, titleIsHelpers } from "@/lib/annotation/members-only";
+import { helperText, judgeHelperText, knownNames, mentionsAnyName, pastHelperTitles, sameTitle, titleIsHelpers, unknownTitleAside, warnStuckTitle } from "@/lib/annotation/members-only";
 import { enqueueEmbedding, refreshTextEmbedding } from "@/lib/jobs/handlers/embed-photo";
 import { withoutWithdrawnNames } from "@/lib/people/forget";
 
@@ -160,9 +160,14 @@ export async function setAnnotationShared(photoId: string, seenRevision: number,
     // The helper's title goes back on the item if it has none of its own.
     data = { annotationMembersOnly: false, annotationTitleOnly: false, annotationTitleWords: [], annotationTitleFrom: [], annotationSharedAt: new Date(), ...(out.changed ? { annotation: out.annotation as object } : {}), ...(ai && !own && kept === ai ? { title: out.title, titleByHelper: true, membersTitle: null } : {}) };
   } else {
-    const unknown = own && photo.titleByHelper === null && own !== ai;
-    const helpers = photo.kind !== "EXTERNAL_VIDEO" && titleIsHelpers({ title: photo.title, titleByHelper: photo.titleByHelper, aiTitle: ai, ...(unknown ? { pastTitles: await pastHelperTitles(photoId) } : {}) });
-    data = { annotationMembersOnly: true, annotationTitleOnly: false, annotationTitleWords: [], annotationTitleFrom: [], annotationSharedAt: null, ...(helpers ? { title: null, titleByHelper: null, membersTitle: kept ?? ai ?? own } : ai && !kept ? { membersTitle: ai } : {}) };
+    const external = photo.kind === "EXTERNAL_VIDEO";
+    const unknown = !external && own && photo.titleByHelper === null && !sameTitle(own, ai);
+    const helpers = !external && titleIsHelpers({ title: photo.title, titleByHelper: photo.titleByHelper, aiTitle: ai, ...(unknown ? { pastTitles: await pastHelperTitles(photoId) } : {}) });
+    // Not provably the helper's but naming somebody: aside for members, never dropped (see `unknownTitleAside`).
+    const aside = !helpers && unknown ? unknownTitleAside({ title: photo.title, titleByHelper: photo.titleByHelper, membersTitle: photo.membersTitle, aiTitle: ai, namesSomebody: mentionsAnyName(own!, await knownNames()) }) : null;
+    if (aside === "stuck") warnStuckTitle(photoId);
+    const titles = helpers ? { title: null, titleByHelper: null, membersTitle: kept ?? ai ?? own } : aside === "move" ? { title: null, titleByHelper: null, membersTitle: photo.title } : ai && !kept ? { membersTitle: ai } : {};
+    data = { annotationMembersOnly: true, annotationTitleOnly: false, annotationTitleWords: [], annotationTitleFrom: [], annotationSharedAt: null, ...titles };
   }
   const done = await db.photo.updateMany({ where: { id: photoId, annotationRevision: seenRevision }, data });
   if (!done.count) throw new Error(DESCRIPTION_CHANGED);
