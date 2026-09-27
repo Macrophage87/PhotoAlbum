@@ -10,8 +10,15 @@ import { GET as activityGeojson } from "@/app/api/activities/[id]/geojson/route"
 import { db } from "@/lib/db";
 import { resetTestDb } from "../helpers/reset";
 
+import { GET as describePhotos } from "@/app/api/map/photos/route";
+import type { MapPayload } from "@/lib/map/geojson";
+
 type Feature = { properties: { id: string; uploaderName: string | null; uploaderId: string | null } };
-const people = async (res: Response) => ((await res.json()).photos.features as Feature[]).map((f) => [f.properties.uploaderId !== null, f.properties.uploaderName]);
+/** Whether each photograph can be coloured by who uploaded it, and whom the legend names. */
+const people = async (res: Response) => {
+  const body = (await res.json()) as MapPayload;
+  return [body.photos.points.map((p) => p[6] !== null), body.rings.uploader?.groups.map((g) => g.label) ?? null];
+};
 
 /** A shared link's map shows what anybody holding the link sees: a member reading it is not shown who uploaded what. */
 describe("a shared link's map, read by a member", () => {
@@ -30,14 +37,21 @@ describe("a shared link's map, read by a member", () => {
 
   it("leaves out who uploaded each photograph with view=share, and keeps it on the member's own map", async () => {
     const trip = (view: string) => tripGeojson(new Request(`http://album.test/api/trips/linked/geojson${view}`), { params: Promise.resolve({ slug: "linked" }) });
-    expect(await people(await trip(""))).toEqual([[true, "Gwen"]]);
-    expect(await people(await trip("?view=share"))).toEqual([[false, null]]);
+    expect(await people(await trip(""))).toEqual([[true], ["Gwen"]]);
+    expect(await people(await trip("?view=share"))).toEqual([[false], null]);
     const collection = (view: string) => collectionGeojson(new Request(`http://album.test/api/collections/c/geojson${view}`), { params: Promise.resolve({ slug: "c" }) });
-    expect(await people(await collection(""))).toEqual([[true, "Gwen"]]);
-    expect(await people(await collection("?view=share"))).toEqual([[false, null]]);
+    expect(await people(await collection(""))).toEqual([[true], ["Gwen"]]);
+    expect(await people(await collection("?view=share"))).toEqual([[false], null]);
+    // One activity's map is sent whole, names included for the family.
     const activity = (view: string) => activityGeojson(new Request(`http://album.test/api/activities/${activityId}/geojson${view}`), { params: Promise.resolve({ id: activityId }) } as never);
-    expect(await people(await activity(""))).toEqual([[true, "Gwen"]]);
-    expect(await people(await activity("?view=share"))).toEqual([[false, null]]);
+    const named = async (res: Response) => ((await res.json()).photos.features as Feature[]).map((f) => [f.properties.uploaderId !== null, f.properties.uploaderName]);
+    expect(await named(await activity(""))).toEqual([[true, "Gwen"]]);
+    expect(await named(await activity("?view=share"))).toEqual([[false, null]]);
+    // Nor does a photograph clicked on a shared link's map.
+    const photoId = (await db.photo.findFirstOrThrow()).id;
+    const clicked = async (view: string) => (await (await describePhotos(new Request(`http://album.test/api/map/photos?ids=${photoId}${view}`))).json()).photos[0].uploadedBy;
+    expect(await clicked("")).toBe("Gwen");
+    expect(await clicked("&view=share")).toBeNull();
   });
 
   it("still opens for the member, who may open the trip whether or not they came by the link", async () => {

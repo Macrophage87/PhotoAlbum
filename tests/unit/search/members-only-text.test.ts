@@ -5,6 +5,7 @@ import { idsMatching } from "@/lib/photos/page";
 import { applyAnnotation } from "@/lib/annotation/apply";
 import { annotationSchema } from "@/lib/annotation/schema";
 import { buildCollectionMapPayload, buildMapPayload } from "@/lib/map/geojson";
+import { describeMapPhotos } from "@/lib/map/details";
 import { parseGalleryFilter } from "@/lib/photos/filters";
 import { tripPhotoPage } from "@/lib/photos/page";
 import type { Viewer } from "@/lib/auth/viewer";
@@ -120,14 +121,14 @@ describe("text a stranger may read and search", () => {
   it("narrows a public trip's gallery and map by what a stranger may read, never by a name", async () => {
     const stranger = parseGalleryFilter({ q: "Ada" }, { member: false });
     expect((await tripPhotoPage(publicTrip, { filter: stranger })).total).toBe(0);
-    expect((await buildMapPayload(anon, publicTrip, stranger)).photos.features).toEqual([]);
-    expect((await buildMapPayload(anon, undefined, stranger)).photos.features).toEqual([]);
-    expect((await buildMapPayload(anon, publicTrip, parseGalleryFilter({ q: "Dana" }, { member: false }))).photos.features).toEqual([]);
+    expect((await buildMapPayload(anon, publicTrip, stranger)).photos.points).toEqual([]);
+    expect((await buildMapPayload(anon, undefined, stranger)).photos.points).toEqual([]);
+    expect((await buildMapPayload(anon, publicTrip, parseGalleryFilter({ q: "Dana" }, { member: false }))).photos.points).toEqual([]);
     // A filter that claims to be a member's is still a stranger's when a stranger is asking.
-    expect((await buildMapPayload(anon, publicTrip, parseGalleryFilter({ q: "Ada" }, { member: true }))).photos.features).toEqual([]);
+    expect((await buildMapPayload(anon, publicTrip, parseGalleryFilter({ q: "Ada" }, { member: true }))).photos.points).toEqual([]);
     const family = parseGalleryFilter({ q: "Ada" }, { member: true });
     expect((await tripPhotoPage(publicTrip, { filter: family })).photos.map((p) => p.id)).toEqual([named]);
-    expect((await buildMapPayload(member, publicTrip, family)).photos.features.map((f) => f.properties.id)).toEqual([named]);
+    expect((await buildMapPayload(member, publicTrip, family)).photos.points.map((p) => p[0])).toEqual([named]);
   });
 
   it("asks the words inside the trip, so matches elsewhere cannot crowd out the trip's own", async () => {
@@ -141,11 +142,16 @@ describe("text a stranger may read and search", () => {
   });
 
   it("names neither the private trip nor its activity on a map a stranger sees the photograph on", async () => {
-    const anyone = (await buildMapPayload(anon)).photos.features.find((f) => f.properties.id === fromPrivate)!;
-    expect(anyone.properties).toMatchObject({ tripTitle: "", tripSlug: "", activityTitle: null, activityId: null });
-    const onCollection = (await buildCollectionMapPayload(anon, (await db.collection.findFirstOrThrow()).id)).photos.features[0];
-    expect(onCollection.properties).toMatchObject({ tripTitle: "", activityTitle: null, activityId: null });
-    const family = (await buildMapPayload(member)).photos.features.find((f) => f.properties.id === fromPrivate)!;
-    expect(family.properties).toMatchObject({ tripTitle: "Hopkins weekend", activityTitle: "Chemo, second round" });
+    // Not when it is clicked…
+    const [anyone] = await describeMapPhotos(anon, [fromPrivate], null);
+    expect(anyone).toMatchObject({ caption: "Waiting room view", trip: null, activityTitle: null, uploadedBy: null });
+    // …and not in the legend of either map it is on, where its activity could otherwise be something to colour by.
+    const everywhere = await buildMapPayload(anon);
+    expect(everywhere.photos.points.map((p) => p[0])).toContain(fromPrivate);
+    const onCollection = await buildCollectionMapPayload(anon, (await db.collection.findFirstOrThrow()).id);
+    for (const payload of [everywhere, onCollection]) expect(JSON.stringify(payload)).not.toMatch(/Chemo|Hopkins/);
+    const [family] = await describeMapPhotos(member, [fromPrivate], null);
+    expect(family).toMatchObject({ trip: { slug: "hospital", title: "Hopkins weekend" }, activityTitle: "Chemo, second round", uploadedBy: "Dana" });
+    expect((await buildMapPayload(member)).rings.activity.groups.map((g) => g.label)).toContain("Chemo, second round");
   });
 });

@@ -19,7 +19,7 @@ const anon = (tokens: [string, string][] = []): Viewer => ({ kind: "anonymous", 
 let member: Viewer;
 
 const timelineIds = (r: { groups: { items: { photos: { id: string }[] }[] }[] }) => r.groups.flatMap((g) => g.items.flatMap((i) => i.photos.map((p) => p.id)));
-const featureIds = async (res: Response) => ((await res.json()).photos.features as { properties: { id: string } }[]).map((f) => f.properties.id);
+const featureIds = async (res: Response) => ((await res.json()).photos.points as [string][]).map((p) => p[0]);
 const photoIds = async (res: Response) => ((await res.json()).photos as { id: string }[]).map((p) => p.id);
 
 /**

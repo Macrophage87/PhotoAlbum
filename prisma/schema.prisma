@@ -1031,3 +1031,12 @@ model ForgetLeftover {
 
   @@index([dismissedAt])
 }
+
+/// One row: bumped by triggers whenever something a map shows changes, so a map worked out once can be answered from
+/// until then (src/lib/map/cache.ts, and the map_version migration for what counts). `access` counts only the changes
+/// that can take something off a map for somebody.
+model MapVersion {
+  id      Int    @id @default(1)
+  version BigInt @default(0)
+  access  BigInt @default(0)
+}

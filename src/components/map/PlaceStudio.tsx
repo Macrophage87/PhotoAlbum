@@ -88,7 +88,7 @@ export function PlaceStudio({ photos: initial, total, theme, tracks, bounds }: {
         .map((p): GeoJSON.Feature<GeoJSON.Point, MapPhotoProps> => ({
           type: "Feature",
           geometry: { type: "Point", coordinates: [p.lng!, p.lat!] },
-          properties: { id: p.id, thumbUrl: p.thumbUrl, mediumUrl: p.thumbUrl, caption: p.label, takenAt: p.takenAt, tripSlug: "", tripTitle: "", activityId: null, gpsSource: null, day: p.day, activityTitle: null, uploaderId: null, uploaderName: null, slot: selected.has(p.id) ? 0 : NONE_SLOT },
+          properties: { id: p.id, thumbUrl: p.thumbUrl, caption: p.label, day: p.day, slot: selected.has(p.id) ? 0 : NONE_SLOT },
         }))),
     }),
     [items, selected],

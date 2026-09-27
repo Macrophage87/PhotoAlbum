@@ -36,7 +36,8 @@ export default async function PlacePhotosPage({ searchParams }: PageProps<"/plac
             </p>
           </div>
         </div>
-        <PlaceOnMap src="/api/map/geojson" theme={mapThemeOf(getTheme("default"))} initial={tray} tripTitle={null} />
+        {/* Fresh: what was just placed must be on the map the moment it is asked for again, never a map from before. */}
+        <PlaceOnMap src="/api/map/geojson?fresh=1" theme={mapThemeOf(getTheme("default"))} initial={tray} tripTitle={null} />
       </Container>
     </AppShell>
   );

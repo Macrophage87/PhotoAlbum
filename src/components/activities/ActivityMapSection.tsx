@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { ActivityType } from "@/generated/prisma/enums";
-import type { MapPayload } from "@/lib/map/geojson";
+import type { ActivityMapPayload } from "@/lib/map/geojson";
 import type { MapTheme } from "@/lib/map/theme";
 import { MapViewDynamic } from "@/components/map/MapViewDynamic";
 import { TrackCharts } from "@/components/charts/TrackCharts";
@@ -13,7 +13,7 @@ import { Lightbox, type LightboxPhoto } from "@/components/photos/Lightbox";
  * activity alone rather than the whole trip, so the same section works for whoever holds only the activity's link.
  */
 export function ActivityMapSection({ trackId, activityId, type, theme, member = false }: { trackId: string; activityId: string; type: ActivityType; theme: MapTheme; /** A member on a member's page; otherwise the map is asked for as the page's visitors see it (`view=share`). */ member?: boolean }) {
-  const [data, setData] = useState<MapPayload | null>(null);
+  const [data, setData] = useState<ActivityMapPayload | null>(null);
   const [marker, setMarker] = useState<{ lat: number; lng: number } | null>(null);
   const [lightbox, setLightbox] = useState<number | null>(null);
 
@@ -21,7 +21,7 @@ export function ActivityMapSection({ trackId, activityId, type, theme, member = 
     let alive = true;
     fetch(`/api/activities/${activityId}/geojson${member ? "" : "?view=share"}`)
       .then((r) => (r.ok ? r.json() : null))
-      .then((d: MapPayload | null) => {
+      .then((d: ActivityMapPayload | null) => {
         if (alive && d) setData(d);
       });
     return () => {
