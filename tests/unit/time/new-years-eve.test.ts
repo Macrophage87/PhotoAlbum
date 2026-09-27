@@ -9,7 +9,7 @@ vi.mock("next/cache", () => ({ revalidatePath: () => undefined }));
 vi.mock("@/lib/jobs/boss", () => ({ enqueue: async () => null }));
 
 import { tileDate } from "@/components/photos/PhotoGrid";
-import { outsiderAlt, takenDay, takenYearSpan, toGridPhoto } from "@/components/photos/toGrid";
+import { outsiderAlt, takenYearSpan, toGridPhoto } from "@/components/photos/toGrid";
 import { readingTime } from "@/components/photos/DateTroubleshooter";
 import { formatTaken } from "@/components/photos/LightboxInfo";
 import { GET as photoInfo } from "@/app/api/photos/[id]/info/route";
@@ -17,7 +17,7 @@ import type { PhotoInfo } from "@/app/api/photos/[id]/info/route";
 import { dateReport } from "@/lib/photos/date-report";
 import { guessDate } from "@/lib/photos/date-from-neighbours";
 import { idsInLocalYear, tripPhotoPage } from "@/lib/photos/page";
-import { searchFacets, searchMedia } from "@/lib/search/query";
+import { hitWhen, searchFacets, searchMedia } from "@/lib/search/query";
 import { listCollectionItems } from "@/lib/collections/queries";
 import { collectionTimeline } from "@/lib/collections/timeline";
 import { tripTimeline } from "@/lib/timeline/queries";
@@ -117,7 +117,8 @@ describe("a New Year's Eve photograph with no offset of its own, on a trip in Lo
     expect((await searchFacets(member)).years).toEqual([2025]);
     // The date beside a search hit.
     const [hit] = await searchMedia(member, { q: "fireworks" }, 120, null);
-    expect(takenDay({ ...hit, trip: hit.tripTimezone ? { timezone: hit.tripTimezone } : null })).toBe("2025-12-31");
+    expect(hitWhen(hit)).toBe("Dec 31, 2025");
+    expect(hitWhen({ ...hit, tripTimezone: null })).toBe("Jan 1, 2026");
   });
 
   it("files it under 31 December on the trip's and the collection's timelines, at 11:30 PM, and in 2025 on the collection's overview", async () => {

@@ -5,7 +5,9 @@ import type { Viewer } from "@/lib/auth/viewer";
 import { visibleContainersWhere } from "@/lib/auth/access";
 import { embedText, mlConfigured, vectorLiteral } from "@/lib/ml/client";
 import { peopleInPhotos, type FilterPerson } from "@/lib/people/in-photos";
-import { inLocalYearSql, localYearSql } from "@/lib/time/local-day-sql";
+import { inLocalYearSql, localYearSql, tripZoneFixes } from "@/lib/time/local-day-sql";
+import { photoDay } from "@/lib/time/local-day";
+import { formatDay } from "@/lib/time/format";
 
 export type SearchParams = { q: string; tripId?: string; collectionId?: string; uploaderId?: string; personIds?: string[]; year?: number; kind?: MediaKind };
 
@@ -35,6 +37,11 @@ export type SearchHit = {
   /** Plain text with [[ ]] around matches; never HTML from the database. */
   snippet: string;
 };
+
+/** The date beside a hit: the day it was taken where it was taken (see `photoDay`), as "Dec 31, 2025". */
+export function hitWhen(h: Pick<SearchHit, "takenAt" | "tzOffsetMin" | "tripTimezone">): string | null {
+  return h.takenAt ? formatDay(photoDay(h.takenAt, h.tzOffsetMin, h.tripTimezone ?? "UTC"), "shortYear") : null;
+}
 
 export const MAX_QUERY_LENGTH = 200;
 
@@ -106,7 +113,7 @@ export async function searchMedia(viewer: Viewer, params: SearchParams, limit = 
       filters.push(Prisma.sql`(EXISTS (SELECT 1 FROM "Face" f2 WHERE f2."photoId" = p.id AND f2."personId" = ${personId} AND f2.status = 'CONFIRMED')
         OR EXISTS (SELECT 1 FROM "AnimalDetection" a2 WHERE a2."photoId" = p.id AND a2."personId" = ${personId} AND a2.status = 'CONFIRMED'))`);
   // The year where it was taken, on the one rule for a photograph's clock (`t` is its trip, joined below).
-  if (params.year) filters.push(inLocalYearSql(params.year));
+  if (params.year) filters.push(inLocalYearSql(params.year, await tripZoneFixes()));
   if (params.kind) filters.push(Prisma.sql`p.kind = ${params.kind}::"MediaKind"`);
   const where = filters.length ? Prisma.join(filters, " AND ") : Prisma.sql`TRUE`;
   const text = hitTextSql(member);
@@ -163,13 +170,14 @@ export type SearchFacets = {
 /** Filter options built from the viewer's visible set only. */
 export async function searchFacets(viewer: Viewer): Promise<SearchFacets> {
   const member = viewer.kind === "user";
+  const zoneFixes = await tripZoneFixes();
   const [trips, collections, uploaders, people, years] = await Promise.all([
     db.trip.findMany({ where: visibleContainersWhere(viewer), orderBy: { startDate: "desc" }, select: { id: true, title: true } }),
     db.collection.findMany({ where: visibleContainersWhere(viewer), orderBy: { title: "asc" }, select: { id: true, title: true } }),
     member ? db.user.findMany({ where: { photos: { some: {} } }, orderBy: { name: "asc" }, select: { id: true, name: true, email: true } }) : Promise.resolve([]),
     member ? peopleInPhotos() : Promise.resolve([]),
     db.$queryRaw<{ year: number }[]>`
-      SELECT DISTINCT ${localYearSql()} AS year
+      SELECT DISTINCT ${localYearSql(zoneFixes)} AS year
       FROM "Photo" p LEFT JOIN "Trip" t ON t.id = p."tripId"
       WHERE p."takenAt" IS NOT NULL AND p.status = 'READY' AND ${visibilitySql(viewer)}
       ORDER BY year DESC`,

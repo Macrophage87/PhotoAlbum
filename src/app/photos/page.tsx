@@ -24,9 +24,10 @@ export default async function UnassignedPhotosPage({ searchParams }: PageProps<"
     unassignedPhotoPage(filter),
     db.user.findMany({ where: { photos: { some: { tripId: null, ...NOT_TRASHED } } }, orderBy: { name: "asc" }, select: { id: true, name: true, email: true } }),
     peopleInPhotos(),
-    // The years these actually cover, so the list offers nothing that would come back empty.
+    // The years these actually cover, so the list offers nothing that would come back empty. On no trip, so no
+    // trip's zone is read and none needs checking.
     db.$queryRaw<{ year: number }[]>`
-      SELECT DISTINCT ${localYearSql()} AS year
+      SELECT DISTINCT ${localYearSql([])} AS year
       FROM "Photo" p LEFT JOIN "Trip" t ON t.id = p."tripId" WHERE p."tripId" IS NULL AND p."trashedAt" IS NULL AND p."takenAt" IS NOT NULL ORDER BY year DESC`,
   ]);
   const active = filterIsActive(filter);

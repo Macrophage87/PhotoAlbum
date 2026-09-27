@@ -8,7 +8,7 @@ import { boundingBox, MILE_IN_METRES, NO_PICKER_FILTER, type PickerFilter } from
 import { idsWithPerson } from "@/lib/people/in-photos";
 import { publicMediaSql } from "@/lib/search/query";
 import { cursorWhere, encodeCursor, type KeyColumn } from "./keyset";
-import { inLocalYearSql } from "@/lib/time/local-day-sql";
+import { inLocalYearSql, tripZoneFixes } from "@/lib/time/local-day-sql";
 
 /** Gallery pages load this many items at a time; the client asks for the next page by cursor. */
 export const GALLERY_PAGE = 240;
@@ -70,11 +70,12 @@ export async function idsMatching(q: string, opts: { member: boolean; scope?: Ma
  * and the count beside it, agree exactly on what is in it.
  */
 export async function idsInLocalYear(tripId: string | null, year: number): Promise<string[]> {
+  const zoneFixes = await tripZoneFixes();
   const rows = await db.$queryRaw<{ id: string }[]>`
     SELECT p.id FROM "Photo" p LEFT JOIN "Trip" t ON t.id = p."tripId"
     WHERE p."trashedAt" IS NULL
       AND ${tripId ? Prisma.sql`p."tripId" = ${tripId}` : Prisma.sql`TRUE`}
-      AND ${inLocalYearSql(year)}`;
+      AND ${inLocalYearSql(year, zoneFixes)}`;
   return rows.map((r) => r.id);
 }
 

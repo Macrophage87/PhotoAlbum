@@ -9,7 +9,8 @@ import { WhoWasThere, type Member } from "@/components/people/WhoWasThere";
 
 export type TripFormValues = { title: string; description: string; startDate: string; endDate: string; timezone: string; themeKey: string; participants: string[] };
 
-const COMMON_ZONES = [
+/** The zones offered, under the names Postgres knows them by (see `canonicalTimezone`). */
+export const COMMON_ZONES = [
   "UTC",
   "America/New_York",
   "America/Chicago",
@@ -45,7 +46,7 @@ const COMMON_ZONES = [
   "Pacific/Auckland",
   "Africa/Johannesburg",
   "America/Sao_Paulo",
-  "America/Buenos_Aires",
+  "America/Argentina/Buenos_Aires",
   "America/Lima",
   "America/Santiago",
 ];
