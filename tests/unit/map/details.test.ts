@@ -98,7 +98,8 @@ describe("what a clicked pin may say", () => {
     who.viewer = member;
     expect(await described(Object.values(id))).toEqual([id.open, id.shut, id.linked, id.collected, id.onActivity, id.linkCollected].sort());
     expect((await ask([id.onActivity])).photos[0]).toMatchObject({ activityTitle: "Chemo, second round", trip: { slug: "shut" }, uploadedBy: "Gwen" });
-    expect((await ask([id.onActivity], "&view=share")).photos[0]).toMatchObject({ trip: null, uploadedBy: null });
+    // Answered as a visitor without the activity's link: the activity is not named either.
+    expect((await ask([id.onActivity], "&view=share")).photos[0]).toMatchObject({ trip: null, activityTitle: null, uploadedBy: null });
     expect((await ask([id.linked], "&view=share")).photos[0]).toMatchObject({ uploadedBy: null });
   });
 

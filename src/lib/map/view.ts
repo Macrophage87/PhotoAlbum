@@ -32,9 +32,11 @@ export function parseViewport(sp: URLSearchParams): MapViewport | null | "bad" {
   const bbox = sp.get("bbox");
   const zoom = sp.get("zoom");
   if (bbox === null && zoom === null) return null;
-  const parts = (bbox ?? "").split(",").map(Number);
+  const raw = (bbox ?? "").split(",");
+  const parts = raw.map(Number);
   const z = Number(zoom);
-  if (parts.length !== 4 || !parts.every(Number.isFinite) || zoom === null || !Number.isFinite(z)) return "bad";
+  // Number("") is 0, so an empty value is refused before it can pass for the equator or zoom 0.
+  if (parts.length !== 4 || raw.some((v) => !v.trim()) || !parts.every(Number.isFinite) || !zoom?.trim() || !Number.isFinite(z)) return "bad";
   const [west, south, east, north] = parts;
   if (south > north || east < west) return "bad";
   return { west, south: Math.max(-90, south), east, north: Math.min(90, north), zoom: Math.min(MAX_ZOOM, Math.max(0, z)) };
@@ -53,39 +55,49 @@ export function inViewport(v: MapViewport, lat: number, lng: number): boolean {
 }
 
 /** Web Mercator, as the map draws it: 0 to 1 across the world, west to east and north to south. */
-function mercator(lat: number, lng: number): [number, number] {
+export function mercator(lat: number, lng: number): [number, number] {
   const clamped = Math.max(-85.05112878, Math.min(85.05112878, lat));
   const sin = Math.sin((clamped * Math.PI) / 180);
   return [(lng + 180) / 360, 0.5 - Math.log((1 + sin) / (1 - sin)) / (4 * Math.PI)];
 }
 
-/** A group of photographs sent as one: where to draw it, how many, the box they fill, and their ring colours. */
+/** Past this zoom a cell is a few metres across, finer than any pin; it also keeps a cell's number exact. */
+const MAX_GRID_ZOOM = 20;
+
+/** A group of positions sent as one: where to draw it (the middle of what is in it), how many, and the box they fill. */
 export type Cell<R> = { lat: number; lng: number; n: number; box: [number, number, number, number]; members: R[] };
 
 /**
- * Group positions into square cells `CELL_PX` wide at this zoom, drawn at the middle of what is in each. When that
- * would still be more than `MAX_CELLS`, the cells are made twice as wide until it is not, so a bad zoom in the
- * address cannot make the answer as big as the album.
+ * Group positions into square cells `CELL_PX` wide at this zoom. Each position comes with its place on the Mercator
+ * square (`x`, `y`), worked out once for the map rather than on every view. When that would still be more than
+ * `MAX_CELLS`, the cells are made twice as wide until it is not, so a bad zoom in the address cannot make the answer
+ * as big as the album.
  */
-export function gridCells<R extends { lat: number; lng: number }>(rows: R[], zoom: number): Cell<R>[] {
-  const at = rows.map((r) => mercator(r.lat, r.lng));
-  for (let z = Math.floor(zoom); ; z--) {
+export function gridCells<R extends { lat: number; lng: number; x: number; y: number }>(rows: R[], zoom: number): Cell<R>[] {
+  for (let z = Math.min(Math.floor(zoom), MAX_GRID_ZOOM); ; z--) {
     const across = (TILE_PX * 2 ** z) / CELL_PX;
-    const cells = new Map<string, Cell<R>>();
-    rows.forEach((r, i) => {
-      const key = `${Math.floor(at[i][0] * across)},${Math.floor(at[i][1] * across)}`;
+    const cells = new Map<number, Cell<R>>();
+    for (const r of rows) {
+      const key = Math.floor(r.x * across) * across + Math.floor(r.y * across);
       const c = cells.get(key);
+      // The middle is summed here and divided once the cell is whole.
       if (!c) cells.set(key, { lat: r.lat, lng: r.lng, n: 1, box: [r.lng, r.lat, r.lng, r.lat], members: [r] });
       else {
         c.n++;
+        c.lat += r.lat;
+        c.lng += r.lng;
         c.members.push(r);
-        c.box = [Math.min(c.box[0], r.lng), Math.min(c.box[1], r.lat), Math.max(c.box[2], r.lng), Math.max(c.box[3], r.lat)];
+        const b = c.box;
+        if (r.lng < b[0]) b[0] = r.lng;
+        if (r.lat < b[1]) b[1] = r.lat;
+        if (r.lng > b[2]) b[2] = r.lng;
+        if (r.lat > b[3]) b[3] = r.lat;
       }
-    });
+    }
     if (cells.size <= MAX_CELLS || z <= 0) {
       for (const c of cells.values()) {
-        c.lat = c.members.reduce((s, r) => s + r.lat, 0) / c.n;
-        c.lng = c.members.reduce((s, r) => s + r.lng, 0) / c.n;
+        c.lat /= c.n;
+        c.lng /= c.n;
       }
       return [...cells.values()];
     }

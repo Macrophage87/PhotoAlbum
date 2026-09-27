@@ -510,6 +510,8 @@ model Photo {
   @@index([provider, externalId])
   @@index([reviewedAt])
   @@index([trashedAt])
+  /// The map of the album asks for the latest change on every view, to know whether what it worked out still holds.
+  @@index([updatedAt])
 }
 
 /// A named, themed, shareable set of media that is independent of trips. A photo may sit in any number of collections.

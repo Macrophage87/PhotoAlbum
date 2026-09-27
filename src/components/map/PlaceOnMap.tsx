@@ -29,7 +29,7 @@ export function PlaceOnMap({ src, theme, initial, tripTitle }: { src: string; th
   const router = useRouter();
   const [tray, setTray] = useState<TrayPhoto[]>(initial.photos);
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const { data, error, photos: sent, onViewChange } = useMapData(src);
+  const { data, error, photos: sent, onViewChange, refresh } = useMapData(src);
   const { describe, known } = useDescribe(src);
   // The map opens on the album, so it waits for the album: bounds given after the map is made are not looked at.
   const ready = data !== null || error !== null;
@@ -76,6 +76,11 @@ export function PlaceOnMap({ src, theme, initial, tripTitle }: { src: string; th
         return next;
       });
       setTray((prev) => prev.filter((p) => !saved.includes(p.id)));
+      // A map sent a view at a time asks for its view again, which now has these where they were put (or counted in a
+      // group there), and then stops drawing them itself, or each would be on the map twice.
+      void refresh().then((asked) => {
+        if (asked) setPlaced((prev) => new Map([...prev].filter(([id]) => !saved.includes(id))));
+      });
       setSelected(new Set());
       const skipped = ids.length - n;
       setNotice(`${n} photograph${n === 1 ? "" : "s"} placed. ${at.lat.toFixed(5)}, ${at.lng.toFixed(5)}${skipped ? `. ${skipped} not yours to place, left where ${skipped === 1 ? "it was" : "they were"}.` : ""}`);

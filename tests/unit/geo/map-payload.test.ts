@@ -1,8 +1,9 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { db } from "@/lib/db";
 import { buildCollectionMapPayload, buildCollectionMapView, buildMapPayload, buildMapView, type MapPhotos } from "@/lib/map/geojson";
-import { gridCells, inViewport, MAX_CELLS, parseViewport, POINT_LIMIT } from "@/lib/map/view";
+import { gridCells, inViewport, MAX_CELLS, mercator, parseViewport, POINT_LIMIT } from "@/lib/map/view";
 import { NO_FILTER } from "@/lib/photos/filters";
+import { forgetMapStates } from "@/lib/map/cache";
 import { JITTER_STEP_M, spreadOverlapping } from "@/lib/map/jitter";
 import { haversine } from "@/lib/geo/haversine";
 import type { Viewer } from "@/lib/auth/viewer";
@@ -133,9 +134,10 @@ describe("what a map sends of each photograph", () => {
 });
 
 describe("a map bigger than one answer", () => {
-  let tripId: string;
+  let tripId: string, collectionId: string;
   const count = POINT_LIMIT + 300;
-  beforeEach(async () => {
+  // Seeded once: nearly two thousand photographs take seconds to write, and nothing here changes them.
+  beforeAll(async () => {
     await resetTestDb();
     const user = await db.user.create({ data: { email: "m@example.com", role: "ADMIN" } });
     tripId = (await db.trip.create({ data: { slug: "t", title: "T", startDate: new Date("2025-08-10"), endDate: new Date("2025-08-16"), createdById: user.id, visibility: "PRIVATE" } })).id;
@@ -146,19 +148,23 @@ describe("a map bigger than one answer", () => {
         lat: i < 10 ? 10 + i : 44.3 + (i % 50) * 0.001, lng: i < 10 ? 10 + i : -68.2 + Math.floor(i / 50) * 0.001, takenAt: new Date(Date.UTC(2025, 7, 10 + (i % 5))),
       })),
     });
-  });
+    collectionId = (await db.collection.create({ data: { slug: "c", title: "C", createdById: user.id, visibility: "PUBLIC" } })).id;
+    const photos = await db.photo.findMany({ select: { id: true } });
+    await db.collectionItem.createMany({ data: photos.map((p) => ({ collectionId, photoId: p.id, addedById: user.id })) });
+  }, 60_000);
 
   it("sends no photographs up front, but says how many there are and how to colour them all", async () => {
     const payload = await buildMapPayload(member, tripId);
-    expect(payload.photos).toEqual({ points: [], cells: [], complete: false });
+    expect(payload.photos).toEqual({ points: [], cells: [], complete: false, version: payload.version });
     expect(payload.total).toBe(count);
     expect(payload.rings.day.groups.reduce((n, g) => n + g.count, 0)).toBe(count);
     expect(payload.bounds).not.toBeNull();
-  });
+  }, 30_000);
 
   it("groups a crowded view into cells that count every photograph in it, coloured as the whole map is", async () => {
     const view = { west: -180, south: -85, east: 180, north: 85, zoom: 2 };
     const answer = await buildMapView(member, tripId, NO_FILTER, view);
+    expect(answer.version).toBe((await buildMapPayload(member, tripId)).version);
     expect(answer.cells.length).toBeGreaterThan(0);
     expect(answer.cells.length + answer.points.length).toBeLessThan(50);
     // Nothing is left out: every photograph is in a cell or is sent as itself.
@@ -169,7 +175,7 @@ describe("a map bigger than one answer", () => {
       expect(c.box[0]).toBeLessThanOrEqual(c.at[0]);
       expect(c.box[2]).toBeGreaterThanOrEqual(c.at[0]);
     }
-  });
+  }, 30_000);
 
   it("sends the photographs one by one once the view holds few enough of them", async () => {
     const far = await buildMapView(member, tripId, NO_FILTER, { west: 9, south: 9, east: 20, north: 20, zoom: 6 });
@@ -178,17 +184,57 @@ describe("a map bigger than one answer", () => {
     // In the order they were taken, like the whole map.
     const days = far.points.map((p) => p[3]!);
     expect([...days].sort()).toEqual(days);
-  });
+  }, 30_000);
 
   it("answers the same way for a collection's map", async () => {
-    const user = await db.user.findFirstOrThrow();
-    const collection = await db.collection.create({ data: { slug: "c", title: "C", createdById: user.id, visibility: "PUBLIC" } });
-    const photos = await db.photo.findMany({ select: { id: true } });
-    await db.collectionItem.createMany({ data: photos.map((p) => ({ collectionId: collection.id, photoId: p.id, addedById: user.id })) });
-    expect((await buildCollectionMapPayload(stranger, collection.id)).photos.complete).toBe(false);
-    const answer = await buildCollectionMapView(stranger, collection.id, NO_FILTER, { west: -180, south: -85, east: 180, north: 85, zoom: 2 });
+    expect((await buildCollectionMapPayload(stranger, collectionId)).photos.complete).toBe(false);
+    const answer = await buildCollectionMapView(stranger, collectionId, NO_FILTER, { west: -180, south: -85, east: 180, north: 85, zoom: 2 });
     expect(answer.cells.reduce((n, c) => n + c.n, 0) + answer.points.length).toBe(count);
     expect(answer.cells.every((c) => c.rings.uploader === null)).toBe(true);
+  }, 30_000);
+});
+
+describe("a map kept from one view to the next", () => {
+  let tripId: string, photoId: string, uploaderId: string;
+  const everywhere = { west: -180, south: -85, east: 180, north: 85, zoom: 2 };
+  beforeEach(async () => {
+    await resetTestDb();
+    forgetMapStates();
+    uploaderId = (await db.user.create({ data: { email: "m@example.com", role: "ADMIN" } })).id;
+    tripId = (await db.trip.create({ data: { slug: "t", title: "T", startDate: new Date("2025-08-10"), endDate: new Date("2025-08-16"), createdById: uploaderId, visibility: "PUBLIC" } })).id;
+    const base = { uploaderId, tripId, mimeType: "image/jpeg", storageKey: "k", originalPath: "k/o.jpg", sizeBytes: 1, status: "READY" as const, gpsSource: "EXIF" as const };
+    photoId = (await db.photo.create({ data: { ...base, originalName: "a.jpg", lat: 44.35, lng: -68.2, takenAt: new Date("2025-08-12T15:00:00Z") } })).id;
+    await db.photo.create({ data: { ...base, originalName: "b.jpg", lat: 44.36, lng: -68.21, takenAt: new Date("2025-08-12T16:00:00Z") } });
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it("answers a view from the map already worked out, without reading every photograph again", async () => {
+    await buildMapPayload(stranger);
+    const read = vi.spyOn(db.photo, "findMany");
+    expect(idsOf(await buildMapView(stranger, undefined, NO_FILTER, everywhere))).toHaveLength(2);
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it("stops showing a visitor a trip the moment it is made private", async () => {
+    expect(idsOf(await buildMapView(stranger, undefined, NO_FILTER, everywhere))).toHaveLength(2);
+    await db.trip.update({ where: { id: tripId }, data: { visibility: "PRIVATE" } });
+    expect(idsOf(await buildMapView(stranger, undefined, NO_FILTER, everywhere))).toEqual([]);
+  });
+
+  it("shows a photograph where it was just put, and says when the legends have changed", async () => {
+    const before = await buildMapView(member, undefined, NO_FILTER, everywhere);
+    await db.photo.update({ where: { id: photoId }, data: { lat: 10, lng: 10, takenAt: new Date("2025-08-14T12:00:00Z") } });
+    const after = await buildMapView(member, undefined, NO_FILTER, everywhere);
+    expect(after.points.find((p) => p[0] === photoId)!.slice(1, 4)).toEqual([10, 10, "2025-08-14"]);
+    // A new day in the legend: the map is told its legends are not the ones these slots are numbered by.
+    expect(after.version).not.toBe(before.version);
+    expect((await buildMapPayload(member)).version).toBe(after.version);
+  });
+
+  it("drops a photograph in the trash from the next view, for a member too", async () => {
+    await buildMapView(member, undefined, NO_FILTER, everywhere);
+    await db.photo.update({ where: { id: photoId }, data: { trashedAt: new Date(), trashedById: uploaderId, trashReason: "BLURRY" } });
+    expect(idsOf(await buildMapView(member, undefined, NO_FILTER, everywhere))).not.toContain(photoId);
   });
 });
 
@@ -197,7 +243,7 @@ describe("views and cells", () => {
     expect(parseViewport(new URLSearchParams(""))).toBeNull();
     expect(parseViewport(new URLSearchParams("bbox=-10,-5,10,5&zoom=3"))).toEqual({ west: -10, south: -5, east: 10, north: 5, zoom: 3 });
     expect(parseViewport(new URLSearchParams("bbox=-10,-5,10,5&zoom=99"))!).toMatchObject({ zoom: 24 });
-    for (const bad of ["bbox=1,2,3&zoom=1", "bbox=a,b,c,d&zoom=1", "bbox=-10,-5,10,5", "zoom=3", "bbox=10,-5,-10,5&zoom=1", "bbox=-10,5,10,-5&zoom=1", "bbox=-10,-5,10,5&zoom=x"]) {
+    for (const bad of ["bbox=1,2,3&zoom=1", "bbox=-10,-5,10,5&zoom=", "bbox=,,,&zoom=3", "bbox=-10,,10,5&zoom=3", "bbox=a,b,c,d&zoom=1", "bbox=-10,-5,10,5", "zoom=3", "bbox=10,-5,-10,5&zoom=1", "bbox=-10,5,10,-5&zoom=1", "bbox=-10,-5,10,5&zoom=x"]) {
       expect(parseViewport(new URLSearchParams(bad))).toBe("bad");
     }
   });
@@ -211,7 +257,10 @@ describe("views and cells", () => {
   });
 
   it("never makes more cells than an answer may hold, however far in the view says it is zoomed", () => {
-    const scattered = Array.from({ length: 5000 }, (_, i) => ({ lat: -60 + (i % 100) * 1.2, lng: -170 + Math.floor(i / 100) * 6.8 }));
+    const scattered = Array.from({ length: 5000 }, (_, i) => ({ lat: -60 + (i % 100) * 1.2, lng: -170 + Math.floor(i / 100) * 6.8 })).map((p) => {
+      const [x, y] = mercator(p.lat, p.lng);
+      return { ...p, x, y };
+    });
     const cells = gridCells(scattered, 24);
     expect(cells.length).toBeLessThanOrEqual(MAX_CELLS);
     expect(cells.reduce((n, c) => n + c.n, 0)).toBe(5000);

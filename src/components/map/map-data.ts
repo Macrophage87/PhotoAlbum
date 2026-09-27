@@ -6,6 +6,7 @@ import type { MapPhotoDetail } from "@/lib/map/details";
 import type { ColourBy } from "@/lib/map/colour-by";
 import { MAX_DESCRIBED, type MapViewport } from "@/lib/map/view";
 import type { MapCellProps, MapPhotoProps } from "./MapView";
+import { viewAsker } from "./view-asker";
 
 /** Where each way of colouring keeps its slot in a sent photograph. */
 const SLOT_AT = { day: 4, activity: 5, uploader: 6 } as const;
@@ -39,81 +40,74 @@ export function cellFeatures(cells: PhotoCell[], by: ColourBy): GeoJSON.FeatureC
   };
 }
 
-/** A view made half as wide again on every side, so a small pan stays inside what was already sent. */
-function widen(v: MapViewport): MapViewport {
-  const w = v.east - v.west;
-  const h = v.north - v.south;
-  const wide = w * 2 >= 360;
-  return { west: wide ? -180 : v.west - w / 2, east: wide ? 180 : v.east + w / 2, south: Math.max(-90, v.south - h / 2), north: Math.min(90, v.north + h / 2), zoom: v.zoom };
-}
-
-const covers = (a: MapViewport, b: MapViewport) => a.west <= b.west && a.east >= b.east && a.south <= b.south && a.north >= b.north;
-
 /**
  * A map's data: everything but its photographs once, and the photographs too when the map is small enough to send
- * them at once. A bigger map sends its photographs a view at a time, asked for as the map settles (`onViewChange`)
- * and only when what is on screen was not already sent: a view of single photographs stays good anywhere inside it,
- * and a view of groups until the zoom changes, since groups are only right for the zoom they were made for.
+ * them at once. A bigger map sends its photographs a view at a time, asked for as the map settles (`onViewChange`,
+ * see `viewAsker`). Each answer says which legends its ring slots are numbered by; when the album has changed since
+ * the map opened and they are new ones, the map's legends and tracks are asked for again to match.
  */
 export function useMapData(src: string) {
   const [data, setData] = useState<MapPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [inView, setInView] = useState<{ src: string; photos: MapPhotos } | null>(null);
-  const asked = useRef<{ src: string; view: MapViewport; grouped: boolean } | null>(null);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pending = useRef<AbortController | null>(null);
+  /** Bumped to ask for the map's legends and tracks again. */
+  const [reload, setReload] = useState(0);
+  const version = useRef<string | null>(null);
 
   useEffect(() => {
     let alive = true;
     fetch(src)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`Map data failed (${r.status})`))))
-      .then((d: MapPayload) => alive && setData(d))
+      .then((d: MapPayload) => {
+        if (!alive) return;
+        version.current = d.version;
+        setData(d);
+      })
       .catch((e: Error) => alive && setError(e.message));
     return () => {
       alive = false;
     };
-  }, [src]);
+  }, [src, reload]);
 
-  useEffect(
-    () => () => {
-      if (timer.current) clearTimeout(timer.current);
-      pending.current?.abort();
-    },
-    [],
-  );
+  const asker = useRef<ReturnType<typeof viewAsker> | null>(null);
+  useEffect(() => {
+    const mine = viewAsker({
+      fetchView: (v, signal) =>
+        fetch(`${src}${src.includes("?") ? "&" : "?"}bbox=${[v.west, v.south, v.east, v.north].map((n) => n.toFixed(5)).join(",")}&zoom=${v.zoom.toFixed(2)}`, { signal }).then((r) =>
+          r.ok ? (r.json() as Promise<MapPhotos>) : Promise.reject(new Error(String(r.status))),
+        ),
+      onAnswer: (photos) => {
+        setInView({ src, photos });
+        if (version.current !== null && photos.version !== version.current) {
+          version.current = photos.version;
+          setReload((n) => n + 1);
+        }
+      },
+    });
+    asker.current = mine;
+    return () => {
+      mine.dispose();
+      if (asker.current === mine) asker.current = null;
+    };
+  }, [src]);
 
   const onViewChange = useCallback(
     (v: MapViewport) => {
-      if (!data || data.photos.complete) return;
-      const last = asked.current;
-      if (last && last.src === src && covers(last.view, v) && (!last.grouped || Math.floor(last.view.zoom) === Math.floor(v.zoom))) return;
-      if (timer.current) clearTimeout(timer.current);
-      timer.current = setTimeout(() => {
-        pending.current?.abort();
-        const ctl = new AbortController();
-        pending.current = ctl;
-        const wide = widen(v);
-        const bbox = [wide.west, wide.south, wide.east, wide.north].map((n) => n.toFixed(5)).join(",");
-        fetch(`${src}${src.includes("?") ? "&" : "?"}bbox=${bbox}&zoom=${v.zoom.toFixed(2)}`, { signal: ctl.signal })
-          .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
-          .then((photos: MapPhotos) => {
-            asked.current = { src, view: wide, grouped: photos.cells.length > 0 };
-            setInView({ src, photos });
-          })
-          // Given up for a newer view, or failed: the map keeps what it has, and the next move asks again.
-          .catch(() => {});
-      }, 250);
+      if (data && !data.photos.complete) asker.current?.ask(v);
     },
-    [data, src],
+    [data],
   );
+  /** Ask for the view on screen again, now: something on it was just changed. False when the map is sent whole. */
+  const refresh = useCallback(() => (data && !data.photos.complete && asker.current ? asker.current.refresh() : Promise.resolve(false)), [data]);
 
   const photos = data ? (data.photos.complete ? data.photos : inView?.src === src ? inView.photos : null) : null;
-  return { data, error, photos, onViewChange };
+  return { data, error, photos, onViewChange, refresh };
 }
 
 /**
  * The details a pin does not carry (its picture, caption, activity and uploader), looked up when it is clicked and
- * kept for the visit. A share page's map asks as its visitors do (`view=share`).
+ * kept for the visit. A share page's map asks as its visitors do (`view=share`). The answer holds only what this
+ * viewer may see; a request that fails rejects.
  */
 export function useDescribe(src: string) {
   const view = useMemo(() => new URL(src, "http://localhost").searchParams.get("view"), [src]);
@@ -126,7 +120,8 @@ export function useDescribe(src: string) {
         const q = new URLSearchParams({ ids: missing.slice(i, i + MAX_DESCRIBED).join(",") });
         if (view) q.set("view", view);
         const r = await fetch(`/api/map/photos?${q}`);
-        if (!r.ok) continue;
+        // A failed request is not an answer: nothing is taken to be gone because the network was.
+        if (!r.ok) throw new Error(`Photo details failed (${r.status})`);
         for (const d of ((await r.json()) as { photos: MapPhotoDetail[] }).photos) cache.current.set(d.id, d);
       }
       if (missing.length) setKnown(new Map(cache.current));
