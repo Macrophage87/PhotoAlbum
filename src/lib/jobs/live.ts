@@ -1,4 +1,5 @@
 import { db } from "@/lib/db";
+import { Prisma } from "@/generated/prisma/client";
 import { QUEUES } from "./queues";
 
 /**
@@ -16,5 +17,22 @@ export async function hasLiveProcessingJob(photoId: string): Promise<boolean> {
   } catch (err) {
     console.error("[jobs] could not read pg-boss's jobs; treating the photo as still queued", err);
     return true;
+  }
+}
+
+/**
+ * Which of these Google Photos rows a Picker download job still names while it is waiting, running or due a retry:
+ * that job is still bringing the file. Unknown counts as all of them, for the same reason.
+ */
+export async function withLivePickerJob(photoIds: string[]): Promise<Set<string>> {
+  if (!photoIds.length) return new Set();
+  try {
+    const rows = await db.$queryRaw<{ id: string }[]>`
+      SELECT DISTINCT i.id FROM pgboss.job j CROSS JOIN LATERAL jsonb_array_elements_text(COALESCE(j.data->'photoIds', '[]'::jsonb)) AS i(id)
+      WHERE j.name = ${QUEUES.googlePickerImport} AND j.state IN ('created', 'retry', 'active') AND i.id IN (${Prisma.join(photoIds)})`;
+    return new Set(rows.map((r) => r.id));
+  } catch (err) {
+    console.error("[jobs] could not read pg-boss's jobs; treating the Google Photos downloads as still queued", err);
+    return new Set(photoIds);
   }
 }
