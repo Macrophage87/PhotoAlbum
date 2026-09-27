@@ -235,42 +235,85 @@ describe("descriptions that stay in the family", () => {
     const share = async (id: string) => setAnnotationShared(id, (await db.photo.findUniqueOrThrow({ where: { id } })).annotationRevision, true);
 
     it("G1: refuses once a withdrawal's fortnight has passed, for an everyday name and one only the neighbour rule excuses", async () => {
-      await db.person.create({ data: { name: "Rose", namingWithdrawnAt: new Date(Date.now() - 30 * 86_400_000), createdById: who.id } });
-      await db.person.create({ data: { name: "Ximena", namingWithdrawnAt: new Date(Date.now() - 30 * 86_400_000), createdById: who.id } });
+      // As in real data: named once without evidence of being an adult, and the naming withdrawn.
+      const withdrawn = { nameInDescriptions: false, nameInDescriptionsSetAt: new Date("2026-01-01"), namingWithdrawnAt: new Date(Date.now() - 30 * 86_400_000), createdById: who.id };
+      await db.person.create({ data: { name: "Rose", ...withdrawn } });
+      await db.person.create({ data: { name: "Ximena", ...withdrawn } });
+      // Withdrawn by the migration from an old "named" flag, with no record of when naming was decided.
+      await db.person.create({ data: { name: "Ivy", nameInDescriptions: true, namingWithdrawnAt: new Date(Date.now() - 30 * 86_400_000), createdById: who.id } });
       const rose = await heldPhoto("Rose At The Hut");
       const ximena = await heldPhoto("Ximena Hut Walk", "Ximena Hut Walk, in the snow.");
+      const ivy = await heldPhoto("Ivy At The Hut");
       await scrubWithdrawnNames();
       expect(await db.person.count({ where: { namingWithdrawnAt: { not: null } } })).toBe(0);
-      for (const p of [rose, ximena]) await expect(share(p.id)).rejects.toThrow(/no longer to be named/);
+      // Taken back for good is recorded as a naming decided and not allowed.
+      expect(await db.person.count({ where: { nameInDescriptionsSetAt: null } })).toBe(0);
+      for (const p of [rose, ximena, ivy]) await expect(share(p.id)).rejects.toThrow(/isn't to be shown outside the family/);
       expect(await db.photo.count({ where: { annotationMembersOnly: false } })).toBe(1);
     });
 
     it("G2: refuses when an admin has switched naming off, for photographs, trips, collections and activities", async () => {
       const ximena = await db.person.create({ data: { name: "Ximena", nameInDescriptions: true, adultAttestedAt: new Date(), createdById: who.id } });
       const p = await heldPhoto("Ximena Hut Walk");
-      await db.trip.update({ where: { id: tripId }, data: { description: "Ximena Hut Walk, in the snow.", descriptionMembersOnly: true } });
-      const collection = await db.collection.create({ data: { slug: "snow", title: "Snow", description: "Ximena in the snow.", descriptionMembersOnly: true, createdById: who.id } });
-      await db.activity.update({ where: { id: activityId }, data: { description: "Ximena leads the walk.", descriptionMembersOnly: true } });
+      await db.trip.update({ where: { id: tripId }, data: { description: "Ximena Hut Walk, in the snow.", descriptionByHelper: true, descriptionMembersOnly: true } });
+      const collection = await db.collection.create({ data: { slug: "snow", title: "Snow", description: "Ximena in the snow.", descriptionByHelper: true, descriptionMembersOnly: true, createdById: who.id } });
+      await db.activity.update({ where: { id: activityId }, data: { description: "Ximena leads the walk.", descriptionByHelper: true, descriptionMembersOnly: true } });
       // Agreed to be named: shown as asked.
       await share(p.id);
       expect((await db.photo.findUniqueOrThrow({ where: { id: p.id } })).annotationMembersOnly).toBe(false);
-      await db.person.update({ where: { id: ximena.id }, data: { nameInDescriptions: false } });
+      await db.person.update({ where: { id: ximena.id }, data: { nameInDescriptions: false, nameInDescriptionsSetAt: new Date() } });
       const q = await heldPhoto("Ximena Hut Walk");
-      await expect(share(q.id)).rejects.toThrow(/no longer to be named/);
-      await expect(setTripDescriptionShared("acadia", true)).rejects.toThrow(/no longer to be named/);
-      await expect(setCollectionDescriptionShared("snow", true)).rejects.toThrow(/no longer to be named/);
-      await expect(setActivityDescriptionShared("acadia", activityId, true)).rejects.toThrow(/no longer to be named/);
+      await expect(share(q.id)).rejects.toThrow(/isn't to be shown outside the family/);
+      await expect(setTripDescriptionShared("acadia", true)).rejects.toThrow(/isn't to be shown outside the family/);
+      await expect(setCollectionDescriptionShared("snow", true)).rejects.toThrow(/isn't to be shown outside the family/);
+      await expect(setActivityDescriptionShared("acadia", activityId, true)).rejects.toThrow(/isn't to be shown outside the family/);
       expect((await db.collection.findUniqueOrThrow({ where: { id: collection.id } })).descriptionMembersOnly).toBe(true);
     });
 
     it("still shows words that name nobody the album may not name", async () => {
-      await db.person.create({ data: { name: "Rose", namingWithdrawnAt: new Date(Date.now() - 30 * 86_400_000), createdById: who.id } });
+      await db.person.create({ data: { name: "Rose", nameInDescriptionsSetAt: new Date("2026-01-01"), namingWithdrawnAt: new Date(Date.now() - 30 * 86_400_000), createdById: who.id } });
       const p = await heldPhoto("a rose by the hut", "The hut in winter.");
       await share(p.id);
       expect((await db.photo.findUniqueOrThrow({ where: { id: p.id } })).annotationMembersOnly).toBe(false);
       await db.trip.update({ where: { id: tripId }, data: { description: "Fog and cliffs.", descriptionMembersOnly: true } });
       await setTripDescriptionShared("acadia", true);
       expect((await db.trip.findUniqueOrThrow({ where: { id: tripId } })).descriptionMembersOnly).toBe(false);
+    });
+
+    /** The reviewer's people, each tagged nowhere, named in the helper's words and in a member's. */
+    const PEOPLE: [string, string, Record<string, unknown>, boolean][] = [
+      ["P1 never asked", "Pia", {}, true],
+      ["P2 attested adult, never asked", "Paz", { adultAttestedAt: new Date() }, true],
+      ["P3 recognized adult, never asked about naming", "Pim", { faceIndexing: true, birthday: new Date("1970-01-01") }, true],
+      ["P4 adult by birthday, never asked", "Pola", { birthday: new Date("1970-01-01") }, true],
+      ["P5 naming switched off by an admin", "Peri", { birthday: new Date("1970-01-01"), nameInDescriptions: false, nameInDescriptionsSetAt: new Date() }, false],
+      ["P6 opted out", "Pru", { optedOutAt: new Date() }, false],
+      ["P7 a child by birthday", "Pip", { birthday: new Date("2019-01-01") }, false],
+    ];
+    it.each(PEOPLE)("%s: the helper's words share only when the album may name them; a member's always do", async (_, name, data, shares) => {
+      await db.person.create({ data: { name, createdById: who.id, ...data } });
+      const p = await heldPhoto(`${name} At The Hut`, `${name} walks to the hut.`);
+      if (shares) await share(p.id);
+      else await expect(share(p.id)).rejects.toThrow(/isn't to be shown outside the family/);
+      await db.trip.update({ where: { id: tripId }, data: { description: `${name} walks to the hut.`, descriptionByHelper: true, descriptionMembersOnly: true } });
+      if (shares) await setTripDescriptionShared("acadia", true);
+      else await expect(setTripDescriptionShared("acadia", true)).rejects.toThrow(/isn't to be shown outside the family/);
+      // Written by a member: theirs to show, as a caption is.
+      await db.trip.update({ where: { id: tripId }, data: { description: `${name} walks to the hut.`, descriptionByHelper: false, descriptionMembersOnly: true } });
+      await setTripDescriptionShared("acadia", true);
+      expect((await db.trip.findUniqueOrThrow({ where: { id: tripId } })).descriptionMembersOnly).toBe(false);
+    });
+
+    it("shares everyday words, dates and a surname alone, whoever may not be named", async () => {
+      const off = { nameInDescriptions: false, nameInDescriptionsSetAt: new Date(), createdById: who.id };
+      await db.person.create({ data: { name: "May Smith", ...off } });
+      await db.person.create({ data: { name: "Grace Lee", createdById: who.id } });
+      await db.person.create({ data: { name: "Ruth Baker", ...off } });
+      for (const words of ["Lake day in May.", "Grace before the big dinner.", "The Baker Street bakery"]) {
+        const p = await heldPhoto(words, words);
+        await share(p.id);
+        expect([words, (await db.photo.findUniqueOrThrow({ where: { id: p.id } })).annotationMembersOnly]).toEqual([words, false]);
+      }
     });
 
     it("keeps a title of unknown origin that may name her for members, even one already shown to everyone", async () => {

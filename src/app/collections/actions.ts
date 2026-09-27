@@ -269,8 +269,9 @@ export async function setCollectionDescription(slug: string, text: string): Prom
 /** Show the collection's description to everyone who may open it, or keep it for the family; see setTripDescriptionShared. */
 export async function setCollectionDescriptionShared(slug: string, everyone: boolean): Promise<void> {
   const collection = await loadEditableCollection(slug);
-  // Never a description that may name somebody the album may not name (withdrawn, switched off, opted out).
-  if (everyone && (await namesSomebodyRestricted([collection.description]))) throw new Error(NAME_NOT_TO_BE_SHOWN);
+  // Never the helper's description while it names somebody who may not be named there (see namesSomebodyRestricted);
+  // a member's own words are theirs to show, as their captions are.
+  if (everyone && collection.descriptionByHelper && (await namesSomebodyRestricted([collection.description]))) throw new Error(NAME_NOT_TO_BE_SHOWN);
   await db.collection.update({ where: { id: collection.id }, data: { descriptionMembersOnly: !everyone, descriptionSharedAt: everyone ? new Date() : null } });
   revalidatePath(`/collections/${slug}`, "layout");
 }

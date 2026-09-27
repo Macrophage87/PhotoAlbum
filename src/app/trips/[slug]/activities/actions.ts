@@ -176,10 +176,11 @@ export async function setActivityDescription(slug: string, id: string, text: str
 /** Show the activity's description to everyone who may open it (its link included), or keep it for the family. */
 export async function setActivityDescriptionShared(slug: string, id: string, everyone: boolean): Promise<void> {
   const trip = await loadTrip(slug);
-  const activity = await db.activity.findFirst({ where: { id, tripId: trip.id }, select: { id: true, description: true } });
+  const activity = await db.activity.findFirst({ where: { id, tripId: trip.id }, select: { id: true, description: true, descriptionByHelper: true } });
   if (!activity) throw new Error("Activity not found");
-  // Never a description that may name somebody the album may not name (withdrawn, switched off, opted out).
-  if (everyone && (await namesSomebodyRestricted([activity.description]))) throw new Error(NAME_NOT_TO_BE_SHOWN);
+  // Never the helper's description while it names somebody who may not be named there (see namesSomebodyRestricted);
+  // a member's own words are theirs to show, as their captions are.
+  if (everyone && activity.descriptionByHelper && (await namesSomebodyRestricted([activity.description]))) throw new Error(NAME_NOT_TO_BE_SHOWN);
   await db.activity.update({ where: { id }, data: { descriptionMembersOnly: !everyone, descriptionTitleOnly: false, descriptionSharedAt: everyone ? new Date() : null } });
   revalidatePath(`/trips/${slug}/activities/${id}`);
 }
