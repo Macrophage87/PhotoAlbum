@@ -1,8 +1,8 @@
 import { db } from "@/lib/db";
-import { forgetNameInText, forgetQueuedFileNames, forgetRawAnswers, leftoverItems, matcherFor, memberTextCount, memberTextMentioning, photosInContainers, photosMentioning, recleanShared, taggedPhotoIds } from "./forget";
+import { forgetNameInText, forgetQueuedFileNames, forgetRawAnswers, leftoverItems, matcherFor, memberTextCount, memberTextMentioning, ownPhotoIds, photosInContainers, photosMentioning, recleanShared, taggedPhotoIds } from "./forget";
 import { containerKey, forgetKeyState, hashPlainScopes, rememberForgotten } from "./tombstone";
 import { isKinWord, isListedPlace, nameMatcher, notThePerson, type NameMatcher, type Neighbourhood } from "./scrub";
-import { stampForget, withForgetLock } from "./names-changed";
+import { clearScrubStamps, stampForget, withForgetLock } from "./names-changed";
 import { dropRejudgeJobs, forgetJudgedNames } from "@/lib/annotation/rejudge";
 
 /**
@@ -45,6 +45,8 @@ export async function forgetPerson(personId: string, opts: { keepName: boolean; 
     const forms = m.tombstoneForms.filter((f) => !f.month);
     const months = m.tombstoneForms.filter((f) => f.month);
     const tagged = await taggedPhotoIds(personId);
+    // Of them, those the family has not taken the tag back from: only there is the strict matcher used.
+    const onThem = await ownPhotoIds(personId);
     // Photographs whose members' words name them too — their own, or their trip's, collection's or activity's: what
     // the helper wrote there was written from those words.
     const before = await memberTextMentioning(m, tagged, personId, Infinity);
@@ -80,15 +82,15 @@ export async function forgetPerson(personId: string, opts: { keepName: boolean; 
       // her; any other with everything the forget went through.
       // A first name of a full one only with their own photographs and notes naming them in full.
       const placeForms = new Set(placeLike.map((f) => f.form));
-      await rememberForgotten(forms.filter((f) => !f.derived && !placeForms.has(f.form)), { photoIds, taggedPhotoIds: tagged, containerIds });
-      if (placeForms.size) await rememberForgotten(placeLike, { photoIds: notedPlace, taggedPhotoIds: tagged });
-      if (derived.length) await rememberForgotten(derived, { photoIds: derivedNoted, taggedPhotoIds: tagged });
+      await rememberForgotten(forms.filter((f) => !f.derived && !placeForms.has(f.form)), { photoIds, taggedPhotoIds: onThem, containerIds });
+      if (placeForms.size) await rememberForgotten(placeLike, { photoIds: notedPlace, taggedPhotoIds: onThem });
+      if (derived.length) await rememberForgotten(derived, { photoIds: derivedNoted, taggedPhotoIds: onThem });
       // "May" or "June": only on the photographs they were tagged on, and only where it plainly names somebody.
-      if (months.length) await rememberForgotten(months, { photoIds: tagged, taggedPhotoIds: tagged });
+      if (months.length) await rememberForgotten(months, { photoIds: tagged, taggedPhotoIds: onThem });
       await stampForget();
     }
     await held.assertHeld();
-    await forgetNameInText(photoIds, m, { tagged: hers, taggedOn: new Set(tagged), personId, stamp: false });
+    await forgetNameInText(photoIds, m, { tagged: hers, taggedOn: onThem, personId, stamp: false });
     await forgetRawAnswers(m);
     await forgetQueuedFileNames(m);
     // What is left mentioning them is what members wrote (or the helper's trip descriptions, where only a name that
@@ -133,9 +135,14 @@ export async function forgetPerson(personId: string, opts: { keepName: boolean; 
     // is stamped: which ones this forget covered is nobody's to read from the database. The stamps an untagging or
     // a withdrawal left go too, now that this forget's own supersedes them all: those left would tell which
     // photographs were not among the ones it went through (the forget review's B).
+    // Stamped whatever happens to the clear: a clear cut short is finished by the pending pass (every stamp older
+    // than the last forget goes there; see completePendingForgets).
     await held.assertHeld();
-    await db.$executeRaw`UPDATE "Photo" SET "namesScrubbedAt" = NULL WHERE "namesScrubbedAt" IS NOT NULL`;
-    await stampForget();
+    try {
+      await clearScrubStamps();
+    } finally {
+      await stampForget();
+    }
   });
   // Nor in the queue: judging jobs asked for them are dropped, finished ones included.
   if (!keepName && !later) await dropRejudgeJobs(personId, [person.name, ...person.formerNames]);
@@ -145,6 +152,8 @@ export async function forgetPerson(personId: string, opts: { keepName: boolean; 
 export async function completePendingForgets(): Promise<number> {
   // And forgotten names kept before the photographs they cover were hashed: hashed now, under their own key.
   await hashPlainScopes().catch((err) => console.error("[forget] could not hash the places of forgotten names", err instanceof Error ? err.message : err));
+  // And the stamps a forget cut short left behind: every one older than the last forget is superseded by it.
+  await clearScrubStamps({ beforeLastForget: true }).catch((err) => console.error("[forget] could not clear the stamps a forget supersedes", err instanceof Error ? err.message : err));
   const waiting = await db.person.findMany({ where: { forgetPendingAt: { not: null } }, select: { id: true, forgetPendingById: true } });
   if (!waiting.length || !(await forgetKeyState()).write) return 0;
   // Their leftovers were listed when they asked, unless that run was cut short first (see forgetListedAt).

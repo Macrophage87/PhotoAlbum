@@ -121,7 +121,7 @@ export async function applyAnnotation(photoId: string, model: string, parsed: An
   // shared text (held again only if they now name somebody), and only the helper's refreshed fields are judged as the
   // helper's. Refreshed fields that are for members only are not published over the shared text; the ones the member
   // read and shared stay instead.
-  const sharedStays = edited && current.annotationSharedAt !== null && !mentionsAnyName(helperText(memberWords(stored)), await knownNames()) && !(await namesSomebodyRestricted([helperText(memberWords(stored))]));
+  const sharedStays = edited && current.annotationSharedAt !== null && !mentionsAnyName(helperText(memberWords(stored)), await knownNames()) && !(await namesSomebodyRestricted([stored.caption, stored.description, stored.place], stored.tags ?? []));
   if (sharedStays && (await judgeHelperText(photoId, helperWords(stored), current.context, opts.sent)).membersOnly) {
     stored = await scrub({ ...stored, ...helperFieldsOf(current.annotation, stored) });
   }

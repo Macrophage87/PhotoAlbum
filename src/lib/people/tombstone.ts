@@ -6,7 +6,7 @@ import { dbNow } from "./names-changed";
 import { Prisma } from "@/generated/prisma/client";
 import type { StoredAnnotation } from "@/lib/annotation/schema";
 import { FUNCTION_WORDS, inTitleCase, isEverydayWord, isKinWord, isMonth, isTitlePrefix, kinshipKey, isPlaceOrDateWord, normalizeName, notThePerson, replaceSpans, type Neighbourhood } from "./scrub";
-import { monthAsDate, strictNormalize } from "./strict-names";
+import { lakeSpans, monthAsDate, strictNormalize } from "./strict-names";
 
 /**
  * What the album remembers of somebody it has forgotten: keyed hashes of their names, never the names.
@@ -532,6 +532,8 @@ export async function loadTombstone(): Promise<Tombstone> {
       const raw = m[0].replace(/['’]s$/u, "").replace(/\.$/u, (d) => (/^\p{L}\.(\p{L}\.)*$/u.test(m[0]) ? d : ""));
       return { start: m.index!, end: m.index! + raw.length, raw, norm: normalizeName(raw.replace(/\p{Cf}/gu, "")) };
     });
+    let lakeCache: [number, number][] | null = null;
+    const lakes = () => (lakeCache ??= lakeSpans(text));
     /** On a photograph a forgotten person was tagged on: see `strictHere`. */
     const ownRow = (f: Found) => Boolean(scope && !scope.whole && scope.own.has(f.key));
     // A tag that is a one-word name, or its possessive: "ximena", "ximena's".
@@ -557,7 +559,9 @@ export async function loadTombstone(): Promise<Tombstone> {
           if (ownRow(found) || (n > 1 && lookupAll(run[0].norm).some(ownRow))) {
             if ((n === 1 || found.scoped) && !scope?.rows.has(found.key)) return null;
             if (found.people && [...found.people].some((id) => scope!.tagged.has(id))) return null;
-            if (n === 1 && !plural && isMonth(run[0].raw) && monthAsDate(strictNormalize(text.slice(0, run[0].start)), strictNormalize(text.slice(run[0].end)))) return null;
+            // "Lake Geneva at dawn.", as the forget reads it there (strict-names.ts).
+            if (lakes().some(([a, b]) => run[0].start >= a && run[n - 1].end <= b)) return null;
+            if (n === 1 && !plural && isMonth(run[0].raw) && monthAsDate(strictNormalize(text.slice(0, run[0].start)), strictNormalize(text.slice(run[0].end)), text.slice(run[0].end))) return null;
             let k = i;
             // "Great", "Grand", "Step" or "Half" only as part of a kinship word taken already: "The Great Ada show."
             while (k > 0 && isKinWord(tokens[k - 1].raw) && !FUNCTION_WORDS.has(tokens[k - 1].norm) && /^(?:[ \t]+|[-‐])$/u.test(text.slice(tokens[k - 1].end, tokens[k].start)) && (k < i || !titlePrefix(tokens[k - 1]))) k--;

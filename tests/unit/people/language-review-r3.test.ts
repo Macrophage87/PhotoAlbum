@@ -8,11 +8,12 @@ import { forgetPerson } from "@/lib/people/forget-person";
 import { namesSomebodyRestricted, withoutWithdrawnNames } from "@/lib/people/forget";
 import { forgottenScope, loadTombstone } from "@/lib/people/tombstone";
 import type { StoredAnnotation } from "@/lib/annotation/schema";
-import { TABLE_3, TABLE_4 } from "./language-review-r3-rows";
+import { TABLE_3, TABLE_4, TABLE_5 } from "./language-review-r3-rows";
 
 /**
- * The language review's third round: every mention row of its table_3 (60 sentences, run alone and with a family in
- * the album) and table_4 (10 aimed at the strict matcher). On her own photograph the strict matcher decides (only a
+ * The language review's third and fourth rounds: every mention row of its table_3 (60 sentences, run alone and with a
+ * family in the album), table_4 (10 aimed at the strict matcher) and table_5 (43, dashes, hyphens and dates, run alone
+ * and with a family that has a Grace Kelly and a Taylor Austin). On her own photograph the strict matcher decides (only a
  * month in a date's own shape is left), so each marked mention is rewritten by the forget and in a later answer; the
  * share guard refuses each for a child; a withdrawn naming publishes none of them, on her photograph or elsewhere.
  */
@@ -28,9 +29,17 @@ describe("the language review's third round", () => {
     admin = (await db.user.create({ data: { email: "a@example.com", role: "ADMIN" } })).id;
   });
 
-  const rows = [...TABLE_3.map(([name, raw]) => [name, raw, false] as const), ...TABLE_3.map(([name, raw]) => [name, raw, true] as const), ...TABLE_4.map(([name, raw]) => [name, raw, false] as const)];
+  const FAMILY_3 = ["Ben Ortiz", "Grandma Ruth", "Baby Leo"];
+  const FAMILY_5 = [...FAMILY_3, "Grace Kelly", "Taylor Austin"];
+  const rows = [
+    ...TABLE_3.map(([name, raw]) => [name, raw, ""] as const),
+    ...TABLE_3.map(([name, raw]) => [name, raw, FAMILY_3.join(", ")] as const),
+    ...TABLE_4.map(([name, raw]) => [name, raw, ""] as const),
+    ...TABLE_5.map(([name, raw]) => [name, raw, ""] as const),
+    ...TABLE_5.map(([name, raw]) => [name, raw, FAMILY_5.join(", ")] as const),
+  ];
 
-  it.each(rows)("%s: %s (a family in the album: %s)", async (name, raw, family) => {
+  it.each(rows)("%s: %s (the family in the album: %s)", async (name, raw, family) => {
     const text = raw.replace(/[[\]]/g, "");
     const word = raw.match(/\[([^\]]+)\]/u)![1];
     // Hers are the marked ones; another may be a date ("May 2021") or somebody else ("June", "Lake Louise").
@@ -39,7 +48,7 @@ describe("the language review's third round", () => {
     const left = (t: string) => count(word, t) <= others && count(word, t) < count(word, text);
     const person = await db.person.create({ data: { name, birthday: new Date("2019-01-01"), createdById: admin } });
     if (family) {
-      for (const n of ["Ben Ortiz", "Grandma Ruth", "Baby Leo"]) await db.person.create({ data: { name: n, createdById: admin } });
+      for (const n of family.split(", ")) await db.person.create({ data: { name: n, createdById: admin } });
       await db.user.create({ data: { email: "k@example.com", name: "Aunt Kay" } });
     }
     const photo = () => db.photo.create({ data: { uploaderId: admin, originalName: "x.jpg", mimeType: "image/jpeg", storageKey: "k", originalPath: "k/o.jpg", sizeBytes: 1, status: "READY", annotation: record(text), annotatedAt: new Date() } });

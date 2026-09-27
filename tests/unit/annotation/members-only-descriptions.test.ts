@@ -312,7 +312,7 @@ describe("descriptions that stay in the family", () => {
       await db.person.create({ data: { name: "May Smith", ...off } });
       await db.person.create({ data: { name: "Grace Lee", createdById: who.id } });
       await db.person.create({ data: { name: "Ruth Baker", ...off } });
-      for (const words of ["Lake day in May.", "Grace before the big dinner.", "The Baker Street bakery"]) {
+      for (const words of ["Lake day in May 2019.", "Grace before the big dinner.", "The Baker Street bakery"]) {
         const p = await heldPhoto(words, words);
         await share(p.id);
         expect([words, (await db.photo.findUniqueOrThrow({ where: { id: p.id } })).annotationMembersOnly]).toEqual([words, false]);

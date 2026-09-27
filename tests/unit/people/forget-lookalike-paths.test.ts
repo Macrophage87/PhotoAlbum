@@ -300,9 +300,12 @@ describe("the share guard and a withdrawn naming, around places, dates and sayin
   const ROWS: [string, string, boolean][] = [
     // A month as a date, "Lake" or "Mount" with a listed place, an everyday surname alone, and words that name
     // nobody: shared by the guard. (A withdrawal may still hold them, as the nightly pass does: never garbled.)
-    ["May Smith", "Lake day in May.", true],
+    ["May Smith", "Lake day in May, 2019.", true],
     ["May Smith", "May 2019 at the lake", true],
-    ["May Smith", "In May.", true],
+    ["May Smith", "May 5, 2019.", true],
+    // A bare "in May." is no date's own shape (the language review's fourth round): refused.
+    ["May Smith", "Lake day in May.", false],
+    ["May Smith", "In May.", false],
     ["Ruth Baker", "The Baker Street bakery", true],
     ["Geneva Smith", "Lake Geneva at dawn", true],
     ["Geneva Smith", "Lake Geneva.", true],
@@ -385,8 +388,9 @@ describe("on her own photograph, when she is forgotten and in a later answer", (
     ["May Lee", "May and Ben built a fort.", "A family member and Ben built a fort."],
     ["May Lee", "May swam across.", "A family member swam across."],
     ["May Lee", "May 2020 at the lake.", "May 2020 at the lake."],
-    ["May Lee", "A swim in May.", "A swim in May."],
-    ["May Lee", "May Day at the fair.", "A family member Day at the fair."],
+    ["May Lee", "A swim in May.", "A swim in a family member."],
+    ["May Lee", "A swim in May 2020.", "A swim in May 2020."],
+    ["May Lee", "May Day at the fair.", "May Day at the fair."],
     ["Will Turner", "Will swam faster than Ben.", "A family member swam faster than Ben."],
     ["Will Turner", "Will you look at that!", "A family member you look at that!"],
     // "be" says nothing ("Will be ten next week" is him): over-removal is the lesser evil.
@@ -414,7 +418,7 @@ describe("on her own photograph, when she is forgotten and in a later answer", (
     ["April Reyes", "Nap time for April.", "Nap time for a family member."],
     ["August Lind", "August in the pool with Dad.", "A family member in the pool with Dad."],
     ["May Chen", "May, 7, and Ben, 5, at the lake.", "A family member, 7, and Ben, 5, at the lake."],
-    ["April Reyes", "Easter in April, the whole family.", "Easter in April, the whole family."],
+    ["April Reyes", "Easter in April, the whole family.", "Easter in a family member, the whole family."],
     // A month that is her name: plainly her (S1), or the month (S2, the first review's "June waves").
     ["May Chen", "May's first day of school.", "A family member's first day of school."],
     ["May Chen", "Happy birthday, May!", "Happy birthday, a family member!"],
@@ -434,7 +438,8 @@ describe("on her own photograph, when she is forgotten and in a later answer", (
     ["June Carter", "June waves crashed on the rocks.", "A family member waves crashed on the rocks."],
     // A month only as a plain date: after a date word, at the end or before a year ("Late June.", "Late June 2019").
     ["June Carter", "Late June at the lake house.", "Late a family member at the lake house."],
-    ["June Carter", "At the lake house, late June.", "At the lake house, late June."],
+    ["June Carter", "At the lake house, late June.", "At the lake house, late a family member."],
+    ["June Carter", "At the lake house, late June, 2019.", "At the lake house, late June, 2019."],
     ["June Carter", "Late June 2019 at the lake house.", "Late June 2019 at the lake house."],
     ["May Chen", "Our May trip to the coast.", "Our a family member trip to the coast."],
   ];

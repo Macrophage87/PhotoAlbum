@@ -52,6 +52,19 @@ export async function taggedPhotoIds(personId: string): Promise<Set<string>> {
   return new Set([...faces, ...animals].map((f) => f.photoId));
 }
 
+/**
+ * The photographs they are tagged on, confirmed or proposed as them: where the strict matcher decides (see
+ * Where.noted). Not those whose tag or proposal the family took back or turned down ("Ada from next door"), which
+ * `taggedPhotoIds` still covers.
+ */
+export async function ownPhotoIds(personId: string): Promise<Set<string>> {
+  const [faces, animals] = await Promise.all([
+    db.face.findMany({ where: { personId, status: { in: ["CONFIRMED", "PROPOSED"] } }, select: { photoId: true }, distinct: ["photoId"] }),
+    db.animalDetection.findMany({ where: { personId, status: { in: ["CONFIRMED", "PROPOSED"] } }, select: { photoId: true }, distinct: ["photoId"] }),
+  ]);
+  return new Set([...faces, ...animals].map((f) => f.photoId));
+}
+
 /** The names of everybody else tagged on each of these photographs: their words there are theirs. */
 async function othersOn(photoIds: string[], personId?: string): Promise<Map<string, string[]>> {
   const out = new Map<string, string[]>();
@@ -712,7 +725,7 @@ export async function forgetNameEverywhere(person: PersonNames, opts: { publicOn
   // may name them is looked at, a first name alone included ("Mia blows bubbles at her party"), not only what the
   // album-wide search for names nobody else has finds.
   const scope = [...tagged, ...(await photosMentioning(m, {})), ...(await photosNamingAnyWay(m, names))];
-  await forgetNameInText(scope, m, { tagged, personId: person.id, publicOnly: opts.publicOnly, since: opts.since, strict: true, names });
+  await forgetNameInText(scope, m, { tagged, taggedOn: await ownPhotoIds(person.id), personId: person.id, publicOnly: opts.publicOnly, since: opts.since, strict: true, names });
 }
 
 /**
@@ -740,7 +753,12 @@ async function photosNamingAnyWay(m: NameMatcher, names: string[]): Promise<stri
  * its prose (place and visible text included), its keywords, tags and objects.
  */
 function shownWords(title: string | null, record: StoredAnnotation | null): string[] {
-  return [title, helperWordsOf(record), record?.searchSummary, ...(record?.tags ?? []), ...(record?.objects ?? [])].filter((t): t is string => typeof t === "string" && t.trim() !== "");
+  return [title, helperWordsOf(record)].filter((t): t is string => typeof t === "string" && t.trim() !== "");
+}
+
+/** The keywords, tags and objects of what would be shown: lists, where words run together (see StrictOptions). */
+function shownLists(record: StoredAnnotation | null): string[] {
+  return [record?.searchSummary, ...(record?.tags ?? []), ...(record?.objects ?? [])].filter((t): t is string => typeof t === "string" && t.trim() !== "");
 }
 
 /**
@@ -758,7 +776,7 @@ export async function withoutWithdrawnNames(photoId: string, text: { annotation:
   let title = text.title;
   let hold = false;
   const recordOf = (a: unknown) => (a && typeof a === "object" && !Array.isArray(a) ? (a as StoredAnnotation) : null);
-  if (!people.length) return { annotation, title, changed: false, hold: await namesSomebodyRestricted(shownWords(title, recordOf(annotation))) };
+  if (!people.length) return { annotation, title, changed: false, hold: await namesSomebodyRestricted(shownWords(title, recordOf(annotation)), shownLists(recordOf(annotation))) };
   const tagged = await db.face.findMany({ where: { photoId, OR: [{ personId: { in: people.map((p) => p.id) } }, { proposedPersonId: { in: people.map((p) => p.id) } }] }, select: { personId: true, proposedPersonId: true } });
   const on = new Set(tagged.flatMap((f) => [f.personId, f.proposedPersonId]));
   const [everybody, members] = await Promise.all([db.person.findMany({ select: { name: true, formerNames: true } }), db.user.findMany({ where: { name: { not: null } }, select: { name: true } })]);
@@ -773,7 +791,8 @@ export async function withoutWithdrawnNames(photoId: string, text: { annotation:
     // Every check, in every case: the strict one, the forget's rules and the nightly pass's, keywords and tags.
     const holds = (t: string | null, record: StoredAnnotation | null) => {
       const words = shownWords(t, record);
-      if (words.some(strict) || words.some(still)) return true;
+      const lists = shownLists(record);
+      if (words.some((w) => strict(w)) || lists.some((w) => strict(w, { list: true })) || [...words, ...lists].some((w) => still(w))) return true;
       if (!record) return false;
       const keywords = (typeof record.searchSummary === "string" && m.scrubKeywords(record.searchSummary, strictWhere) !== record.searchSummary) || [record.tags, record.objects].some((l) => Array.isArray(l) && l.some((x) => m.namesTag(x, strictWhere)));
       return keywords || annotationMentions(record, m, strictWhere);
@@ -781,7 +800,7 @@ export async function withoutWithdrawnNames(photoId: string, text: { annotation:
     // Their name used as a thing's ("The Austin skyline", "our June trip"), or, off their photographs, a name that is
     // also a place ("The Eiffel Tower, Paris."): rewriting it would garble the words, so it is left as written.
     const placeNamed = !on.has(p.id) && names.some((n) => isListedPlace(n.trim().split(/\s+/u)[0] ?? ""));
-    if (!placeNamed && !attributive(p, shownWords(title, recordOf(annotation)))) {
+    if (!placeNamed && !attributive(p, [...shownWords(title, recordOf(annotation)), ...shownLists(recordOf(annotation))])) {
       const where: Where = on.has(p.id) ? { tagged: true, others } : AWAY;
       const before = recordOf(annotation);
       if (before) annotation = scrubAnnotation(before, m, where);
@@ -790,7 +809,7 @@ export async function withoutWithdrawnNames(photoId: string, text: { annotation:
     if (holds(title, recordOf(annotation))) hold = true;
   }
   // And everybody else the album may not name, withdrawn long ago or never agreed: not rewritten here, just not shown.
-  if (!hold && (await namesSomebodyRestricted(shownWords(title, recordOf(annotation))))) hold = true;
+  if (!hold && (await namesSomebodyRestricted(shownWords(title, recordOf(annotation)), shownLists(recordOf(annotation))))) hold = true;
   return { annotation, title, changed: JSON.stringify(annotation) !== JSON.stringify(text.annotation) || title !== text.title, hold };
 }
 

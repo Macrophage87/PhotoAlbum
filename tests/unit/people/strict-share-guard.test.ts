@@ -67,7 +67,7 @@ const REFUSED: Row[] = [
 ];
 
 const SHARED: Row[] = [
-  { name: "May", text: "Lake day in May." },
+  { name: "May", text: "Lake day in May, 2019." },
   { name: "May", text: "May 2019 at the cabin." },
   { name: "May", text: "The 5th of May." },
   { name: "Geneva", text: "Lake Geneva at dawn" },

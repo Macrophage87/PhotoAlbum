@@ -655,6 +655,9 @@ export function replaceSpans(text: string, spans: [number, number][]): string {
       from = Math.min(s1, y);
     }
     const sentence = rest + text.slice(from, s1);
+    // A long word in lower case is no title's: "Great-grandma Grace Kelly holding a family member." (somebody else's
+    // name is capitalized anyway, and would otherwise make it look like one).
+    if ((sentence.match(/(?<![\p{L}\p{M}'’-])\p{Ll}[\p{L}\p{M}]{4,}/gu) ?? []).length) return false;
     // A sentence of two capitalized words is judged with the whole text too (see titleCaseAt).
     if ((sentence.match(/[\p{L}][\p{L}\p{M}'’-]*/gu) ?? []).filter((w) => letters(w) >= 2).length >= 3) return titleCase(sentence, new Set());
     let all = "";
@@ -919,8 +922,8 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
     if (!f) ownFinders.set(key, (f = strictFinder(list, otherNames, new Set(there))));
     return f;
   };
-  const scrubOwn = (text: string, where: Where): string => {
-    const found = strictHere(where).spans(text);
+  const scrubOwn = (text: string, where: Where, keywords = false): string => {
+    const found = strictHere(where).spans(text, { list: keywords });
     if (!found.length) return text;
     const spans: [number, number][] = [];
     for (const [a, b] of found) {
@@ -945,7 +948,7 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
   const ownPhoto = (where: Where) => Boolean(where.tagged) && where.onPhoto !== false && !where.noted;
 
   const scrubText = (text: string, where: Where, keywords = false): string => {
-    if (ownPhoto(where)) return scrubOwn(text, where);
+    if (ownPhoto(where)) return scrubOwn(text, where, keywords);
     // On their own photograph a kinship word before their name goes with it ("Little Sister Ada"), and the stand-in's
     // capitals are judged without it, as the forgotten names' are (replaceSpans): "Little Sister Ada and Big Brother
     // Ada." is no title in title case. Only the capitals: what is taken out is judged as before.
@@ -1068,7 +1071,7 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
   const namesTag = (tag: unknown, where: Where = {}) => {
     if (typeof tag !== "string" || !tag.trim()) return false;
     try {
-      if (ownPhoto(where)) return strictHere(where).finds(tag);
+      if (ownPhoto(where)) return strictHere(where).finds(tag, { list: true });
       const t = tag.trim().toLowerCase().replace(/’/g, "'");
       const k = keywordsFor(where);
       // Off their own photograph a saint's name in a tag is a place's ("st. mary's church").

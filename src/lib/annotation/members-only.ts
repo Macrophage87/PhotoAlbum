@@ -56,7 +56,7 @@ export function titleHits(text: string, containers: PrivateContainer[]): { words
 export async function judgeHelperText(photoId: string, text: Pick<StoredAnnotation, "title" | "caption" | "description" | "searchSummary" | "place" | "tags">, context: string | null, sent?: boolean | null): Promise<Judgement> {
   const said = helperText(text);
   // And anybody who may not be named, found strictly (any case, any spelling): "HAPPY BIRTHDAY ROSE" on a banner.
-  const hard = Boolean(sent || context?.trim()) || (await taggedOn(photoId)) || mentionsAnyName(said, await knownNames()) || (await namesSomebodyRestricted([said]));
+  const hard = Boolean(sent || context?.trim()) || (await taggedOn(photoId)) || mentionsAnyName(said, await knownNames()) || (await namesSomebodyRestricted([text.title, text.caption, text.description, text.place], [text.searchSummary, ...(text.tags ?? [])]));
   const hits = titleHits(said, await privateContainersOf(photoId));
   return { ...judged(hard, hits.from.length > 0), ...(hits.from.length ? { titleWords: hits.words, titleFrom: hits.from } : {}) };
 }

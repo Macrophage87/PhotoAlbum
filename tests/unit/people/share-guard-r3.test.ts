@@ -66,7 +66,7 @@ const SHARED: Row[] = [
   { name: "Al Brown", text: "Dinner al fresco." },
   { name: "Do Kim", text: "we do the dishes" },
   { name: "Madison Clark", text: "Lake Madison at dawn." },
-  { name: "May Chen", text: "Back in May." },
+  { name: "May Chen", text: "Back in May 2019." },
   { name: "May Chen", text: "The 5th of May." },
 ];
 

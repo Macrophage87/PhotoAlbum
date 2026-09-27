@@ -5,8 +5,8 @@ ALTER TABLE "Photo" ADD COLUMN "imageVersion" INTEGER NOT NULL DEFAULT 0;
 -- Bumped whenever what the photo's addresses serve, or who may fetch them, changes: its files, its edits, its state,
 -- which trip or activity it is in (and so who may see it), and whenever a writer bumps it itself (new renditions
 -- under the same file names, a collection's exposure). Text never moves it. Never back to a number used before: at
--- least the clock's seconds, so a restored backup or a reset row does not hand out an address a cache already holds
--- for other bytes.
+-- least the clock's seconds since November 2023, so a restored backup or a reset row does not hand out an address a
+-- cache already holds for other bytes (offset, so an int holds it until 2091 rather than January 2038).
 CREATE OR REPLACE FUNCTION photo_image_version() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   IF NEW."imageVersion" IS DISTINCT FROM OLD."imageVersion"
@@ -22,7 +22,7 @@ BEGIN
      OR NEW.height IS DISTINCT FROM OLD.height
      OR NEW."tripId" IS DISTINCT FROM OLD."tripId"
      OR NEW."activityId" IS DISTINCT FROM OLD."activityId" THEN
-    NEW."imageVersion" := greatest(OLD."imageVersion" + 1, extract(epoch from clock_timestamp())::int);
+    NEW."imageVersion" := greatest(OLD."imageVersion" + 1, (extract(epoch from clock_timestamp())::bigint - 1700000000)::int);
   END IF;
   RETURN NEW;
 END $$;

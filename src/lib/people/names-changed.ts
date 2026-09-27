@@ -155,7 +155,41 @@ export async function dbNow(): Promise<Date> {
  * asked for before the stamp (by the same clock) is thrown away (see namesChangedSince).
  */
 export async function stampScrubbed(photoIds: string[]): Promise<void> {
-  if (photoIds.length) await db.$executeRaw`UPDATE "Photo" SET "namesScrubbedAt" = clock_timestamp() WHERE id = ANY(${photoIds}::text[])`;
+  // The rows locked in id order, as everything else that locks photographs does.
+  if (photoIds.length) await db.$executeRaw`UPDATE "Photo" SET "namesScrubbedAt" = clock_timestamp() WHERE id IN (SELECT id FROM "Photo" WHERE id = ANY(${photoIds}::text[]) ORDER BY id FOR NO KEY UPDATE)`;
+}
+
+const CLEAR_BATCH = 1000;
+
+/** Whether a database error is a deadlock (40P01), which a retry of the same work resolves. */
+function deadlocked(err: unknown): boolean {
+  const e = err as { code?: string; meta?: { code?: string }; message?: string } | null;
+  return e?.code === "40P01" || e?.meta?.code === "40P01" || /40P01|deadlock detected/u.test(String(e?.message ?? err));
+}
+
+/**
+ * Take the untagging and withdrawal stamps a forget supersedes (every stamp, or with `beforeLastForget` only those
+ * older than the last forget): a batch at a time, the rows locked in id order as everything else that locks
+ * photographs does (nameCluster), and a batch that meets a deadlock tried again.
+ */
+export async function clearScrubStamps(opts: { beforeLastForget?: boolean } = {}): Promise<number> {
+  let cleared = 0;
+  for (;;) {
+    let n = 0;
+    for (let attempt = 1; ; attempt++) {
+      try {
+        n = opts.beforeLastForget
+          ? await db.$executeRaw`UPDATE "Photo" SET "namesScrubbedAt" = NULL WHERE id IN (SELECT id FROM "Photo" WHERE "namesScrubbedAt" < (SELECT "lastForgetAt" FROM "AppSetting" WHERE id = 'app') ORDER BY id LIMIT ${CLEAR_BATCH} FOR NO KEY UPDATE)`
+          : await db.$executeRaw`UPDATE "Photo" SET "namesScrubbedAt" = NULL WHERE id IN (SELECT id FROM "Photo" WHERE "namesScrubbedAt" IS NOT NULL ORDER BY id LIMIT ${CLEAR_BATCH} FOR NO KEY UPDATE)`;
+        break;
+      } catch (err) {
+        if (!deadlocked(err) || attempt >= 5) throw err;
+        await new Promise((r) => setTimeout(r, 50 * attempt));
+      }
+    }
+    cleared += n;
+    if (n < CLEAR_BATCH) return cleared;
+  }
 }
 
 /** Stamp that a forget began or finished now, by the database's clock (see forgetState). */

@@ -179,7 +179,7 @@ describe("image addresses when the renditions are made again", () => {
 
   it("never hands out a version used before: at least the clock's seconds, for a bump by a writer too", async () => {
     const id = await staged();
-    const now = Math.floor(Date.now() / 1000);
+    const now = Math.floor(Date.now() / 1000) - 1_700_000_000;
     await db.photo.update({ where: { id }, data: { imageVersion: { increment: 1 } } });
     const bumped = (await db.photo.findUniqueOrThrow({ where: { id } })).imageVersion;
     expect(bumped).toBeGreaterThanOrEqual(now - 5);

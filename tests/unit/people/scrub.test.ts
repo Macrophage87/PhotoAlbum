@@ -84,10 +84,11 @@ describe("a first name on the person's own photographs", () => {
 
   it("leaves a month in a date alone", () => {
     const may = (t: string) => scrub("May Smith", t, [], true);
-    // Only in a date's own shape: a year, a day before an end or a year, a date word before an end (strict-names.ts).
+    // Only in a date's own shape: a year, a day and a year, an ordinal day at the end (strict-names.ts).
     expect(may("In May we drove north. May waved.")).toBe("In a family member we drove north. A family member waved.");
-    expect(may("May 2019; May 5, 2019; the 5th of May; back in May.")).toBe("May 2019; May 5, 2019; the 5th of May; back in May.");
-    expect(may("May 5 at the lake; last May")).toBe("A family member 5 at the lake; last May");
+    expect(may("May 2019; May 5, 2019; back in May 2020; the 5th of May.")).toBe("May 2019; May 5, 2019; back in May 2020; the 5th of May.");
+    expect(may("Back in May. May 5 at the beach. Up next May!")).toBe("Back in a family member. A family member 5 at the beach. Up next a family member!");
+    expect(may("May 5 at the lake; last May")).toBe("A family member 5 at the lake; last a family member");
     expect(scrub("May", "We may go")).toBe("We may go");
   });
 
@@ -187,8 +188,9 @@ describe("where a first name is also a place", () => {
     expect(m.scrub("A trip to Florence, Italy; Florence, Italy.", { away: true })).toBe("A trip to Florence, Italy; Florence, Italy.");
     expect(m.scrub("A walk to Florence's house with Florence", { tagged: true })).toBe("A walk to a family member's house with a family member");
     const may = nameMatcher(["May Jones"]);
-    expect(may.scrub("May Day at the fair. The May pole. MAY DAY", { tagged: true })).toBe("A family member Day at the fair. A family member pole. A family member DAY");
-    expect(may.scrub("Back in May. May 2019. The 5th of May.", { tagged: true })).toBe("Back in May. May 2019. The 5th of May.");
+    // "May Day" is a day's name; a maypole is not.
+    expect(may.scrub("May Day at the fair. The May pole. MAY DAY", { tagged: true })).toBe("May Day at the fair. A family member pole. MAY DAY");
+    expect(may.scrub("Back in May 2019. May 2019. The 5th of May.", { tagged: true })).toBe("Back in May 2019. May 2019. The 5th of May.");
     expect(may.scrub("May swims", { tagged: true })).toBe("A family member swims");
   });
 });
@@ -313,13 +315,13 @@ describe("small words around the stand-in", () => {
     expect(scrub("Ann (Nan) Smith", "Nan swam")).toBe("Nan swam");
   });
 
-  it("reads 'by May's side' and 'by May' as her on her own photograph, and 'by May 5' or 'in May' as a date", () => {
+  it("reads 'by May's side', 'by May', 'by May 5' and 'in May' as her on her own photograph, and 'May 5, 2019' as a date", () => {
     // After "by", "on", "of" or "from" a month is her unless a day or a year follows: over-removal there is the lesser
     // evil ("A card from May", "Waiting on June").
     expect(scrub("May Smith", "By May's side all day; done by May", [], true)).toBe("By a family member's side all day; done by a family member");
-    // On her own photograph "by May 5" is not a date (a lone digit counts only before ", year", the end or a stop).
-    expect(scrub("May Smith", "Done by May 5, back in May.", [], true)).toBe("Done by a family member 5, back in May.");
-    expect(scrub("May Smith", "Done by May 5, 2019, back in May.", [], true)).toBe("Done by May 5, 2019, back in May.");
+    // On her own photograph "by May 5" and "in May." are not dates (a day counts only with a year; strict-names.ts).
+    expect(scrub("May Smith", "Done by May 5, back in May.", [], true)).toBe("Done by a family member 5, back in a family member.");
+    expect(scrub("May Smith", "Done by May 5, 2019, back in May 2020.", [], true)).toBe("Done by May 5, 2019, back in May 2020.");
   });
 });
 

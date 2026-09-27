@@ -9,16 +9,19 @@
  *
  * Text and names are compared alike: compatibility forms folded (NFKC), invisible characters taken out (a zero-width
  * space or a soft hyphen inside "Madison"), accents off, letters without a plain form spelled out (Ł, ø, æ, ß), one
- * apostrophe, lower case. A name is found as a whole word, plural or possessive with or without an apostrophe
- * ("Madisons", "mays"), however digits are run against it ("madison2016"): any full name, the first name, a nickname
+ * apostrophe, lower case, an en or em dash a space. A name is found as a whole word, plural or possessive with or
+ * without an apostrophe ("Madisons", "mays"), however digits are run against it ("madison2016"), and either half of a
+ * hyphenated word unless all of it is somebody else's name ("Madison-approved", not "Ann-Marie" of an album with an
+ * Ann-Marie): any full name, the first name, a nickname
  * or former name, and a surname nobody else has that is no everyday word. A two-letter first name that is also a
  * small word ("An", "Is") only written with a capital. Any match counts, but for exactly three things:
- * - a month used as a date, in a date's own shape (see `monthAsDate`): "May 2019", "May 5, 2019", "the 5th of May",
- *   "in May.";
+ * - a month used as a date, in a date's own shape (see `monthAsDate`): "May 2019", "May 5, 2019", "the 5th of May.",
+ *   "May Day";
  * - "Lake", "Mount", "Mt" or "Loch", capitalized and not after "the", and a listed place, with nothing after it but
  *   the end, a stop, or the time of day ("Lake Geneva at dawn.");
- * - somebody else the album knows, written in full ("Grace Kelly" when the album has a Grace Kelly): their name, not
- *   this person's. Kinship words are nobody's name words, so "Grandma Ruth" in the album hides no "Ruth".
+ * - somebody else the album knows, written in full in one field, with capitals and a single space between the words
+ *   ("Grace Kelly" when the album has a Grace Kelly), never in keywords, tags or objects (StrictOptions.list): their
+ *   name, not this person's. Kinship words are nobody's name words, so "Grandma Ruth" in the album hides no "Ruth".
  */
 import { PLACE_NAMES } from "./places";
 import { isKinWord, isNotANameWord, isPersonVerb, isWordSurname, splitNickname } from "./scrub";
@@ -34,7 +37,9 @@ function normalizeChar(c: string): string {
     .normalize("NFD")
     .replace(/\p{M}/gu, "")
     .replace(/[’‘ʼ`´]/gu, "'")
-    .replace(/[‐‑–—]/gu, "-")
+    // A hyphen is one, however it is typed; an en or em dash is no hyphen but a space between words ("day—Madison").
+    .replace(/[‐‑]/gu, "-")
+    .replace(/[–—―]/gu, " ")
     .toLowerCase()
     .replace(/[łøæœßđþı]/gu, (x) => TRANSLIT[x] ?? x);
 }
@@ -61,8 +66,8 @@ function normalizeText(text: string): { text: string; from: number[] } {
 
 const CJK = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
 export const MONTHS = new Set(["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"]);
-/** Words before a month that make it a date, with nothing after it but an end or a year: "in May.", "late June, 2019". */
-const DATE_WORDS = new Set(["in", "during", "since", "until", "till", "early", "late", "mid", "last", "next"]);
+/** Words before a month and a year that make a comma between them a date's: "late June, 2019". */
+const DATE_WORDS = new Set(["in", "during", "since", "until", "till", "early", "late", "mid"]);
 const TIME_WORDS = "dawn|dusk|sunrise|sunset|night|noon|midnight|twilight|daybreak|morning|evening|afternoon";
 /** Two-letter names that are also small words: only written with a capital ("An", not "an"). */
 const SMALL_WORDS = new Set(["an", "in", "on", "at", "to", "so", "no", "or", "as", "is", "it", "me", "we", "us", "he", "be", "do", "go", "my", "by", "of", "up", "am", "if", "al", "el", "la", "le", "de", "da", "di", "du"]);
@@ -110,42 +115,41 @@ export function strictForms(names: string[], others: Set<string> = new Set()): s
 }
 
 /**
- * A month used as a date, in normalized text: only in a date's own shape. A year beside it ("May 2019"); a day of
- * 1-31 followed by a comma and a year, the end or a stop ("May 5, 2019", "May 5."); "5 May" likewise, or "the 5th of
- * May"; a date word before it ("in", "early", "until"…) with nothing after it but an end, a stop, a comma or a year —
- * and "in May." not after something a person does ("Ben tucked in June."); ", <year>" only after a date word or with
- * the month opening the text ("May, 2019."). Never with a possessive or a plural, never before an age ("May 3 at the
- * beach", "6 months old") or a birthday.
+ * A month used as a date, in normalized text, only in these shapes (the language review's fourth round):
+ * - with a year: "May 2019", and after a date word with a comma too ("late June, 2019"); not before something a
+ *   person does ("May 2020 swims") or an age ("June 2019 months");
+ * - with a day and a year: "May 5, 2019"; or an ordinal day with a year or at the end: "May 5th, 2019", "May 5th.",
+ *   "the 5th of May.";
+ * - a day named after it: "May Day" (with a capital, when `originalAfter` is given).
+ * Anything else is them: "A swim in May.", "Late June at the lake", "May 5 at the beach", "Leo 7, May 5.", "Up next
+ * June!". Over-refusal there is accepted; the photographs they were never tagged on keep the language rules.
  */
-export function monthAsDate(before: string, after: string): boolean {
+export function monthAsDate(before: string, after: string, originalAfter?: string): boolean {
   if (/^'?s(?![\p{L}])/u.test(after)) return false;
-  const end = /^[ \t]*(?:$|\n|[.!?;:])/u;
-  const year = /^[ \t]+\d{4}(?![\p{L}\p{N}])/u.exec(after);
-  if (year) return !/^[ \t]+(?:months?|years?|weeks?|days?|old)(?![\p{L}])/u.test(after.slice(year[0].length));
-  const day = /^[ \t]+([12]?\d|3[01])(?:st|nd|rd|th)?(?![\p{L}\p{N}])/u.exec(after);
-  if (day) {
+  const year = /^[ \t]+\d{4}(?![\p{L}\p{N}])/u.exec(after) ?? (DATE_WORDS.has(/(\p{L}+)[ \t-]+$/u.exec(before)?.[1] ?? "") ? /^[ \t]*,[ \t]*\d{4}(?![\p{L}\p{N}])/u.exec(after) : null);
+  if (year) {
+    const rest = after.slice(year[0].length);
+    const w = /^[ \t]+(\p{L}+)/u.exec(rest)?.[1];
+    return !/^[ \t]+(?:months?|years?|weeks?|days?|old)(?![\p{L}])/u.test(rest) && !(w && isPersonVerb(w));
+  }
+  const end = /^[ \t]*[.!?]*[ \t]*(?:$|\n)/u;
+  const withYear = /^[ \t]*,[ \t]*\d{4}(?![\p{L}\p{N}])/u;
+  const day = /^[ \t]+([12]?\d|3[01])(st|nd|rd|th)?(?![\p{L}\p{N}])/u.exec(after);
+  if (day && Number(day[1]) >= 1) {
     const rest = after.slice(day[0].length);
-    return Number(day[1]) >= 1 && (/^,[ \t]*\d{4}(?![\p{N}])/u.test(rest) || end.test(rest));
+    return withYear.test(rest) || (Boolean(day[2]) && end.test(rest));
   }
-  const afterEnds = end.test(after) || /^[ \t]*,/u.test(after);
-  // "5 May", "the 5th of May".
-  if (/(?:^|[^\p{L}\p{N}])(?:the[ \t]+)?([12]?\d|3[01])(?:st|nd|rd|th)?[ \t]+(?:of[ \t]+)?$/u.test(before)) return end.test(after) || /^,[ \t]*\d{4}(?![\p{N}])/u.test(after);
-  const words = before.match(/(\p{L}+)[ \t-]+(\p{L}+)[ \t-]+$/u);
-  const prev = words?.[2] ?? /(\p{L}+)[ \t-]+$/u.exec(before)?.[1];
-  if (prev && DATE_WORDS.has(prev)) {
-    // "tucked in June.", "swam in May.": somebody is in there.
-    if (prev === "in" && words && (isPersonVerb(words[1]) || /(?:ed|es)$/u.test(words[1]))) return false;
-    return afterEnds || /^[ \t]*,?[ \t]*\d{4}(?![\p{N}])/u.test(after);
-  }
-  // "May, 2019." opening the text.
-  return /^[\s"'“(]*$/u.test(before) && /^,[ \t]*\d{4}(?![\p{N}])/u.test(after);
+  // "the 5th of May", "5th of May, 2019".
+  if (/(?:^|[^\p{L}\p{N}])([12]?\d|3[01])(?:st|nd|rd|th)[ \t]+of[ \t]+$/u.test(before)) return withYear.test(after) || end.test(after);
+  // "May Day".
+  return /^[ \t]+day(?![\p{L}])/u.test(after) && (originalAfter === undefined || /^[ \t]+D/u.test(originalAfter));
 }
 
 /**
  * The spans of the original text to leave out of the matching: "Lake Geneva at dawn", written with a capital, not
  * after "the", a listed place, and nothing after it but the end, a stop or the time of day.
  */
-function lakeSpans(text: string): [number, number][] {
+export function lakeSpans(text: string): [number, number][] {
   const spans: [number, number][] = [];
   const rx = /(?<![\p{L}\p{M}])(?<!(?:the|The|THE)[ \t]+)(?:Lake|LAKE|Mount|MOUNT|Mt\.?|MT\.?|Loch|LOCH)[ \t]+(\p{L}[\p{L}\p{M}]*)/gu;
   const tail = new RegExp(`^(?:[ \\t]+(?:(?:at|by|in)[ \\t]+)?(?:${TIME_WORDS}))?[ \\t]*(?:$|[.!?]+[ \\t]*(?:$|\\n))`, "u");
@@ -157,11 +161,14 @@ function lakeSpans(text: string): [number, number][] {
   return spans;
 }
 
+/** `list`: keywords, tags or objects, where words run together and nobody else's full name excuses a match. */
+export type StrictOptions = { list?: boolean };
+
 export type StrictFinder = {
   /** Whether the text mentions them, but for the excuses above. */
-  finds(text: unknown): boolean;
+  finds(text: unknown, opts?: StrictOptions): boolean;
   /** Where in the text (original offsets), to rewrite on their own photographs. */
-  spans(text: string): [number, number][];
+  spans(text: string, opts?: StrictOptions): [number, number][];
 };
 
 /**
@@ -179,14 +186,19 @@ export function strictFinder(names: string[], others: string[] = [], skip: Set<s
   // album knows a Grace Kelly (not a name of theirs too). Their own name beside it still is: "Grace Kelly and Grace".
   // Kinship words are nobody's name words: "Grandma Ruth" in the album does not hide "Ruth" in "Grandma Ruth".
   const otherFull = [...new Set(others.map((o) => strictNormalize(splitNickname(o).name).split(/\s+/u).filter((w) => w && !isKinWord(w)).join(" ")).filter((o) => o && !CJK.test(o) && /\s/u.test(o) && !own.has(o)))];
-  const fullRx = otherFull.length ? new RegExp(`(?<![\\p{L}])(?:${otherFull.sort((a, b) => b.length - a.length).map((o) => escape(o).replace(/[ -]/g, "[\\s\\-]+")).join("|")})(?:'?s)?(?![\\p{L}])`, "gu") : null;
+  // Within one field and one line, a single space or tab between the words, and written with capitals ("Tom Jordan",
+  // not "tom jordan" run together in keywords, nor "Tom\nJordan" across two fields).
+  const fullRx = otherFull.length ? new RegExp(`(?<![\\p{L}-])(?:${otherFull.sort((a, b) => b.length - a.length).map((o) => escape(o).replace(/ /g, "[ \\t]")).join("|")})(?:'?s)?(?![\\p{L}-])`, "gu") : null;
+  // Somebody else's hyphenated name word holding one of theirs: "Ann" is not in "Ann-Marie" when the album knows an
+  // Ann-Marie. Any other hyphenated word holds it ("Madison-approved", "Pre-Madison", "Madison-Rose").
+  const otherHyphenated = new Set(others.flatMap((o) => strictNormalize(splitNickname(o).name).split(/\s+/u)).filter((w) => /\p{L}-\p{L}/u.test(w) && !own.has(w)));
   const cjk = forms.filter((f) => CJK.test(f));
   const small = new Set(forms.filter((f) => SMALL_WORDS.has(f)));
   const words = forms.filter((f) => !CJK.test(f)).sort((a, b) => b.length - a.length);
-  // Whole words, letters only at the edges (digits run against a name do not hide it), and not one half of a
-  // hyphenated word ("Ann" is not in "Ann-Marie").
-  const rx = words.length ? new RegExp(`(?<![\\p{L}])(?<![\\p{L}]-)(?:${words.map((w) => escape(w).replace(/[ -]/g, "[\\s\\-]+")).join("|")})(?:'?s)?(?![\\p{L}])(?!-\\p{L})`, "gu") : null;
-  const spans = (text: string): [number, number][] => {
+  // Whole words, letters only at the edges (digits or a hyphen run against a name do not hide it).
+  const rx = words.length ? new RegExp(`(?<![\\p{L}])(?:${words.map((w) => escape(w).replace(/[ -]/g, "[\\s\\-]+")).join("|")})(?:'?s)?(?![\\p{L}])`, "gu") : null;
+  const capitalized = (original: string) => original.split(/[ \t]/u).every((w) => /^\p{Lu}/u.test(w.replace(/\p{Cf}/gu, "")));
+  const spans = (text: string, opts: StrictOptions = {}): [number, number][] => {
     if (!text.trim()) return [];
     const out: [number, number][] = [];
     const { text: t, from } = normalizeText(text);
@@ -203,9 +215,14 @@ export function strictFinder(names: string[], others: string[] = [], skip: Set<s
     }
     if (!rx) return out.sort((a, b) => a[0] - b[0]);
     const lake = lakeSpans(text);
-    const theirs: [number, number][] = fullRx ? [...t.matchAll(fullRx)].map((m) => [m.index!, m.index! + m[0].length]) : [];
+    const theirs: [number, number][] = fullRx && !opts.list ? [...t.matchAll(fullRx)].filter((m) => capitalized(text.slice(from[m.index!], from[m.index! + m[0].length]))).map((m) => [m.index!, m.index! + m[0].length]) : [];
     for (const m of t.matchAll(rx)) {
       if (theirs.some(([a, b]) => m.index! >= a && m.index! + m[0].length <= b)) continue;
+      // The whole hyphenated word it is in, if somebody else's name word.
+      if (otherHyphenated.size) {
+        const whole = `${/(?:\p{L}+-)+$/u.exec(t.slice(0, m.index))?.[0] ?? ""}${m[0]}${/^(?:-\p{L}+)+/u.exec(t.slice(m.index! + m[0].length))?.[0] ?? ""}`;
+        if (whole !== m[0] && otherHyphenated.has(whole.replace(/'s$/u, ""))) continue;
+      }
       const start = from[m.index!];
       const end = from[m.index! + m[0].length];
       const bare = m[0].replace(/'?s$/u, "");
@@ -213,16 +230,16 @@ export function strictFinder(names: string[], others: string[] = [], skip: Set<s
       if (lake.some(([a, b]) => start >= a && end <= b)) continue;
       // "An", not "an": a small word is only a name written with a capital.
       if (small.has(word) && !/^\p{Lu}/u.test(text.slice(start, end).replace(/\p{Cf}/gu, ""))) continue;
-      if (MONTHS.has(m[0]) && monthAsDate(t.slice(0, m.index), t.slice(m.index! + m[0].length))) continue;
+      if (MONTHS.has(m[0]) && monthAsDate(t.slice(0, m.index), t.slice(m.index! + m[0].length), text.slice(end))) continue;
       // A possessive's "'s" stays outside the span ("May's side" is "a family member's side"); a plural goes with it.
       out.push([start, /'s$/u.test(m[0]) ? from[m.index! + m[0].length - 2] : end]);
     }
     return out.sort((a, b) => a[0] - b[0]);
   };
-  return { spans, finds: (text) => typeof text === "string" && spans(text).length > 0 };
+  return { spans, finds: (text, opts) => typeof text === "string" && spans(text, opts).length > 0 };
 }
 
 /** A test for any mention of one person in words strangers may read (see `strictFinder`). */
-export function strictMatcher(names: string[], others: string[] = []): (text: unknown) => boolean {
+export function strictMatcher(names: string[], others: string[] = []): (text: unknown, opts?: StrictOptions) => boolean {
   return strictFinder(names, others).finds;
 }
