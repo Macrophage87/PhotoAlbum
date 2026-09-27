@@ -27,14 +27,15 @@ export async function GET(_req: Request, { params }: { params: Promise<{ jobId: 
 
 /**
  * Why a failed import failed, from where pg-boss put it: an Error is stored as its own fields, anything else thrown
- * (a parser that rejects with a bare string) under `value`. A job pg-boss stopped for running too long says so in
- * pg-boss's words, which are put in the album's.
+ * (a parser that rejects with a bare string) under `value`, as is pg-boss's own note on a job it expired. A job
+ * stopped for running too long, or lost with its worker, says so in pg-boss's words, which are put in the album's.
  */
 function failureMessage(output: unknown): string {
   const o = output as { message?: unknown; value?: unknown } | null;
   const value = o?.value as { message?: unknown } | string | null | undefined;
   const message = typeof o?.message === "string" ? o.message : typeof value === "string" ? value : typeof value?.message === "string" ? value.message : null;
   if (!message?.trim()) return "Import failed";
-  if (/^handler execution exceeded/.test(message)) return "The import took too long and was stopped.";
+  // A handler pg-boss stopped itself, or a job whose worker died and that pg-boss expired afterwards.
+  if (/^handler execution exceeded|^job timed out$/.test(message)) return "The import took too long and was stopped.";
   return message;
 }

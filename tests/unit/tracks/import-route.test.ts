@@ -153,6 +153,8 @@ describe("an import's progress is its importer's", () => {
     expect(await failed({ value: { message: "Unreadable export" } })).toBe("Unreadable export");
     // pg-boss's own words for a job it stopped are put in the album's.
     expect(await failed({ name: "Error", message: "handler execution exceeded 3600s" })).toBe("The import took too long and was stopped.");
+    // What pg-boss writes when it expires a job whose worker died with it.
+    expect(await failed({ value: { message: "job timed out" } })).toBe("The import took too long and was stopped.");
     expect(await failed(null)).toBe("Import failed");
   });
 });
