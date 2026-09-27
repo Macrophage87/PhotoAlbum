@@ -180,7 +180,9 @@ async function notesNaming(words: string[], places: boolean): Promise<string[]> 
   return rows
     .filter((r) => {
       if (!r.context || ![...r.context.matchAll(rx)].length) return false;
-      if (!places) return true;
+      // Beside another capitalized word it is somebody else's name or a place's ("Santa Barbara Pier"), as in the
+      // helper's text away from their photographs.
+      if (!places) return [...r.context.matchAll(rx)].some((x) => !notThePerson(r.context!, x.index!, x.index! + x[0].length, {}));
       if ([r.placeName, r.placeEstimateName].some((t) => t && anyCase.test(t))) return false;
       const around = [r.trip, r.activity, ...r.collections.map((c) => c.collection)].flatMap((c) => (c ? [c.title, c.description] : []));
       if (around.some((t) => usedAsPlace(t, rx, { place: "wide", number: true }))) return false;

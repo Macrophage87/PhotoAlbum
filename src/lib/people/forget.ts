@@ -87,6 +87,9 @@ function likeAny(column: Prisma.Sql, words: string[]): Prisma.Sql {
   return Prisma.sql`(${Prisma.join(words.map((w) => Prisma.sql`${column} ILIKE ${`%${w}%`}`), " OR ")})`;
 }
 
+/** Away from somebody's photographs, what counts as them: their full names only (see Where.wholeOnly). */
+const AWAY: Where = { wholeOnly: true };
+
 type MachineText = { id: string; kind: string; title: string | null; membersTitle: string | null; titleByHelper: boolean | null; annotation: unknown; placeEstimateName: string | null; placeEstimateNote: string | null; estimatedDateNote: string | null };
 
 /**
@@ -105,7 +108,8 @@ function helpersTitles(p: Pick<MachineText, "kind" | "title" | "membersTitle" | 
 /** Whether the helper's words on an item mention them. Evidence notes only by names that are nobody else's. */
 function machineMentions(p: MachineText, m: NameMatcher, where: Where, given?: Set<string>): boolean {
   const h = helpersTitles(p, given);
-  return annotationMentions(p.annotation, m, where) || (h.title && m.mentions(p.title, where)) || (h.membersTitle && m.mentions(p.membersTitle, where)) || [p.placeEstimateName, p.placeEstimateNote, p.estimatedDateNote].some((t) => m.mentions(t));
+  const evidence: Where = where.tagged ? {} : AWAY;
+  return annotationMentions(p.annotation, m, where) || (h.title && m.mentions(p.title, where)) || (h.membersTitle && m.mentions(p.membersTitle, where)) || [p.placeEstimateName, p.placeEstimateNote, p.estimatedDateNote].some((t) => m.mentions(t, evidence));
 }
 
 /**
@@ -120,7 +124,7 @@ export async function photosMentioning(m: NameMatcher): Promise<string[]> {
     WHERE ${likeAny(Prisma.sql`annotation::text`, words)} OR ${likeAny(Prisma.sql`"membersTitle"`, words)} OR ${likeAny(Prisma.sql`title`, words)}
        OR ${likeAny(Prisma.sql`"placeEstimateName"`, words)} OR ${likeAny(Prisma.sql`"placeEstimateNote"`, words)} OR ${likeAny(Prisma.sql`"estimatedDateNote"`, words)}`;
   const given = await answerTitles(rows.map((r) => r.id));
-  return rows.filter((r) => machineMentions(r, m, {}, given.get(r.id))).map((r) => r.id);
+  return rows.filter((r) => machineMentions(r, m, AWAY, given.get(r.id))).map((r) => r.id);
 }
 
 /**
@@ -134,7 +138,7 @@ export async function forgetRawAnswers(m: NameMatcher): Promise<number> {
   const words = probes([...m.albumForms, ...m.tombstoneForms.filter((f) => !f.derived).map((f) => f.form)]);
   if (!words.length) return 0;
   const rows = await db.$queryRaw<{ id: string; text: string }[]>`SELECT id, response::text AS text FROM "MediaAnnotationRaw" WHERE ${likeAny(Prisma.sql`response::text`, words)}`;
-  const ids = rows.filter((r) => m.mentions(r.text, { tagged: true }) || m.scrubKeywords(r.text, { tagged: true }) !== r.text).map((r) => r.id);
+  const ids = rows.filter((r) => m.mentions(r.text, AWAY) || m.scrubKeywords(r.text, AWAY) !== r.text).map((r) => r.id);
   if (ids.length) await db.mediaAnnotationRaw.deleteMany({ where: { id: { in: ids } } });
   return ids.length;
 }
@@ -243,12 +247,12 @@ export async function forgetNameInText(photoIds: string[], m: NameMatcher, opts:
     for (const p of photos) {
       // On somebody else's photograph only a full name is theirs to take out: a first name alone there is as often a
       // place or somebody else ("Santa Barbara Pier"), and rewriting it would change words that are not about them.
-      const where: Where = { tagged: tagged.has(p.id), others: others.get(p.id) ?? [], ...(tagged.has(p.id) ? {} : { wholeOnly: true }) };
+      const where: Where = { tagged: tagged.has(p.id), others: others.get(p.id) ?? [], ...(tagged.has(p.id) ? {} : AWAY) };
       const a = p.annotation && typeof p.annotation === "object" && !Array.isArray(p.annotation) ? (p.annotation as StoredAnnotation) : null;
       const h = helpersTitles(p, given.get(p.id));
       const helperText = !opts.publicOnly || !p.annotationMembersOnly;
       const evidence = !opts.publicOnly || !p.placeEstimateMembersOnly;
-      const evidenceWhere: Where = tagged.has(p.id) ? {} : { wholeOnly: true };
+      const evidenceWhere: Where = tagged.has(p.id) ? {} : AWAY;
       const next = {
         ...(a && helperText ? { annotation: scrubAnnotation(a, m, where) } : {}),
         // A title is only rewritten while it is the helper's; a member's own title is theirs.
@@ -281,9 +285,12 @@ export async function forgetNameInText(photoIds: string[], m: NameMatcher, opts:
     db.activity.findMany({ where: byHelper(near.activities), select: { id: true, description: true } }),
     db.collection.findMany({ where: byHelper(near.collections), select: { id: true, description: true } }),
   ]);
-  for (const t of trips) if (m.mentions(t.description)) await db.trip.update({ where: { id: t.id }, data: { description: m.scrub(t.description) } });
-  for (const x of activities) if (m.mentions(x.description)) await db.activity.update({ where: { id: x.id }, data: { description: m.scrub(x.description) } });
-  for (const c of collections) if (m.mentions(c.description)) await db.collection.update({ where: { id: c.id }, data: { description: m.scrub(c.description) } });
+  // One holding none of their photographs was found by a word of its text alone: there only a full name is theirs
+  // ("Santa Barbara Pier At Sunset" is not Barbara Jones).
+  const around = (ids: string[], id: string): Where => (ids.includes(id) ? {} : AWAY);
+  for (const t of trips) if (m.mentions(t.description, around(near.trips, t.id))) await db.trip.update({ where: { id: t.id }, data: { description: m.scrub(t.description, around(near.trips, t.id)) } });
+  for (const x of activities) if (m.mentions(x.description, around(near.activities, x.id))) await db.activity.update({ where: { id: x.id }, data: { description: m.scrub(x.description, around(near.activities, x.id)) } });
+  for (const c of collections) if (m.mentions(c.description, around(near.collections, c.id))) await db.collection.update({ where: { id: c.id }, data: { description: m.scrub(c.description, around(near.collections, c.id)) } });
 }
 
 export type MemberTextField = "title" | "caption" | "notes" | "place" | "file name" | "trash note" | "link note";
@@ -352,10 +359,17 @@ function hyphenated(text: string): string {
 }
 
 /**
- * The last word of a two-word first name, which runs into one given name of its own: Mary Ann is Maryann, Anna
- * Belle Annabelle, Rose Lee Roselee. A name ending so is not looked for run together.
+ * Given names that are two first names run together (Mary Ann is Maryann, Anna Belle Annabelle): a name that joins
+ * into one of them is not looked for run together, since the joined spelling is somebody else's own name. Only the
+ * joined spelling decides — a last name that is also a first name (Lee, Ray, Bell, Rose, Grace, Kay, Jean, May,
+ * Joy, Lynn) still counts: "brucelee80" is Bruce Lee.
  */
-const GIVEN_NAME_ENDINGS = new Set(["ann", "anne", "anna", "belle", "bell", "bella", "beth", "lee", "leigh", "lynn", "lyn", "lynne", "marie", "mae", "may", "rose", "jo", "joy", "sue", "lou", "louise", "ellen", "jean", "jane", "kay", "ray", "etta", "ette", "elle", "ella", "dee", "grace", "lea", "leah", "lena", "line", "lina", "joe"]);
+const JOINED_GIVEN_NAMES = new Set([
+  "maryann", "maryanne", "marianne", "annabelle", "annabel", "annabella", "marylou", "marylee", "maryellen", "marybeth", "maryjane", "maryjo", "marykate",
+  "annmarie", "annemarie", "annamarie", "roseanne", "roseann", "rosanne", "rosemarie", "roselee", "rosalee", "joanne", "joann", "joanna", "leeann", "leeanne",
+  "leanne", "luann", "luanne", "suellen", "sueann", "bettyjo", "bettylou", "billyjoe", "billyjo", "bobbijo", "bobbiejo", "sarajane", "sarahjane", "lizbeth",
+  "elizabeth", "maribel", "maribeth", "marilou", "marylynn", "jolene", "joellen", "carolann", "carolanne", "kathleen", "dianne", "deeann", "deanne",
+]);
 
 /**
  * Whether text a member typed without thinking of it as prose names them: a file name ("zebulon_quince_80.jpg"), a
@@ -368,13 +382,26 @@ export function looseMatcher(m: NameMatcher): (text: string | null | undefined) 
   const names = [...new Set([...m.albumForms, ...m.tombstoneForms.filter((f) => !f.derived && !f.capitalizedOnly).map((f) => f.form)])];
   const forms = names.map(hyphenated).filter((f) => f.length > 4);
   // A full name run together ("zebulonquince80", "ZebulonQuince.jpg"): only a name of more than one word, of eight
-  // letters or more, not ending as a two-word first name does ("Anna Belle" is Annabelle), and whose joined spelling
-  // is no everyday word, herb or place ("Rose Mary" is rosemary, "Mary Land" Maryland).
-  const joined = [...new Set(names.map((n) => piecesOf(n)).filter((w) => w.length > 1 && !GIVEN_NAME_ENDINGS.has(w[w.length - 1])).map((w) => w.join("")))].filter((j) => j.length >= 8 && !isEverydayWord(j) && !isPlaceOrDateWord(j));
+  // letters or more, whose joined spelling is no given name of its own ("Anna Belle" is Annabelle, see
+  // JOINED_GIVEN_NAMES) and no everyday word, herb or place ("Rose Mary" is rosemary, "Mary Land" Maryland).
+  const joined = [...new Set(names.map((n) => piecesOf(n)).filter((w) => w.length > 1).map((w) => w.join("")))].filter((j) => j.length >= 8 && !JOINED_GIVEN_NAMES.has(j) && !isEverydayWord(j) && !isPlaceOrDateWord(j));
+  // A one-word name that is all of theirs ("Barbara") beside another capitalized word is somebody's or a place's,
+  // as in prose away from their photographs: "Santa Barbara Pier", "Lake Louise". All in one case (a web address,
+  // "barbara_80.jpg") nothing says so, and it counts.
+  const single = new Set(forms.filter((f) => !f.slice(1, -1).includes("-")).map((f) => f.slice(1, -1)));
+  const many = forms.filter((f) => f.slice(1, -1).includes("-"));
   return (text) => {
     if (!text?.trim()) return false;
     const h = hyphenated(text);
-    return forms.some((f) => h.includes(f)) || (joined.length > 0 && runsTogether(piecesOf(text), joined));
+    if (many.some((f) => h.includes(f)) || (joined.length > 0 && runsTogether(piecesOf(text), joined))) return true;
+    if (!single.size) return false;
+    // Neighbours only across spaces, the way a place or a title is written; in a file name ("Barbara_80.JPG") the
+    // pieces beside it say nothing.
+    const plain = folded(text);
+    const words = [...plain.matchAll(/[\p{L}\p{N}]+/gu)].map((x) => ({ w: x[0], start: x.index!, end: x.index! + x[0].length }));
+    const cap = (i: number) => Boolean(words[i] && /^\p{Lu}\p{Ll}/u.test(words[i].w));
+    const spaced = (a: number, b: number) => Boolean(words[a] && words[b] && /^[ \t]+$/u.test(plain.slice(words[a].end, words[b].start)));
+    return words.some((x, i) => single.has(x.w.toLowerCase()) && !(cap(i) && ((spaced(i - 1, i) && cap(i - 1)) || (spaced(i, i + 1) && cap(i + 1)))));
   };
 }
 
@@ -432,7 +459,8 @@ export async function memberTextMentioning(m: NameMatcher, tagged: Set<string> =
     ORDER BY "createdAt" ASC`;
   const [others, given] = await Promise.all([othersOn(taggedIds, personId), answerTitles(photos.map((p) => p.id))]);
   for (const p of photos) {
-    const where: Where = { tagged: tagged.has(p.id), others: others.get(p.id) ?? [] };
+    // Away from their photographs, only a full name (see forgetNameInText): "Santa Barbara Pier" is nobody.
+    const where: Where = { tagged: tagged.has(p.id), others: others.get(p.id) ?? [], ...(tagged.has(p.id) ? {} : AWAY) };
     const h = helpersTitles(p, given.get(p.id));
     const fields: MemberTextField[] = [];
     // A photograph in the trash is listed for what only it still carries, its file name and the note on why.
@@ -462,8 +490,8 @@ export async function memberTextMentioning(m: NameMatcher, tagged: Set<string> =
     db.activity.findMany({ where: found(near.activities), select: { id: true, title: true, description: true, trip: { select: { slug: true } } }, orderBy: { startTime: "asc" } }),
   ]);
   const containerFields = (x: { title: string; description: string | null; slug?: string }, tagged: boolean): ContainerTextField[] => [
-    ...(m.mentions(x.title, { tagged }) ? ["title" as const] : []),
-    ...(m.mentions(x.description, { tagged }) ? ["description" as const] : []),
+    ...(m.mentions(x.title, tagged ? { tagged } : AWAY) ? ["title" as const] : []),
+    ...(m.mentions(x.description, tagged ? { tagged } : AWAY) ? ["description" as const] : []),
     ...(x.slug !== undefined && loose(x.slug) ? ["web address" as const] : []),
   ];
   out.trips = trips.map((t) => ({ id: t.id, slug: t.slug, title: t.title, fields: containerFields(t, near.trips.includes(t.id)) })).filter((t) => t.fields.length).slice(0, limit);
@@ -545,7 +573,7 @@ export async function withoutWithdrawnNames(photoId: string, text: { annotation:
   const on = new Set(tagged.flatMap((f) => [f.personId, f.proposedPersonId]));
   for (const p of people) {
     const m = await matcherFor(p);
-    const where: Where = { tagged: on.has(p.id), others: on.has(p.id) ? ((await othersOn([photoId], p.id)).get(photoId) ?? []) : [] };
+    const where: Where = on.has(p.id) ? { tagged: true, others: (await othersOn([photoId], p.id)).get(photoId) ?? [] } : AWAY;
     if (annotation && typeof annotation === "object" && !Array.isArray(annotation)) annotation = scrubAnnotation(annotation as StoredAnnotation, m, where);
     title = m.scrub(title, where);
   }

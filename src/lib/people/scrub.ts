@@ -253,6 +253,11 @@ export type Neighbourhood = {
   /** Words of their own name: beside one, a match is still them ("Mary Ann swam" for Mary Ann Smith). */
   own?: Set<string>;
   /**
+   * Away from their photographs (Where.wholeOnly): beside another capitalized word a match is somebody else's name
+   * or a place's however the text is written, in title case or all in capitals ("SANTA BARBARA PIER").
+   */
+  away?: boolean;
+  /**
    * Their own photographs (or a forgotten name's own scope): a place opening a sentence only where it is plainly
    * one, so "Florence at the lake" and "Florence and Ben swam." are her.
    */
@@ -318,7 +323,7 @@ export function notThePerson(text: string, start: number, end: number, n: Neighb
     }
   }
   const caps = isUpperWord(match.replace(/[^\p{L}]/gu, ""));
-  if (!n.title && !caps) {
+  if (n.away || (!n.title && !caps)) {
     // "Ann Jones", "Robin Hood", "Florence Nightingale" (but "Mary Ann swam" is Mary Ann Smith)...
     if (next && /^\p{Lu}/u.test(next) && !n.own?.has(bare(next))) return true;
     // ..."Mary Ann" and "Union Jack", unless the word before only says when or who she is to them.
@@ -695,7 +700,11 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
           otherWords,
           own,
           isNameWord: (w) => shared.has(bare(w)) || own.has(bare(w)),
-          title,
+          // Away from their photographs, a one-word name of theirs beside another capitalized word is somebody's or
+          // a place's even in a title written in title case ("Santa Barbara Pier", "Lake Louise"): nothing there
+          // says it is them.
+          title: title && !(where.wholeOnly && !where.tagged),
+          away: Boolean(where.wholeOnly && !where.tagged),
           // A month or an everyday word in a date, on their own photographs: "in May", "May 5", "May Day".
           date: everyday,
           // Away from their photographs a first name that is also a place is one after "to", "in", "near" ("to
@@ -754,8 +763,9 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
       const k = keywordsFor(where);
       if (k.pairRx) out = out.replace(k.pairRx, put);
       if (k.strongRx) out = out.replace(k.strongRx, put);
-      // A one-word name that is all of theirs is them in lower case too, anywhere: "ximena fishing".
-      if (wholeRx) out = out.replace(wholeRx, put);
+      // A one-word name that is all of theirs is them in lower case too, anywhere: "ximena fishing" — except, away
+      // from their photographs under `wholeOnly`, where keywords run words together ("santa barbara pier").
+      if (wholeRx && !(where.wholeOnly && !where.tagged)) out = out.replace(wholeRx, put);
       return out === t ? out : withoutDoubledArticle(out);
     });
   const mentions = (text: unknown, where: Where = {}) => typeof text === "string" && text !== "" && scrub(text, where) !== text;
@@ -770,8 +780,9 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
       if (k.weakWords.includes(bareTag)) return true;
       if ((where.tagged ? [...cjkAlbum, ...cjkTagged] : cjkAlbum).some((f) => t.replace(/\s+/g, "").includes(f.replace(/\s+/g, "")))) return true;
       if (safe.some((x) => t === x.form.toLowerCase() || t === `${x.form.toLowerCase()}'s`)) return true;
-      // A safe one-word name is all of their name: a tag containing it ("sam's bike") is about them.
-      return Boolean(wholeTest?.test(tag) || longAnyTest?.test(tag));
+      // A safe one-word name is all of their name: a tag containing it ("sam's bike") is about them — not, away from
+      // their photographs under `wholeOnly`, one where it is part of something else's name ("santa barbara").
+      return Boolean((!(where.wholeOnly && !where.tagged) && wholeTest?.test(tag)) || longAnyTest?.test(tag));
     } catch {
       return false;
     }

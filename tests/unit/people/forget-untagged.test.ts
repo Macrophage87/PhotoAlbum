@@ -36,6 +36,28 @@ describe("what a forget rewrites on photographs they are not on", () => {
     expect(await text(p.id)).toEqual([words, words, words, words]);
   });
 
+  it.each([
+    ["Barbara", "Santa Barbara Pier"],
+    ["Leo", "Leo Martinez Park At Dusk"],
+    ["Louise", "Sunrise At Lake Louise"],
+  ])("forgetting somebody called just %s leaves %s alone there", async (name, words) => {
+    const p = await photo(words);
+    await forgetNameInText([p.id], nameMatcher([name], []), { tagged: new Set(), containers: false });
+    expect(await text(p.id)).toEqual([words, words, words, words]);
+  });
+
+  it("takes out a one-word name there when nothing beside it says it is somebody else's", async () => {
+    const p = await db.photo.create({ data: { uploaderId: admin, originalName: "x.jpg", mimeType: "image/jpeg", storageKey: "k", originalPath: "k/o.jpg", sizeBytes: 1, status: "READY", annotation: { title: "", caption: "Barbara at the pier", description: "", tags: [], searchSummary: "" } } });
+    await forgetNameInText([p.id], nameMatcher(["Barbara"], []), { tagged: new Set(), containers: false });
+    expect(((await db.photo.findUniqueOrThrow({ where: { id: p.id } })).annotation as StoredAnnotation).caption).toBe("A family member at the pier");
+  });
+
+  it("leaves a helper's trip description naming a place alone when the trip holds none of their photographs", async () => {
+    const trip = await db.trip.create({ data: { slug: "sb", title: "Coast", description: "Santa Barbara Pier At Sunset", descriptionByHelper: true, startDate: new Date("2025-08-10"), endDate: new Date("2025-08-11"), createdById: admin } });
+    await forgetNameInText([], nameMatcher(["Barbara Jones"], []), { tagged: new Set() });
+    expect((await db.trip.findUniqueOrThrow({ where: { id: trip.id } })).description).toBe("Santa Barbara Pier At Sunset");
+  });
+
   it("still takes out the full name there, and a first name alone on their own photograph", async () => {
     const elsewhere = await photo("Leo Martin At The Lake");
     const theirs = await photo("Leo At The Lake");

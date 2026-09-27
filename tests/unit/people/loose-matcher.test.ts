@@ -34,6 +34,19 @@ describe("a forgotten name in file names, web addresses and the like", () => {
     for (const [name, t] of rows) expect([name, t, looks(name)(t)]).toEqual([name, t, false]);
   });
 
+  it("never counts a one-word name beside another capitalized word in a place's or a title, but does in a file name", () => {
+    expect(looks("Barbara")("Santa Barbara Pier")).toBe(false);
+    expect(looks("Louise")("Sunrise At Lake Louise")).toBe(false);
+    expect(looks("Barbara")("Barbara's cabin")).toBe(true);
+    expect(looks("Barbara")("barbara_80.jpg")).toBe(true);
+    expect(looks("Barbara")("Barbara_80.JPG")).toBe(true);
+  });
+
+  it("runs a name together when only its last word is also a first name, since only the joined spelling decides", () => {
+    expect(looks("Bruce Lee")("BruceLee.jpg")).toBe(true);
+    expect(looks("Ellie May")("elliemay80")).toBe(true);
+  });
+
   it("never runs together a two-word first name that is a given name of its own", () => {
     expect(looks("Mary Ann")("Maryann.jpg")).toBe(false);
     expect(looks("Anna Belle")("annabelle-80th")).toBe(false);
