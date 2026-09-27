@@ -218,7 +218,9 @@ export async function geotagPhotos(job: GeotagPhotosJob): Promise<{ updated: num
       // it, and not this uploader. No track of the trip gives it a place now, so the one it has is taken back, under
       // the same guard as placing it; a guess it replaced is asked for again, as when a track is deleted.
       const r = await db.photo.updateMany({
-        where: { id: photo.id, takenAt: photo.takenAt, placeSetById: null, gpsSource: "TRACK" },
+        // Only the position this run judged: another run may have placed it again meanwhile, from a track imported
+        // after this one read the trip's tracks.
+        where: { id: photo.id, takenAt: photo.takenAt, placeSetById: null, gpsSource: "TRACK", lat: photo.lat, lng: photo.lng },
         data: { lat: null, lng: null, altitude: null, gpsSource: null, ...(photo.placeEstimateName !== null ? { placeEstimatedAt: null } : {}) },
       });
       cleared += r.count;

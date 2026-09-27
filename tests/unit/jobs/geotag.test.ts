@@ -443,6 +443,25 @@ describe("geotagPhotos and who was on another member's ride", () => {
     expect(p.lat).toBeCloseTo(44.003, 5);
   });
 
+  it("takes back a place its ride no longer gives, but not one another run gave meanwhile", async () => {
+    await ride([dad]);
+    const stale = await makePhoto(tripId, mom, new Date(T0 + 3 * 60_000), { lat: 44.003, lng: -68, gpsSource: "TRACK" });
+    await geotagPhotos({ tripId });
+    expect(await db.photo.findUniqueOrThrow({ where: { id: stale.id } })).toMatchObject({ lat: null, gpsSource: null });
+
+    const p = await makePhoto(tripId, mom, new Date(T0 + 3 * 60_000), { lat: 44.003, lng: -68, gpsSource: "TRACK" });
+    const real = db.photo.findMany.bind(db.photo);
+    // Another run places it from a track imported after this run read the trip's tracks.
+    const spy = vi.spyOn(db.photo, "findMany").mockImplementationOnce((async (args: Parameters<typeof real>[0]) => {
+      const rows = await real(args);
+      await db.photo.update({ where: { id: p.id }, data: { lat: 45.5, lng: -69 } });
+      return rows;
+    }) as unknown as typeof db.photo.findMany);
+    await geotagPhotos({ tripId });
+    spy.mockRestore();
+    expect(await db.photo.findUniqueOrThrow({ where: { id: p.id } })).toMatchObject({ lat: 45.5, lng: -69, gpsSource: "TRACK" });
+  });
+
   it("still places anybody's photo from a track with no activity, or an activity that names nobody", async () => {
     await ride(null);
     expect(await place(mom)).toMatchObject({ gpsSource: "TRACK" });
