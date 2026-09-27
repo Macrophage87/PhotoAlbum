@@ -9,10 +9,10 @@ import { QUEUES } from "@/lib/jobs/queues";
 import { fileExisting } from "@/lib/photos/file-existing";
 import { decodeHeaderName } from "@/lib/media/header-name";
 import { uploaderLabel } from "@/components/photos/toGrid";
-import { ALLOWED_MIMES as ALLOWED, EXT_BY_MIME, kindForMime, scanFormatOf, VIDEO_MIMES as VIDEO } from "@/lib/media/mime";
+import { ALLOWED_MIMES as ALLOWED, EXT_BY_MIME, isGlbHeader, kindForMime, scanFormatOf, VIDEO_MIMES as VIDEO } from "@/lib/media/mime";
 import { claimContentHash } from "@/lib/media/content-hash";
 import { mimeAsSent } from "@/lib/media/picker";
-import { maxUploadBytes } from "@/lib/media/limits";
+import { EMPTY_FILE_MESSAGE, maxUploadBytes } from "@/lib/media/limits";
 import { uploadByteLimits } from "@/lib/media/upload-limits";
 import { processAgainIfStuck } from "@/lib/media/requeue";
 import { isResend } from "@/lib/media/resend";
@@ -30,11 +30,23 @@ const headerSchema = z.object({
   attempt: z.coerce.number().int().positive().optional(),
 });
 
+/** The album looked at what arrived and will not keep it; the reason is the member's to read. */
+class Refused extends Error {}
+
+/** The first `n` bytes of a stored file. */
+async function headOf(key: string, n: number): Promise<Buffer> {
+  const { stream } = await storage().getStream(key, { start: 0, end: n - 1 });
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) chunks.push(chunk as Buffer);
+  return Buffer.concat(chunks);
+}
+
 /** Streams one file to storage and queues processing. Body is the raw file; metadata rides in headers. */
 export async function POST(request: Request) {
   const viewer = await getViewer();
   if (viewer.kind !== "user") return Response.json({ error: "Unauthorized" }, { status: 401 });
-  if (!request.body) return Response.json({ error: "Empty body" }, { status: 400 });
+  // A zero-byte file may arrive with no body at all.
+  if (!request.body) return Response.json({ error: EMPTY_FILE_MESSAGE }, { status: 422 });
 
   const parsed = headerSchema.safeParse({
     // A name that will not decode fails the schema, and so is a bad request rather than a crash.
@@ -102,6 +114,9 @@ export async function POST(request: Request) {
     // handler) instead of leaving it waiting for bytes that will never come.
     const body = Readable.fromWeb(request.body as never, { signal: request.signal });
     const { bytes } = await storage().putStream(originalPath, body, { maxBytes: maxUploadBytes(mime, uploadByteLimits()), onChunk: (chunk) => digest.update(chunk) });
+    // Before it takes a hash: every empty file is the same file, and would be answered as one the album already has.
+    if (bytes === 0) throw new Refused(EMPTY_FILE_MESSAGE);
+    if (mime === "model/gltf-binary" && !isGlbHeader(await headOf(originalPath, 12), bytes)) throw new Refused("This .glb file is not a 3D model the album can read. Export it from the scanning app again and upload that.");
     const contentHash = digest.digest("hex");
     const match = await claimContentHash(photo.id, contentHash, { storageKey, originalPath, sizeBytes: bytes });
     if (match) {
@@ -139,6 +154,7 @@ export async function POST(request: Request) {
     await storage().deletePrefix(storageKey).catch(() => undefined);
     await db.photo.delete({ where: { id: photo.id } }).catch(() => {});
     if (err instanceof StorageLimitError) return Response.json({ error: `File is larger than ${Math.round(err.maxBytes / 1048576)} MB` }, { status: 413 });
+    if (err instanceof Refused) return Response.json({ error: err.message }, { status: 422 });
     if (request.signal.aborted) return new Response(null, { status: 499 });
     console.error("[upload]", err);
     return Response.json({ error: "Upload failed" }, { status: 500 });

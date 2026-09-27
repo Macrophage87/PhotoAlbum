@@ -15,6 +15,8 @@ export const EDITOR_SIZE = 1200;
  * a screen and still have somewhere to go sideways, without handing a phone the 60-megapixel original.
  */
 export const PANORAMA_SIZE = 4096;
+/** The longest side a WebP may have. A stitched panorama is often longer, and the edited copy is held to this. */
+export const WEBP_MAX_SIDE = 16383;
 export type RenditionKey = keyof typeof RENDITION_SIZES;
 export type Rendition = { key: string; w: number; h: number };
 /**
@@ -58,8 +60,12 @@ export async function makeRenditions(
   }
   if (live) {
     // Edited items get a full-size copy as well, so "open the full-size photo" shows the picture as it is now; the
-    // untouched original stays where it is and is always one click away.
-    const full = await edited().webp({ quality: 90 }).toBuffer({ resolveWithObject: true });
+    // untouched original stays where it is and is always one click away. As full as WebP allows: past its limit the
+    // whole item would fail for the sake of one copy.
+    const full = await edited()
+      .resize({ width: WEBP_MAX_SIDE, height: WEBP_MAX_SIDE, fit: "inside", withoutEnlargement: true })
+      .webp({ quality: 90 })
+      .toBuffer({ resolveWithObject: true });
     const fullKey = `${storageKeyPrefix}/edited.webp`;
     await put(fullKey, full.data);
     out.full = { key: fullKey, w: full.info.width, h: full.info.height };

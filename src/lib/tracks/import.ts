@@ -27,8 +27,11 @@ export const MAX_PARSED_TRACK_BYTES = 256 * 1024 * 1024;
 
 export type ImportArgs = { importKey: string; tripId: string; userId: string; sourceHint: "auto" | TrackFileKind; originalName: string; replaceGoogle?: boolean };
 
-/** Parse an uploaded track file and store whatever tracks/activities it yields. */
-export async function importTrackFile(args: ImportArgs): Promise<ImportSummary> {
+/**
+ * Parse an uploaded track file and store whatever tracks/activities it yields. `signal` stops it before each save,
+ * so an import its job has given up on does not go on filling the trip behind the member's back.
+ */
+export async function importTrackFile(args: ImportArgs, signal?: AbortSignal): Promise<ImportSummary> {
   const store = storage();
   const filePath = store.localPath?.(args.importKey);
   if (!filePath) throw new Error("import requires a storage driver with local paths");
@@ -80,6 +83,7 @@ export async function importTrackFile(args: ImportArgs): Promise<ImportSummary> 
       const saved: PersistedTrack[] = [];
       let replaced = 0;
       for (const { day, parsed } of days) {
+        signal?.throwIfAborted();
         const earlier = args.replaceGoogle
           ? await (client ?? db).track.findMany({ where: { tripId: trip.id, uploaderId: args.userId, source: "GOOGLE", name: parsed.name }, select: { id: true, tripId: true, startTime: true, endTime: true } })
           : [];
@@ -116,6 +120,7 @@ export async function importTrackFile(args: ImportArgs): Promise<ImportSummary> 
     return summary;
   }
   for (const parsed of parsedTracks) {
+    signal?.throwIfAborted();
     // The same file imported twice (or the same ride exported again) would put a second copy of the ride and its
     // activity on the trip. What is saved is the cleaned points, so a copy has the same start, end and count.
     const points = cleanPoints(parsed.points);

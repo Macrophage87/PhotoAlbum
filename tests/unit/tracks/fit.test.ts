@@ -68,6 +68,17 @@ function multisportFit(shuffle = false): Buffer {
   return Buffer.from(enc.close());
 }
 
+describe("a FIT file that is cut off", () => {
+  it("fails with an Error that says so, not the parser's bare string", async () => {
+    const whole = readFileSync(path.join(process.cwd(), "tests/fixtures/sample.fit"));
+    for (const cut of [whole.subarray(0, 5), whole.subarray(0, whole.length / 2)]) {
+      const err = await parseFit(cut).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(Error);
+      expect((err as Error).message).toMatch(/^This FIT file is incomplete or damaged/);
+    }
+  });
+});
+
 describe("parseFit with several sessions", () => {
   it("makes one track per leg, each with its own sport, totals and times", async () => {
     const tracks = await parseFit(multisportFit());

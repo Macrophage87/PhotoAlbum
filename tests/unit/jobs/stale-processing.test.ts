@@ -16,7 +16,7 @@ vi.mock("@/lib/jobs/boss", async (orig) => ({ ...((await orig()) as object), enq
 const stopping = vi.hoisted(() => ({ now: false }));
 vi.mock("@/lib/jobs/shutdown", () => ({ workerStopping: () => stopping.now, markStopping: () => { stopping.now = true; } }));
 
-import { transcodeVideo } from "@/lib/jobs/handlers/transcode-video";
+import { CANNOT_CONVERT, transcodeVideo } from "@/lib/jobs/handlers/transcode-video";
 import { reconcileStalePhotos } from "@/lib/jobs/worker";
 
 describe("items stuck in PROCESSING", () => {
@@ -35,7 +35,8 @@ describe("items stuck in PROCESSING", () => {
     await expect(transcodeVideo({ photoId: row.id })).rejects.toThrow(/ENOSPC/);
     const after = await db.photo.findUniqueOrThrow({ where: { id: row.id } });
     expect(after.status).toBe("FAILED");
-    expect(after.error).toMatch(/ENOSPC/);
+    // What went wrong is the log's (it names a path on the server); the member reads that it could not be converted.
+    expect(after.error).toBe(CANNOT_CONVERT);
   });
 
   it("reconciliation fails only rows no job can still own", async () => {

@@ -67,7 +67,7 @@ export function TakeoutAdmin({ configured, dir, archives, imports }: { configure
                   <span className="text-muted">{i.status === "RUNNING" ? "in progress" : i.status === "ENDED" ? "done" : "failed"} · started {stamp(i.startedAt)}</span>
                 </div>
                 <div className="text-muted">
-                  {i.imported} imported · {i.skipped} skipped{i.report?.duplicates ? ` (${i.report.duplicates} already in the album)` : ""}{i.report?.inTrash ? ` (${i.report.inTrash} in the trash, left there)` : ""} · {i.repaired} repaired · {i.failed} failed · {i.collectionsCreated} private collection{i.collectionsCreated === 1 ? "" : "s"} created
+                  {i.imported} imported · {i.skipped} skipped{i.report?.duplicates ? ` (${i.report.duplicates} already in the album)` : ""}{i.report?.inTrash ? ` (${i.report.inTrash} in the trash, left there)` : ""}{i.report?.unsupported ? ` (${i.report.unsupported} in formats the album does not take)` : ""} · {i.repaired} repaired · {i.failed} failed · {i.collectionsCreated} private collection{i.collectionsCreated === 1 ? "" : "s"} created
                   {i.report?.noSidecar ? ` · ${i.report.noSidecar} without Google metadata` : ""}
                 </div>
                 {i.report?.albums && i.report.albums.length > 0 && <div className="text-muted">Albums: {i.report.albums.map((a) => `${a.title} (${a.items}${a.created ? "" : ", existing"})`).join(", ")}</div>}

@@ -37,6 +37,13 @@ describe("the files an import leaves behind", () => {
     expect(stillThere(key)).toBe(false);
     expect(await db.track.count({ where: { originalFile: { not: null } } })).toBe(0);
   });
+  it("saves nothing once pg-boss has stopped the job, and does not keep the file", async () => {
+    const key = uploaded("sample.gpx", "imports/late.gpx");
+    const expired = AbortSignal.abort(new Error("handler execution exceeded 3600s"));
+    await expect(importTrack(job(key, "late.gpx"), expired)).rejects.toThrow(/exceeded/);
+    expect(await db.track.count()).toBe(0);
+    expect(stillThere(key)).toBe(false);
+  });
   it("deletes a file that could not be read, and one that gave no tracks", async () => {
     const junk = uploaded(null, "imports/junk.tcx", "not a track");
     await expect(importTrack(job(junk, "junk.tcx"))).rejects.toThrow();

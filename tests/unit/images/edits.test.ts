@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import sharp from "sharp";
 import { applyEdits, contrastTerms, editedSize, editsSchema, hasEdits, LEVELS_PERCENTILES, LEVELS_SAMPLE_WIDTH, levelsOfRegion, levelsStretch, tidyEdits, warmthChannels } from "@/lib/images/edits";
-import { EDITOR_SIZE, makeRenditions } from "@/lib/images/renditions";
+import { EDITOR_SIZE, makeRenditions, WEBP_MAX_SIDE } from "@/lib/images/renditions";
 
 /** A 200x100 image, left half red, right half blue, so a crop and a mirror are visible in the pixels. */
 async function twoTone(): Promise<Buffer> {
@@ -175,4 +175,18 @@ describe("rendering an edited item", () => {
     // The dimensions on the row describe the picture the album shows, not the file on disk.
     expect([edited.width, edited.height]).toEqual([100, 100]);
   });
+
+  it("edits a panorama longer than WebP allows, holding only the full-size copy to the limit", async () => {
+    const src = await sharp({ create: { width: 18000, height: 2000, channels: 3, background: { r: 90, g: 120, b: 160 } } }).jpeg().toBuffer();
+    const sizes = new Map<string, [number, number]>();
+    const put = async (key: string, buf: Buffer) => {
+      const m = await sharp(buf).metadata();
+      sizes.set(key, [m.width!, m.height!]);
+    };
+    const r = await makeRenditions(src, "p/2", put, { brightness: 1.2 });
+    expect(r.renditions.full).toMatchObject({ w: WEBP_MAX_SIDE, h: Math.round((2000 * WEBP_MAX_SIDE) / 18000) });
+    expect(sizes.get("p/2/edited.webp")).toEqual([r.renditions.full!.w, r.renditions.full!.h]);
+    // The row still describes the whole picture.
+    expect([r.width, r.height]).toEqual([18000, 2000]);
+  }, 60_000);
 });

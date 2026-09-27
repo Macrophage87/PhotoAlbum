@@ -6,13 +6,20 @@
  * `.supplemental-me.json`, `.supple.json`, `.s.json`). A counter suffix on the media name goes after the extension in the
  * sidecar name: `IMG(1).jpg` pairs with `IMG.jpg(1).json` (or `IMG.jpg.supplemental-metadata(1).json`).
  */
-const MEDIA_EXT = new Set(["jpg", "jpeg", "png", "webp", "heic", "heif", "gif", "mp4", "mov", "m4v", "webm"]);
+const MEDIA_EXT = new Set(["jpg", "jpeg", "png", "webp", "heic", "heif", "gif", "tif", "tiff", "avif", "mp4", "mov", "m4v", "webm"]);
 const VIDEO_EXT = new Set(["mp4", "mov", "m4v", "webm"]);
+/** Photos and clips Google keeps that the album cannot take: cameras' raw files, and older or rarer containers. */
+const UNSUPPORTED_MEDIA_EXT = new Set(["dng", "cr2", "cr3", "crw", "nef", "nrw", "arw", "srf", "sr2", "raf", "orf", "rw2", "pef", "srw", "raw", "bmp", "jxl", "3gp", "3g2", "avi", "mkv", "wmv", "mpg", "mpeg", "mts", "m2ts", "flv", "ogv"]);
 const SUFFIX = "supplemental-metadata";
 
 export function isMediaName(name: string): boolean {
   const ext = name.toLowerCase().split(".").pop() ?? "";
   return MEDIA_EXT.has(ext);
+}
+
+/** A photo or clip in a format the album does not take, so the report can count it rather than pass over it in silence. */
+export function isUnsupportedMediaName(name: string): boolean {
+  return UNSUPPORTED_MEDIA_EXT.has(name.toLowerCase().split(".").pop() ?? "");
 }
 
 export function isVideoName(name: string): boolean {

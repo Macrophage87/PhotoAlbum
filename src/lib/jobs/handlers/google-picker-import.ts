@@ -113,10 +113,14 @@ export async function googlePickerImport(job: GooglePickerImportJob, signal?: Ab
       if (isVideo) await enqueue(QUEUES.transcodeVideo, { photoId: row.id, tripId: row.tripId });
       else await enqueue(QUEUES.processPhoto, { photoId: row.id, tripId: row.tripId });
     } catch (err) {
-      const reason = err instanceof NoToken ? tokenFailure(err.reason) : err instanceof StorageLimitError ? `Larger than ${Math.round(err.maxBytes / 1048576)} MB` : err instanceof GoogleAuthError ? `Google Photos refused the download. ${PICK_AGAIN}` : `Download from Google Photos failed. ${PICK_AGAIN}`;
+      // Cut off by the job's own timeout or a shutdown rather than by anything wrong with the item: it waits for the
+      // retry like the ones not reached yet, unless there is no retry to wait for.
+      const cutOff = Boolean(signal?.aborted);
+      const reason = cutOff ? `Download from Google Photos took too long. ${PICK_AGAIN}` : err instanceof NoToken ? tokenFailure(err.reason) : err instanceof StorageLimitError ? `Larger than ${Math.round(err.maxBytes / 1048576)} MB` : err instanceof GoogleAuthError ? `Google Photos refused the download. ${PICK_AGAIN}` : `Download from Google Photos failed. ${PICK_AGAIN}`;
+      const outcome = cutOff && !opts.finalAttempt ? { status: "PENDING" as const, error: null } : { status: "FAILED" as const, error: reason };
       // Back to having no file, so picking it again fetches it rather than finding a row pointing at nothing — but
       // only while it is still this job's to put back.
-      const reset = await db.photo.updateMany({ where: { id: row.id, ...mine }, data: { status: "FAILED", error: reason, storageKey: "pending", originalPath: "pending", sizeBytes: 0 } }).catch(() => ({ count: 0 }));
+      const reset = await db.photo.updateMany({ where: { id: row.id, ...mine }, data: { ...outcome, storageKey: "pending", originalPath: "pending", sizeBytes: 0 } }).catch(() => ({ count: 0 }));
       // Only this download's own file, and only while no row points at it: once written onto the row it goes only
       // with the row's pointer to it. Anything else in the folder is not this job's to remove.
       if (!written || reset.count === 1) await store.delete(originalPath).catch(() => undefined);
@@ -130,6 +134,8 @@ export async function googlePickerImport(job: GooglePickerImportJob, signal?: Ab
       console.error(`[google] download of ${row.originalName} failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
+  // Its retry still needs the session for any item cut off on the last lap.
+  if (signal?.aborted && !opts.finalAttempt) return;
   const last = await token().catch(() => null);
   if (last) await deletePickerSession(last, job.sessionId);
 }

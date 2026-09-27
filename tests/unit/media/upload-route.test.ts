@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { db } from "@/lib/db";
@@ -111,6 +111,28 @@ describe("the upload route", () => {
     expect((await upload(bytes(3000), "splat.ply")).status).toBe(200);
     expect((await upload(bytes(3000, 2), "big.jpg")).status).toBe(413);
     expect((await upload(bytes(6000, 3), "huge.ply")).status).toBe(413);
+  });
+
+  it("refuses an empty file with a reason, keeping nothing, and never calls it one the album already has", async () => {
+    for (let i = 0; i < 2; i++) {
+      const r = await upload(new Uint8Array(0), "empty.jpg");
+      expect(r.status).toBe(422);
+      expect((await r.json()).error).toMatch(/empty \(0 bytes\)/);
+    }
+    expect(await db.photo.count()).toBe(0);
+    expect(leftovers()).toEqual([]);
+  });
+
+  it("takes a real glTF binary as a scan, but not a .glb that is empty or something else", async () => {
+    const glb = readFileSync(path.join(process.cwd(), "tests/fixtures/scan.glb"));
+    expect((await upload(glb, "room.glb")).status).toBe(200);
+    for (const bad of [bytes(500, 7), glb.subarray(0, 600)]) {
+      const r = await upload(bad, "broken.glb");
+      expect(r.status).toBe(422);
+      expect((await r.json()).error).toMatch(/not a 3D model/);
+    }
+    expect(await db.photo.count()).toBe(1);
+    expect(leftovers()).toHaveLength(1);
   });
 
   it("answers a member's own retry after a lost answer as their upload, still processing, not as already in the album", async () => {

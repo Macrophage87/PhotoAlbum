@@ -14,6 +14,7 @@ import { dateByHand, dateMovedSince, lockedPhoto } from "@/lib/photos/member-own
 import { localDayFromOffset, offsetMinutesInZone } from "@/lib/time/local-day";
 import { withHeavyLock } from "../heavy-lock";
 import { workerStopping } from "../shutdown";
+import { forgetFilesIfGone } from "@/lib/storage/sweep";
 import type { TranscodeVideoJob } from "../queues";
 import { enqueueEmbedding } from "./embed-photo";
 import { enqueueFaceDetection } from "./detect-faces";
@@ -21,8 +22,13 @@ import { enqueueAnimalDetection } from "./detect-animals";
 
 export type VideoRenditions = { mp4: { key: string; w: number; h: number; bytes: number }; poster: { key: string } };
 
-export function tooLongMessage(durationS: number, limit: number): string {
-  return `This video is ${Math.round(durationS)} seconds long; clips uploaded here are limited to ${limit} seconds. Upload longer videos to YouTube as Unlisted and add the link instead.`;
+/** A reason the member is meant to read as it is. Anything else is the machinery's (ffmpeg's output names paths on the server), so it is logged and the member reads CANNOT_CONVERT. */
+class ClipRefused extends Error {}
+export const CANNOT_CONVERT = "This clip could not be converted. Use Re-process to try again; if it fails again, it may be damaged or in a format the album cannot read.";
+
+/** `durationS` is null when all that is known is that it runs past the limit. */
+export function tooLongMessage(durationS: number | null, limit: number): string {
+  return `This video is ${durationS === null ? `more than ${limit}` : Math.round(durationS)} seconds long; clips uploaded here are limited to ${limit} seconds. Upload longer videos to YouTube as Unlisted and add the link instead.`;
 }
 
 /**
@@ -32,11 +38,14 @@ export function tooLongMessage(durationS: number, limit: number): string {
  */
 export async function transcodeVideo(job: TranscodeVideoJob, signal?: AbortSignal): Promise<void> {
   const photo = await db.photo.findUnique({ where: { id: job.photoId } });
-  if (!photo) return;
+  // Deleted for good before its job ran, or while an earlier run of it was writing (its retry lands here).
+  if (!photo) return void (await forgetFilesIfGone(job.photoId));
   const store = storage();
   let work: string | null = null;
   // The stamp marks the row as this run's: a retry of a timed-out run stamps it again.
   let claimedAt: Date | null = null;
+  /** Set when the row was deleted for good while the clip was being made. */
+  let gone = false;
   // Everything after the row turns PROCESSING is inside the try, so no failure can leave it spinning.
   try {
     claimedAt = (await db.photo.update({ where: { id: photo.id }, data: { status: "PROCESSING", error: null }, select: { updatedAt: true } })).updatedAt;
@@ -47,13 +56,18 @@ export async function transcodeVideo(job: TranscodeVideoJob, signal?: AbortSigna
       const info = await probe(input, signal);
       const limit = env().MAX_CLIP_SECONDS;
       // A clip already accepted is not refused on a Re-process because the limit has since been lowered.
-      if (!photo.videoRenditions && info.durationS !== null && info.durationS > limit) throw new Error(tooLongMessage(info.durationS, limit));
+      const limited = !photo.videoRenditions;
+      if (limited && info.durationS !== null && info.durationS > limit) throw new ClipRefused(tooLongMessage(info.durationS, limit));
 
       const mp4 = path.join(dir, "video.mp4");
       const poster = path.join(dir, "poster.jpg");
-      await ffmpeg(transcodeArgs(input, mp4, info), signal);
-      await ffmpeg(posterArgs(mp4, poster, info.durationS), signal);
+      // A container may not say how long it is (WebM straight from a browser's recorder has no duration), or say
+      // wrongly: the clip itself is measured, decoded no further than just past the limit.
+      await ffmpeg(transcodeArgs(input, mp4, info, limited ? limit + 1 : undefined), signal);
       const out = await probe(mp4, signal);
+      // Half a second over is the encoder's padding, not the clip; one too long stops a whole second past the limit.
+      if (limited && out.durationS !== null && out.durationS > limit + 0.5) throw new ClipRefused(tooLongMessage(null, limit));
+      await ffmpeg(posterArgs(mp4, poster, info.durationS ?? out.durationS), signal);
       signal?.throwIfAborted();
       const mp4Key = `${photo.storageKey}/video.mp4`;
       const posterKey = `${photo.storageKey}/poster.jpg`;
@@ -91,7 +105,10 @@ export async function transcodeVideo(job: TranscodeVideoJob, signal?: AbortSigna
       // on an activity since. So it is read again, locked, and what a member set is never written over.
       await db.$transaction(async (tx) => {
         const now = await lockedPhoto(tx, photo.id);
-        if (!now) return;
+        if (!now) {
+          gone = true;
+          return;
+        }
         // A date given (or changed) since the job read the row stands, and so does the trip it put the clip on; a
         // date a member set before is kept as it is too (its trip still follows from it, as the job read it).
         const moved = dateMovedSince(photo, now);
@@ -130,6 +147,8 @@ export async function transcodeVideo(job: TranscodeVideoJob, signal?: AbortSigna
         });
       });
     }, signal);
+    // What was just written has nothing to belong to.
+    if (gone) return void (await forgetFilesIfGone(photo.id));
     // Follow-up jobs are best-effort here; the sweeps pick up anything the queue refused.
     await enqueueEmbedding(photo.id).catch(() => undefined);
     await enqueueFaceDetection(photo.id).catch(() => undefined);
@@ -141,11 +160,14 @@ export async function transcodeVideo(job: TranscodeVideoJob, signal?: AbortSigna
       // Timed out: the retry may already have the row, so fail it only while it is still this run's.
       console.error(`[transcode-video] ${photo.id} timed out`);
       if (claimedAt) await db.photo.updateMany({ where: { id: photo.id, status: "PROCESSING", updatedAt: claimedAt }, data: { status: "FAILED", error: "Transcoding took too long and was stopped." } });
+      await forgetFilesIfGone(photo.id);
       throw err;
     }
     const message = err instanceof Error ? err.message : String(err);
+    // No row to fail (it was deleted for good mid-run): nothing is left to retry, and whatever this run wrote goes.
+    const failed = await db.photo.updateMany({ where: { id: photo.id }, data: { status: "FAILED", error: err instanceof ClipRefused ? message.slice(0, 500) : CANNOT_CONVERT } });
+    if (!failed.count && (await forgetFilesIfGone(photo.id))) return;
     console.error(`[transcode-video] ${photo.id} failed:`, message);
-    await db.photo.update({ where: { id: photo.id }, data: { status: "FAILED", error: message.slice(0, 500) } });
     throw err;
   } finally {
     if (work) await rm(work, { recursive: true, force: true });

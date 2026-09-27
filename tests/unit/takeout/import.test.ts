@@ -35,7 +35,10 @@ vi.mock("@/lib/media/content-hash", async (orig) => {
 });
 
 import { closeDeadImports, importTakeoutArchive } from "@/lib/takeout/import";
-import { copyFileSync, readdirSync } from "node:fs";
+import { copyFileSync, createWriteStream, readdirSync } from "node:fs";
+import { pipeline } from "node:stream/promises";
+import sharp from "sharp";
+import { ZipFile } from "yazl";
 
 describe("importing a Takeout archive", () => {
   let userId: string;
@@ -254,6 +257,24 @@ describe("importing a Takeout archive", () => {
     expect((await db.takeoutImport.findUniqueOrThrow({ where: { id: dead.id } })).status).toBe("FAILED");
     expect((await db.takeoutImport.findUniqueOrThrow({ where: { id: live.id } })).status).toBe("RUNNING");
     expect((await db.takeoutImport.findUniqueOrThrow({ where: { id: fresh.id } })).status).toBe("RUNNING");
+  });
+  it("takes TIFF and AVIF, counts formats it cannot take, and fails an empty file with a reason", async () => {
+    const pixels = sharp({ create: { width: 40, height: 30, channels: 3, background: { r: 200, g: 80, b: 40 } } });
+    const zip = new ZipFile();
+    zip.addBuffer(await pixels.clone().tiff().toBuffer(), "Takeout/Google Photos/Scans/letter.tif");
+    zip.addBuffer(await pixels.clone().avif().toBuffer(), "Takeout/Google Photos/Photos from 2025/sunset.avif");
+    zip.addBuffer(Buffer.from("raw sensor data"), "Takeout/Google Photos/Photos from 2025/IMG_0001.dng");
+    zip.addBuffer(Buffer.alloc(0), "Takeout/Google Photos/Photos from 2025/broken.jpg");
+    zip.end();
+    await pipeline(zip.outputStream, createWriteStream(path.join(inbox, "takeout-formats.zip")));
+    const row = await db.takeoutImport.create({ data: { archiveName: "takeout-formats.zip", startedById: userId } });
+    await importTakeoutArchive(row.id);
+    const r = await db.takeoutImport.findUniqueOrThrow({ where: { id: row.id } });
+    expect({ imported: r.imported, skipped: r.skipped, failed: r.failed }).toEqual({ imported: 2, skipped: 1, failed: 1 });
+    const report = r.report as { unsupported: number; failures: { file: string; reason: string }[] };
+    expect(report.unsupported).toBe(1);
+    expect(report.failures).toEqual([{ file: "broken.jpg", reason: "The file in the archive is empty (0 bytes)." }]);
+    expect((await db.photo.findMany({ select: { mimeType: true }, orderBy: { mimeType: "asc" } })).map((p) => p.mimeType)).toEqual(["image/avif", "image/tiff"]);
   });
   it("refuses names outside the inbox", async () => {
     const row = await db.takeoutImport.create({ data: { archiveName: "../etc/passwd.zip", startedById: userId } });

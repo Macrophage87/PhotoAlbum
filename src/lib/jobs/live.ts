@@ -18,3 +18,19 @@ export async function hasLiveProcessingJob(photoId: string): Promise<boolean> {
     return true;
   }
 }
+
+/**
+ * The uploaded files (imports/…) that an import job waiting, running or due a retry will still read. Null when
+ * pg-boss's tables cannot be read, so nothing is ever deleted from under a job on a guess.
+ */
+export async function liveImportKeys(): Promise<Set<string> | null> {
+  try {
+    const rows = await db.$queryRaw<{ key: string | null }[]>`
+      SELECT data->>'importKey' AS key FROM pgboss.job
+      WHERE name = ${QUEUES.importTrack} AND state IN ('created', 'retry', 'active')`;
+    return new Set(rows.flatMap((r) => (r.key ? [r.key] : [])));
+  } catch (err) {
+    console.error("[jobs] could not read pg-boss's jobs; keeping every uploaded track file", err);
+    return null;
+  }
+}

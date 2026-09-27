@@ -26,6 +26,10 @@ import { inboxDir, listArchives } from "@/lib/takeout/inbox";
 import { closeDeadImports } from "@/lib/takeout/import";
 import { visitorStats } from "@/lib/visits/stats";
 import { VisitorStats } from "@/components/admin/VisitorStats";
+import { OrphanFoldersAdmin } from "@/components/admin/OrphanFoldersAdmin";
+import { StorageIdentityNotice } from "@/components/admin/StorageIdentityNotice";
+import { HEARTBEAT_STALE_MS, installIdentity, rebindBlockedUntil, utcStamp } from "@/lib/storage/identity";
+import { QUARANTINE_KEEP_MS, quarantineContents } from "@/lib/storage/sweep";
 
 export const metadata = { title: "Admin" };
 
@@ -83,6 +87,13 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
     const lead = byId.get(g.ids[0]);
     return { contentHash: g.contentHash, ids: g.ids, name: lead?.originalName ?? "", thumbUrl: lead && lead.renditions ? photoUrl(lead, "thumb") : null };
   });
+  // Whether this database and the storage folder are the same album's, and what the hourly check found in it.
+  const [identity, rebindBlock, storageFindings, quarantine] = await Promise.all([
+    installIdentity(),
+    rebindBlockedUntil(),
+    db.appSetting.findUnique({ where: { id: "app" }, select: { orphanFolderCount: true, orphanFolderSample: true, orphanFoldersCheckedAt: true } }),
+    quarantineContents(),
+  ]);
   const unavailable = await db.photo.findMany({ where: { kind: "EXTERNAL_VIDEO", externalStatus: "UNAVAILABLE" }, orderBy: { externalCheckedAt: "desc" }, select: { id: true, title: true, externalUrl: true, externalCheckedAt: true } });
 
   return (
@@ -219,6 +230,14 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
           </p>
           <Link href="/admin/trash" className="text-primary hover:underline text-sm">Open the trash</Link>
         </section>
+
+        {(!identity.ok || storageFindings?.orphanFolderCount || quarantine.length > 0) && (
+          <section className="space-y-3">
+            <h2 className="font-display text-xl font-semibold mb-1">Storage</h2>
+            {!identity.ok && <StorageIdentityNotice kind={identity.kind} problem={identity.problem} block={!rebindBlock ? null : "unreadable" in rebindBlock ? "unreadable" : { minutesAgo: rebindBlock.minutesAgo, until: utcStamp(rebindBlock.until) }} waitHours={HEARTBEAT_STALE_MS / 3600_000} />}
+            <OrphanFoldersAdmin count={identity.ok ? (storageFindings?.orphanFolderCount ?? 0) : 0} sample={storageFindings?.orphanFolderSample ?? []} checkedAt={storageFindings?.orphanFoldersCheckedAt?.toISOString() ?? null} quarantine={quarantine} keepDays={QUARANTINE_KEEP_MS / 86_400_000} />
+          </section>
+        )}
 
         <section>
           <DuplicatesPanel rows={duplicateRows} total={dupeGroups.length} />

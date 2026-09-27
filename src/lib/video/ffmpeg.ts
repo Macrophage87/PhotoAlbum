@@ -54,8 +54,11 @@ export function videoFilter(p: Pick<Probe, "hdr">): string {
   return `zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p,${fit}`;
 }
 
-/** Arguments for the web-playable H.264 MP4. `-preset veryfast` keeps a 90-second clip to minutes on a small VPS. */
-export function transcodeArgs(input: string, output: string, p: Pick<Probe, "hdr">): string[] {
+/**
+ * Arguments for the web-playable H.264 MP4. `-preset veryfast` keeps a 90-second clip to minutes on a small VPS.
+ * `maxSeconds` stops it there, so a clip too long to keep is never transcoded in full to find that out.
+ */
+export function transcodeArgs(input: string, output: string, p: Pick<Probe, "hdr">, maxSeconds?: number): string[] {
   return [
     "-y", "-hide_banner", "-loglevel", "error",
     "-i", input,
@@ -64,6 +67,7 @@ export function transcodeArgs(input: string, output: string, p: Pick<Probe, "hdr
     "-c:a", "aac", "-b:a", "128k", "-ac", "2",
     "-movflags", "+faststart",
     "-map_metadata", "-1",
+    ...(maxSeconds ? ["-t", String(maxSeconds)] : []),
     output,
   ];
 }

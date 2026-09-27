@@ -323,9 +323,55 @@ chmod +x ~/backup-album.sh
 
 Copy the `backups` folder off the server regularly (rclone to any cloud storage, or `rsync` to another machine). A backup on the same disk as the data does not protect against disk failure.
 
-To restore on a new server: bring the stack up once so the volumes exist, stop it, extract the photo archive into the photos volume with the same `docker run ... alpine tar` pattern in reverse, and pipe the SQL dump into `docker compose exec -T db sh -c 'exec psql -U "$POSTGRES_USER" "$POSTGRES_DB"'`.
+To restore on a new server, put the database back **before the album starts for the first time**. The first start migrates an empty database and gives it an install id of its own, which the dump's `AppSetting` row then collides with and loses. So create the volumes without starting the app, load the dump, then the photos, then start everything:
+
+```bash
+cd ~/photoalbum
+docker compose create                    # the containers and volumes, nothing running
+docker compose start db
+gunzip -c db-YYYY-MM-DD.sql.gz | docker compose exec -T db sh -c 'exec psql -U "$POSTGRES_USER" "$POSTGRES_DB"'
+docker run --rm -v photoalbum_photos:/data -v /home/album/backups:/backup alpine \
+  tar xzf /backup/photos-YYYY-MM-DD.tgz -C /data
+docker compose up -d
+```
+
+The photo archive brings its `.album-install-id` with it and the dump brings the same id, but the database now lives in another Postgres, so the Admin page will say under **Storage** that the storage is bound to another database. Make sure the old album is stopped for good, and check this one looks right. The marker also carries the old album's last heartbeat, so **Re-bind the storage to this database** becomes available there 48 hours after the old album last ran (the page says when); until then the album works normally but cleans nothing up. If the album was started before the dump went in, stop it, empty the database (`docker compose exec -T db sh -c 'exec psql -U "$POSTGRES_USER" -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;" "$POSTGRES_DB"'`), load the dump, start it again, and re-bind.
 
 If the photographs have been moved onto their own drive, the volume in that script is no longer what the album reads: see [MOVE-MEDIA.md](MOVE-MEDIA.md), which says what to change here.
+
+**Restoring an older dump over the same photos** (rolling back a mistake): the album is still the same album, so its clean-ups keep running. Uploaded GPX and FIT files kept for tracks added after the dump (`imports/`) have no track in the restored database, and the hourly clean-up deletes them after six hours. Copy `imports/` somewhere safe before restoring if you might want those tracks again. Photo folders from after the dump are only counted, never deleted.
+
+### The install marker
+
+The media folder has a small file at its top, `.album-install-id`, that names the album (the same id as the database's `AppSetting.installId`) and the database it belongs to (the Postgres cluster's system identifier and the database name, kept as `AppSetting.installBinding`). A copy of the database, such as a staging clone, carries the id but is a different database, so it does not match. The worker of the database the folder belongs to also writes a heartbeat into the file when it starts and every hour.
+
+The worker writes the file by itself only into an empty folder, on a new install. A folder that already holds photos or uploaded track files — every existing album, the first time it runs this version — shows **This storage has not been claimed by this album yet** under **Storage** on the Admin page, with a **Claim this storage** button, and nothing in it is cleaned up until an admin presses it. Press it on the live site, never on a staging site that shares the live folder: a staging copy of the live database knows every photo in it. A claim is refused:
+
+- while another database's heartbeat in the file is less than 48 hours old;
+- while files this database does not know (a photo folder with no photo here, or an uploaded track file nothing here refers to) have been written in the last 48 hours — "Files were added here … ago that this database doesn't know. Another album may still be using this storage (stop it first), or an upload failed here recently; …" That is live, still on older code, adding photos next to a staging clone — or, on a single album, a track upload that failed under the old code in the last two days, which older versions never cleaned up; wait until it is 48 hours old and claim again;
+- unless the database has a photo for at least 95% of the photo folders (for an album with tracks but no photos at all, a track or an import in progress for 95% of the uploaded track files).
+
+Uploaded track files that nothing refers to, such as failed imports kept by older versions, do not stop a photo album from being claimed once they are two days old; the hourly clean-up deletes them afterwards. A marker that is there is never replaced by the worker.
+
+The album reads the cluster's system identifier with `pg_control_system()`. The database user the album connects as normally owns the database and may call it; if it may not, the Admin page says the album cannot check which database this is, nothing is cleaned up, and the fix is to run, as a superuser, `GRANT EXECUTE ON FUNCTION pg_control_system() TO <the album's user>;`.
+
+Before the album cleans up anything in the media folder (track files left by an import that died, folders of items deleted for good) it checks that the file, the database's id and the database itself all agree. If they do not, it cleans up nothing, says so in the log, and shows a red notice under **Storage** on the Admin page. What to do depends on the notice:
+
+- **"This storage holds files this album's database does not know."** The folder is another album's, or this database is missing much of it (the wrong database, or a restore that has not gone in yet). Connect the right database. Do not force it.
+- **The storage is bound to another database.** There are two very different reasons:
+  - *A staging copy of the live database pointed at the live folder.* Never re-bind it. Staging's database has live's photos, so it would pass every check, and then clean up live's new files as if they were nobody's. Give staging its own copy of the media ([MOVE-MEDIA.md](MOVE-MEDIA.md), option C).
+  - *The album was moved or restored to another server.* Stop the old album for good. **Re-bind the storage to this database** on the Admin page becomes available once the old album's heartbeat in the file is 48 hours old, and until then the button is not offered and the action is refused ("Another database used this storage … ago; stop that album first, then wait until …"). It also refuses unless the database accounts for the folder by the same test as above. Then it writes this database's id, binding and heartbeat into both places.
+- **This database has no install id** (restored from a dump taken before the marker existed): check the album looks right, then re-bind, with the same waits and checks.
+- **The file is missing** (media copied without dot files, say): **Claim this storage**, with the same waits and checks. On a folder that is empty the worker writes it at its next start.
+- **Another database used this folder … ago**, on the live site after a staging site claimed or re-bound a folder the two share: stop the staging site, give it its own copy of the media, and re-bind here once the page offers it (48 hours after the staging site's last heartbeat).
+- **The heartbeat cannot be read** (the file was edited by hand): stop any other site that shares the folder, then remove the `heartbeatAt` and `heartbeatBinding` fields from the file, or put back a copy from a backup.
+- **The file is another album's.** Two installs are using one media folder with different databases. Stop, and give each its own folder (or share the database too; see [MOVE-MEDIA.md](MOVE-MEDIA.md)). Do not edit the file to make the notice go away: the check is what keeps one album from deciding the other's photos are rubbish.
+
+Never point two installs with different databases at one media folder, and that includes a staging copy of the live database. Each would see the other's photos as files nobody owns.
+
+### The quarantine
+
+Every hour the worker counts folders under `photos/` that no photo in the database refers to and that nothing has written to for a week, and the Admin page shows the number under **Storage**. Nothing is deleted by itself. An admin can type the number to move those folders into `quarantine/<date>/` in the media folder; the move is refused when the album has no photos, when the install marker does not match, or when it would take more than 200 folders or 5% of all of them at once, since that many usually means the database is the wrong one. Each day's folder keeps a `.moved.json` saying when each folder was moved in. A folder in the quarantine can be moved back into `photos/` by hand. **Empty quarantine older than 30 days** deletes what that record says was moved in over 30 days ago, and nothing newer or unrecorded; a folder whose photo is back in the database by then (after a restore) is put back in `photos/` instead of deleted, or left in the quarantine if its place there has been taken, and the page says which.
 
 ## 10. Updating
 
@@ -350,6 +396,8 @@ Migrations run automatically at start. Take a database dump first (step 9) befor
 The app's port is now published on `127.0.0.1` only (`APP_BIND`). If other devices used to open the album as `http://<server>:<port>`, put Caddy in front instead (step 6); `APP_BIND=0.0.0.0` does not bring plain http back. Signing in needs https, since the session cookie is `Secure` in production, and without a proxy anyone can forge the `X-Forwarded-For` the sign-in rate limits go by. A proxy on another machine needs `APP_BIND` set to an address it can reach, a firewall that really covers the port (Docker's published ports bypass ufw), and to set `X-Forwarded-For` itself.
 
  In-flight photo processing is given 45 seconds to finish before the old container stops. A description backfill that is still submitting is cut short by an upgrade: the Admin page says so under that run within about an hour. Wait until no row of that run still reads "in progress" (batches already sent keep processing at Anthropic for up to a day), then run the backfill again for the remaining items; the app refuses to start a new run while one is open, so nothing is sent twice.
+
+**After the upgrade that adds the storage check** (the `.album-install-id` marker), an existing album shows **This storage has not been claimed by this album yet** on its Admin page, once. Press **Claim this storage** on the live site — never on a staging site that shares its media folder — and cleaning up the media folder (track files left by failed imports, the count of folders with no photo) stays off until you do. If a staging site shares the folder and runs this version first, it shows the same notice; leave it alone there. See "The install marker" in §9.
 
 ### Upgrading from before the forget key
 
@@ -395,7 +443,7 @@ The map uses OpenStreetMap's public tile server, which is fine for family use. F
 
 To run a staging copy on the same server, clone the `staging` branch into a second folder such as `~/photoalbum-staging`, give it its own `.env` with a different `APP_URL` (for example `staging.album.example.com`), a different `APP_PORT` (say `3100`), and add a second site block in the Caddyfile pointing at that port. Compose names the volumes after the folder, so the two installs keep separate databases and photos.
 
-To have the two work from one set of photographs instead, see [MOVE-MEDIA.md](MOVE-MEDIA.md) — sharing the media folder without also sharing the database does more harm than good, and there is a migration rule that comes with sharing both.
+To have the two work from one set of photographs instead, see [MOVE-MEDIA.md](MOVE-MEDIA.md) — sharing the media folder without also sharing the database does more harm than good (the install marker, §9, stops the second install from cleaning anything up, but that is all it can do), and there is a migration rule that comes with sharing both.
 
 ## Troubleshooting
 

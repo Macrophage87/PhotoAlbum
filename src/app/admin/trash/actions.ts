@@ -35,7 +35,8 @@ export async function deleteFromTrash(photoIds: string[]): Promise<number> {
   const photos = await db.photo.findMany({ where: { id: { in: list }, trashedAt: { not: null } }, select: { id: true, storageKey: true } });
   if (!photos.length) return 0;
   await db.photo.deleteMany({ where: { id: { in: photos.map((p) => p.id) } } });
-  for (const p of photos) await enqueue(QUEUES.deletePhoto, { storageKey: p.storageKey });
+  // A Picker item whose download failed has only the "pending" placeholder for a key: its own folder is what goes.
+  for (const p of photos) await enqueue(QUEUES.deletePhoto, { storageKey: p.storageKey === "pending" ? `photos/${p.id}` : p.storageKey });
   revalidatePath("/", "layout");
   return photos.length;
 }

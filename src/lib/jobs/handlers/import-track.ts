@@ -8,10 +8,11 @@ import { QUEUES, type ImportTrackJob } from "../queues";
  * deleted: it is years of somebody's whereabouts, and the tracks hold all that was wanted from it. A GPX or FIT file
  * that failed, or gave no tracks, goes too; one that made tracks stays with them (see forgetTrackFiles).
  */
-export async function importTrack(job: ImportTrackJob): Promise<unknown> {
+/** `signal` is pg-boss's: a job it has stopped for running too long saves nothing more. */
+export async function importTrack(job: ImportTrackJob, signal?: AbortSignal): Promise<unknown> {
   let summary: Awaited<ReturnType<typeof importTrackFile>>;
   try {
-    summary = await importTrackFile(job);
+    summary = await importTrackFile(job, signal);
   } catch (err) {
     await forgetTrackFiles([job.importKey]);
     throw err;

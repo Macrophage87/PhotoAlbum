@@ -67,6 +67,16 @@ describe("importing tracks is arranging the trip", () => {
     expect(boss.sent).toHaveLength(2);
   });
 
+  it("refuses an empty file with a reason, keeping and queuing nothing", async () => {
+    who.id = maker;
+    const before = await stored();
+    const res = await POST(new Request("https://album.example/api/tracks/import", { method: "POST", body: new Uint8Array(0), headers: { "x-file-name": "walk.gpx", "x-trip-id": tripId } }));
+    expect(res.status).toBe(422);
+    expect((await res.json()).error).toMatch(/empty \(0 bytes\)/);
+    expect(boss.sent).toEqual([]);
+    expect(await stored()).toBe(before);
+  });
+
   it("answers a malformed file name with 400, not a crash", async () => {
     who.id = maker;
     expect((await post(tripId, "%E0.gpx")).status).toBe(400);
@@ -130,5 +140,21 @@ describe("an import's progress is its importer's", () => {
 
   it("treats an id that is not a job id as not found, not a crash", async () => {
     expect((await poll("not-a-uuid")).status).toBe(404);
+  });
+
+  it("tells the importer why it failed, wherever pg-boss put the reason", async () => {
+    const failed = async (output: unknown) => {
+      boss.jobs.set(mine, { state: "failed", data: { userId: "me" }, output });
+      return (await (await poll(mine)).json()).error;
+    };
+    // An Error is stored as its own fields; anything else thrown (a bare string) under `value`.
+    expect(await failed({ name: "Error", message: "No track points found in this file.", stack: "…" })).toBe("No track points found in this file.");
+    expect(await failed({ value: "This FIT file is incomplete or damaged." })).toBe("This FIT file is incomplete or damaged.");
+    expect(await failed({ value: { message: "Unreadable export" } })).toBe("Unreadable export");
+    // pg-boss's own words for a job it stopped are put in the album's.
+    expect(await failed({ name: "Error", message: "handler execution exceeded 3600s" })).toBe("The import took too long and was stopped.");
+    // What pg-boss writes when it expires a job whose worker died with it.
+    expect(await failed({ value: { message: "job timed out" } })).toBe("The import took too long and was stopped.");
+    expect(await failed(null)).toBe("Import failed");
   });
 });

@@ -6,7 +6,8 @@ import { startMocks } from "../tests/e2e/mocks.mjs";
 
 const dbUrl = process.env.E2E_DATABASE_URL ?? process.env.DATABASE_URL?.replace(/\/([^/?]+)(\?.*)?$/, "/$1_e2e$2");
 if (!dbUrl) throw new Error("DATABASE_URL or E2E_DATABASE_URL is required");
-const photoRoot = process.env.E2E_PHOTO_ROOT ?? "/tmp/photoalbum-e2e-photos";
+// One per e2e database, so two checkouts testing side by side never share (or claim) each other's media.
+const photoRoot = process.env.E2E_PHOTO_ROOT ?? `/tmp/${new URL(dbUrl).pathname.slice(1)}-photos`;
 mkdirSync(photoRoot, { recursive: true });
 const inboxDir = process.env.E2E_INBOX_DIR ?? "/tmp/photoalbum-e2e-inbox";
 mkdirSync(inboxDir, { recursive: true });
