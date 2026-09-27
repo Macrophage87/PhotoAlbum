@@ -44,7 +44,7 @@ export default async function CollectionOverviewPage({ params }: PageProps<"/col
         {editable && ready.length === 0 ? (
           <Card className="p-5 space-y-2">
             <p className="font-medium">Nothing here yet.</p>
-            <p className="text-sm text-muted">Pick photos that are already in the album, upload new ones, or open any photo and tick this collection.</p>
+            <p className="text-sm text-muted">Pick photos that are already in the album, upload new ones, or open any photo and check this collection.</p>
             <div className="flex flex-wrap gap-2 pt-1"><ButtonLink href={`/collections/${slug}/add`} size="sm">Add existing photos</ButtonLink>{upload}</div>
           </Card>
         ) : (

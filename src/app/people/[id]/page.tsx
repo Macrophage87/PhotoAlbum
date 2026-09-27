@@ -135,7 +135,7 @@ export default async function PersonPage({ params, searchParams }: PageProps<"/p
                   {person.optedOutAt && (
                     <label className="flex items-start gap-2 rounded-theme border border-amber-300 bg-amber-50 p-2 text-amber-900">
                       <input type="checkbox" name="agreedAgain" className="mt-1" />
-                      <span>{person.name} asked to be forgotten on {person.optedOutAt.toLocaleDateString("en-US")}. Tick only if they have told you they agree to recognition again; otherwise the switch below is ignored.</span>
+                      <span>{person.name} asked to be forgotten on {person.optedOutAt.toLocaleDateString("en-US")}. Check this only if they have told you they agree to recognition again; otherwise the switch below is ignored.</span>
                     </label>
                   )}
                   <label className="flex items-start gap-2">
