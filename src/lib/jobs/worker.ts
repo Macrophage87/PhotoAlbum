@@ -63,7 +63,7 @@ export async function startWorker(): Promise<void> {
     processPhoto(job.data as never, job.signal),
   );
   await boss.work(QUEUES.importTrack, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 2 }, async ([job]) =>
-    importTrack(job.data as never),
+    importTrack(job.data as never, job.signal),
   );
   await boss.work(QUEUES.geotagPhotos, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 5 }, async ([job]) =>
     geotagPhotos(job.data as never),
@@ -128,10 +128,12 @@ export async function startWorker(): Promise<void> {
   await completePendingForgets().catch((err) => console.error("[worker] pending forgets failed", err));
   await boss.schedule(QUEUES.sweepStrandedUploads, "40 * * * *", {}, { retryLimit: 0 });
   await boss.schedule(QUEUES.reconcilePhotos, "*/15 * * * *", {}, { retryLimit: 0 });
-  // Files left behind by work that died part-way: uploaded track files no import will read again, and photo folders
-  // whose item was deleted for good.
+  // Files left behind by work that died part-way: uploaded track files no import will read again are deleted; photo
+  // folders with no row are only counted, for an admin to move to the quarantine.
   await boss.schedule(QUEUES.sweepOrphanFiles, "25 * * * *", {}, { retryLimit: 0 });
   console.log("[worker] pg-boss handlers registered");
+  // Before anything sweeps the storage root: which album it belongs to (see src/lib/storage/identity.ts).
+  await (await import("@/lib/storage/identity")).ensureInstallIdentity().catch((err) => console.error("[worker] could not check the storage's install marker", err));
   // Before the reconciliation below, so a Picker download lost in the restart is told to be picked again rather
   // than re-processed (it has no file to process).
   await (await import("@/lib/media/stranded")).sweepStrandedUploads().catch((err) => console.error("[worker] stranded-upload sweep failed", err));

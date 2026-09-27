@@ -324,6 +324,24 @@ To restore on a new server: bring the stack up once so the volumes exist, stop i
 
 If the photographs have been moved onto their own drive, the volume in that script is no longer what the album reads: see [MOVE-MEDIA.md](MOVE-MEDIA.md), which says what to change here.
 
+Restore the database before the album runs against the restored photos for any length of time. The install marker (below) keeps an empty database from cleaning anything up meanwhile, but the Admin page will say the two do not match until the dump is in.
+
+### The install marker
+
+The media folder has a small file at its top, `.album-install-id`, holding the same id as the database's `AppSetting.installId`. The worker writes both the first time it starts: on a new install, or on an existing album whose database has photos. It never writes the file over a folder that already holds media while the database is empty, and it never replaces a marker that is there.
+
+Before the album cleans up anything in the media folder (track files left by an import that died, folders of items deleted for good) it checks that the two ids match. If they do not, or the file is missing, it cleans up nothing, says so in the log, and shows a red notice under **Storage** on the Admin page. What to do depends on why:
+
+- **The database was restored from a dump taken before the marker existed** (the notice says the database has no install id). Check the album looks right, then copy the id from the file into the database: `docker compose exec -T db sh -c 'exec psql -U "$POSTGRES_USER" "$POSTGRES_DB"' -c "UPDATE \"AppSetting\" SET \"installId\" = '<id from the file>' WHERE id = 'app'"`.
+- **The file is missing** (media copied without dot files, say). Restart the worker once the database with the photos is connected; it writes the file.
+- **The file is another album's.** Two installs are using one media folder with different databases. Stop, and give each its own folder (or share the database too; see [MOVE-MEDIA.md](MOVE-MEDIA.md)). Do not edit the file to make the notice go away: the check is what keeps one album from deciding the other's photos are rubbish.
+
+Never point two installs with different databases at one media folder. Each would see the other's photos as files nobody owns.
+
+### The quarantine
+
+Every hour the worker counts folders under `photos/` that no photo in the database refers to and that nothing has written to for a week, and the Admin page shows the number under **Storage**. Nothing is deleted by itself. An admin can type the number to move those folders into `quarantine/<date>/` in the media folder; the move is refused when the album has no photos, when the install marker does not match, or when it would take more than 200 folders or 5% of all of them at once, since that many usually means the database is the wrong one. A folder in the quarantine can be moved back into `photos/` by hand. **Empty quarantine older than 30 days** deletes the days that have waited that long, and nothing newer.
+
 ## 10. Updating
 
 ```bash
@@ -362,7 +380,7 @@ The map uses OpenStreetMap's public tile server, which is fine for family use. F
 
 To run a staging copy on the same server, clone the `staging` branch into a second folder such as `~/photoalbum-staging`, give it its own `.env` with a different `APP_URL` (for example `staging.album.example.com`), a different `APP_PORT` (say `3100`), and add a second site block in the Caddyfile pointing at that port. Compose names the volumes after the folder, so the two installs keep separate databases and photos.
 
-To have the two work from one set of photographs instead, see [MOVE-MEDIA.md](MOVE-MEDIA.md) — sharing the media folder without also sharing the database does more harm than good, and there is a migration rule that comes with sharing both.
+To have the two work from one set of photographs instead, see [MOVE-MEDIA.md](MOVE-MEDIA.md) — sharing the media folder without also sharing the database does more harm than good (the install marker, §9, stops the second install from cleaning anything up, but that is all it can do), and there is a migration rule that comes with sharing both.
 
 ## Troubleshooting
 

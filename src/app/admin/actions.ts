@@ -15,6 +15,7 @@ import { closeDeadImports } from "@/lib/takeout/import";
 import { stat } from "node:fs/promises";
 import { disconnectGoogleAccount } from "@/lib/google/account";
 import { foldDuplicates } from "@/lib/photos/duplicates";
+import { emptyQuarantine, quarantineOrphanPhotoFolders, type QuarantineResult } from "@/lib/storage/sweep";
 
 async function requireAdminOrThrow() {
   const user = await requireUserOrThrow();
@@ -129,4 +130,25 @@ export async function foldDuplicatePhotos(): Promise<{ groups: number; folded: n
   revalidatePath("/admin");
   revalidatePath("/", "layout");
   return { groups: report.groups, folded: report.folded, conflicts: report.conflicts, coversReleased: report.coversReleased };
+}
+
+/**
+ * Move the photo folders that have no photo in this album to the quarantine. The admin types how many, so a count
+ * that changed since the page was drawn is caught; the limits and the identity check are the library's.
+ */
+export async function quarantineOrphanFolders(typed: string): Promise<QuarantineResult> {
+  await requireAdminOrThrow();
+  const expected = Number(typed.trim());
+  if (!Number.isInteger(expected) || expected <= 0) return { ok: false, message: "Type the number of folders to move." };
+  const result = await quarantineOrphanPhotoFolders(expected);
+  revalidatePath("/admin");
+  return result;
+}
+
+/** Delete what has been in the quarantine for longer than it is kept; anything moved more recently stays. */
+export async function emptyOldQuarantine(): Promise<QuarantineResult> {
+  await requireAdminOrThrow();
+  const result = await emptyQuarantine();
+  revalidatePath("/admin");
+  return result;
 }

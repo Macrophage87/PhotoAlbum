@@ -16,7 +16,9 @@ the user that owns it.
 | Takeout archives waiting to be imported | Docker volume `photoalbum_imports` | temporary |
 | ML model weights | Docker volume `photoalbum_ml-models` | ~2 GB, re-downloadable |
 
-Under the media root there is exactly one folder, `photos/`, and under it one folder per item named after its id:
+Under the media root is `photos/`, with one folder per item named after its id, beside a small `.album-install-id`
+file (see "The install marker" below), `imports/` for track files being imported, and, once an admin has used it,
+`quarantine/`:
 
 ```
 photos/cmu0adw74001i9k7dz8vadb3c/original.jpg     the file as it was uploaded, never written over
@@ -30,6 +32,12 @@ photos/cmu0adw7g001j9k7d41bidem8/video.mp4
 the `Photo` table's `storageKey`, `originalPath` and `renditions` columns. The media folder on its own is a heap of
 files named after nothing. Keep that in mind for the whole of this document — especially the staging part, where it
 is the difference between sharing data and quietly corrupting it.
+
+**The install marker.** `.album-install-id` at the media root holds the same id as the database
+(`AppSetting.installId`). The album cleans nothing up in a media folder whose marker does not match its database, so
+copy the dot file along with everything else (`rsync -a` and `tar -C … .` both do). If it is left behind, the Admin
+page says so, and restarting the worker with the right database connected writes it again. See
+[DEPLOY.md §9](DEPLOY.md#the-install-marker) for the other cases.
 
 Check how much you are about to move:
 
@@ -187,7 +195,10 @@ echo "$missing missing"
 yet, which is why it is skipped.
 
 The other direction — files on disk that no row mentions — is not a failure. Trashing an item leaves its files until
-an admin deletes it for good, and a failed upload can leave one behind.
+an admin deletes it for good, and a failed upload can leave one behind. Folders no row mentions are counted on the
+Admin page, and can be moved to `quarantine/` from there ([DEPLOY.md](DEPLOY.md#the-quarantine)). After a move that
+number should be what it was before. If it is suddenly large, the database the album is connected to is probably not
+this media's: stop and check before moving anything.
 
 ## Part 5 — Tidy up
 
@@ -220,7 +231,7 @@ data, that has to change on both counts.
 | | Media | Database | What it means |
 |---|---|---|---|
 | **A. One album, two windows** | shared | shared | Both sites show the same photographs, and a change on either is a change to both. This is what "the same data" means. |
-| **B. Shared folder only** | shared | separate | Don't. Each site can delete the other's files. |
+| **B. Shared folder only** | shared | separate | Don't. Each site can delete the other's files. The install marker refuses the second site's clean-ups, but not its trash. |
 | **C. Staging on a copy** | copy | copy | Staging is a safe place to try things; it drifts from live until you refresh it. |
 
 ### A. One album, two windows
@@ -294,7 +305,9 @@ sudo chown -R 1000:1000 /mnt/album-staging/photos
 docker compose up -d app
 ```
 
-A copy costs a second full-size library. If that is what the new drive was for, option A is the reason to prefer it.
+The copy brings the live album's install marker and install id with it, so staging's clean-ups run on staging's own
+copy and nowhere else. A copy costs a second full-size library. If that is what the new drive was for, option A is
+the reason to prefer it.
 
 ## If something goes wrong
 
