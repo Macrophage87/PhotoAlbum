@@ -53,7 +53,7 @@ Skip only if cieply.com is meant to start empty.
 cd /cieply/sites/cieply.com
 git clone -b main <repo-url> PhotoAlbum-live
 cd PhotoAlbum-live
-cp ../PhotoAlbum/.env .env          # then edit it — see step 2
+cp ../PhotoAlbum/.env .env          # then edit it — see step 2; keep its FORGET_KEY
 cp ../PhotoAlbum/docker-compose.override.yml . 2>/dev/null || true
 ```
 
@@ -96,6 +96,28 @@ APP_PORT=3005
 caches it, so the container must be recreated (`docker compose up -d`), not just
 reloaded. `NEXT_PUBLIC_*` values are different: they are compiled into the
 browser bundle and need `docker compose up --build -d`.
+
+**`FORGET_KEY` goes with the data.** Forgotten people's names are kept in the
+database as hashes under a key made from `FORGET_KEY` and a salt in that same
+database, so the live instance must keep the key the old instance had: the
+copied `.env` already carries it, so leave that line as it is. Under any other
+key, or none, the live album pauses forgetting and the AI helper as soon as
+anybody has been forgotten, until the old key is back. If the old `.env` has no
+`FORGET_KEY` line yet, see "Upgrading from before the forget key" in
+[DEPLOY.md](DEPLOY.md#upgrading-from-before-the-forget-key) first.
+
+The new dev instance starts with an empty database, so it gets a key of its
+own (the two instances never share one):
+
+```bash
+cd /cieply/sites/cieply.com/PhotoAlbum
+sudo sed -i '/^FORGET_KEY=/d' .env
+echo "FORGET_KEY=$(openssl rand -base64 32)" | sudo tee -a .env >/dev/null
+```
+
+Only do that once its old volumes are out of the way: on the old database, a
+new key pauses forgetting just the same. Back up both keys, each labeled with
+its instance, apart from the database dumps (which do not contain them).
 
 **What `APP_URL` decides**, all of which break quietly if it is left at the old
 host:
@@ -270,11 +292,14 @@ Do this:
 2. Take a database dump and a photo-volume archive from the existing instance,
    verify both are non-empty, and tell me their sizes and where they are.
 3. Create the PhotoAlbum-live checkout on `main`, give it its own .env with
-   APP_URL=https://cieply.com and APP_PORT=3004, and restore the dump and the
+   APP_URL=https://cieply.com and APP_PORT=3004 and the existing instance's
+   FORGET_KEY unchanged (never print it), and restore the dump and the
    photos into its volumes. Verify by counting rows in "Photo" and files under
    the photo volume and comparing with the source.
 4. Reset the existing checkout to a clean `staging` instance for dev.cieply.com
-   with APP_URL=https://dev.cieply.com and APP_PORT=3005. Ask me before deleting
+   with APP_URL=https://dev.cieply.com and APP_PORT=3005, and a new FORGET_KEY
+   (openssl rand -base64 32) once its database is the new, empty one; tell me
+   to back up both keys rather than showing them. Ask me before deleting
    or reusing any volume that still holds the only copy of anything.
 5. Update the reverse proxy for both hostnames, confirm X-Forwarded-For and
    X-Forwarded-Proto are passed through, and confirm the proxy adds no

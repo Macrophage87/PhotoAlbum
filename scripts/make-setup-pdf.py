@@ -139,7 +139,7 @@ S += [P("3. Quick start with Docker", H1),
 git clone https://github.com/Macrophage87/PhotoAlbum.git
 cd PhotoAlbum
 cp .env.example .env
-nano .env                 # set ADMIN_EMAIL, SMTP_* for real email, a new POSTGRES_PASSWORD
+nano .env                 # set ADMIN_EMAIL, SMTP_* for real email, a new POSTGRES_PASSWORD, FORGET_KEY
 docker compose up --build -d
 """),
       P("The stack has two services by default. <b>db</b> is PostgreSQL 16 with pgvector, its data in the <b>pgdata</b> volume. <b>app</b> is the web server, "
@@ -213,6 +213,7 @@ S += [P("4. Configuration reference (.env)", H1),
         ["IMPORT_INBOX_DIR", "/data/imports", "Folder the Google Takeout importer reads zip files from (the imports volume). Empty hides the section on the Admin page."],
         ["GOOGLE_OAUTH_CLIENT_ID / _SECRET", "(empty)", "OAuth client for the Google Photos picker button. See the deployment guide for the Google Cloud steps."],
         ["TOKEN_ENCRYPTION_KEY", "(empty)", "32 random bytes in base64 (openssl rand -base64 32). Encrypts members' Google tokens; required with the client id."],
+        ["FORGET_KEY", "(empty)", "32 random bytes in base64 (openssl rand -base64 32), a different one for each instance. Forgotten people's names are kept only as hashes under a key made from it and a salt in the database. Required in production for forgetting anybody for good. It is not in the database dumps: back it up separately, and never change it, since once somebody has been forgotten, running without it or with another pauses forgetting and the AI helper until it is put back. deploy/update.sh makes one if .env has none."],
         ["ANTHROPIC_BASE_URL, YOUTUBE_*_URL", "(empty)", "Endpoints for test doubles; leave empty."],
         ["VISITOR_STATS_ENABLED", "true", "Count how many pages are opened and by how many browsers, for the Admin page. Counted here, sent nowhere."],
         ["VISITOR_STATS_RETENTION_DAYS", "90", "Days those counts are kept; a nightly job deletes older ones and the salt that hashed them."],

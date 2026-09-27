@@ -251,6 +251,9 @@ APP_PORT=3100
 # Let the live stack do the background work. Two sets of workers on one database both run, and staging's would
 # process the family's real photographs with whatever code is being tried out.
 RUN_WORKER=false
+# The live stack's own key, copied from its .env. One database has one key: under any other, staging pauses
+# forgetting and the AI helper, and if staging forgot somebody first, the live site would pause instead.
+FORGET_KEY=<the value from the live .env>
 ```
 
 Then, in the staging folder, `docker compose up -d app` — start only `app`, so staging does not bring up a second
@@ -294,6 +297,18 @@ sudo rsync -aH --delete /mnt/album/photos/ /mnt/album-staging/photos/
 sudo chown -R 1000:1000 /mnt/album-staging/photos
 docker compose up -d app
 ```
+
+The copy brings the live album's forgotten names with it, hashed under the live `FORGET_KEY`, and staging keeps
+its own `.env`. Once anybody has been forgotten on the live site, staging on its own key recognizes none of those
+names, so it pauses forgetting and the AI helper (the Admin page says why) until the keys match. Either:
+
+- **copy the live key into staging's `.env`** (`FORGET_KEY=` from the live `.env`, then `docker compose up -d app`),
+  if staging should behave like the live site. Staging then holds the family's data *and* the secret that guards
+  forgotten names, so a staging server or backup is worth as much to an attacker as the live one; or
+- **accept the pause** on staging, and keep its own key. Nothing is lost: the live site is not affected, and a fresh
+  staging database (or one refreshed from a live album nobody has been forgotten in) works normally on its own key.
+
+Never give staging a *new* key after a refresh to "fix" the pause: that changes nothing for the copied names.
 
 A copy costs a second full-size library. If that is what the new drive was for, option A is the reason to prefer it.
 

@@ -103,6 +103,7 @@ Set at least these values:
 | `ADMIN_EMAIL` | Your own email address. Only this address can create the first admin account, and only while there is no admin: once one exists it is an ordinary address, so removing that account from the Admin page sticks. |
 | `SIGN_IN_MAIL_PER_HOUR` | Leave at `200`. Protects your mail provider's quota. Each address holds at most three unused sign-in links at a time; its first always goes out, and only the second and third count against this hourly total. Once it is used up, asking for another link while one is still live says to try again later, but anybody without a live link still gets one. |
 | `POSTGRES_PASSWORD` | A long random password, for example the output of `openssl rand -base64 24`. |
+| `FORGET_KEY` | The output of `openssl rand -base64 32`, a different one for each instance. Forgotten people's names are kept as hashes under it, and without it nobody can be forgotten for good. Back it up now, apart from the database backups of step 9 (they do not contain it), and never change it (see the variable table below). |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM` | Your mail provider's settings. Leave `SMTP_HOST` empty to print links to the log instead. |
 | `APP_PORT` | Leave at `3000`. The reverse proxy in the next step talks to it locally. |
 | `APP_BIND` | Leave at `127.0.0.1`, so the app is reachable only through that proxy (Docker's published ports bypass ufw). |
