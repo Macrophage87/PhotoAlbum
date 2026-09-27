@@ -21,7 +21,9 @@ import { confirmPlaceEstimate } from "@/app/photos/[id]/actions";
 import { updatePerson } from "@/app/people/actions";
 import { tripTimeline } from "@/lib/timeline/queries";
 import { NO_FILTER } from "@/lib/photos/filters";
-import { rejudgeNames } from "@/lib/annotation/rejudge";
+import { rejudgeNames, rejudgeSweep } from "@/lib/annotation/rejudge";
+import { applyAnnotation } from "@/lib/annotation/apply";
+import { annotationSchema } from "@/lib/annotation/schema";
 
 /**
  * A trip's, a collection's or an activity's description, when the helper wrote it or a member typed it: members-only
@@ -167,5 +169,28 @@ describe("descriptions that stay in the family", () => {
     // The old name too: what was written with it is still about them.
     expect(who.queued).toEqual([{ queue: "rejudge-text", data: { names: ["Biscuit", "Rex"] } }]);
     expect((await db.photo.findUniqueOrThrow({ where: { id: p.id } })).annotationMembersOnly).toBe(false);
+  });
+
+  it("never takes a title a member typed before the album kept track, whoever it names", async () => {
+    // As the members_only_text migration leaves a photograph from before it: notes, so members-only; the helper's
+    // title moved aside; the member's own title, naming somebody the album knows, of unknown origin.
+    await db.person.create({ data: { name: "Rose", createdById: who.id } });
+    const helper = { title: "Helper title", caption: "The hut", description: "", tags: [], searchSummary: "" };
+    const p = await photo({ context: "Rose's hut", title: "Rose at the hut", titleByHelper: null, membersTitle: "Helper title", annotationMembersOnly: true, annotation: helper });
+    const titles = async () => db.photo.findUniqueOrThrow({ where: { id: p.id }, select: { title: true, membersTitle: true, titleByHelper: true } });
+    // The worker's first sweep.
+    await rejudgeSweep();
+    expect(await titles()).toEqual({ title: "Rose at the hut", membersTitle: "Helper title", titleByHelper: null });
+    // Described again: the helper's new title replaces its old one, and the member's stays.
+    const again = annotationSchema.parse({ ...helper, title: "Hut in the snow", place: null, activity: null, objects: [], visibleText: null, season: "winter", mood: null, estimatedYear: null, estimatedPlace: null });
+    await applyAnnotation(p.id, "m", again, {}, { sent: true });
+    expect(await titles()).toEqual({ title: "Rose at the hut", membersTitle: "Hut in the snow", titleByHelper: null });
+    // Shown to everyone and kept for the family again.
+    const seen = (await db.photo.findUniqueOrThrow({ where: { id: p.id } })).annotationRevision;
+    await setAnnotationShared(p.id, seen, true);
+    await setAnnotationShared(p.id, seen, false);
+    expect(await titles()).toEqual({ title: "Rose at the hut", membersTitle: "Hut in the snow", titleByHelper: null });
+    await rejudgeNames(["Rose"]);
+    expect((await titles()).title).toBe("Rose at the hut");
   });
 });

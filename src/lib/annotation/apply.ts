@@ -22,7 +22,7 @@ export type Usage = { input_tokens: number; output_tokens: number; cache_read_in
  * `membersTitle` already is replaced only when it was the helper's last title.
  */
 export function titlesAfter(
-  current: { title: string | null; membersTitle: string | null; previousAiTitle: string | null; titleByHelper?: boolean | null; pastTitles?: string[]; namesSomebody?: boolean },
+  current: { title: string | null; membersTitle: string | null; previousAiTitle: string | null; titleByHelper?: boolean | null; pastTitles?: string[] },
   aiTitle: string,
   membersOnly: boolean,
 ): { title: string | null; membersTitle: string | null; titleByHelper: boolean | null } {
@@ -32,7 +32,7 @@ export function titlesAfter(
   let title = current.title;
   let titleByHelper = current.titleByHelper ?? null;
   if (membersOnly) {
-    if (titleIsHelpers({ title, titleByHelper, aiTitle: current.previousAiTitle, pastTitles: current.pastTitles, namesSomebody: current.namesSomebody })) {
+    if (titleIsHelpers({ title, titleByHelper, aiTitle: current.previousAiTitle, pastTitles: current.pastTitles })) {
       membersTitle = membersTitle ?? title;
       title = null;
       titleByHelper = null;
@@ -121,7 +121,7 @@ export async function applyAnnotation(photoId: string, model: string, parsed: An
   const membersOnly = judgement.membersOnly;
   const aiTitle = current.kind !== "EXTERNAL_VIDEO" ? stored.title.trim() : "";
   const previousAiTitle = (current.annotation as { title?: string } | null)?.title ?? null;
-  // A title of unknown origin on an item going members-only: the helper's past answers and its words decide.
+  // A title of unknown origin on an item going members-only: the helper's past answers decide.
   const unknownTitle = membersOnly && current.title?.trim() && current.titleByHelper === null && current.title.trim() !== previousAiTitle?.trim();
   const titles = titlesAfter(
     {
@@ -129,7 +129,7 @@ export async function applyAnnotation(photoId: string, model: string, parsed: An
       membersTitle: current.membersTitle,
       previousAiTitle,
       titleByHelper: current.titleByHelper,
-      ...(unknownTitle ? { pastTitles: await pastHelperTitles(photoId), namesSomebody: mentionsAnyName(current.title!, await knownNames()) } : {}),
+      ...(unknownTitle ? { pastTitles: await pastHelperTitles(photoId) } : {}),
     },
     aiTitle,
     membersOnly,

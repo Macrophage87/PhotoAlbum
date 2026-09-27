@@ -161,7 +161,7 @@ export async function setAnnotationShared(photoId: string, seenRevision: number,
     data = { annotationMembersOnly: false, annotationTitleOnly: false, annotationTitleWords: [], annotationTitleFrom: [], annotationSharedAt: new Date(), ...(out.changed ? { annotation: out.annotation as object } : {}), ...(ai && !own && kept === ai ? { title: out.title, titleByHelper: true, membersTitle: null } : {}) };
   } else {
     const unknown = own && photo.titleByHelper === null && own !== ai;
-    const helpers = photo.kind !== "EXTERNAL_VIDEO" && titleIsHelpers({ title: photo.title, titleByHelper: photo.titleByHelper, aiTitle: ai, ...(unknown ? { pastTitles: await pastHelperTitles(photoId), namesSomebody: mentionsAnyName(own!, await knownNames()) } : {}) });
+    const helpers = photo.kind !== "EXTERNAL_VIDEO" && titleIsHelpers({ title: photo.title, titleByHelper: photo.titleByHelper, aiTitle: ai, ...(unknown ? { pastTitles: await pastHelperTitles(photoId) } : {}) });
     data = { annotationMembersOnly: true, annotationTitleOnly: false, annotationTitleWords: [], annotationTitleFrom: [], annotationSharedAt: null, ...(helpers ? { title: null, titleByHelper: null, membersTitle: kept ?? ai ?? own } : ai && !kept ? { membersTitle: ai } : {}) };
   }
   const done = await db.photo.updateMany({ where: { id: photoId, annotationRevision: seenRevision }, data });

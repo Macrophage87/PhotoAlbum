@@ -149,15 +149,16 @@ export async function handWrittenDescription(before: DescriptionBefore, text: st
 
 /**
  * Whether the title on an item is the helper's, so that a members-only item loses it. The album records who wrote
- * a title (`titleByHelper`); a title from before it did is the helper's when it is one the helper gave (now or in a
- * past answer still kept), or when it names somebody — an old helper title such as "Ada's birthday cake" that a later
- * description did not repeat. A title the family typed since is never taken.
+ * a title (`titleByHelper`); a title from before it did is the helper's only when it is one the helper gave (now or
+ * in a past answer still kept) — the same rule forgetting somebody goes by (`helpersTitles` in forget.ts). Anything
+ * else from before is the family's, whatever it says: a title a member typed is theirs to publish, names and all,
+ * and is never taken.
  */
-export function titleIsHelpers(p: { title: string | null; titleByHelper: boolean | null; aiTitle: string | null; pastTitles?: string[]; namesSomebody?: boolean }): boolean {
+export function titleIsHelpers(p: { title: string | null; titleByHelper: boolean | null; aiTitle: string | null; pastTitles?: string[] }): boolean {
   const own = p.title?.trim();
   if (!own || p.titleByHelper === false) return false;
   if (p.titleByHelper === true || own === p.aiTitle?.trim()) return true;
-  return Boolean(p.pastTitles?.some((t) => t.trim() === own) || p.namesSomebody);
+  return Boolean(p.pastTitles?.some((t) => t.trim() === own));
 }
 
 /** The titles in the helper's past answers for an item, from the raw responses still kept. */

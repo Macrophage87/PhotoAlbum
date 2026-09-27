@@ -139,9 +139,10 @@ describe("where the helper's title goes", () => {
     // Described from notes as "Ada's birthday cake", then described again as "Cake table": the old title was the helper's.
     expect(titlesAfter({ title: "Ada's birthday cake", membersTitle: null, previousAiTitle: "Ada's birthday cake", titleByHelper: true }, "Cake table", true)).toEqual({ title: null, membersTitle: "Cake table", titleByHelper: null });
     expect(titlesAfter({ title: "Ada's birthday cake", membersTitle: null, previousAiTitle: "Cake table", titleByHelper: null, pastTitles: ["Ada's birthday cake"] }, "Cake table", true)).toMatchObject({ title: null });
-    expect(titlesAfter({ title: "Ada's birthday cake", membersTitle: null, previousAiTitle: "Cake table", titleByHelper: null, namesSomebody: true }, "Cake table", true)).toMatchObject({ title: null });
+    // From before the album kept track and none of the helper's: the family's, whatever it names.
+    expect(titlesAfter({ title: "Ada's birthday cake", membersTitle: null, previousAiTitle: "Cake table", titleByHelper: null, pastTitles: [] }, "Cake table", true)).toEqual({ title: "Ada's birthday cake", membersTitle: "Cake table", titleByHelper: null });
     // Typed by a member since the album kept track: theirs to publish, names and all.
-    expect(titlesAfter({ title: "Ada's birthday cake", membersTitle: null, previousAiTitle: "Cake table", titleByHelper: false, namesSomebody: true }, "Cake table", true)).toMatchObject({ title: "Ada's birthday cake" });
+    expect(titlesAfter({ title: "Ada's birthday cake", membersTitle: null, previousAiTitle: "Cake table", titleByHelper: false }, "Cake table", true)).toMatchObject({ title: "Ada's birthday cake" });
   });
 
   it("replaces only the helper's own last title, never one moved aside because it named somebody", () => {
