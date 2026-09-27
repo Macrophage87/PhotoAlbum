@@ -44,7 +44,7 @@ function collapseFamilies(rows: Batch[]): Collapsed[] {
 }
 
 function describeSkips(reasons: Record<string, number>): string {
-  return Object.entries(reasons).map(([k, n]) => `${n} ${SKIP_LABELS[k] ?? k}`).join(", ");
+  return Object.entries(reasons).filter(([, n]) => n > 0).map(([k, n]) => `${n} ${SKIP_LABELS[k] ?? k}`).join(", ");
 }
 
 type Batch = { id: string; parentId: string | null; skippedReasons: Record<string, number> | null; running: boolean; /** A marker row: the rest of the run was not sent, because of an error or a worker restart. */ marker: "error" | "restart" | null; canceled: number; status: string; requested: number; succeeded: number; errored: number; skipped: number; createdAt: string; endedAt: string | null; scope: string };
@@ -156,7 +156,7 @@ export function AnnotationAdmin({ gates, model, batches, spend, rawRetentionDays
                 ) : (
                   <span>
                     {stamp(b.createdAt)} · {b.scope}{b.parentId ? " (continued)" : ""} · {b.requested} requested
-                    {b.status !== "SUBMITTED" && <> · {b.succeeded} described, {b.errored} failed{b.canceled > 0 ? `, ${b.canceled} not processed (stopped)` : ""}, {b.skipped} skipped{b.skippedReasons ? ` (${describeSkips(b.skippedReasons)})` : ""}</>}
+                    {b.status !== "SUBMITTED" && <> · {b.succeeded} described, {b.errored} failed{b.canceled > 0 ? `, ${b.canceled} not processed (stopped)` : ""}, {b.skipped} skipped{b.skippedReasons && describeSkips(b.skippedReasons) ? ` (${describeSkips(b.skippedReasons)})` : ""}</>}
                     {" · "}
                     <span className="text-muted">{b.status === "SUBMITTED" ? "in progress" : b.running ? `${b.status.toLowerCase()}, still submitting the rest of the run` : b.status === "FAILED" && !b.parentId ? "failed before anything was sent; run it again (details in the worker log)" : b.status.toLowerCase()}</span>
                   </span>
