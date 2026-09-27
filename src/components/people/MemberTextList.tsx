@@ -19,7 +19,7 @@ const REMEDY: Record<string, string> = {
   relationship: "edit it on their page",
   descriptors: "edit them on their page",
   "former names": "can't be edited; kept so text written under an old name is still found",
-  name: "a track can't be renamed; delete its activity with its track to remove it",
+  name: "a track can't be renamed; delete its activity with its track, or a track with no activity from the trip's import page, to remove it",
 };
 
 function Fields({ what, fields, extra }: { what?: string; fields: readonly string[]; extra?: string }) {

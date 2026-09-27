@@ -177,7 +177,9 @@ async function carveOut(tx: Prisma.TransactionClient, clusterId: string, faceIds
  */
 async function requireFaceEditor(faceId: string) {
   const user = await requireUserOrThrow();
-  const face = await db.face.findUniqueOrThrow({ where: { id: faceId }, select: { id: true, clusterId: true, personId: true, proposedPersonId: true, photoId: true, photo: { select: { uploaderId: true } } } });
+  const face = await db.face.findUnique({ where: { id: faceId }, select: { id: true, clusterId: true, personId: true, proposedPersonId: true, photoId: true, photo: { select: { uploaderId: true } } } });
+  // A re-scan of the photograph can remove a face between the page drawing it and the press.
+  if (!face) throw new Error("That face has changed since the page was drawn");
   if (!canEditMedia(user, face.photo)) throw new Error(NOT_YOURS);
   return face;
 }
