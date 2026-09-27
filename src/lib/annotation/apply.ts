@@ -147,9 +147,10 @@ export async function applyAnnotation(photoId: string, model: string, parsed: An
     // Somebody was forgotten since the forgotten names were read: read them again, and judge the answer afresh.
     if (forget.reload) throw reload;
     // The text as it was read, too: a member's edit (or anything else that rewrote it) after the read is newer than
-    // this answer's view of it, so the answer is judged again against it rather than written over it.
+    // this answer's view of it, so the answer is judged again against it rather than written over it. The titles as
+    // well, which are written whole from what was read: a title typed meanwhile is not put back to the old one.
     const written = await tx.photo.updateMany({
-      where: { id: photoId, annotationRevision: current.annotationRevision, annotationSource: current.annotationSource, annotationSharedAt: current.annotationSharedAt, ...(requestedAt ? unchangedSince(requestedAt) : {}) },
+      where: { id: photoId, annotationRevision: current.annotationRevision, annotationSource: current.annotationSource, annotationSharedAt: current.annotationSharedAt, title: current.title, membersTitle: current.membersTitle, titleByHelper: current.titleByHelper, ...(requestedAt ? unchangedSince(requestedAt) : {}) },
       data: {
         annotation: stored,
         annotationModel: model,

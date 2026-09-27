@@ -197,4 +197,24 @@ describe("descriptions that stay in the family", () => {
     await rejudgeNames(["Rose"]);
     expect((await titles()).title).toBe("Rose at the hut");
   });
+
+  it("never puts back a title a member typed while an answer was being stored", async () => {
+    const p = await photo({});
+    const answer = annotationSchema.parse({ title: "Mail boat lunch", caption: "Lobster rolls", description: "", tags: [], place: null, activity: null, objects: [], visibleText: null, season: "summer", mood: null, searchSummary: "", estimatedYear: null, estimatedPlace: null });
+    // The member saves a title of their own after the answer read the row, before it is written.
+    const real = db.photo.findUnique.bind(db.photo);
+    const spy = vi.spyOn(db.photo, "findUnique").mockImplementationOnce((async (args: never) => {
+      const read = await real(args);
+      await db.photo.update({ where: { id: p.id }, data: { title: "Our boat day", titleByHelper: false } });
+      return read;
+    }) as never);
+    who.queued.length = 0;
+    await applyAnnotation(p.id, "m", answer, {});
+    spy.mockRestore();
+    expect(await db.photo.findUniqueOrThrow({ where: { id: p.id } })).toMatchObject({ title: "Our boat day", titleByHelper: false, annotation: null });
+    // Asked again, against the title as it is now.
+    expect(who.queued.map((q) => q.queue)).toContain("annotate-photo");
+    await applyAnnotation(p.id, "m", answer, {});
+    expect(await db.photo.findUniqueOrThrow({ where: { id: p.id } })).toMatchObject({ title: "Our boat day", titleByHelper: false, membersTitle: null });
+  });
 });
