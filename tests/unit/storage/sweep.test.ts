@@ -14,7 +14,7 @@ const jobs = vi.hoisted(() => ({ importKeys: new Set<string>() as Set<string> | 
 // No pg-boss here: what its live import jobs would read is given by each test.
 vi.mock("@/lib/jobs/live", () => ({ liveImportKeys: async () => jobs.importKeys }));
 
-import { IMPORT_ABANDONED_MS, ORPHAN_FOLDER_MS, QUARANTINE_KEEP_MS, QUARANTINE_MANIFEST, emptyQuarantine, findOrphanPhotoFolders, quarantineOrphanPhotoFolders, recordOrphanPhotoFolders, sweepImportFiles } from "@/lib/storage/sweep";
+import { IMPORT_ABANDONED_MS, ORPHAN_FOLDER_MS, QUARANTINE_KEEP_MS, QUARANTINE_MANIFEST, emptyQuarantine, findOrphanPhotoFolders, quarantineOrphanPhotoFolders, recordOrphanPhotoFolders, sweepImportFiles, sweepOrphanFiles } from "@/lib/storage/sweep";
 import { databaseBinding, ensureInstallIdentity, forgetCoverage, HEARTBEAT_STALE_MS, INSTALL_MARKER, installIdentity, rebindInstall, touchHeartbeat } from "@/lib/storage/identity";
 
 const now = new Date("2026-09-27T12:00:00Z");
@@ -506,5 +506,35 @@ describe("photo folders with no photo", { timeout: 30_000 }, () => {
     const young = cuid();
     folder(young, ORPHAN_FOLDER_MS - DAY);
     expect(await findOrphanPhotoFolders(now)).toEqual({ ok: true, orphans: [], folders: 2 });
+  });
+});
+
+describe("visitors' copies of pictures that have changed", { timeout: 30_000 }, () => {
+  beforeEach(freshInstall);
+
+  it("are deleted by the hourly sweep, with their notes; a current one, and anything of a newer version, stays", async () => {
+    const uploaderId = (await db.user.create({ data: { email: "u@example.com" } })).id;
+    const mk = async () => {
+      const id = cuid();
+      await db.photo.create({ data: { id, uploaderId, originalName: "a.jpg", mimeType: "image/jpeg", storageKey: `photos/${id}`, originalPath: `photos/${id}/original.jpg`, sizeBytes: 1, status: "READY" } });
+      return { id, v: (await db.photo.findUniqueOrThrow({ where: { id } })).imageVersion };
+    };
+    const names = (id: string) => readdirSync(path.join(root, "photos", id)).sort();
+    // Opened by a visitor, then edited: the re-render serves its own full size, so no copy is made to clear this one.
+    const edited = await mk();
+    for (const name of ["original.jpg", "edited.webp", `visitor-${edited.v}-0a1b2c3d.webp`, `visitor-${edited.v}-0a1b2c3d.failed`, `visitor-${edited.v}-0a1b2c3d.0f0e0d0c-0b0a-4000-8000-000000000001.tmp`]) file(`photos/${edited.id}/${name}`, DAY);
+    await db.photo.update({ where: { id: edited.id }, data: { edits: { crop: { x: 0, y: 0, w: 0.5, h: 0.5 } } } });
+    // Current, and one a making of a newer version may have just written.
+    const current = await mk();
+    for (const name of ["original.jpg", `visitor-${current.v}-0a1b2c3d.webp`, `visitor-${current.v + 1}-0a1b2c3d.webp`]) file(`photos/${current.id}/${name}`, DAY);
+    // In the trash: nothing of it is served to anybody outside the family.
+    const trashed = await mk();
+    for (const name of ["original.jpg", `visitor-${trashed.v}-0a1b2c3d.jpg`, `visitor-${trashed.v}-0a1b2c3d.withheld`]) file(`photos/${trashed.id}/${name}`, DAY);
+    await db.photo.update({ where: { id: trashed.id }, data: { trashedAt: new Date(), trashReason: "OTHER" } });
+
+    await sweepOrphanFiles(now);
+    expect(names(edited.id)).toEqual(["edited.webp", "original.jpg"]);
+    expect(names(current.id)).toEqual(["original.jpg", `visitor-${current.v + 1}-0a1b2c3d.webp`, `visitor-${current.v}-0a1b2c3d.webp`].sort());
+    expect(names(trashed.id)).toEqual(["original.jpg"]);
   });
 });

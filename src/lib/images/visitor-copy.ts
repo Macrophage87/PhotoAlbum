@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { stat } from "node:fs/promises";
+import { readdir, stat } from "node:fs/promises";
+import path from "node:path";
 import sharp from "sharp";
 import { storage } from "@/lib/storage";
 import { enqueue } from "@/lib/jobs/boss";
@@ -135,6 +136,25 @@ export function visitorStem(item: VisitorCopyItem): string {
  * too big to copy safely, and a file still being written.
  */
 export const VISITOR_FILE = /^visitor-(\d+)-[0-9a-f]{8}\.(webp|jpg|failed|withheld|[0-9a-f-]{36}\.tmp)$/;
+
+/**
+ * Delete the item's visitor files from before `version`, and with `keep`, every other one of that version too. A
+ * newer version's are left alone: a making of it may have finished first, and its copy is the one being served.
+ * Returns how many went.
+ */
+export async function forgetVisitorFiles(storageKey: string, version: number, keep?: string): Promise<number> {
+  const store = storage();
+  const dir = store.localPath?.(storageKey);
+  if (!dir) return 0;
+  let gone = 0;
+  for (const name of await readdir(dir).catch(() => [] as string[])) {
+    const m = VISITOR_FILE.exec(name);
+    if (!m) continue;
+    const of = Number(m[1]);
+    if (of < version || (keep && of === version && name !== path.basename(keep))) await store.delete(`${storageKey}/${name}`).then(() => gone++, () => undefined);
+  }
+  return gone;
+}
 
 /** The key of this item's copy of the picture as it is now, if one has been made. */
 export async function findVisitorCopy(item: VisitorCopyItem): Promise<string | null> {

@@ -1,11 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { readdir } from "node:fs/promises";
-import path from "node:path";
 import { db } from "@/lib/db";
 import { storage } from "@/lib/storage";
 import { editsOf } from "@/lib/images/edits";
 import { heicSource, isHeic } from "@/lib/images/heic";
-import { findVisitorCopy, planVisitorCopy, renderVisitorCopy, VISITOR_FILE, visitorStem } from "@/lib/images/visitor-copy";
+import { findVisitorCopy, forgetVisitorFiles, planVisitorCopy, renderVisitorCopy, visitorStem } from "@/lib/images/visitor-copy";
 import { forgetFilesIfGone } from "@/lib/storage/sweep";
 import { withHeavyLock } from "../heavy-lock";
 import type { VisitorCopyJob } from "../queues";
@@ -32,9 +30,11 @@ export async function makeVisitorCopy(job: VisitorCopyJob, signal?: AbortSignal)
 
   const stem = visitorStem(photo);
   const tmp = `${stem}.${randomUUID()}.tmp`;
-  let kept: string;
+  let kept: string | null;
   try {
     kept = await withHeavyLock(async () => {
+      // The picture may have changed while this waited its turn.
+      if ((await db.photo.findUnique({ where: { id: photo.id }, select: { imageVersion: true } }))?.imageVersion !== photo.imageVersion) return null;
       const edits = editsOf(photo.edits);
       // A HEIC is decoded as its renditions were: sharp cannot read one, and the file's own bytes are never passed on.
       const input = isHeic(photo.mimeType, photo.originalName) ? await heicSource(store, photo.storageKey, local) : local;
@@ -60,22 +60,6 @@ export async function makeVisitorCopy(job: VisitorCopyJob, signal?: AbortSignal)
     await store.putBuffer(`${stem}.failed`, Buffer.from(String(err).slice(0, 500))).catch(() => undefined);
     throw err;
   }
-  if (await forgetFilesIfGone(photo.id)) return;
+  if (kept === null || (await forgetFilesIfGone(photo.id))) return;
   await forgetVisitorFiles(photo.storageKey, photo.imageVersion, kept);
-}
-
-/**
- * Delete the item's visitor files from before `version`, and with `keep`, every other one of that version too. A
- * newer version's are left alone: a making of it may have finished first, and its copy is the one being served.
- */
-async function forgetVisitorFiles(storageKey: string, version: number, keep?: string): Promise<void> {
-  const store = storage();
-  const dir = store.localPath?.(storageKey);
-  if (!dir) return;
-  for (const name of await readdir(dir).catch(() => [] as string[])) {
-    const m = VISITOR_FILE.exec(name);
-    if (!m) continue;
-    const of = Number(m[1]);
-    if (of < version || (keep && of === version && name !== path.basename(keep))) await store.delete(`${storageKey}/${name}`).catch(() => undefined);
-  }
 }
