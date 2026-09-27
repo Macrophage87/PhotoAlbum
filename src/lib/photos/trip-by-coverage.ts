@@ -13,11 +13,11 @@ const DAY_MS = 86_400_000;
  * dated the day after the trip ends, and one that sets out at 23:30 the evening before its first day takes some the
  * day before it begins; both belong to the trip all the same, and to the ride. An activity counts only where this
  * uploader may be filed on it (see `whoWasThere`); a track is the trip's record whoever brought it. Where several
- * trips are running at that moment, or none is, there is no answer.
+ * trips are running at that moment, or none is, there is no answer. A camera left on home time is the same case: its
+ * clock can put 22:30 on a trip's last evening on the day after, although the ride it was on was still going.
  *
- * Only those two days are looked at: the day before a trip's first and the day after its last, in the trip's zone.
- * A track imported into the wrong trip, or an activity whose year was mistyped, is not a reason to pull in a
- * photograph from some other week. And only a date the album trusts enough to place a photograph on a track by
+ * Only the trip's days and the one either side of them are looked at, in the trip's zone. A track imported into the
+ * wrong trip, or an activity whose year was mistyped, is not a reason to pull in a photograph from some other week. And only a date the album trusts enough to place a photograph on a track by
  * (`TRUSTED_TIME_SOURCES`, as geotagging uses): a file's modified time or the upload time says nothing about which
  * ride it was.
  *
@@ -36,8 +36,9 @@ export async function pickTripByCoverage<T extends { id: string; startDate: Date
     const read = instantIn(t);
     const ms = read?.takenAt?.getTime();
     if (ms === undefined || !Number.isFinite(ms) || !read!.source || !TRUSTED_TIME_SOURCES.includes(read!.source)) continue;
+    // Its own days count too: the trip was only passed over by the photograph's own clock (a camera on home time).
     const day = localDayInZone(read!.takenAt!, t.timezone);
-    if (day === dateColumnToDay(new Date(t.startDate.getTime() - DAY_MS)) || day === dateColumnToDay(new Date(t.endDate.getTime() + DAY_MS))) at.set(t.id, ms);
+    if (day >= dateColumnToDay(new Date(t.startDate.getTime() - DAY_MS)) && day <= dateColumnToDay(new Date(t.endDate.getTime() + DAY_MS))) at.set(t.id, ms);
   }
   if (!at.size) return null;
   const tripIds = [...at.keys()], times = [...at.values()];
