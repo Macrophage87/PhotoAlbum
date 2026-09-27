@@ -4,7 +4,7 @@ import fs from "node:fs";
 import { randomUUID } from "node:crypto";
 import sharp from "sharp";
 import { stillIsBlank } from "@/lib/images/poster";
-import { createTrip, inviteFor, magicLinkFor, pressSignIn, resetDb, setVisibility, signIn, withDb } from "./helpers";
+import { createTrip, expectOneSetOfMetadata, inviteFor, magicLinkFor, pressSignIn, resetDb, setVisibility, signIn, withDb } from "./helpers";
 
 // Must match ADMIN_EMAIL as set by scripts/e2e-server.mjs: only that address may bootstrap the admin account.
 const ADMIN = process.env.E2E_ADMIN_EMAIL ?? "e2e-admin@example.com";
@@ -194,6 +194,7 @@ test("a share link opens the trip read-only, and stops working when rotated", as
   const page = await anon.newPage();
   await page.goto("/share/e2e-share-token/photos");
   await expect(page.getByText("Shared with you")).toBeVisible();
+  await expectOneSetOfMetadata(page);
   const img = page.locator("img[src*='/api/photos/']").first();
   await expect(img).toBeVisible();
   await expect.poll(async () => img.evaluate((el: HTMLImageElement) => el.naturalWidth)).toBeGreaterThan(0);
@@ -287,6 +288,7 @@ test("one activity can be sent on its own link, which opens it and nothing else 
   const guest = await anon.newPage();
   await guest.goto(`/share/a/${token}`);
   await expect(guest.getByText("Shared with you")).toBeVisible();
+  await expectOneSetOfMetadata(guest);
   await expect(guest.getByRole("heading", { name: "Ocean Path loop" })).toBeVisible();
   const img = guest.locator("img[src*='/api/photos/']").first();
   await expect(img).toBeVisible();
@@ -589,6 +591,7 @@ test("a collection gathers photos from two trips and can be shared by link", asy
   await expect(anonPage).toHaveURL(/\/auth\/signin/);
   await anonPage.goto(shareUrl);
   await expect(anonPage.getByText("Shared with you")).toBeVisible();
+  await expectOneSetOfMetadata(anonPage);
   const imgs = anonPage.locator("img[src*='/api/photos/']");
   await expect(imgs).toHaveCount(2);
   for (const img of await imgs.all()) await expect.poll(async () => img.evaluate((el: HTMLImageElement) => el.naturalWidth)).toBeGreaterThan(0);
