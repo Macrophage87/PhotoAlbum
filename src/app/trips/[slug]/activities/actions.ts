@@ -11,7 +11,7 @@ import { annotationGates } from "@/lib/annotation/eligibility";
 import { buildActivityRequest, loadActivityForDescription, parseActivityDescription } from "@/lib/annotation/activity";
 import { permittedNames } from "@/lib/people/gates";
 import { canEditContainer, NOT_YOUR_CONTAINER } from "@/lib/auth/ownership";
-import { activityInputFromForm, keepSeconds, localInputToInstant } from "@/lib/activities/validation";
+import { activityInputFromForm, formTimeToInstant, localInputToInstant } from "@/lib/activities/validation";
 import { deleteActivityAndRefile, reassignPhotosForActivity } from "@/lib/activities/reassign";
 import { deleteTrackAndItsPositions } from "@/lib/tracks/remove";
 import { fieldErrors, participantsFromForm } from "@/lib/trips/validation";
@@ -75,9 +75,10 @@ export async function updateActivity(slug: string, id: string, _prev: ActivityFo
     data: {
       title: v.title,
       type: v.type as ActivityType,
-      // The form shows whole minutes; an imported track's seconds survive a save that did not move them.
-      startTime: keepSeconds(localInputToInstant(v.start, trip.timezone), existing.startTime),
-      endTime: keepSeconds(localInputToInstant(v.end, trip.timezone), existing.endTime),
+      // The form shows whole minutes of a wall clock: a time it sends back as it was shown stays exactly as stored, its
+      // seconds (an imported track's) and its side of a DST change (the autumn night's second 01:30) included.
+      startTime: formTimeToInstant(v.start, existing.startTime, trip.timezone),
+      endTime: formTimeToInstant(v.end, existing.endTime, trip.timezone),
       description: v.description,
       ...(await activityHandWritten(existing, v.description)),
       descriptionByHelper: descriptionStaysHelpers(existing, v.description),

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { TZDate } from "@date-fns/tz";
 import { ACTIVITY_TYPES } from "./types";
 import { dateColumnToDay, localDayInZone, wallTimeToInstant, type LocalDay } from "@/lib/time/local-day";
 
@@ -41,6 +42,19 @@ export function localInputToInstant(value: string, timezone: string): Date {
  */
 export function keepSeconds(submitted: Date, stored: Date): Date {
   return Math.floor(stored.getTime() / 60_000) === Math.floor(submitted.getTime() / 60_000) ? stored : submitted;
+}
+
+/**
+ * A time typed into the edit form, as an instant: the stored one wherever the form sends back the wall time it was
+ * shown. On the night the clocks go back, 01:30 happens twice and reads back as the first; one stored as the second
+ * would otherwise move an hour on every save, taking its photographs with it.
+ */
+export function formTimeToInstant(value: string, stored: Date, timezone: string): Date {
+  const z = new TZDate(stored, timezone);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const shown = `${z.getFullYear()}-${pad(z.getMonth() + 1)}-${pad(z.getDate())}T${pad(z.getHours())}:${pad(z.getMinutes())}`;
+  if (value.slice(0, 16) === shown) return stored;
+  return keepSeconds(localInputToInstant(value, timezone), stored);
 }
 
 /**

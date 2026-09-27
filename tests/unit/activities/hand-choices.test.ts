@@ -22,7 +22,7 @@ import { setPhotoDate, updatePhoto } from "@/app/photos/[id]/actions";
 import { activityWindow, tripWindow } from "@/lib/photos/in-window";
 import { applyPhotoInstant } from "@/lib/photos/apply-date";
 import { deleteActivityAndRefile, reassignPhotosForActivity, refileByClock } from "@/lib/activities/reassign";
-import { keepSeconds } from "@/lib/activities/validation";
+import { formTimeToInstant, keepSeconds } from "@/lib/activities/validation";
 
 const at = (h: number, m = 0, s = 0) => new Date(Date.UTC(2025, 7, 12, h, m, s));
 
@@ -152,6 +152,17 @@ describe("filing photographs on activities", () => {
       const a = await db.activity.findUniqueOrThrow({ where: { id: hike } });
       expect([a.startTime.toISOString(), a.endTime.toISOString()]).toEqual([at(16, 0, 12).toISOString(), at(17, 42, 37).toISOString()]);
       expect((await row(summit.id)).activityId).toBe(hike);
+    });
+
+    it("keeps the second 01:30 of the night the clocks go back through a save that did not touch it", async () => {
+      await db.trip.update({ where: { id: tripId }, data: { timezone: "America/New_York" } });
+      // 01:30 EST on 2 November 2025, the second time that night the clock read 01:30.
+      const late = new Date("2025-11-02T06:30:00Z"), end = new Date("2025-11-02T07:15:00Z");
+      const ride = (await db.activity.create({ data: { tripId, title: "Night ride", type: "BIKE", startTime: late, endTime: end } })).id;
+      await redirected(updateActivity("acadia", ride, { status: "idle" }, form({ title: "Night ride!", type: "BIKE", start: "2025-11-02T01:30", end: "2025-11-02T02:15" })));
+      expect(await db.activity.findUniqueOrThrow({ where: { id: ride } })).toMatchObject({ title: "Night ride!", startTime: late, endTime: end });
+      // A time actually changed is read as typed.
+      expect(formTimeToInstant("2025-11-02T01:45", late, "America/New_York")).toEqual(new Date("2025-11-02T05:45:00Z"));
     });
 
     it("takes the new time when the minute changed", () => {
