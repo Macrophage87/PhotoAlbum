@@ -338,6 +338,12 @@ export function MapView({ photos, cells, describe, onViewChange, tracks, bounds,
         hoveredRef.current = id;
       };
 
+      /** What the pins given do not carry, asked twice before giving up: a dropped request should not leave a gray box. */
+      const lookUp = (ids: string[]) => {
+        const describe = callbacks.current.describe!;
+        return describe(ids).catch(() => describe(ids));
+      };
+
       /** Ask which of several photographs at one spot was meant; the answer goes where a tap on its pin would. */
       const chooseFrom = (at: [number, number], list: MapPhotoProps[]) => {
         if (mapRef.current !== map) return; // the map went away while the group was being looked up
@@ -375,8 +381,7 @@ export function MapView({ photos, cells, describe, onViewChange, tracks, bounds,
         // The pictures and captions of pins that came without them, filled in as they arrive.
         const unknown = list.filter((p) => !p.thumbUrl).map((p) => p.id);
         if (unknown.length && callbacks.current.describe) {
-          callbacks.current
-            .describe(unknown)
+          lookUp(unknown)
             .then((found) => {
               el.querySelectorAll<HTMLButtonElement>("button[data-photo]").forEach((b, i) => {
                 const d = found.get(b.dataset.photo!);
@@ -385,7 +390,9 @@ export function MapView({ photos, cells, describe, onViewChange, tracks, bounds,
                 b.setAttribute("aria-label", stackLabel({ ...list[i], caption: d.caption }, i, list.length));
               });
             })
-            .catch(() => {});
+            .catch(() => {
+              el.firstElementChild!.textContent = `${list.length} photos here. Couldn't load their pictures.`;
+            });
         }
       };
 
@@ -461,8 +468,7 @@ export function MapView({ photos, cells, describe, onViewChange, tracks, bounds,
           el.appendChild(cap);
           // A pin sent without its picture asks for it now, with the caption, the activity and (for members) who uploaded it.
           if (!p.thumbUrl && callbacks.current.describe) {
-            callbacks.current
-              .describe([p.id])
+            lookUp([p.id])
               .then((found) => {
                 const d = found.get(p.id);
                 if (!d) {
@@ -479,7 +485,9 @@ export function MapView({ photos, cells, describe, onViewChange, tracks, bounds,
                   el.appendChild(more);
                 }
               })
-              .catch(() => {});
+              .catch(() => {
+                cap.textContent = "Couldn't load this photo.";
+              });
           }
           el.onclick = () => callbacks.current.onPhotoClick?.(p.id);
           popupRef.current = new Popup({ offset: 14, closeButton: false, maxWidth: "200px" }).setLngLat((f.geometry as GeoJSON.Point).coordinates as [number, number]).setDOMContent(el).addTo(map);
@@ -547,7 +555,9 @@ export function MapView({ photos, cells, describe, onViewChange, tracks, bounds,
     map.setPaintProperty("cells", "circle-stroke-width", rings ? 0 : 3);
     if (!rings) return;
     // Keyed by the group and what is in it: the same photographs coloured another way make groups with the same ids,
-    // and a ring kept by id alone would go on showing the old colours.
+    // and a ring kept by id alone would go on showing the old colours. The rings outlive new data (a map sent a view
+    // at a time gets new data on every move): each is swapped for its successor once the new groups are drawn, rather
+    // than all taken down at once and the map left without rings until then.
     const drawn = new Map<string, Marker>();
     const update = () => {
       if (!map.getSource("photos") || !map.isSourceLoaded("photos") || !map.isSourceLoaded("cells")) return;
@@ -560,11 +570,13 @@ export function MapView({ photos, cells, describe, onViewChange, tracks, bounds,
       for (const { f, id } of groups) {
         const props = f.properties as Record<string, number>;
         const counts = Array.from({ length: SLOT_COUNT }, (_, i) => Number(props[`s${i}`] ?? 0));
-        const key = `${id}:${counts.join(",")}`;
+        const at = (f.geometry as GeoJSON.Point).coordinates as [number, number];
+        // Where it is too: new data can give a group elsewhere the id and counts an old one had.
+        const key = `${id}@${at[0].toFixed(5)},${at[1].toFixed(5)}:${counts.join(",")}`;
         if (seen.has(key)) continue;
         seen.add(key);
         if (!drawn.has(key)) {
-          const m = new Marker({ element: clusterRing(counts, slotColours) }).setLngLat((f.geometry as GeoJSON.Point).coordinates as [number, number]).addTo(map);
+          const m = new Marker({ element: clusterRing(counts, slotColours) }).setLngLat(at).addTo(map);
           drawn.set(key, m);
         }
       }
@@ -581,8 +593,8 @@ export function MapView({ photos, cells, describe, onViewChange, tracks, bounds,
       map.off("render", update);
       for (const m of drawn.values()) m.remove();
     };
-    // New data renumbers the groups, so the rings are drawn afresh whenever the photographs change.
-  }, [rings, photos, cells, loaded, slotColours]);
+    // New data renumbers the groups, which `update` sees on the next frame drawn; only another way of colouring starts afresh.
+  }, [rings, loaded, slotColours]);
 
   // What is chosen, kept up to date in an open list of a heap of pins.
   useEffect(() => {

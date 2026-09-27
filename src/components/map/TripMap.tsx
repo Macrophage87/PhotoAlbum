@@ -13,6 +13,10 @@ import { ActivityTypeIcon } from "@/components/activities/ActivityTypeIcon";
 import { formatDistance } from "@/lib/time/format";
 import { NONE_SLOT, type ColourBy } from "@/lib/map/colour-by";
 import { cellFeatures, pointFeatures, useDescribe, useMapData } from "./map-data";
+import { lightboxNav } from "./lightbox-nav";
+
+/** What the lightbox draws while a photograph's picture is still being looked up: nothing, rather than a broken image. */
+const LOADING = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
 
 const COLOUR_BY_KEY = "map-colour-by";
 const COLOUR_BY_LABEL: Record<ColourBy, string> = { none: "Nothing", day: "Day", activity: "Activity", uploader: "Who uploaded" };
@@ -28,7 +32,9 @@ export function TripMap({ src, theme, showTripList = false, activityHrefBase, na
   const { describe, known } = useDescribe(src);
   // The photographs the lightbox steps through are the ones on the map when it opened, whatever is fetched meanwhile.
   const [lightbox, setLightbox] = useState<{ ids: string[]; index: number } | null>(null);
-  const asking = useRef(0);
+  const nav = useRef<ReturnType<typeof lightboxNav> | null>(null);
+  /** Photographs asked about and not described: no longer there for this viewer. */
+  const gone = useRef(new Set<string>());
   const [hover, setHover] = useState<string | null>(null);
   const [focus, setFocus] = useState<MapPayload["bounds"]>(null);
   // The choice is remembered on this device, so somebody who likes seeing the days keeps seeing them. Read as the
@@ -70,20 +76,36 @@ export function TripMap({ src, theme, showTripList = false, activityHrefBase, na
     () =>
       (lightbox?.ids ?? []).map((id) => {
         const d = known.get(id);
-        return { id, mediumUrl: d?.mediumUrl ?? "", width: null, height: null, caption: d?.caption ?? null, alt: d?.caption ?? "Photo" };
+        return { id, mediumUrl: d?.mediumUrl ?? LOADING, width: null, height: null, caption: d?.caption ?? null, alt: d ? (d.caption ?? "Photo") : "Loading" };
       }),
     [lightbox, known],
   );
 
-  /** Open the lightbox on one of these once its picture is known, looking up its neighbours on the way. */
-  const show = (ids: string[], index: number) => {
-    const n = ids.length;
-    const asked = ++asking.current;
-    describe([ids[index], ids[(index + 1) % n], ids[(index - 1 + n) % n]])
-      .then((found) => {
-        if (asked === asking.current && found.has(ids[index])) setLightbox({ ids, index });
-      })
-      .catch(() => {});
+  /** Open the lightbox on one of these at once; its picture, and its neighbours', are looked up as it opens. */
+  const open = (ids: string[], index: number) => {
+    const mine = lightboxNav({
+      ids,
+      start: index,
+      isGone: (id) => gone.current.has(id),
+      onShow: (i) => {
+        if (nav.current === mine) setLightbox(i < 0 ? null : { ids, index: i });
+      },
+      prefetch: (few) =>
+        void describe(few)
+          .then((found) => {
+            const missing = few.filter((id) => !found.has(id));
+            for (const id of missing) gone.current.add(id);
+            if (missing.length && nav.current === mine) mine.recheck();
+          })
+          // Not answered is not gone: the photograph stays, and is asked about again on the next step.
+          .catch(() => {}),
+    });
+    nav.current = mine;
+    mine.open();
+  };
+  const close = () => {
+    nav.current = null;
+    setLightbox(null);
   };
 
   if (error) return <p className="text-sm text-red-600">{error}</p>;
@@ -133,14 +155,21 @@ export function TripMap({ src, theme, showTripList = false, activityHrefBase, na
               highlightTrackId={hover}
               focusBounds={focus}
               onPhotoClick={(id) => {
-                const i = order.indexOf(id);
-                if (i >= 0) show(order, i);
+                // Among groups the lone pins between them are no sequence to step through: the photograph opens alone.
+                if (sent?.cells.length) open([id], 0);
+                else if (order.includes(id)) open(order, order.indexOf(id));
               }}
               onTrackHover={setHover}
               onTrackClick={(p: TrackFeatureProps) => {
                 if (p.activityId) router.push(activityHref(p.tripSlug, p.activityId));
               }}
             />
+            {!empty && !sent && (
+              // A map sent a view at a time has nothing on it until the first view is answered.
+              <div className="absolute inset-x-0 top-3 text-center pointer-events-none" data-testid="map-loading">
+                <span className="inline-block bg-surface/90 text-muted text-sm px-3 py-1.5 rounded-theme border border-border animate-pulse">Loading photos…</span>
+              </div>
+            )}
             {empty && (
               <div className="absolute inset-x-0 top-3 px-3 text-center pointer-events-none">
                 <span className="inline-block max-w-md bg-surface/90 text-muted text-sm px-3 py-1.5 rounded-theme border border-border" data-testid={narrowed ? "map-no-matches" : "map-empty"}>
@@ -192,7 +221,8 @@ export function TripMap({ src, theme, showTripList = false, activityHrefBase, na
           </div>
         </aside>
       </div>
-      {lightbox !== null && <Lightbox photos={photos} index={lightbox.index} onClose={() => { asking.current++; setLightbox(null); }} onNavigate={(i) => show(lightbox.ids, i)} />}
+      {/* A press is a step from wherever the lightbox has got to, not from the photograph last drawn, so quick presses add up. */}
+      {lightbox !== null && <Lightbox photos={photos} index={lightbox.index} onClose={close} onNavigate={(i) => nav.current?.step(i === (lightbox.index + 1) % lightbox.ids.length ? 1 : -1)} />}
     </div>
   );
 }
