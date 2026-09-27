@@ -62,7 +62,7 @@ function parseGlb(glb: Buffer) {
 }
 
 /** A GLB as a scanning app writes one: where and by whom in its JSON, and a camera JPEG as its texture. */
-async function appGlb(texture: Buffer): Promise<{ glb: Buffer; positions: Buffer }> {
+async function appGlb(texture: Buffer) {
   const positions = Buffer.alloc(48);
   [-1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 1, 0].forEach((x, i) => positions.writeFloatLE(x, i * 4));
   const indices = Buffer.alloc(12);
@@ -99,6 +99,11 @@ async function appGlb(texture: Buffer): Promise<{ glb: Buffer; positions: Buffer
   // accessors point at views 1 and 2; view 0 is the texture.
   json.accessors[0].bufferView = 1;
   json.accessors[1].bufferView = 2;
+  return { glb: glbOf(json, bin), positions, json, bin };
+}
+
+/** A GLB container around this JSON and binary chunk. */
+function glbOf(json: unknown, bin: Buffer): Buffer {
   const jsonBytes = Buffer.from(JSON.stringify(json));
   const jsonChunk = Buffer.concat([jsonBytes, Buffer.alloc(pad4(jsonBytes.length) - jsonBytes.length, 0x20)]);
   const binChunk = Buffer.concat([bin, Buffer.alloc(pad4(bin.length) - bin.length)]);
@@ -108,7 +113,7 @@ async function appGlb(texture: Buffer): Promise<{ glb: Buffer; positions: Buffer
   header.writeUInt32LE(0x46546c67, 0);
   header.writeUInt32LE(2, 4);
   header.writeUInt32LE(12 + body.length, 8);
-  return { glb: Buffer.concat([header, body]), positions };
+  return Buffer.concat([header, body]);
 }
 
 const LEAKS = ["Exif", "Photoshop 3.0", "8BIM", "xmpmeta", "SECRET", "44.35", "68.2", "KHR_xmp_json_ld", "iPhone", "2025-08-12"];
@@ -165,9 +170,56 @@ describe("cleaning a GLB for visitors", () => {
   });
 });
 
+describe("what a GLB keeps: only what is known to draw it", () => {
+  let texture: Buffer;
+  beforeAll(async () => { texture = await phoneJpeg(); });
+
+  it("drops a scanning app's own extension, wherever it is, and a top-level property glTF does not have", async () => {
+    const { json, bin } = await appGlb(texture);
+    const vendor = { SCANIVERSE_capture: { latitude: 44.35, longitude: -68.2, device: "SECRET-DEVICE" } };
+    const withVendor = { ...json, metadata: { owner: "SECRET-OWNER", where: "44.35,-68.2" }, extensionsUsed: [...json.extensionsUsed, "SCANIVERSE_capture"], extensions: { ...json.extensions, ...vendor }, nodes: [{ ...json.nodes[0], extensions: vendor }], materials: [{ ...json.materials[0], extensions: vendor }] };
+    const clean = (await sanitizeGlb(glbOf(withVendor, bin)))!;
+    for (const leak of [...LEAKS, "SCANIVERSE", "latitude", "metadata"]) expect(clean.includes(Buffer.from(leak)), leak).toBe(false);
+    const { json: out } = parseGlb(clean);
+    expect(out.extensionsUsed).toEqual(["KHR_texture_transform"]);
+    expect(Object.keys(out).sort()).toEqual(["accessors", "asset", "bufferViews", "buffers", "extensionsUsed", "images", "materials", "meshes", "nodes", "scene", "scenes", "textures"]);
+  });
+
+  it("withholds a scan that cannot be drawn without an extension it does not keep", async () => {
+    const { json, bin } = await appGlb(texture);
+    expect(await sanitizeGlb(glbOf({ ...json, extensionsUsed: ["SCANIVERSE_capture"], extensionsRequired: ["SCANIVERSE_capture"] }, bin))).toBeNull();
+    // A required extension it does keep is fine.
+    expect(await sanitizeGlb(glbOf({ ...json, extensionsUsed: ["KHR_texture_transform"], extensionsRequired: ["KHR_texture_transform"] }, bin))).not.toBeNull();
+  });
+
+  it("copies only the views something reads, and renumbers what points at them", async () => {
+    const { json, bin, positions } = await appGlb(texture);
+    // A whole camera JPEG in a view nobody points at, placed first so every other view's number changes.
+    const stowaway = await phoneJpeg();
+    const shifted = pad4(stowaway.length);
+    const bigger = Buffer.concat([stowaway, Buffer.alloc(shifted - stowaway.length), bin]);
+    const views = [{ buffer: 0, byteOffset: 0, byteLength: stowaway.length }, ...json.bufferViews.map((v: { byteOffset: number }) => ({ ...v, byteOffset: v.byteOffset + shifted }))];
+    const moved = { ...json, bufferViews: views, buffers: [{ byteLength: bigger.length }], images: [{ ...json.images[0], bufferView: 1 }], accessors: json.accessors.map((a: { bufferView: number }) => ({ ...a, bufferView: a.bufferView + 1 })) };
+    const { json: out, view } = parseGlb((await sanitizeGlb(glbOf(moved, bigger)))!);
+    expect(out.bufferViews).toHaveLength(3);
+    expect(out.images[0].bufferView).toBe(0);
+    expect(out.accessors.map((a: { bufferView: number }) => a.bufferView)).toEqual([1, 2]);
+    expect(view(out.accessors[0].bufferView).equals(positions)).toBe(true);
+    expect((await sharp(view(0)).metadata()).exif).toBeUndefined();
+  });
+
+  it("stands a texture the right way up before its EXIF (and so its orientation) goes", async () => {
+    const sideways = await sharp({ create: { width: 40, height: 20, channels: 3, background: "#336699" } }).withMetadata({ orientation: 6 }).jpeg().toBuffer();
+    const { json, bin } = await appGlb(sideways);
+    const { json: out, view } = parseGlb((await sanitizeGlb(glbOf(json, bin)))!);
+    expect(await sharp(view(out.images[0].bufferView)).metadata()).toMatchObject({ width: 20, height: 40 });
+  });
+});
+
 describe("cleaning the other formats", () => {
-  it("takes a PLY's comment and obj_info lines out of its header, and leaves the points alone", () => {
-    const points = Buffer.from([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+  const points = Buffer.from([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+
+  it("keeps only a PLY's reading instructions, and leaves the points alone", () => {
     const ply = Buffer.concat([Buffer.from("ply\nformat binary_little_endian 1.0\ncomment Created by SECRET-APP at 44.35,-68.2\nobj_info SECRET-DEVICE\nelement vertex 1\nproperty float x\nproperty float y\nproperty float z\nend_header\n"), points]);
     const clean = sanitizePly(ply)!;
     expect(clean.toString("latin1")).not.toMatch(/comment|obj_info|SECRET|44\.35/);
@@ -175,18 +227,52 @@ describe("cleaning the other formats", () => {
     expect(clean.subarray(clean.length - points.length).equals(points)).toBe(true);
   });
 
-  it("gives an SPZ a new gzip wrapper, without the file name the old one may carry", () => {
-    const raw = Buffer.alloc(32);
+  it("finds the end of a PLY's header only as a line of its own, in any case, and drops anything it does not know", () => {
+    const ply = Buffer.concat([Buffer.from("ply\r\nformat ascii 1.0\r\ncomment end_header SECRET-AFTER-A-FAKE-END\r\nCOMMENT SECRET-SHOUTED\r\nuser_data SECRET-OTHER\r\nelement vertex 1\r\nproperty float x\r\nEnd_Header\r\n"), Buffer.from("1.5\r\n")]);
+    const clean = sanitizePly(ply)!.toString("latin1");
+    expect(clean).toBe("ply\r\nformat ascii 1.0\r\nelement vertex 1\r\nproperty float x\r\nend_header\r\n1.5\r\n");
+    expect(sanitizePly(Buffer.from("ply\nformat ascii 1.0\ncomment end_header\n"))).toBeNull();
+    expect(sanitizePly(Buffer.from("not a ply\nend_header\n"))).toBeNull();
+  });
+
+  /** An SPZ's decompressed bytes: header for `n` degree-0 version-2 points, then their arrays. */
+  const splat = (n: number) => {
+    const raw = Buffer.alloc(16 + n * (9 + 1 + 3 + 3 + 3));
     raw.writeUInt32LE(0x5053474e, 0);
     raw.writeUInt32LE(2, 4);
+    raw.writeUInt32LE(n, 8);
+    raw.fill(7, 16);
+    return raw;
+  };
+
+  it("gives an SPZ a new gzip wrapper, without the file name the old one may carry", async () => {
+    const raw = splat(2);
     const plain = gzipSync(raw);
     // The same stream with FNAME set: flags bit 3, and a zero-terminated name after the ten-byte header.
     const named = Buffer.concat([plain.subarray(0, 3), Buffer.from([plain[3] | 0x08]), plain.subarray(4, 10), Buffer.from("SECRET-Main-St-scan.spz\0"), plain.subarray(10)]);
     expect(gunzipSync(named).equals(raw)).toBe(true);
-    const clean = sanitizeSpz(named)!;
+    const clean = (await sanitizeSpz(named))!;
     expect(clean.includes(Buffer.from("SECRET"))).toBe(false);
     expect(gunzipSync(clean).equals(raw)).toBe(true);
-    expect(sanitizeSpz(gzipSync(Buffer.from("not a splat at all, just text")))).toBeNull();
+    expect(await sanitizeSpz(gzipSync(Buffer.from("not a splat at all, just text")))).toBeNull();
+  });
+
+  it("reads only an SPZ's first gzip member, cut to the size its header gives, and refuses one shorter than that", async () => {
+    const raw = splat(2);
+    const padded = Buffer.concat([raw, Buffer.from("SECRET-TRAILING-BYTES")]);
+    const smuggled = Buffer.concat([gzipSync(padded), gzipSync(Buffer.from("SECRET-SECOND-MEMBER")), Buffer.from("SECRET-AFTER")]);
+    const clean = (await sanitizeSpz(smuggled))!;
+    const out = gunzipSync(clean);
+    expect(out.equals(raw)).toBe(true);
+    expect(out.includes(Buffer.from("SECRET"))).toBe(false);
+    // Says three points, holds two.
+    const short = Buffer.from(raw);
+    short.writeUInt32LE(3, 8);
+    expect(await sanitizeSpz(gzipSync(short))).toBeNull();
+    // A version or degree it does not know is not guessed at.
+    const odd = Buffer.from(raw);
+    odd[12] = 9;
+    expect(await sanitizeSpz(gzipSync(odd))).toBeNull();
   });
 
   it("withholds a USDZ, which it does not take apart", async () => {
@@ -246,6 +332,24 @@ describe("a scan's file, for somebody outside the family", () => {
       expect((await get(usdzId, "original", query)).res.status).toBe(404);
     });
   }
+
+  it("streams a PLY's points across under a cleaned header, and puts the copy in place whole", async () => {
+    const points = Buffer.alloc(300_000, 9);
+    const ply = Buffer.concat([Buffer.from("ply\nformat binary_little_endian 1.0\ncomment SECRET-APP 44.35,-68.2\nelement vertex 25000\nproperty float x\nproperty float y\nproperty float z\nend_header\n"), points]);
+    await storage().putBuffer("scans-test/ply/original.ply", ply);
+    const trip = await db.trip.findFirstOrThrow();
+    const u = await db.user.findFirstOrThrow();
+    const id = (await db.photo.create({ data: { tripId: trip.id, uploaderId: u.id, kind: "SCAN", scanFormat: "PLY", originalName: "SECRET.ply", mimeType: "application/x-ply", storageKey: "scans-test/ply", originalPath: "scans-test/ply/original.ply", sizeBytes: ply.length, status: "READY" } })).id;
+    who.viewer = anon;
+    const { res, body } = await get(id, "model");
+    expect(res.status).toBe(200);
+    expect(body.equals(sanitizePly(ply)!)).toBe(true);
+    expect(body.includes(Buffer.from("SECRET"))).toBe(false);
+    // Written under a name of its own and moved into place: nothing half-written is left beside it.
+    const { readdir } = await import("node:fs/promises");
+    expect((await readdir(path.dirname(storage().localPath!("scans-test/ply/original.ply")))).sort()).toEqual(["model-public.ply", "original.ply"]);
+    await storage().deletePrefix("scans-test/ply");
+  });
 
   it("shows visitors a line of text in place of a USDZ, and a GLB as a scan", () => {
     const card = (fmt: string) => ({ id: "s", uploaderId: "u", kind: "SCAN", scanFormat: fmt, status: "READY", updatedAt: new Date(), edits: null, renditions: null, uploader: null, collections: [], caption: null, title: null, originalName: "x", takenAt: null, tzOffsetMin: null }) as unknown as PhotoCard;

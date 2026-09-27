@@ -10,6 +10,8 @@ export interface StorageProvider {
   /** `range` is inclusive byte offsets, for video playback (HTTP 206). `size` is always the whole object's size. */
   getStream(key: string, range?: { start: number; end: number }): Promise<{ stream: Readable; size: number }>;
   exists(key: string): Promise<boolean>;
+  /** Put a finished object in place under another key, replacing any there, in one step: nobody sees half of it. */
+  move(from: string, to: string): Promise<void>;
   delete(key: string): Promise<void>;
   deletePrefix(prefix: string): Promise<void>;
   /** Fast path for libraries that read files directly (sharp, parsers). Undefined for remote stores. */
