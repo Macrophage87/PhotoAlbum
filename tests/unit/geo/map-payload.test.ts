@@ -7,6 +7,7 @@ import { forgetMapStates } from "@/lib/map/cache";
 import { JITTER_STEP_M, spreadOverlapping } from "@/lib/map/jitter";
 import { haversine } from "@/lib/geo/haversine";
 import type { Viewer } from "@/lib/auth/viewer";
+import { shareKey } from "@/lib/auth/access";
 import { resetTestDb } from "../helpers/reset";
 
 const member: Viewer = { kind: "user", user: { id: "u", email: "m@example.com", name: null, role: "MEMBER" }, shareTokens: new Map() };
@@ -235,6 +236,28 @@ describe("a map kept from one view to the next", () => {
     await buildMapView(member, undefined, NO_FILTER, everywhere);
     await db.photo.update({ where: { id: photoId }, data: { trashedAt: new Date(), trashedById: uploaderId, trashReason: "BLURRY" } });
     expect(idsOf(await buildMapView(member, undefined, NO_FILTER, everywhere))).not.toContain(photoId);
+  });
+});
+
+describe("a collection's map kept for its visitors", () => {
+  it("never serves a visitor without a trip's link what a visitor holding it was shown", async () => {
+    await resetTestDb();
+    forgetMapStates();
+    const user = await db.user.create({ data: { email: "m@example.com", role: "ADMIN" } });
+    const trip = await db.trip.create({ data: { slug: "linked", title: "Linked", startDate: new Date("2025-08-10"), endDate: new Date("2025-08-16"), createdById: user.id, visibility: "LINK", shareToken: "ttok" } });
+    const activity = await db.activity.create({ data: { tripId: trip.id, title: "Secret swim", startTime: new Date("2025-08-11T10:00:00Z"), endTime: new Date("2025-08-11T12:00:00Z") } });
+    const photo = await db.photo.create({ data: { uploaderId: user.id, tripId: trip.id, activityId: activity.id, mimeType: "image/jpeg", storageKey: "k", originalPath: "k/o.jpg", sizeBytes: 1, status: "READY", gpsSource: "EXIF", originalName: "a.jpg", lat: 44.35, lng: -68.2, takenAt: new Date("2025-08-11T11:00:00Z") } });
+    const collection = await db.collection.create({ data: { slug: "c", title: "C", createdById: user.id, visibility: "PUBLIC" } });
+    await db.collectionItem.create({ data: { collectionId: collection.id, photoId: photo.id, addedById: user.id } });
+    const activities = async (viewer: Viewer) => (await buildCollectionMapPayload(viewer, collection.id)).rings.activity.groups.map((g) => g.label);
+
+    // Holding the trip's link, a visitor may colour this collection's map by the trip's activities…
+    const holder: Viewer = { kind: "anonymous", user: null, shareTokens: new Map([[shareKey("trip", trip.id), "ttok"]]) };
+    expect(await activities(holder)).toContain("Secret swim");
+    // …and the next visitor, without it, is not handed the map worked out for the first.
+    expect(await activities(stranger)).not.toContain("Secret swim");
+    expect(JSON.stringify(await buildCollectionMapView(stranger, collection.id, NO_FILTER, { west: -180, south: -85, east: 180, north: 85, zoom: 2 }))).not.toContain("Secret swim");
+    expect(JSON.stringify(await buildCollectionMapPayload(stranger, collection.id))).not.toContain("Secret swim");
   });
 });
 
