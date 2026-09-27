@@ -2,7 +2,20 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { db } from "@/lib/db";
 import { resetTestDb } from "../helpers/reset";
 
-const fail = vi.hoisted(() => ({ once: false }));
+const fail = vi.hoisted(() => ({ once: false, raw: false }));
+vi.mock("@/lib/people/forget", async (orig) => {
+  const real = (await orig()) as typeof import("@/lib/people/forget");
+  return {
+    ...real,
+    forgetRawAnswers: async (...args: Parameters<typeof real.forgetRawAnswers>) => {
+      if (fail.raw) {
+        fail.raw = false;
+        throw new Error("connection lost");
+      }
+      return real.forgetRawAnswers(...args);
+    },
+  };
+});
 vi.mock("@/lib/jobs/boss", () => ({ enqueue: async () => {} }));
 vi.mock("@/lib/annotation/rejudge", async (orig) => {
   const real = (await orig()) as typeof import("@/lib/annotation/rejudge");
@@ -26,6 +39,7 @@ describe("forgetting somebody on thousands of photographs", () => {
   beforeEach(async () => {
     await resetTestDb();
     fail.once = false;
+    fail.raw = false;
     admin = (await db.user.create({ data: { email: "admin@example.com", role: "ADMIN" } })).id;
   });
 
@@ -45,6 +59,22 @@ describe("forgetting somebody on thousands of photographs", () => {
     expect(await db.face.count()).toBe(0);
     expect(await db.forgetLeftover.count()).toBe(1);
   }, 120_000);
+
+  it("makes its leftover list when the pending pass finishes a forget cut short before it had one", async () => {
+    const person = await taggedOn(3);
+    await db.photo.update({ where: { id: "ph000001" }, data: { caption: "Zebulon Quince waves" } });
+    const trip = await db.trip.create({ data: { slug: "zebulon-quince-80th", title: "The party", startDate: new Date("2025-08-10"), endDate: new Date("2025-08-11"), createdById: admin } });
+    fail.raw = true;
+    await expect(forgetPerson(person.id, { keepName: false, byUserId: admin })).rejects.toThrow("connection lost");
+    expect(await db.forgetLeftover.count()).toBe(0);
+    expect(await completePendingForgets()).toBe(1);
+    expect(await db.person.count({ where: { id: person.id } })).toBe(0);
+    const [left] = await db.forgetLeftover.findMany();
+    expect(left.createdById).toBe(admin);
+    const items = left.items as { photos: { id: string; fields: string[] }[]; trips: { id: string; fields: string[] }[] };
+    expect(items.photos).toEqual(expect.arrayContaining([{ id: "ph000001", fields: ["caption"] }]));
+    expect(items.trips).toEqual([{ id: trip.id, fields: ["web address"] }]);
+  });
 
   it("is finished by the pending pass when it is cut short at the last step, never left with the name on the record", async () => {
     const person = await taggedOn(50);

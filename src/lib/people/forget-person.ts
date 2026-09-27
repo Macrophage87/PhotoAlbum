@@ -82,8 +82,14 @@ export async function forgetPerson(personId: string, opts: { keepName: boolean; 
     // is also a word is left); it is listed so it can be edited by hand.
     const after = await memberTextMentioning(m, tagged, personId);
     // The list stays until an admin (or whoever forgot them) has seen to it: ids and fields, never the name. Made now,
-    // before anything is deleted, so a forget finished later by the pending pass (which lists nothing) has one.
-    if (!keepName && memberTextCount(after) && opts.list !== false) await db.forgetLeftover.create({ data: { items: leftoverItems(after), createdById: opts.byUserId } });
+    // before anything is deleted, and once per forget: one cut short before this makes it when the pending pass
+    // finishes it, one cut short after does not make a second.
+    if (!keepName && !person.forgetListedAt && opts.list !== false) {
+      await db.$transaction([
+        ...(memberTextCount(after) ? [db.forgetLeftover.create({ data: { items: leftoverItems(after), createdById: person.forgetPendingById ?? opts.byUserId } })] : []),
+        db.person.update({ where: { id: personId }, data: { forgetListedAt: new Date() } }),
+      ]);
+    }
     await held.assertHeld();
     await db.faceCluster.deleteMany({ where: { personId } });
     await db.face.deleteMany({ where: { proposedPersonId: personId } });
@@ -118,8 +124,8 @@ export async function forgetPerson(personId: string, opts: { keepName: boolean; 
 export async function completePendingForgets(): Promise<number> {
   const waiting = await db.person.findMany({ where: { forgetPendingAt: { not: null } }, select: { id: true, forgetPendingById: true } });
   if (!waiting.length || !(await forgetKeyState()).write) return 0;
-  // Their leftovers were listed when they asked.
-  for (const p of waiting) await forgetPerson(p.id, { keepName: false, byUserId: p.forgetPendingById, list: false });
+  // Their leftovers were listed when they asked, unless that run was cut short first (see forgetListedAt).
+  for (const p of waiting) await forgetPerson(p.id, { keepName: false, byUserId: p.forgetPendingById });
   return waiting.length;
 }
 
