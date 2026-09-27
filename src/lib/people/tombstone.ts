@@ -284,10 +284,10 @@ export async function forgottenScope(where: { photoIds?: string[]; containers?: 
     : null;
   const inside = inContainers ? (await db.$queryRaw<{ id: string }[]>`${inContainers}`).map((r) => r.id) : [];
   // Rows keep their places hashed under their own key (see rememberForgotten), so each key's rows are compared with
-  // the places hashed under it — the few asked about as they are too, for a row from before places were hashed
-  // (the start-up pass hashes those: see hashPlainScopes).
+  // the places hashed under it — and as they are too, a whole container's photographs included, for a row from
+  // before places were hashed (the start-up pass hashes those: see hashPlainScopes).
   const places = ts ? ts.places : placesUnder((await forgetKeyState()).keys);
-  const matches = places.versions.map((version) => ({ version, photos: places.under(version, photoIds, "photo", true), containers: places.under(version, keys, "container", true), inside: places.under(version, inside, "photo") }));
+  const matches = places.versions.map((version) => ({ version, photos: places.under(version, photoIds, "photo", true), containers: places.under(version, keys, "container", true), inside: places.under(version, inside, "photo", true) }));
   if (!matches.length) return NO_SCOPE;
   const [rows, tagged] = await Promise.all([
     db.$queryRaw<{ keyVersion: number; hash: string; own: boolean }[]>`

@@ -6,6 +6,10 @@ export async function register() {
   // A FORGET_KEY that is not 32 bytes of base64 is no key: say so at start, not only on the admin page.
   const { forgetKeySecret, INVALID_FORGET_KEY } = await import("@/lib/people/forget-key");
   if (env().NODE_ENV === "production" && env().FORGET_KEY && !forgetKeySecret(env().FORGET_KEY)) console.error(`[forget] ${INVALID_FORGET_KEY} Forgetting anybody waits until it is.`);
+  // Forgotten names kept before the photographs they cover were hashed: hashed before the first request, with or
+  // without a worker (the worker's nightly pass does it again). Plain ones are still matched until then.
+  const { hashPlainScopes } = await import("@/lib/people/tombstone");
+  await hashPlainScopes().catch((err) => console.error("[forget] could not hash the places of forgotten names", err instanceof Error ? err.message : err));
   if (!env().RUN_WORKER) return;
   const { startWorker } = await import("@/lib/jobs/worker");
   const { installShutdownHandlers } = await import("@/lib/jobs/boss");

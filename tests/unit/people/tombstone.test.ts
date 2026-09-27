@@ -360,6 +360,10 @@ describe("names that are also words", () => {
       expect(ts.scrub("Ximena waved", await sc(await photo()))).toBe("Ximena waved");
     };
     await check();
+    // Only the photograph itself kept, plain: a whole trip holding it still counts it.
+    await db.forgottenName.update({ where: { hash: row.hash }, data: { photoIds: [inTrip], taggedPhotoIds: [], containerIds: [] } });
+    expect((await loadTombstone()).scrub("Ximena at the lake", await forgottenScope({ containers: [{ kind: "trip", id: trip.id }] }))).toBe("A family member at the lake");
+    await db.forgottenName.update({ where: { hash: row.hash }, data: { photoIds: [tagged], taggedPhotoIds: [tagged], containerIds: [`trip:${trip.id}`] } });
     expect(await hashPlainScopes()).toBe(1);
     const after = await db.forgottenName.findUniqueOrThrow({ where: { hash: row.hash } });
     expect(JSON.stringify(after)).not.toContain(tagged);
