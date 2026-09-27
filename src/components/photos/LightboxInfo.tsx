@@ -121,9 +121,10 @@ export function LightboxInfo({ photoId, share }: { photoId: string; share?: { to
               <PlaceProvenance estimate={info.placeEstimate} muted="text-white/50" />
             </div>
           )}
+          {/* The name is printed once, above: the editor adds only the coordinates and where they came from. */}
           {info.editable && (
             <div className="mt-2">
-              <PlaceEditor photoId={info.id} initial={info.lat !== null && info.lng !== null ? { lat: info.lat, lng: info.lng } : null} gpsSource={info.gpsSource} setBy={info.placeSetBy} placeName={info.placeName} estimate={info.placeEstimate} theme={mapThemeOf(getTheme(info.themeKey))} dark onSaved={(v) => setInfo((prev) => (prev ? { ...prev, lat: v.lat, lng: v.lng, gpsSource: v.gpsSource, placeSetBy: v.setBy, placeName: v.placeName } : prev))} />
+              <PlaceEditor photoId={info.id} initial={info.lat !== null && info.lng !== null ? { lat: info.lat, lng: info.lng } : null} gpsSource={info.gpsSource} setBy={info.placeSetBy} placeName={info.placeName} showName={false} estimate={info.placeEstimate} theme={mapThemeOf(getTheme(info.themeKey))} dark onSaved={(v) => setInfo((prev) => (prev ? { ...prev, lat: v.lat, lng: v.lng, gpsSource: v.gpsSource, placeSetBy: v.setBy, placeName: v.placeName } : prev))} />
             </div>
           )}
         </div>

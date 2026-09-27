@@ -50,7 +50,7 @@ export function sourceLabel(source: string | null, setBy: string | null): string
 }
 
 /** Where an item was taken: shows the current position and its source, and lets a member set or clear it. */
-export function PlaceEditor({ photoId, initial, gpsSource, setBy, placeName, estimate, theme, dark = false, readOnly = false, onSaved }: { photoId: string; initial: PlaceValue | null; gpsSource: string | null; /** Who pinned it, when a member did. */ setBy?: string | null; /** What the place is called, when the album knows. */ placeName?: string | null; /** What the helper recognised, when the position is its guess. */ estimate?: PlaceEstimate | null; theme: MapTheme; dark?: boolean; /** Show where it is without offering to change it: someone else's photograph. */ readOnly?: boolean; onSaved?: (v: { lat: number | null; lng: number | null; gpsSource: string | null; setBy: string | null; placeName: string | null }) => void }) {
+export function PlaceEditor({ photoId, initial, gpsSource, setBy, placeName, showName = true, estimate, theme, dark = false, readOnly = false, onSaved }: { photoId: string; initial: PlaceValue | null; gpsSource: string | null; /** Who pinned it, when a member did. */ setBy?: string | null; /** What the place is called, when the album knows. */ placeName?: string | null; /** False where the surrounding panel already names the place above the editor. */ showName?: boolean; /** What the helper recognised, when the position is its guess. */ estimate?: PlaceEstimate | null; theme: MapTheme; dark?: boolean; /** Show where it is without offering to change it: someone else's photograph. */ readOnly?: boolean; onSaved?: (v: { lat: number | null; lng: number | null; gpsSource: string | null; setBy: string | null; placeName: string | null }) => void }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [current, setCurrent] = useState<{ pos: PlaceValue | null; source: string | null; setBy: string | null; name: string | null }>({ pos: initial, source: gpsSource, setBy: setBy ?? null, name: placeName ?? null });
@@ -58,6 +58,7 @@ export function PlaceEditor({ photoId, initial, gpsSource, setBy, placeName, est
   const [message, setMessage] = useState<string | null>(null);
   const [pending, start] = useTransition();
   const muted = dark ? "text-white/60" : "text-muted";
+  const ghost = dark ? "ghostOnDark" : "ghost";
 
   const save = () => start(async () => {
     if (!draft) return;
@@ -96,7 +97,7 @@ export function PlaceEditor({ photoId, initial, gpsSource, setBy, placeName, est
       {current.pos ? (
         <p>
           {/* The name leads where there is one: "Jordan Pond" is what a family recognises, the coordinates are only proof. */}
-          {current.name ? (
+          {current.name && showName ? (
             <>
               <span className="block font-medium" data-testid="place-name">{current.name}</span>
               <span className={`block text-xs ${muted}`}>{current.pos.lat.toFixed(5)}, {current.pos.lng.toFixed(5)}</span>
@@ -114,14 +115,14 @@ export function PlaceEditor({ photoId, initial, gpsSource, setBy, placeName, est
         <div className="flex flex-wrap gap-2">
           {current.source === "ESTIMATE" && <Button size="sm" onClick={accept} disabled={pending}>Use this place</Button>}
           <Button size="sm" variant="secondary" onClick={() => setOpen(true)}>{current.pos ? "Change place" : "Set a place"}</Button>
-          {current.pos && <Button size="sm" variant="ghost" onClick={clear} disabled={pending}>Clear</Button>}
+          {current.pos && <Button size="sm" variant={ghost} onClick={clear} disabled={pending}>Clear</Button>}
         </div>
       ) : (
         <div className="space-y-2">
           <PlacePicker initial={current.pos} theme={theme} onChange={setDraft} dark={dark} />
           <div className="flex gap-2">
             <Button size="sm" onClick={save} disabled={pending || !draft}>{pending ? "Saving…" : "Save place"}</Button>
-            <Button size="sm" variant="ghost" onClick={() => { setOpen(false); setMessage(null); }}>Cancel</Button>
+            <Button size="sm" variant={ghost} onClick={() => { setOpen(false); setMessage(null); }}>Cancel</Button>
           </div>
         </div>
       )}

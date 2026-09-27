@@ -66,7 +66,8 @@ export function Lightbox({ photos, index, onClose, onNavigate, share = null }: {
 
   if (!photo) return null;
   return (
-    <div ref={dialogRef} className="fixed inset-0 z-50 bg-black/90 flex flex-col" onClick={onClose} role="dialog" aria-modal="true" aria-label="Photo viewer">
+    // Opaque on a phone, where the details panel fills the lower half and the page behind showed through its text.
+    <div ref={dialogRef} className="fixed inset-0 z-50 bg-black lg:bg-black/95 flex flex-col" onClick={onClose} role="dialog" aria-modal="true" aria-label="Photo viewer">
       <div className="flex items-center justify-between p-3 text-white/80 text-sm" onClick={(e) => e.stopPropagation()}>
         <span>
           {index + 1} / {photos.length}
@@ -136,7 +137,7 @@ export function Lightbox({ photos, index, onClose, onNavigate, share = null }: {
             <p className="max-w-3xl text-center text-white text-base sm:text-xl font-medium leading-snug drop-shadow" data-testid="lightbox-caption" onClick={(e) => e.stopPropagation()}>{photo.caption}</p>
           )}
         </div>
-        <aside className="flex-1 min-h-0 overflow-y-auto lg:flex-none lg:w-80 xl:w-96 bg-black/40 border-t lg:border-t-0 lg:border-l border-white/10" onClick={(e) => e.stopPropagation()}>
+        <aside className="flex-1 min-h-0 overflow-y-auto lg:flex-none lg:w-80 xl:w-96 bg-neutral-950 lg:bg-black/40 border-t lg:border-t-0 lg:border-l border-white/10" onClick={(e) => e.stopPropagation()}>
           <LightboxInfo key={photo.id} photoId={photo.id} share={share} />
           {photo.canTag && <div className="px-4 pb-4 text-sm text-white/90"><PetTagger photoId={photo.id} dark /></div>}
         </aside>
