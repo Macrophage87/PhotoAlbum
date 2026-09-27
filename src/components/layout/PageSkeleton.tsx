@@ -1,4 +1,5 @@
-export default function RootLoading() {
+/** The grey placeholder a list page shows while its data loads on a client-side navigation. */
+export function PageSkeleton() {
   return (
     <div className="mx-auto max-w-6xl px-4 sm:px-6 py-10 animate-pulse space-y-6">
       <div className="h-9 w-40 bg-surface-alt rounded" />

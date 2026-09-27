@@ -315,8 +315,11 @@ test("one activity can be sent on its own link, which opens it and nothing else 
   await page.getByTestId("activity-share-rotate").click();
   await expect(page.getByTestId("activity-shared")).toBeVisible();
   const stale = await anon.newPage();
-  await stale.goto(`/share/a/${token}`);
+  // A real 404, not a "Not found" page sent as 200: nothing streams before the link is found to be dead.
+  expect((await stale.goto(`/share/a/${token}`))?.status()).toBe(404);
   await expect(stale.getByRole("heading", { name: "Ocean Path loop" })).toHaveCount(0);
+  expect((await stale.goto("/share/not-a-real-token"))?.status()).toBe(404);
+  expect((await stale.goto("/trips/no-such-trip"))?.status()).toBe(404);
 
   // And stopping sharing closes it altogether.
   const fresh = (await withDb((c) => c.query(`SELECT "shareToken" FROM "Activity" WHERE id = $1`, [activityId]))).rows[0].shareToken as string;
