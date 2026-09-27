@@ -7,6 +7,7 @@ import { Prisma } from "@/generated/prisma/client";
 import type { StoredAnnotation } from "@/lib/annotation/schema";
 import { FUNCTION_WORDS, inTitleCase, isEverydayWord, isKinWord, isMonth, isTitlePrefix, kinshipKey, isPlaceOrDateWord, normalizeName, notThePerson, replaceSpans, type Neighbourhood } from "./scrub";
 import { lakeSpans, monthAsDate, strictNormalize } from "./strict-names";
+import { splitCamel } from "@/lib/annotation/names";
 
 /**
  * What the album remembers of somebody it has forgotten: keyed hashes of their names, never the names.
@@ -528,8 +529,10 @@ export async function loadTombstone(): Promise<Tombstone> {
     const spans: [number, number][] = [];
     // Letters apart from digits ("madison2016" is Madison and a year), invisible characters inside a word kept in it.
     const tokens = [...text.matchAll(/[\p{L}\p{M}][\p{L}\p{M}\p{Cf}'’.]*|\p{N}+/gu)].map((m) => {
-      // A possessive and a sentence's full stop stay outside the name.
-      const raw = m[0].replace(/['’]s$/u, "").replace(/\.$/u, (d) => (/^\p{L}\.(\p{L}\.)*$/u.test(m[0]) ? d : ""));
+      // A possessive, a closing quote and a sentence's full stop stay outside the name ("May's", "‘May’", "'May'.");
+      // an initial keeps its stop ("J.").
+      let raw = m[0].replace(/['’]s$/u, "");
+      if (!/^\p{L}\.(\p{L}\.)*$/u.test(m[0])) raw = raw.replace(/[.'’]+$/u, "").replace(/['’]s$/u, "");
       return { start: m.index!, end: m.index! + raw.length, raw, norm: normalizeName(raw.replace(/\p{Cf}/gu, "")) };
     });
     let lakeCache: [number, number][] | null = null;
@@ -539,7 +542,30 @@ export async function loadTombstone(): Promise<Tombstone> {
     // A tag that is a one-word name, or its possessive: "ximena", "ximena's".
     const wholeTag = mode === "tag" && tokens.length === 1 && /^[\s]*[\p{L}\p{M}\p{N}'’.-]+[\s]*$/u.test(text);
     const titlePrefix = (t: { raw: string }) => /^(?:great|step|half|grand)$/iu.test(t.raw);
+    // A hashtag holding a forgotten name goes whole: a camel-case word or run of words of it that is a name kept here
+    // ("#MayTheBirthdayGirl", "#AdaByron"), or on their own photograph any name of theirs inside it
+    // ("#happybirthdaymay", "#amazinggrace").
+    const usable = (f: Found, n: number) => {
+      if (f.people && scope && [...f.people].some((id) => scope.tagged.has(id))) return false;
+      if (ownRow(f)) return !((n === 1 || f.scoped) && !scope!.rows.has(f.key));
+      return n > 1 && !f.scoped && !f.derived;
+    };
+    const tagSpans: [number, number][] = [];
+    for (const h of text.matchAll(/#([\p{L}\p{M}\p{N}_\p{Cf}]+)/gu)) {
+      const words = splitCamel(h[1].replace(/\p{Cf}/gu, "")).split(/[^\p{L}\p{M}]+/u).filter(Boolean);
+      let hit = false;
+      for (let a = 0; a < words.length && !hit; a++) {
+        for (let n = Math.min(MAX_WORDS, words.length - a); n >= 1 && !hit; n--) hit = lookupAll(normalizeName(words.slice(a, a + n).join(" "))).some((f) => usable(f, n));
+      }
+      const letters = normalizeName(h[1].replace(/[\p{N}_\p{Cf}]+/gu, "")).replace(/\s+/gu, "");
+      for (let a = 0; a + 3 <= letters.length && a < 60 && !hit; a++) {
+        for (let b = Math.min(letters.length, a + 30); b >= a + 3 && !hit; b--) hit = lookupAll(letters.slice(a, b)).some((f) => ownRow(f) && usable(f, 1));
+      }
+      if (hit) tagSpans.push([h.index!, h.index! + h[0].length]);
+    }
+    spans.push(...tagSpans);
     for (let i = 0; i < tokens.length; i++) {
+      if (tagSpans.some(([a, b]) => tokens[i].start >= a && tokens[i].end <= b)) continue;
       // Not inside a title: "Great-Grandma Ruth" and "Great Grandma Ruth" are not Grandma Ruth.
       if (i > 0 && isKinWord(tokens[i].raw) && isKinWord(tokens[i - 1].raw)) {
         const sep = text.slice(tokens[i - 1].end, tokens[i].start);
@@ -561,7 +587,7 @@ export async function loadTombstone(): Promise<Tombstone> {
             if (found.people && [...found.people].some((id) => scope!.tagged.has(id))) return null;
             // "Lake Geneva at dawn.", as the forget reads it there (strict-names.ts).
             if (lakes().some(([a, b]) => run[0].start >= a && run[n - 1].end <= b)) return null;
-            if (n === 1 && !plural && isMonth(run[0].raw) && monthAsDate(strictNormalize(text.slice(0, run[0].start)), strictNormalize(text.slice(run[0].end)), text.slice(run[0].end))) return null;
+            if (n === 1 && !plural && isMonth(run[0].raw) && monthAsDate(strictNormalize(text.slice(0, run[0].start)), strictNormalize(text.slice(run[0].end)), text.slice(run[0].end), text.slice(0, run[0].start))) return null;
             let k = i;
             // "Great", "Grand", "Step" or "Half" only as part of a kinship word taken already: "The Great Ada show."
             while (k > 0 && isKinWord(tokens[k - 1].raw) && !FUNCTION_WORDS.has(tokens[k - 1].norm) && /^(?:[ \t]+|[-‐])$/u.test(text.slice(tokens[k - 1].end, tokens[k].start)) && (k < i || !titlePrefix(tokens[k - 1]))) k--;

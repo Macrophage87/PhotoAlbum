@@ -9,6 +9,7 @@ import { withoutWithdrawnNames } from "@/lib/people/forget";
 import { strictMatcher } from "@/lib/people/strict-names";
 import { nameMatcher } from "@/lib/people/scrub";
 import { judgeHelperText } from "@/lib/annotation/members-only";
+import { mentionsAnyName } from "@/lib/annotation/names";
 import type { StoredAnnotation } from "@/lib/annotation/schema";
 
 /**
@@ -52,6 +53,23 @@ const REFUSED: [string, string][] = [
   ["May Chen", "Happy birthday May 5!"],
   ["May Chen", "Ben 5 May 3."],
   ["August Lind", "Hot August day—August in the sprinkler."],
+  // Round six: after a year, a verb in -ing, a birth or an age.
+  ["May Chen", "May 2020 smiling at the camera"],
+  ["May Chen", "May 2020 hugging Ben"],
+  ["May Chen", "May 2016 born"],
+  ["May Chen", "May 1999 age 5"],
+  // Round six, the language review: hashtags, a date joined to names, ordinals in a list.
+  ["May Chen", "#MayTheBirthdayGirl"],
+  ["May Chen", "Cake says #happybirthdaymay"],
+  ["May Chen", "Banner: #TeamMay"],
+  ["Grace Hopper", "#amazinggrace at her recital"],
+  ["Do Kim", "Go #TeamDo!"],
+  ["May Chen", "Ben & May 2019"],
+  ["May Chen", "Ben and May 2019 at the lake"],
+  ["May Chen", "Ben, May 2019"],
+  ["June Carter", "June 2019 champion!"],
+  ["May Chen", "Race results: Ben 1st, Leo 2nd, May 3rd!"],
+  ["May Chen", "Ben came 2nd and May 1st!"],
 ];
 
 const SHARED: [string, string][] = [
@@ -63,6 +81,12 @@ const SHARED: [string, string][] = [
   ["June Carter", "Late June, 2019."],
   ["June Carter", "Early June 2019 at the lake."],
   ["May Chen", "May Day at the fair."],
+  ["May Chen", "May 2019 during the holidays."],
+  ["June Carter", "June 2019 wedding."],
+  ["May Chen", "On May 5th."],
+  ["May Chen", "May 5th."],
+  ["May Chen", "The lake that summer, May 2019."],
+  ["Do Kim", "#dothedishes"],
 ];
 
 describe("the share guard, round five", () => {
@@ -110,8 +134,17 @@ describe("the share guard, round five", () => {
       expect(await namesSomebodyRestricted(["Grandma and Grace Kelly at the recital."])).toBe(false);
     });
 
-    it("not across a line, a hyphen or two spaces, nor in lower case", async () => {
+    it("not across a line, a hyphen, a dash or two spaces, nor in lower case", async () => {
       for (const t of ["Picnic with Tom\nJordan on the swing", "Picnic with Tom-Jordan", "Picnic with Tom  Jordan", "picnic with tom jordan", "Picnic with TOM jordan"]) expect([t, await namesSomebodyRestricted([t])]).toEqual([t, true]);
+      // Round six: a dash is no space between one person's names, spaced or not.
+      for (const t of ["A picnic with Tom—Jordan runs ahead.", "Grandpa Tom–Jordan and the kite", "Tom―Jordan", "Tom — Jordan", "Tom – Jordan runs ahead."]) expect([t, await namesSomebodyRestricted([t])]).toEqual([t, true]);
+    });
+
+    it("not across a dash for another child and adult either", async () => {
+      await child("Mason Smith");
+      await adult("Bob Mason");
+      expect(await namesSomebodyRestricted(["Fishing with Grandpa Bob—Mason caught the biggest one!"])).toBe(true);
+      expect(await namesSomebodyRestricted(["Fishing with Grandpa Bob Mason."])).toBe(false);
     });
 
     it("never in keywords, tags or objects", async () => {
@@ -122,6 +155,16 @@ describe("the share guard, round five", () => {
       const record: StoredAnnotation = { title: "", caption: "A picnic", description: "", tags: ["Grace Kelly"], place: null, activity: null, objects: [], visibleText: null, season: "summer", mood: null, searchSummary: "", };
       expect((await withoutWithdrawnNames(p.id, { annotation: record, title: null })).hold).toBe(true);
     });
+  });
+
+  it("the members-only look and the forget's language rules see inside a hashtag too", () => {
+    for (const t of ["Cake says #happybirthdaymay", "#MayTheBirthdayGirl", "Banner: #TeamMay"]) expect([t, mentionsAnyName(t, ["May Chen"])]).toEqual([t, true]);
+    expect(mentionsAnyName("#dothedishes", ["May Chen"])).toBe(false);
+    const m = nameMatcher(["May Chen"]);
+    expect(m.scrub("Cake says #happybirthdaymay", { tagged: true, noted: true })).toBe("Cake says a family member");
+    // Off her photographs, only her full name.
+    expect(m.scrub("Banner: #TeamMay", { away: true })).toBe("Banner: #TeamMay");
+    expect(m.scrub("Banner: #MayChenRocks", { away: true })).toBe("Banner: a family member");
   });
 
   it("writes the stand-in in lower case in a sentence that is no title", () => {

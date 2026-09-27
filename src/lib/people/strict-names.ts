@@ -25,6 +25,7 @@
  */
 import { PLACE_NAMES } from "./places";
 import { isKinWord, isNotANameWord, isPersonVerb, isWordSurname, splitNickname } from "./scrub";
+import { splitCamel } from "@/lib/annotation/names";
 
 /** Letters that do not come apart into a plain letter and an accent, spelled the way a keyboard without them does. */
 const TRANSLIT: Record<string, string> = { ł: "l", ø: "o", æ: "ae", œ: "oe", ß: "ss", đ: "d", þ: "th", ı: "i" };
@@ -68,6 +69,12 @@ const CJK = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hang
 export const MONTHS = new Set(["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"]);
 /** Words before a month and a year that make a comma between them a date's: "late June, 2019". */
 const DATE_WORDS = new Set(["in", "during", "since", "until", "till", "early", "late", "mid"]);
+/** Words in "-ing" that are no one doing something: "May 2019 during the holidays", "June 2019 wedding". */
+const NOT_DOING = new Set(["during", "morning", "evening", "spring", "wedding", "outing", "gathering", "meeting", "christening", "housewarming", "thanksgiving", "clothing", "building", "king", "thing", "something", "nothing", "everything", "anything", "ring", "string", "wing", "swing"]);
+/** Words before a month and an ordinal day at the end that make them a date: "On May 5th.", "until June 1st!". */
+const ORDINAL_DATE_WORDS = new Set([...DATE_WORDS, "on", "by", "before", "after", "from", "through"]);
+/** A person after a month and a year: "June 2019 champion!", "May 2020 graduate". */
+const PERSON_AFTER = /^[ \t]+(?:champion|champ|graduate|grad|winner|runner-up|girl|boy|baby|babe|star|queen|king|princess|prince|mvp|hero|kid|toddler|newborn|player|captain|student|athlete|swimmer|dancer|scholar|leader|helper|superstar|cutie|sweetie)s?(?![\p{L}])/u;
 const TIME_WORDS = "dawn|dusk|sunrise|sunset|night|noon|midnight|twilight|daybreak|morning|evening|afternoon";
 /** Two-letter names that are also small words: only written with a capital ("An", not "an"). */
 const SMALL_WORDS = new Set(["an", "in", "on", "at", "to", "so", "no", "or", "as", "is", "it", "me", "we", "us", "he", "be", "do", "go", "my", "by", "of", "up", "am", "if", "al", "el", "la", "le", "de", "da", "di", "du"]);
@@ -117,27 +124,38 @@ export function strictForms(names: string[], others: Set<string> = new Set()): s
 /**
  * A month used as a date, in normalized text, only in these shapes (the language review's fourth round):
  * - with a year: "May 2019", and after a date word with a comma too ("late June, 2019"); not before something a
- *   person does ("May 2020 swims") or an age ("June 2019 months");
- * - with a day and a year: "May 5, 2019"; or an ordinal day with a year or at the end: "May 5th, 2019", "May 5th.",
+ *   person does ("May 2020 swims", "smiling"), an age or a birth ("June 2019 months", "May 2016 born") or a person
+ *   ("June 2019 champion!"), and not joined to a name by "&", "and" or a comma ("Ben & May 2019", "Ben, May 2019");
+ * - with a day and a year: "May 5, 2019"; or an ordinal day with a year ("May 5th, 2019"), or at the end after a date
+ *   word or opening the text ("On May 5th.", "May 5th."), never in a list of names or places ("Ben 1st, May 3rd!");
  *   "the 5th of May.";
  * - a day named after it: "May Day" (with a capital, when `originalAfter` is given).
  * Anything else is them: "A swim in May.", "Late June at the lake", "May 5 at the beach", "Leo 7, May 5.", "Up next
  * June!". Over-refusal there is accepted; the photographs they were never tagged on keep the language rules.
  */
-export function monthAsDate(before: string, after: string, originalAfter?: string): boolean {
+export function monthAsDate(before: string, after: string, originalAfter?: string, originalBefore?: string): boolean {
   if (/^'?s(?![\p{L}])/u.test(after)) return false;
+  const prevWord = /(\p{L}+)[ \t-]+$/u.exec(before)?.[1] ?? "";
   const year = /^[ \t]+\d{4}(?![\p{L}\p{N}])/u.exec(after) ?? (DATE_WORDS.has(/(\p{L}+)[ \t-]+$/u.exec(before)?.[1] ?? "") ? /^[ \t]*,[ \t]*\d{4}(?![\p{L}\p{N}])/u.exec(after) : null);
   if (year) {
     const rest = after.slice(year[0].length);
     const w = /^[ \t]+(\p{L}+)/u.exec(rest)?.[1];
-    return !/^[ \t]+(?:months?|years?|weeks?|days?|old)(?![\p{L}])/u.test(rest) && !(w && isPersonVerb(w));
+    // Joined to a name before it: "Ben & May 2019", "Leo and June 2021", "Ben, May 2019".
+    if (/(?:&|(?:^|[^\p{L}])and)[ \t]*$/u.test(before)) return false;
+    if (/(?:^|[^\p{L}])\p{Lu}[\p{L}\p{M}'’]*[ \t]*,[ \t]*$/u.test(originalBefore ?? "")) return false;
+    // Nor before an age, a birth, a person or something going on: "May 2016 born", "May 1999 age 5", "June 2019
+    // champion!", "May 2020 smiling".
+    if (/^[ \t]+(?:months?|years?|weeks?|days?|old|born|age|aged)(?![\p{L}])/u.test(rest) || PERSON_AFTER.test(rest)) return false;
+    return !(w && (isPersonVerb(w) || (/ing$/u.test(w) && !NOT_DOING.has(w))));
   }
   const end = /^[ \t]*[.!?]*[ \t]*(?:$|\n)/u;
   const withYear = /^[ \t]*,[ \t]*\d{4}(?![\p{L}\p{N}])/u;
   const day = /^[ \t]+([12]?\d|3[01])(st|nd|rd|th)?(?![\p{L}\p{N}])/u.exec(after);
   if (day && Number(day[1]) >= 1) {
     const rest = after.slice(day[0].length);
-    return withYear.test(rest) || (Boolean(day[2]) && end.test(rest));
+    // An ordinal at the end only as a date is written: "On May 5th.", "May 5th." — not "Ben 1st, Leo 2nd, May 3rd!".
+    const opens = /^[\s"'“‘(]*$/u.test(before);
+    return withYear.test(rest) || (Boolean(day[2]) && end.test(rest) && (opens || ORDINAL_DATE_WORDS.has(prevWord)));
   }
   // "the 5th of May", "5th of May, 2019".
   if (/(?:^|[^\p{L}\p{N}])([12]?\d|3[01])(?:st|nd|rd|th)[ \t]+of[ \t]+$/u.test(before)) return withYear.test(after) || end.test(after);
@@ -169,7 +187,31 @@ export type StrictFinder = {
   finds(text: unknown, opts?: StrictOptions): boolean;
   /** Where in the text (original offsets), to rewrite on their own photographs. */
   spans(text: string, opts?: StrictOptions): [number, number][];
+  /** The hashtags holding a name of theirs (see `hashtagSpans`); with `fullOnly`, only a full name. */
+  hashtags(text: string, fullOnly?: boolean): [number, number][];
 };
+
+/**
+ * The whole hashtags that hold one of these forms: a word of it written in camel case ("#MayTheBirthdayGirl",
+ * "#TeamMay"), or any form of three letters or more anywhere inside it ("#happybirthdaymay", "#amazinggrace").
+ * `forms` normalized, as strictForms gives them; a two-letter one only as a capitalized word.
+ */
+export function hashtagSpans(text: string, forms: string[]): [number, number][] {
+  const out: [number, number][] = [];
+  const joined = forms.filter((f) => !CJK.test(f)).map((f) => ({ f, run: f.replace(/[\s-]+/gu, "") }));
+  for (const h of text.matchAll(/#([\p{L}\p{M}\p{N}_\p{Cf}]+)/gu)) {
+    const body = strictNormalize(h[1]).replace(/[_\d]+/gu, "");
+    const words = splitCamel(h[1].replace(/\p{Cf}/gu, "")).split(/[^\p{L}\p{M}]+/u).filter(Boolean);
+    const spaced = ` ${words.map(strictNormalize).join(" ")} `;
+    const hit = joined.some(({ f, run }) => {
+      if (run.length >= 3 && body.includes(run)) return true;
+      if (!spaced.includes(` ${f.replace(/-/gu, " ")} `)) return false;
+      return !SMALL_WORDS.has(f) || words.some((w) => strictNormalize(w) === f && /^\p{Lu}/u.test(w));
+    });
+    if (hit) out.push([h.index!, h.index! + h[0].length]);
+  }
+  return out;
+}
 
 /**
  * A finder for one person's names in words strangers may read, or on their own photographs. `others`: everybody
@@ -197,7 +239,11 @@ export function strictFinder(names: string[], others: string[] = [], skip: Set<s
   const words = forms.filter((f) => !CJK.test(f)).sort((a, b) => b.length - a.length);
   // Whole words, letters only at the edges (digits or a hyphen run against a name do not hide it).
   const rx = words.length ? new RegExp(`(?<![\\p{L}])(?:${words.map((w) => escape(w).replace(/[ -]/g, "[\\s\\-]+")).join("|")})(?:'?s)?(?![\\p{L}])`, "gu") : null;
-  const capitalized = (original: string) => original.split(/[ \t]/u).every((w) => /^\p{Lu}/u.test(w.replace(/\p{Cf}/gu, "")));
+  // Written as one person's name: each word with a capital, and exactly one space or tab between them, as written.
+  const capitalized = (original: string) => {
+    const words = original.replace(/\p{Cf}/gu, "").split(/[ \t]/u);
+    return words.every((w) => /^\p{Lu}[\p{L}\p{M}'’.-]*$/u.test(w));
+  };
   const spans = (text: string, opts: StrictOptions = {}): [number, number][] => {
     if (!text.trim()) return [];
     const out: [number, number][] = [];
@@ -213,11 +259,16 @@ export function strictFinder(names: string[], others: string[] = [], skip: Set<s
         }
       }
     }
+    // A hashtag holding a name of theirs is theirs whole.
+    const tags = hashtagSpans(text, forms);
+    out.push(...tags);
     if (!rx) return out.sort((a, b) => a[0] - b[0]);
     const lake = lakeSpans(text);
+    // Judged on the original: a dash turned into a space ("Tom—Jordan") is no space between one person's names.
     const theirs: [number, number][] = fullRx && !opts.list ? [...t.matchAll(fullRx)].filter((m) => capitalized(text.slice(from[m.index!], from[m.index! + m[0].length]))).map((m) => [m.index!, m.index! + m[0].length]) : [];
     for (const m of t.matchAll(rx)) {
       if (theirs.some(([a, b]) => m.index! >= a && m.index! + m[0].length <= b)) continue;
+      if (tags.some(([a, b]) => from[m.index!] >= a && from[m.index!] < b)) continue;
       // The whole hyphenated word it is in, if somebody else's name word.
       if (otherHyphenated.size) {
         const whole = `${/(?:\p{L}+-)+$/u.exec(t.slice(0, m.index))?.[0] ?? ""}${m[0]}${/^(?:-\p{L}+)+/u.exec(t.slice(m.index! + m[0].length))?.[0] ?? ""}`;
@@ -230,13 +281,14 @@ export function strictFinder(names: string[], others: string[] = [], skip: Set<s
       if (lake.some(([a, b]) => start >= a && end <= b)) continue;
       // "An", not "an": a small word is only a name written with a capital.
       if (small.has(word) && !/^\p{Lu}/u.test(text.slice(start, end).replace(/\p{Cf}/gu, ""))) continue;
-      if (MONTHS.has(m[0]) && monthAsDate(t.slice(0, m.index), t.slice(m.index! + m[0].length), text.slice(end))) continue;
+      if (MONTHS.has(m[0]) && monthAsDate(t.slice(0, m.index), t.slice(m.index! + m[0].length), text.slice(end), text.slice(0, start))) continue;
       // A possessive's "'s" stays outside the span ("May's side" is "a family member's side"); a plural goes with it.
       out.push([start, /'s$/u.test(m[0]) ? from[m.index! + m[0].length - 2] : end]);
     }
     return out.sort((a, b) => a[0] - b[0]);
   };
-  return { spans, finds: (text, opts) => typeof text === "string" && spans(text, opts).length > 0 };
+  const full = forms.filter((f) => /\s/u.test(f));
+  return { spans, finds: (text, opts) => typeof text === "string" && spans(text, opts).length > 0, hashtags: (text, fullOnly) => hashtagSpans(text, fullOnly ? full : forms) };
 }
 
 /** A test for any mention of one person in words strangers may read (see `strictFinder`). */

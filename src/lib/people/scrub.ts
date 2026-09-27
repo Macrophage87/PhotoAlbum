@@ -947,8 +947,15 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
   };
   const ownPhoto = (where: Where) => Boolean(where.tagged) && where.onPhoto !== false && !where.noted;
 
+  let tagFinder: StrictFinder | null = null;
   const scrubText = (text: string, where: Where, keywords = false): string => {
     if (ownPhoto(where)) return scrubOwn(text, where, keywords);
+    // A hashtag holding a name of theirs goes whole: on a photograph about them any of their names ("#TeamMay",
+    // "#happybirthdaymay"), elsewhere only a full name ("#AdaByron").
+    if (text.includes("#")) {
+      const tags = (tagFinder ??= strictFinder(list, otherNames)).hashtags(text, !where.tagged);
+      if (tags.length) text = replaceSpans(text, tags);
+    }
     // On their own photograph a kinship word before their name goes with it ("Little Sister Ada"), and the stand-in's
     // capitals are judged without it, as the forgotten names' are (replaceSpans): "Little Sister Ada and Big Brother
     // Ada." is no title in title case. Only the capitals: what is taken out is judged as before.

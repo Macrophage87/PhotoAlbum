@@ -121,4 +121,50 @@ describe("round five", () => {
     expect(ts.scrub("Lake day—Geneva at Lake Geneva.", scope)).toBe("Lake day—a family member at Lake Geneva.");
     expect(ts.scrub("Swimming in the lake Geneva loves.", scope)).toBe("Swimming in the lake a family member loves.");
   });
+
+  it("uses the strict matcher on a confirmed photograph and on an open proposal, not a turned-down one (round six)", async () => {
+    const tim = await db.person.create({ data: { name: "Timothy Kent", createdById: admin } });
+    const confirmed = await mk("c", { namesScrubbedAt: null, annotation: record({ caption: "timothy waves" }), annotatedAt: new Date() });
+    // Proposed because the notes name him, not yet decided.
+    const proposed = await mk("p", { namesScrubbedAt: null, context: "Timothy at the lake", annotation: record({ caption: "timothy at the lake" }), annotatedAt: new Date() });
+    const rejected = await mk("r", { namesScrubbedAt: null, annotation: record({ caption: "timothy from next door waves" }), annotatedAt: new Date() });
+    await db.face.create({ data: { photoId: confirmed.id, personId: tim.id, status: "CONFIRMED", box: [0, 0, 1, 1], confidence: 0 } });
+    await db.face.create({ data: { photoId: proposed.id, proposedPersonId: tim.id, status: "PROPOSED", box: [0, 0, 1, 1], confidence: 0.9 } });
+    await db.face.create({ data: { photoId: rejected.id, proposedPersonId: tim.id, status: "REJECTED", box: [0, 0, 1, 1], confidence: 0.9 } });
+    await forgetPerson(tim.id, { keepName: false, byUserId: admin });
+    const caption = async (id: string) => ((await db.photo.findUniqueOrThrow({ where: { id } })).annotation as StoredAnnotation).caption;
+    expect([await caption(confirmed.id), await caption(proposed.id), await caption(rejected.id)]).toEqual(["A family member waves", "A family member at the lake", "timothy from next door waves"]);
+    const ts = await loadTombstone();
+    const later = async (id: string, t: string) => ts.scrub(t, await forgottenScope({ photoIds: [id] }));
+    expect([await later(confirmed.id, "timothy waves at the lake"), await later(proposed.id, "timothy waves at the lake"), await later(rejected.id, "timothy from next door waves")]).toEqual(["A family member waves at the lake", "A family member waves at the lake", "timothy from next door waves"]);
+  });
+
+  it("the forget's clear takes only the stamps written before it began", async () => {
+    await mk("old", { namesScrubbedAt: new Date(Date.now() - 60_000) });
+    const started = await db.$queryRaw<{ t: Date }[]>`SELECT clock_timestamp() AS t`;
+    await mk("new");
+    await db.$executeRaw`UPDATE "Photo" SET "namesScrubbedAt" = clock_timestamp() + interval '1 second' WHERE id = 'new'`;
+    expect(started[0].t).toBeInstanceOf(Date);
+    await clearScrubStamps();
+    expect((await db.photo.findUniqueOrThrow({ where: { id: "old" } })).namesScrubbedAt).toBeNull();
+    expect((await db.photo.findUniqueOrThrow({ where: { id: "new" } })).namesScrubbedAt).not.toBeNull();
+  });
+
+  it("finds her in a later answer inside quotes of either kind and inside a hashtag (round six)", async () => {
+    const may = await db.person.create({ data: { name: "May Chen", createdById: admin } });
+    const p = await mk("m", { namesScrubbedAt: null });
+    await db.face.create({ data: { photoId: p.id, personId: may.id, status: "CONFIRMED", box: [0, 0, 1, 1], confidence: 0 } });
+    await forgetPerson(may.id, { keepName: false, byUserId: admin });
+    const ts = await loadTombstone();
+    const scope = await forgottenScope({ photoIds: [p.id] });
+    for (const [t, want] of [
+      ["‘May’ in glitter on her T-shirt.", "‘A family member’ in glitter on her T-shirt."],
+      ["'May' in glitter on her T-shirt.", "'A family member' in glitter on her T-shirt."],
+      ["“May.” Grandma said.", "“A family member.” Grandma said."],
+      ["Cake says #happybirthdaymay", "Cake says a family member"],
+      ["#MayTheBirthdayGirl", "A family member"],
+    ]) expect([t, ts.scrub(t, scope)]).toEqual([t, want]);
+    // Elsewhere a hashtag holding only her first name is not hers.
+    expect(ts.scrub("#TeamMay", await forgottenScope({ photoIds: [(await mk("o")).id] }))).toBe("#TeamMay");
+  });
 });

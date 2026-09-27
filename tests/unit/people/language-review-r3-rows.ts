@@ -1,4 +1,7 @@
-/** The language review's third and fourth rounds: table_3's, table_4's and table_5's mention rows. [..] marks her. */
+/**
+ * The language review's third to fifth rounds: the mention rows of table_3 to table_6. [..] marks her; a hashtag row
+ * (table_6) holds her name inside the hashtag.
+ */
 export const TABLE_3: [string, string][] = [
   ["May Chen", "[May] is three months old today!"],
   ["May Chen", "[May] and June on the swings."],
@@ -114,4 +117,38 @@ export const TABLE_5: [string, string][] = [
   ["Louise Dunmore", "Lake Louise—[Louise] skipping stones."],
   ["Sierra Okafor", "Mountain trip—[Sierra] on Dad's shoulders."],
   ["Sierra Okafor", "Sierra Nevada—[Sierra] at the summit."],
+];
+
+export const TABLE_6: [string, string][] = [
+  ["May Chen", "#MayTheBirthdayGirl"],
+  ["May Chen", "Cake says #happybirthdaymay"],
+  ["May Chen", "Banner: #TeamMay"],
+  ["May Chen", "Ben & [May] 2019"],
+  ["May Chen", "Race results: Ben 1st, Leo 2nd, [May] 3rd!"],
+  ["May Chen", "Ben came 2nd and [May] 1st!"],
+  ["May Chen", "[May]🎂 turns five!"],
+  ["May Chen", "🎈[May]🎈"],
+  ["May Chen", "“[May],” Grandma said, “come here!”"],
+  ["May Chen", "‘[May]’ in glitter on her T-shirt."],
+  ["May Chen", "[May]’s first steps."],
+  ["May Chen", "Grandpa with [May] (age 3)."],
+  ["May Chen", "Grandpa (left) and [May] (right)."],
+  ["May Chen", "[May]/Ben tag team."],
+  ["May Chen", "Twins [May]/June at the pool."],
+  ["June Carter", "#JuneBug on her 3rd birthday"],
+  ["June Carter", "[June]-bug and Ben at the fair."],
+  ["June Carter", "Dance recital: 1st place, [June]!"],
+  ["June Carter", "[June] 2019 champion!"],
+  ["June Carter", "Leo & [June] 2021 🌊"],
+  ["April Reyes", "[April]2020 in the pool."],
+  ["April Reyes", "Spelling bee: [April] 1st, Ben 2nd."],
+  ["August Lind", "Birthday boy: [August] ❤️"],
+  ["August Lind", "#AugustIsTwo"],
+  ["Grace Hopper", "#amazinggrace at her recital"],
+  ["Grace Hopper", "Ballet—#GraceTheDancer"],
+  ["Hope Adams", "[Hope]’s and Ben’s kites."],
+  ["Hope Adams", "“[Hope]!” — Ben, probably."],
+  ["Paris Moreau", "#ParisIsFive"],
+  ["Paris Moreau", "[Paris]/Ben/Leo: the three musketeers."],
+  ["Madison Clark", "Team [Madison] 🏆"],
 ];

@@ -53,14 +53,16 @@ export async function taggedPhotoIds(personId: string): Promise<Set<string>> {
 }
 
 /**
- * The photographs they are tagged on, confirmed or proposed as them: where the strict matcher decides (see
- * Where.noted). Not those whose tag or proposal the family took back or turned down ("Ada from next door"), which
- * `taggedPhotoIds` still covers.
+ * The photographs they are tagged on, or proposed as them and not yet decided ("Probably Timothy?", a proposal made
+ * because the notes name them): where the strict matcher decides (see Where.noted). Not those whose tag or proposal
+ * the family took back or turned down ("Ada from next door"), which `taggedPhotoIds` still covers. A proposal names
+ * them only in `proposedPersonId`.
  */
 export async function ownPhotoIds(personId: string): Promise<Set<string>> {
+  const theirs = { OR: [{ personId, status: { in: ["CONFIRMED" as const, "PROPOSED" as const] } }, { proposedPersonId: personId, status: "PROPOSED" as const }] };
   const [faces, animals] = await Promise.all([
-    db.face.findMany({ where: { personId, status: { in: ["CONFIRMED", "PROPOSED"] } }, select: { photoId: true }, distinct: ["photoId"] }),
-    db.animalDetection.findMany({ where: { personId, status: { in: ["CONFIRMED", "PROPOSED"] } }, select: { photoId: true }, distinct: ["photoId"] }),
+    db.face.findMany({ where: theirs, select: { photoId: true }, distinct: ["photoId"] }),
+    db.animalDetection.findMany({ where: theirs, select: { photoId: true }, distinct: ["photoId"] }),
   ]);
   return new Set([...faces, ...animals].map((f) => f.photoId));
 }

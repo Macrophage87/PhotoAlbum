@@ -168,19 +168,22 @@ function deadlocked(err: unknown): boolean {
 }
 
 /**
- * Take the untagging and withdrawal stamps a forget supersedes (every stamp, or with `beforeLastForget` only those
- * older than the last forget): a batch at a time, the rows locked in id order as everything else that locks
- * photographs does (nameCluster), and a batch that meets a deadlock tried again.
+ * Take the untagging and withdrawal stamps a forget supersedes (every stamp written before the clear began, or with
+ * `beforeLastForget` only those older than the last forget): a batch at a time, the rows locked in id order as
+ * everything else that locks photographs does (nameCluster), and a batch that meets a deadlock tried again.
  */
 export async function clearScrubStamps(opts: { beforeLastForget?: boolean } = {}): Promise<number> {
   let cleared = 0;
+  // Only stamps written before the clear began: one an untagging writes meanwhile stays, and still protects its
+  // photograph should the forget's own stamp after this fail.
+  const until = await dbNow();
   for (;;) {
     let n = 0;
     for (let attempt = 1; ; attempt++) {
       try {
         n = opts.beforeLastForget
           ? await db.$executeRaw`UPDATE "Photo" SET "namesScrubbedAt" = NULL WHERE id IN (SELECT id FROM "Photo" WHERE "namesScrubbedAt" < (SELECT "lastForgetAt" FROM "AppSetting" WHERE id = 'app') ORDER BY id LIMIT ${CLEAR_BATCH} FOR NO KEY UPDATE)`
-          : await db.$executeRaw`UPDATE "Photo" SET "namesScrubbedAt" = NULL WHERE id IN (SELECT id FROM "Photo" WHERE "namesScrubbedAt" IS NOT NULL ORDER BY id LIMIT ${CLEAR_BATCH} FOR NO KEY UPDATE)`;
+          : await db.$executeRaw`UPDATE "Photo" SET "namesScrubbedAt" = NULL WHERE id IN (SELECT id FROM "Photo" WHERE "namesScrubbedAt" <= ${until} ORDER BY id LIMIT ${CLEAR_BATCH} FOR NO KEY UPDATE)`;
         break;
       } catch (err) {
         if (!deadlocked(err) || attempt >= 5) throw err;

@@ -8,12 +8,13 @@ import { forgetPerson } from "@/lib/people/forget-person";
 import { namesSomebodyRestricted, withoutWithdrawnNames } from "@/lib/people/forget";
 import { forgottenScope, loadTombstone } from "@/lib/people/tombstone";
 import type { StoredAnnotation } from "@/lib/annotation/schema";
-import { TABLE_3, TABLE_4, TABLE_5 } from "./language-review-r3-rows";
+import { TABLE_3, TABLE_4, TABLE_5, TABLE_6 } from "./language-review-r3-rows";
 
 /**
  * The language review's third and fourth rounds: every mention row of its table_3 (60 sentences, run alone and with a
  * family in the album), table_4 (10 aimed at the strict matcher) and table_5 (43, dashes, hyphens and dates, run alone
- * and with a family that has a Grace Kelly and a Taylor Austin). On her own photograph the strict matcher decides (only a
+ * and with a family that has a Grace Kelly and a Taylor Austin) and table_6 (31, hashtags, joined dates, ordinals and
+ * quotes, run the same two ways). On her own photograph the strict matcher decides (only a
  * month in a date's own shape is left), so each marked mention is rewritten by the forget and in a later answer; the
  * share guard refuses each for a child; a withdrawn naming publishes none of them, on her photograph or elsewhere.
  */
@@ -37,15 +38,19 @@ describe("the language review's third round", () => {
     ...TABLE_4.map(([name, raw]) => [name, raw, ""] as const),
     ...TABLE_5.map(([name, raw]) => [name, raw, ""] as const),
     ...TABLE_5.map(([name, raw]) => [name, raw, FAMILY_5.join(", ")] as const),
+    ...TABLE_6.map(([name, raw]) => [name, raw, ""] as const),
+    ...TABLE_6.map(([name, raw]) => [name, raw, FAMILY_5.join(", ")] as const),
   ];
 
   it.each(rows)("%s: %s (the family in the album: %s)", async (name, raw, family) => {
     const text = raw.replace(/[[\]]/g, "");
-    const word = raw.match(/\[([^\]]+)\]/u)![1];
+    const word = raw.match(/\[([^\]]+)\]/u)?.[1] ?? name.split(" ")[0];
     // Hers are the marked ones; another may be a date ("May 2021") or somebody else ("June", "Lake Louise").
     const theirs = (raw.match(/\[/g) ?? []).length;
     const others = count(word, text) - theirs;
-    const left = (t: string) => count(word, t) <= others && count(word, t) < count(word, text);
+    // A hashtag row: no hashtag holding her name is left.
+    const tagged = (t: string) => [...t.matchAll(/#\S+/gu)].some((h) => h[0].toLowerCase().includes(word.toLowerCase()));
+    const left = theirs ? (t: string) => count(word, t) <= others && count(word, t) < count(word, text) && !tagged(t) : (t: string) => !tagged(t);
     const person = await db.person.create({ data: { name, birthday: new Date("2019-01-01"), createdById: admin } });
     if (family) {
       for (const n of family.split(", ")) await db.person.create({ data: { name: n, createdById: admin } });
