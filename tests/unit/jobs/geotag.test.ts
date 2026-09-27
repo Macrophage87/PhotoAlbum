@@ -454,3 +454,28 @@ describe("geotagPhotos and who was on another member's ride", () => {
     expect(await place(mom)).toMatchObject({ gpsSource: "TRACK" });
   });
 });
+
+describe("geotagPhotos and a stop in one place", () => {
+  let tripId: string, dad: string, mom: string;
+  beforeEach(async () => {
+    await resetTestDb();
+    dad = (await db.user.create({ data: { email: "dad@example.com" } })).id;
+    mom = (await db.user.create({ data: { email: "mom@example.com" } })).id;
+    tripId = (await db.trip.create({ data: { slug: "s", title: "S", startDate: new Date("2025-08-10"), endDate: new Date("2025-08-16"), createdById: dad } })).id;
+  });
+  const H = 3_600_000;
+
+  it("places a photo from a ride's auto-paused stop, but reads no stop into a Google trace", async () => {
+    // His ride pauses two hours at a café; her Google trace has two fixes at home, ten hours apart.
+    await makeTrack(tripId, dad, [{ t: T0, lat: 44, lng: -68 }, { t: T0 + 2 * H, lat: 44.0002, lng: -68 }, { t: T0 + 2 * H + 60_000, lat: 44.001, lng: -68 }], "GPX");
+    await makeTrack(tripId, mom, [{ t: T0 - 4 * H, lat: 41, lng: -70 }, { t: T0 + 6 * H, lat: 41, lng: -70 }], "GOOGLE");
+    const his = await makePhoto(tripId, dad, new Date(T0 + H));
+    const hers = await makePhoto(tripId, mom, new Date(T0 + H));
+    await geotagPhotos({ tripId });
+    const at = async (id: string) => db.photo.findUniqueOrThrow({ where: { id } });
+    expect((await at(his.id)).lat).toBeCloseTo(44.0001, 6);
+    // Her trace says nothing about the hours between its fixes, so the ride she was on (nobody named) places it.
+    expect(await at(hers.id)).toMatchObject({ gpsSource: "TRACK", lng: -68 });
+    expect((await at(hers.id)).lat).toBeCloseTo(44.0001, 6);
+  });
+});

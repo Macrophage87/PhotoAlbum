@@ -109,8 +109,9 @@ function choose<T extends { source: string; uploaderId: string }>(tracks: T[], u
       const dy = (points[i].lat - place.lat) * mPerLat, dx = (points[i].lng - place.lng) * mPerLng;
       if (dx * dx + dy * dy <= limit2) return true;
     }
+    // `points` is another member's activity track here (never a Google trace), so a stop on it counts.
     for (const edge of [nearFrom, nearTo]) {
-      const p = positionAt(points, edge);
+      const p = positionAt(points, edge, { stops: true });
       if (p && dist(p) <= LOOSE_TOGETHER_M) return true;
     }
     return false;
@@ -189,8 +190,10 @@ export async function geotagPhotos(job: GeotagPhotosJob): Promise<{ updated: num
     const t = photo.takenAt!.getTime();
     const chosen = choose(tracks.filter((track) => onIt(track, photo.uploaderId)), photo.uploaderId, t, (track) => {
       if (t < track.startTime.getTime() || t > track.endTime.getTime()) return null;
-      const points = pointsOf(track), pos = positionAt(points, t);
-      return pos && { pos, kind: positionKindAt(points, t) ?? "soft", points };
+      // An auto-paused stop is read as one only on an activity's track (see STOP_RADIUS_M).
+      const points = pointsOf(track), reading = { stops: track.source !== "GOOGLE" };
+      const pos = positionAt(points, t, reading);
+      return pos && { pos, kind: positionKindAt(points, t, reading) ?? "soft", points };
     });
     if (chosen) {
       const { track, pos } = chosen;

@@ -131,21 +131,25 @@ describe("positionAt", () => {
     expect(positionAt(pts, -1)).toBeNull();
     expect(positionAt(pts, 10 ** 9)).toBeNull();
   });
-  it("places a photo taken while the ride was auto-paused at the stop, however long it was", () => {
-    const H = 3_600_000;
-    // A café 30 m on from where the computer paused, left two hours later; then a gap of a kilometre.
+  it("places a photo taken while a ride was auto-paused at the stop, for up to three hours", () => {
+    const H = 3_600_000, ride = { stops: true };
+    // A café 30 m on from where the computer paused, left two hours later; a kilometre on in an hour; then four hours
+    // without a fix at one spot.
     const stop: TrackPoint[] = [
       { t: 0, lat: 44, lng: -68 },
       { t: 2 * H, lat: 44.0002, lng: -68.0002 },
       { t: 3 * H, lat: 44.01, lng: -68 },
-      { t: 3 * H + 13 * H, lat: 44.01, lng: -68 },
+      { t: 7 * H, lat: 44.01, lng: -68 },
     ];
-    expect(positionAt(stop, H)).toMatchObject({ lat: 44.0001, lng: -68.0001 });
-    expect(positionKindAt(stop, H)).toBe("firm");
-    // A long gap between places apart is still no answer, and neither is a "stop" of more than 12 hours.
-    expect(positionAt(stop, 2.5 * H)).toBeNull();
-    expect(positionAt(stop, 9 * H)).toBeNull();
-    expect(positionKindAt(stop, 9 * H)).toBeNull();
+    expect(positionAt(stop, H, ride)).toMatchObject({ lat: 44.0001, lng: -68.0001 });
+    expect(positionKindAt(stop, H, ride)).toBe("firm");
+    // A long gap between places apart is still no answer, and neither is a "stop" of more than three hours.
+    expect(positionAt(stop, 2.5 * H, ride)).toBeNull();
+    expect(positionAt(stop, 5 * H, ride)).toBeNull();
+    expect(positionKindAt(stop, 5 * H, ride)).toBeNull();
+    // Nor two fixes of a Google trace at the same spot: it records sparsely whether anybody moves or not.
+    expect(positionAt(stop, H)).toBeNull();
+    expect(positionKindAt(stop, H)).toBeNull();
   });
 });
 
