@@ -5,6 +5,8 @@ import { helperTitle } from "@/lib/annotation/helper-text";
 import { enqueueEmbedding } from "@/lib/jobs/handlers/embed-photo";
 import { QUEUES } from "@/lib/jobs/queues";
 import { mentionsAnyName } from "@/lib/annotation/names";
+import { unknownTitleAside, warnStuckTitle } from "@/lib/annotation/members-only";
+import { nameMayLeaveServer } from "./consent";
 import { bossJobs } from "@/lib/jobs/schema";
 import { isMinor, knownAdult } from "./consent";
 import { annotationMentions, FUNCTION_WORDS, isEverydayWord, isPlaceOrDateWord, nameMatcher, scrubAnnotation, type NameMatcher, type Where } from "./scrub";
@@ -218,6 +220,32 @@ export function stillNames(m: NameMatcher, names: string[], where: Where): (text
   };
 }
 
+/** What show-to-everyone refuses to publish (see `namesSomebodyRestricted`). */
+export const NAME_NOT_TO_BE_SHOWN = "This description may name somebody who is no longer to be named, so it stays visible to the family only. Edit it to take the name out first.";
+
+/**
+ * Everybody the album may not name in what everyone reads: whose naming is switched off or was never agreed (not
+ * known to be an adult), withdrawn, opted out, or waiting to be forgotten — the people `nameMayLeaveServer` refuses,
+ * and more. Every name they have gone by.
+ */
+async function restrictedNames(): Promise<string[]> {
+  const people = await db.person.findMany({ where: { kind: "HUMAN" }, select: { name: true, formerNames: true, birthday: true, adultAttestedAt: true, adultConfirmedAt: true, faceIndexing: true, nameInDescriptions: true, optedOutAt: true, forgetPendingAt: true, namingWithdrawnAt: true } });
+  return people.filter((p) => p.namingWithdrawnAt || p.optedOutAt || p.forgetPendingAt || !nameMayLeaveServer(p)).flatMap((p) => [p.name, ...(p.formerNames ?? [])]);
+}
+
+/**
+ * Whether words about to be shown to everyone may name somebody the album may not name, by the members-only rule's
+ * own look (annotation/names.ts; all capitals read as title case). Not only while a withdrawal waits out its
+ * fortnight: once it has, or when naming was switched off, the words are still not to be published by a click.
+ */
+export async function namesSomebodyRestricted(texts: (string | null | undefined)[]): Promise<boolean> {
+  const words = texts.filter((t): t is string => typeof t === "string" && t.trim() !== "");
+  if (!words.length) return false;
+  const names = await restrictedNames();
+  if (!names.length) return false;
+  return words.some((t) => mentionsAnyName(t, names) || (!/\p{Ll}/u.test(t) && mentionsAnyName(titled(t), names)));
+}
+
 /** Trips, activities and collections holding any of these photographs. */
 async function containersOf(photoIds: string[]) {
   if (!photoIds.length) return { trips: [] as string[], activities: [] as string[], collections: [] as string[] };
@@ -309,7 +337,13 @@ export async function forgetNameInText(photoIds: string[], m: NameMatcher, opts:
       const holdText = !p.annotationMembersOnly && Boolean(shown) && (still(helperWordsOf(shown)) || annotationMentions(shown, m, strictWhere));
       const holdTitle = h.title && still(next.title ?? p.title);
       const holdEvidence = !p.placeEstimateMembersOnly && still([next.placeEstimateName ?? p.placeEstimateName, next.placeEstimateNote ?? p.placeEstimateNote, next.estimatedDateNote ?? p.estimatedDateNote].filter(Boolean).join("\n"));
+      // A title of unknown origin (from before the album recorded who wrote titles) that may name them: kept for
+      // members and never erased (see unknownTitleAside), whether or not it was shown to everyone.
+      const unknownTitle = opts.strict && !h.title && p.titleByHelper === null && p.kind !== "EXTERNAL_VIDEO" && Boolean(p.title?.trim()) && still(p.title);
+      const aside = unknownTitle ? unknownTitleAside({ title: p.title, titleByHelper: null, membersTitle: p.membersTitle, aiTitle: helperTitle(p.annotation), namesSomebody: true }) : null;
+      if (aside === "stuck") warnStuckTitle(p.id);
       const held = {
+        ...(aside === "move" ? { title: null, titleByHelper: null, membersTitle: p.title } : {}),
         ...(holdText || holdTitle ? { annotationMembersOnly: true, annotationTitleOnly: false, annotationTitleWords: [], annotationTitleFrom: [], annotationSharedAt: null } : {}),
         // The helper's title, kept for members (as the members-only rule does), unless they have one already.
         ...(holdTitle ? { title: null, titleByHelper: null, membersTitle: p.membersTitle?.trim() ? p.membersTitle : (next.title ?? p.title) } : {}),
@@ -659,7 +693,10 @@ export async function withoutWithdrawnNames(photoId: string, text: { annotation:
   let annotation = text.annotation;
   let title = text.title;
   let hold = false;
-  if (!people.length) return { annotation, title, changed: false, hold };
+  if (!people.length) {
+    const record = annotation && typeof annotation === "object" && !Array.isArray(annotation) ? (annotation as StoredAnnotation) : null;
+    return { annotation, title, changed: false, hold: await namesSomebodyRestricted([title, helperWordsOf(record), record?.searchSummary, ...(record?.tags ?? [])]) };
+  }
   const tagged = await db.face.findMany({ where: { photoId, OR: [{ personId: { in: people.map((p) => p.id) } }, { proposedPersonId: { in: people.map((p) => p.id) } }] }, select: { personId: true, proposedPersonId: true } });
   const on = new Set(tagged.flatMap((f) => [f.personId, f.proposedPersonId]));
   for (const p of people) {
@@ -675,6 +712,9 @@ export async function withoutWithdrawnNames(photoId: string, text: { annotation:
     const record = annotation && typeof annotation === "object" && !Array.isArray(annotation) ? (annotation as StoredAnnotation) : null;
     if (still(title) || still(helperWordsOf(record)) || (record && annotationMentions(record, m, strictWhere))) hold = true;
   }
+  // And everybody else the album may not name, withdrawn long ago or never agreed: not rewritten here, just not shown.
+  const record = annotation && typeof annotation === "object" && !Array.isArray(annotation) ? (annotation as StoredAnnotation) : null;
+  if (!hold && (await namesSomebodyRestricted([title, helperWordsOf(record), record?.searchSummary, ...(record?.tags ?? [])]))) hold = true;
   return { annotation, title, changed: JSON.stringify(annotation) !== JSON.stringify(text.annotation) || title !== text.title, hold };
 }
 

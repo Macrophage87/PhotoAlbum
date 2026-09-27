@@ -19,6 +19,7 @@ import { rejudgeFromAction } from "@/lib/annotation/rejudge-notice";
 import { descriptionStaysHelpers } from "@/lib/annotation/helper-text";
 import { forgetTrackFiles } from "@/lib/tracks/files";
 import { uniqueSlug } from "@/lib/trips/slug";
+import { NAME_NOT_TO_BE_SHOWN, namesSomebodyRestricted } from "@/lib/people/forget";
 import { isCoverable } from "@/lib/photos/cover";
 
 /** The trip, where this member may change it: whoever made it, and admins. */
@@ -224,6 +225,8 @@ export async function setTripDescription(slug: string, text: string): Promise<vo
  */
 export async function setTripDescriptionShared(slug: string, everyone: boolean): Promise<void> {
   const trip = await loadEditableTrip(slug);
+  // Never a description that may name somebody the album may not name (withdrawn, switched off, opted out).
+  if (everyone && (await namesSomebodyRestricted([trip.description]))) throw new Error(NAME_NOT_TO_BE_SHOWN);
   await db.trip.update({ where: { id: trip.id }, data: { descriptionMembersOnly: !everyone, descriptionSharedAt: everyone ? new Date() : null } });
   revalidatePath(`/trips/${slug}`, "layout");
 }

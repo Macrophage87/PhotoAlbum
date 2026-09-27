@@ -12,6 +12,7 @@ import { levelOf } from "@/lib/visibility/exposure";
 import { requireUserOrThrow } from "@/lib/auth/viewer";
 import { generateToken } from "@/lib/auth/tokens";
 import { uniqueSlug } from "@/lib/trips/slug";
+import { NAME_NOT_TO_BE_SHOWN, namesSomebodyRestricted } from "@/lib/people/forget";
 import { fieldErrors } from "@/lib/trips/validation";
 import { collectionInputFromForm } from "@/lib/collections/validation";
 import { canEditContainer, editableMediaIds, NOT_YOUR_CONTAINER } from "@/lib/auth/ownership";
@@ -268,6 +269,8 @@ export async function setCollectionDescription(slug: string, text: string): Prom
 /** Show the collection's description to everyone who may open it, or keep it for the family; see setTripDescriptionShared. */
 export async function setCollectionDescriptionShared(slug: string, everyone: boolean): Promise<void> {
   const collection = await loadEditableCollection(slug);
+  // Never a description that may name somebody the album may not name (withdrawn, switched off, opted out).
+  if (everyone && (await namesSomebodyRestricted([collection.description]))) throw new Error(NAME_NOT_TO_BE_SHOWN);
   await db.collection.update({ where: { id: collection.id }, data: { descriptionMembersOnly: !everyone, descriptionSharedAt: everyone ? new Date() : null } });
   revalidatePath(`/collections/${slug}`, "layout");
 }

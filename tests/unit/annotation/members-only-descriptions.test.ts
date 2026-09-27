@@ -18,6 +18,8 @@ vi.mock("@/lib/annotation/client", async (original) => ({
 import { writeContainerDescription } from "@/lib/annotation/container";
 import { describeActivityWithAi, setActivityDescription } from "@/app/trips/[slug]/activities/actions";
 import { setTripDescription, setTripDescriptionShared } from "@/app/trips/[slug]/actions";
+import { setActivityDescriptionShared } from "@/app/trips/[slug]/activities/actions";
+import { setCollectionDescriptionShared } from "@/app/collections/actions";
 import { setAnnotationShared, updateAnnotation } from "@/app/annotation/actions";
 import { confirmPlaceEstimate } from "@/app/photos/[id]/actions";
 import { updatePerson } from "@/app/people/actions";
@@ -25,6 +27,7 @@ import { tripTimeline } from "@/lib/timeline/queries";
 import { NO_FILTER } from "@/lib/photos/filters";
 import { rejudgeNames, rejudgeSweep, rejudgeText } from "@/lib/annotation/rejudge";
 import { applyAnnotation } from "@/lib/annotation/apply";
+import { scrubWithdrawnNames } from "@/lib/people/forget";
 import { annotationSchema } from "@/lib/annotation/schema";
 
 /**
@@ -224,5 +227,57 @@ describe("descriptions that stay in the family", () => {
     expect(who.queued.map((q) => q.queue)).toContain("annotate-photo");
     await applyAnnotation(p.id, "m", answer, {});
     expect(await db.photo.findUniqueOrThrow({ where: { id: p.id } })).toMatchObject({ title: "Our boat day", titleByHelper: false, membersTitle: null });
+  });
+
+  describe("showing words to everyone that may name somebody the album may not name", () => {
+    const helperRecord = (title: string, description = "") => ({ title, caption: "", description, tags: [], searchSummary: "" });
+    const heldPhoto = (title: string, description = "") => photo({ annotation: helperRecord(title, description), annotationMembersOnly: true, membersTitle: title });
+    const share = async (id: string) => setAnnotationShared(id, (await db.photo.findUniqueOrThrow({ where: { id } })).annotationRevision, true);
+
+    it("G1: refuses once a withdrawal's fortnight has passed, for an everyday name and one only the neighbour rule excuses", async () => {
+      await db.person.create({ data: { name: "Rose", namingWithdrawnAt: new Date(Date.now() - 30 * 86_400_000), createdById: who.id } });
+      await db.person.create({ data: { name: "Ximena", namingWithdrawnAt: new Date(Date.now() - 30 * 86_400_000), createdById: who.id } });
+      const rose = await heldPhoto("Rose At The Hut");
+      const ximena = await heldPhoto("Ximena Hut Walk", "Ximena Hut Walk, in the snow.");
+      await scrubWithdrawnNames();
+      expect(await db.person.count({ where: { namingWithdrawnAt: { not: null } } })).toBe(0);
+      for (const p of [rose, ximena]) await expect(share(p.id)).rejects.toThrow(/no longer to be named/);
+      expect(await db.photo.count({ where: { annotationMembersOnly: false } })).toBe(1);
+    });
+
+    it("G2: refuses when an admin has switched naming off, for photographs, trips, collections and activities", async () => {
+      const ximena = await db.person.create({ data: { name: "Ximena", nameInDescriptions: true, adultAttestedAt: new Date(), createdById: who.id } });
+      const p = await heldPhoto("Ximena Hut Walk");
+      await db.trip.update({ where: { id: tripId }, data: { description: "Ximena Hut Walk, in the snow.", descriptionMembersOnly: true } });
+      const collection = await db.collection.create({ data: { slug: "snow", title: "Snow", description: "Ximena in the snow.", descriptionMembersOnly: true, createdById: who.id } });
+      await db.activity.update({ where: { id: activityId }, data: { description: "Ximena leads the walk.", descriptionMembersOnly: true } });
+      // Agreed to be named: shown as asked.
+      await share(p.id);
+      expect((await db.photo.findUniqueOrThrow({ where: { id: p.id } })).annotationMembersOnly).toBe(false);
+      await db.person.update({ where: { id: ximena.id }, data: { nameInDescriptions: false } });
+      const q = await heldPhoto("Ximena Hut Walk");
+      await expect(share(q.id)).rejects.toThrow(/no longer to be named/);
+      await expect(setTripDescriptionShared("acadia", true)).rejects.toThrow(/no longer to be named/);
+      await expect(setCollectionDescriptionShared("snow", true)).rejects.toThrow(/no longer to be named/);
+      await expect(setActivityDescriptionShared("acadia", activityId, true)).rejects.toThrow(/no longer to be named/);
+      expect((await db.collection.findUniqueOrThrow({ where: { id: collection.id } })).descriptionMembersOnly).toBe(true);
+    });
+
+    it("still shows words that name nobody the album may not name", async () => {
+      await db.person.create({ data: { name: "Rose", namingWithdrawnAt: new Date(Date.now() - 30 * 86_400_000), createdById: who.id } });
+      const p = await heldPhoto("a rose by the hut", "The hut in winter.");
+      await share(p.id);
+      expect((await db.photo.findUniqueOrThrow({ where: { id: p.id } })).annotationMembersOnly).toBe(false);
+      await db.trip.update({ where: { id: tripId }, data: { description: "Fog and cliffs.", descriptionMembersOnly: true } });
+      await setTripDescriptionShared("acadia", true);
+      expect((await db.trip.findUniqueOrThrow({ where: { id: tripId } })).descriptionMembersOnly).toBe(false);
+    });
+
+    it("keeps a title of unknown origin that may name her for members, even one already shown to everyone", async () => {
+      await db.person.create({ data: { name: "Rose", namingWithdrawnAt: new Date(), createdById: who.id } });
+      const p = await photo({ title: "Rose At The Hut", titleByHelper: null, annotation: helperRecord("The hut"), annotatedAt: new Date(), annotationSharedAt: new Date() });
+      await scrubWithdrawnNames();
+      expect(await db.photo.findUniqueOrThrow({ where: { id: p.id } })).toMatchObject({ title: null, membersTitle: "Rose At The Hut" });
+    });
   });
 });
