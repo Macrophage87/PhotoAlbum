@@ -107,12 +107,20 @@ anybody has been forgotten, until the old key is back. If the old `.env` has no
 [DEPLOY.md](DEPLOY.md#upgrading-from-before-the-forget-key) first.
 
 The new dev instance starts with an empty database, so it gets a key of its
-own (the two instances never share one):
+own (the two instances never share one). **This is the one time a key is
+replaced, and only because live now holds it:** the block below changes the dev
+`.env` only when `PhotoAlbum-live/.env` has the very same key line, so it never
+throws away the only copy, and pasting it twice does nothing the second time:
 
 ```bash
 cd /cieply/sites/cieply.com/PhotoAlbum
-sudo sed -i '/^FORGET_KEY=/d' .env
-echo "FORGET_KEY=$(openssl rand -base64 32)" | sudo tee -a .env >/dev/null
+KEY_LINE='^[[:space:]]*(export[[:space:]]+)?FORGET_KEY='
+if sudo cmp -s <(sudo grep -E "$KEY_LINE" .env) <(sudo grep -E "$KEY_LINE" ../PhotoAlbum-live/.env); then
+  sudo sed -i -E "/$KEY_LINE/d" .env
+  echo "FORGET_KEY=$(openssl rand -base64 32)" | sudo tee -a .env >/dev/null
+else
+  echo "The two .env files hold different keys: this one is new already, or live lacks it. Check before changing anything."
+fi
 ```
 
 Only do that once its old volumes are out of the way: on the old database, a

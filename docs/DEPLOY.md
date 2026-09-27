@@ -355,12 +355,19 @@ The app's port is now published on `127.0.0.1` only (`APP_BIND`). If other devic
 
 `FORGET_KEY` came with forgetting people. `deploy/update.sh` makes one when `.env` has none, but the first deploy of that release onto a checkout still on an older one is run by the older copy of the script, which knows nothing of the key (live's `main` had no hand-over to the new script before it). The album then starts without one: nothing is lost, but nobody can be forgotten for good until the next deploy's script makes it, and the Admin page says so meanwhile. So before that first deploy, give **each instance its own key** in its own `.env` — staging and live never share one, since a key is tied to the database its names were forgotten in:
 
+**Never replace a key that already exists.** A key that has been used cannot be made again, and every name forgotten under it stops being recognized. The block below adds one only where `.env` has none (an empty `FORGET_KEY=` line from `.env.example` is dropped first), so it is safe to paste, and to paste twice; where there is a key it leaves it alone and says so:
+
 ```bash
 cd /cieply/sites/cieply.com/PhotoAlbum-live          # then the same in PhotoAlbum, for staging
-sudo grep -c '^FORGET_KEY=.' .env                    # 0: go on. 1: it has a key already; leave it alone
-sudo sed -i '/^FORGET_KEY=/d' .env                   # drop an empty FORGET_KEY= line from .env.example
-echo "FORGET_KEY=$(openssl rand -base64 32)" | sudo tee -a .env >/dev/null
+if sudo grep -qE '^[[:space:]]*(export[[:space:]]+)?FORGET_KEY=[^[:space:]]' .env; then
+  echo "This .env already has a FORGET_KEY: leaving it alone."
+else
+  sudo sed -i -E '/^[[:space:]]*(export[[:space:]]+)?FORGET_KEY=[[:space:]]*$/d' .env
+  echo "FORGET_KEY=$(openssl rand -base64 32)" | sudo tee -a .env >/dev/null
+fi
 ```
+
+If `docker-compose.override.yml` sets `FORGET_KEY` instead, leave that as it is and skip the block.
 
 Then back each key up **separately from the database dumps**, labeled with its instance (`sudo grep '^FORGET_KEY=' .env` shows it; a password manager is the place for it): `deploy/update.sh` dumps only the database, and once somebody has been forgotten, that database without its key pauses forgetting and the AI helper until the key is back. If an instance has already forgotten somebody under a key and its `.env` has lost it, do not make a new one: put the original back. The script refuses to make a key for a database that keeps names under one, and says so.
 
