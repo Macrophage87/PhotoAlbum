@@ -1,5 +1,6 @@
 import { db } from "@/lib/db";
 import { pickTripByDay, whoWasThere } from "@/lib/photos/assign";
+import { pickTripByCoverage } from "@/lib/photos/trip-by-coverage";
 import { activityFor } from "@/lib/activities/reassign";
 import { localDayFromOffset } from "@/lib/time/local-day";
 import { enqueue } from "@/lib/jobs/boss";
@@ -25,8 +26,12 @@ export async function applyPhotoInstant(
   let tripId = photo.tripId;
   if (!tripId) {
     // Only trips this member was on, where anybody said who was on them; a clock cannot tell two families apart.
-    const trips = await db.trip.findMany({ where: whoWasThere(photo.uploaderId), select: { id: true, startDate: true, endDate: true } });
-    tripId = pickTripByDay(trips, localDayFromOffset(takenAt, tzOffsetMin))?.id ?? null;
+    const trips = await db.trip.findMany({ where: whoWasThere(photo.uploaderId), select: { id: true, startDate: true, endDate: true, timezone: true } });
+    const day = localDayFromOffset(takenAt, tzOffsetMin);
+    tripId = pickTripByDay(trips, day)?.id ?? null;
+    // On no trip's days (a ride on the last evening that runs past midnight): the trip out on an activity or a track
+    // at that moment.
+    if (!tripId && !trips.some((t) => pickTripByDay([t], day))) tripId = (await pickTripByCoverage(trips, photo.uploaderId, () => ({ takenAt, source })))?.id ?? null;
   }
   // An activity a member chose stays chosen: a corrected date does not move a photo out of the walk it was on. One
   // kept off every activity stays off through shifts, bulk corrections and the album's own re-reading of the date;

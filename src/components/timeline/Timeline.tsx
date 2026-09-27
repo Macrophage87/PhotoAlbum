@@ -44,7 +44,13 @@ export async function Timeline({ groups: built, tripSlug, timezone, member, idPr
                 // An activity's card is an anchor too, so the panel can take the reader straight to it.
                 <li key={ii} className="relative scroll-mt-32" id={item.kind === "activity" ? `${days[gi].id}-${item.activity.id}` : undefined}>
                   <span className="absolute -left-[1.85rem] top-2 w-3 h-3 rounded-full bg-primary ring-4 ring-bg" />
-                  {item.kind === "activity" ? (
+                  {item.kind === "continued" ? (
+                    // Not a second copy: its card, and its photographs, are under the day it began.
+                    <p className="text-sm text-muted pt-0.5" data-testid="activity-continued">
+                      Continued from {formatDay(item.from, "shortDay")}:{" "}
+                      <a href={`#${idPrefix}-${item.from}-${item.activity.id}`} className="text-primary hover:underline">{item.activity.title}</a>
+                    </p>
+                  ) : item.kind === "activity" ? (
                     // A photograph dropped on an activity card is filed there by hand, whatever the clock says.
                     <TimelineDrop kind="activity" target={item.activity.id} label={item.activity.title}>
                       <ActivityCard activity={item.activity} tripSlug={tripSlug} timezone={timezone} hrefBase={activityHrefBase}>

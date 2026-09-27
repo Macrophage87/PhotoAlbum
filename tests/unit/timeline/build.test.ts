@@ -74,3 +74,40 @@ describe("counting a day's photographs", () => {
     expect(photosOnDay(day)).toBe(4);
   });
 });
+
+describe("buildTimeline, an activity that runs past midnight", () => {
+  // A ride from 22:30 on the 12th to 01:15 on the 13th in New York.
+  const ride = a("ride", "2025-08-13T02:30:00Z", "2025-08-13T05:15:00Z");
+
+  it("stays under the day it began, and the next day opens with a pointer back to it", () => {
+    const photos = [p("dusk", "2025-08-13T02:45:00Z", "ride"), p("after-midnight", "2025-08-13T04:40:00Z", "ride"), p("breakfast", "2025-08-13T12:00:00Z")];
+    const groups = buildTimeline(photos, [ride], "America/New_York");
+    expect(groups.map((g) => g.dayKey)).toEqual(["2025-08-12", "2025-08-13"]);
+    expect(groups[0].items.map((i) => i.kind)).toEqual(["activity"]);
+    expect(groups[0].items[0].photos.map((x) => x.id)).toEqual(["dusk", "after-midnight"]);
+    const next = groups[1].items;
+    expect(next.map((i) => i.kind)).toEqual(["continued", "photos"]);
+    expect(next[0]).toMatchObject({ kind: "continued", from: "2025-08-12", activity: { id: "ride" }, photos: [] });
+    // Its photographs are counted once, under the day it began.
+    expect(groups.map(photosOnDay)).toEqual([2, 1]);
+  });
+
+  it("makes up no day to hold the pointer, and points from no day for a ride ending on the stroke of midnight", () => {
+    expect(buildTimeline([p("after-midnight", "2025-08-13T04:40:00Z", "ride")], [ride], "America/New_York").map((g) => g.dayKey)).toEqual(["2025-08-12"]);
+    const toMidnight = a("evening", "2025-08-13T02:30:00Z", "2025-08-13T04:00:00Z");
+    const groups = buildTimeline([p("breakfast", "2025-08-13T12:00:00Z")], [toMidnight], "America/New_York");
+    expect(groups[1].items.map((i) => i.kind)).toEqual(["photos"]);
+  });
+
+  it("points back from every later day of a trek several days long", () => {
+    const trek = a("trek", "2025-08-12T12:00:00Z", "2025-08-15T20:00:00Z");
+    const photos = ["2025-08-13T15:00:00Z", "2025-08-14T15:00:00Z", "2025-08-16T15:00:00Z"].map((iso, i) => p(`day${i}`, iso));
+    const groups = buildTimeline(photos, [trek], "America/New_York");
+    expect(groups.map((g) => [g.dayKey, g.items.map((i) => i.kind).join(",")])).toEqual([
+      ["2025-08-12", "activity"],
+      ["2025-08-13", "continued,photos"],
+      ["2025-08-14", "continued,photos"],
+      ["2025-08-16", "photos"],
+    ]);
+  });
+});

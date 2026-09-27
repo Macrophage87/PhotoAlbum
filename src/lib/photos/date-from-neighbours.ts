@@ -14,6 +14,9 @@ export const TRUSTED_DATE_SOURCES: TakenAtSource[] = ["EXIF_OFFSET", "EXIF_TZLOO
 /** A date worth replacing with a better guess: nothing at all, the file's clock, or a tag an editor may have rewritten. */
 export const WEAK_DATE_SOURCES: TakenAtSource[] = ["FILE_MTIME", "UPLOAD_TIME", "EXIF_CREATED"];
 
+/** Only timestamps that came from the camera (or were set by hand) are trustworthy enough to place a photo on a track. */
+export const TRUSTED_TIME_SOURCES: TakenAtSource[] = ["EXIF_OFFSET", "EXIF_TZLOOKUP", "TRIP_TZ", "MANUAL", "SIDECAR"];
+
 export function isWeakDate(source: TakenAtSource | null, takenAt: Date | null): boolean {
   return !takenAt || source === null || WEAK_DATE_SOURCES.includes(source);
 }
