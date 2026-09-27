@@ -19,7 +19,7 @@ import { faceCounts, needsDecision } from "@/lib/people/queries";
 import { withdrawalDue, withdrawalNotice, withdrawalReason } from "@/lib/people/forget";
 import { FacesAdmin } from "@/components/people/FacesAdmin";
 import { allowForgottenName, allowForgottenNameTyped, decideIndexing } from "@/app/people/actions";
-import { forgetKeyState, forgottenNames } from "@/lib/people/tombstone";
+import { forgetKeyState, forgottenNameLabel, forgottenNames } from "@/lib/people/tombstone";
 import { isMinor } from "@/lib/people/consent";
 import { TakeoutAdmin } from "@/components/admin/TakeoutAdmin";
 import { inboxDir, listArchives } from "@/lib/takeout/inbox";
@@ -156,9 +156,9 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
               <h3 className="font-medium">Forgotten names</h3>
               <p className="text-muted">The album keeps each forgotten name only as a code, and takes it out of anything sent to or written by the AI helper. If one turns out to be somebody else&apos;s too, or an everyday word, allow it again.</p>
               <ul className="space-y-1">
-                {forgotten.map((f) => (
-                  <li key={f.hash} className="flex items-center gap-2">
-                    <span>A forgotten name, added {f.createdAt.toLocaleDateString("en-US")}</span>
+                {forgotten.map((f, i) => (
+                  <li key={f.hash} className="flex flex-wrap items-center gap-2">
+                    <span>{forgottenNameLabel(f, i, forgotten.length)}</span>
                     <form action={allowForgottenName.bind(null, f.hash)}>
                       <ConfirmSubmitButton size="sm" variant="secondary" confirmMessage="Allow this forgotten name again? The AI helper may then be told it and write it.">Allow this name again</ConfirmSubmitButton>
                     </form>

@@ -157,8 +157,38 @@ export async function rememberForgotten(forms: { form: string; capitalizedOnly: 
 }
 
 /** Forgotten names an admin may allow again: when each was added, and nothing that says what it was. */
-export async function forgottenNames(): Promise<{ hash: string; createdAt: Date }[]> {
-  return db.forgottenName.findMany({ orderBy: { createdAt: "desc" }, select: { hash: true, createdAt: true } });
+export async function forgottenNames(): Promise<ForgottenNameRow[]> {
+  const rows = await db.forgottenName.findMany({ orderBy: { createdAt: "desc" }, select: { hash: true, createdAt: true, derived: true, kinshipGroups: true, photoIds: true, containerIds: true } });
+  // Enough to tell the rows apart without the name: its shape, and how far its one-word matching reaches.
+  return rows.map((r) => ({
+    hash: r.hash,
+    createdAt: r.createdAt,
+    derived: r.derived,
+    oneWord: Array.isArray(r.kinshipGroups) && r.kinshipGroups.length > 0,
+    photos: r.photoIds.length,
+    places: r.containerIds.length,
+  }));
+}
+
+export type ForgottenNameRow = { hash: string; createdAt: Date; /** The first name of a full one. */ derived: boolean; /** Looked for only where its person was. */ oneWord: boolean; photos: number; places: number };
+
+/**
+ * One line of the admin's list, telling rows apart without saying the name: "2 of 3 · a full name, forgotten Sep 27,
+ * 2026, 3:14 PM". Forgetting "Sam Kent" leaves two rows at the same moment, so the shape is what separates them.
+ */
+export function forgottenNameLabel(f: Pick<ForgottenNameRow, "createdAt" | "derived" | "oneWord" | "photos" | "places">, index: number, total: number, timeZone?: string): string {
+  const shape = f.derived
+    ? "the first name of a full name"
+    : f.oneWord
+    ? "a one-word name"
+    : "a full name";
+  const reach = !(f.derived || f.oneWord)
+    ? ""
+    : f.photos + f.places === 0
+    ? ", on no photograph yet"
+    : `, looked for only on ${f.photos} photograph${f.photos === 1 ? "" : "s"}${f.places ? ` and ${f.places} trip${f.places === 1 ? "" : "s"}, collection${f.places === 1 ? "" : "s"} or activit${f.places === 1 ? "y" : "ies"}` : ""}`;
+  const when = f.createdAt.toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short", timeZone });
+  return `${index + 1} of ${total} · ${shape}${reach}, forgotten ${when}`;
 }
 
 /** The entries a typed name would be under each key, for "Allow this name again" without showing any name. */

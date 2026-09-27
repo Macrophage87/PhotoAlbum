@@ -18,7 +18,7 @@ import { applyAnnotation } from "@/lib/annotation/apply";
 import { applyPlaceEstimate } from "@/lib/annotation/place";
 import { loadItem, withoutUnpermittedNames } from "@/lib/annotation/request";
 import { withoutUnpermittedNames as withoutContainerNames } from "@/lib/annotation/container";
-import { forgetKeyState, forgottenNames, forgottenScope, loadTombstone } from "@/lib/people/tombstone";
+import { forgetKeyState, forgottenNameLabel, forgottenNames, forgottenScope, loadTombstone } from "@/lib/people/tombstone";
 import { completePendingForgets } from "@/lib/people/forget-person";
 import { withForgetLock } from "@/lib/people/names-changed";
 import { nameMatcher } from "@/lib/people/scrub";
@@ -674,6 +674,13 @@ describe("names that are also words", () => {
     // "Ximena", "Robin Hood", and Robin Hood's "Robin" (kept only on his photographs).
     expect(list.length).toBe(3);
     expect(JSON.stringify(list)).not.toMatch(/ximena|robin/i);
+    // Each row reads differently, still without the name: its place in the list and its shape.
+    const labels = list.map((f, i) => forgottenNameLabel(f, i, list.length, "UTC"));
+    expect(new Set(labels).size).toBe(3);
+    expect(labels.join("\n")).not.toMatch(/ximena|robin/i);
+    expect(labels.some((l) => l.includes("a full name"))).toBe(true);
+    expect(labels.some((l) => l.includes("the first name of a full name"))).toBe(true);
+    expect(labels[0]).toMatch(/^1 of 3 · /);
     const fd = new FormData();
     fd.set("name", "robin  hood");
     await allowForgottenNameTyped(fd);
