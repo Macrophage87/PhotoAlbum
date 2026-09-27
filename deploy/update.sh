@@ -128,7 +128,7 @@ KEY_LINE='^[[:space:]]*(export[[:space:]]+)?FORGET_KEY='
 NEED_KEY=
 if as_root test -f .env && ! as_root grep -qE "${KEY_LINE}[^[:space:]]" .env; then
   if as_root grep -qs FORGET_KEY docker-compose.override.yml; then
-    echo "== .env has no FORGET_KEY, but docker-compose.override.yml names it: making none (make sure it holds the key) =="
+    echo "!! .env has no FORGET_KEY, but docker-compose.override.yml names it: making none (make sure it holds the key)." >&2
   else
     NEED_KEY=1
   fi

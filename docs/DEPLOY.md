@@ -363,13 +363,14 @@ if sudo grep -qE '^[[:space:]]*(export[[:space:]]+)?FORGET_KEY=[^[:space:]]' .en
   echo "This .env already has a FORGET_KEY: leaving it alone."
 else
   sudo sed -i -E '/^[[:space:]]*(export[[:space:]]+)?FORGET_KEY=[[:space:]]*$/d' .env
+  sudo sed -i -e '$a\' .env                         # end the last line, so the key starts a line of its own
   echo "FORGET_KEY=$(openssl rand -base64 32)" | sudo tee -a .env >/dev/null
 fi
 ```
 
 If `docker-compose.override.yml` sets `FORGET_KEY` instead, leave that as it is and skip the block.
 
-Then back each key up **separately from the database dumps**, labeled with its instance (`sudo grep '^FORGET_KEY=' .env` shows it; a password manager is the place for it): `deploy/update.sh` dumps only the database, and once somebody has been forgotten, that database without its key pauses forgetting and the AI helper until the key is back. If an instance has already forgotten somebody under a key and its `.env` has lost it, do not make a new one: put the original back. The script refuses to make a key for a database that keeps names under one, and says so.
+Then back each key up **separately from the database dumps**, labeled with its instance (`sudo grep -E '^[[:space:]]*(export[[:space:]]+)?FORGET_KEY=' .env` shows it; a password manager is the place for it): `deploy/update.sh` dumps only the database, and once somebody has been forgotten, that database without its key pauses forgetting and the AI helper until the key is back. If an instance has already forgotten somebody under a key and its `.env` has lost it, do not make a new one: put the original back. The script refuses to make a key for a database that keeps names under one, and says so.
 
 Two things to know when upgrading an install from before the media-hub release: the database image changed from `postgres:16` to `pgvector/pgvector:pg16` (same data format; compose replaces the container and keeps the `pgdata` volume, and the first start creates the `vector` extension), and if you run the ML sidecar its profile must be part of every `up`. Put `COMPOSE_PROFILES=ml` (plus `worker` if used) in `.env` so `docker compose up --build -d` and `deploy/update.sh` include it, then run `docker compose run --rm ml-init` once to fetch the weights.
 
