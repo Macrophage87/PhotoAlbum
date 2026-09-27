@@ -337,26 +337,42 @@ export function memberTextCount(t: MemberText): number {
 /** How many of each are listed: enough to act on, not the whole album. */
 const MEMBER_TEXT_LIMIT = 100;
 
+/**
+ * Letters that do not come apart into a plain letter and an accent, spelled the way a keyboard without them does:
+ * Łukasz is Lukasz in a file name, Søren Soren.
+ */
+const FOLD: Record<string, string> = { ł: "l", Ł: "L", ø: "o", Ø: "O", æ: "ae", Æ: "Ae", œ: "oe", Œ: "Oe", ß: "ss", đ: "d", Đ: "D", þ: "th", Þ: "Th" };
+function folded(text: string): string {
+  return text.normalize("NFKD").replace(/\p{M}/gu, "").replace(/[łŁøØæÆœŒßđĐþÞ]/gu, (c) => FOLD[c] ?? c);
+}
+
 /** Letters and digits only, lower-cased and hyphen-joined, the way a web address or a file name spells a name. */
 function hyphenated(text: string): string {
-  return `-${text.normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "-")}-`;
+  return `-${folded(text).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "-")}-`;
 }
 
 /**
+ * The last word of a two-word first name, which runs into one given name of its own: Mary Ann is Maryann, Anna
+ * Belle Annabelle, Rose Lee Roselee. A name ending so is not looked for run together.
+ */
+const GIVEN_NAME_ENDINGS = new Set(["ann", "anne", "anna", "belle", "bell", "bella", "beth", "lee", "leigh", "lynn", "lyn", "lynne", "marie", "mae", "may", "rose", "jo", "joy", "sue", "lou", "louise", "ellen", "jean", "jane", "kay", "ray", "etta", "ette", "elle", "ella", "dee", "grace", "lea", "leah", "lena", "line", "lina", "joe"]);
+
+/**
  * Whether text a member typed without thinking of it as prose names them: a file name ("zebulon_quince_80.jpg"), a
- * web address, a note. By the rules for prose, or by one of their full names spelled out in any case — never by a
- * first name alone, or a one-word name that is also a word.
+ * place name, a web address, a note, a relationship. Only by one of their full names, spelled apart in any case
+ * ("Zebulon Quince's cabin", "zebulon-quince-80th") or run together ("ZebulonQuince.jpg"): never by a first name
+ * alone, which in a place's or a track's name is as often somebody else or a place ("Leo Martinez Park", "Santa
+ * Barbara Pier"), and never by the rules for prose, which count one.
  */
 export function looseMatcher(m: NameMatcher): (text: string | null | undefined) => boolean {
   const names = [...new Set([...m.albumForms, ...m.tombstoneForms.filter((f) => !f.derived && !f.capitalizedOnly).map((f) => f.form)])];
   const forms = names.map(hyphenated).filter((f) => f.length > 4);
-  // A full name run together ("zebulonquince80", "ZebulonQuince.jpg"): only a name of more than one word, and only
-  // when its joined spelling is no everyday word, herb or place ("Rose Mary" is rosemary, "Mary Land" Maryland).
-  const joined = [...new Set(names.map((n) => piecesOf(n)).filter((w) => w.length > 1).map((w) => w.join("")))].filter((j) => j.length >= 6 && !isEverydayWord(j) && !isPlaceOrDateWord(j));
+  // A full name run together ("zebulonquince80", "ZebulonQuince.jpg"): only a name of more than one word, of eight
+  // letters or more, not ending as a two-word first name does ("Anna Belle" is Annabelle), and whose joined spelling
+  // is no everyday word, herb or place ("Rose Mary" is rosemary, "Mary Land" Maryland).
+  const joined = [...new Set(names.map((n) => piecesOf(n)).filter((w) => w.length > 1 && !GIVEN_NAME_ENDINGS.has(w[w.length - 1])).map((w) => w.join("")))].filter((j) => j.length >= 8 && !isEverydayWord(j) && !isPlaceOrDateWord(j));
   return (text) => {
     if (!text?.trim()) return false;
-    // An underscore is a space in a file name; the rules for prose would read "Leo_Martinez" as Leo alone.
-    if (m.mentions(text.replace(/_/g, " "))) return true;
     const h = hyphenated(text);
     return forms.some((f) => h.includes(f)) || (joined.length > 0 && runsTogether(piecesOf(text), joined));
   };
@@ -367,7 +383,7 @@ export function looseMatcher(m: NameMatcher): (text: string | null | undefined) 
  * and where a lower-case letter meets a capital. "ZebulonQuince80" is zebulon, quince, 80; "zebulonquince" is one.
  */
 function piecesOf(text: string): string[] {
-  const plain = text.normalize("NFKD").replace(/\p{M}/gu, "");
+  const plain = folded(text);
   return (plain.match(/\p{Lu}?\p{Ll}+|\p{Lu}+(?!\p{Ll})|\p{Lo}+|\p{N}+/gu) ?? []).map((p) => p.toLowerCase());
 }
 
@@ -426,7 +442,7 @@ export async function memberTextMentioning(m: NameMatcher, tagged: Set<string> =
       if (m.mentions(p.context, where)) fields.push("notes");
       // The place's name, from the address lookup or a guess a member accepted ("Zebulon Quince's cabin"): shown
       // with the photograph and searched by it, and changed by setting the place again.
-      if (m.mentions(p.placeName, where) || loose(p.placeName)) fields.push("place");
+      if (loose(p.placeName)) fields.push("place");
     }
     if (loose(p.originalName)) fields.push("file name");
     if (loose(p.trashNote)) fields.push("trash note");
