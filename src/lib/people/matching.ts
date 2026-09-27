@@ -105,8 +105,10 @@ export async function confirmFaceAs(faceId: string, personId: string): Promise<v
   // Their recognition read under a lock until this commits (person, then face, then era group, as everywhere): an
   // admin switching it off meanwhile either comes first and is seen here, or waits and nulls what this keeps.
   await db.$transaction(async (tx) => {
-    const [now] = await tx.$queryRaw<{ faceIndexing: boolean }[]>`SELECT "faceIndexing" FROM "Person" WHERE id = ${personId} FOR SHARE`;
+    const [now] = await tx.$queryRaw<{ faceIndexing: boolean; forgetting: boolean }[]>`SELECT "faceIndexing", ("optedOutAt" IS NOT NULL OR "forgetPendingAt" IS NOT NULL) AS forgetting FROM "Person" WHERE id = ${personId} FOR SHARE`;
     if (!now) throw new Error("That person is no longer in the album");
+    // Being forgotten: their faces are being taken away, not added to (a leftover proposal confirmed meanwhile).
+    if (now.forgetting) throw new Error("This person asked to be forgotten");
     await tx.face.update({ where: { id: faceId }, data: { personId, proposedPersonId: null, status: "CONFIRMED", clusterId: null, ageAtCaptureYears: age ? Math.round(age.years * 10) / 10 : undefined } });
     if (!now.faceIndexing) {
       await tx.$executeRaw`UPDATE "Face" SET embedding = NULL WHERE id = ${faceId}`;

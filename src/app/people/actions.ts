@@ -29,8 +29,10 @@ const day = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().transform((v) => 
 
 /** Set the templates of a person's faces and clusters to NULL, keeping rows, boxes and confirmations. */
 async function nullTemplatesFor(personId: string, client: Prisma.TransactionClient = db) {
-  // Groups before faces, the order every other writer of both takes them in (leaveCluster, naming, detection).
-  await client.$executeRaw`UPDATE "FaceCluster" SET centroid = NULL WHERE "personId" = ${personId}`;
+  // Groups (in id order) before faces, as leaveCluster and naming take them. Confirming a face and detection's
+  // restore take a face before its era group, but only after the person's row FOR SHARE, which decideIndexing holds
+  // FOR UPDATE before it gets here: they wait for it rather than cross it.
+  await client.$executeRaw`UPDATE "FaceCluster" SET centroid = NULL WHERE id IN (SELECT id FROM "FaceCluster" WHERE "personId" = ${personId} ORDER BY id FOR UPDATE)`;
   await client.$executeRaw`UPDATE "Face" SET embedding = NULL WHERE "personId" = ${personId}`;
 }
 
@@ -273,12 +275,15 @@ export async function decideIndexing(personId: string, fd: FormData): Promise<vo
   const attest = fd.get("attest") === "on";
   // Someone who asked to be forgotten stays off unless the admin records that they have agreed again.
   const agreedAgain = fd.get("agreedAgain") === "on";
-  const wantIndexing = fd.get("faceIndexing") === "on" && (!person.optedOutAt || agreedAgain);
-  const outcome = namingOutcome({ byAdmin: true, wantIndexing, parentInstruction: fd.get("parentInstruction") === "on", birthday, attest, isChildFlag: false });
   const now = new Date();
   const named = nameMayLeaveServer(person);
-  // Recognition off and the templates gone in one commit: never a person switched off who keeps them.
-  const after = await db.$transaction(async (tx) => {
+  // Recognition off and the templates gone in one commit: never a person switched off who keeps them. Whether they
+  // asked to be forgotten is read under the lock, so a switch-on racing a forget never turns them back on.
+  const { after, outcome } = await db.$transaction(async (tx) => {
+    const [locked] = await tx.$queryRaw<{ optedOut: boolean; forgetting: boolean }[]>`SELECT "optedOutAt" IS NOT NULL AS "optedOut", "forgetPendingAt" IS NOT NULL AS forgetting FROM "Person" WHERE id = ${personId} FOR UPDATE`;
+    if (!locked) throw new Error("That person is no longer in the album");
+    const wantIndexing = fd.get("faceIndexing") === "on" && !locked.forgetting && (!locked.optedOut || agreedAgain);
+    const outcome = namingOutcome({ byAdmin: true, wantIndexing, parentInstruction: fd.get("parentInstruction") === "on", birthday, attest, isChildFlag: false });
     const updated = await tx.person.update({
       where: { id: personId },
       data: {
@@ -289,10 +294,12 @@ export async function decideIndexing(personId: string, fd: FormData): Promise<vo
         adultAttestedById: outcome.attested ? admin.id : person.adultAttestedById,
         adultAttestedAt: outcome.attested ? now : person.adultAttestedAt,
         pendingDecision: false,
+        // Agreed again, and so no longer opted out: in the same commit as turning them on.
+        ...(!outcome.nullTemplates && agreedAgain ? { optedOutAt: null } : {}),
       },
     });
     if (outcome.nullTemplates) await nullTemplatesFor(personId, tx);
-    return updated;
+    return { after: updated, outcome };
   });
   // No longer to be named (recognition off, or a birthday showing a child): what the helper wrote with the name goes.
   if (named && !nameMayLeaveServer(after)) await forgetNameEverywhere(after);
@@ -305,7 +312,6 @@ export async function decideIndexing(personId: string, fd: FormData): Promise<vo
     // Enabling later: templates of confirmed faces are recomputed by re-scanning their photos, then open faces are re-matched.
     const photos = await db.face.findMany({ where: { personId, status: "CONFIRMED" }, select: { photoId: true }, distinct: ["photoId"] });
     await db.photo.updateMany({ where: { id: { in: photos.map((p) => p.photoId) } }, data: { facesDetectedAt: null } });
-    if (agreedAgain) await db.person.update({ where: { id: personId }, data: { optedOutAt: null } });
     // The re-scan restores the templates and rebuilds this person's centroids, then proposes for open faces (detect-faces.ts).
     await enqueueFaceDetection(...photos.map((p) => p.photoId));
   }
