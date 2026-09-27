@@ -6,8 +6,8 @@ import sharp from "sharp";
 import { db } from "@/lib/db";
 import type { Viewer } from "@/lib/auth/viewer";
 import { storage } from "@/lib/storage";
-import { sanitizeGlb, sanitizePly, sanitizeScan, sanitizeSpz } from "@/lib/scans/sanitize";
-import { publicScanKey } from "@/lib/scans/public-copy";
+import { PlyWithheld, plyHeader, plyTextBody, sanitizeGlb, sanitizePly, sanitizeScan, sanitizeSpz } from "@/lib/scans/sanitize";
+import { PUBLIC_SCAN_VERSION, publicScanKey, withheldScanKey } from "@/lib/scans/public-copy";
 import { toGridPhoto } from "@/components/photos/toGrid";
 import type { PhotoCard } from "@/lib/photos/queries";
 import { resetTestDb } from "../helpers/reset";
@@ -441,6 +441,64 @@ describe("cleaning the other formats", () => {
     expect(sanitizePly(Buffer.concat([Buffer.from("ply\nformat binary_little_endian 1.0\nelement vertex 2\nproperty float x\nend_header\n"), Buffer.alloc(4)]))).toBeNull();
   });
 
+  it("writes a float as no more than a float32, an integer only within its type, and not-a-number one way (PLY values)", () => {
+    const one = (type: string, value: string) => {
+      const out = sanitizePly(Buffer.from(`ply\nformat ascii 1.0\nelement vertex 1\nproperty ${type} v\nend_header\n${value}\n`));
+      return out && out.toString().split("end_header\n")[1].trim();
+    };
+    // A float keeps only what a float32 holds, in the fewest digits that read back as it; a double keeps its own.
+    expect(one("float", "0.1000000001")).toBe("0.1");
+    expect(one("float", "16777217")).toBe("16777216");
+    expect(one("float", "3.14159274101257324")).toBe("3.1415927");
+    expect(one("float32", "-12.345678")).toBe("-12.345678");
+    expect(one("float", "1e39")).toBe("inf");
+    expect(one("double", "0.1000000001")).toBe("0.1000000001");
+    expect(one("double", "3.14159274101257324")).toBe("3.1415927410125732");
+    for (const [token, word] of [["NaN", "nan"], ["-nan", "nan"], ["+INF", "inf"], ["-Infinity", "-inf"], ["inf", "inf"]]) {
+      expect(one("float", token), token).toBe(word);
+      expect(one("double", token), token).toBe(word);
+    }
+    // An integer within what its type holds, including a whole number written with a point; nothing else.
+    for (const [type, ok, bad] of [["char", "-128", "128"], ["int8", "127", "-129"], ["uchar", "255", "256"], ["uint8", "0", "-1"], ["short", "-32768", "32768"], ["int16", "32767", "-32769"], ["ushort", "65535", "65536"], ["uint16", "0", "-1"], ["int", "-2147483648", "2147483648"], ["int32", "2147483647", "-2147483649"], ["uint", "4294967295", "4294967296"], ["uint32", "0", "-1"]]) {
+      expect(one(type, ok), `${type} ${ok}`).toBe(ok);
+      expect(one(type, bad), `${type} ${bad}`).toBeNull();
+    }
+    expect(one("uchar", "255.000000")).toBe("255");
+    expect(one("int", "-0.0")).toBe("0");
+    for (const bad of ["255.5", "1e-3", "nan", "0x10"]) expect(one("uchar", bad), bad).toBeNull();
+  });
+
+  it("reads integers written with a point, as three's loader does (PLY whole numbers)", () => {
+    const ply = Buffer.from("ply\nformat ascii 1.0\nelement vertex 1\nproperty float x\nproperty float y\nproperty float z\nproperty uchar red\nproperty uchar green\nproperty uchar blue\nend_header\n1 2 3 255.0 0.0 0.0\n");
+    expect(sanitizePly(ply)!.toString().endsWith("end_header\n1 2 3 255 0 0\n")).toBe(true);
+  });
+
+  it("makes a text PLY's records as it streams, a batch at a time, giving the server its turn between (PLY streaming)", async () => {
+    const rows = 12_000;
+    const head = `ply\nformat ascii 1.0\ncomment SECRET\nelement vertex ${rows}\nproperty float x\nproperty uchar red\nelement face 1\nproperty list uchar int vertex_indices\nend_header\n`;
+    const body = Array.from({ length: rows }, (_, i) => `${i / 8} ${i % 256} SECRET\r\n`).join("") + "3 0 1 2 SECRET\r\nSECRETPLYTAIL";
+    const ply = Buffer.from(head + body);
+    const layout = plyHeader(ply)!;
+    // Cut anywhere, mid-line and mid-number, it comes out the same as made in one piece.
+    const raw = ply.subarray(layout.bodyStart);
+    const chunks = Array.from({ length: Math.ceil(raw.length / 7) }, (_, i) => raw.subarray(i * 7, i * 7 + 7));
+    let ticked = false;
+    setImmediate(() => (ticked = true));
+    const made = plyTextBody(layout, chunks);
+    const parts = [(await made.next()).value as Buffer];
+    // The first batch is made without waiting on anything; before the next, the server has had a turn.
+    expect(ticked).toBe(false);
+    for (let r = await made.next(); !r.done; r = await made.next()) parts.push(r.value);
+    expect(ticked).toBe(true);
+    expect(parts.length).toBeGreaterThan(2);
+    expect(Buffer.concat([layout.header, ...parts]).equals(sanitizePly(ply)!)).toBe(true);
+    expect(Buffer.concat(parts).includes(Buffer.from("SECRET"))).toBe(false);
+    // What is not a record withholds the file, as does a line no record would run to.
+    const drain = async (b: Buffer) => { for await (const part of plyTextBody(plyHeader(b)!, [b.subarray(plyHeader(b)!.bodyStart)])) void part; };
+    await expect(drain(Buffer.from(head + "1 2\n"))).rejects.toBeInstanceOf(PlyWithheld);
+    await expect(drain(Buffer.concat([Buffer.from(head), Buffer.alloc(2 * 1024 * 1024, "1")]))).rejects.toBeInstanceOf(PlyWithheld);
+  });
+
   /** An SPZ's decompressed bytes: header for `n` degree-0 version-2 points, then their arrays. */
   const splat = (n: number) => {
     const raw = Buffer.alloc(16 + n * (9 + 1 + 3 + 3 + 3));
@@ -553,8 +611,53 @@ describe("a scan's file, for somebody outside the family", () => {
     expect(body.includes(Buffer.from("SECRET"))).toBe(false);
     // Written under a name of its own and moved into place: nothing half-written is left beside it.
     const { readdir } = await import("node:fs/promises");
-    expect((await readdir(path.dirname(storage().localPath!("scans-test/ply/original.ply")))).sort()).toEqual(["model-public.ply", "original.ply"]);
+    expect((await readdir(path.dirname(storage().localPath!("scans-test/ply/original.ply")))).sort()).toEqual([`model-public-v${PUBLIC_SCAN_VERSION}.ply`, "original.ply"]);
     await storage().deletePrefix("scans-test/ply");
+  });
+
+  const plyScan = async (ply: Buffer) => {
+    await storage().deletePrefix("scans-test/ply");
+    await storage().putBuffer("scans-test/ply/original.ply", ply);
+    const trip = await db.trip.findFirstOrThrow();
+    const u = await db.user.findFirstOrThrow();
+    return (await db.photo.create({ data: { tripId: trip.id, uploaderId: u.id, kind: "SCAN", scanFormat: "PLY", originalName: "SECRET.ply", mimeType: "application/x-ply", storageKey: "scans-test/ply", originalPath: "scans-test/ply/original.ply", sizeBytes: ply.length, status: "READY" } })).id;
+  };
+  const plyFile = { storageKey: "scans-test/ply", originalPath: "scans-test/ply/original.ply", scanFormat: "PLY" };
+
+  it("streams a text PLY's records across made again, and nothing after them", async () => {
+    const ply = Buffer.from("ply\nformat ascii 1.0\ncomment SECRET-APP\nelement vertex 2\nproperty float x\nproperty uchar red\nend_header\n1.5 255.0 SECRET\n2.5 7\nSECRETPLYTAIL\n");
+    const id = await plyScan(ply);
+    who.viewer = anon;
+    const { res, body } = await get(id, "model");
+    expect(res.status).toBe(200);
+    expect(body.toString()).toBe("ply\nformat ascii 1.0\nelement vertex 2\nproperty float x\nproperty uchar red\nend_header\n1.5 255\n2.5 7\n");
+    await storage().deletePrefix("scans-test/ply");
+  });
+
+  it("finds a scan that cannot be cleaned to be so once, and writes down why", async () => {
+    const bad = Buffer.from("ply\nformat ascii 1.0\nelement vertex 2\nproperty float x\nproperty float y\nend_header\n1 2\n3\n");
+    const id = await plyScan(bad);
+    who.viewer = anon;
+    expect((await get(id, "model")).res.status).toBe(404);
+    const marker = storage().localPath!(withheldScanKey(plyFile));
+    expect(JSON.parse(await readFile(marker, "utf8"))).toEqual({ version: PUBLIC_SCAN_VERSION, reason: expect.stringMatching(/record/) });
+    // Asked again, it is not made again: even a file that could now be cleaned is answered from what was written down.
+    await storage().putBuffer("scans-test/ply/original.ply", Buffer.from("ply\nformat ascii 1.0\nelement vertex 1\nproperty float x\nend_header\n1\n"));
+    expect((await get(id, "model")).res.status).toBe(404);
+    expect(await storage().exists(publicScanKey(plyFile))).toBe(false);
+    await storage().deletePrefix("scans-test/ply");
+  });
+
+  it("makes again a copy an older cleaning made, and deletes the old one", async () => {
+    // What an older cleaning left beside the upload, holding what this one strips.
+    await storage().putBuffer("scans-test/glb/model-public.glb", original);
+    await storage().putBuffer(withheldScanKey({ storageKey: "scans-test/glb", originalPath: "", scanFormat: "GLB" }, 1), Buffer.from("{}"));
+    who.viewer = anon;
+    const { res, body } = await get(glbId, "model");
+    expect(res.status).toBe(200);
+    for (const leak of LEAKS) expect(body.includes(Buffer.from(leak)), leak).toBe(false);
+    const { readdir } = await import("node:fs/promises");
+    expect((await readdir(path.dirname(storage().localPath!("scans-test/glb/original.glb")))).sort()).toEqual([`model-public-v${PUBLIC_SCAN_VERSION}.glb`, "original.glb"]);
   });
 
   it("shows visitors a line of text in place of a USDZ, and a GLB as a scan", () => {

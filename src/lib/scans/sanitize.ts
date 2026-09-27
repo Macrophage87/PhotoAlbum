@@ -575,64 +575,193 @@ export function plyBodyLength(layout: PlyLayout, body: Buffer): number | null {
   return at;
 }
 
-const isReal = (type: string) => type.startsWith("float") || type === "double";
-const PLY_INTEGER = /^[+-]?\d+$/;
 const PLY_REAL = /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/;
-const PLY_NOT_FINITE = /^[+-]?(nan|inf|infinity)$/i;
+const PLY_NOT_FINITE = /^([+-]?)(nan|inf|infinity)$/i;
+/** What each integer type can hold; a value outside it is not one a reader could have read. */
+const PLY_INT_RANGE: Record<string, [number, number]> = { char: [-128, 127], int8: [-128, 127], uchar: [0, 255], uint8: [0, 255], short: [-32768, 32767], int16: [-32768, 32767], ushort: [0, 65535], uint16: [0, 65535], int: [-2147483648, 2147483647], int32: [-2147483648, 2147483647], uint: [0, 4294967295], uint32: [0, 4294967295] };
+/** The smallest normal float32: from there up, six significant digits always survive a float32 and back. */
+const FLOAT32_NORMAL = 2 ** -126;
 
-/**
- * One text value, written again as the number it is: the shortest digits that read back as the same value, so a value
- * stretched out with digits nobody reads cannot carry anything, and one with 15 significant digits or fewer (what
- * exporters write) keeps its exact decimal value. Null for anything that is not a number of `type`'s kind.
- */
-function plyValue(token: string, type: string): string | null {
-  if (isReal(type) && PLY_NOT_FINITE.test(token)) return token; // one of a few fixed words, left as the file wrote it
-  if (!(isReal(type) ? PLY_REAL : PLY_INTEGER).test(token)) return null;
-  const n = Number(token);
-  return Object.is(n, -0) ? "-0" : String(n);
+/** Significant digits in a number as `String` writes it. */
+function digits(s: string): number {
+  let n = 0;
+  let leading = true;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c === 101) break; // "e"
+    if (c < 48 || c > 57 || (leading && c === 48)) continue;
+    leading = false;
+    n++;
+  }
+  return n;
 }
 
 /**
- * A text body's records, one line each, made again from exactly the values the header declares for them (a list's
- * length, then that many items) and nothing after the last: a record's extra tokens are left behind, and a record
- * with too few values, or one that is not a number, withholds the file. Blank lines are skipped.
+ * The fewest significant digits that read back as this float32. No other decimal of six digits or fewer reads back
+ * as the same float (six digits always survive the trip), so what the file wrote is kept when it is that short;
+ * otherwise the digits are found again from the float itself, starting from as many as the file wrote.
  */
-function plyAsciiRecords(layout: PlyLayout, body: Buffer): Buffer | null {
-  const parts: Buffer[] = [];
-  let rows: string[] = [];
+function float32Text(f: number, written: string): string {
+  let p = Math.min(Math.max(digits(written), 1), 9);
+  if ((f === 0 || Math.abs(f) >= FLOAT32_NORMAL) && p <= 6) return written;
+  while (p > 1 && Math.fround(Number(f.toPrecision(p - 1))) === f) p--;
+  let s = f.toPrecision(p);
+  // Nine digits read back as any float32, so this ends there at the latest. The fewest digits end in no zero.
+  while (Math.fround(Number(s)) !== f) s = f.toPrecision(++p);
+  return s;
+}
+
+/**
+ * One text value, written again as the number it is, so a value stretched out with digits nobody reads cannot carry
+ * anything: an integer (a whole number written with a point too) as its digits, within what its type holds; a `float`
+ * as the fewest digits that read back as the same float32, and a `double` as the fewest that read back as the same
+ * double (a value of 15 significant digits or fewer, as exporters write them, keeps its exact decimal value);
+ * not-a-number and infinities as `nan`, `inf` and `-inf`. Null for anything that is not a number of `type`'s kind.
+ */
+function plyValue(token: string, type: string): string | null {
+  const range = PLY_INT_RANGE[type];
+  if (range) {
+    // Some exporters write a whole number as `255.0`, and readers take it as the integer.
+    if (!PLY_REAL.test(token)) return null;
+    const n = Number(token);
+    return Number.isInteger(n) && n >= range[0] && n <= range[1] ? String(n) : null;
+  }
+  const single = type === "float" || type === "float32";
+  let n: number;
+  let written = "";
+  if (PLY_REAL.test(token)) {
+    n = Number(token);
+    written = String(n);
+  } else {
+    const word = PLY_NOT_FINITE.exec(token);
+    if (!word) return null;
+    n = word[2].toLowerCase() === "nan" ? NaN : word[1] === "-" ? -Infinity : Infinity;
+  }
+  if (single) n = Math.fround(n);
+  if (Number.isNaN(n)) return "nan";
+  if (!Number.isFinite(n)) return n > 0 ? "inf" : "-inf";
+  if (Object.is(n, -0)) return "-0";
+  return single ? float32Text(n, written) : written;
+}
+
+/**
+ * Makes a text body's records again a line at a time, each from exactly the values the header declares for it (a
+ * list's length, then that many items): a record's extra tokens are left behind, and one with too few values, or a
+ * value that is not a number its type holds, withholds the file. `row` gives the record ("" for a blank line, which is
+ * skipped) or null; `done` says when the last record has been made, and nothing after it is read.
+ */
+function plyTextRows(layout: PlyLayout) {
+  const left = layout.elements.map((e) => e.count);
+  let element = 0;
+  const advance = () => {
+    while (element < left.length && left[element] === 0) element++;
+  };
+  advance();
+  // The line being read, and how far into it.
+  let line = "";
   let at = 0;
-  for (const e of layout.elements) {
-    for (let n = 0; n < e.count; ) {
-      if (at >= body.length) return null;
-      let nl = body.indexOf(0x0a, at);
-      if (nl < 0) nl = body.length; // the last record may end the file without a newline
-      const t = body.toString("latin1", at, nl).trim().split(/\s+/);
-      at = nl + 1;
-      if (t[0] === "") continue;
-      const row: string[] = [];
-      let i = 0;
-      const take = (type: string) => {
-        const v = i < t.length ? plyValue(t[i++], type) : null;
-        if (v !== null) row.push(v);
-        return v;
-      };
-      for (const p of e.properties) {
+  const token = (): string | null => {
+    while (at < line.length && line.charCodeAt(at) <= 32) at++;
+    if (at >= line.length) return null;
+    const start = at;
+    while (at < line.length && line.charCodeAt(at) > 32) at++;
+    return line.slice(start, at);
+  };
+  const out: string[] = [];
+  /** The next token as a value of `type`, added to the record; null when there is none, or it is not one. */
+  const take = (type: string): string | null => {
+    const t = token();
+    const v = t === null ? null : plyValue(t, type);
+    if (v !== null) out.push(v);
+    return v;
+  };
+  return {
+    done: () => element >= left.length,
+    row(text: string): string | null {
+      line = text;
+      at = 0;
+      while (at < line.length && line.charCodeAt(at) <= 32) at++;
+      if (at >= line.length) return "";
+      out.length = 0;
+      for (const p of layout.elements[element].properties) {
         if ("list" in p) {
-          const count = take("int");
+          const count = PLY_INT_RANGE[p.list[0]] ? take(p.list[0]) : null; // a list's length is an integer
           if (count === null || Number(count) < 0) return null;
-          for (let k = 0; k < Number(count); k++) if (take(p.list[1]) === null) return null;
+          for (let k = Number(count); k > 0; k--) if (take(p.list[1]) === null) return null;
         } else if (take(p.type) === null) return null;
       }
-      rows.push(row.join(" ") + layout.eol);
-      n++;
-      if (rows.length === 65536) {
-        parts.push(Buffer.from(rows.join(""), "latin1"));
-        rows = [];
+      left[element]--;
+      advance();
+      return out.join(" ") + layout.eol;
+    },
+  };
+}
+
+/** Thrown from `plyTextBody` for a text PLY that is not handed out. */
+export class PlyWithheld extends Error {}
+
+/** How long one text record may run; a list of a few thousand items fits many times over. */
+const PLY_LINE_MAX = 1024 * 1024;
+/** Records made between turns given back to the server. */
+const PLY_TEXT_BATCH = 5_000;
+
+/**
+ * A text PLY's records made again from its body as it streams in, a batch at a time with the server given its turn
+ * in between, so a point cloud of any size neither sits in memory nor holds up anything else. Stops reading after the
+ * last record; throws `PlyWithheld` for a file that is not handed out.
+ */
+export async function* plyTextBody(layout: PlyLayout, body: AsyncIterable<Buffer> | Iterable<Buffer>): AsyncGenerator<Buffer> {
+  const rows = plyTextRows(layout);
+  let out: string[] = [];
+  const take = (line: string) => {
+    let r: string | null;
+    try {
+      r = rows.row(line);
+    } catch {
+      r = null; // whatever it was, it was in reading the file, and answers the same way
+    }
+    if (r === null) throw new PlyWithheld("a text record that is not what its header declares");
+    if (r) out.push(r);
+  };
+  // latin1 is a byte to a character, so a chunk can be read as text wherever it was cut.
+  let carry = "";
+  for await (const chunk of body) {
+    const text = carry + chunk.toString("latin1");
+    let at = 0;
+    for (let nl = text.indexOf("\n"); nl >= 0 && !rows.done(); nl = text.indexOf("\n", at)) {
+      take(text.slice(at, nl));
+      at = nl + 1;
+      if (out.length >= PLY_TEXT_BATCH) {
+        yield Buffer.from(out.join(""), "latin1");
+        out = [];
+        await new Promise((resolve) => setImmediate(resolve));
       }
     }
+    if (rows.done()) break;
+    carry = text.slice(at);
+    if (carry.length > PLY_LINE_MAX) throw new PlyWithheld("a text record longer than any real one");
   }
-  parts.push(Buffer.from(rows.join(""), "latin1"));
-  return Buffer.concat(parts);
+  // The last record may end the file without a newline.
+  if (!rows.done() && carry) take(carry);
+  if (!rows.done()) throw new PlyWithheld("fewer text records than its header declares");
+  yield Buffer.from(out.join(""), "latin1");
+}
+
+/** `plyTextBody` for a body already in memory; null for a file that is not handed out. */
+function plyTextBodySync(layout: PlyLayout, body: Buffer): Buffer | null {
+  const rows = plyTextRows(layout);
+  const text = body.toString("latin1");
+  const out: string[] = [];
+  for (let at = 0; !rows.done(); ) {
+    if (at >= text.length) return null;
+    let nl = text.indexOf("\n", at);
+    if (nl < 0) nl = text.length; // the last record may end the file without a newline
+    const r = rows.row(text.slice(at, nl));
+    at = nl + 1;
+    if (r === null) return null;
+    out.push(r);
+  }
+  return Buffer.from(out.join(""), "latin1");
 }
 
 /** A PLY with only its reading instructions left in the header, and its records and nothing after them. */
@@ -641,7 +770,7 @@ export function sanitizePly(input: Buffer): Buffer | null {
   if (!layout) return null;
   const body = input.subarray(layout.bodyStart);
   if (layout.format === "ascii") {
-    const records = plyAsciiRecords(layout, body);
+    const records = plyTextBodySync(layout, body);
     return records && Buffer.concat([layout.header, records]);
   }
   const length = plyBodyLength(layout, body);
