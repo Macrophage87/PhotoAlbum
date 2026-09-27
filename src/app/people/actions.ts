@@ -69,7 +69,7 @@ export async function nameCluster(clusterId: string, fd: FormData): Promise<void
   });
   const now = new Date();
 
-  const person = await db.$transaction(async (tx) => {
+  const person = await retryOnDeadlock(() => db.$transaction(async (tx) => {
     const cluster = await lockCluster(tx, clusterId);
     if (!cluster || cluster.personId) throw new Error("Cluster not found or already named");
     // Read under the lock: exactly the faces the group holds now, none of them named.
@@ -94,10 +94,14 @@ export async function nameCluster(clusterId: string, fd: FormData): Promise<void
         },
       }));
     await tx.faceCluster.update({ where: { id: named }, data: { personId: who.id, label: who.name } });
+    // Naming a face refreshes its photograph's search text (face_search_trigger), one photo at a time in whatever
+    // order the faces come. Two groups named at once whose faces share photographs would each hold one the other
+    // wants; taking the photographs first, in one order, makes the second wait instead.
+    await tx.$queryRaw`SELECT p.id FROM "Photo" p WHERE p.id IN (SELECT "photoId" FROM "Face" WHERE id = ANY(${own})) ORDER BY p.id FOR NO KEY UPDATE`;
     // A face the album had proposed as somebody is now this person, and no longer proposed as anybody.
     await tx.face.updateMany({ where: { id: { in: own }, clusterId: named, personId: null }, data: { personId: who.id, status: "CONFIRMED", proposedPersonId: null } });
     return who;
-  });
+  }));
 
   /**
    * A group of dogs is a group the detector was wrong about in a gentler way: those are faces, and they are the
@@ -119,6 +123,26 @@ export async function nameCluster(clusterId: string, fd: FormData): Promise<void
   if (!existing) await rejudgeFromAction({ names: [person.name] });
   revalidatePath("/people", "layout");
   revalidatePath("/admin");
+}
+
+/**
+ * Run a transaction again, once, when the database chose it to break a deadlock: the other party has finished by
+ * then. Should it happen twice, the member is told plainly rather than shown a database error.
+ */
+async function retryOnDeadlock<T>(run: () => Promise<T>): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await run();
+    } catch (err) {
+      if (!isDeadlock(err)) throw err;
+      if (attempt >= 2) throw new Error("Somebody else was naming faces on the same photos just then. Try again in a moment.");
+    }
+  }
+}
+
+function isDeadlock(err: unknown): boolean {
+  const e = err as { code?: string; meta?: { code?: string }; message?: string } | null;
+  return e?.code === "P2034" || e?.meta?.code === "40P01" || /\b40P01\b|deadlock detected/i.test(e?.message ?? "");
 }
 
 /**

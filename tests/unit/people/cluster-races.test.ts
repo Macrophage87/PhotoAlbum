@@ -23,26 +23,43 @@ vi.mock("@/lib/auth/viewer", () => ({
 vi.mock("next/cache", () => ({ revalidatePath: () => undefined }));
 vi.mock("@/lib/jobs/boss", () => ({ enqueue: async () => {} }));
 const ml = vi.hoisted(() => ({ detect: vi.fn() }));
-// A seam in the database client: after any raw query whose text includes `match`, run `then` before answering.
-const seam = vi.hoisted(() => ({ match: "", then: null as null | (() => Promise<void>) }));
+// A seam in the database client, transactions included: every raw query's text is recorded; after one whose text
+// includes `match`, `then` runs before it answers; and while `fail` is above zero, the photographs' lock throws the
+// error Prisma gives a transaction the database chose to break a deadlock.
+const seam = vi.hoisted(() => ({ match: "", then: null as null | (() => Promise<void>), seen: [] as string[], fail: 0 }));
 vi.mock("@/lib/db", async (orig) => {
-  const real = ((await orig()) as { db: object }).db as Record<string | symbol, unknown>;
-  const queryRaw = async (strings: TemplateStringsArray, ...values: unknown[]) => {
-    const out = await (real.$queryRaw as (s: TemplateStringsArray, ...v: unknown[]) => Promise<unknown>)(strings, ...values);
-    if (seam.then && seam.match && strings.join("?").includes(seam.match)) {
+  const real = ((await orig()) as { db: object }).db;
+  type Client = Record<string | symbol, unknown>;
+  const rawOf = (t: Client) => async (strings: TemplateStringsArray, ...values: unknown[]) => {
+    const text = strings.join("?");
+    seam.seen.push(text);
+    if (seam.fail > 0 && text.includes("FOR NO KEY UPDATE")) {
+      seam.fail--;
+      throw Object.assign(new Error("Transaction failed due to a write conflict or a deadlock"), { code: "P2034" });
+    }
+    const out = await (t.$queryRaw as (s: TemplateStringsArray, ...v: unknown[]) => Promise<unknown>).call(t, strings, ...values);
+    if (seam.then && seam.match && text.includes(seam.match)) {
       const then = seam.then;
       seam.then = null;
       await then();
     }
     return out;
   };
-  const db = new Proxy(real, { get: (t, k) => (k === "$queryRaw" ? queryRaw : typeof t[k] === "function" ? (t[k] as (...a: unknown[]) => unknown).bind(t) : t[k]) });
-  return { db };
+  const wrap = (client: Client): Client =>
+    new Proxy(client, {
+      get: (t, k) => {
+        if (k === "$queryRaw") return rawOf(t);
+        if (k === "$transaction") return (fn: unknown, opts?: unknown) => (t.$transaction as (f: unknown, o?: unknown) => Promise<unknown>).call(t, typeof fn === "function" ? (tx: Client) => (fn as (c: Client) => unknown)(wrap(tx)) : fn, opts);
+        return typeof t[k] === "function" ? (t[k] as (...a: unknown[]) => unknown).bind(t) : t[k];
+      },
+    });
+  return { db: wrap(real as Client) };
 });
 vi.mock("@/lib/ml/client", async (orig) => ({ ...(await orig()) as object, detectFaces: ml.detect }));
 
 import { nameCluster, nameClusterAs } from "@/app/people/actions";
 import { detectFacesJob } from "@/lib/jobs/handlers/detect-faces";
+import { updatedCentroid } from "@/lib/people/cluster";
 
 /** Unit vectors near the first axis, so they group together. */
 const near = (tilt: number) => normalise(Array.from({ length: 512 }, (_, i) => (i === 0 ? 1 : i === 1 ? tilt : 0)));
@@ -88,6 +105,9 @@ describe("two people acting on one group of faces at once", () => {
   beforeEach(async () => {
     await resetTestDb();
     ml.detect.mockReset();
+    seam.seen = [];
+    seam.fail = 0;
+    seam.then = null;
     me = (await db.user.create({ data: { email: "me@example.com", role: "MEMBER" } })).id;
     other = (await db.user.create({ data: { email: "other@example.com", role: "MEMBER" } })).id;
     admin = (await db.user.create({ data: { email: "admin@example.com", role: "ADMIN" } })).id;
@@ -161,6 +181,59 @@ describe("two people acting on one group of faces at once", () => {
     expect(found.clusterId).not.toBe(clusterId);
     expect(found.cluster?.personId).toBeNull();
     expect(await centroid(clusterId)).toEqual(before);
+  });
+
+  it("adds a detected face to a group's centre as the group is when it is locked, not as it was first read", async () => {
+    ml.detect.mockResolvedValue([{ box: [0.6, 0.6, 0.1, 0.1], confidence: 0.9, embedding: near(0.05), age: 30 }]);
+    // Between detection reading the groups and placing its face, another face joins the group (a second scan,
+    // say), moving its centre and its count.
+    const moved = normalise(near(0).map((x, i) => x + near(0.6)[i]));
+    seam.match = `FROM "FaceCluster" WHERE "personId" IS NULL AND centroid IS NOT NULL`;
+    seam.then = async () => {
+      await face(mine, near(0.6), { clusterId, box: [0.7, 0.7, 0.1, 0.1] });
+      await db.$executeRaw`UPDATE "FaceCluster" SET centroid = ${vectorLiteral(moved)}::vector, "faceCount" = 2 WHERE id = ${clusterId}`;
+    };
+    // Scanning their photograph again: their old face goes first, leaving mine alone in the group.
+    await detectFacesJob({ photoId: theirs });
+    const found = await db.face.findFirstOrThrow({ where: { photoId: theirs } });
+    expect(found.clusterId).toBe(clusterId);
+    const after = await centroid(clusterId);
+    expect(after.faceCount).toBe(3);
+    const expected = updatedCentroid(moved, 2, near(0.05));
+    after.centroid!.slice(0, 2).forEach((x, i) => expect(x).toBeCloseTo(expected[i], 5));
+  });
+
+  it("takes the photographs in one order before naming, so two groups sharing them are named one after the other", async () => {
+    // Two groups, each with a face on both photographs, named at the same moment, several times over.
+    for (let round = 0; round < 6; round++) {
+      await db.face.deleteMany({});
+      await db.faceCluster.deleteMany({});
+      const groups: string[] = [];
+      for (let g = 0; g < 2; g++) {
+        const id = (await db.faceCluster.create({ data: { faceCount: 2 } })).id;
+        await face(mine, near(g), { clusterId: id });
+        await face(theirs, near(g), { clusterId: id });
+        groups.push(id);
+      }
+      as(admin, "ADMIN");
+      seam.seen = [];
+      await Promise.all(groups.map((g) => nameClusterAs(g, jo)));
+      expect(await db.face.count({ where: { personId: jo } })).toBe(4);
+      expect(seam.seen.filter((q) => q.includes(`ORDER BY p.id FOR NO KEY UPDATE`))).toHaveLength(2);
+    }
+  });
+
+  it("tries once more when the database breaks a deadlock, and says so plainly if it happens again", async () => {
+    as(admin, "ADMIN");
+    seam.fail = 1;
+    await nameClusterAs(clusterId, jo);
+    expect(await db.face.count({ where: { personId: jo } })).toBe(2);
+    const other = (await db.faceCluster.create({ data: { faceCount: 1 } })).id;
+    await face(mine, near(0.3), { clusterId: other });
+    seam.fail = 2;
+    await expect(nameClusterAs(other, jo)).rejects.toThrow(/naming faces on the same photos/);
+    // Nothing of the failed attempts stayed.
+    expect((await db.faceCluster.findUniqueOrThrow({ where: { id: other } })).personId).toBeNull();
   });
 
   it("gives a carved-out group, and the group it left, centres made from their own faces", async () => {

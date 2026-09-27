@@ -70,12 +70,14 @@ export async function detectFacesJob(job: DetectFacesJob, signal?: AbortSignal):
           // The groups were read before this face was placed, and one may have been named since. Naming holds the
           // group's row while it works, so ask again under the same lock: a face never joins a named group, and so
           // somebody, without anybody saying so.
-          const [row] = await tx.$queryRaw<{ personId: string | null }[]>`SELECT "personId" FROM "FaceCluster" WHERE id = ${hit.cluster.id} FOR UPDATE`;
+          const [row] = await tx.$queryRaw<{ personId: string | null; c: string | null; n: number }[]>`SELECT "personId", centroid::text AS c, "faceCount" AS n FROM "FaceCluster" WHERE id = ${hit.cluster.id} FOR UPDATE`;
           if (row && row.personId === null) {
             clusterId = hit.cluster.id;
-            const next = updatedCentroid(hit.cluster.centroid, hit.cluster.faceCount, f.embedding);
+            // The centre and count as they are now, not as read before the lock: a face carved out or split off
+            // meanwhile has already been taken out of them.
+            const next = updatedCentroid(row.c ? (JSON.parse(row.c) as number[]) : hit.cluster.centroid, row.n, f.embedding);
             hit.cluster.centroid = next;
-            hit.cluster.faceCount += 1;
+            hit.cluster.faceCount = row.n + 1;
             await tx.$executeRaw`UPDATE "FaceCluster" SET centroid = ${vectorLiteral(next)}::vector, "faceCount" = "faceCount" + 1, "updatedAt" = now() WHERE id = ${clusterId}`;
           } else clusters.splice(clusters.indexOf(hit.cluster), 1);
         }
