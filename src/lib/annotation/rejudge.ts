@@ -381,11 +381,11 @@ async function recordJudged(keys: string[], extra: { membersOnlyMatcher?: string
 }
 
 /**
- * A person's record is being deleted: the names recorded as judged for them go in the same transaction, so their
- * name is not left in clear in the settings until the next sweep.
+ * A person's (`person:<id>`) or a member's (`user:<id>`) record is being deleted: the names recorded as judged for
+ * them go in the same transaction, so their name is not left in clear in the settings until the next sweep.
  */
-export async function forgetJudgedNames(tx: Prisma.TransactionClient, personId: string): Promise<void> {
-  await tx.$executeRaw`UPDATE "AppSetting" SET "membersOnlyNames" = ARRAY(SELECT k FROM unnest("membersOnlyNames") k WHERE k NOT LIKE ${`person:${personId}:%`}) WHERE id = 'app'`;
+export async function forgetJudgedNames(tx: Prisma.TransactionClient, owner: `person:${string}` | `user:${string}`): Promise<void> {
+  await tx.$executeRaw`UPDATE "AppSetting" SET "membersOnlyNames" = ARRAY(SELECT k FROM unnest("membersOnlyNames") k WHERE k NOT LIKE ${`${owner}:%`}) WHERE id = 'app'`;
 }
 
 /**

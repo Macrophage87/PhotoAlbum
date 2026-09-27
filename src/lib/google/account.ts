@@ -1,6 +1,6 @@
 import { db } from "@/lib/db";
 import { decryptSecret, encryptSecret } from "./crypto";
-import { GoogleAuthError, refreshAccessToken, revokeToken } from "./oauth";
+import { GoogleAuthError, refreshAccessToken, revokeToken, revokeTokenOrThrow } from "./oauth";
 
 export type GoogleStatus = { connected: boolean; needsReconnect: boolean; connectedAt: string | null };
 
@@ -73,16 +73,37 @@ export async function disconnectGoogleAccount(userId: string): Promise<void> {
 
 /**
  * Revoke at Google a connection whose row is already gone (a removed member's goes with their account), and stop
- * handing out its cached access token.
+ * handing out its cached access token. "failed" when Google could not be told: the caller queues it to be tried
+ * again (`revokeQueuedConnection`), since the grant would otherwise outlive the member.
  */
-export async function revokeRemovedConnection(userId: string, encryptedRefreshToken: string | null): Promise<void> {
+export async function revokeRemovedConnection(userId: string, encryptedRefreshToken: string | null): Promise<"revoked" | "failed" | "none"> {
   cache.delete(userId);
-  if (!encryptedRefreshToken) return;
+  if (!encryptedRefreshToken) return "none";
+  let token: string;
   try {
-    await revokeToken(decryptSecret(encryptedRefreshToken));
+    token = decryptSecret(encryptedRefreshToken);
   } catch {
-    /* an undecryptable token (rotated key) cannot be revoked; the local copy is gone */
+    // An undecryptable token (rotated key) cannot be revoked; the local copy is gone.
+    return "none";
   }
+  try {
+    await revokeTokenOrThrow(token);
+    return "revoked";
+  } catch (err) {
+    console.error("[google] could not revoke a removed member's Google connection; queued to try again", err instanceof Error ? err.message : err);
+    return "failed";
+  }
+}
+
+/** The retry: throws while Google cannot be told, so the queue tries again later. */
+export async function revokeQueuedConnection(job: { encryptedRefreshToken: string }): Promise<void> {
+  let token: string;
+  try {
+    token = decryptSecret(job.encryptedRefreshToken);
+  } catch {
+    return;
+  }
+  await revokeTokenOrThrow(token);
 }
 
 export const _cacheForTests = cache;

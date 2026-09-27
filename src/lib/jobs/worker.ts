@@ -116,6 +116,8 @@ export async function startWorker(): Promise<void> {
   await boss.work(QUEUES.purgeVisits, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60 }, async () => void (await purgeVisits()));
   await boss.work(QUEUES.purgeMagicLinks, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60 }, async () => void (await purgeExpiredMagicLinks({ db })));
   await boss.work(QUEUES.sweepStrandedUploads, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60 }, async () => void (await sweepStrandedUploads()));
+  const { revokeQueuedConnection } = await import("@/lib/google/account");
+  await boss.work(QUEUES.revokeGoogle, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60 }, async ([job]) => revokeQueuedConnection(job.data as never));
   await boss.work(QUEUES.reconcilePhotos, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60 }, async () => void (await reconcileStalePhotos()));
   // Schedules (idempotent): weekly video re-check, the annotation quiet-period sweep, batch polling, raw-response purge,
   // and the stale-photo reconciliation.

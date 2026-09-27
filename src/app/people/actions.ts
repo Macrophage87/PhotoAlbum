@@ -553,7 +553,7 @@ export async function deletePerson(personId: string): Promise<void> {
   // Its judged names go with the record. Judging jobs queued for it carry only its id, which finds nothing once it
   // is gone; one queued before jobs carried ids holds the name until the next sweep clears it (dropLegacyRejudgeJobs).
   await db.$transaction(async (tx) => {
-    await forgetJudgedNames(tx, personId);
+    await forgetJudgedNames(tx, `person:${personId}`);
     await tx.person.delete({ where: { id: personId, kind: "PET" } });
   });
   revalidatePath("/people", "layout");

@@ -87,7 +87,7 @@ export async function forgetPerson(personId: string, opts: { keepName: boolean; 
       // Their names recorded as judged go with the record, rather than waiting in clear for the next sweep.
       await db.$transaction(async (tx) => {
         await tx.face.deleteMany({ where: { personId } });
-        await forgetJudgedNames(tx, personId);
+        await forgetJudgedNames(tx, `person:${personId}`);
         await tx.person.delete({ where: { id: personId } });
       });
     }

@@ -14,6 +14,7 @@ import { ArchiveDeleteError, deleteArchive, safeArchivePath } from "@/lib/takeou
 import { closeDeadImports } from "@/lib/takeout/import";
 import { stat } from "node:fs/promises";
 import { revokeRemovedConnection } from "@/lib/google/account";
+import { forgetJudgedNames } from "@/lib/annotation/rejudge";
 import { foldDuplicates } from "@/lib/photos/duplicates";
 
 async function requireAdminOrThrow() {
@@ -61,33 +62,59 @@ export async function setRole(userId: string, role: "ADMIN" | "MEMBER"): Promise
   revalidatePath("/admin");
 }
 
+/** A member with tens of thousands of uploads takes seconds to hand over: well past a transaction's default five. */
+const REMOVE_MEMBER_TX = { timeout: 120_000, maxWait: 10_000 };
+
 export async function removeMember(userId: string): Promise<void> {
   const admin = await requireAdminOrThrow();
   if (userId === admin.id) throw new Error("You can't remove yourself.");
-  const member = await db.user.findUnique({ where: { id: userId }, select: { email: true } });
-  if (!member) return;
   // Keep their uploads and what they made: reassign ownership to the acting admin, then delete the account, its
   // sessions, its Google connection, and any sign-in link still outstanding for the address. Every reference to
   // them that would stop the delete is handed over here, or none of it happens.
-  const google = await db.$transaction(async (tx) => {
-    const account = await tx.googleAccount.findUnique({ where: { userId }, select: { encryptedRefreshToken: true } });
-    await tx.photo.updateMany({ where: { uploaderId: userId }, data: { uploaderId: admin.id } });
-    await tx.track.updateMany({ where: { uploaderId: userId }, data: { uploaderId: admin.id } });
-    await tx.trip.updateMany({ where: { createdById: userId }, data: { createdById: admin.id } });
-    await tx.collection.updateMany({ where: { createdById: userId }, data: { createdById: admin.id } });
-    await tx.collectionItem.updateMany({ where: { addedById: userId }, data: { addedById: admin.id } });
-    // Their choices stay choices. Left to the foreign keys these would be emptied, and an empty setter means the
-    // album's own guess: a photo they took off an activity would be put straight back on it, a place they removed
-    // filled in again, a date they fixed re-read from the file.
-    await tx.photo.updateMany({ where: { activitySetById: userId }, data: { activitySetById: admin.id } });
-    await tx.photo.updateMany({ where: { placeSetById: userId }, data: { placeSetById: admin.id } });
-    await tx.photo.updateMany({ where: { dateSetById: userId }, data: { dateSetById: admin.id } });
-    await tx.user.delete({ where: { id: userId } });
-    await tx.magicLinkToken.deleteMany({ where: { email: member.email } });
-    return account;
+  const remove = () =>
+    db.$transaction(async (tx) => {
+      // Both accounts locked, in one order, so two admins removing each other take turns: the second finds itself
+      // gone. A member already removed is nothing to do; an acting admin removed or demoted meanwhile may not.
+      const users = await tx.$queryRaw<{ id: string; role: string; email: string }[]>`SELECT id, role::text AS role, email FROM "User" WHERE id IN (${admin.id}, ${userId}) ORDER BY id FOR UPDATE`;
+      const member = users.find((u) => u.id === userId);
+      if (!member) return null;
+      if (users.find((u) => u.id === admin.id)?.role !== "ADMIN") throw new Error("Your account is no longer an admin's.");
+      // Never the last admin: somebody has to be able to run the album.
+      const [{ admins }] = await tx.$queryRaw<{ admins: number }[]>`SELECT count(*)::int AS admins FROM "User" WHERE role = 'ADMIN' AND id <> ${userId}`;
+      if (!admins) throw new Error("The album needs at least one admin.");
+      // Their uploads and their choices, in one pass over the photographs. Their choices stay choices: left to the
+      // foreign keys these setters would be emptied, and an empty setter means the album's own guess — a photo they
+      // took off an activity put straight back on it, a place they removed filled in again, a date they fixed re-read.
+      await tx.$executeRaw`
+        UPDATE "Photo" SET
+          "uploaderId" = CASE WHEN "uploaderId" = ${userId} THEN ${admin.id} ELSE "uploaderId" END,
+          "activitySetById" = CASE WHEN "activitySetById" = ${userId} THEN ${admin.id} ELSE "activitySetById" END,
+          "placeSetById" = CASE WHEN "placeSetById" = ${userId} THEN ${admin.id} ELSE "placeSetById" END,
+          "dateSetById" = CASE WHEN "dateSetById" = ${userId} THEN ${admin.id} ELSE "dateSetById" END
+        WHERE "uploaderId" = ${userId} OR "activitySetById" = ${userId} OR "placeSetById" = ${userId} OR "dateSetById" = ${userId}`;
+      await tx.track.updateMany({ where: { uploaderId: userId }, data: { uploaderId: admin.id } });
+      await tx.trip.updateMany({ where: { createdById: userId }, data: { createdById: admin.id } });
+      await tx.collection.updateMany({ where: { createdById: userId }, data: { createdById: admin.id } });
+      await tx.collectionItem.updateMany({ where: { addedById: userId }, data: { addedById: admin.id } });
+      const google = await tx.$queryRaw<{ token: string }[]>`DELETE FROM "GoogleAccount" WHERE "userId" = ${userId} RETURNING "encryptedRefreshToken" AS token`;
+      // Their name, recorded as judged, goes with them.
+      await forgetJudgedNames(tx, `user:${userId}`);
+      await tx.user.delete({ where: { id: userId } });
+      await tx.magicLinkToken.deleteMany({ where: { email: member.email } });
+      return { token: google[0]?.token ?? null };
+    }, REMOVE_MEMBER_TX);
+  // A write conflict or deadlock with something else changing their photographs is tried once more.
+  const done = await remove().catch((err: unknown) => {
+    if ((err as { code?: string }).code === "P2034") return remove();
+    throw err;
   });
-  // Revoked at Google only once they are gone: a removal that failed leaves them connected as they were.
-  await revokeRemovedConnection(userId, google?.encryptedRefreshToken ?? null);
+  // Revoked at Google only once they are gone: a removal that failed leaves them connected as they were. One Google
+  // could not be told about is tried again from the queue, carrying only the sealed token.
+  if (done && (await revokeRemovedConnection(userId, done.token)) === "failed") {
+    await enqueue(QUEUES.revokeGoogle, { encryptedRefreshToken: done.token }, { retryLimit: 10, retryDelay: 600, retryBackoff: true }).catch((err) => {
+      console.error("[admin] could not queue the retry of a removed member's Google revocation", err instanceof Error ? err.message : err);
+    });
+  }
   revalidatePath("/admin");
 }
 

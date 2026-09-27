@@ -37,6 +37,7 @@ vi.mock("@/lib/google/account", () => ({
   revokeRemovedConnection: async (userId: string, token: string | null) => {
     const { db } = await import("@/lib/db");
     google.revoked.push({ userId, token, memberStillThere: Boolean(await db.user.findUnique({ where: { id: userId } })) });
+    return token ? "revoked" : "none";
   },
 }));
 vi.mock("next/headers", () => ({ headers: async () => who.headers }));
