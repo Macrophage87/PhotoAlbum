@@ -116,19 +116,39 @@ function scopeHash(key: Buffer, value: string): string {
 const HASHED = /^[0-9a-f]{64}$/;
 
 /** Places (photograph ids, or `containerKey`s) as each key's rows keep them. */
-export type Places = { versions: number[]; under(version: number, values: string[], kind: "photo" | "container", plainToo?: boolean): string[] };
+export type Places = { versions: number[]; under(version: number, values: string[], kind: "photo" | "container"): string[] };
 
 /**
- * Places as the rows under each of these keys keep them: hashed under the key — and, `plainToo`, as they are, for a
- * row kept before places were hashed, until `hashPlainScopes` rewrites it at start-up.
+ * Places hashed before, by key and value: a trip's photographs are hashed once per process, not on every request
+ * about it (a description asks two or three times). Bounded; emptied when full.
  */
+const hashedPlaces = new Map<string, Map<string, string>>();
+const HASHED_PLACES_MAX = 500_000;
+
+/** Places as the rows under each of these keys keep them: hashed under the key (see rememberForgotten). */
 function placesUnder(keys: VersionKey[]): Places {
+  const caches = new Map(
+    keys.map((k) => {
+      const print = fingerprint(k.key);
+      if (!hashedPlaces.has(print)) hashedPlaces.set(print, new Map());
+      return [k.version, { key: k.key, cache: hashedPlaces.get(print)! }] as const;
+    }),
+  );
   return {
     versions: keys.map((k) => k.version),
-    under: (version, values, kind, plainToo = false) => {
-      const k = keys.find((x) => x.version === version);
-      const hashed = k ? values.map((v) => scopeHash(k.key, kind === "photo" ? photoScope(v) : v)) : [];
-      return plainToo ? [...hashed, ...values] : hashed;
+    under: (version, values, kind) => {
+      const c = caches.get(version);
+      if (!c) return [];
+      return values.map((v) => {
+        const input = kind === "photo" ? photoScope(v) : v;
+        let h = c.cache.get(input);
+        if (!h) {
+          if (c.cache.size >= HASHED_PLACES_MAX) c.cache.clear();
+          h = scopeHash(c.key, input);
+          c.cache.set(input, h);
+        }
+        return h;
+      });
     },
   };
 }
@@ -268,13 +288,20 @@ export async function forgottenScope(where: { photoIds?: string[]; containers?: 
   const photoIds = where.photoIds ?? [];
   const containers = where.containers ?? [];
   if (!photoIds.length && !containers.length) return NO_SCOPE;
-  // Nothing forgotten is kept by place: nothing to look up (read once per load of the forgotten names).
-  if (!(ts ? ts.scoped : await anyScoped())) return NO_SCOPE;
-  const around = photoIds.length ? await db.photo.findMany({ where: { id: { in: photoIds } }, select: { tripId: true, activityId: true, collections: { select: { collectionId: true } } } }) : [];
-  const keys = [
-    ...containers.map((c) => containerKey(c.kind, c.id)),
-    ...around.flatMap((p) => [p.tripId ? containerKey("trip", p.tripId) : null, p.activityId ? containerKey("activity", p.activityId) : null, ...p.collections.map((c) => containerKey("collection", c.collectionId))]).filter((k): k is string => Boolean(k)),
-  ];
+  // Nothing forgotten is kept by place: nothing to look up (read once per load of the forgotten names). Only the keys
+  // that have such rows are hashed under.
+  const places = ts ? (ts.scoped ? ts.places : null) : await scopedPlaces();
+  if (!places?.versions.length) return NO_SCOPE;
+  // The ids sent once each, not once per part: a whole trip's are thousands.
+  const around = photoIds.length
+    ? await db.$queryRaw<{ key: string }[]>`
+        WITH asked AS (SELECT unnest(${photoIds}::text[]) AS id)
+        SELECT DISTINCT 'trip:' || p."tripId" AS key FROM asked JOIN "Photo" p ON p.id = asked.id WHERE p."tripId" IS NOT NULL
+        UNION SELECT DISTINCT 'activity:' || p."activityId" FROM asked JOIN "Photo" p ON p.id = asked.id WHERE p."activityId" IS NOT NULL
+        UNION SELECT DISTINCT 'collection:' || c."collectionId" FROM asked JOIN "CollectionItem" c ON c."photoId" = asked.id`
+    : [];
+  // (As containerKey spells them.)
+  const keys = [...new Set([...containers.map((c) => containerKey(c.kind, c.id)), ...around.map((r) => r.key)])];
   const of = (kind: string) => containers.filter((c) => c.kind === kind).map((c) => c.id);
   // Each part on its own index; only when a whole container is asked about.
   const inContainers = containers.length
@@ -282,29 +309,85 @@ export async function forgottenScope(where: { photoIds?: string[]; containers?: 
         UNION SELECT id FROM "Photo" WHERE "activityId" = ANY(${of("activity")}::text[])
         UNION SELECT "photoId" FROM "CollectionItem" WHERE "collectionId" = ANY(${of("collection")}::text[])`
     : null;
-  const inside = inContainers ? (await db.$queryRaw<{ id: string }[]>`${inContainers}`).map((r) => r.id) : [];
-  // Rows keep their places hashed under their own key (see rememberForgotten), so each key's rows are compared with
-  // the places hashed under it — and as they are too, a whole container's photographs included, for a row from
-  // before places were hashed (the start-up pass hashes those: see hashPlainScopes).
-  const places = ts ? ts.places : placesUnder((await forgetKeyState()).keys);
-  const matches = places.versions.map((version) => ({ version, photos: places.under(version, photoIds, "photo", true), containers: places.under(version, keys, "container", true), inside: places.under(version, inside, "photo", true) }));
-  if (!matches.length) return NO_SCOPE;
-  const [rows, tagged] = await Promise.all([
-    db.$queryRaw<{ keyVersion: number; hash: string; own: boolean }[]>`
-      ${Prisma.join(
-        matches.map(
-          (m) => Prisma.sql`SELECT "keyVersion", hash, (${containers.length === 0} AND "taggedPhotoIds" && ${m.photos}::text[]) AS own FROM "ForgottenName"
-            WHERE "keyVersion" = ${m.version} AND ("photoIds" && ${m.photos}::text[] OR "containerIds" && ${m.containers}::text[] ${m.inside.length ? Prisma.sql`OR "photoIds" && ${m.inside}::text[]` : Prisma.empty})`,
-        ),
-        " UNION ALL ",
-      )}`,
+  const [inside, index, tagged] = await Promise.all([
+    inContainers ? db.$queryRaw<{ id: string }[]>`${inContainers}`.then((r) => r.map((x) => x.id)) : Promise.resolve([] as string[]),
+    placeIndex(),
     db.$queryRaw<{ personId: string }[]>`
-      SELECT "personId" FROM "Face" WHERE "personId" IS NOT NULL AND "photoId" = ANY(${photoIds}::text[])
-      UNION SELECT "personId" FROM "AnimalDetection" WHERE "personId" IS NOT NULL AND "photoId" = ANY(${photoIds}::text[])
-      ${inContainers ? Prisma.sql`UNION SELECT "personId" FROM "Face" WHERE "personId" IS NOT NULL AND "photoId" IN (${inContainers}) UNION SELECT "personId" FROM "AnimalDetection" WHERE "personId" IS NOT NULL AND "photoId" IN (${inContainers})` : Prisma.empty}`,
+      WITH asked AS (SELECT unnest(${photoIds}::text[]) AS id ${inContainers ? Prisma.sql`UNION ${inContainers}` : Prisma.empty})
+      SELECT DISTINCT f."personId" FROM asked JOIN "Face" f ON f."photoId" = asked.id WHERE f."personId" IS NOT NULL
+      UNION SELECT DISTINCT a."personId" FROM asked JOIN "AnimalDetection" a ON a."photoId" = asked.id WHERE a."personId" IS NOT NULL`,
   ]);
+  // Rows keep their places hashed under their own key (see rememberForgotten), so the places are hashed under each
+  // key that has rows and looked up in the rows' own (placeIndex) — and as they are too, for a row from before places
+  // were hashed (see hashPlainScopes). In memory: a whole trip is thousands of photographs, and comparing arrays in
+  // SQL went pairwise and took seconds.
+  const rows = new Set<string>();
+  const own = new Set<string>();
+  const find = (map: Map<string, string[]>, values: string[], into: Set<string>) => {
+    for (const v of values) for (const r of map.get(v) ?? []) into.add(r);
+  };
+  const all = [...new Set([...photoIds, ...inside])];
+  for (const version of places.versions) {
+    find(index.photos, [...places.under(version, all, "photo"), ...all], rows);
+    find(index.containers, [...places.under(version, keys, "container"), ...keys], rows);
+    if (!containers.length) find(index.tagged, [...places.under(version, photoIds, "photo"), ...photoIds], own);
+  }
+  for (const r of own) rows.add(r);
   // A whole trip, collection or activity is about many photographs, few of them hers: the wider place guard there.
-  return { rows: new Set(rows.map((r) => `${r.keyVersion}:${r.hash}`)), own: new Set(rows.filter((r) => r.own).map((r) => `${r.keyVersion}:${r.hash}`)), tagged: new Set(tagged.map((t) => t.personId)), photos: new Set(containers.length ? [] : photoIds), whole: containers.length > 0 };
+  return { rows, own, tagged: new Set(tagged.map((t) => t.personId)), photos: new Set(containers.length ? [] : photoIds), whole: containers.length > 0 };
+}
+
+/** Where the one-word forgotten names are kept, value by value: `${keyVersion}:${hash}` of every row keeping it. */
+type PlaceIndex = { sig: string; photos: Map<string, string[]>; tagged: Map<string, string[]>; containers: Map<string, string[]> };
+let placeIndexCache: PlaceIndex | null = null;
+
+/**
+ * Every row's places, read once and kept while no row has changed (any write gives a row a new xmin): the table is
+ * small, a row for each forgotten name, and a lookup is then a few map reads.
+ */
+async function placeIndex(): Promise<PlaceIndex> {
+  const [{ sig }] = await db.$queryRaw<{ sig: string }[]>`SELECT md5(COALESCE(string_agg(hash || ':' || xmin::text, ',' ORDER BY hash), '')) AS sig FROM "ForgottenName"`;
+  if (placeIndexCache?.sig === sig) return placeIndexCache;
+  const found = await db.$queryRaw<{ hash: string; keyVersion: number; photoIds: string[]; taggedPhotoIds: string[]; containerIds: string[] }[]>`
+    SELECT hash, "keyVersion", "photoIds", "taggedPhotoIds", "containerIds" FROM "ForgottenName"
+    WHERE cardinality(COALESCE("photoIds", '{}')) > 0 OR cardinality(COALESCE("containerIds", '{}')) > 0`;
+  const index: PlaceIndex = { sig, photos: new Map(), tagged: new Map(), containers: new Map() };
+  const add = (map: Map<string, string[]>, values: string[] | null, row: string) => {
+    for (const v of values ?? []) map.set(v, [...(map.get(v) ?? []), row]);
+  };
+  for (const r of found) {
+    const row = `${r.keyVersion}:${r.hash}`;
+    add(index.photos, r.photoIds, row);
+    add(index.tagged, r.taggedPhotoIds, row);
+    add(index.containers, r.containerIds, row);
+  }
+  placeIndexCache = index;
+  return index;
+}
+
+/** The keys that have one-word names kept by place, to hash places under; none when there are no such names. */
+async function scopedPlaces(): Promise<Places | null> {
+  await hashPlainScopesOnce();
+  const found = await db.$queryRaw<{ keyVersion: number }[]>`SELECT DISTINCT "keyVersion" FROM "ForgottenName" WHERE cardinality(COALESCE("photoIds", '{}')) > 0 OR cardinality(COALESCE("containerIds", '{}')) > 0`;
+  if (!found.length) return null;
+  const versions = new Set(found.map((f) => f.keyVersion));
+  return placesUnder((await forgetKeyState()).keys.filter((k) => versions.has(k.version)));
+}
+
+/**
+ * hashPlainScopes once in this process, before its first lookup (the web process also runs it before serving: see
+ * instrumentation.ts). Tried again on the next lookup if it failed; plain rows are matched as they are meanwhile.
+ */
+let hashedOnce: Promise<void> | null = null;
+function hashPlainScopesOnce(): Promise<void> {
+  hashedOnce ??= hashPlainScopes().then(
+    () => undefined,
+    (err) => {
+      hashedOnce = null;
+      console.error("[forget] could not hash the places of forgotten names", err instanceof Error ? err.message : err);
+    },
+  );
+  return hashedOnce;
 }
 
 /**
@@ -343,21 +426,15 @@ export async function sharedByNamesakes(photoIds: string[]): Promise<string[]> {
   for (const version of places.versions) {
     const hashed = places.under(version, photoIds, "photo");
     // As they are too, for a row from before places were hashed.
-    const rows = await db.$queryRaw<{ taggedPhotoIds: string[] }[]>`
-      SELECT "taggedPhotoIds" FROM "ForgottenName"
-      WHERE "keyVersion" = ${version} AND jsonb_array_length(COALESCE("kinshipGroups", '[]'::jsonb)) > 1 AND "taggedPhotoIds" && ${[...hashed, ...photoIds]}::text[]`;
-    const kept = new Set(rows.flatMap((r) => r.taggedPhotoIds));
+    const rows = await db.$queryRaw<{ id: string }[]>`
+      SELECT DISTINCT t.id FROM (SELECT unnest("taggedPhotoIds") AS id FROM "ForgottenName" WHERE "keyVersion" = ${version} AND jsonb_array_length(COALESCE("kinshipGroups", '[]'::jsonb)) > 1) t
+      JOIN unnest(${[...hashed, ...photoIds]}::text[]) AS h(id) ON h.id = t.id`;
+    const kept = new Set(rows.map((r) => r.id));
     photoIds.forEach((id, i) => {
       if (kept.has(hashed[i]) || kept.has(id)) out.add(id);
     });
   }
   return [...out];
-}
-
-/** Whether any forgotten name is kept with the places it was found. */
-async function anyScoped(): Promise<boolean> {
-  const [{ any }] = await db.$queryRaw<{ any: boolean }[]>`SELECT EXISTS (SELECT 1 FROM "ForgottenName" WHERE cardinality(COALESCE("photoIds", '{}')) > 0 OR cardinality(COALESCE("containerIds", '{}')) > 0) AS any`;
-  return any;
 }
 
 /**
@@ -390,6 +467,7 @@ export async function tombstoneStale(ts: Tombstone): Promise<boolean> {
 
 /** The forgotten names, ready to check text against. */
 export async function loadTombstone(): Promise<Tombstone> {
+  await hashPlainScopesOnce();
   const loadedAt = new Date();
   const state = await forgetKeyState();
   const rows = await db.$queryRaw<{ hash: string; keyVersion: number; capitalizedOnly: boolean; derived: boolean; kinshipGroups: KinshipGroup[] | null; scoped: boolean }[]>`
