@@ -19,8 +19,8 @@ import { db } from "@/lib/db";
  * for a map worked out after it, and requests meanwhile share that one working-out. How late an addition may be is
  * capped twice: a working-out is started at most every `REBUILD_EVERY_MS` per map, so an import going on does not
  * keep the server working maps out back to back, and no kept map older than `MAP_STATE_TTL_MS` is ever answered
- * from while something has changed since. One the album has not changed under is simply kept, however old. `fresh` asks never to be answered from a map older than the album (the placing screen, which must see what it
- * just placed).
+ * from while something has changed since. One the album has not changed under is simply kept, however old. `fresh`
+ * asks never to be answered from a map older than the album (the placing screen, which must see what it just placed).
  *
  * A map small enough to send whole is not kept at all: it is asked for once per visit, never a view at a time.
  */
