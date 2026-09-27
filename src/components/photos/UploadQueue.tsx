@@ -264,7 +264,11 @@ export function UploadQueueProvider({ children }: { children: ReactNode }) {
   const sending = items.some((i) => i.status === "queued" || i.status === "uploading");
   useEffect(() => {
     if (!sending) return;
-    const warn = (e: BeforeUnloadEvent) => e.preventDefault();
+    // returnValue as well, for the browsers that still ask for it before they will warn.
+    const warn = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
     window.addEventListener("beforeunload", warn);
     return () => window.removeEventListener("beforeunload", warn);
   }, [sending]);
