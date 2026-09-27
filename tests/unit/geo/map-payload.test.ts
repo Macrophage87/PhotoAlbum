@@ -352,6 +352,32 @@ describe("a map kept from one view to the next", () => {
     expect(countOf(await buildMapView(stranger, undefined, NO_FILTER, everywhere))).toBe(MANY);
   });
 
+  it("stops waiting on a shared working-out once it has run long enough to count as hung", async () => {
+    forgetMapStates();
+    const start = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(start);
+    vi.spyOn(db.photo, "findMany").mockImplementationOnce((() => new Promise(() => {})) as never);
+    void buildMapView(stranger, undefined, NO_FILTER, everywhere);
+    await new Promise((r) => setTimeout(r, 50));
+    // Asked just before the first would count as hung: shared, but only for what is left of its time.
+    clock.mockReturnValue(start + BUILD_GIVE_UP_MS - 100);
+    const answer = await Promise.race([buildMapView(stranger, undefined, NO_FILTER, everywhere), new Promise<null>((r) => setTimeout(() => r(null), 5000))]);
+    expect(answer && countOf(answer)).toBe(MANY);
+  });
+
+  it("does not work out again a map the album has not changed under, however long it is kept", async () => {
+    const start = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(start);
+    await buildMapView(stranger, undefined, NO_FILTER, everywhere);
+    const read = vi.spyOn(db.photo, "findMany");
+    for (const later of [MAP_STATE_TTL_MS / 2 + 1, MAP_STATE_TTL_MS + 1, 3 * MAP_STATE_TTL_MS]) {
+      clock.mockReturnValue(start + later);
+      expect(countOf(await buildMapView(stranger, undefined, NO_FILTER, everywhere))).toBe(MANY);
+    }
+    await new Promise((r) => setTimeout(r, 200));
+    expect(read).not.toHaveBeenCalled();
+  });
+
   it("says when working a map out again in the background fails, and goes on answering from the kept one", async () => {
     const start = Date.now();
     const clock = vi.spyOn(Date, "now").mockReturnValue(start);
