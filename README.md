@@ -155,7 +155,7 @@ src/lib/jobs       pg-boss queue and every background job (processing, imports, 
 src/lib/annotation Claude request building, schema, pricing, apply
 src/lib/people     consent rules, clustering, matching, text-to-name
 src/lib/search     Postgres full-text plus semantic search
-src/lib/graph      nearest-neighbour edges and the graph payload
+src/lib/graph      nearest-neighbor edges and the graph payload
 src/lib/ml         client for the sidecar
 src/lib/security   the Content-Security-Policy builder
 src/themes         theme registry and per-theme art
