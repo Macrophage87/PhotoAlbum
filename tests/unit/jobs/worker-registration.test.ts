@@ -16,6 +16,10 @@ vi.mock("@/lib/jobs/boss", async (orig) => ({
   }),
 }));
 
+// The two slow start-up passes never finish here: registration must not wait for them.
+vi.mock("@/lib/people/forget", async (orig) => ({ ...((await orig()) as object), scrubWithdrawnNames: () => new Promise(() => {}) }));
+vi.mock("@/lib/people/forget-person", async (orig) => ({ ...((await orig()) as object), completePendingForgets: () => new Promise(() => {}) }));
+
 import { startWorker } from "@/lib/jobs/worker";
 import { HEAVY_HEARTBEAT_REFRESH_SECONDS, HEAVY_HEARTBEAT_SECONDS, HEAVY_QUEUES, queueOptions } from "@/lib/jobs/boss";
 import { QUEUES } from "@/lib/jobs/queues";
@@ -30,6 +34,12 @@ describe("the worker's registration", () => {
     expect(fake.schedules).toContainEqual({ queue: QUEUES.reconcilePhotos, cron: "*/15 * * * *" });
     // Every queue that has a schedule also has a handler.
     for (const s of fake.schedules) expect(fake.work.map((w) => w.queue)).toContain(s.queue);
+  });
+
+  it("registers every schedule without waiting for the slow start-up passes, and no two nightly jobs share a minute", async () => {
+    expect(fake.schedules.map((s) => s.queue)).toEqual(expect.arrayContaining([QUEUES.sweepStrandedUploads, QUEUES.reconcilePhotos]));
+    const nightly = fake.schedules.filter((s) => /^\d+ \d+ \* \* \*$/.test(s.cron)).map((s) => s.cron);
+    expect(new Set(nightly).size).toBe(nightly.length);
   });
 
   it("refreshes heavy jobs' heartbeats often enough for the queue's heartbeat window", async () => {

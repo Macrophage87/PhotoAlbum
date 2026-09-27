@@ -119,14 +119,18 @@ export async function startWorker(): Promise<void> {
   await boss.schedule(QUEUES.purgeUnnamedFaces, "45 3 * * *", {}, { retryLimit: 0 });
   await boss.schedule(QUEUES.flagNewAdults, "50 3 * * *", {}, { retryLimit: 0 });
   await boss.schedule(QUEUES.purgeVisits, "15 3 * * *", {}, { retryLimit: 0 });
-  // Expired sign-in links, including placeholders for addresses that may not sign in.
-  await boss.schedule(QUEUES.purgeMagicLinks, "20 3 * * *", {}, { retryLimit: 0 });
-  // A naming the album withdrew by itself: what strangers can read loses the name at once, not at the next night.
-  await scrubWithdrawnNames().catch((err) => console.error("[worker] withdrawn-name scrub failed", err));
-  await completePendingForgets().catch((err) => console.error("[worker] pending forgets failed", err));
+  // Expired sign-in links, including placeholders for addresses that may not sign in. Its own minute: the members-only
+  // sweep has 3:20.
+  await boss.schedule(QUEUES.purgeMagicLinks, "25 3 * * *", {}, { retryLimit: 0 });
   await boss.schedule(QUEUES.sweepStrandedUploads, "40 * * * *", {}, { retryLimit: 0 });
   await boss.schedule(QUEUES.reconcilePhotos, "*/15 * * * *", {}, { retryLimit: 0 });
   console.log("[worker] pg-boss handlers registered");
+  // A naming the album withdrew by itself: what strangers can read loses the name at once, not at the next night.
+  // Both can take a while over a big album, so they run beside the rest of start-up rather than ahead of it.
+  void (async () => {
+    await scrubWithdrawnNames().catch((err) => console.error("[worker] withdrawn-name scrub failed", err));
+    await completePendingForgets().catch((err) => console.error("[worker] pending forgets failed", err));
+  })();
   // Before the reconciliation below, so a Picker download lost in the restart is told to be picked again rather
   // than re-processed (it has no file to process).
   await (await import("@/lib/media/stranded")).sweepStrandedUploads().catch((err) => console.error("[worker] stranded-upload sweep failed", err));
