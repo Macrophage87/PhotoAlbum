@@ -128,6 +128,18 @@ describe("keywords", () => {
     expect(may.scrubKeywords("may blossoms, wood fire, may wood picnic", here)).toBe("may blossoms, wood fire, a family member picnic");
   });
 
+  it("take their surname alone out of a search summary on a photograph about them, but not a place's", () => {
+    const ruth = nameMatcher(["Ruth Jones"]);
+    const here = { tagged: true };
+    expect(ruth.scrubKeywords("jones family reunion", here)).toBe("A family member family reunion");
+    expect(ruth.scrubKeywords("picnic, jones family", { tagged: true, onPhoto: false })).toBe("picnic, a family member family");
+    for (const t of ["jones beach picnic", "picnic at jones park", "jones 2019", "florence jones"]) expect(ruth.scrubKeywords(t, here)).toBe(t);
+    // Not off their photographs, nor where somebody tagged there shares it, nor an everyday surname ("wood fire").
+    expect(ruth.scrubKeywords("jones family reunion")).toBe("jones family reunion");
+    expect(ruth.scrubKeywords("jones family reunion", { tagged: true, others: ["Ben Jones"] })).toBe("jones family reunion");
+    expect(nameMatcher(["Ada Wood"]).scrubKeywords("wood fire", here)).toBe("wood fire");
+  });
+
   it("take a one-word name that is all of theirs out of a search summary anywhere, in any case", () => {
     expect(nameMatcher(["Ximena"]).scrubKeywords("ximena fishing at dusk")).toBe("A family member fishing at dusk");
   });

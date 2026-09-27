@@ -706,6 +706,7 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
   const taggedOnly: Short[] = []; // as written, their photographs only
   const strong = new Set<string>(); // any case, in keywords on their photographs: a first name that is no word
   const weak = new Set<string>(); // in keywords only as the whole tag, or beside another word of the name
+  const surnames = new Set<string>(); // of those, a surname (or middle name) that is no everyday word: in a search summary on its own too
   const oneWord: string[] = []; // a one-word name that is all of their name, for the tombstone
   const firstNames: { form: string; kinship: string[] }[] = []; // the first name of a full one, for the tombstone (kept only where they were)
   const months: { form: string; kinship: string[]; derived: boolean }[] = []; // a first name that is a month, for the tombstone (their own photographs only)
@@ -776,6 +777,7 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
           if (letters(part) < 2 || isKin(part)) continue;
           if (i === 0 && !EVERYDAY_WORDS.has(bare(part)) && !NOT_SAFE.has(bare(part))) strong.add(part);
           else weak.add(part);
+          if (i > 0 && letters(part) >= 3 && !NOT_SAFE.has(bare(part)) && !isPlaceOrDateWord(part)) surnames.add(part);
         }
       });
       // "Mary Ann Smith" is also "Mary Smith"; and "Mary Ann", written as a name, is her first name (below).
@@ -896,13 +898,14 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
 
   /** Name words in keywords, on their own photographs; not a word somebody else tagged there shares. */
   const keywordsFor = (where: Where) => {
-    if (!where.tagged) return { strongRx: null, pairRx: null, weakWords: [] as string[] };
+    if (!where.tagged) return { strongRx: null, pairRx: null, surnameRx: null, weakWords: [] as string[] };
     const there = new Set((where.others ?? []).flatMap((o) => wordsOf(splitNickname(o).name).map(bare)));
     const s = [...strong].filter((w) => !there.has(bare(w)));
     const all = [...new Set([...strong, ...weak])].filter((w) => !there.has(bare(w)));
     // Two words of the name side by side ("byron ada", "grace hopper") are her, whatever each is on its own.
     const pairs = all.flatMap((a) => all.filter((b) => b !== a).map((b) => `${a} ${b}`));
-    return { strongRx: rx(bounded(variants(s)), "giu"), pairRx: rx(bounded(variants(pairs)), "giu"), weakWords: all.map((w) => bare(w)) };
+    const sur = [...surnames].filter((w) => !there.has(bare(w)) && !strong.has(w));
+    return { strongRx: rx(bounded(variants(s)), "giu"), pairRx: rx(bounded(variants(pairs)), "giu"), surnameRx: rx(bounded(variants(sur)), "giu"), weakWords: all.map((w) => bare(w)) };
   };
 
   const guard = <T,>(text: T, f: (t: string) => string): T => {
@@ -923,6 +926,14 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
       const k = keywordsFor(where);
       if (k.pairRx) out = out.replace(k.pairRx, put);
       if (k.strongRx) out = out.replace(k.strongRx, put);
+      // Their surname alone, on a photograph about them ("jones family"): not beside a place's word, a place or a
+      // date, which make it the place's ("byron bay", "jones beach", "kent 2019").
+      if (k.surnameRx) {
+        out = out.replace(k.surnameRx, (m: string, offset: number, w: string) => {
+          const beside = [w.slice(0, offset).match(/([\p{L}\p{M}\p{N}'’-]+)[ \t]+$/u)?.[1], w.slice(offset + m.length).match(/^[ \t]+([\p{L}\p{M}\p{N}'’-]+)/u)?.[1]];
+          return beside.some((b) => b && (isPlaceOrDateWord(b) || PLACE_TYPES.has(bare(b)))) ? m : put(m, offset, w);
+        });
+      }
       // A one-word name that is all of theirs is them in lower case too, anywhere: "ximena fishing" — except, away
       // from their photographs under `away`, where keywords run words together ("santa barbara pier").
       if (wholeRx && !(where.away && !where.tagged)) out = out.replace(wholeRx, put);

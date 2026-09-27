@@ -167,6 +167,18 @@ describe("a first name in prose away from her photographs is still hers", () => 
     expect(a.tags).toEqual(["st. mary's church"]);
   });
 
+  it("takes her surname alone out of the search summary of a photograph about her, and nowhere else", async () => {
+    const ruth = await db.person.create({ data: { name: "Ruth Jones", createdById: admin } });
+    const hers = await photo({ annotation: { ...record("A picnic"), searchSummary: "jones family reunion picnic" }, annotatedAt: new Date() });
+    await db.face.create({ data: { photoId: hers.id, personId: ruth.id, status: "CONFIRMED", box: [0.1, 0.1, 0.2, 0.2], confidence: 0 } });
+    const named = await photo({ annotation: { ...record("Ruth waves"), searchSummary: "jones family picnic" }, annotatedAt: new Date(), context: "Ruth Jones at the reunion" });
+    const beach = await photo({ annotation: { ...record("Ruth at the beach"), searchSummary: "jones beach picnic" }, annotatedAt: new Date(), context: "Ruth Jones at the beach" });
+    const others = await photo({ annotation: { ...record("A picnic"), searchSummary: "jones family reunion" }, annotatedAt: new Date() });
+    await forgetPerson(ruth.id, { keepName: false, byUserId: admin });
+    const summary = async (id: string) => ((await db.photo.findUniqueOrThrow({ where: { id } })).annotation as StoredAnnotation).searchSummary;
+    expect([await summary(hers.id), await summary(named.id), await summary(beach.id), await summary(others.id)]).toEqual(["A family member family reunion picnic", "A family member family picnic", "jones beach picnic", "jones family reunion"]);
+  });
+
   it("the withdrawn pass reaches a helper's trip description that gives only her first name", async () => {
     await db.person.create({ data: { name: "Mia Kent", birthday: new Date("2019-01-01"), namingWithdrawnAt: new Date(Date.now() - 30 * 86_400_000), createdById: admin } });
     const trip = await db.trip.create({ data: { slug: "lake", title: "The lake", description: "Mia's party at the lake, with bubbles.", descriptionByHelper: true, startDate: new Date("2025-08-10"), endDate: new Date("2025-08-11"), createdById: admin } });
