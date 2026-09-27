@@ -1,5 +1,5 @@
 import { db } from "@/lib/db";
-import { forgetNameInText, matcherFor, memberTextMentioning, photosInContainers, photosMentioning, taggedPhotoIds } from "./forget";
+import { forgetNameInText, forgetRawAnswers, matcherFor, memberTextMentioning, photosInContainers, photosMentioning, taggedPhotoIds } from "./forget";
 import { containerKey, forgetKeyState, rememberForgotten } from "./tombstone";
 import { isListedPlace, nameMatcher, notThePerson, type NameMatcher, type Neighbourhood } from "./scrub";
 import { withForgetLock } from "./names-changed";
@@ -72,6 +72,7 @@ export async function forgetPerson(personId: string, opts: { keepName: boolean; 
     }
     await held.assertHeld();
     await forgetNameInText(photoIds, m, { tagged, personId });
+    await forgetRawAnswers(m);
     // What is left mentioning them is what members wrote (or the helper's trip descriptions, where only a name that
     // is also a word is left); it is listed so it can be edited by hand.
     const after = await memberTextMentioning(m, tagged, personId);

@@ -121,6 +121,22 @@ export async function photosMentioning(m: NameMatcher): Promise<string[]> {
   return rows.filter((r) => machineMentions(r, m, {}, given.get(r.id))).map((r) => r.id);
 }
 
+/**
+ * The helper's raw answers anywhere in the album that name them, deleted: they are its words as first written, kept
+ * briefly for debugging, and one about a photograph the forget did not otherwise touch (a caption naming them on
+ * somebody else's photograph, text since replaced) would keep the name in clear until it is purged. Matched as on
+ * their own photographs, any word of their name in any case (tags come lower-cased), which errs towards deleting a
+ * debugging copy.
+ */
+export async function forgetRawAnswers(m: NameMatcher): Promise<number> {
+  const words = probes([...m.albumForms, ...m.tombstoneForms.filter((f) => !f.derived).map((f) => f.form)]);
+  if (!words.length) return 0;
+  const rows = await db.$queryRaw<{ id: string; text: string }[]>`SELECT id, response::text AS text FROM "MediaAnnotationRaw" WHERE ${likeAny(Prisma.sql`response::text`, words)}`;
+  const ids = rows.filter((r) => m.mentions(r.text, { tagged: true }) || m.scrubKeywords(r.text, { tagged: true }) !== r.text).map((r) => r.id);
+  if (ids.length) await db.mediaAnnotationRaw.deleteMany({ where: { id: { in: ids } } });
+  return ids.length;
+}
+
 /** Trips, activities and collections holding any of these photographs. */
 async function containersOf(photoIds: string[]) {
   if (!photoIds.length) return { trips: [] as string[], activities: [] as string[], collections: [] as string[] };

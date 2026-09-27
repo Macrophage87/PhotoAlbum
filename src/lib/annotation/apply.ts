@@ -145,6 +145,7 @@ export async function applyAnnotation(photoId: string, model: string, parsed: An
     aiTitle,
     membersOnly,
   );
+  const keptRaw = await rawToKeep(raw, parsed, scrub, tombstone, scope);
   const est = parsed.estimatedYear;
   const noReliableDate = isWeakDate(current.takenAtSource, current.takenAt);
   const keepMemberEstimate = current.estimatedDateSource === "MEMBER";
@@ -197,7 +198,7 @@ export async function applyAnnotation(photoId: string, model: string, parsed: An
         data: { estimatedDate: new Date(Date.UTC(Math.round((est.from + est.to) / 2), 6, 1)), estimatedDateConfidence: est.confidence, estimatedDateSource: "MODEL", estimatedDateNote: `${est.from}–${est.to}: ${tombstone.scrub(est.evidence, scope)}` },
       });
     }
-    await tx.mediaAnnotationRaw.create({ data: { photoId, model, response: raw as object } });
+    await tx.mediaAnnotationRaw.create({ data: { photoId, model, response: keptRaw as object } });
     return true;
   }).catch((err: unknown) => {
     if (err === stale) return false;
@@ -225,6 +226,24 @@ export async function applyAnnotation(photoId: string, model: string, parsed: An
   if (needsPlaceEstimate(current)) await applyPlaceEstimate(photoId, parsed.estimatedPlace, { sent: membersOnly || opts.sent, requestedAt, tombstone });
   // The description changed, so the semantic index for this item is stale.
   await enqueueEmbedding(photoId, true);
+}
+
+/**
+ * The raw answer as it may be kept for debugging. It is the helper's words as first written, so once anybody has
+ * been forgotten it may still carry their name where the record stored beside it no longer does. When taking the
+ * names out (the scrub the record gets) changes anything in the answer, its text is kept as the scrubbed answer
+ * instead, never as written; the title in it is then the one that went on the item, which is what
+ * `pastHelperTitles` reads it for. Usage and the rest of the envelope are kept as they came.
+ */
+async function rawToKeep(raw: Record<string, unknown>, parsed: Annotation, scrub: (r: StoredAnnotation) => Promise<StoredAnnotation>, tombstone: Tombstone, scope: Awaited<ReturnType<typeof forgottenScope>> | undefined): Promise<Record<string, unknown>> {
+  if (tombstone.empty) return raw;
+  const deep = (v: unknown): unknown =>
+    typeof v === "string" ? tombstone.scrub(v, scope) : Array.isArray(v) ? v.map(deep) : v && typeof v === "object" ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, deep(x)])) : v;
+  const answer = { ...(await scrub(toStored(parsed))), estimatedYear: deep(parsed.estimatedYear), estimatedPlace: deep(parsed.estimatedPlace) };
+  const asWritten = { ...toStored(parsed), estimatedYear: parsed.estimatedYear, estimatedPlace: parsed.estimatedPlace };
+  // The text as it came as well: it may hold more than the parsed answer kept (a caption cut to length).
+  if (JSON.stringify(answer) === JSON.stringify(asWritten) && JSON.stringify(deep(raw.content)) === JSON.stringify(raw.content)) return raw;
+  return { ...raw, content: [{ type: "text", text: JSON.stringify(answer) }], scrubbed: true };
 }
 
 /** Validate a message the way `messages.parse` would, for batch results that come back as plain messages. */

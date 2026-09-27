@@ -17,6 +17,8 @@ import { QUEUES } from "@/lib/jobs/queues";
 import { tagPersonAt } from "@/app/people/actions";
 import { rejudgeSweep, rejudgeText, type RejudgeJob } from "@/lib/annotation/rejudge";
 import { forgetPerson } from "@/lib/people/forget-person";
+import { applyAnnotation } from "@/lib/annotation/apply";
+import { annotationSchema } from "@/lib/annotation/schema";
 import { resetTestDb } from "../helpers/reset";
 
 const NAME = "Zebulon Quince";
@@ -72,10 +74,26 @@ describe("forgetting somebody leaves their name nowhere", () => {
     expect((await db.appSetting.findUniqueOrThrow({ where: { id: "app" } })).membersOnlyNames).toContain(`person:${person.id}:${NAME}`);
     expect(await tablesMentioning("Zebulon")).toEqual(expect.arrayContaining(["public.AppSetting", "public.Person"]));
 
+    // A raw answer kept about a photograph the forget has no other reason to touch: the helper named them in a
+    // caption since replaced.
+    const elsewhere = (await db.photo.create({ data: { uploaderId: real.admin, originalName: "y.jpg", mimeType: "image/jpeg", storageKey: "k2", originalPath: "k2/o.jpg", sizeBytes: 1, status: "READY", annotation: { title: "", caption: "A pier", description: "", tags: [], searchSummary: "" } } })).id;
+    await db.mediaAnnotationRaw.create({ data: { photoId: elsewhere, model: "m", response: { content: [{ type: "text", text: JSON.stringify({ title: "Pier", caption: `${NAME} on the pier`, tags: ["zebulon quince"] }) }] } } });
+
     await forgetPerson(person.id, { keepName: false, byUserId: real.admin });
     expect(await tablesMentioning("Zebulon")).toEqual([]);
     expect(await tablesMentioning("Quince")).toEqual([]);
     expect(await real.boss.findJobs(QUEUES.rejudgeText)).toEqual([]);
+
+    // An answer that comes back afterwards naming them, about another photograph: stored without the name, the raw
+    // answer included, whose title still says what went on the item.
+    const later = (await db.photo.create({ data: { uploaderId: real.admin, originalName: "z.jpg", mimeType: "image/jpeg", storageKey: "k3", originalPath: "k3/o.jpg", sizeBytes: 1, status: "READY" } })).id;
+    const answer = annotationSchema.parse({ title: `${NAME}'s cake`, caption: `${NAME} blows out the candles`, description: "", tags: ["cake", "zebulon quince"], place: null, activity: null, objects: [], visibleText: "HAPPY 80TH ZEBULON QUINCE", season: "summer", mood: null, searchSummary: "cake zebulon quince", estimatedYear: { from: 1990, to: 1995, confidence: 0.5, evidence: `${NAME} looks eighty` }, estimatedPlace: null });
+    await applyAnnotation(later, "m", answer, { content: [{ type: "text", text: JSON.stringify(answer) }], usage: { input_tokens: 1, output_tokens: 1 } });
+    const kept = await db.mediaAnnotationRaw.findFirstOrThrow({ where: { photoId: later } });
+    const stored = await db.photo.findUniqueOrThrow({ where: { id: later } });
+    expect(JSON.parse((kept.response as { content: { text: string }[] }).content[0].text).title).toBe((stored.annotation as { title: string }).title);
+    expect(await tablesMentioning("Zebulon")).toEqual([]);
+    expect(await tablesMentioning("Quince")).toEqual([]);
   }, 30_000);
 
   it("runs a job for somebody forgotten since it was queued as nothing to do", async () => {
