@@ -1,6 +1,6 @@
 import { db } from "@/lib/db";
-import { Prisma } from "@/generated/prisma/client";
 import { QUEUES } from "./queues";
+import { bossJobs } from "./schema";
 
 /**
  * Is a processing job for this photo waiting, running, or due a retry? A photo can sit PENDING for a long time behind
@@ -10,7 +10,7 @@ import { QUEUES } from "./queues";
 export async function hasLiveProcessingJob(photoId: string): Promise<boolean> {
   try {
     const rows = await db.$queryRaw<{ one: number }[]>`
-      SELECT 1 AS one FROM pgboss.job
+      SELECT 1 AS one FROM ${bossJobs()}
       WHERE name IN (${QUEUES.processPhoto}, ${QUEUES.transcodeVideo}) AND state IN ('created', 'retry', 'active') AND data->>'photoId' = ${photoId}
       LIMIT 1`;
     return rows.length > 0;
@@ -28,8 +28,8 @@ export async function withLivePickerJob(photoIds: string[]): Promise<Set<string>
   if (!photoIds.length) return new Set();
   try {
     const rows = await db.$queryRaw<{ id: string }[]>`
-      SELECT DISTINCT i.id FROM pgboss.job j CROSS JOIN LATERAL jsonb_array_elements_text(COALESCE(j.data->'photoIds', '[]'::jsonb)) AS i(id)
-      WHERE j.name = ${QUEUES.googlePickerImport} AND j.state IN ('created', 'retry', 'active') AND i.id IN (${Prisma.join(photoIds)})`;
+      SELECT DISTINCT i.id FROM ${bossJobs()} j CROSS JOIN LATERAL jsonb_array_elements_text(COALESCE(j.data->'photoIds', '[]'::jsonb)) AS i(id)
+      WHERE j.name = ${QUEUES.googlePickerImport} AND j.state IN ('created', 'retry', 'active') AND i.id = ANY(${photoIds}::text[])`;
     return new Set(rows.map((r) => r.id));
   } catch (err) {
     console.error("[jobs] could not read pg-boss's jobs; treating the Google Photos downloads as still queued", err);

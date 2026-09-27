@@ -3,9 +3,14 @@ import { PgBoss } from "pg-boss";
 
 /**
  * Forgetting somebody leaves their name nowhere in the database: not in the names the sweep recorded as judged, and
- * not in the judging jobs queued (or finished) for them. Against a real pg-boss in the `pgboss` schema of the test
- * database, the one the forget clears, dropped afterwards.
+ * not in the judging jobs queued (or finished) for them. Against a real pg-boss in a schema of this run's own in the
+ * test database (PGBOSS_SCHEMA, which the forget clears too), dropped afterwards.
  */
+const SCHEMA = vi.hoisted(() => {
+  const schema = `pgboss_unit_forget_${process.pid}_${Math.random().toString(36).slice(2, 8)}`;
+  process.env.PGBOSS_SCHEMA = schema;
+  return schema;
+});
 const real = vi.hoisted(() => ({ boss: null as unknown as import("pg-boss").PgBoss, admin: "" }));
 vi.mock("@/lib/jobs/boss", () => ({ enqueue: (queue: string, data: object, options: object) => real.boss.send(queue, data, options) }));
 vi.mock("@/lib/auth/viewer", () => ({ requireUserOrThrow: async () => ({ id: real.admin, email: "admin@example.com", name: null, role: "ADMIN" }) }));
@@ -27,7 +32,7 @@ const NAME = "Zebulon Quince";
 async function tablesMentioning(word: string): Promise<string[]> {
   const tables = await db.$queryRaw<{ s: string; t: string }[]>`
     SELECT table_schema AS s, table_name AS t FROM information_schema.tables
-    WHERE table_schema IN ('public', 'pgboss') AND table_type = 'BASE TABLE'`;
+    WHERE table_schema IN ('public', ${SCHEMA}) AND table_type = 'BASE TABLE'`;
   const found: string[] = [];
   for (const { s, t } of tables) {
     const [{ n }] = await db.$queryRawUnsafe<{ n: number }[]>(`SELECT count(*)::int AS n FROM "${s}"."${t}" x WHERE x::text ILIKE $1`, `%${word}%`);
@@ -38,14 +43,13 @@ async function tablesMentioning(word: string): Promise<string[]> {
 
 describe("forgetting somebody leaves their name nowhere", () => {
   beforeAll(async () => {
-    await db.$executeRawUnsafe(`DROP SCHEMA IF EXISTS pgboss CASCADE`);
-    real.boss = new PgBoss({ connectionString: process.env.DATABASE_URL!, schema: "pgboss", supervise: false, schedule: false });
+    real.boss = new PgBoss({ connectionString: process.env.DATABASE_URL!, schema: SCHEMA, supervise: false, schedule: false });
     await real.boss.start();
     for (const q of Object.values(QUEUES)) await real.boss.createQueue(q);
   });
   afterAll(async () => {
     await real.boss.stop({ graceful: false });
-    await db.$executeRawUnsafe(`DROP SCHEMA IF EXISTS pgboss CASCADE`);
+    await db.$executeRawUnsafe(`DROP SCHEMA IF EXISTS "${SCHEMA}" CASCADE`);
   });
   beforeEach(async () => {
     await resetTestDb();

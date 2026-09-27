@@ -14,6 +14,12 @@ import { withLivePickerJob } from "@/lib/jobs/live";
 import { QUEUES } from "@/lib/jobs/queues";
 
 const noJobs = async () => new Set<string>();
+// A real queue in a schema of this run's own (see bossSchema), dropped afterwards.
+const SCHEMA = vi.hoisted(() => {
+  const schema = `pgboss_unit_stranded_${process.pid}_${Math.random().toString(36).slice(2, 8)}`;
+  process.env.PGBOSS_SCHEMA = schema;
+  return schema;
+});
 
 describe("rows whose file never arrived", () => {
   let userId: string;
@@ -62,8 +68,7 @@ describe("rows whose file never arrived", () => {
   });
 
   it("finds the rows a queued Picker download names, on a real queue", async () => {
-    await db.$executeRawUnsafe(`DROP SCHEMA IF EXISTS pgboss CASCADE`);
-    const boss = new PgBoss({ connectionString: process.env.DATABASE_URL!, schema: "pgboss", supervise: false, schedule: false });
+    const boss = new PgBoss({ connectionString: process.env.DATABASE_URL!, schema: SCHEMA, supervise: false, schedule: false });
     try {
       await boss.start();
       await boss.createQueue(QUEUES.googlePickerImport);
@@ -75,7 +80,7 @@ describe("rows whose file never arrived", () => {
       expect([...(await withLivePickerJob(["a", "c", "d"]))].sort()).toEqual(["a"]);
     } finally {
       await boss.stop({ graceful: false });
-      await db.$executeRawUnsafe(`DROP SCHEMA IF EXISTS pgboss CASCADE`);
+      await db.$executeRawUnsafe(`DROP SCHEMA IF EXISTS "${SCHEMA}" CASCADE`);
     }
   });
 

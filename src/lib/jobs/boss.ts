@@ -3,6 +3,7 @@ import { env } from "@/lib/env";
 import { QUEUES, type QueueName } from "./queues";
 import { FFMPEG_TIMEOUT_MS } from "@/lib/video/ffmpeg";
 import { markStopping } from "./shutdown";
+import { bossSchema } from "./schema";
 
 const globalForBoss = globalThis as unknown as { boss?: Promise<PgBoss> };
 
@@ -36,7 +37,7 @@ export function queueOptions(name: QueueName): typeof QUEUE_OPTIONS & { heartbea
 }
 
 async function create(): Promise<PgBoss> {
-  const boss = new PgBoss({ connectionString: env().DATABASE_URL, schema: "pgboss" });
+  const boss = new PgBoss({ connectionString: env().DATABASE_URL, schema: bossSchema() });
   boss.on("error", (err) => console.error("[pg-boss]", err));
   await boss.start();
   for (const name of Object.values(QUEUES)) {

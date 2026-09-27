@@ -2,6 +2,7 @@ import { db } from "@/lib/db";
 import { Prisma } from "@/generated/prisma/client";
 import { enqueue } from "@/lib/jobs/boss";
 import { QUEUES } from "@/lib/jobs/queues";
+import { bossJobs } from "@/lib/jobs/schema";
 import type { StoredAnnotation } from "./schema";
 import { helperText, knownNameEntries, knownNames, pastHelperTitles, sameTitle, titleHits, titleIsHelpers, titleKey, unknownTitleAside, warnStuckTitle, type PrivateContainer } from "./members-only";
 import { nameMatcher, namePatterns, spokenWords, titleWords } from "./names";
@@ -396,7 +397,7 @@ export async function dropRejudgeJobs(personId: string, names: string[]): Promis
   const forms = [...new Set(names.filter((n) => n.trim()))];
   try {
     await db.$executeRaw`
-      DELETE FROM pgboss.job WHERE name = ${QUEUES.rejudgeText}
+      DELETE FROM ${bossJobs()} WHERE name = ${QUEUES.rejudgeText}
         AND (jsonb_exists(COALESCE(data->'people', '[]'::jsonb), ${personId})
           OR jsonb_exists_any(COALESCE(data->'names', '[]'::jsonb), ${forms}::text[]))`;
   } catch (err) {
@@ -411,7 +412,7 @@ export async function dropRejudgeJobs(personId: string, names: string[]): Promis
  */
 export async function dropLegacyRejudgeJobs(): Promise<number> {
   try {
-    return await db.$executeRaw`DELETE FROM pgboss.job WHERE name = ${QUEUES.rejudgeText} AND jsonb_exists(data, 'names')`;
+    return await db.$executeRaw`DELETE FROM ${bossJobs()} WHERE name = ${QUEUES.rejudgeText} AND jsonb_exists(data, 'names')`;
   } catch (err) {
     console.error("[rejudge] could not clear judging jobs that carry names", err instanceof Error ? err.message : err);
     return 0;
