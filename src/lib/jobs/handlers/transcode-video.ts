@@ -22,6 +22,10 @@ import { enqueueAnimalDetection } from "./detect-animals";
 
 export type VideoRenditions = { mp4: { key: string; w: number; h: number; bytes: number }; poster: { key: string } };
 
+/** A reason the member is meant to read as it is. Anything else is the machinery's (ffmpeg's output names paths on the server), so it is logged and the member reads CANNOT_CONVERT. */
+class ClipRefused extends Error {}
+export const CANNOT_CONVERT = "This clip could not be converted. It may be damaged, or in a format the album cannot read; if it plays on your device, use Re-process to try again.";
+
 /** `durationS` is null when all that is known is that it runs past the limit. */
 export function tooLongMessage(durationS: number | null, limit: number): string {
   return `This video is ${durationS === null ? `more than ${limit}` : Math.round(durationS)} seconds long; clips uploaded here are limited to ${limit} seconds. Upload longer videos to YouTube as Unlisted and add the link instead.`;
@@ -53,7 +57,7 @@ export async function transcodeVideo(job: TranscodeVideoJob, signal?: AbortSigna
       const limit = env().MAX_CLIP_SECONDS;
       // A clip already accepted is not refused on a Re-process because the limit has since been lowered.
       const limited = !photo.videoRenditions;
-      if (limited && info.durationS !== null && info.durationS > limit) throw new Error(tooLongMessage(info.durationS, limit));
+      if (limited && info.durationS !== null && info.durationS > limit) throw new ClipRefused(tooLongMessage(info.durationS, limit));
 
       const mp4 = path.join(dir, "video.mp4");
       const poster = path.join(dir, "poster.jpg");
@@ -62,7 +66,7 @@ export async function transcodeVideo(job: TranscodeVideoJob, signal?: AbortSigna
       await ffmpeg(transcodeArgs(input, mp4, info, limited ? limit + 1 : undefined), signal);
       const out = await probe(mp4, signal);
       // Half a second over is the encoder's padding, not the clip; one too long stops a whole second past the limit.
-      if (limited && out.durationS !== null && out.durationS > limit + 0.5) throw new Error(tooLongMessage(null, limit));
+      if (limited && out.durationS !== null && out.durationS > limit + 0.5) throw new ClipRefused(tooLongMessage(null, limit));
       await ffmpeg(posterArgs(mp4, poster, info.durationS ?? out.durationS), signal);
       signal?.throwIfAborted();
       const mp4Key = `${photo.storageKey}/video.mp4`;
@@ -161,7 +165,7 @@ export async function transcodeVideo(job: TranscodeVideoJob, signal?: AbortSigna
     }
     const message = err instanceof Error ? err.message : String(err);
     // No row to fail (it was deleted for good mid-run): nothing is left to retry, and whatever this run wrote goes.
-    const failed = await db.photo.updateMany({ where: { id: photo.id }, data: { status: "FAILED", error: message.slice(0, 500) } });
+    const failed = await db.photo.updateMany({ where: { id: photo.id }, data: { status: "FAILED", error: err instanceof ClipRefused ? message.slice(0, 500) : CANNOT_CONVERT } });
     if (!failed.count && (await forgetFilesIfGone(photo.id))) return;
     console.error(`[transcode-video] ${photo.id} failed:`, message);
     throw err;

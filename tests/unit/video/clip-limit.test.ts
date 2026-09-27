@@ -11,7 +11,7 @@ process.env.PHOTO_STORAGE_ROOT = photoRoot;
 process.env.MAX_CLIP_SECONDS = "2";
 vi.mock("@/lib/jobs/boss", () => ({ enqueue: async () => {} }));
 
-import { transcodeVideo } from "@/lib/jobs/handlers/transcode-video";
+import { CANNOT_CONVERT, transcodeVideo } from "@/lib/jobs/handlers/transcode-video";
 import { probe, transcodeArgs } from "@/lib/video/ffmpeg";
 
 /**
@@ -58,4 +58,19 @@ describe("the clip length limit", () => {
     expect(args.slice(-3)).toEqual(["-t", "91", "out.mp4"]);
     expect(transcodeArgs("in.webm", "out.mp4", { hdr: false })).not.toContain("-t");
   });
+});
+
+describe("a clip the album cannot convert", () => {
+  it("tells the member so in plain words, never with ffmpeg's output or where the file is kept", async () => {
+    await resetTestDb();
+    const uploaderId = (await db.user.create({ data: { email: "c@example.com" } })).id;
+    const photo = await db.photo.create({ data: { uploaderId, originalName: "broken.mp4", mimeType: "video/mp4", kind: "VIDEO", storageKey: "pending", originalPath: "pending", sizeBytes: 1, status: "PENDING" } });
+    const key = `photos/${photo.id}`;
+    mkdirSync(path.join(photoRoot, key), { recursive: true });
+    writeFileSync(path.join(photoRoot, key, "original.mp4"), Buffer.from("not a video at all"));
+    await db.photo.update({ where: { id: photo.id }, data: { storageKey: key, originalPath: `${key}/original.mp4` } });
+    await expect(transcodeVideo({ photoId: photo.id })).rejects.toThrow();
+    const row = await db.photo.findUniqueOrThrow({ where: { id: photo.id } });
+    expect(row).toMatchObject({ status: "FAILED", error: CANNOT_CONVERT });
+  }, 60_000);
 });
