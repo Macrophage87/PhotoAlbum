@@ -130,6 +130,19 @@ describe("forgetting somebody", () => {
     expect(await db.person.findUnique({ where: { id: adaId } })).toBeNull();
   });
 
+  it("never rewrites an embedded video's own title, whatever it was recorded as", async () => {
+    // YouTube's title, which the members_only_text migration recorded as the helper's for matching its record.
+    const video = await photo("v.jpg", { kind: "EXTERNAL_VIDEO", title: "Ada Byron at the lake", titleByHelper: true, annotation, annotatedAt: new Date() });
+    await db.face.create({ data: { photoId: video, personId: adaId, status: "CONFIRMED", box: [0.1, 0.1, 0.2, 0.2], confidence: 0 } });
+    await optOutPerson(adaId, form());
+    const v = await db.photo.findUniqueOrThrow({ where: { id: video } });
+    expect(v.title).toBe("Ada Byron at the lake");
+    expect((v.annotation as StoredAnnotation).caption).toBe("A family member wading in at the lake");
+    // Left as it is, and listed with the rest of what members' words say.
+    const [left] = await db.forgetLeftover.findMany();
+    expect((left.items as { photos: { id: string; fields: string[] }[] }).photos.find((x) => x.id === video)?.fields).toEqual(["title"]);
+  });
+
   it("scrubs the same way when they keep their name on the photographs, and can be run again", async () => {
     await optOutPerson(adaId, form("keep-name"));
     await optOutPerson(adaId, form("keep-name"));

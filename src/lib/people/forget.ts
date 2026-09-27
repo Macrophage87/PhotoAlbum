@@ -85,17 +85,19 @@ function likeAny(column: Prisma.Sql, words: string[]): Prisma.Sql {
   return Prisma.sql`(${Prisma.join(words.map((w) => Prisma.sql`${column} ILIKE ${`%${w}%`}`), " OR ")})`;
 }
 
-type MachineText = { id: string; title: string | null; membersTitle: string | null; titleByHelper: boolean | null; annotation: unknown; placeEstimateName: string | null; placeEstimateNote: string | null; estimatedDateNote: string | null };
+type MachineText = { id: string; kind: string; title: string | null; membersTitle: string | null; titleByHelper: boolean | null; annotation: unknown; placeEstimateName: string | null; placeEstimateNote: string | null; estimatedDateNote: string | null };
 
 /**
  * Which of an item's two titles are the helper's words: the title its record gives now, or one of its kept answers
  * gave; for the item's own title, also one recorded as the helper's (`titleByHelper` true). A title recorded as a
  * member's (false) is theirs whatever it says, and one from before the album kept track (null) counts as a member's
- * unless it is one of the helper's own titles: it is listed, never rewritten.
+ * unless it is one of the helper's own titles: it is listed, never rewritten. An embedded video's own title is
+ * YouTube's or a member's, never the helper's, whatever it was recorded as or matches.
  */
-function helpersTitles(p: Pick<MachineText, "title" | "membersTitle" | "titleByHelper" | "annotation">, given: Set<string> = new Set()) {
+function helpersTitles(p: Pick<MachineText, "kind" | "title" | "membersTitle" | "titleByHelper" | "annotation">, given: Set<string> = new Set()) {
   const said = (t: string | null) => Boolean(t?.trim()) && (t!.trim() === helperTitle(p.annotation) || given.has(t!.trim()));
-  return { title: Boolean(p.title?.trim()) && p.titleByHelper !== false && (p.titleByHelper === true || said(p.title)), membersTitle: said(p.membersTitle) };
+  const own = p.kind !== "EXTERNAL_VIDEO" && Boolean(p.title?.trim()) && p.titleByHelper !== false && (p.titleByHelper === true || said(p.title));
+  return { title: own, membersTitle: said(p.membersTitle) };
 }
 
 /** Whether the helper's words on an item mention them. Evidence notes only by names that are nobody else's. */
@@ -112,7 +114,7 @@ export async function photosMentioning(m: NameMatcher): Promise<string[]> {
   const words = probes(m.albumForms);
   if (!words.length) return [];
   const rows = await db.$queryRaw<MachineText[]>`
-    SELECT id, title, "membersTitle", "titleByHelper", annotation, "placeEstimateName", "placeEstimateNote", "estimatedDateNote" FROM "Photo"
+    SELECT id, kind::text AS kind, title, "membersTitle", "titleByHelper", annotation, "placeEstimateName", "placeEstimateNote", "estimatedDateNote" FROM "Photo"
     WHERE ${likeAny(Prisma.sql`annotation::text`, words)} OR ${likeAny(Prisma.sql`"membersTitle"`, words)} OR ${likeAny(Prisma.sql`title`, words)}
        OR ${likeAny(Prisma.sql`"placeEstimateName"`, words)} OR ${likeAny(Prisma.sql`"placeEstimateNote"`, words)} OR ${likeAny(Prisma.sql`"estimatedDateNote"`, words)}`;
   const given = await answerTitles(rows.map((r) => r.id));
@@ -168,7 +170,7 @@ export async function forgetNameInText(photoIds: string[], m: NameMatcher, opts:
   const touched: string[] = [];
   if (ids.length) {
     const [photos, others, given] = await Promise.all([
-      db.photo.findMany({ where: { id: { in: ids }, ...(opts.since ? writtenSince(opts.since, opts.personId) : {}) }, select: { id: true, title: true, membersTitle: true, titleByHelper: true, annotation: true, annotationMembersOnly: true, placeEstimateName: true, placeEstimateNote: true, placeEstimateMembersOnly: true, estimatedDateNote: true } }),
+      db.photo.findMany({ where: { id: { in: ids }, ...(opts.since ? writtenSince(opts.since, opts.personId) : {}) }, select: { id: true, kind: true, title: true, membersTitle: true, titleByHelper: true, annotation: true, annotationMembersOnly: true, placeEstimateName: true, placeEstimateNote: true, placeEstimateMembersOnly: true, estimatedDateNote: true } }),
       othersOn(ids.filter((id) => tagged.has(id)), opts.personId),
       answerTitles(ids),
     ]);
@@ -239,8 +241,8 @@ export async function memberTextMentioning(m: NameMatcher, tagged: Set<string> =
   const taggedIds = [...tagged];
   const anywhere = words.length ? Prisma.sql`(${likeAny(Prisma.sql`title`, words)} OR ${likeAny(Prisma.sql`"membersTitle"`, words)} OR ${likeAny(Prisma.sql`caption`, words)} OR ${likeAny(Prisma.sql`context`, words)})` : Prisma.sql`false`;
   const theirs = taggedIds.length ? Prisma.sql`id IN (${Prisma.join(taggedIds)})` : Prisma.sql`false`;
-  const photos = await db.$queryRaw<{ id: string; title: string | null; membersTitle: string | null; titleByHelper: boolean | null; caption: string | null; context: string | null; annotation: unknown; originalName: string }[]>`
-    SELECT id, title, "membersTitle", "titleByHelper", caption, context, annotation, "originalName" FROM "Photo"
+  const photos = await db.$queryRaw<{ id: string; kind: string; title: string | null; membersTitle: string | null; titleByHelper: boolean | null; caption: string | null; context: string | null; annotation: unknown; originalName: string }[]>`
+    SELECT id, kind::text AS kind, title, "membersTitle", "titleByHelper", caption, context, annotation, "originalName" FROM "Photo"
     WHERE "trashedAt" IS NULL AND (${anywhere} OR ${theirs})
     ORDER BY "createdAt" ASC`;
   const [others, given] = await Promise.all([othersOn(taggedIds, personId), answerTitles(photos.map((p) => p.id))]);
@@ -290,7 +292,7 @@ export async function photosInContainers(t: Pick<MemberText, "trips" | "collecti
  */
 export async function forgetOnPhoto(photoId: string, person: PersonNames): Promise<void> {
   const m = await matcherFor(person);
-  const p = await db.photo.findUnique({ where: { id: photoId }, select: { id: true, title: true, membersTitle: true, titleByHelper: true, annotation: true, placeEstimateName: true, placeEstimateNote: true, estimatedDateNote: true } });
+  const p = await db.photo.findUnique({ where: { id: photoId }, select: { id: true, kind: true, title: true, membersTitle: true, titleByHelper: true, annotation: true, placeEstimateName: true, placeEstimateNote: true, estimatedDateNote: true } });
   if (!p) return;
   const others = (await othersOn([photoId], person.id)).get(photoId) ?? [];
   if (machineMentions(p, m, { tagged: true, others }, (await answerTitles([photoId])).get(photoId))) await forgetNameInText([photoId], m, { tagged: new Set([photoId]), personId: person.id, containers: false });
