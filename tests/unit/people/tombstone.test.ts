@@ -18,7 +18,7 @@ import { applyAnnotation } from "@/lib/annotation/apply";
 import { applyPlaceEstimate } from "@/lib/annotation/place";
 import { loadItem, withoutUnpermittedNames } from "@/lib/annotation/request";
 import { withoutUnpermittedNames as withoutContainerNames } from "@/lib/annotation/container";
-import { forgetKeyState, forgottenNameLabel, forgottenNames, forgottenScope, loadTombstone } from "@/lib/people/tombstone";
+import { forgetKeyState, forgottenNameLabel, forgottenNames, forgottenScope, hashedPhotoId, hashPlainScopes, loadTombstone } from "@/lib/people/tombstone";
 import { completePendingForgets } from "@/lib/people/forget-person";
 import { withForgetLock } from "@/lib/people/names-changed";
 import { nameMatcher } from "@/lib/people/scrub";
@@ -214,6 +214,13 @@ describe("names that are also words", () => {
     return on;
   };
   const sc = (id: string) => forgottenScope({ photoIds: [id] });
+  /** Whether a forgotten row covers a photograph, as it keeps them: hashed under its key. */
+  type Row = { keyVersion: number; photoIds: string[]; taggedPhotoIds: string[] };
+  const covers = async (row: Row, id: string, field: "photoIds" | "taggedPhotoIds" = "photoIds") => row[field].includes((await hashedPhotoId(id, row.keyVersion))!);
+  const taggedOn = async (id: string) => {
+    for (const r of await db.forgottenName.findMany()) if (await covers(r, id, "taggedPhotoIds")) return r;
+    return undefined;
+  };
 
   it("keeps a one-word name to the photographs they were on, as a name is written", async () => {
     const on = await forget("Ximena");
@@ -297,6 +304,38 @@ describe("names that are also words", () => {
     expect((await loadTombstone()).scrub("Ximena turned five", await sc(await photo()))).toBe("Ximena turned five");
   });
 
+  it("keeps the photographs and trips a one-word name covers hashed, and hashes a row kept before they were", async () => {
+    const p = await db.person.create({ data: { name: "Ximena", createdById: admin } });
+    const tagged = await photo();
+    await db.face.create({ data: { photoId: tagged, personId: p.id, status: "CONFIRMED", box: [0, 0, 1, 1], confidence: 0 } });
+    const trip = await db.trip.create({ data: { slug: "x", title: "Ximena's birthday", startDate: new Date("2026-07-01"), endDate: new Date("2026-07-01"), createdById: admin } });
+    await optOutPerson(p.id, new FormData());
+    const [row] = await db.forgottenName.findMany();
+    const kept = [...row.photoIds, ...row.taggedPhotoIds, ...row.containerIds];
+    expect(kept.length).toBeGreaterThan(0);
+    for (const x of kept) expect(x).toMatch(/^[0-9a-f]{64}$/);
+    expect(JSON.stringify(row)).not.toContain(tagged);
+    expect(JSON.stringify(row)).not.toContain(trip.id);
+    expect(await covers(row, tagged, "taggedPhotoIds")).toBe(true);
+    // A row from before: plain ids, still matched, then hashed in place.
+    await db.forgottenName.update({ where: { hash: row.hash }, data: { photoIds: [tagged], taggedPhotoIds: [tagged], containerIds: [`trip:${trip.id}`] } });
+    const inTrip = (await db.photo.create({ data: { uploaderId: admin, originalName: "t.jpg", mimeType: "image/jpeg", storageKey: "t", originalPath: "t/o.jpg", sizeBytes: 1, status: "READY", tripId: trip.id } })).id;
+    const check = async () => {
+      const ts = await loadTombstone();
+      expect(ts.scrub("Ximena waved", await sc(tagged))).toBe("A family member waved");
+      expect(ts.scrub("Ximena waved", await sc(inTrip))).toBe("A family member waved");
+      expect(ts.scrub("Ximena waved", await forgottenScope({ containers: [{ kind: "trip", id: trip.id }] }))).toBe("A family member waved");
+      expect(ts.scrub("Ximena waved", await sc(await photo()))).toBe("Ximena waved");
+    };
+    await check();
+    expect(await hashPlainScopes()).toBe(1);
+    const after = await db.forgottenName.findUniqueOrThrow({ where: { hash: row.hash } });
+    expect(JSON.stringify(after)).not.toContain(tagged);
+    expect(JSON.stringify(after)).not.toContain(trip.id);
+    await check();
+    expect(await hashPlainScopes()).toBe(0);
+  });
+
   it("keeps the photographs of everybody forgotten under the same one-word name", async () => {
     const first = await forget("Ximena");
     const second = await forget("Ximena");
@@ -375,7 +414,7 @@ describe("names that are also words", () => {
     const p = await db.person.create({ data: { name: "Florence", createdById: admin } });
     const noted = (await db.photo.create({ data: { uploaderId: admin, originalName: "n.jpg", mimeType: "image/jpeg", storageKey: "n", originalPath: "n/o.jpg", sizeBytes: 1, status: "READY", context: "Florence at the pool" } })).id;
     await optOutPerson(p.id, new FormData());
-    expect((await db.forgottenName.findFirstOrThrow()).photoIds).toContain(noted);
+    expect(await covers(await db.forgottenName.findFirstOrThrow(), noted)).toBe(true);
     await applyAnnotation(noted, "m", record({ caption: "Florence dives in" }), { content: [] }, { requestedAt: new Date() });
     expect(((await db.photo.findUniqueOrThrow({ where: { id: noted } })).annotation as StoredAnnotation).caption).toBe("A family member dives in");
   });
@@ -390,8 +429,8 @@ describe("names that are also words", () => {
     const pool = await noting("Florence at the pool");
     await optOutPerson(p.id, new FormData());
     const row = await db.forgottenName.findFirstOrThrow();
-    for (const id of city) expect(row.photoIds).not.toContain(id);
-    expect(row.photoIds).toEqual(expect.arrayContaining([hers, pool]));
+    for (const id of city) expect(await covers(row, id)).toBe(false);
+    for (const id of [hers, pool]) expect(await covers(row, id)).toBe(true);
     for (const id of city) {
       const item = (await loadItem(id))!;
       expect((await withoutUnpermittedNames(item)).context).toBe(item.context);
@@ -473,7 +512,7 @@ describe("names that are also words", () => {
     const nc = await db.trip.create({ data: { slug: "nc", title: "Charlotte, NC 2020", startDate: new Date("2020-07-01"), endDate: new Date("2020-07-01"), createdById: admin } });
     const rain = (await db.photo.create({ data: { uploaderId: admin, originalName: "r.jpg", mimeType: "image/jpeg", storageKey: "r", originalPath: "r/o.jpg", sizeBytes: 1, status: "READY", tripId: nc.id, context: "Charlotte in the rain" } })).id;
     await optOutPerson(charlotte.id, new FormData());
-    expect((await db.forgottenName.findFirstOrThrow()).photoIds).not.toContain(rain);
+    expect(await covers(await db.forgottenName.findFirstOrThrow(), rain)).toBe(false);
 
     const florence = await db.person.create({ data: { name: "Florence", createdById: admin } });
     const own = await photo();
@@ -485,9 +524,9 @@ describe("names that are also words", () => {
     for (const context of notes) inTrip.push((await db.photo.create({ data: { uploaderId: admin, originalName: "f.jpg", mimeType: "image/jpeg", storageKey: "f", originalPath: "f/o.jpg", sizeBytes: 1, status: "READY", tripId: trip.id, context } })).id);
     const pool = (await db.photo.create({ data: { uploaderId: admin, originalName: "p.jpg", mimeType: "image/jpeg", storageKey: "p", originalPath: "p/o.jpg", sizeBytes: 1, status: "READY", context: "Florence at the pool" } })).id;
     await optOutPerson(florence.id, new FormData());
-    const row = (await db.forgottenName.findMany()).find((r) => r.taggedPhotoIds.includes(own))!;
-    for (const id of [located, ...inTrip]) expect(row.photoIds).not.toContain(id);
-    expect(row.photoIds).toContain(pool);
+    const row = (await taggedOn(own))!;
+    for (const id of [located, ...inTrip]) expect(await covers(row, id)).toBe(false);
+    expect(await covers(row, pool)).toBe(true);
     for (const id of [located, ...inTrip]) {
       const item = (await loadItem(id))!;
       expect((await withoutUnpermittedNames(item)).context).toBe(item.context);
@@ -614,9 +653,9 @@ describe("names that are also words", () => {
     const place = [await note("Florence at night"), await note("Florence and Siena by train"), await note("Florence in the rain"), await note("Ponte Vecchio. Florence at dusk"), await note("Florence at night", null), await note("Florence vs Rome", null)];
     const pool = await note("Florence at the pool", null);
     await optOutPerson(florence.id, new FormData());
-    const row = (await db.forgottenName.findMany()).find((r) => r.taggedPhotoIds.includes(own))!;
-    for (const id of place) expect(row.photoIds).not.toContain(id);
-    expect(row.photoIds).toContain(pool);
+    const row = (await taggedOn(own))!;
+    for (const id of place) expect(await covers(row, id)).toBe(false);
+    expect(await covers(row, pool)).toBe(true);
   });
 
   it("keeps kinship words hashed, since some are names", async () => {
@@ -638,9 +677,9 @@ describe("names that are also words", () => {
     const sun = await photo();
     await db.photo.update({ where: { id: sun }, data: { context: "Florence in the sun." } });
     await optOutPerson(florence.id, new FormData());
-    const row = (await db.forgottenName.findMany()).find((r) => r.taggedPhotoIds.includes(own))!;
-    expect(row.photoIds).toContain(hat);
-    expect(row.photoIds).not.toContain(sun);
+    const row = (await taggedOn(own))!;
+    expect(await covers(row, hat)).toBe(true);
+    expect(await covers(row, sun)).toBe(false);
   });
 
   it("looks nothing up when nothing forgotten is kept by place", async () => {

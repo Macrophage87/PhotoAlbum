@@ -979,7 +979,9 @@ model ForgottenName {
   /// Matched only as a name is written (capitalized, or in capitals): a one-word name, or one of everyday words.
   capitalizedOnly Boolean  @default(false)
   /// For a one-word name, the photographs the forget went through, and the trips, collections and activities that
-  /// named them ("trip:<id>"): ids only. It is looked for nowhere else.
+  /// named them ("trip:<id>"), each hashed under the row's key like the name: without the key they say nothing of
+  /// which photographs it covers. It is looked for nowhere else. (Rows kept before they were hashed hold plain ids
+  /// until the start-up pass hashes them: see hashPlainScopes.)
   photoIds        String[] @default([])
   containerIds    String[] @default([])
   /// Of photoIds, the ones its owner was tagged on: there a place-like name is them unless a place is plainly meant.

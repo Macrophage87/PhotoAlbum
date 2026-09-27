@@ -1,6 +1,6 @@
 import { db } from "@/lib/db";
 import { forgetNameInText, forgetQueuedFileNames, forgetRawAnswers, leftoverItems, matcherFor, memberTextCount, memberTextMentioning, photosInContainers, photosMentioning, taggedPhotoIds } from "./forget";
-import { containerKey, forgetKeyState, rememberForgotten } from "./tombstone";
+import { containerKey, forgetKeyState, hashPlainScopes, rememberForgotten } from "./tombstone";
 import { isListedPlace, nameMatcher, notThePerson, type NameMatcher, type Neighbourhood } from "./scrub";
 import { withForgetLock } from "./names-changed";
 import { dropRejudgeJobs, forgetJudgedNames } from "@/lib/annotation/rejudge";
@@ -128,6 +128,8 @@ export async function forgetPerson(personId: string, opts: { keepName: boolean; 
 
 /** Forget everybody waiting on FORGET_KEY, once it is set. At start-up and overnight. */
 export async function completePendingForgets(): Promise<number> {
+  // And forgotten names kept before the photographs they cover were hashed: hashed now, under their own key.
+  await hashPlainScopes().catch((err) => console.error("[forget] could not hash the places of forgotten names", err instanceof Error ? err.message : err));
   const waiting = await db.person.findMany({ where: { forgetPendingAt: { not: null } }, select: { id: true, forgetPendingById: true } });
   if (!waiting.length || !(await forgetKeyState()).write) return 0;
   // Their leftovers were listed when they asked, unless that run was cut short first (see forgetListedAt).
