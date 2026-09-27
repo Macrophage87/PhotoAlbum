@@ -11,7 +11,8 @@ vi.mock("@/lib/share/queries", () => ({
 import { POST } from "@/app/api/share/open/route";
 import { SHARE_OPENED_COOKIE } from "@/lib/share/opened-cookie";
 
-const open = (body: unknown) => POST(new Request("http://localhost/api/share/open", { method: "POST", body: JSON.stringify(body) }));
+const open = (body: unknown, headers: Record<string, string> = {}) =>
+  POST(new Request("http://localhost/api/share/open", { method: "POST", headers: { "content-type": "application/json", "sec-fetch-site": "same-origin", ...headers }, body: JSON.stringify(body) }));
 
 describe("opening a share link", () => {
   beforeEach(() => void (jar.set = []));
@@ -28,6 +29,17 @@ describe("opening a share link", () => {
     expect((await open({ kind: "trip", id: "other", token: "good" })).status).toBe(404);
     expect((await open({ kind: "trip", id: "trip1", token: "bad" })).status).toBe(404);
     expect((await open({ kind: "album", id: "trip1", token: "good" })).status).toBe(400);
+    expect(jar.set).toEqual([]);
+  });
+
+  it("refuses a request from another site, so a page elsewhere cannot plant a share cookie", async () => {
+    expect((await open({ kind: "trip", id: "trip1", token: "good" }, { "sec-fetch-site": "cross-site" })).status).toBe(403);
+    expect((await open({ kind: "trip", id: "trip1", token: "good" }, { "sec-fetch-site": "", origin: "https://evil.example" })).status).toBe(403);
+    expect(jar.set).toEqual([]);
+  });
+
+  it("refuses a body that is not JSON, which is all a plain form can send", async () => {
+    expect((await open({ kind: "trip", id: "trip1", token: "good" }, { "content-type": "text/plain" })).status).toBe(415);
     expect(jar.set).toEqual([]);
   });
 });

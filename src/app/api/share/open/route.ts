@@ -4,6 +4,8 @@ import { getSharedActivity, getSharedCollection, getSharedTrip } from "@/lib/sha
 import { SHARE_COOKIE_PREFIX } from "@/lib/auth/viewer";
 import { shareKey } from "@/lib/auth/access";
 import { SHARE_OPENED_COOKIE } from "@/lib/share/opened-cookie";
+import { isSameOriginRequest } from "@/lib/auth/same-origin";
+import { env } from "@/lib/env";
 
 const body = z.object({ kind: z.enum(["trip", "collection", "activity"]), id: z.string().min(1).max(64), token: z.string().min(1).max(256) });
 
@@ -14,6 +16,10 @@ const body = z.object({ kind: z.enum(["trip", "collection", "activity"]), id: z.
  * streamed title and link-preview tags behind beside the new ones. The page loads itself again instead.
  */
 export async function POST(request: Request) {
+  // Only the album's own share pages may set this cookie: a form on another site could otherwise plant one (a
+  // plain-text form POST is sent top-level, cookies and all). Browsers never send a JSON body from a form.
+  if (!isSameOriginRequest(request.headers, env().APP_URL)) return new Response(null, { status: 403 });
+  if (!request.headers.get("content-type")?.toLowerCase().startsWith("application/json")) return new Response(null, { status: 415 });
   const parsed = body.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return new Response(null, { status: 400 });
   const { kind, id, token } = parsed.data;
