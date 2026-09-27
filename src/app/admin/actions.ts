@@ -16,6 +16,7 @@ import { stat } from "node:fs/promises";
 import { disconnectGoogleAccount } from "@/lib/google/account";
 import { foldDuplicates } from "@/lib/photos/duplicates";
 import { emptyQuarantine, quarantineOrphanPhotoFolders, type QuarantineResult } from "@/lib/storage/sweep";
+import { rebindInstall } from "@/lib/storage/identity";
 
 async function requireAdminOrThrow() {
   const user = await requireUserOrThrow();
@@ -149,6 +150,14 @@ export async function quarantineOrphanFolders(typed: string): Promise<Quarantine
 export async function emptyOldQuarantine(): Promise<QuarantineResult> {
   await requireAdminOrThrow();
   const result = await emptyQuarantine();
+  revalidatePath("/admin");
+  return result;
+}
+
+/** After a genuine move or restore: make this database the storage folder's owner, if it accounts for what is there. */
+export async function rebindStorage(): Promise<{ ok: boolean; message: string }> {
+  await requireAdminOrThrow();
+  const result = await rebindInstall();
   revalidatePath("/admin");
   return result;
 }

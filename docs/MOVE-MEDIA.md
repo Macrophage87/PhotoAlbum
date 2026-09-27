@@ -33,11 +33,12 @@ the `Photo` table's `storageKey`, `originalPath` and `renditions` columns. The m
 files named after nothing. Keep that in mind for the whole of this document — especially the staging part, where it
 is the difference between sharing data and quietly corrupting it.
 
-**The install marker.** `.album-install-id` at the media root holds the same id as the database
-(`AppSetting.installId`). The album cleans nothing up in a media folder whose marker does not match its database, so
-copy the dot file along with everything else (`rsync -a` and `tar -C … .` both do). If it is left behind, the Admin
-page says so, and restarting the worker with the right database connected writes it again. See
-[DEPLOY.md §9](DEPLOY.md#the-install-marker) for the other cases.
+**The install marker.** `.album-install-id` at the media root names the album and the database it belongs to (the
+same as `AppSetting.installId` and `installBinding`). The album cleans nothing up in a media folder whose marker does
+not match its database, so copy the dot file along with everything else (`rsync -a` and `tar -C … .` both do). If it
+is left behind, the Admin page says so; restarting the worker with the right database connected writes it again, or
+use **Re-bind the storage to this database** there. Moving the media leaves the database where it is, so nothing
+else changes. See [DEPLOY.md §9](DEPLOY.md#the-install-marker) for the other cases.
 
 Check how much you are about to move:
 
@@ -305,8 +306,10 @@ sudo chown -R 1000:1000 /mnt/album-staging/photos
 docker compose up -d app
 ```
 
-The copy brings the live album's install marker and install id with it, so staging's clean-ups run on staging's own
-copy and nowhere else. A copy costs a second full-size library. If that is what the new drive was for, option A is
+The copy brings the live album's install marker and install id with it, but in another database, so after each
+refresh the staging Admin page says the storage is not bound to its database and staging cleans nothing up. Its
+storage is its own copy, so re-bind it there (**Re-bind the storage to this database**) after each refresh. Never do
+that on a staging site that shares the live folder. A copy costs a second full-size library. If that is what the new drive was for, option A is
 the reason to prefer it.
 
 ## If something goes wrong

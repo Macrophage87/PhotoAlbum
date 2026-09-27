@@ -25,17 +25,17 @@ export async function resetDb() {
     await c.query('TRUNCATE "_TripParticipants", "_ActivityParticipants", "Visit", "VisitSalt", "AnimalDetection", "TakeoutImport", "GoogleAccount", "MediaSimilarity", "Face", "FaceCluster", "Person", "MediaAnnotationRaw", "AnnotationBatch", "AppSetting", "CollectionItem", "Collection", "PhotoLink", "TrackStats", "Track", "Photo", "Activity", "Trip", "Session", "MagicLinkToken", "Invite", "User" CASCADE');
     // Jobs left by a previous run (a server killed mid-job) would otherwise sit until they expire.
     await c.query("DELETE FROM pgboss.job").catch(() => {});
-    // Emptying AppSetting also took the install id the worker gave the album as it started, while the storage root's
-    // .album-install-id still holds it: the Admin page would call them two albums' and the sweeps would stop. Put the
-    // marker's id back (or give both a new one, on a root with none yet), as a worker restart would.
+    // Emptying AppSetting also took the install id and binding the worker gave the album as it started, while the
+    // storage root's .album-install-id still holds them: the Admin page would call them two albums' and the sweeps
+    // would stop. Bind the two again, keeping the marker's id (or a new one, on a root with none yet), as an admin's
+    // re-bind would (src/lib/storage/identity.ts).
     const marker = path.join(photoRoot, ".album-install-id");
-    let id = (await readFile(marker, "utf8").catch(() => "")).trim();
-    if (!id) {
-      id = randomUUID();
-      await mkdir(photoRoot, { recursive: true });
-      await writeFile(marker, `${id}\n`);
-    }
-    await c.query(`INSERT INTO "AppSetting" (id, "installId", "updatedAt") VALUES ('app', $1, now())`, [id]);
+    const read = await readFile(marker, "utf8").then((t) => JSON.parse(t) as { installId?: string }, () => null).catch(() => null);
+    const installId = read?.installId || randomUUID();
+    const { rows } = await c.query<{ binding: string }>("SELECT system_identifier::text || ':' || current_database() AS binding FROM pg_control_system()");
+    await mkdir(photoRoot, { recursive: true });
+    await writeFile(marker, `${JSON.stringify({ installId, binding: rows[0].binding })}\n`);
+    await c.query(`INSERT INTO "AppSetting" (id, "installId", "installBinding", "updatedAt") VALUES ('app', $1, $2, now())`, [installId, rows[0].binding]);
   });
 }
 

@@ -627,6 +627,9 @@ model AppSetting {
   /// root is swept unless the two match: a database that is not this media's never decides what in it is orphaned
   /// (src/lib/storage/identity.ts).
   installId              String?
+  /// The database the id was given to: `<pg_control_system().system_identifier>:<current_database()>`. A copy of
+  /// this database carries the same installId, but not this; the marker records both.
+  installBinding         String?
   /// What the hourly check last found: photos/<id> folders with no row here. Only ever moved to the quarantine, by an
   /// admin, from the Admin page.
   orphanFolderCount      Int?

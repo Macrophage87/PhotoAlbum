@@ -1,20 +1,14 @@
-import { mkdir, readdir, rename, rm, stat } from "node:fs/promises";
+import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { db } from "@/lib/db";
 import { storage } from "@/lib/storage";
 import { liveImportKeys } from "@/lib/jobs/live";
 import { inboxDir } from "@/lib/takeout/inbox";
 import { installIdentity } from "./identity";
+import { IMPORT_ABANDONED_MS, IMPORT_NAME, PHOTO_FOLDER } from "./layout";
 
-/**
- * An uploaded track file no job has read in this long was left by an import that died with its worker: the job is
- * queued with no retry and expires after an hour, and only the job deletes its file. A Google export among them is
- * years of somebody's whereabouts, so it is not kept for ever by accident.
- */
-export const IMPORT_ABANDONED_MS = 6 * 3600_000;
-
-/** The only names the import route gives what it stores (`imports/<uuid>.<ext>`); anything else is not the sweep's. */
-const IMPORT_NAME = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.[a-z0-9]+$/;
+// A Google export among the track files is years of somebody's whereabouts, so it is not kept for ever by accident.
+export { IMPORT_ABANDONED_MS };
 
 /**
  * Delete files under imports/ older than IMPORT_ABANDONED_MS that neither a track (a GPX or FIT file is kept with
@@ -73,11 +67,12 @@ export const QUARANTINE_KEEP_MS = 30 * 24 * 3600_000;
 /** The most folders one move may take: an album whose database has lost track of more than this needs a person. */
 export const QUARANTINE_MAX = 200;
 export const QUARANTINE_MAX_SHARE = 0.05;
+/** In each quarantine/<day>/: when each folder was moved there, which is what the thirty days are counted from. */
+export const QUARANTINE_MANIFEST = ".moved.json";
+type Manifest = Record<string, string>;
 /** How many of the found folders the Admin page names. */
 const SAMPLE = 20;
 
-/** Only folder names the album itself makes (a row's cuid), so nobody's own folder under photos/ is ever counted. */
-const PHOTO_FOLDER = /^c[a-z0-9]{24}$/;
 const DAY_FOLDER = /^\d{4}-\d{2}-\d{2}$/;
 
 /** The latest write anywhere in a folder, in epoch ms. */
@@ -145,10 +140,14 @@ export async function quarantineOrphanPhotoFolders(expected: number, now = new D
   const day = now.toISOString().slice(0, 10);
   const into = store.localPath!(`quarantine/${day}`);
   await mkdir(into, { recursive: true });
+  const manifest = await readManifest(into);
   let moved = 0;
   for (const id of orphans) {
     // Asked again on its own just before it moves, so nothing listed a moment ago is taken on stale word.
     if (await db.photo.findUnique({ where: { id }, select: { id: true } })) continue;
+    // Recorded first: a folder in the quarantine with no record of when it came is never deleted.
+    manifest[id] = now.toISOString();
+    await writeManifest(into, manifest);
     await rename(store.localPath!(`photos/${id}`), path.join(into, id)).then(() => moved++, (err) => console.error(`[sweep] could not move photos/${id}`, err));
   }
   await recordOrphanPhotoFolders(now);
@@ -158,28 +157,79 @@ export async function quarantineOrphanPhotoFolders(expected: number, now = new D
 
 export type QuarantineDay = { day: string; folders: number };
 
+async function readManifest(dayDir: string): Promise<Manifest> {
+  try {
+    const m = JSON.parse(await readFile(path.join(dayDir, QUARANTINE_MANIFEST), "utf8")) as unknown;
+    return m && typeof m === "object" ? (m as Manifest) : {};
+  } catch {
+    return {};
+  }
+}
+
+async function writeManifest(dayDir: string, manifest: Manifest): Promise<void> {
+  const file = path.join(dayDir, QUARANTINE_MANIFEST);
+  await writeFile(`${file}.tmp`, `${JSON.stringify(manifest, null, 1)}\n`);
+  await rename(`${file}.tmp`, file);
+}
+
+/** The folders in one day of the quarantine. */
+async function quarantined(dayDir: string): Promise<string[]> {
+  return (await readdir(dayDir, { withFileTypes: true }).catch(() => [])).filter((d) => d.isDirectory()).map((d) => d.name);
+}
+
 /** What is in the quarantine, a day at a time. */
 export async function quarantineContents(): Promise<QuarantineDay[]> {
   const dir = storage().localPath?.("quarantine");
   if (!dir) return [];
   const days = (await readdir(dir).catch(() => [] as string[])).filter((d) => DAY_FOLDER.test(d)).sort();
-  return Promise.all(days.map(async (day) => ({ day, folders: (await readdir(path.join(dir, day)).catch(() => [])).length })));
+  return Promise.all(days.map(async (day) => ({ day, folders: (await quarantined(path.join(dir, day))).length })));
 }
 
-/** Delete the quarantine's days that are older than QUARANTINE_KEEP_MS; later ones stay. Only for this album's own storage. */
+/**
+ * Delete what the quarantine's records say was moved there over QUARANTINE_KEEP_MS ago; anything moved later, or
+ * with no record of when, stays. A folder whose photo is in the database again (a restore since, say) is not
+ * deleted but put back in photos/, when nothing has taken its place there. Only for this album's own storage.
+ */
 export async function emptyQuarantine(now = new Date()): Promise<QuarantineResult> {
   const identity = await installIdentity();
   if (!identity.ok) return { ok: false, message: `Nothing was deleted. ${identity.problem}` };
   const dir = storage().localPath?.("quarantine");
   if (!dir) return { ok: true, message: "The quarantine is empty.", moved: 0 };
   const cutoff = now.getTime() - QUARANTINE_KEEP_MS;
-  let folders = 0;
-  for (const { day, folders: n } of await quarantineContents()) {
-    if (Date.parse(`${day}T00:00:00Z`) >= cutoff) continue;
-    await rm(path.join(dir, day), { recursive: true, force: true });
-    folders += n;
+  let deleted = 0;
+  const restored: string[] = [], stuck: string[] = [];
+  for (const { day } of await quarantineContents()) {
+    const dayDir = path.join(dir, day);
+    const manifest = await readManifest(dayDir);
+    for (const id of await quarantined(dayDir)) {
+      const movedAt = Date.parse(manifest[id] ?? "");
+      if (!Number.isFinite(movedAt) || movedAt >= cutoff) continue;
+      // Asked again just before it goes: the database may know this photo again since it was moved.
+      if (await db.photo.findUnique({ where: { id }, select: { id: true } })) {
+        const home = storage().localPath!(`photos/${id}`);
+        if (await stat(home).catch(() => null)) {
+          stuck.push(id);
+          continue;
+        }
+        await rename(path.join(dayDir, id), home);
+        restored.push(id);
+      } else {
+        await rm(path.join(dayDir, id), { recursive: true, force: true });
+        deleted++;
+      }
+      delete manifest[id];
+      await writeManifest(dayDir, manifest);
+    }
+    if (!(await quarantined(dayDir)).length) await rm(dayDir, { recursive: true, force: true });
   }
-  return { ok: true, message: folders ? `Deleted ${folders} folder${folders === 1 ? "" : "s"} that had been in the quarantine for over ${QUARANTINE_KEEP_MS / 86_400_000} days.` : `Nothing in the quarantine is over ${QUARANTINE_KEEP_MS / 86_400_000} days old yet.`, moved: folders };
+  const keep = QUARANTINE_KEEP_MS / 86_400_000;
+  const parts = [
+    deleted ? `Deleted ${deleted} folder${deleted === 1 ? "" : "s"} that had been in the quarantine for over ${keep} days.` : `Nothing in the quarantine had been there over ${keep} days to delete.`,
+    restored.length ? `${restored.length} ${restored.length === 1 ? "has a photo" : "have photos"} in the album again, so ${restored.length === 1 ? "it was" : "they were"} put back in photos/ instead: ${restored.join(", ")}.` : null,
+    stuck.length ? `${stuck.length} ${stuck.length === 1 ? "has a photo" : "have photos"} in the album again but ${stuck.length === 1 ? "its" : "their"} place in photos/ is taken, so ${stuck.length === 1 ? "it was" : "they were"} left in the quarantine: ${stuck.join(", ")}.` : null,
+  ].filter(Boolean);
+  if (restored.length || stuck.length) console.warn(`[sweep] quarantine: ${restored.length} put back, ${stuck.length} left because photos/<id> is taken`);
+  return { ok: true, message: parts.join(" "), moved: deleted };
 }
 
 /** The hourly storage job. Each part stands alone, so one that fails does not keep the other from running. */

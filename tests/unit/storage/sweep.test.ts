@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { db } from "@/lib/db";
@@ -14,8 +14,8 @@ const jobs = vi.hoisted(() => ({ importKeys: new Set<string>() as Set<string> | 
 // No pg-boss here: what its live import jobs would read is given by each test.
 vi.mock("@/lib/jobs/live", () => ({ liveImportKeys: async () => jobs.importKeys }));
 
-import { IMPORT_ABANDONED_MS, ORPHAN_FOLDER_MS, QUARANTINE_KEEP_MS, emptyQuarantine, findOrphanPhotoFolders, quarantineOrphanPhotoFolders, recordOrphanPhotoFolders, sweepImportFiles } from "@/lib/storage/sweep";
-import { ensureInstallIdentity, INSTALL_MARKER, installIdentity } from "@/lib/storage/identity";
+import { IMPORT_ABANDONED_MS, ORPHAN_FOLDER_MS, QUARANTINE_KEEP_MS, QUARANTINE_MANIFEST, emptyQuarantine, findOrphanPhotoFolders, quarantineOrphanPhotoFolders, recordOrphanPhotoFolders, sweepImportFiles } from "@/lib/storage/sweep";
+import { databaseBinding, ensureInstallIdentity, INSTALL_MARKER, installIdentity, rebindInstall } from "@/lib/storage/identity";
 
 const now = new Date("2026-09-27T12:00:00Z");
 const DAY = 86_400_000;
@@ -46,20 +46,62 @@ async function freshInstall() {
 describe("the install marker", () => {
   beforeEach(freshInstall);
 
-  it("is written once, on a new install, and matches the database", async () => {
-    const id = readFileSync(marker(), "utf8").trim();
-    expect(await installIdentity()).toEqual({ ok: true, id });
+  it("is written once, on a new install, and names the album and the database", async () => {
+    const written = JSON.parse(readFileSync(marker(), "utf8")) as { installId: string; binding: string };
+    expect(written.binding).toBe(await databaseBinding());
+    expect(await installIdentity()).toEqual({ ok: true, id: written.installId });
+    expect(await db.appSetting.findUniqueOrThrow({ where: { id: "app" } })).toMatchObject({ installId: written.installId, installBinding: written.binding });
     // Starting again changes nothing.
     await ensureInstallIdentity();
-    expect(readFileSync(marker(), "utf8").trim()).toBe(id);
+    expect(readFileSync(marker(), "utf8")).toBe(`${JSON.stringify(written)}\n`);
   });
 
   it("is not claimed by an empty database facing media that is already there", async () => {
     rmSync(marker());
     await db.appSetting.deleteMany();
     file(`photos/${cuid()}/original.jpg`, DAY);
-    expect((await ensureInstallIdentity()).ok).toBe(false);
+    expect(await ensureInstallIdentity()).toMatchObject({ ok: false, kind: "unknown-files", problem: expect.stringContaining("This storage holds files this album's database does not know.") });
     expect(existsSync(marker())).toBe(false);
+  });
+
+  it("is not claimed by another album's database that happens to have photos of its own", async () => {
+    // Live, on code from before the marker: sixty photos and a GPX file kept with its track, and no marker.
+    const live = Array.from({ length: 60 }, () => cuid());
+    for (const id of live) file(`photos/${id}/original.jpg`, 30 * DAY);
+    const gpx = file(`imports/${uuidName("gpx")}`, 30 * DAY);
+    // Staging, with its own database of one photo, starts first against the same root.
+    rmSync(marker());
+    await db.appSetting.deleteMany();
+    const uploaderId = (await db.user.create({ data: { email: "staging@example.com" } })).id;
+    const own = cuid();
+    await db.photo.create({ data: { id: own, uploaderId, originalName: "a.jpg", mimeType: "image/jpeg", storageKey: `photos/${own}`, originalPath: `photos/${own}/original.jpg`, sizeBytes: 1, status: "READY" } });
+    const r = await ensureInstallIdentity(now);
+    expect(r).toMatchObject({ ok: false, kind: "unknown-files" });
+    expect(existsSync(marker())).toBe(false);
+    // Its hourly sweep leaves live's file alone, and its admin cannot re-bind the root to it either.
+    expect(await sweepImportFiles(now)).toBe(0);
+    expect(existsSync(gpx)).toBe(true);
+    expect(await rebindInstall(now)).toMatchObject({ ok: false, message: expect.stringMatching(/does not know/) });
+    expect(existsSync(marker())).toBe(false);
+  });
+
+  it("is claimed for an album from before the marker only when the database accounts for the files", async () => {
+    const uploaderId = (await db.user.create({ data: { email: "old@example.com" } })).id;
+    const ids = Array.from({ length: 20 }, () => cuid());
+    for (const id of ids) file(`photos/${id}/original.jpg`, 30 * DAY);
+    const addRows = (list: string[]) => db.photo.createMany({ data: list.map((id) => ({ id, uploaderId, originalName: "a.jpg", mimeType: "image/jpeg", storageKey: `photos/${id}`, originalPath: `photos/${id}/original.jpg`, sizeBytes: 1, status: "READY" as const })) });
+    rmSync(marker());
+    await db.appSetting.deleteMany();
+    // Eighteen of twenty is under 95%.
+    await addRows(ids.slice(0, 18));
+    expect((await ensureInstallIdentity(now)).ok).toBe(false);
+    // An uploaded track file nothing refers to is not this database's either.
+    await addRows(ids.slice(18, 19));
+    const stray = file(`imports/${uuidName("gpx")}`, 30 * DAY);
+    expect(await ensureInstallIdentity(now)).toMatchObject({ ok: false, kind: "unknown-files", problem: expect.stringMatching(/1 uploaded track file is not/) });
+    rmSync(stray);
+    expect((await ensureInstallIdentity(now)).ok).toBe(true);
+    expect(existsSync(marker())).toBe(true);
   });
 
   it("is written for an album from before the marker, whose database has its photos", async () => {
@@ -71,6 +113,30 @@ describe("the install marker", () => {
     file(`photos/${id}/original.jpg`, DAY);
     expect((await ensureInstallIdentity()).ok).toBe(true);
     expect(existsSync(marker())).toBe(true);
+  });
+
+  it("refuses a copy of this database, and lets an admin re-bind after a genuine move once the files are accounted for", async () => {
+    const written = JSON.parse(readFileSync(marker(), "utf8")) as { installId: string; binding: string };
+    // A staging database cloned from live: live's id and live's binding, in a database that is neither.
+    await db.appSetting.update({ where: { id: "app" }, data: { installBinding: "7000000000000000001:photoalbum" } });
+    writeFileSync(marker(), JSON.stringify({ installId: written.installId, binding: "7000000000000000001:photoalbum" }));
+    const stale = file(`imports/${uuidName()}`, 2 * IMPORT_ABANDONED_MS);
+    expect(await installIdentity()).toMatchObject({ ok: false, kind: "other-database" });
+    expect(await sweepImportFiles(now)).toBe(0);
+    expect(existsSync(stale)).toBe(true);
+    // The album restored on another server: its own id, and a database that accounts for the files (here, none but a
+    // stray track file, which it does not). Refused until that is so, then re-bound.
+    expect(await rebindInstall(now)).toMatchObject({ ok: false });
+    rmSync(stale);
+    expect(await rebindInstall(now)).toMatchObject({ ok: true });
+    expect(await installIdentity()).toEqual({ ok: true, id: written.installId });
+    expect(JSON.parse(readFileSync(marker(), "utf8"))).toEqual({ installId: written.installId, binding: await databaseBinding() });
+  });
+
+  it("takes a bare id in the marker for the album, but not for this database", async () => {
+    const written = JSON.parse(readFileSync(marker(), "utf8")) as { installId: string };
+    writeFileSync(marker(), `${written.installId}\n`);
+    expect(await installIdentity()).toMatchObject({ ok: false, kind: "other-database" });
   });
 
   it("refuses another album's database, and an empty one, against a marked root", async () => {
@@ -192,7 +258,7 @@ describe("photo folders with no photo", () => {
 
   it("deletes nothing and moves nothing when the database is empty, or another album's", async () => {
     const { kept } = await album(30, 0);
-    const own = (await db.appSetting.findUniqueOrThrow({ where: { id: "app" } })).installId!;
+    const { installId: own, installBinding } = await db.appSetting.findUniqueOrThrow({ where: { id: "app" } });
     // The dangerous one: an empty database facing a full media folder, as after a restore that has not run yet.
     await db.photo.deleteMany();
     for (const state of ["empty", "other"] as const) {
@@ -205,7 +271,7 @@ describe("photo folders with no photo", () => {
       expect(await emptyQuarantine(now)).toMatchObject({ ok: false });
     }
     // Even with the right identity, an album with no photos at all moves nothing.
-    await db.appSetting.update({ where: { id: "app" }, data: { installId: own } });
+    await db.appSetting.update({ where: { id: "app" }, data: { installId: own, installBinding } });
     expect(await quarantineOrphanPhotoFolders(30, now)).toMatchObject({ ok: false, message: expect.stringMatching(/no photos at all/) });
     expect(present(kept)).toBe(30);
     expect(existsSync(path.join(root, "quarantine"))).toBe(false);
@@ -229,18 +295,59 @@ describe("photo folders with no photo", () => {
     expect(await quarantineOrphanPhotoFolders(1, now)).toMatchObject({ ok: true, moved: 1 });
     expect(present(kept)).toBe(40);
     expect(present(lost)).toBe(0);
-    const today = path.join(root, "quarantine", now.toISOString().slice(0, 10), lost[0]);
+    const todayDir = path.join(root, "quarantine", now.toISOString().slice(0, 10));
+    const today = path.join(todayDir, lost[0]);
     expect(existsSync(path.join(today, "frames/1.jpg"))).toBe(true);
+    expect(JSON.parse(readFileSync(path.join(todayDir, QUARANTINE_MANIFEST), "utf8"))).toEqual({ [lost[0]]: now.toISOString() });
     expect(await db.appSetting.findUniqueOrThrow({ where: { id: "app" } })).toMatchObject({ orphanFolderCount: 0 });
-    // An earlier move, long enough ago to go.
-    const old = path.join(root, "quarantine", new Date(now.getTime() - QUARANTINE_KEEP_MS - DAY).toISOString().slice(0, 10), cuid());
+    // An earlier move, recorded long enough ago to go; and in the same old-dated folder, one with no record of when
+    // it came (copied in by hand, say), which stays.
+    const oldDir = path.join(root, "quarantine", new Date(now.getTime() - QUARANTINE_KEEP_MS - DAY).toISOString().slice(0, 10));
+    const old = path.join(oldDir, cuid()), unrecorded = path.join(oldDir, cuid());
     mkdirSync(old, { recursive: true });
+    mkdirSync(unrecorded, { recursive: true });
+    writeFileSync(path.join(oldDir, QUARANTINE_MANIFEST), JSON.stringify({ [path.basename(old)]: new Date(now.getTime() - QUARANTINE_KEEP_MS - DAY).toISOString() }));
     expect(await emptyQuarantine(now)).toMatchObject({ ok: true, moved: 1 });
     expect(existsSync(old)).toBe(false);
+    expect(existsSync(unrecorded)).toBe(true);
     expect(existsSync(today)).toBe(true);
     // A month on, today's goes too.
     expect(await emptyQuarantine(new Date(now.getTime() + QUARANTINE_KEEP_MS + DAY))).toMatchObject({ ok: true, moved: 1 });
     expect(existsSync(today)).toBe(false);
+  });
+
+  it("goes by when a folder was moved, not the name of the day it sits under", async () => {
+    const dir = path.join(root, "quarantine", "2020-01-01");
+    const id = cuid();
+    mkdirSync(path.join(dir, id), { recursive: true });
+    writeFileSync(path.join(dir, QUARANTINE_MANIFEST), JSON.stringify({ [id]: new Date(now.getTime() - DAY).toISOString() }));
+    expect(await emptyQuarantine(now)).toMatchObject({ ok: true, moved: 0 });
+    expect(existsSync(path.join(dir, id))).toBe(true);
+  });
+
+  it("puts a quarantined folder back when its photo is in the database again, rather than deleting it", async () => {
+    await album(40, 2);
+    const scan = await findOrphanPhotoFolders(now);
+    const [back, blocked] = scan.ok ? scan.orphans : [];
+    // Two of 42 is over the cap for one move, so they are put in the quarantine by hand, as a move leaves them.
+    for (const id of [back, blocked]) {
+      const dayDir = path.join(root, "quarantine", now.toISOString().slice(0, 10));
+      mkdirSync(dayDir, { recursive: true });
+      renameSync(path.join(root, "photos", id), path.join(dayDir, id));
+      const manifest = existsSync(path.join(dayDir, QUARANTINE_MANIFEST)) ? JSON.parse(readFileSync(path.join(dayDir, QUARANTINE_MANIFEST), "utf8")) : {};
+      writeFileSync(path.join(dayDir, QUARANTINE_MANIFEST), JSON.stringify({ ...manifest, [id]: now.toISOString() }));
+    }
+    // A restore since brought both photos back; one of them already has a new folder of its own.
+    await row(back);
+    await row(blocked);
+    folder(blocked, DAY);
+    const later = new Date(now.getTime() + QUARANTINE_KEEP_MS + DAY);
+    const r = await emptyQuarantine(later);
+    expect(r).toMatchObject({ ok: true, moved: 0 });
+    expect(r.message).toMatch(new RegExp(`put back in photos/ instead: ${back}`));
+    expect(r.message).toMatch(new RegExp(`left in the quarantine: ${blocked}`));
+    expect(existsSync(path.join(root, "photos", back, "frames/1.jpg"))).toBe(true);
+    expect(existsSync(path.join(root, "quarantine", now.toISOString().slice(0, 10), blocked))).toBe(true);
   });
 
   it("does not count a folder whose row exists, however old, or one left too recently", async () => {

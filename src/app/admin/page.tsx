@@ -27,6 +27,7 @@ import { closeDeadImports } from "@/lib/takeout/import";
 import { visitorStats } from "@/lib/visits/stats";
 import { VisitorStats } from "@/components/admin/VisitorStats";
 import { OrphanFoldersAdmin } from "@/components/admin/OrphanFoldersAdmin";
+import { StorageIdentityNotice } from "@/components/admin/StorageIdentityNotice";
 import { installIdentity } from "@/lib/storage/identity";
 import { QUARANTINE_KEEP_MS, quarantineContents } from "@/lib/storage/sweep";
 
@@ -232,12 +233,7 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
         {(!identity.ok || storageFindings?.orphanFolderCount || quarantine.length > 0) && (
           <section className="space-y-3">
             <h2 className="font-display text-xl font-semibold mb-1">Storage</h2>
-            {!identity.ok && (
-              <div className="rounded-theme border border-red-300 bg-red-50 p-3 text-sm text-red-900" data-testid="install-identity-problem">
-                <p className="font-medium">The storage folder and this database may not be the same album&apos;s</p>
-                <p>{identity.problem} Until it is put right, nothing in the storage folder is cleaned up or moved. See &ldquo;The install marker&rdquo; in the deployment guide.</p>
-              </div>
-            )}
+            {!identity.ok && <StorageIdentityNotice problem={identity.problem} unknownFiles={identity.kind === "unknown-files"} />}
             <OrphanFoldersAdmin count={identity.ok ? (storageFindings?.orphanFolderCount ?? 0) : 0} sample={storageFindings?.orphanFolderSample ?? []} checkedAt={storageFindings?.orphanFoldersCheckedAt?.toISOString() ?? null} quarantine={quarantine} keepDays={QUARANTINE_KEEP_MS / 86_400_000} />
           </section>
         )}
