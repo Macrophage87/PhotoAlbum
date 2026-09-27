@@ -117,6 +117,12 @@ export function Lightbox({ photos, index, onClose, onNavigate, share = null }: {
               >
                 <PanoramaHint label={panoramaLabel(photo.panorama.projection)} />
               </PanoramaView>
+              {/* What is panned across is a smaller copy; the whole of it is a click away, as on its own page. */}
+              {photo.originalUrl ? (
+                <p className="mt-1 text-center text-xs">
+                  <a href={photo.originalUrl} target="_blank" rel="noreferrer" className="text-white/80 underline underline-offset-2 hover:text-white" data-testid="lightbox-full-size">Open the full-size photo</a>
+                </p>
+              ) : null}
             </div>
           ) : photo.originalUrl ? (
             // A second click on the picture opens the full-size file in its own tab.

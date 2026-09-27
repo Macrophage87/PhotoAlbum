@@ -29,7 +29,8 @@ const info = async (id: string, query = "") => (await (await infoRoute(new Reque
 
 /**
  * The file as uploaded carries the camera's GPS, and whatever a crop or "remove place" took out of the picture the
- * album shows. It is the family's: anybody else asking for it gets the largest rendition, which carries nothing.
+ * album shows. It is the family's: anybody else asking for it gets a copy of the picture at the same size, which
+ * carries nothing (see tests/unit/images/clean-copy.test.ts for that copy itself).
  */
 describe("the file as uploaded, for somebody outside the family", () => {
   let member: Viewer, plainId: string, editedId: string, clipId: string, tripId: string, original: Buffer, renditions: Renditions, edited: Renditions;
@@ -85,11 +86,16 @@ describe("the file as uploaded, for somebody outside the family", () => {
     ["a link preview's token", () => anon(), "&share=tok&kind=trip"],
     ["a member reading a share page", () => member, "&view=share"],
   ] as const) {
-    it(`gives ${label} the largest rendition in place of the original, the edited file or the uncropped copy`, async () => {
+    it(`gives ${label} a clean full-size copy in place of the original, the edited file or the uncropped copy`, async () => {
       who.viewer = viewer();
       const plain = await fetchBytes(plainId, "original", query);
       expect(plain.res.status).toBe(200);
-      expect(plain.body.equals(await readFile(storage().localPath!(renditions.medium.key)))).toBe(true);
+      const made = ((await db.photo.findUniqueOrThrow({ where: { id: plainId } })).renditions as Renditions).full!;
+      expect(plain.body.equals(await readFile(storage().localPath!(made.key)))).toBe(true);
+      // The whole picture, where the medium would have been all there was before.
+      expect([made.w, made.h]).toEqual([1200, 800]);
+      expect((await readExif(plain.body)).lat).toBeNull();
+      expect((await sharp(plain.body).metadata()).exif).toBeUndefined();
       expect(plain.res.headers.get("Content-Type")).toBe("image/webp");
       expect(plain.res.headers.get("Content-Disposition")).toBeNull();
       expect(plain.res.headers.get("Cache-Control")).toMatch(/^private/);
@@ -110,18 +116,20 @@ describe("the file as uploaded, for somebody outside the family", () => {
     const out = await info(editedId);
     expect(out.uneditedUrl).toBeNull();
     expect(out.originalUrl).toContain(`/api/photos/${editedId}/edited?`);
-    expect((await info(plainId)).originalUrl).toBeNull();
+    expect((await info(plainId)).originalUrl).toContain(`/api/photos/${plainId}/edited?`);
     who.viewer = member;
     const mine = await info(editedId);
     expect(mine.uneditedUrl).toContain("/original?");
     expect((await info(plainId)).originalUrl).toContain("/original?");
   });
 
-  it("links a visitor's grid tile to the largest rendition, never the original", async () => {
+  it("links a visitor's grid tile to the full-size copy, never the original", async () => {
     const card = { id: plainId, kind: "PHOTO", status: "READY", updatedAt: new Date(), edits: null, renditions, uploader: null, collections: [] } as unknown as PhotoCard;
     expect(toGridPhoto(card, null, { id: "someone", role: "MEMBER" }).originalUrl).toContain("/original?");
-    expect(toGridPhoto(card).originalUrl).toBeNull();
+    expect(toGridPhoto(card).originalUrl).toContain("/edited?");
     expect(toGridPhoto({ ...card, edits: {}, renditions: edited } as PhotoCard).originalUrl).toContain("/edited?");
-    expect(toGridPhoto({ ...card, renditions: { ...renditions, pano: { key: "p.webp", w: 4096, h: 800 } } } as PhotoCard).originalUrl).toContain("/pano?");
+    // A panorama too, whose long copy is still a fraction of it.
+    expect(toGridPhoto({ ...card, renditions: { ...renditions, pano: { key: "p.webp", w: 4096, h: 800 } } } as PhotoCard).originalUrl).toContain("/edited?");
+    expect(toGridPhoto({ ...card, renditions: null } as unknown as PhotoCard).originalUrl).toBeNull();
   });
 });

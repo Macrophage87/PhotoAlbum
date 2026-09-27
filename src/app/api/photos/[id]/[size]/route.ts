@@ -9,6 +9,7 @@ import { jpegPreview } from "@/lib/images/preview";
 import { MEDIA_CSP } from "@/lib/security/csp";
 import { viewerFor } from "@/lib/auth/access";
 import { largestRendition } from "@/lib/photos/urls";
+import { cleanCopy } from "@/lib/images/clean-copy";
 import { publicScanCopy } from "@/lib/scans/public-copy";
 
 const MIME: Record<string, string> = { webp: "image/webp", jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", heic: "image/heic", heif: "image/heif", tif: "image/tiff", avif: "image/avif", gif: "image/gif", mp4: "video/mp4" };
@@ -38,9 +39,10 @@ export function parseRange(header: string | null, size: number): { start: number
  *
  * The file as uploaded (and the editor's uncropped copy) is the family's: it carries the camera's EXIF, GPS included,
  * and whatever a crop or "remove place" took out. Anybody else — a visitor, a share link, a member reading a share
- * page (`?view=share`) — asking for it gets the largest rendition instead, which carries no metadata. A 3D scan has
- * no rendition to stand in for it: they get its model only, as a copy with its metadata taken out (see
- * `lib/scans/sanitize`), or nothing for a format that cannot be cleaned.
+ * page (`?view=share`) — asking for it, or for the edited full size, gets the same picture at the same size as a
+ * copy made for them: upright, edited, and with no metadata (see `lib/images/clean-copy`). A 3D scan has no picture
+ * to stand in for it: they get its model only, as a copy with its metadata taken out (see `lib/scans/sanitize`), or
+ * nothing for a format that cannot be cleaned.
  */
 export async function GET(request: Request, { params }: { params: Promise<{ id: string; size: string }> }) {
   const { id, size } = await params;
@@ -48,7 +50,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
 
   const photo = await db.photo.findUnique({
     where: { id },
-    select: { id: true, status: true, originalPath: true, originalName: true, renditions: true, videoRenditions: true, storageKey: true, mimeType: true, kind: true, scanFormat: true, ...mediaAccessInclude },
+    select: { id: true, status: true, originalPath: true, originalName: true, renditions: true, videoRenditions: true, storageKey: true, mimeType: true, kind: true, scanFormat: true, edits: true, imageVersion: true, updatedAt: true, ...mediaAccessInclude },
   });
   if (!photo) return new Response("Not found", { status: 404 });
 
@@ -73,7 +75,11 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     if (photo.kind === "VIDEO") key = video?.mp4?.key;
     // The editor's copy is the picture before its crop, so the medium, which has it, answers instead.
     else if (size === "source") key = (photo.renditions as Renditions | null)?.medium?.key;
-    else key = largestRendition(photo.renditions as Renditions | null)?.rendition.key;
+    else {
+      // A photograph at its full size, made for them; should that fail, the largest picture the album already has.
+      const full = photo.kind === "PHOTO" ? await cleanCopy(photo).catch((err) => void console.error(`[photos] no clean copy of ${photo.id}:`, err)) : null;
+      key = full?.key ?? largestRendition(photo.renditions as Renditions | null)?.rendition.key;
+    }
     if (!key) return new Response("Not ready", { status: 404 });
     return serve(request, key, MIME[key.split(".").pop() ?? ""] ?? "image/webp", byViewer(url));
   }

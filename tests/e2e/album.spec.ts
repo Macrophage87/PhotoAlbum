@@ -264,6 +264,20 @@ test("public trips are browsable anonymously without edit controls", async ({ br
   await expect(page.locator('meta[property="og:description"]')).toHaveAttribute("content", /\w/);
   await expect(page.locator('meta[name="twitter:card"]')).toHaveAttribute("content", "summary_large_image");
   await expect(page.getByRole("link", { name: "Settings" })).toHaveCount(0);
+  // A second click opens the photograph full size, as it does for the family: a copy made for visitors, with none
+  // of the file's EXIF (its GPS included) or its name on it.
+  const still = await withDb((c) => c.query(`SELECT p.id FROM "Photo" p JOIN "Trip" t ON t.id = p."tripId" WHERE t.slug = 'acadia' AND p."originalName" = 'photo-with-gps.jpg' AND p.status = 'READY' AND p."trashedAt" IS NULL LIMIT 1`));
+  await page.goto("/trips/acadia/photos");
+  await page.locator(`button:has(img[src*='/api/photos/${still.rows[0].id}/'])`).first().click();
+  const full = page.getByRole("dialog", { name: "Photo viewer" }).locator(`a[href*='/api/photos/${still.rows[0].id}/edited']`);
+  await expect(full).toBeVisible();
+  const copy = await page.request.get((await full.getAttribute("href"))!);
+  expect(copy.ok()).toBe(true);
+  expect(copy.headers()["content-type"]).toMatch(/^image\/(webp|jpeg)/);
+  expect(copy.headers()["content-disposition"]).toBeUndefined();
+  const copied = await copy.body();
+  for (const marker of ["Exif", "EXIF", "photo-with-gps"]) expect(copied.includes(marker)).toBe(false);
+  await page.keyboard.press("Escape");
   await page.goto("/trips/acadia/settings");
   await expect(page).toHaveURL(/\/auth\/signin/);
   await setVisibility("acadia", "PRIVATE");
@@ -1807,6 +1821,8 @@ test("a panorama is recognized, kept long, and shown as a panorama rather than a
   const dialog = page.getByRole("dialog", { name: "Photo viewer" });
   const view = dialog.getByTestId("panorama-view");
   await expect(view).toBeVisible();
+  // What is panned across is a smaller copy: the whole panorama is a link away, as on its own page.
+  await expect(dialog.getByTestId("lightbox-full-size")).toHaveAttribute("href", new RegExp(`/api/photos/${row.id}/original\\?`));
   await view.click();
   await expect(dialog).toBeVisible();
   // Wait for the picture, so the drag has something to scroll.

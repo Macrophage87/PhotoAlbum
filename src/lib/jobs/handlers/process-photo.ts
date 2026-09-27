@@ -1,4 +1,3 @@
-import { existsSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import { db } from "@/lib/db";
 import { storage } from "@/lib/storage";
@@ -7,11 +6,12 @@ import { cameraLabel, readExif, resolveDigitizedTakenAt, resolveTakenAt, type Ta
 import { resolveFilenameTakenAt } from "@/lib/images/filename-date";
 import { timezoneForCoords } from "@/lib/geo/tz";
 import { sha256File } from "@/lib/media/hash";
-import { heicToJpegBuffer, isHeic } from "@/lib/images/heic";
-import { makeRenditions } from "@/lib/images/renditions";
+import { heicSource, heicToJpegBuffer, isHeic } from "@/lib/images/heic";
+import { makeRenditions, type Renditions } from "@/lib/images/renditions";
+import { forgetCleanCopies } from "@/lib/images/clean-copy";
 import { applyPhotoInstant } from "@/lib/photos/apply-date";
 import { readGPano } from "@/lib/images/panorama-read";
-import { editsSchema, hasEdits, type PhotoEdits } from "@/lib/images/edits";
+import { editsOf } from "@/lib/images/edits";
 import { pickTripByDay, whoWasThere } from "@/lib/photos/assign";
 import { pickTripByCoverage } from "@/lib/photos/trip-by-coverage";
 import { activityFor } from "@/lib/activities/reassign";
@@ -29,20 +29,6 @@ import { forgetFilesIfGone } from "@/lib/storage/sweep";
  * Turn an uploaded original into a usable photo: EXIF, timezone-correct takenAt, GPS,
  * WebP renditions, then trip/activity assignment. Idempotent: re-running overwrites.
  */
-/** A HEIC original cannot be read by sharp, so a re-render uses the JPEG made at upload, or makes one again. */
-async function heicSource(store: ReturnType<typeof storage>, storageKey: string, localPath: string): Promise<string | Buffer> {
-  const converted = store.localPath?.(`${storageKey}/original-converted.jpg`);
-  if (converted && existsSync(converted)) return converted;
-  return heicToJpegBuffer(localPath);
-}
-
-/** The stored instructions, or null when the item has never been edited or the row holds something unreadable. */
-export function editsOf(raw: unknown): PhotoEdits | null {
-  if (!raw) return null;
-  const parsed = editsSchema.safeParse(raw);
-  return parsed.success && hasEdits(parsed.data) ? parsed.data : null;
-}
-
 /** `signal` is pg-boss's: a run it has timed out writes nothing more, so the retry never races it. */
 export async function processPhoto(job: ProcessPhotoJob, signal?: AbortSignal): Promise<void> {
   const photo = await db.photo.findUnique({ where: { id: job.photoId } });
@@ -103,6 +89,7 @@ export async function processPhoto(job: ProcessPhotoJob, signal?: AbortSignal): 
       const { width, height, renditions, panorama } = await makeRenditions(from, photo.storageKey, (key, buf) => store.putBuffer(key, buf), editsOf(photo.edits), gpano);
       signal?.throwIfAborted();
       await db.photo.update({ where: { id: photo.id }, data: { status: "READY", width, height, renditions, panorama, panoProjection: gpano?.projection ?? null, imageVersion: { increment: 1 } } });
+      await forgetCleanCopies(photo.storageKey, (photo.renditions as Renditions | null)?.full).catch(() => undefined);
       await enqueueEmbedding(photo.id);
       await enqueueFaceDetection(photo.id);
       await enqueueAnimalDetection(photo.id);
@@ -280,6 +267,8 @@ export async function processPhoto(job: ProcessPhotoJob, signal?: AbortSignal): 
     });
     // Deleted for good while it was being rendered: what was just written has nothing to belong to.
     if (!settled) return void (await forgetFilesIfGone(photo.id));
+    // A visitor's full-size copy was of the picture as it was; the next visitor to ask is given one of it as it is.
+    await forgetCleanCopies(photo.storageKey, (photo.renditions as Renditions | null)?.full).catch(() => undefined);
 
     await enqueueEmbedding(photo.id);
     await enqueueFaceDetection(photo.id);

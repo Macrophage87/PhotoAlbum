@@ -36,7 +36,8 @@ export type PhotoInfo = {
   /** When the position is the helper's guess: what it recognised, and how sure it was. */
   placeEstimate: PlaceEstimate | null;
   themeKey: string | null;
-  /** The full-size view: the picture as it is now for a member, the largest rendition for anybody else. */
+  /** The full-size view: the picture as it is now, for a member its own file where nobody has edited it, for anybody
+   * else a copy of it at the same size with none of the file's metadata. */
   originalUrl: string | null;
   editable: boolean;
   uploadedBy: string | null;

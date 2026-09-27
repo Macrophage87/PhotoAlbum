@@ -37,6 +37,13 @@ export function hasEdits(e: PhotoEdits | null | undefined): boolean {
   return (e.brightness ?? 1) !== 1 || (e.contrast ?? 1) !== 1 || (e.saturation ?? 1) !== 1 || (e.warmth ?? 0) !== 0;
 }
 
+/** The stored instructions, or null when the item has never been edited or the row holds something unreadable. */
+export function editsOf(raw: unknown): PhotoEdits | null {
+  if (!raw) return null;
+  const parsed = editsSchema.safeParse(raw);
+  return parsed.success && hasEdits(parsed.data) ? parsed.data : null;
+}
+
 /** Drop anything that is already neutral, so "no edits" really means no edits and the badge is honest. */
 export function tidyEdits(e: PhotoEdits): PhotoEdits | null {
   const out: PhotoEdits = {};
