@@ -134,6 +134,7 @@ export async function updateAnnotation(photoId: string, fd: FormData): Promise<v
 }
 
 const DESCRIPTION_CHANGED = "The description changed; have a look at the new one first.";
+const WITHDRAWN_NAME = "This description may name somebody who is no longer to be named, so it stays visible to the family only. Edit it to take the name out first.";
 
 /**
  * Show the helper's text for an item (and the title it wrote) to everyone who may see the item, or keep it for the
@@ -156,6 +157,8 @@ export async function setAnnotationShared(photoId: string, seenRevision: number,
   if (everyone) {
     // Nobody whose naming the album withdrew is shown by name: the nightly pass only looks at what was written since.
     const out = await withoutWithdrawnNames(photoId, { annotation: photo.annotation, title: ai });
+    // Words that may still name somebody whose naming was withdrawn stay with the family.
+    if (out.hold) throw new Error(WITHDRAWN_NAME);
     scrubbed = out.changed;
     // The helper's title goes back on the item if it has none of its own.
     data = { annotationMembersOnly: false, annotationTitleOnly: false, annotationTitleWords: [], annotationTitleFrom: [], annotationSharedAt: new Date(), ...(out.changed ? { annotation: out.annotation as object } : {}), ...(ai && !own && kept === ai ? { title: out.title, titleByHelper: true, membersTitle: null } : {}) };

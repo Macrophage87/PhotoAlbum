@@ -4,6 +4,7 @@ import type { StoredAnnotation } from "@/lib/annotation/schema";
 import { helperTitle } from "@/lib/annotation/helper-text";
 import { enqueueEmbedding } from "@/lib/jobs/handlers/embed-photo";
 import { QUEUES } from "@/lib/jobs/queues";
+import { mentionsAnyName } from "@/lib/annotation/names";
 import { bossJobs } from "@/lib/jobs/schema";
 import { isMinor, knownAdult } from "./consent";
 import { annotationMentions, FUNCTION_WORDS, isEverydayWord, isPlaceOrDateWord, nameMatcher, scrubAnnotation, type NameMatcher, type Where } from "./scrub";
@@ -193,6 +194,30 @@ export async function forgetQueuedFileNames(m: NameMatcher): Promise<number> {
   return changed;
 }
 
+/** Prose of a helper's record that is shown with the item, as one text. */
+function helperWordsOf(a: StoredAnnotation | null): string {
+  if (!a) return "";
+  return [a.title, a.caption, a.description, a.place, a.activity, a.visibleText, a.mood].filter((t): t is string => typeof t === "string" && t.trim() !== "").join("\n");
+}
+
+/** Every word capitalized, for text written all in capitals ("ROSE AT THE HUT" is read as "Rose At The Hut"). */
+const titled = (t: string) => t.toLowerCase().replace(/(^|[^\p{L}\p{M}'’])(\p{L})/gu, (_, a: string, b: string) => a + b.toUpperCase());
+
+/**
+ * Whether words may still be them after a rewrite, when deciding what everyone may read (ForgetScope.strict): by the
+ * rules from before the neighbour rule, which take a first name beside another capitalized word for them ("Santa
+ * Barbara Pier"), or by the members-only rule's own look at their names (annotation/names.ts), which takes an
+ * everyday word written as a name for them ("Rose At The Hut", "ROSE AT THE HUT") but not in lower case ("a rose
+ * by the hut"). Such words are kept for members, never rewritten.
+ */
+export function stillNames(m: NameMatcher, names: string[], where: Where): (text: unknown) => boolean {
+  return (text) => {
+    if (typeof text !== "string" || !text.trim()) return false;
+    if (m.mentions(text, where)) return true;
+    return names.length > 0 && (mentionsAnyName(text, names) || (!/\p{Ll}/u.test(text) && mentionsAnyName(titled(text), names)));
+  };
+}
+
 /** Trips, activities and collections holding any of these photographs. */
 async function containersOf(photoIds: string[]) {
   if (!photoIds.length) return { trips: [] as string[], activities: [] as string[], collections: [] as string[] };
@@ -215,11 +240,14 @@ export type ForgetScope = {
   /** The items they are, or were, on. */
   tagged?: Set<string>;
   /**
-   * Deciding what everyone may read rather than rewriting for a forget (a naming withdrawn or never permitted): away
-   * from their photographs a first name counts even beside another capitalized word, as it always did. A match only
-   * the neighbour rule would excuse ("Ximena Hut Walk") is never published.
+   * Deciding what everyone may read rather than forgetting (a naming withdrawn or never permitted): what is certainly
+   * them is rewritten as for a forget, and anything still uncertain — a name only the neighbour rule excuses ("Santa
+   * Barbara Pier", "Ximena Hut Walk"), or an everyday word the members-only rule takes for their name ("Rose At The
+   * Hut") — is not rewritten but kept for members (see `stillNames`), never published.
    */
   strict?: boolean;
+  /** With `strict`: every name they have gone by, for the members-only rule's own look (annotation/names.ts). */
+  names?: string[];
   /** The person being forgotten, so the others tagged beside them are known. */
   personId?: string;
   /** Also the trip, collection and activity descriptions the helper wrote (the default). */
@@ -244,7 +272,9 @@ export type ForgetScope = {
  */
 export async function forgetNameInText(photoIds: string[], m: NameMatcher, opts: ForgetScope = {}): Promise<void> {
   const tagged = opts.tagged ?? new Set<string>();
-  const away: Where = opts.strict ? {} : AWAY;
+  const away: Where = AWAY;
+  // Deciding what may be read: what the rewrite left that still may be them keeps the text for members.
+  const uncertain = (where: Where) => (opts.strict ? stillNames(m, opts.names ?? [], where) : () => false);
   const ids = [...new Set(photoIds)];
   const touched: string[] = [];
   if (ids.length) {
@@ -271,11 +301,25 @@ export async function forgetNameInText(photoIds: string[], m: NameMatcher, opts:
         // Evidence says "May 1990" as readily as "May at the lake": only names that could be nobody else's.
         ...(evidence ? { placeEstimateName: m.scrub(p.placeEstimateName, evidenceWhere), placeEstimateNote: m.scrub(p.placeEstimateNote, evidenceWhere), estimatedDateNote: m.scrub(p.estimatedDateNote, evidenceWhere) } : {}),
       };
-      const changed = Object.entries(next).some(([k, v]) => JSON.stringify(v) !== JSON.stringify((p as Record<string, unknown>)[k]));
+      // What everyone could still read after the rewrite, judged strictly: the helper's text unless kept for members,
+      // its title, and the place guess's words.
+      const strictWhere: Where = tagged.has(p.id) ? { tagged: true, others: others.get(p.id) ?? [] } : {};
+      const still = uncertain(strictWhere);
+      const shown = (next.annotation ?? a) as StoredAnnotation | null;
+      const holdText = !p.annotationMembersOnly && Boolean(shown) && (still(helperWordsOf(shown)) || annotationMentions(shown, m, strictWhere));
+      const holdTitle = h.title && still(next.title ?? p.title);
+      const holdEvidence = !p.placeEstimateMembersOnly && still([next.placeEstimateName ?? p.placeEstimateName, next.placeEstimateNote ?? p.placeEstimateNote, next.estimatedDateNote ?? p.estimatedDateNote].filter(Boolean).join("\n"));
+      const held = {
+        ...(holdText || holdTitle ? { annotationMembersOnly: true, annotationTitleOnly: false, annotationTitleWords: [], annotationTitleFrom: [], annotationSharedAt: null } : {}),
+        // The helper's title, kept for members (as the members-only rule does), unless they have one already.
+        ...(holdTitle ? { title: null, titleByHelper: null, membersTitle: p.membersTitle?.trim() ? p.membersTitle : (next.title ?? p.title) } : {}),
+        ...(holdEvidence ? { placeEstimateMembersOnly: true } : {}),
+      };
+      const changed = Object.entries({ ...next, ...held }).some(([k, v]) => JSON.stringify(v) !== JSON.stringify((p as Record<string, unknown>)[k]));
       if (changed) touched.push(p.id);
       // A forget stamps every photograph it looked at, so no answer about any of them is written over it; the
       // withdrawal's public pass writes (and stamps) only what it changed.
-      if (changed || !opts.publicOnly) await db.photo.update({ where: { id: p.id }, data: { ...next, namesScrubbedAt: now } });
+      if (changed || !opts.publicOnly) await db.photo.update({ where: { id: p.id }, data: { ...next, ...held, namesScrubbedAt: now } });
     }
     const found = opts.publicOnly ? touched : photos.map((p) => p.id);
     if (found.length) {
@@ -298,9 +342,15 @@ export async function forgetNameInText(photoIds: string[], m: NameMatcher, opts:
   // One holding none of their photographs was found by a word of its text alone: there only a full name is theirs
   // ("Santa Barbara Pier At Sunset" is not Barbara Jones).
   const around = (ids: string[], id: string): Where => (ids.includes(id) ? {} : away);
-  for (const t of trips) if (m.mentions(t.description, around(near.trips, t.id))) await db.trip.update({ where: { id: t.id }, data: { description: m.scrub(t.description, around(near.trips, t.id)) } });
-  for (const x of activities) if (m.mentions(x.description, around(near.activities, x.id))) await db.activity.update({ where: { id: x.id }, data: { description: m.scrub(x.description, around(near.activities, x.id)) } });
-  for (const c of collections) if (m.mentions(c.description, around(near.collections, c.id))) await db.collection.update({ where: { id: c.id }, data: { description: m.scrub(c.description, around(near.collections, c.id)) } });
+  // Rewritten where it is certainly them; where it still may be (strict), kept for members instead.
+  const settle = async (write: (data: { description?: string | null; descriptionMembersOnly?: boolean; descriptionSharedAt?: null }) => Promise<unknown>, description: string | null, where: Where) => {
+    const next = m.mentions(description, where) ? m.scrub(description, where) : description;
+    const hold = uncertain({})(next);
+    if (next !== description || hold) await write({ ...(next !== description ? { description: next } : {}), ...(hold ? { descriptionMembersOnly: true, descriptionSharedAt: null } : {}) });
+  };
+  for (const t of trips) await settle((data) => db.trip.update({ where: { id: t.id }, data }), t.description, around(near.trips, t.id));
+  for (const x of activities) await settle((data) => db.activity.update({ where: { id: x.id }, data }), x.description, around(near.activities, x.id));
+  for (const c of collections) await settle((data) => db.collection.update({ where: { id: c.id }, data }), c.description, around(near.collections, c.id));
 }
 
 export type MemberTextField = "title" | "caption" | "notes" | "place" | "file name" | "trash note" | "link note";
@@ -569,30 +619,56 @@ export async function forgetOnPhoto(photoId: string, person: PersonNames): Promi
  */
 export async function forgetNameEverywhere(person: PersonNames, opts: { publicOnly?: boolean; since?: Date | null } = {}): Promise<void> {
   const m = await matcherFor(person);
+  const names = [person.name, ...(person.formerNames ?? [])];
   const tagged = await taggedPhotoIds(person.id);
-  // Deciding what may be read, not rewriting for a forget: the strict rule (see ForgetScope.strict).
-  await forgetNameInText([...tagged, ...(await photosMentioning(m, {}))], m, { tagged, personId: person.id, publicOnly: opts.publicOnly, since: opts.since, strict: true });
+  // Deciding what may be read, not rewriting for a forget: the strict rule (see ForgetScope.strict). Everything that
+  // may name them is looked at, a first name alone included ("Mia blows bubbles at her party"), not only what the
+  // album-wide search for names nobody else has finds.
+  const scope = [...tagged, ...(await photosMentioning(m, {})), ...(await photosNamingAnyWay(m, names))];
+  await forgetNameInText(scope, m, { tagged, personId: person.id, publicOnly: opts.publicOnly, since: opts.since, strict: true, names });
+}
+
+/**
+ * Photographs whose helper's text or title may name them in any way: pre-filtered by every word of their names, then
+ * judged strictly (see `stillNames`). For deciding what everyone may read, where a first name alone counts.
+ */
+async function photosNamingAnyWay(m: NameMatcher, names: string[]): Promise<string[]> {
+  const words = [...new Set(names.flatMap((n) => n.normalize("NFC").split(/[\s\-‐]+/u)).filter((w) => [...w].length >= 3))];
+  if (!words.length) return [];
+  const rows = await db.$queryRaw<MachineText[]>`
+    SELECT id, kind::text AS kind, title, "membersTitle", "titleByHelper", annotation, "placeEstimateName", "placeEstimateNote", "estimatedDateNote" FROM "Photo"
+    WHERE ${likeAny(Prisma.sql`annotation::text`, words)} OR ${likeAny(Prisma.sql`title`, words)} OR ${likeAny(Prisma.sql`"placeEstimateName"`, words)} OR ${likeAny(Prisma.sql`"placeEstimateNote"`, words)}`;
+  const still = stillNames(m, names, {});
+  const given = await answerTitles(rows.map((r) => r.id));
+  return rows.filter((r) => machineMentions(r, m, {}, given.get(r.id)) || still(helperWordsOf(r.annotation as StoredAnnotation | null)) || still(r.title) || still([r.placeEstimateName, r.placeEstimateNote].filter(Boolean).join("\n"))).map((r) => r.id);
 }
 
 /**
  * The helper's text on an item, and its title, without the name of anybody whose naming the album withdrew by itself:
  * for text a member is about to show to everyone, which the nightly public pass would otherwise not reach for days.
  */
-export async function withoutWithdrawnNames(photoId: string, text: { annotation: unknown; title: string | null }): Promise<{ annotation: unknown; title: string | null; changed: boolean }> {
+export async function withoutWithdrawnNames(photoId: string, text: { annotation: unknown; title: string | null }): Promise<{ annotation: unknown; title: string | null; changed: boolean; hold: boolean }> {
   const people = await db.person.findMany({ where: { namingWithdrawnAt: { not: null } }, select: { id: true, name: true, formerNames: true } });
   let annotation = text.annotation;
   let title = text.title;
-  if (!people.length) return { annotation, title, changed: false };
+  let hold = false;
+  if (!people.length) return { annotation, title, changed: false, hold };
   const tagged = await db.face.findMany({ where: { photoId, OR: [{ personId: { in: people.map((p) => p.id) } }, { proposedPersonId: { in: people.map((p) => p.id) } }] }, select: { personId: true, proposedPersonId: true } });
   const on = new Set(tagged.flatMap((f) => [f.personId, f.proposedPersonId]));
   for (const p of people) {
     const m = await matcherFor(p);
-    // What everyone is about to read: the strict rule, as the nightly public pass (see ForgetScope.strict).
-    const where: Where = on.has(p.id) ? { tagged: true, others: (await othersOn([photoId], p.id)).get(photoId) ?? [] } : {};
+    const others = on.has(p.id) ? ((await othersOn([photoId], p.id)).get(photoId) ?? []) : [];
+    // What is certainly them is taken out, as for a forget; what still may be keeps the text from being shown to
+    // everyone at all (see ForgetScope.strict).
+    const where: Where = on.has(p.id) ? { tagged: true, others } : AWAY;
     if (annotation && typeof annotation === "object" && !Array.isArray(annotation)) annotation = scrubAnnotation(annotation as StoredAnnotation, m, where);
     title = m.scrub(title, where);
+    const strictWhere: Where = on.has(p.id) ? { tagged: true, others } : {};
+    const still = stillNames(m, [p.name, ...(p.formerNames ?? [])], strictWhere);
+    const record = annotation && typeof annotation === "object" && !Array.isArray(annotation) ? (annotation as StoredAnnotation) : null;
+    if (still(title) || still(helperWordsOf(record)) || (record && annotationMentions(record, m, strictWhere))) hold = true;
   }
-  return { annotation, title, changed: JSON.stringify(annotation) !== JSON.stringify(text.annotation) || title !== text.title };
+  return { annotation, title, changed: JSON.stringify(annotation) !== JSON.stringify(text.annotation) || title !== text.title, hold };
 }
 
 /** How long a withdrawal nobody asked for waits for an admin to record evidence before members-only text is scrubbed. */

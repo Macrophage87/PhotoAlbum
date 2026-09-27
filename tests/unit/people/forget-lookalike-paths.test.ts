@@ -86,15 +86,15 @@ describe.each([["Barbara Jones"], ["Barbara"]])("forgetting %s, on every text pa
     expect(rows.filter(([, got, want]) => !isDeepStrictEqual(got, want))).toEqual([]);
   });
 
-  it("a withdrawn naming, deciding what everyone may read, publishes no match the neighbour rule alone would excuse", async () => {
+  it("a withdrawn naming neither publishes nor rewrites a match only the neighbour rule would excuse", async () => {
     const f = await fixture();
-    await db.person.update({ where: { id: f.person.id }, data: { namingWithdrawnAt: new Date(Date.now() - 30 * 86_400_000) } });
-    // Showing text to everyone, and the nightly pass, keep to the strict rule: not "Santa Barbara Pier" with her
-    // name possibly in it.
-    const shown = await withoutWithdrawnNames(f.helpers.id, { annotation: helper, title: PIER });
-    expect(shown.changed).toBe(true);
-    expect(shown.title).not.toContain("Barbara");
+    await db.person.update({ where: { id: f.person.id }, data: { namingWithdrawnAt: new Date() } });
+    // Show to everyone is refused; the nightly public pass keeps the words for members, as written.
+    expect((await withoutWithdrawnNames(f.helpers.id, { annotation: helper, title: PIER })).hold).toBe(true);
     await scrubWithdrawnNames();
+    const after = await db.photo.findUniqueOrThrow({ where: { id: f.helpers.id } });
+    expect(after).toMatchObject({ annotation: helper, annotationMembersOnly: true, title: null, membersTitle: PIER, placeEstimateName: PIER, placeEstimateMembersOnly: true });
+    expect(await db.trip.findUniqueOrThrow({ where: { id: f.trip.id } })).toMatchObject({ description: `${PIER} At Sunset`, descriptionMembersOnly: true });
     expect((await db.photo.findUniqueOrThrow({ where: { id: f.hers.id } })).title).toBe("A Family Member At The Lake");
   });
 
@@ -142,10 +142,27 @@ describe("a first name in prose away from her photographs is still hers", () => 
     const mia = await db.person.create({ data: { name: "Mia Kent", birthday: new Date("2019-01-01"), namingWithdrawnAt: new Date(), createdById: admin } });
     const p = await photo({ annotation: record("Mia blows bubbles"), annotatedAt: new Date() });
     const shown = await withoutWithdrawnNames(p.id, { annotation: record("Mia blows bubbles"), title: "Mia Blows Bubbles" });
-    expect(shown.changed).toBe(true);
+    // Her name in prose is taken out; beside "Blows" in a title it may be somebody else's, so none of it is shown.
     expect((shown.annotation as StoredAnnotation).caption).toBe("A family member blows bubbles");
-    expect(shown.title).toBe("A Family Member Blows Bubbles");
+    expect(shown.hold).toBe(true);
     expect(mia.id).toBeTruthy();
+  });
+
+  it("S5: the nightly pass after the fortnight reaches her first name alone in words kept for members", async () => {
+    const mia = await db.person.create({ data: { name: "Mia Kent", birthday: new Date("2019-01-01"), namingWithdrawnAt: new Date(Date.now() - 30 * 86_400_000), createdById: admin } });
+    const p = await photo({ annotation: record("Mia blows bubbles at her party"), annotationMembersOnly: true, annotatedAt: new Date() });
+    await scrubWithdrawnNames();
+    expect(((await db.photo.findUniqueOrThrow({ where: { id: p.id } })).annotation as StoredAnnotation).caption).toBe("A family member blows bubbles at her party");
+    expect(mia.id).toBeTruthy();
+  });
+
+  it("S3: once the record's words name her, her first name leaves its keywords and tags too", async () => {
+    const barbara = await db.person.create({ data: { name: "Barbara Jones", createdById: admin } });
+    const p = await photo({ annotation: { ...record("Barbara blows out the candles on her 80th", ["barbara's 80th", "cake"]), searchSummary: "barbara birthday 80th candles" }, annotatedAt: new Date() });
+    await forgetPerson(barbara.id, { keepName: false, byUserId: admin });
+    const a = (await db.photo.findUniqueOrThrow({ where: { id: p.id } })).annotation as StoredAnnotation;
+    expect(a.tags).toEqual(["cake"]);
+    expect(a.searchSummary).not.toMatch(/barbara/i);
   });
 
   describe.each([["Ximena At The Hut"], ["XIMENA AT THE HUT"], ["Ximena And Ben At The Hut"], ["Ximena Beside The Lake"]])("a helper's title %s", (title) => {
@@ -173,8 +190,53 @@ describe("a first name in prose away from her photographs is still hers", () => 
 
   it("still leaves every place and every lookalike alone, in title case and in capitals", () => {
     const text = (name: string, t: string) => nameMatcher([name], []).scrub(t, { away: true });
-    for (const [name, t] of [["Barbara Jones", "Santa Barbara Pier"], ["Barbara Jones", "SANTA BARBARA PIER"], ["Leo Martin", "Leo Martinez Park At Dusk"], ["Louise Penny", "Sunrise At Lake Louise"], ["Barbara", "Santa Barbara Pier"]]) expect([name, text(name, t)]).toEqual([name, t]);
+    for (const [name, t] of [
+      ["Barbara Jones", "Santa Barbara Pier"], ["Barbara Jones", "SANTA BARBARA PIER"], ["Leo Martin", "Leo Martinez Park At Dusk"], ["Louise Penny", "Sunrise At Lake Louise"], ["Barbara", "Santa Barbara Pier"],
+      ["Mary Kemp", "Wedding At St Mary's Church"], ["Peter Hale", "Saint Peter's Basilica"], ["Barbara Jones", "Isle Of Barbara"], ["Barbara Jones", "Barbara Of Cleves Street"], ["Catherine Wells", "Catherine The Great Palace"],
+    ]) expect([name, text(name, t)]).toEqual([name, t]);
+    for (const [name, t, want] of [["Barbara Jones", "Barbara And Ben At The Lake", "A Family Member And Ben At The Lake"], ["Barbara Jones", "Barbara At The Party", "A Family Member At The Party"]]) expect([name, text(name, t)]).toEqual([name, want]);
     const loose = looseMatcher(nameMatcher(["Barbara"], []));
     expect(loose("SANTA BARBARA PIER")).toBe(false);
+  });
+});
+
+/** Deciding what everyone may read while somebody's naming is withdrawn: never a word that may still be them. */
+describe("show to everyone and the nightly public pass, for a withdrawn naming", () => {
+  let admin: string;
+  beforeEach(async () => {
+    await resetTestDb();
+    admin = (await db.user.create({ data: { email: "admin@example.com", role: "ADMIN" } })).id;
+  });
+  const record = (title: string, description = ""): StoredAnnotation => ({ title, caption: "", description, tags: [], place: null, activity: null, objects: [], visibleText: null, season: "summer", mood: null, searchSummary: "" });
+  /** What strangers read of the item, by each strict path: nothing while it is held. */
+  async function readable(name: string, withdrawn: boolean, title: string, description = "") {
+    await db.person.create({ data: { name, createdById: admin, ...(withdrawn ? { namingWithdrawnAt: new Date() } : {}) } });
+    const a = record(title, description);
+    const p = await db.photo.create({ data: { uploaderId: admin, originalName: "x.jpg", mimeType: "image/jpeg", storageKey: "k", originalPath: "k/o.jpg", sizeBytes: 1, status: "READY", title, titleByHelper: true, annotation: a, annotatedAt: new Date() } });
+    const shown = await withoutWithdrawnNames(p.id, { annotation: a, title });
+    const everyone = shown.hold ? "" : [shown.title, (shown.annotation as StoredAnnotation).title, (shown.annotation as StoredAnnotation).description].join("\n");
+    await scrubWithdrawnNames();
+    const row = await db.photo.findUniqueOrThrow({ where: { id: p.id } });
+    const nightly = [row.title, ...(row.annotationMembersOnly ? [] : [(row.annotation as StoredAnnotation).title, (row.annotation as StoredAnnotation).description])].join("\n");
+    return { everyone, nightly, row };
+  }
+
+  it.each([["Rose At The Hut"], ["ROSE AT THE HUT"], ["Rose at the hut"]])("never shows a withdrawn Rose in %s", async (title) => {
+    const r = await readable("Rose", true, title);
+    expect([r.everyone, r.nightly].map((t) => /rose/i.test(t))).toEqual([false, false]);
+  });
+
+  it("never shows a withdrawn name only the neighbour rule excuses in a description", async () => {
+    const r = await readable("Ximena", true, "The hut in winter", "Ximena Hut Walk, in the snow.");
+    expect([r.everyone, r.nightly].map((t) => /ximena/i.test(t))).toEqual([false, false]);
+  });
+
+  it("still shows an everyday word in lower case, and everything while nobody's naming is withdrawn", async () => {
+    const lower = await readable("Rose", true, "a rose by the hut");
+    expect([lower.everyone.split("\n")[0], lower.nightly.split("\n")[0], lower.row.annotationMembersOnly]).toEqual(["a rose by the hut", "a rose by the hut", false]);
+    await resetTestDb();
+    admin = (await db.user.create({ data: { email: "admin@example.com", role: "ADMIN" } })).id;
+    const named = await readable("Rose", false, "Rose At The Hut");
+    expect([named.everyone.split("\n")[0], named.nightly.split("\n")[0], named.row.annotationMembersOnly]).toEqual(["Rose At The Hut", "Rose At The Hut", false]);
   });
 });

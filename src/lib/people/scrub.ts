@@ -89,8 +89,11 @@ const STARTERS = new Set([
  * The Lake". Beside a name, capitalized or not, they never make it somebody else's; a name-like word does ("Santa
  * Barbara", "Leo Martinez", "Lake Louise").
  */
+/** A saint's title, which away from their photographs makes a place of the name after it ("St Mary's Church"). */
+const SAINT = new Set(["st", "saint", "ste", "san", "santa", "sankt"]);
+
 export const FUNCTION_WORDS = new Set([
-  "a", "an", "the", "and", "or", "but", "nor", "&", "of", "at", "in", "on", "with", "without", "within", "by", "beside", "besides", "near", "to", "for", "from",
+  "a", "an", "the", "and", "or", "but", "nor", "&", "at", "in", "on", "with", "without", "within", "by", "beside", "besides", "near", "to", "for", "from",
   "under", "over", "into", "onto", "upon", "up", "down", "off", "out", "after", "before", "behind", "across", "around", "along", "among", "through", "past",
   "during", "outside", "inside", "towards", "toward", "against", "via", "vs", "as", "her", "his", "their", "our", "my", "your", "its", "is", "was", "are", "were",
   "be", "s", "has", "had",
@@ -335,6 +338,14 @@ export function notThePerson(text: string, start: number, end: number, n: Neighb
     }
   }
   const caps = isUpperWord(match.replace(/[^\p{L}]/gu, ""));
+  if (n.away) {
+    // Away from their photographs a saint's name is a place's, never a title before theirs: "St Mary's Church",
+    // "Saint Peter's Basilica".
+    if (p && SAINT.has(p)) return true;
+    // "Isle Of Barbara", "Bay Of Louise": a capitalized word and "Of" before it make it a place's name. ("Of" is no
+    // joining word: "X Of Y" is how places and historical names are written.)
+    if (p === "of" && /(?<![\p{L}\p{M}])\p{Lu}[\p{L}\p{M}'’.-]*[ \t]+of[ \t]+$/iu.test(before) && /(?<![\p{L}\p{M}])\p{Lu}[\p{L}\p{M}'’.-]*[ \t]+\p{Lu}[\p{L}\p{M}]*[ \t]+$/u.test(before)) return true;
+  }
   if (n.away || (!n.title && !caps)) {
     // "Ann Jones", "Robin Hood", "Florence Nightingale" (but "Mary Ann swam" is Mary Ann Smith)...
     if (next && /^\p{Lu}/u.test(next) && !n.own?.has(bare(next)) && !FUNCTION_WORDS.has(bare(next))) return true;
@@ -370,6 +381,11 @@ function isIdiom(before: string, match: string, after: string, ownPhotos = false
   if (m === "grace" && /(?<![\p{L}])amazing[ \t]+$/iu.test(before)) return true;
   if (m === "jack" && /^[ \t]+in[ \t]+the[ \t]+box(?![\p{L}])/iu.test(after)) return true;
   if (m === "will" && /^[ \t]+(?:you|we|they|it|he|she|i|this|that|there)(?![\p{L}\p{M}'’])/iu.test(after)) return true;
+  // An epithet: "Catherine the Great", "Peter The Great", "Alfred the Great".
+  if (/^[ \t]+the[ \t]+great(?![\p{L}\p{M}])/iu.test(after)) return true;
+  // The apostles: "Saints Peter and Paul", "Peter And Paul Church".
+  if (m === "peter" && /^[ \t]+(?:and|&)[ \t]+paul(?![\p{L}\p{M}])/iu.test(after)) return true;
+  if (m === "paul" && /(?<![\p{L}\p{M}])peter[ \t]+(?:and|&)[ \t]+$/iu.test(before)) return true;
   return false;
 }
 
@@ -827,9 +843,11 @@ export function scrubAnnotation(a: StoredAnnotation, m: NameMatcher, where: Wher
   const maybe = (v: unknown) => (typeof v === "string" ? m.scrub(v, where) : null);
   const prose = { title: text(a.title), caption: text(a.caption), description: text(a.description), place: maybe(a.place), activity: maybe(a.activity), visibleText: maybe(a.visibleText), mood: maybe(a.mood) };
   // Away from their photographs (`away`) a one-word name inside keywords or a tag is not taken for them on its
-  // own ("santa barbara"); once the record's own words named them ("Sam at the fair"), it is ("sam's pony").
+  // own ("santa barbara").
   const named = where.away && !where.tagged && (Object.keys(prose) as (keyof typeof prose)[]).some((k) => m.mentions(a[k], where));
-  const words: Where = named ? { ...where, away: false, fullOnly: true } : where;
+  // Once the record's own words named them, its keywords and tags are cleaned as on their own photographs: any word
+  // of their name, in any case ("barbara's 80th", "barbara birthday candles").
+  const words: Where = named ? { ...where, away: false, tagged: true } : where;
   const list = (v: unknown) => (Array.isArray(v) ? v.filter((t): t is string => typeof t === "string" && !m.namesTag(t, words)) : []);
   return {
     ...a,
