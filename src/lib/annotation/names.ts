@@ -35,8 +35,16 @@ const CJK = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hang
  * "Madison"), and compatibility forms are folded first (full-width letters), so neither hides a name.
  */
 export function foldAccents(s: string): string {
-  return s.normalize("NFKC").replace(/\p{Cf}/gu, "").normalize("NFKD").replace(/\p{M}+/gu, "");
+  return s
+    .normalize("NFKC")
+    .replace(/\p{Cf}/gu, "")
+    .normalize("NFKD")
+    .replace(/\p{M}+/gu, "")
+    .replace(/[łŁøØæÆœŒßđĐþÞı]/gu, (c) => FOLD[c] ?? c);
 }
+
+/** Letters that do not come apart into a plain letter and an accent, spelled the way a keyboard without them does. */
+const FOLD: Record<string, string> = { ł: "l", Ł: "L", ø: "o", Ø: "O", æ: "ae", Æ: "Ae", œ: "oe", Œ: "Oe", ß: "ss", đ: "d", Đ: "D", þ: "th", Þ: "Th", ı: "i" };
 
 /** Lower case, accents off. */
 export function foldForNames(s: string): string {
@@ -95,7 +103,8 @@ export function nameMatcher(patterns: NamePattern[]): ((text: string) => boolean
   // Letters and digits only in each alternative, so nothing needs escaping.
   const regexFor = (key: string, alts: Set<string>) => {
     let re = compiled.get(key);
-    if (!re) compiled.set(key, (re = new RegExp(`(?<![\\p{L}\\p{N}])(?:${[...alts].join("|")})(?:['’]s|s)?(?![\\p{L}\\p{N}])`, "u")));
+    // Letters only at the edges: digits run against a name ("madison2016") do not hide it.
+    if (!re) compiled.set(key, (re = new RegExp(`(?<![\\p{L}])(?:${[...alts].join("|")})(?:['’]s|s)?(?![\\p{L}])`, "u")));
     return re;
   };
   const cjkRes = [...new Set(patterns.filter((p) => p.cjk).map((p) => p.words[0]))].map((c) => {
@@ -108,7 +117,7 @@ export function nameMatcher(patterns: NamePattern[]): ((text: string) => boolean
     const folded = foldAccents(text);
     const lowered = folded.toLowerCase();
     const tried = new Set<string>();
-    for (const w of folded.split(/[^\p{L}\p{N}]+/u)) {
+    for (const w of folded.split(/[^\p{L}]+/u)) {
       if (!w) continue;
       // A plural or possessive "s" in any case: "EMMAS" is Emma's too.
       for (const exact of /s$/i.test(w) ? [w, w.slice(0, -1)] : [w]) {

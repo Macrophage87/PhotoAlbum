@@ -150,6 +150,14 @@ export async function dbNow(): Promise<Date> {
   return now;
 }
 
+/**
+ * Stamp these photographs `namesScrubbedAt`, by the database's clock and after their text was written: an answer
+ * asked for before the stamp (by the same clock) is thrown away (see namesChangedSince).
+ */
+export async function stampScrubbed(photoIds: string[]): Promise<void> {
+  if (photoIds.length) await db.$executeRaw`UPDATE "Photo" SET "namesScrubbedAt" = clock_timestamp() WHERE id = ANY(${photoIds}::text[])`;
+}
+
 /** Stamp that a forget began or finished now, by the database's clock (see forgetState). */
 export async function stampForget(): Promise<void> {
   await db.$executeRaw`INSERT INTO "AppSetting" (id, "lastForgetAt", "updatedAt") VALUES ('app', clock_timestamp(), now()) ON CONFLICT (id) DO UPDATE SET "lastForgetAt" = clock_timestamp()`;

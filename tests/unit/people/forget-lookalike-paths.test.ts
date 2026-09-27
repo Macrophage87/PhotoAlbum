@@ -386,18 +386,18 @@ describe("on her own photograph, when she is forgotten and in a later answer", (
     ["May Lee", "May swam across.", "A family member swam across."],
     ["May Lee", "May 2020 at the lake.", "May 2020 at the lake."],
     ["May Lee", "A swim in May.", "A swim in May."],
-    ["May Lee", "May Day at the fair.", "May Day at the fair."],
+    ["May Lee", "May Day at the fair.", "A family member Day at the fair."],
     ["Will Turner", "Will swam faster than Ben.", "A family member swam faster than Ben."],
-    ["Will Turner", "Will you look at that!", "Will you look at that!"],
+    ["Will Turner", "Will you look at that!", "A family member you look at that!"],
     // "be" says nothing ("Will be ten next week" is him): over-removal is the lesser evil.
     ["Will Turner", "Will be fun.", "A family member be fun."],
     ["Ada Byron", "Little Sister Ada and Big Brother Ada.", "A family member and a family member."],
     // A name that is also a verb, used as a name (the language review's B5).
     ["Will Turner", "Will not impressed by the snow.", "A family member not impressed by the snow."],
     ["Hope Adams", "Hope so proud of her medal.", "A family member so proud of her medal."],
-    // Used as the verb only before a pronoun, and in "May the fourth": anything else is them.
-    ["May Chen", "May the fourth be with you!", "May the fourth be with you!"],
-    ["Hope Adams", "Hope you like the pictures!", "Hope you like the pictures!"],
+    // On her own photograph every use is her, the verb and the saying too (the linguist's third review).
+    ["May Chen", "May the fourth be with you!", "A family member the fourth be with you!"],
+    ["Hope Adams", "Hope you like the pictures!", "A family member you like the pictures!"],
     ["Will Turner", "Will the ring bearer walking down the aisle.", "A family member the ring bearer walking down the aisle."],
     ["Will Turner", "Ben and Will the budding fisherman.", "Ben and a family member the budding fisherman."],
     ["Hope Adams", "Hope the flower girl at Aunt Kay's wedding.", "A family member the flower girl at Aunt Kay's wedding."],
@@ -430,10 +430,13 @@ describe("on her own photograph, when she is forgotten and in a later answer", (
     ["June Carter", "Little June in her Easter dress.", "A family member in her Easter dress."],
     ["June Carter", "Sunset with June on the beach.", "Sunset with a family member on the beach."],
     ["June Carter", "June, May and Ben on the dock.", "A family member, May and Ben on the dock."],
-    ["June Carter", "The June sun was brutal.", "The June sun was brutal."],
-    ["June Carter", "June waves crashed on the rocks.", "June waves crashed on the rocks."],
-    ["June Carter", "Late June at the lake house.", "Late June at the lake house."],
-    ["May Chen", "Our May trip to the coast.", "Our May trip to the coast."],
+    ["June Carter", "The June sun was brutal.", "A family member sun was brutal."],
+    ["June Carter", "June waves crashed on the rocks.", "A family member waves crashed on the rocks."],
+    // A month only as a plain date: after a date word, at the end or before a year ("Late June.", "Late June 2019").
+    ["June Carter", "Late June at the lake house.", "Late a family member at the lake house."],
+    ["June Carter", "At the lake house, late June.", "At the lake house, late June."],
+    ["June Carter", "Late June 2019 at the lake house.", "Late June 2019 at the lake house."],
+    ["May Chen", "Our May trip to the coast.", "Our a family member trip to the coast."],
   ];
 
   it.each(ROWS)("%s: %s", async (name, text, want) => {
@@ -490,7 +493,9 @@ describe("forgotten names kept by place, notes about a place, and keywords", () 
   it("her surname alone leaves a search summary about her whatever stands before it, but not before a place's word", () => {
     const m = nameMatcher(["Ruth Jones"], []);
     expect(m.scrubKeywords("barbara pier jones family", { tagged: true })).toBe("barbara pier a family member family");
-    expect(m.scrubKeywords("picnic at jones beach", { tagged: true })).toBe("picnic at jones beach");
+    // On her own photograph strictly, the beach too; on one only its notes say is about her, not.
+    expect(m.scrubKeywords("picnic at jones beach", { tagged: true })).toBe("picnic at a family member beach");
+    expect(m.scrubKeywords("picnic at jones beach", { tagged: true, noted: true })).toBe("picnic at jones beach");
     // A surname that is an everyday word stays: "price tag".
     expect(nameMatcher(["Ruth Price"], []).scrubKeywords("price tag on the cake", { tagged: true })).toBe("price tag on the cake");
   });

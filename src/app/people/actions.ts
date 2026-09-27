@@ -13,7 +13,7 @@ import { knownAdult, nameMayLeaveServer, namingOutcome } from "@/lib/people/cons
 import { forgetNameEverywhere, forgetOnPhoto } from "@/lib/people/forget";
 import { forgetKeyState, forgottenHashesOf } from "@/lib/people/tombstone";
 import { forgetPerson } from "@/lib/people/forget-person";
-import { ForgetBusyError } from "@/lib/people/names-changed";
+import { ForgetBusyError, stampScrubbed } from "@/lib/people/names-changed";
 import { enqueueFaceDetection, rebuildUnnamedCentroids } from "@/lib/jobs/handlers/detect-faces";
 import { confirmFaceAs, rejectProposal } from "@/lib/people/matching";
 import { rejudgeFromAction } from "@/lib/annotation/rejudge-notice";
@@ -606,7 +606,7 @@ async function forgetIfNoLongerOn(photoId: string, personId: string): Promise<vo
   if (face || animal) return;
   const person = await db.person.findUnique({ where: { id: personId }, select: { id: true, name: true, formerNames: true } });
   if (person) await forgetOnPhoto(photoId, person);
-  else await db.photo.update({ where: { id: photoId }, data: { namesScrubbedAt: new Date() } });
+  else await stampScrubbed([photoId]);
 }
 
 const petSchema = z.object({

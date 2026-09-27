@@ -7,10 +7,14 @@ import { QUEUES } from "@/lib/jobs/queues";
 import { mentionsAnyName } from "@/lib/annotation/names";
 import { unknownTitleAside, warnStuckTitle } from "@/lib/annotation/members-only";
 import { bossJobs } from "@/lib/jobs/schema";
-import { isMinor, knownAdult, nameMayLeaveServer } from "./consent";
+import { isMinor, knownAdult } from "./consent";
 import { annotationMentions, FUNCTION_WORDS, isEverydayWord, isListedPlace, isPlaceOrDateWord, nameMatcher, scrubAnnotation, type NameMatcher, type Where } from "./scrub";
 import { forgottenScope, loadTombstone, scrubRecord, sharedByNamesakes } from "./tombstone";
 import { strictMatcher } from "./strict-names";
+import { namesSomebodyRestricted } from "./restricted";
+import { stampScrubbed } from "./names-changed";
+
+export { namesSomebodyRestricted };
 
 /**
  * Taking a forgotten person's name out of what the helper wrote, and finding what members wrote that still says it.
@@ -115,7 +119,7 @@ function helpersTitles(p: Pick<MachineText, "kind" | "title" | "membersTitle" | 
 /** Whether the helper's words on an item mention them. Evidence notes only by names that are nobody else's. */
 function machineMentions(p: MachineText, m: NameMatcher, where: Where, given?: Set<string>): boolean {
   const h = helpersTitles(p, given);
-  const evidence: Where = where.tagged ? {} : where.away ? AWAY : {};
+  const evidence: Where = where.tagged ? where : where.away ? AWAY : {};
   return annotationMentions(p.annotation, m, where) || (h.title && m.mentions(p.title, where)) || (h.membersTitle && m.mentions(p.membersTitle, where)) || [p.placeEstimateName, p.placeEstimateNote, p.estimatedDateNote].some((t) => m.mentions(t, evidence));
 }
 
@@ -224,52 +228,6 @@ export function stillNames(m: NameMatcher, names: string[], where: Where): (text
 /** What show-to-everyone refuses to publish (see `namesSomebodyRestricted`). */
 export const NAME_NOT_TO_BE_SHOWN = "This description names somebody whose name isn't to be shown outside the family, so it stays visible to the family only. Edit it to take the name out first.";
 
-/**
- * Everybody who said no, had their naming taken back, or cannot agree: opted out, waiting to be forgotten, a naming
- * withdrawn (or taken back once its fortnight passed, or switched off by an admin — naming decided and not allowed
- * now), and anybody whose birthday says they are a child. Not somebody nobody has asked: there the member who shows
- * the helper's words decides, as they always did.
- */
-async function restrictedPeople(): Promise<{ names: string[] }[]> {
-  const people = await db.person.findMany({ where: { kind: "HUMAN" }, select: { name: true, formerNames: true, birthday: true, adultAttestedAt: true, adultConfirmedAt: true, faceIndexing: true, nameInDescriptions: true, nameInDescriptionsSetAt: true, optedOutAt: true, forgetPendingAt: true, namingWithdrawnAt: true } });
-  return people
-    .filter((p) => p.optedOutAt || p.forgetPendingAt || p.namingWithdrawnAt || (p.nameInDescriptionsSetAt && !nameMayLeaveServer(p)) || isMinor(p))
-    .map((p) => ({ names: [p.name, ...(p.formerNames ?? [])] }));
-}
-
-/**
- * What show-to-everyone would publish of the helper's words on an item, or index for strangers' search: its title,
- * its prose (place and visible text included), its keywords, tags and objects.
- */
-function shownWords(title: string | null, record: StoredAnnotation | null): string[] {
-  return [title, helperWordsOf(record), record?.searchSummary, ...(record?.tags ?? []), ...(record?.objects ?? [])].filter((t): t is string => typeof t === "string" && t.trim() !== "");
-}
-
-/** Everybody's names, and a strict test for each restricted person's (see strict-names.ts). */
-async function restrictedMatchers(): Promise<((text: unknown) => boolean)[]> {
-  const people = await restrictedPeople();
-  if (!people.length) return [];
-  const [everybody, members] = await Promise.all([db.person.findMany({ select: { name: true, formerNames: true } }), db.user.findMany({ where: { name: { not: null } }, select: { name: true } })]);
-  const all = [...everybody.flatMap((p) => [p.name, ...(p.formerNames ?? [])]), ...members.map((u) => u.name ?? "")];
-  return people.map(({ names }) => {
-    const own = new Set(names);
-    return strictMatcher(names, all.filter((n) => !own.has(n)));
-  });
-}
-
-/**
- * Whether the helper's words about to be shown to everyone name somebody who may not be named there (see
- * `restrictedPeople`), by the strict matcher (strict-names.ts): any full name, first name, nickname or former name,
- * or a surname only they have, in any case and through any invisible character or accent. Only a month used as a
- * date ("Lake day in May.", "May 2019") and "Lake" or "Mount" with a listed place ("Lake Geneva at dawn") are
- * excused; everything else it finds stays with the family until a member edits it (#147 item 8 is declined).
- */
-export async function namesSomebodyRestricted(texts: (string | null | undefined)[]): Promise<boolean> {
-  const words = texts.filter((t): t is string => typeof t === "string" && t.trim() !== "");
-  if (!words.length) return false;
-  const tests = await restrictedMatchers();
-  return tests.some((finds) => words.some(finds));
-}
 
 /** Trips, activities and collections holding any of these photographs. */
 async function containersOf(photoIds: string[]) {
@@ -292,6 +250,11 @@ function writtenSince(since: Date, personId?: string): Prisma.PhotoWhereInput {
 export type ForgetScope = {
   /** The items they are, or were, on. */
   tagged?: Set<string>;
+  /**
+   * Of `tagged`, those they are or were tagged on, when `tagged` also holds photographs whose notes plainly name
+   * them: only there is the strict matcher used (see Where.noted). All of `tagged` when not given.
+   */
+  taggedOn?: Set<string>;
   /**
    * Deciding what everyone may read rather than forgetting (a naming withdrawn or never permitted): what is certainly
    * them is rewritten as for a forget, and anything still uncertain — a name only the neighbour rule excuses ("Santa
@@ -342,16 +305,18 @@ export async function forgetNameInText(photoIds: string[], m: NameMatcher, opts:
       othersOn(ids.filter((id) => tagged.has(id)), opts.personId),
       answerTitles(ids),
     ]);
-    const now = new Date();
+    const stamped: string[] = [];
     for (const p of photos) {
       // On somebody else's photograph only a full name is theirs to take out: a first name alone there is as often a
       // place or somebody else ("Santa Barbara Pier"), and rewriting it would change words that are not about them.
-      const where: Where = { tagged: tagged.has(p.id), others: others.get(p.id) ?? [], ...(tagged.has(p.id) ? {} : away) };
+      const noted = tagged.has(p.id) && Boolean(opts.taggedOn) && !opts.taggedOn!.has(p.id);
+      const where: Where = { tagged: tagged.has(p.id), others: others.get(p.id) ?? [], ...(tagged.has(p.id) ? {} : away), ...(noted ? { noted } : {}) };
       const a = p.annotation && typeof p.annotation === "object" && !Array.isArray(p.annotation) ? (p.annotation as StoredAnnotation) : null;
       const h = helpersTitles(p, given.get(p.id));
       const helperText = !opts.publicOnly || !p.annotationMembersOnly;
       const evidence = !opts.publicOnly || !p.placeEstimateMembersOnly;
-      const evidenceWhere: Where = tagged.has(p.id) ? {} : away;
+      // On their own photograph as strictly as the rest (see NameMatcher); elsewhere only names nobody else has.
+      const evidenceWhere: Where = tagged.has(p.id) ? where : away;
       const next = {
         ...(a && helperText ? { annotation: scrubAnnotation(a, m, where) } : {}),
         // A title is only rewritten while it is the helper's; a member's own title is theirs.
@@ -362,7 +327,7 @@ export async function forgetNameInText(photoIds: string[], m: NameMatcher, opts:
       };
       // What everyone could still read after the rewrite, judged strictly: the helper's text unless kept for members,
       // its title, and the place guess's words.
-      const strictWhere: Where = tagged.has(p.id) ? { tagged: true, others: others.get(p.id) ?? [] } : {};
+      const strictWhere: Where = tagged.has(p.id) ? { tagged: true, others: others.get(p.id) ?? [], ...(noted ? { noted } : {}) } : {};
       const still = uncertain(strictWhere);
       const shown = (next.annotation ?? a) as StoredAnnotation | null;
       const holdText = !p.annotationMembersOnly && Boolean(shown) && (still(helperWordsOf(shown)) || annotationMentions(shown, m, strictWhere));
@@ -385,8 +350,11 @@ export async function forgetNameInText(photoIds: string[], m: NameMatcher, opts:
       // Untagging and a withdrawal stamp every photograph they looked at, so no answer about any of them is written
       // over it (the withdrawal's public pass only what it changed); a forget writes only what changed, unstamped.
       const stamp = opts.stamp !== false;
-      if (changed || (stamp && !opts.publicOnly)) await db.photo.update({ where: { id: p.id }, data: { ...next, ...held, ...(stamp ? { namesScrubbedAt: now } : {}) } });
+      if (changed) await db.photo.update({ where: { id: p.id }, data: { ...next, ...held } });
+      if (stamp && (changed || !opts.publicOnly)) stamped.push(p.id);
     }
+    // After every write, by the database's clock: an answer asked for before this read the words before them.
+    await stampScrubbed(stamped);
     // The semantic index is rebuilt for what changed (and, stamping, for all it looked at); the helper's raw answers
     // go for all it looked at, whatever they said then.
     const found = opts.publicOnly || opts.stamp === false ? touched : photos.map((p) => p.id);
@@ -728,7 +696,7 @@ export async function forgetOnPhoto(photoId: string, person: PersonNames): Promi
   if (!p) return;
   const others = (await othersOn([photoId], person.id)).get(photoId) ?? [];
   if (machineMentions(p, m, { tagged: true, others }, (await answerTitles([photoId])).get(photoId))) await forgetNameInText([photoId], m, { tagged: new Set([photoId]), personId: person.id, containers: false });
-  else await db.photo.update({ where: { id: photoId }, data: { namesScrubbedAt: new Date() } });
+  else await stampScrubbed([photoId]);
 }
 
 /**
@@ -765,6 +733,14 @@ async function photosNamingAnyWay(m: NameMatcher, names: string[]): Promise<stri
   const still = stillNames(m, names, {});
   const given = await answerTitles(rows.map((r) => r.id));
   return rows.filter((r) => machineMentions(r, m, {}, given.get(r.id)) || still(helperWordsOf(r.annotation as StoredAnnotation | null)) || still(r.title) || still([r.placeEstimateName, r.placeEstimateNote].filter(Boolean).join("\n"))).map((r) => r.id);
+}
+
+/**
+ * What show-to-everyone would publish of the helper's words on an item, or index for strangers' search: its title,
+ * its prose (place and visible text included), its keywords, tags and objects.
+ */
+function shownWords(title: string | null, record: StoredAnnotation | null): string[] {
+  return [title, helperWordsOf(record), record?.searchSummary, ...(record?.tags ?? []), ...(record?.objects ?? [])].filter((t): t is string => typeof t === "string" && t.trim() !== "");
 }
 
 /**

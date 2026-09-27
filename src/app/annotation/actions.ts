@@ -18,6 +18,7 @@ import { anthropic } from "@/lib/annotation/client";
 import { helperText, judgeHelperText, knownNames, mentionsAnyName, pastHelperTitles, sameTitle, titleIsHelpers, unknownTitleAside, warnStuckTitle } from "@/lib/annotation/members-only";
 import { enqueueEmbedding, refreshTextEmbedding } from "@/lib/jobs/handlers/embed-photo";
 import { NAME_NOT_TO_BE_SHOWN, withoutWithdrawnNames } from "@/lib/people/forget";
+import { dbNow } from "@/lib/people/names-changed";
 
 /** The admin's half of the two gates. Recorded with who and when so the decision is auditable. */
 export async function setAnnotationOptIn(on: boolean): Promise<void> {
@@ -254,7 +255,7 @@ export async function startBackfill(scope: BackfillScope, typedConfirmation: str
   if (typedConfirmation.trim() !== String(items.length)) throw new Error(`Type ${items.length} to confirm`);
   const id = `b${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
   // The placeholder is unique per batch so two submissions never collide on the unique column.
-  const batch = await db.annotationBatch.create({ data: { id, anthropicBatchId: `pending-${id}`, scope: s, requested: items.length, createdById: admin.id } });
+  const batch = await db.annotationBatch.create({ data: { id, anthropicBatchId: `pending-${id}`, scope: s, requested: items.length, createdById: admin.id, createdAt: await dbNow() } });
   // A full run can take hours of building and uploading; the job must not expire meanwhile. One late retry lets a
   // run cut short by a crash be closed by the handler as well as by the poll.
   await enqueue(QUEUES.annotationBackfill, { batchId: batch.id }, { expireInSeconds: 12 * 3600, retryLimit: 1, retryDelay: 3600, retryBackoff: false });
@@ -288,7 +289,7 @@ export async function refreshNamesFor(personId: string): Promise<string | null> 
   const items = await backfillCandidates(scope);
   if (!items.length) return null;
   const id = `b${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
-  const batch = await db.annotationBatch.create({ data: { id, anthropicBatchId: `pending-${id}`, scope, requested: items.length, createdById: admin.id } });
+  const batch = await db.annotationBatch.create({ data: { id, anthropicBatchId: `pending-${id}`, scope, requested: items.length, createdById: admin.id, createdAt: await dbNow() } });
   await enqueue(QUEUES.annotationBackfill, { batchId: batch.id }, { expireInSeconds: 12 * 3600, retryLimit: 1, retryDelay: 3600, retryBackoff: false });
   revalidatePath(`/people/${personId}`);
   revalidatePath("/admin");

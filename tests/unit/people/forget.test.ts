@@ -183,8 +183,8 @@ describe("forgetting somebody", () => {
     // On her photograph "Grace" is her — an everyday word and another Grace notwithstanding — but "Grace Kelly" is not.
     expect(a.title).toBe("Grace Kelly and a family member");
     expect(a.caption).toBe("A family member waves");
-    // "grace" alone is her there; "hopper family" is a surname in a keyword, which could as well be a place or a thing.
-    expect(a.tags).toEqual(["hopper family", "lake"]);
+    // On her own photograph every tag holding a name of hers goes, her surname too (strict-names.ts).
+    expect(a.tags).toEqual(["lake"]);
     // Where the other Grace is tagged too, "Grace" alone could be either of them, so it is left.
     const b = (await db.photo.findUniqueOrThrow({ where: { id: both } })).annotation as StoredAnnotation;
     expect(b.caption).toBe("Grace waves");
@@ -502,7 +502,8 @@ describe("short names", () => {
     await optOutPerson(grace.id, form("keep-name"));
     await optOutPerson(jo.id, form("keep-name"));
     const on = (await db.photo.findUniqueOrThrow({ where: { id: hers } })).annotation as StoredAnnotation;
-    expect(on.caption).toBe("A family member said grace; a family member waved");
+    // On her own photograph every "grace", in any case (strict-names.ts).
+    expect(on.caption).toBe("A family member said a family member; a family member waved");
     expect(on.tags).toEqual(["rose garden"]);
     const off = (await db.photo.findUniqueOrThrow({ where: { id: elsewhere } })).annotation as StoredAnnotation;
     expect(off.caption).toBe("Grace said grace; Jo waved");
@@ -535,9 +536,10 @@ describe("where short names are used", () => {
     const hers = await photo("m.jpg", { tripId: trip.id, estimatedDateNote: "2019–2020: May 2019 on the calendar", annotation: { ...annotation, title: "", caption: "May waves in May" } });
     await db.face.create({ data: { photoId: hers, personId: may.id, status: "CONFIRMED", box: [0, 0, 1, 1], confidence: 0 } });
     await optOutPerson(may.id, form());
-    // On her photograph the name is hers; the month is not.
+    // On her photograph the name is hers; the month only in a date's own shape ("waves in May" could be either:
+    // "in" after a verb is somebody too, as in "tucked in June").
     const p = await db.photo.findUniqueOrThrow({ where: { id: hers } });
-    expect((p.annotation as StoredAnnotation).caption).toBe("A family member waves in May");
+    expect((p.annotation as StoredAnnotation).caption).toBe("A family member waves in a family member");
     expect(p.estimatedDateNote).toBe("2019–2020: May 2019 on the calendar");
     // A whole trip's description is left, and listed for somebody to edit.
     expect((await db.trip.findUniqueOrThrow({ where: { id: trip.id } })).description).toBe("In May we drove north. May waved at every cow.");

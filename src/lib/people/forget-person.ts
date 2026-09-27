@@ -88,7 +88,7 @@ export async function forgetPerson(personId: string, opts: { keepName: boolean; 
       await stampForget();
     }
     await held.assertHeld();
-    await forgetNameInText(photoIds, m, { tagged: hers, personId, stamp: false });
+    await forgetNameInText(photoIds, m, { tagged: hers, taggedOn: new Set(tagged), personId, stamp: false });
     await forgetRawAnswers(m);
     await forgetQueuedFileNames(m);
     // What is left mentioning them is what members wrote (or the helper's trip descriptions, where only a name that
@@ -130,8 +130,11 @@ export async function forgetPerson(personId: string, opts: { keepName: boolean; 
     }
     // Until the record was gone the remembered names still counted as somebody's: an answer asked for before now,
     // about any photograph, is thrown away, and names read before now are read again (see forgetState). No photograph
-    // is stamped: which ones this forget covered is nobody's to read from the database.
+    // is stamped: which ones this forget covered is nobody's to read from the database. The stamps an untagging or
+    // a withdrawal left go too, now that this forget's own supersedes them all: those left would tell which
+    // photographs were not among the ones it went through (the forget review's B).
     await held.assertHeld();
+    await db.$executeRaw`UPDATE "Photo" SET "namesScrubbedAt" = NULL WHERE "namesScrubbedAt" IS NOT NULL`;
     await stampForget();
   });
   // Nor in the queue: judging jobs asked for them are dropped, finished ones included.

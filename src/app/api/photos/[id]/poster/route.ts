@@ -42,6 +42,6 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
 
   const store = storage();
   const { width, height, renditions } = await makeRenditions(still, photo.storageKey, (key, buf) => store.putBuffer(key, buf));
-  await db.photo.update({ where: { id: photo.id }, data: { width, height, renditions } });
+  await db.photo.update({ where: { id: photo.id }, data: { width, height, renditions, imageVersion: { increment: 1 } } });
   return Response.json({ ok: true });
 }

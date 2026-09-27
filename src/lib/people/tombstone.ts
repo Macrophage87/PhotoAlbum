@@ -5,7 +5,8 @@ import { forgetKeySecret, INVALID_FORGET_KEY } from "./forget-key";
 import { dbNow } from "./names-changed";
 import { Prisma } from "@/generated/prisma/client";
 import type { StoredAnnotation } from "@/lib/annotation/schema";
-import { inTitleCase, isEverydayWord, isKinWord, isMonth, isTitlePrefix, kinshipKey, isPlaceOrDateWord, normalizeName, notThePerson, replaceSpans, type Neighbourhood } from "./scrub";
+import { FUNCTION_WORDS, inTitleCase, isEverydayWord, isKinWord, isMonth, isTitlePrefix, kinshipKey, isPlaceOrDateWord, normalizeName, notThePerson, replaceSpans, type Neighbourhood } from "./scrub";
+import { monthAsDate, strictNormalize } from "./strict-names";
 
 /**
  * What the album remembers of somebody it has forgotten: keyed hashes of their names, never the names.
@@ -168,7 +169,8 @@ export async function assertCanForget(): Promise<void> {
 
 /** How a typed or stored name is hashed: CJK names without spaces, anything else normalized. */
 function normalizedForm(f: string): string {
-  return CJK.test(f) ? f.replace(/\s+/g, "") : normalizeName(f);
+  // A colon is how places and kinship titles are hashed ("photo:", "kin:", "trip:"): in a name it is a space.
+  return CJK.test(f) ? f.replace(/\s+/g, "") : normalizeName(f.replace(/:/g, " "));
 }
 
 /**
@@ -193,8 +195,7 @@ export async function rememberForgotten(forms: { form: string; capitalizedOnly: 
   const hashed = { photoIds: photoIds.map((id) => scopeHash(w.key, photoScope(id))), taggedPhotoIds: taggedPhotoIds.map((id) => scopeHash(w.key, photoScope(id))), containerIds: containerIds.map((k) => scopeHash(w.key, k)) };
   for (const f of forms) {
     const n = normalizedForm(f.form);
-    // A colon is how places and kinship titles are hashed ("photo:", "kin:", "trip:"): a name never holds one.
-    if (!n || n.includes(":") || n.split(" ").length > MAX_WORDS) continue;
+    if (!n || n.split(" ").length > MAX_WORDS) continue;
     const h = hash(w.key, n);
     const oneWord = (!CJK.test(n) && !n.includes(" ")) || Boolean(f.derived);
     // A spelling stored both ways is matched the stricter way.
@@ -525,11 +526,14 @@ export async function loadTombstone(): Promise<Tombstone> {
   type Mode = "prose" | "summary" | "tag";
   const spansIn = (text: string, scope: Scope | undefined, mode: Mode): [number, number][] => {
     const spans: [number, number][] = [];
-    const tokens = [...text.matchAll(/[\p{L}\p{M}\p{N}][\p{L}\p{M}\p{N}'’.]*/gu)].map((m) => {
+    // Letters apart from digits ("madison2016" is Madison and a year), invisible characters inside a word kept in it.
+    const tokens = [...text.matchAll(/[\p{L}\p{M}][\p{L}\p{M}\p{Cf}'’.]*|\p{N}+/gu)].map((m) => {
       // A possessive and a sentence's full stop stay outside the name.
       const raw = m[0].replace(/['’]s$/u, "").replace(/\.$/u, (d) => (/^\p{L}\.(\p{L}\.)*$/u.test(m[0]) ? d : ""));
-      return { start: m.index!, end: m.index! + raw.length, raw, norm: normalizeName(raw) };
+      return { start: m.index!, end: m.index! + raw.length, raw, norm: normalizeName(raw.replace(/\p{Cf}/gu, "")) };
     });
+    /** On a photograph a forgotten person was tagged on: see `strictHere`. */
+    const ownRow = (f: Found) => Boolean(scope && !scope.whole && scope.own.has(f.key));
     // A tag that is a one-word name, or its possessive: "ximena", "ximena's".
     const wholeTag = mode === "tag" && tokens.length === 1 && /^[\s]*[\p{L}\p{M}\p{N}'’.-]+[\s]*$/u.test(text);
     const titlePrefix = (t: { raw: string }) => /^(?:great|step|half|grand)$/iu.test(t.raw);
@@ -544,8 +548,22 @@ export async function loadTombstone(): Promise<Tombstone> {
         // Only words next to each other: a run broken by anything but a hyphen or a space is not a name.
         if (run.some((t, j) => j > 0 && !/^[\s\-‐]+$/u.test(text.slice(run[j - 1].end, t.start)))) continue;
         // The same name may have been forgotten more than once, under either key: whichever is in play here counts.
-        const attempt = (found: Found): number | null => {
+        const attempt = (found: Found, plural = false): number | null => {
           let start = run[0].start;
+          // On their own photograph (a full name whose first name is theirs here counts too), strictly: every match,
+          // in any case and any field, a kinship word before it taken with it, and only a month used as a date left
+          // (see strict-names.ts). Over-removal there loses a word on their own photograph; the language rules below,
+          // which decide what is somebody else's or a place's, are for everywhere else.
+          if (ownRow(found) || (n > 1 && lookupAll(run[0].norm).some(ownRow))) {
+            if ((n === 1 || found.scoped) && !scope?.rows.has(found.key)) return null;
+            if (found.people && [...found.people].some((id) => scope!.tagged.has(id))) return null;
+            if (n === 1 && !plural && isMonth(run[0].raw) && monthAsDate(strictNormalize(text.slice(0, run[0].start)), strictNormalize(text.slice(run[0].end)))) return null;
+            let k = i;
+            // "Great", "Grand", "Step" or "Half" only as part of a kinship word taken already: "The Great Ada show."
+            while (k > 0 && isKinWord(tokens[k - 1].raw) && !FUNCTION_WORDS.has(tokens[k - 1].norm) && /^(?:[ \t]+|[-‐])$/u.test(text.slice(tokens[k - 1].end, tokens[k].start)) && (k < i || !titlePrefix(tokens[k - 1]))) k--;
+            return tokens[k].start;
+          }
+          if (plural) return null;
           if (n === 1 || found.scoped) {
             // Only where the forget found them; a row from before that was kept, nowhere.
             if (!scope?.rows.has(found.key)) return null;
@@ -586,17 +604,22 @@ export async function loadTombstone(): Promise<Tombstone> {
                 if (found.derived) return null;
               }
             }
-          } else if (found.capOnly) {
-            // Written as a name in prose; in keywords or a tag a full name side by side is them in any case ("may chen
-            // pool").
-            if (!(mode !== "prose" && n > 1) && !guarded(text, run, true)) return null;
-          }
+            // A full name made only of everyday words ("Holly Berry") in keywords or a tag is the thing, in any case,
+            // off their own photographs (the forget review's C).
+          } else if (found.capOnly && (mode !== "prose" || !guarded(text, run, true))) return null;
           return start;
         };
         let start: number | null = null;
         for (const found of lookupAll(run.map((t) => t.norm).join(" "))) {
           start = attempt(found);
           if (start !== null) break;
+        }
+        // A plural or possessive without its apostrophe ("Madisons", "mays"), on their own photograph only.
+        if (start === null && n === 1 && /s$/u.test(run[0].norm)) {
+          for (const found of lookupAll(run[0].norm.slice(0, -1))) {
+            start = attempt(found, true);
+            if (start !== null) break;
+          }
         }
         if (start === null) continue;
         spans.push([start, run[n - 1].end]);

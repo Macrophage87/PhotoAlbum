@@ -90,7 +90,7 @@ export async function processPhoto(job: ProcessPhotoJob, signal?: AbortSignal): 
       const gpano = photo.kind === "PHOTO" ? await readGPano(localPath) : null;
       const { width, height, renditions, panorama } = await makeRenditions(from, photo.storageKey, (key, buf) => store.putBuffer(key, buf), editsOf(photo.edits), gpano);
       signal?.throwIfAborted();
-      await db.photo.update({ where: { id: photo.id }, data: { status: "READY", width, height, renditions, panorama, panoProjection: gpano?.projection ?? null } });
+      await db.photo.update({ where: { id: photo.id }, data: { status: "READY", width, height, renditions, panorama, panoProjection: gpano?.projection ?? null, imageVersion: { increment: 1 } } });
       await enqueueEmbedding(photo.id);
       await enqueueFaceDetection(photo.id);
       await enqueueAnimalDetection(photo.id);
@@ -249,6 +249,8 @@ export async function processPhoto(job: ProcessPhotoJob, signal?: AbortSignal): 
             ...(mtimeHeader && Number.isFinite(mtimeHeader) ? { fileLastModified: mtimeHeader } : {}),
           },
           renditions,
+          // New pictures under the same file names: their addresses move (see photoUrl), whatever else changed.
+          imageVersion: { increment: 1 },
           panorama,
           panoProjection: gpano?.projection ?? null,
           tripId,

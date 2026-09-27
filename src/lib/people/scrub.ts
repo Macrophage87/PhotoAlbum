@@ -26,6 +26,7 @@
 import type { StoredAnnotation } from "@/lib/annotation/schema";
 import { COMMON_WORD_NAMES, KINSHIP_WORDS, NAME_PARTICLES } from "@/lib/annotation/names";
 import { PLACE_NAMES } from "./places";
+import { strictFinder, strictNormalize, type StrictFinder } from "./strict-names";
 
 export const STAND_IN = "a family member";
 
@@ -70,6 +71,9 @@ const MONTHS = new Set(["january", "february", "march", "april", "may", "june", 
 const WHEN_BEFORE_MONTH = new Set(["in", "during", "since", "until", "till", "early", "late", "mid", "last", "next", "this", "through", "throughout", "every"]);
 /** Words that put a place, not a person, after them: "a train to Florence", "back in Georgia". */
 const PLACE_BEFORE = new Set(["to", "in", "from", "near", "at", "visiting", "visit", "around", "through", "via", "into", "toward", "towards", "outside", "downtown", "across", "of"]);
+
+/** Words that are a kinship word only before another: "Great Aunt", not "the Great". */
+const KIN_MODIFIERS = new Set(["great", "grand", "step", "half"]);
 
 /** Whether a name word is a title or kinship word ("Great-Aunt" as much as "Aunt"). */
 function isKin(word: string): boolean {
@@ -716,6 +720,12 @@ export type Where = {
    * them wherever a place is not plainly meant ("Charlotte in the rain" of the "Charlotte, NC 2020" trip is the city).
    */
   onPhoto?: boolean;
+  /**
+   * With `tagged`: a photograph whose notes plainly name them, but that they were never tagged on. Their own
+   * photograph's language rules apply there, not the strict matcher, which is for the photographs they are or were
+   * tagged on.
+   */
+  noted?: boolean;
 };
 
 export type NameMatcher = {
@@ -758,7 +768,8 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
   const list = (Array.isArray(names) ? names : []).filter((n): n is string => typeof n === "string" && n.trim() !== "");
   const otherNames = (Array.isArray(others) ? others : []).filter((o): o is string => typeof o === "string" && o.trim() !== "");
   const own = new Set(list.flatMap((n) => wordsOf(splitNickname(n).name).map(bare)));
-  const theirs = otherNames.flatMap((o) => wordsOf(splitNickname(o).name).map(bare));
+  // Never a kinship word: "Aunt Kay" and "Baby Leo" make "Aunt May" and "Baby June" nobody else's.
+  const theirs = otherNames.flatMap((o) => wordsOf(splitNickname(o).name).map(bare)).filter((w) => !KIN.has(w));
   // Any word of anybody else's name makes a short name of theirs ambiguous away from their photographs; beside a
   // match, only words not also theirs say it is somebody else ("Lovelace" beside "Ada", not "Byron").
   const shared = new Set(theirs);
@@ -894,7 +905,47 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
     return title && out !== STAND_IN.toUpperCase() ? "A Family Member" : out;
   };
 
-  const scrubText = (text: string, where: Where): string => {
+  /**
+   * On their own photograph, strictly (see strict-names.ts): every whole-word match of any of their names, in any
+   * case and any spelling, a kinship word before it taken with it ("Aunt May at the picnic"), and only a month used
+   * as a date left ("May 2019"). Not a word of somebody else tagged on the same photograph. Over-removal here loses a
+   * word on their own photograph; the language rules are for everywhere else, where it would damage somebody else's.
+   */
+  const ownFinders = new Map<string, StrictFinder>();
+  const strictHere = (where: Where): StrictFinder => {
+    const there = [...new Set((where.others ?? []).flatMap((o) => strictNormalize(splitNickname(o).name).split(/[\s-]+/u)).filter((w) => w && !isKin(w)))];
+    const key = there.join(" ");
+    let f = ownFinders.get(key);
+    if (!f) ownFinders.set(key, (f = strictFinder(list, otherNames, new Set(there))));
+    return f;
+  };
+  const scrubOwn = (text: string, where: Where): string => {
+    const found = strictHere(where).spans(text);
+    if (!found.length) return text;
+    const spans: [number, number][] = [];
+    for (const [a, b] of found) {
+      let start = a;
+      // "Great", "Grand", "Step" or "Half" only as part of a kinship word taken already: "The Great Ada show."
+      let core = isKin(text.slice(a, b).split(/[ \t]+/u)[0].replace(/\.$/u, ""));
+      for (;;) {
+        const kin = text.slice(0, start).match(/([\p{L}\p{M}'’.]+)(?:[ \t]+|[-‐])$/u);
+        if (!kin || !isKin(kin[1].replace(/\.$/u, "")) || FUNCTION_WORDS.has(bare(kin[1]))) break;
+        const modifier = bare(kin[1]).split(/[-‐]/u).every((w) => KIN_MODIFIERS.has(w));
+        if (modifier && !core) break;
+        core = true;
+        start -= kin[0].length;
+      }
+      const last = spans[spans.length - 1];
+      // Two of their names side by side are one mention: "byron ada".
+      if (last && (start <= last[1] || /^[ \t]+$/u.test(text.slice(last[1], start)))) last[1] = Math.max(last[1], b);
+      else spans.push([start, b]);
+    }
+    return replaceSpans(text, spans);
+  };
+  const ownPhoto = (where: Where) => Boolean(where.tagged) && where.onPhoto !== false && !where.noted;
+
+  const scrubText = (text: string, where: Where, keywords = false): string => {
+    if (ownPhoto(where)) return scrubOwn(text, where);
     // On their own photograph a kinship word before their name goes with it ("Little Sister Ada"), and the stand-in's
     // capitals are judged without it, as the forgotten names' are (replaceSpans): "Little Sister Ada and Big Brother
     // Ada." is no title in title case. Only the capitals: what is taken out is judged as before.
@@ -906,7 +957,9 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
       return standInFor(m, whole.slice(0, offset), whole.slice(offset + m.length), standInTitle(whole, offset));
     };
     let out = longAnyRx ? text.replace(longAnyRx, put) : text;
-    if (longCapRx) out = out.replace(longCapRx, put);
+    // A full name made only of everyday words ("Holly Berry") in keywords or a tag is the thing, in any case, off a
+    // photograph about them: "Holly Berry wreath" (the forget review's C).
+    if (longCapRx && !(keywords && !where.tagged)) out = out.replace(longCapRx, put);
     if (where.tagged && longTagged.length) {
       const r = rx(bounded(withCaps(longTagged)), "gu");
       if (r) out = out.replace(r, put);
@@ -989,9 +1042,10 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
       // Off their own photograph, "st. mary's church" in the keywords is still a church.
       const saintly = !(where.tagged && where.onPhoto !== false);
       const put = (m: string, offset: number, w: string) => (saintly && SAINT_BEFORE.test(w.slice(0, offset)) ? m : standIn(m, w.slice(0, offset), w.slice(offset + m.length)));
-      let out = scrubText(t, where);
-      // A full name made of everyday words, side by side, in any case: keywords are all lower case ("may chen pool").
-      if (longCapAnyRx) out = out.replace(longCapAnyRx, put);
+      let out = scrubText(t, where, true);
+      // A full name made of everyday words, side by side, in any case, on a photograph about them: keywords are all
+      // lower case ("may chen pool"). Not elsewhere, where "holly berry wreath" is the plant.
+      if (longCapAnyRx && where.tagged) out = out.replace(longCapAnyRx, put);
       const k = keywordsFor(where);
       if (k.pairRx) out = out.replace(k.pairRx, put);
       if (k.strongRx) out = out.replace(k.strongRx, put);
@@ -1014,6 +1068,7 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
   const namesTag = (tag: unknown, where: Where = {}) => {
     if (typeof tag !== "string" || !tag.trim()) return false;
     try {
+      if (ownPhoto(where)) return strictHere(where).finds(tag);
       const t = tag.trim().toLowerCase().replace(/’/g, "'");
       const k = keywordsFor(where);
       // Off their own photograph a saint's name in a tag is a place's ("st. mary's church").

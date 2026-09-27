@@ -132,7 +132,12 @@ export async function deleteCollection(slug: string): Promise<void> {
   const collection = await loadEditableCollection(slug);
   const me = await requireUserOrThrow();
   if (me.role !== "ADMIN") throw new Error("Only an admin can delete a collection");
-  await db.collection.delete({ where: { id: collection.id } });
+  // Who may fetch its photographs changes with it (a share link or public collection gone): their addresses move,
+  // in the same transaction, so a cached copy under the old address is not served past it.
+  await db.$transaction([
+    db.photo.updateMany({ where: { collections: { some: { collectionId: collection.id } } }, data: { updatedAt: new Date(), imageVersion: { increment: 1 } } }),
+    db.collection.delete({ where: { id: collection.id } }),
+  ]);
   revalidatePath("/", "layout");
   redirect("/");
 }
