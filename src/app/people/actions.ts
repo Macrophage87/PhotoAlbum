@@ -28,9 +28,9 @@ async function requireAdmin() {
 const day = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().transform((v) => (v ? new Date(`${v}T00:00:00Z`) : null));
 
 /** Set the templates of a person's faces and clusters to NULL, keeping rows, boxes and confirmations. */
-async function nullTemplatesFor(personId: string) {
-  await db.$executeRaw`UPDATE "Face" SET embedding = NULL WHERE "personId" = ${personId}`;
-  await db.$executeRaw`UPDATE "FaceCluster" SET centroid = NULL WHERE "personId" = ${personId}`;
+async function nullTemplatesFor(personId: string, client: Prisma.TransactionClient = db) {
+  await client.$executeRaw`UPDATE "Face" SET embedding = NULL WHERE "personId" = ${personId}`;
+  await client.$executeRaw`UPDATE "FaceCluster" SET centroid = NULL WHERE "personId" = ${personId}`;
 }
 
 const nameSchema = z
@@ -71,6 +71,10 @@ export async function nameCluster(clusterId: string, fd: FormData): Promise<void
   const now = new Date();
 
   const person = await retryOnDeadlock(() => db.$transaction(async (tx) => {
+    // Somebody already named is read again, held until this commits: an admin switching their recognition off
+    // meanwhile either comes first and is seen here, or waits and nulls what this attaches.
+    const [known] = existing ? await tx.$queryRaw<{ faceIndexing: boolean; kind: string }[]>`SELECT "faceIndexing", kind::text AS kind FROM "Person" WHERE id = ${existing.id} FOR SHARE` : [];
+    if (existing && !known) throw new Error("That person is no longer in the album");
     const cluster = await lockCluster(tx, clusterId);
     if (!cluster || cluster.personId) throw new Error("Cluster not found or already named");
     // Read under the lock: exactly the faces the group holds now, none of them named.
@@ -105,7 +109,15 @@ export async function nameCluster(clusterId: string, fd: FormData): Promise<void
     await tx.$queryRaw`SELECT p.id FROM "Photo" p WHERE p.id IN (SELECT "photoId" FROM "Face" WHERE id = ANY(${own})) ORDER BY p.id FOR NO KEY UPDATE`;
     // A face the album had proposed as somebody is now this person, and no longer proposed as anybody.
     await tx.face.updateMany({ where: { id: { in: own }, clusterId: named, personId: null }, data: { personId: who.id, status: "CONFIRMED", proposedPersonId: null } });
-    return who;
+    // Templates nobody may match against go in the same commit as the name (a pet's always: it is spotted by the
+    // animal detector), so a failure after it can never leave them: only the faces and the group just named, which
+    // are locked already. The rest of somebody already named lost theirs when their recognition went off.
+    const nullTemplates = known ? known.kind === "PET" || !known.faceIndexing : outcome.nullTemplates;
+    if (nullTemplates) {
+      await tx.$executeRaw`UPDATE "Face" SET embedding = NULL WHERE id = ANY(${own}) AND "personId" = ${who.id}`;
+      await tx.$executeRaw`UPDATE "FaceCluster" SET centroid = NULL WHERE id = ${named}`;
+    }
+    return { ...who, nullTemplates };
   }));
 
   /**
@@ -115,6 +127,7 @@ export async function nameCluster(clusterId: string, fd: FormData): Promise<void
    * makes the chips on those photographs point at the pet.
    */
   if (existing?.kind === "PET") {
+    // And, as before, anything of theirs a failed naming left behind.
     await nullTemplatesFor(existing.id);
     revalidatePath("/people", "layout");
     revalidatePath("/admin");
@@ -122,8 +135,9 @@ export async function nameCluster(clusterId: string, fd: FormData): Promise<void
   }
 
   // Merging a group into somebody already named (another decade of the same face) follows that person's setting.
-  const effective = existing ? { faceIndexing: existing.faceIndexing, nullTemplates: !existing.faceIndexing, pendingDecision: existing.pendingDecision } : outcome;
-  if (effective.nullTemplates) await nullTemplatesFor(person.id);
+  // What the naming attached was nulled with it (by their setting as it stood then); this sweeps up anything of
+  // theirs an earlier failure left.
+  if (person.nullTemplates) await nullTemplatesFor(person.id);
   // A new name: what was written before it was known is judged again, in the background.
   if (!existing) await rejudgeFromAction({ people: [person.id] });
   revalidatePath("/people", "layout");
@@ -260,17 +274,22 @@ export async function decideIndexing(personId: string, fd: FormData): Promise<vo
   const outcome = namingOutcome({ byAdmin: true, wantIndexing, parentInstruction: fd.get("parentInstruction") === "on", birthday, attest, isChildFlag: false });
   const now = new Date();
   const named = nameMayLeaveServer(person);
-  const after = await db.person.update({
-    where: { id: personId },
-    data: {
-      birthday,
-      faceIndexing: outcome.faceIndexing,
-      faceIndexingSetById: admin.id,
-      faceIndexingSetAt: now,
-      adultAttestedById: outcome.attested ? admin.id : person.adultAttestedById,
-      adultAttestedAt: outcome.attested ? now : person.adultAttestedAt,
-      pendingDecision: false,
-    },
+  // Recognition off and the templates gone in one commit: never a person switched off who keeps them.
+  const after = await db.$transaction(async (tx) => {
+    const updated = await tx.person.update({
+      where: { id: personId },
+      data: {
+        birthday,
+        faceIndexing: outcome.faceIndexing,
+        faceIndexingSetById: admin.id,
+        faceIndexingSetAt: now,
+        adultAttestedById: outcome.attested ? admin.id : person.adultAttestedById,
+        adultAttestedAt: outcome.attested ? now : person.adultAttestedAt,
+        pendingDecision: false,
+      },
+    });
+    if (outcome.nullTemplates) await nullTemplatesFor(personId, tx);
+    return updated;
   });
   // No longer to be named (recognition off, or a birthday showing a child): what the helper wrote with the name goes.
   if (named && !nameMayLeaveServer(after)) await forgetNameEverywhere(after);
@@ -279,8 +298,7 @@ export async function decideIndexing(personId: string, fd: FormData): Promise<vo
   // Only evidence that was missing counts: a Recognition save for somebody whose naming was turned off before, with
   // evidence already on record, is no decision about naming, which only turning it back on is.
   if (!knownAdult(person) && knownAdult(after) && after.namingWithdrawnAt) await db.person.update({ where: { id: personId }, data: { namingWithdrawnAt: null } });
-  if (outcome.nullTemplates) await nullTemplatesFor(personId);
-  else {
+  if (!outcome.nullTemplates) {
     // Enabling later: templates of confirmed faces are recomputed by re-scanning their photos, then open faces are re-matched.
     const photos = await db.face.findMany({ where: { personId, status: "CONFIRMED" }, select: { photoId: true }, distinct: ["photoId"] });
     await db.photo.updateMany({ where: { id: { in: photos.map((p) => p.photoId) } }, data: { facesDetectedAt: null } });

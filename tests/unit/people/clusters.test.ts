@@ -167,6 +167,23 @@ describe("joining a group to somebody already named", () => {
     expect((await db.person.findUniqueOrThrow({ where: { id: biscuit.id } })).pendingDecision).toBe(false);
   });
 
+  it("drops the templates in the naming's own commit when recognition is off, so a failure after it leaves none", async () => {
+    const jo = await db.person.create({ data: { name: "Jo", faceIndexing: false, createdById: me } });
+    await db.$executeRaw`UPDATE "Face" SET embedding = ${vectorLiteral(Array(512).fill(0.1))}::vector WHERE id = ${faceId}`;
+    await db.$executeRaw`UPDATE "FaceCluster" SET centroid = ${vectorLiteral(Array(512).fill(0.1))}::vector WHERE id = ${clusterId}`;
+    // The sweep after the commit fails, as a lost connection would.
+    const client = (globalThis as unknown as { prisma: { $executeRaw: (...a: unknown[]) => Promise<number> } }).prisma;
+    const original = client.$executeRaw;
+    const spy = vi.spyOn(client, "$executeRaw").mockImplementation(function (this: unknown, ...a: unknown[]) {
+      return (a[0] as string[])[0] === 'UPDATE "Face" SET embedding = NULL WHERE "personId" = ' ? Promise.reject(new Error("connection lost")) : original.apply(this, a);
+    });
+    await expect(nameClusterAs(clusterId, jo.id)).rejects.toThrow(/connection lost/);
+    spy.mockRestore();
+    expect((await db.face.findUniqueOrThrow({ where: { id: faceId } })).personId).toBe(jo.id);
+    expect((await db.$queryRaw<{ n: number }[]>`SELECT count(*)::int AS n FROM "Face" WHERE "personId" = ${jo.id} AND embedding IS NOT NULL`)[0].n).toBe(0);
+    expect((await db.$queryRaw<{ n: number }[]>`SELECT count(*)::int AS n FROM "FaceCluster" WHERE "personId" = ${jo.id} AND centroid IS NOT NULL`)[0].n).toBe(0);
+  });
+
   it("will not hand faces to somebody who asked to be forgotten", async () => {
     const gone = await db.person.create({ data: { name: "Gone", optedOutAt: new Date(), createdById: me } });
     await expect(nameClusterAs(clusterId, gone.id)).rejects.toThrow(/forgotten/);

@@ -101,11 +101,13 @@ export async function confirmFaceAs(faceId: string, personId: string): Promise<v
   const person = await db.person.findUniqueOrThrow({ where: { id: personId }, select: { faceIndexing: true, kind: true } });
   const age = person.kind === "HUMAN" ? await ageFor(faceId, personId) : null;
   if (face.clusterId && !face.cluster?.personId) await leaveCluster(face.id, face.clusterId);
-  await db.face.update({ where: { id: faceId }, data: { personId, proposedPersonId: null, status: "CONFIRMED", clusterId: null, ageAtCaptureYears: age ? Math.round(age.years * 10) / 10 : undefined } });
+  const confirm = db.face.update({ where: { id: faceId }, data: { personId, proposedPersonId: null, status: "CONFIRMED", clusterId: null, ageAtCaptureYears: age ? Math.round(age.years * 10) / 10 : undefined } });
   if (!person.faceIndexing) {
-    await db.$executeRaw`UPDATE "Face" SET embedding = NULL WHERE id = ${faceId}`;
+    // In one commit: never a face of somebody whose recognition is off that keeps its template.
+    await db.$transaction([confirm, db.$executeRaw`UPDATE "Face" SET embedding = NULL WHERE id = ${faceId}`]);
     return;
   }
+  await confirm;
   const row = await db.$queryRaw<{ embedding: string | null }[]>`SELECT embedding::text AS embedding FROM "Face" WHERE id = ${faceId}`;
   const embedding = row[0]?.embedding ? (JSON.parse(row[0].embedding) as number[]) : null;
   if (!embedding) return;
