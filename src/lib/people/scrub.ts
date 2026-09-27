@@ -406,7 +406,7 @@ const PERSON_VERBS = new Set([
   "naps", "napped", "dances", "danced", "sings", "sang", "cries", "cried", "grins", "grinned", "hikes", "hiked", "bakes", "baked", "cooks", "cooked",
   "feeds", "fed", "carries", "carried", "kisses", "kissed", "catches", "caught", "throws", "threw", "kicks", "kicked", "splashes", "splashed", "paddles",
   "paddled", "builds", "built", "digs", "dug", "pushes", "pushed", "pulls", "pulled", "points", "pointed", "watches", "watched", "wears", "wore",
-  "celebrates", "celebrated", "cuddles", "cuddled", "reads", "opens", "opened", "helps", "helped", "reaches", "reached", "leans", "leaned", "lies",
+  "celebrates", "celebrated", "cuddles", "cuddled", "helps", "helped", "leans", "leaned",
 ]);
 /** Descriptors and title prefixes that say nothing of a person before a month: "Great May sale", "Old June". */
 const NOT_KIN_BEFORE_MONTH = new Set(["great", "grand", "step", "half", "big", "little", "baby", "old", "young", "st", "saint"]);
@@ -420,7 +420,8 @@ export function personShaped(text: string, start: number, end: number): boolean 
   const before = text.slice(0, start);
   const after = text.slice(end);
   const prev = before.match(/(?<![\p{L}\p{M}'’.-])([\p{L}\p{M}'’.-]+)[ \t]+$/u)?.[1]?.replace(/\.$/u, "");
-  if (prev && isKin(prev) && !NOT_KIN_BEFORE_MONTH.has(bare(prev))) return true;
+  // ("the", "our" and "my" count as kinship words to the members-only rule: "the May holiday" is no person.)
+  if (prev && isKin(prev) && !NOT_KIN_BEFORE_MONTH.has(bare(prev)) && !FUNCTION_WORDS.has(bare(prev))) return true;
   if (/^[ \t]+at[ \t]+the(?![\p{L}\p{M}])/iu.test(after)) return true;
   const joined = after.match(/^[ \t]+(?:and|&)[ \t]+(\p{Lu}[\p{L}\p{M}'’-]*)/u)?.[1];
   if (joined && !WHEN_WORDS.has(bare(joined)) && !FUNCTION_WORDS.has(bare(joined))) return true;

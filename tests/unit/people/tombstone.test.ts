@@ -263,6 +263,9 @@ describe("names that are also words", () => {
       [may, "May and June were hot", "May and June were hot"],
       [may, "May flowers by the lake", "May flowers by the lake"],
       [may, "Early May at the lake", "Early May at the lake"],
+      [may, "Photos from the May holiday", "Photos from the May holiday"],
+      [may, "Our May trip at the lake", "Our May trip at the lake"],
+      [may, "May lies ahead", "May lies ahead"],
     ];
     for (const [on, text, want] of cases) expect([text, ts.scrub(text, await sc(on))]).toEqual([text, want]);
     // Not in keywords or tags, and not off their photographs.
