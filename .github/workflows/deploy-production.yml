@@ -3,7 +3,7 @@
 # deploy-staging.yml; only APP_DIR, BRANCH and APP_PORT differ. Details in docs/DEPLOY.md → "Continuous deployment".
 #
 # Needs the same three repository secrets: DEPLOY_HOST, DEPLOY_USER,
-# DEPLOY_SSH_KEY. Until they exist — or until the live instance has been
+# DEPLOY_SSH_KEY (and, advised, DEPLOY_HOST_FINGERPRINT). Until they exist — or until the live instance has been
 # set up on the server (a second checkout with its own .env, port and data
 # directory) — the job prints a note and exits green, so `main` never shows
 # a red ✗ for a server that isn't there yet.
@@ -14,6 +14,9 @@ on:
   # without a commit, re-run this job from the CI run, or run CI by hand on
   # `main` (Actions → CI → Run workflow).
   workflow_call:
+
+# The job only logs into the server; it needs no GitHub token permissions at all.
+permissions: {}
 
 jobs:
   deploy:
@@ -32,7 +35,9 @@ jobs:
         run: echo "DEPLOY_HOST / DEPLOY_USER / DEPLOY_SSH_KEY secrets are not set — skipping the deploy (see docs/DEPLOY.md)."
       - name: SSH in and run deploy/update.sh
         if: env.ARMED == 'true'
-        uses: appleboy/ssh-action@v1
+        # Pinned to the commit v1 (v1.2.5) pointed at, since this step is handed the deploy key: a moved tag cannot
+        # change what runs with it. Bump by looking up the new tag's commit.
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
         env:
           APP_DIR: /cieply/sites/cieply.com/PhotoAlbum-live
           BRANCH: main
@@ -43,6 +48,9 @@ jobs:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
+          # The server's host key fingerprint (SHA256:…), so the runner refuses a machine pretending to be the server.
+          # Unset, the action does not check the host key at all.
+          fingerprint: ${{ secrets.DEPLOY_HOST_FINGERPRINT }}
           command_timeout: 30m # the image rebuild takes a few minutes
           envs: APP_DIR,BRANCH,APP_PORT,DEPLOY_SHA
           script: |

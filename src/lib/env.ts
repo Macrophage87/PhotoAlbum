@@ -1,9 +1,10 @@
 import { z } from "zod";
+import { envFlag } from "./env-flag";
 
 const boolish = z
   .string()
   .optional()
-  .transform((v) => v === undefined || v === "" ? undefined : ["1", "true", "yes", "on"].includes(v.toLowerCase()));
+  .transform((v) => v === undefined || v === "" ? undefined : envFlag(v));
 
 /** A URL that may be left blank: .env.example ships the optional endpoints
  *  as `NAME=`, and an empty value means "unset" (zod's url() check would

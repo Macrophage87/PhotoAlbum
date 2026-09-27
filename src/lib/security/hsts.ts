@@ -1,8 +1,10 @@
+import { envFlag } from "@/lib/env-flag";
+
 export const HSTS_HEADER = "Strict-Transport-Security";
 
 /** HSTS_INCLUDE_SUBDOMAINS read the way src/lib/env.ts reads a flag, without validating the whole environment. */
 export function hstsIncludesSubdomains(value: string | undefined): boolean {
-  return ["1", "true", "yes", "on"].includes((value ?? "").toLowerCase());
+  return envFlag(value);
 }
 
 /**

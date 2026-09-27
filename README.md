@@ -54,7 +54,7 @@ A self-hosted photo album for family trips. Photos are grouped into **trips** an
 
 ```bash
 cp .env.example .env
-# edit .env: set ADMIN_EMAIL, SMTP_* if you want real emails, and a new POSTGRES_PASSWORD
+# edit .env: set ADMIN_EMAIL, SMTP_* if you want real emails, a new POSTGRES_PASSWORD and FORGET_KEY (openssl rand -base64 32)
 docker compose up --build
 ```
 
@@ -64,7 +64,7 @@ Open <http://localhost:3000>, enter the admin email, and follow the sign-in link
 docker compose logs -f app | grep "auth/verify"
 ```
 
-The port is published on `127.0.0.1` only. If you open the album as `http://<server>:<port>` from other devices (no proxy), set `APP_BIND=0.0.0.0` in `.env` and run `docker compose up -d` (only on a trusted network: without a proxy, all sign-in requests share one rate-limit bucket).
+The port is published on `127.0.0.1` only: open the album at <http://localhost:3000> on that machine. Other devices, even on a home network, need https in front of it, from a reverse proxy such as Caddy ([Behind a reverse proxy](#behind-a-reverse-proxy)). Plain `http://<server>:<port>` does not work, and `APP_BIND=0.0.0.0` does not make it: the image runs in production mode, where the session cookie is `Secure` and browsers keep it only over https (or on localhost), and without a proxy in front anyone can forge the `X-Forwarded-For` header the sign-in rate limits go by.
 
 To load demo content (two trips, a hike with stats, sample photos, a collection, a short clip, a YouTube embed, two named people, a pet and AI-style descriptions):
 
@@ -100,7 +100,7 @@ Every page is served with a nonce-based Content-Security-Policy: scripts only fr
 
 For a full walkthrough of a fresh server (Docker, deploy key, HTTPS with Caddy, backups, updates) see [docs/DEPLOY.md](docs/DEPLOY.md). When the photographs outgrow the disk, [docs/MOVE-MEDIA.md](docs/MOVE-MEDIA.md) moves them to another drive without downtime worth speaking of, and covers having the staging site and the live site work from one set of data.
 
-Set `APP_URL` to the public URL (used in emails and redirects) and raise the proxy's body size limit (e.g. `client_max_body_size 2g;` in nginx, `max_size 2GB` in Caddy) so large photos, 1 GB clips (`MAX_VIDEO_UPLOAD_BYTES`) and Google exports get through. `MAX_UPLOAD_BYTES`, `MAX_VIDEO_UPLOAD_BYTES` and `MAX_IMPORT_BYTES` cap sizes on the app side.
+Set `APP_URL` to the public URL (used in emails and redirects) and raise the proxy's body size limit (e.g. `client_max_body_size 2g;` in nginx, `max_size 2GB` in Caddy) so large photos, 1 GB clips (`MAX_VIDEO_UPLOAD_BYTES`) and Google exports get through. `MAX_UPLOAD_BYTES`, `MAX_VIDEO_UPLOAD_BYTES` and `MAX_IMPORT_BYTES` cap sizes on the app side. The proxy must also pass the client's address in `X-Forwarded-For` (Caddy does by itself; nginx needs `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for`): the app trusts only the last entry, the one the proxy adds, for its sign-in rate limits.
 
 ### Maps
 
@@ -155,7 +155,7 @@ src/lib/jobs       pg-boss queue and every background job (processing, imports, 
 src/lib/annotation Claude request building, schema, pricing, apply
 src/lib/people     consent rules, clustering, matching, text-to-name
 src/lib/search     Postgres full-text plus semantic search
-src/lib/graph      nearest-neighbour edges and the graph payload
+src/lib/graph      nearest-neighbor edges and the graph payload
 src/lib/ml         client for the sidecar
 src/lib/security   the Content-Security-Policy builder
 src/themes         theme registry and per-theme art
@@ -190,6 +190,7 @@ See `.env.example` for every variable. The important ones:
 | `PET_MATCHING_ENABLED` | Animal spotting through the sidecar (default true) |
 | `GEOCODER_ENABLED`, `GEOCODER_URL` | Address lookup when setting a photo's place by hand (OpenStreetMap Nominatim by default; false keeps it to map clicks) |
 | `VISITOR_STATS_ENABLED`, `VISITOR_STATS_RETENTION_DAYS` | Who-has-been-looking counts on the Admin page (default true, 90 days); false counts nothing |
+| `FORGET_KEY` | 32 random bytes, base64 (`openssl rand -base64 32`), one per instance: the secret forgotten people's names are hashed under. Required in production for forgetting. Back it up apart from the database dumps and never change it; upgrading from a release without it, set it before the first deploy ([DEPLOY.md](docs/DEPLOY.md#upgrading-from-before-the-forget-key)) |
 | `POSTGRES_PASSWORD` | Database password for the `db` container; change it from the default |
 | `NEXT_PUBLIC_TILE_URL`, `NEXT_PUBLIC_MAP_STYLE_URL`, `NEXT_PUBLIC_MAP_GLYPHS_URL` | Map basemap. Compiled into the browser bundle, so rebuild the image after changing them |
 

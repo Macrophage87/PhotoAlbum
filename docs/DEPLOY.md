@@ -103,6 +103,7 @@ Set at least these values:
 | `ADMIN_EMAIL` | Your own email address. Only this address can create the first admin account, and only while there is no admin: once one exists it is an ordinary address, so removing that account from the Admin page sticks. |
 | `SIGN_IN_MAIL_PER_HOUR` | Leave at `200`. Protects your mail provider's quota. Each address holds at most three unused sign-in links at a time; its first always goes out, and only the second and third count against this hourly total. Once it is used up, asking for another link while one is still live says to try again later, but anybody without a live link still gets one. |
 | `POSTGRES_PASSWORD` | A long random password, for example the output of `openssl rand -base64 24`. |
+| `FORGET_KEY` | The output of `openssl rand -base64 32`, a different one for each instance. Forgotten people's names are kept as hashes under it, and without it nobody can be forgotten for good. Back it up now, apart from the database backups of step 9 (they do not contain it), and never change it (see the variable table below). |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM` | Your mail provider's settings. Leave `SMTP_HOST` empty to print links to the log instead. |
 | `APP_PORT` | Leave at `3000`. The reverse proxy in the next step talks to it locally. |
 | `APP_BIND` | Leave at `127.0.0.1`, so the app is reachable only through that proxy (Docker's published ports bypass ufw). |
@@ -214,7 +215,7 @@ The basics (`APP_URL`, `ADMIN_EMAIL`, `SMTP_*`, `POSTGRES_*`, `APP_PORT`, `MAX_U
 | `IMPORT_INBOX_DIR` | `/data/imports` | Folder the Takeout importer reads; the compose file mounts the `imports` volume there. Empty hides the section. |
 | `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET` | empty | OAuth client for the Google Photos picker (see below). |
 | `TOKEN_ENCRYPTION_KEY` | empty | 32 random bytes, base64; encrypts members' Google refresh tokens at rest. Required with the client id. |
-| `FORGET_KEY` | empty | Exactly 32 random bytes, base64 — make it with `openssl rand -base64 32` (`deploy/update.sh` does); with a random salt kept in the database, it makes the key forgotten people's names are hashed under, so neither a database copy nor the secret alone is enough. In production nobody can be forgotten for good without it, and a value that is not 32 bytes of base64 counts as none (the server logs an error at start): "Forget face data" then switches the person off at once and finishes once a valid key is set; `deploy/update.sh` makes one in `.env` if there is none, and says so. It dumps only the database (to `$BACKUP_DIR`), so back `FORGET_KEY` up separately with the rest of `.env`, and never change it: once a name has been forgotten under it, running without it or with another pauses forgetting and the AI helper, in any environment, until it is put back. Names forgotten before it was set (under a key made from the database alone) are still recognized; the Admin page says how many. |
+| `FORGET_KEY` | empty | Exactly 32 random bytes, base64 — make it with `openssl rand -base64 32`; with a random salt kept in the database, it makes the key forgotten people's names are hashed under, so neither a database copy nor the secret alone is enough. In production nobody can be forgotten for good without it, and a value that is not 32 bytes of base64 counts as none (the server logs an error at start): "Forget face data" then switches the person off at once and finishes once a valid key is set. `deploy/update.sh` makes one in `.env` if there is none, and says so — unless the database already keeps names forgotten under a key, when it stops for that key to be put back — but an older checkout's first deploy of the release that brought it runs the older script, which makes none: see [Upgrading from before the forget key](#upgrading-from-before-the-forget-key). The script dumps only the database (to `$BACKUP_DIR`), so back `FORGET_KEY` up separately with the rest of `.env`, and never change it: once a name has been forgotten under it, running without it or with another pauses forgetting and the AI helper, in any environment, until it is put back. Names forgotten before it was set (under a key made from the database alone) are still recognized; the Admin page says how many. |
 | `GEOCODER_ENABLED` | `true` | Address lookup in "Set a place"; the typed words go to `GEOCODER_URL` from the server. |
 | `GEOCODER_URL` | Nominatim's public search | A Nominatim-compatible endpoint; point it at your own for heavy use. |
 | `VISITOR_STATS_ENABLED` | `true` | Count pages opened, for the Admin page's "Who has been looking". Nothing leaves the server. |
@@ -296,6 +297,8 @@ Create a backup script at `~/backup-album.sh`:
 #!/bin/bash
 # pipefail: without it a failed pg_dump still leaves a small, useless .gz and the script carries on.
 set -eo pipefail
+# The dumps hold every member's address and every name in the album: readable by this user only.
+umask 077
 DEST=/home/album/backups
 mkdir -p "$DEST"
 STAMP=$(date +%F)
@@ -333,11 +336,41 @@ docker compose up --build -d
 docker image prune -f
 ```
 
-Migrations run automatically at start. Take a database dump first (step 9) before any upgrade.
+**Check free disk space before every upgrade or deploy.** A deploy writes a full database dump next to the checkout, builds a new image (a few GB of build cache, pruned to one day's worth afterwards), and some migrations rewrite a whole table, which needs room for a second copy of it until Postgres reclaims the old one. Leave several GB free on the disk holding Docker's data plus about twice the database's size:
 
-The app's port is now published on `127.0.0.1` only (`APP_BIND`). If you open the album as `http://<server>:<port>` from other devices (no proxy), set `APP_BIND=0.0.0.0` in `.env` and run `docker compose up -d`; without a proxy, all sign-in requests share one rate-limit bucket.
+```bash
+df -h / /var/lib/docker .
+docker compose exec -T db sh -c 'psql -U "$POSTGRES_USER" "$POSTGRES_DB" -Atc "SELECT pg_size_pretty(pg_database_size(current_database()))"'
+```
+
+The `members_only_text` migration is one of those: it rewrites every row of the `Photo` table under an exclusive lock, about 30 seconds per 60,000 photos, and the album does not answer until it is done. A deploy waits `HEALTH_TIMEOUT` (180 s by default) for the new container, so on a very large album run `deploy/update.sh` by hand with a longer one for that release.
+
+Migrations run automatically at start. Take a database dump first (step 9) before any upgrade. Upgrading from a release without `FORGET_KEY` in `.env.example`? Set it first: see [Upgrading from before the forget key](#upgrading-from-before-the-forget-key).
+
+The app's port is now published on `127.0.0.1` only (`APP_BIND`). If other devices used to open the album as `http://<server>:<port>`, put Caddy in front instead (step 6); `APP_BIND=0.0.0.0` does not bring plain http back. Signing in needs https, since the session cookie is `Secure` in production, and without a proxy anyone can forge the `X-Forwarded-For` the sign-in rate limits go by. A proxy on another machine needs `APP_BIND` set to an address it can reach, a firewall that really covers the port (Docker's published ports bypass ufw), and to set `X-Forwarded-For` itself.
 
  In-flight photo processing is given 45 seconds to finish before the old container stops. A description backfill that is still submitting is cut short by an upgrade: the Admin page says so under that run within about an hour. Wait until no row of that run still reads "in progress" (batches already sent keep processing at Anthropic for up to a day), then run the backfill again for the remaining items; the app refuses to start a new run while one is open, so nothing is sent twice.
+
+### Upgrading from before the forget key
+
+`FORGET_KEY` came with forgetting people. `deploy/update.sh` makes one when `.env` has none, but the first deploy of that release onto a checkout still on an older one is run by the older copy of the script, which knows nothing of the key (live's `main` had no hand-over to the new script before it). The album then starts without one: nothing is lost, but nobody can be forgotten for good until the next deploy's script makes it, and the Admin page says so meanwhile. So before that first deploy, give **each instance its own key** in its own `.env` — staging and live never share one, since a key is tied to the database its names were forgotten in:
+
+**Never replace a key that already exists.** A key that has been used cannot be made again, and every name forgotten under it stops being recognized. The block below adds one only where `.env` has none (an empty `FORGET_KEY=` line from `.env.example` is dropped first), so it is safe to paste, and to paste twice; where there is a key it leaves it alone and says so:
+
+```bash
+cd /cieply/sites/cieply.com/PhotoAlbum-live          # then the same in PhotoAlbum, for staging
+if sudo grep -qE '^[[:space:]]*(export[[:space:]]+)?FORGET_KEY=[^[:space:]]' .env; then
+  echo "This .env already has a FORGET_KEY: leaving it alone."
+else
+  sudo sed -i -E '/^[[:space:]]*(export[[:space:]]+)?FORGET_KEY=[[:space:]]*$/d' .env
+  sudo sed -i -e '$a\' .env                         # end the last line, so the key starts a line of its own
+  echo "FORGET_KEY=$(openssl rand -base64 32)" | sudo tee -a .env >/dev/null
+fi
+```
+
+If `docker-compose.override.yml` sets `FORGET_KEY` instead, leave that as it is and skip the block.
+
+Then back each key up **separately from the database dumps**, labeled with its instance (`sudo grep -E '^[[:space:]]*(export[[:space:]]+)?FORGET_KEY=' .env` shows it; a password manager is the place for it): `deploy/update.sh` dumps only the database, and once somebody has been forgotten, that database without its key pauses forgetting and the AI helper until the key is back. If an instance has already forgotten somebody under a key and its `.env` has lost it, do not make a new one: put the original back. The script refuses to make a key for a database that keeps names under one, and says so.
 
 Two things to know when upgrading an install from before the media-hub release: the database image changed from `postgres:16` to `pgvector/pgvector:pg16` (same data format; compose replaces the container and keeps the `pgdata` volume, and the first start creates the `vector` extension), and if you run the ML sidecar its profile must be part of every `up`. Put `COMPOSE_PROFILES=ml` (plus `worker` if used) in `.env` so `docker compose up --build -d` and `deploy/update.sh` include it, then run `docker compose run --rm ml-init` once to fetch the weights.
 
@@ -402,12 +435,16 @@ CI tested). The script skips a commit older than the one already deployed
 copy of `update.sh` (when it is new enough to take it), dumps the database
 to a `backups/` folder next to the checkout and stops if the dump fails,
 resets the checkout to the commit (`.env` and `docker-compose.override.yml` are
-untracked and survive), runs `docker compose up --build -d`, waits for
-`/api/health`, and prunes old images. A commit that is no longer on the
+untracked and survive), makes a `FORGET_KEY` in `.env` if there is none
+(and stops instead if the database already keeps names forgotten under
+one), runs `docker compose up --build -d`, waits for `/api/health`, and
+prunes old images. A commit that is no longer on the
 branch (force-pushed away) is skipped with a note; if the branch was
 rewound past what is deployed, the older commit is deployed. A deploy rebuilds the image, so expect a short
 outage of a minute or two per push; in-flight photo processing gets 45
-seconds to finish first.
+seconds to finish first. Check the server's free disk space before
+pushing a release (see step 10): a deploy that fills the disk can take
+Postgres down with it.
 
 | Branch | Workflow | Checkout | Port |
 |---|---|---|---|
@@ -433,7 +470,12 @@ server, one for the server to read GitHub):
    runs git as the checkout's owner and docker via sudo), then add the
    repository secrets `DEPLOY_HOST` (the server's hostname, no `https://`),
    `DEPLOY_USER` and `DEPLOY_SSH_KEY` (the private half). Delete the
-   private key file afterwards.
+   private key file afterwards. Add `DEPLOY_HOST_FINGERPRINT` too, the
+   server's host key fingerprint from `ssh-keygen -l -f
+   /etc/ssh/ssh_host_ed25519_key.pub | cut -d ' ' -f2` on the server (it
+   starts `SHA256:`); without it the runner does not check whom it hands the
+   deploy key to. If the deploy then fails on the fingerprint, the server
+   offered another key type: use that key's `.pub` file instead.
 2. **Server → GitHub.** The checkout's owner needs a key that can read the
    repo: a read-only deploy key in their `~/.ssh` (step 4 above) or a
    personal key that already has access.
