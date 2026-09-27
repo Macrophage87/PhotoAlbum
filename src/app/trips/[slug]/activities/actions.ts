@@ -19,7 +19,7 @@ import type { ActivityType } from "@/generated/prisma/enums";
 import type { ActivityFormState } from "@/components/activities/ActivityForm";
 import { handWrittenDescription, handWrittenMembersOnly, judgeDescription } from "@/lib/annotation/members-only";
 import { descriptionStaysHelpers } from "@/lib/annotation/helper-text";
-import { namesChangedSince } from "@/lib/people/names-changed";
+import { dbNow, namesChangedSince } from "@/lib/people/names-changed";
 import { NAMES_CHANGED, withoutUnpermittedNames } from "@/lib/annotation/container";
 import { forgetState } from "@/lib/people/names-changed";
 import { forgottenScope, loadTombstone } from "@/lib/people/tombstone";
@@ -129,7 +129,7 @@ export async function setActivityShare(slug: string, id: string, on: boolean): P
   const activity = await db.activity.findFirst({ where: { id, tripId: trip.id }, select: { id: true } });
   if (!activity) throw new Error("Activity not found");
   await db.activity.update({ where: { id }, data: { shareToken: on ? generateToken() : null } });
-  await db.photo.updateMany({ where: { activityId: id }, data: { updatedAt: new Date() } });
+  await db.photo.updateMany({ where: { activityId: id }, data: { updatedAt: new Date(), imageVersion: { increment: 1 } } });
   revalidatePath(`/trips/${slug}/activities/${id}`);
 }
 
@@ -212,7 +212,8 @@ export async function describeActivityWithAi(slug: string, id: string, note?: st
   if (activity.trip.annotationOptOut) throw new Error(`The trip ${activity.trip.title} is opted out of the AI helper`);
   if (!activity.photos.length) throw new Error("There are no photographs on this activity to describe it from");
 
-  const requestedAt = new Date();
+  // By the database's clock, as forgets are stamped.
+  const requestedAt = await dbNow();
   const names = [...new Set((await Promise.all(activity.photos.map((p) => permittedNames(p.id)))).flat())];
   // The family's words go without the names the helper may not be told, the note beside the button included.
   // One-word forgotten names count by every photograph in it, not only the few it is shown.

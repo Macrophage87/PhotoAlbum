@@ -154,9 +154,12 @@ export async function applyAnnotation(photoId: string, model: string, parsed: An
   const stale = Symbol("stale");
   const textChanged = Symbol("text changed");
   const reload = Symbol("reload");
+  const forgotten = Symbol("forgotten");
   const kept = await db.$transaction(async (tx) => {
     const forget = await forgetState(tx, tombstone.loadedAt, requestedAt);
-    if (forget.underWay || forget.since) throw stale;
+    if (forget.underWay) throw stale;
+    // Asked for before somebody was forgotten: it may name them wherever it is about (see forgetState).
+    if (forget.since) throw forgotten;
     // Somebody was forgotten since the forgotten names were read: read them again, and judge the answer afresh.
     if (forget.reload) throw reload;
     // The text as it was read, too: a member's edit (or anything else that rewrote it) after the read is newer than
@@ -211,8 +214,15 @@ export async function applyAnnotation(photoId: string, model: string, parsed: An
     if (err === stale) return false;
     if (err === textChanged) return "text_changed" as const;
     if (err === reload) return "reload" as const;
+    if (err === forgotten) return "forgotten" as const;
     throw err;
   });
+  // A backfill's answer that only a forget since made unusable: the item stays for the next backfill, at batch
+  // price, rather than going back one by one at full price. Not a failure of the item's.
+  if (kept === "forgotten" && raw.batched) {
+    await recordFailure(photoId, "names_changed", { terminal: false });
+    return;
+  }
   if (kept === "reload") {
     const attempts = opts.attempts ?? 0;
     if (attempts < 3) return applyAnnotation(photoId, model, parsed, raw, { ...opts, tombstone: await loadTombstone(), attempts: attempts + 1 });

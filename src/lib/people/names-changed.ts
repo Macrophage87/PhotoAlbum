@@ -141,6 +141,20 @@ export async function forgetState(tx: Prisma.TransactionClient, loadedAt?: Date,
   return { underWay: !free, since: Boolean(requestedAt && started && started >= requestedAt), reload: Boolean(loadedAt && started && started >= loadedAt) };
 }
 
+/**
+ * The database's clock, for times compared with a forget's (AppSetting.lastForgetAt is stamped by it): two servers'
+ * clocks, or a worker's and the web process's, never decide which came first.
+ */
+export async function dbNow(): Promise<Date> {
+  const [{ now }] = await db.$queryRaw<{ now: Date }[]>`SELECT clock_timestamp() AS now`;
+  return now;
+}
+
+/** Stamp that a forget began or finished now, by the database's clock (see forgetState). */
+export async function stampForget(): Promise<void> {
+  await db.$executeRaw`INSERT INTO "AppSetting" (id, "lastForgetAt", "updatedAt") VALUES ('app', clock_timestamp(), now()) ON CONFLICT (id) DO UPDATE SET "lastForgetAt" = clock_timestamp()`;
+}
+
 /** Whether somebody is being forgotten right now: for deciding whether to wait, not for writing. */
 export async function forgetRunning(): Promise<boolean> {
   return db.$transaction(async (tx) => !(await tx.$queryRaw<{ free: boolean }[]>`SELECT pg_try_advisory_xact_lock_shared(${FORGET_LOCK}::bigint) AS free`)[0].free);

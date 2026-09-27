@@ -241,9 +241,13 @@ describe("words around a first name", () => {
     expect(nameMatcher(["Will Turner"]).scrub("Will you look at that!", { tagged: true })).toBe("Will you look at that!");
     // A name that is also a verb, used as one, on their own photograph; anything a person does is still them.
     for (const [name, text, want] of [
-      ["Will Turner", "Will anyone swim? Will the kids remember?", "Will anyone swim? Will the kids remember?"],
-      ["May Lee", "May you have many more.", "May you have many more."],
-      ["Hope Kent", "Hope you like it! Hope to see you soon.", "Hope you like it! Hope to see you soon."],
+      ["Will Turner", "Will we ever see snow? Will it rain?", "Will we ever see snow? Will it rain?"],
+      ["May Lee", "May you have many more. May the fourth be with you!", "May you have many more. May the fourth be with you!"],
+      ["Hope Kent", "Hope you like it!", "Hope you like it!"],
+      // Before anything but a pronoun it is them: "Will the ring bearer", "Hope my little helper".
+      ["Will Turner", "Will the ring bearer walking down the aisle.", "A family member the ring bearer walking down the aisle."],
+      ["Hope Kent", "Hope my little helper in the kitchen.", "A family member my little helper in the kitchen."],
+      ["May Lee", "May this morning at the park.", "A family member this morning at the park."],
       // "be", "not", "all" and "so" say nothing: it is as often them.
       ["Will Turner", "Will not impressed by the snow.", "A family member not impressed by the snow."],
       ["May Lee", "May all smiles at her party.", "A family member all smiles at her party."],
@@ -287,8 +291,11 @@ describe("small words around the stand-in", () => {
     expect(scrub("Ann (Nan) Smith", "Nan swam")).toBe("Nan swam");
   });
 
-  it("reads 'by May's side' as her, and 'by May' as a date", () => {
-    expect(scrub("May Smith", "By May's side all day; done by May", [], true)).toBe("By a family member's side all day; done by May");
+  it("reads 'by May's side' and 'by May' as her on her own photograph, and 'by May 5' or 'in May' as a date", () => {
+    // After "by", "on", "of" or "from" a month is her unless a day or a year follows: over-removal there is the lesser
+    // evil ("A card from May", "Waiting on June").
+    expect(scrub("May Smith", "By May's side all day; done by May", [], true)).toBe("By a family member's side all day; done by a family member");
+    expect(scrub("May Smith", "Done by May 5, back in May.", [], true)).toBe("Done by May 5, back in May.");
   });
 });
 

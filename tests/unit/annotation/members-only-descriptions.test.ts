@@ -270,9 +270,12 @@ describe("descriptions that stay in the family", () => {
       expect((await db.collection.findUniqueOrThrow({ where: { id: collection.id } })).descriptionMembersOnly).toBe(true);
     });
 
-    it("still shows words that name nobody the album may not name", async () => {
+    it("still shows words that name nobody the album may not name, and holds an everyday word that may", async () => {
       await db.person.create({ data: { name: "Rose", nameInDescriptionsSetAt: new Date("2026-01-01"), namingWithdrawnAt: new Date(Date.now() - 30 * 86_400_000), createdById: who.id } });
-      const p = await heldPhoto("a rose by the hut", "The hut in winter.");
+      // Matched strictly, in any case: "a rose" stays with the family until a member edits it.
+      const held = await heldPhoto("a rose by the hut", "The hut in winter.");
+      await expect(share(held.id)).rejects.toThrow(/isn't to be shown outside the family/);
+      const p = await heldPhoto("The hut in winter", "Snow on the roof.");
       await share(p.id);
       expect((await db.photo.findUniqueOrThrow({ where: { id: p.id } })).annotationMembersOnly).toBe(false);
       await db.trip.update({ where: { id: tripId }, data: { description: "Fog and cliffs.", descriptionMembersOnly: true } });

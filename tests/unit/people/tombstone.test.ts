@@ -121,6 +121,34 @@ describe("a forgotten name, after the person's record is gone", () => {
     expect((p.annotation as StoredAnnotation).description).toBe("A family member casts a line.");
   });
 
+  it("leaves a backfill's photograph for the next backfill when only a forget since spoiled its answer", async () => {
+    const before = new Date(Date.now() - 60_000);
+    const other = (await db.photo.create({ data: { uploaderId: admin, originalName: "o.jpg", mimeType: "image/jpeg", storageKey: "o", originalPath: "o/o.jpg", sizeBytes: 1, status: "READY" } })).id;
+    await forget();
+    queued.jobs = [];
+    await applyAnnotation(other, "m", record(), { content: [], batched: true }, { requestedAt: before });
+    // Not stored, not a terminal failure (still eligible for a backfill), and not asked again one by one at full price.
+    expect(await db.photo.findUniqueOrThrow({ where: { id: other } })).toMatchObject({ annotation: null, annotatedAt: null, annotationError: "names_changed" });
+    expect(queued.jobs).toEqual([]);
+    // One asked for on its own is asked again, as before.
+    await applyAnnotation(other, "m", record(), { content: [] }, { requestedAt: before });
+    expect(queued.jobs.length).toBeGreaterThan(0);
+  });
+
+  it("deletes only the raw answers on its photographs that name them", async () => {
+    await db.photo.update({ where: { id: photoId }, data: { annotation: record({ caption: "Timothy Kent fishing" }), annotatedAt: new Date() } });
+    await db.mediaAnnotationRaw.create({ data: { photoId, model: "m", response: { content: [{ type: "text", text: "Timothy Kent fishing" }] } } });
+    const quiet = await db.mediaAnnotationRaw.create({ data: { photoId, model: "m", response: { content: [{ type: "text", text: "A river at dawn" }] } } });
+    await forget();
+    expect((await db.mediaAnnotationRaw.findMany({ where: { photoId } })).map((r) => r.id)).toEqual([quiet.id]);
+  });
+
+  it("never remembers a name holding a colon, which is how places and titles are hashed", async () => {
+    const p = await db.person.create({ data: { name: "photo:abc", createdById: admin } });
+    await optOutPerson(p.id, new FormData());
+    expect(await db.forgottenName.count({ where: { derived: false } })).toBe(0);
+  });
+
   it("throws away an answer asked for before a forget, whatever photograph it is about", async () => {
     const before = new Date(Date.now() - 60_000);
     const other = (await db.photo.create({ data: { uploaderId: admin, originalName: "o.jpg", mimeType: "image/jpeg", storageKey: "o", originalPath: "o/o.jpg", sizeBytes: 1, status: "READY" } })).id;
@@ -274,11 +302,12 @@ describe("names that are also words", () => {
       [may, "A swim in May", "A swim in May"],
       [may, "May Day at the fair", "May Day at the fair"],
       [may, "May and June were hot", "May and June were hot"],
-      [may, "May flowers by the lake", "May flowers by the lake"],
+      // Nothing says the month: on her own photograph it is her, as the forget reads it.
+      [may, "May flowers by the lake", "A family member flowers by the lake"],
       [may, "Early May at the lake", "Early May at the lake"],
       [may, "Photos from the May holiday", "Photos from the May holiday"],
       [may, "Our May trip at the lake", "Our May trip at the lake"],
-      [may, "May lies ahead", "May lies ahead"],
+      [may, "May lies ahead", "A family member lies ahead"],
       [may, "May looks at the cake.", "A family member looks at the cake."],
       [may, "May loves the swings.", "A family member loves the swings."],
       [may, "May, Ben and Sue at the lake", "A family member, Ben and Sue at the lake"],

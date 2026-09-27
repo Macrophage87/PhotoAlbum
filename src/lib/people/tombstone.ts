@@ -2,9 +2,10 @@ import { createHash, createHmac, hkdfSync, randomBytes } from "node:crypto";
 import { env } from "@/lib/env";
 import { db } from "@/lib/db";
 import { forgetKeySecret, INVALID_FORGET_KEY } from "./forget-key";
+import { dbNow } from "./names-changed";
 import { Prisma } from "@/generated/prisma/client";
 import type { StoredAnnotation } from "@/lib/annotation/schema";
-import { inTitleCase, isEverydayWord, isKinWord, isMonth, isTitlePrefix, kinshipKey, isPlaceOrDateWord, normalizeName, notThePerson, personShaped, replaceSpans, type Neighbourhood } from "./scrub";
+import { inTitleCase, isEverydayWord, isKinWord, isMonth, isTitlePrefix, kinshipKey, isPlaceOrDateWord, normalizeName, notThePerson, replaceSpans, type Neighbourhood } from "./scrub";
 
 /**
  * What the album remembers of somebody it has forgotten: keyed hashes of their names, never the names.
@@ -123,7 +124,7 @@ export type Places = { versions: number[]; under(version: number, values: string
  * about it (a description asks two or three times). Bounded; emptied when full.
  */
 const hashedPlaces = new Map<string, Map<string, string>>();
-const HASHED_PLACES_MAX = 500_000;
+const HASHED_PLACES_MAX = 100_000;
 
 /** Places as the rows under each of these keys keep them: hashed under the key (see rememberForgotten). */
 function placesUnder(keys: VersionKey[]): Places {
@@ -192,7 +193,8 @@ export async function rememberForgotten(forms: { form: string; capitalizedOnly: 
   const hashed = { photoIds: photoIds.map((id) => scopeHash(w.key, photoScope(id))), taggedPhotoIds: taggedPhotoIds.map((id) => scopeHash(w.key, photoScope(id))), containerIds: containerIds.map((k) => scopeHash(w.key, k)) };
   for (const f of forms) {
     const n = normalizedForm(f.form);
-    if (!n || n.split(" ").length > MAX_WORDS) continue;
+    // A colon is how places and kinship titles are hashed ("photo:", "kin:", "trip:"): a name never holds one.
+    if (!n || n.includes(":") || n.split(" ").length > MAX_WORDS) continue;
     const h = hash(w.key, n);
     const oneWord = (!CJK.test(n) && !n.includes(" ")) || Boolean(f.derived);
     // A spelling stored both ways is matched the stricter way.
@@ -379,7 +381,7 @@ async function scopedPlaces(): Promise<Places | null> {
  * instrumentation.ts). Tried again on the next lookup if it failed; plain rows are matched as they are meanwhile.
  */
 let hashedOnce: Promise<void> | null = null;
-function hashPlainScopesOnce(): Promise<void> {
+export function hashPlainScopesOnce(): Promise<void> {
   hashedOnce ??= hashPlainScopes().then(
     () => undefined,
     (err) => {
@@ -396,8 +398,13 @@ function hashPlainScopesOnce(): Promise<void> {
  * then its places are matched as they are (see `placesUnder`). Only a row nothing else changed meanwhile is written.
  */
 export async function hashPlainScopes(): Promise<number> {
+  // Only rows still holding a plain place: the pass that finds none is one cheap query.
+  const plainRows = await db.$queryRaw<{ hash: string }[]>`
+    SELECT hash FROM "ForgottenName" WHERE EXISTS (
+      SELECT 1 FROM unnest(COALESCE("photoIds", '{}') || COALESCE("taggedPhotoIds", '{}') || COALESCE("containerIds", '{}')) AS x(v) WHERE x.v !~ '^[0-9a-f]{64}$')`;
+  if (!plainRows.length) return 0;
   const state = await forgetKeyState();
-  const rows = await db.forgottenName.findMany({ where: { keyVersion: { in: state.keys.map((k) => k.version) } }, select: { hash: true, keyVersion: true, photoIds: true, taggedPhotoIds: true, containerIds: true } });
+  const rows = await db.forgottenName.findMany({ where: { hash: { in: plainRows.map((r) => r.hash) }, keyVersion: { in: state.keys.map((k) => k.version) } }, select: { hash: true, keyVersion: true, photoIds: true, taggedPhotoIds: true, containerIds: true } });
   let done = 0;
   for (const r of rows) {
     const plain = (xs: string[]) => xs.some((x) => !HASHED.test(x));
@@ -468,7 +475,8 @@ export async function tombstoneStale(ts: Tombstone): Promise<boolean> {
 /** The forgotten names, ready to check text against. */
 export async function loadTombstone(): Promise<Tombstone> {
   await hashPlainScopesOnce();
-  const loadedAt = new Date();
+  // By the database's clock, as forgets are stamped (see stampForget).
+  const loadedAt = await dbNow();
   const state = await forgetKeyState();
   const rows = await db.$queryRaw<{ hash: string; keyVersion: number; capitalizedOnly: boolean; derived: boolean; kinshipGroups: KinshipGroup[] | null; scoped: boolean }[]>`
     SELECT hash, "keyVersion", "capitalizedOnly", derived, "kinshipGroups", (cardinality(COALESCE("photoIds", '{}')) + cardinality(COALESCE("containerIds", '{}')) > 0) AS scoped
@@ -543,9 +551,9 @@ export async function loadTombstone(): Promise<Tombstone> {
             if (!scope?.rows.has(found.key)) return null;
             // Somebody the album knows by that name is on these photographs: it is theirs here.
             if (found.people && [...found.people].some((id) => scope.tagged.has(id))) return null;
-            // A month ("May" of May Lee) only in prose on their own photographs, where it plainly names somebody: "May
-            // at the lake", "May and Ben", "May swam" — never "May 2020", "in May" or "May Day".
-            if (n === 1 && isMonth(run[0].raw) && (mode !== "prose" || !scope.own.has(found.key) || !personShaped(text, run[0].start, run[0].end))) return null;
+            // A month ("May" of May Lee) only in prose on their own photographs, and not where it is a date ("May 2020",
+            // "in May", "May Day", "The June sun": see notThePerson), as the forget reads it there.
+            if (n === 1 && isMonth(run[0].raw) && (mode !== "prose" || !scope.own.has(found.key))) return null;
             if (mode === "tag") {
               if (!wholeTag) return null;
             } else if (mode === "summary") {
@@ -578,7 +586,11 @@ export async function loadTombstone(): Promise<Tombstone> {
                 if (found.derived) return null;
               }
             }
-          } else if (found.capOnly && !guarded(text, run, true)) return null;
+          } else if (found.capOnly) {
+            // Written as a name in prose; in keywords or a tag a full name side by side is them in any case ("may chen
+            // pool").
+            if (!(mode !== "prose" && n > 1) && !guarded(text, run, true)) return null;
+          }
           return start;
         };
         let start: number | null = null;

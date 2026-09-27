@@ -16,7 +16,7 @@ import { unpermittedNameScrub, type NameScrub } from "@/lib/people/unpermitted";
 
 /** What a describe says when somebody on its photographs changed while the helper was writing. */
 export const NAMES_CHANGED = "Somebody on these photographs changed while the helper was writing; try again";
-import { forgetState, namesChangedSince } from "@/lib/people/names-changed";
+import { dbNow, forgetState, namesChangedSince } from "@/lib/people/names-changed";
 import { forgottenScope, loadTombstone } from "@/lib/people/tombstone";
 import { anthropic, thinkingParams } from "./client";
 import { activityDescriptionSchema, parseActivityDescription, type ActivityDescription } from "./activity";
@@ -186,7 +186,8 @@ export async function writeContainerDescription(kind: ContainerKind, id: string,
   if (container.annotationOptOut) throw new Error(`${container.title} is opted out of the AI helper`);
   if (!container.photos.length) throw new Error(`There are no photographs in this ${kind} to describe it from`);
 
-  const requestedAt = new Date();
+  // By the database's clock, as forgets are stamped.
+  const requestedAt = await dbNow();
   const names = [...new Set((await Promise.all(container.photos.map((p) => permittedNames(p.id)))).flat())];
   // The family's words go without the names the helper may not be told: the photographs', the container's own, and
   // the note typed beside the button.

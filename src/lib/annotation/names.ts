@@ -30,9 +30,12 @@ export const COMMON_WORD_NAMES = new Set([
 
 const CJK = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
 
-/** Accents off, case kept: "José" is "Jose". */
+/**
+ * Accents off, case kept: "José" is "Jose". Invisible characters go too (a zero-width space or a soft hyphen inside
+ * "Madison"), and compatibility forms are folded first (full-width letters), so neither hides a name.
+ */
 export function foldAccents(s: string): string {
-  return s.normalize("NFKD").replace(/\p{M}+/gu, "");
+  return s.normalize("NFKC").replace(/\p{Cf}/gu, "").normalize("NFKD").replace(/\p{M}+/gu, "");
 }
 
 /** Lower case, accents off. */
