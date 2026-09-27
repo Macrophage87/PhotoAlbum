@@ -2232,7 +2232,7 @@ test("files already on their way keep the trip they were added with when the tri
 });
 
 test("a batch keeps going when the member leaves the page, and what did not make it is waiting for them", async ({ context, page }) => {
-  test.setTimeout(120_000);
+  test.setTimeout(240_000);
   await signIn(context, ADMIN);
   await page.goto("/upload");
   await page.waitForLoadState("networkidle");
@@ -2258,11 +2258,15 @@ test("a batch keeps going when the member leaves the page, and what did not make
   await expect(page.getByTestId("upload-pill")).toBeVisible();
   release();
   await expect.poll(() => answered.length, { timeout: 60_000 }).toBe(4);
-  await expect.poll(async () => (await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "Photo" WHERE "originalName" LIKE $1`, [`away-%-${tag}.jpg`]))).rows[0].n, { timeout: 60_000 }).toBe(3);
+  // The pill turns to what did not make it only once the rest are processed, and that is the worker's pace, not the
+  // page's: late in a full run it still has earlier tests' jobs in hand. So wait on the photographs themselves.
+  await expect
+    .poll(async () => (await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "Photo" WHERE "originalName" LIKE $1 AND status = 'READY'`, [`away-%-${tag}.jpg`]))).rows[0].n, { timeout: 150_000 })
+    .toBe(3);
 
   // Once the rest are done, the pill stays to say one did not make it, and leads back to the list.
   const review = page.getByTestId("upload-pill-review");
-  await expect(review).toContainText("1 file didn't make it", { timeout: 60_000 });
+  await expect(review).toContainText("1 file didn't make it", { timeout: 30_000 });
   await review.click();
   await expect(page).toHaveURL(/\/upload/);
   await expect(page.getByTestId("upload-failures")).toContainText(`refused-${tag}.jpg`);
