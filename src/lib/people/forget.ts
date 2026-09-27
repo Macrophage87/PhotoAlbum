@@ -6,9 +6,8 @@ import { enqueueEmbedding } from "@/lib/jobs/handlers/embed-photo";
 import { QUEUES } from "@/lib/jobs/queues";
 import { mentionsAnyName } from "@/lib/annotation/names";
 import { unknownTitleAside, warnStuckTitle } from "@/lib/annotation/members-only";
-import { nameMayLeaveServer } from "./consent";
 import { bossJobs } from "@/lib/jobs/schema";
-import { isMinor, knownAdult } from "./consent";
+import { isMinor, knownAdult, nameMayLeaveServer } from "./consent";
 import { annotationMentions, FUNCTION_WORDS, isEverydayWord, isPlaceOrDateWord, nameMatcher, scrubAnnotation, type NameMatcher, type Where } from "./scrub";
 
 /**
@@ -221,29 +220,43 @@ export function stillNames(m: NameMatcher, names: string[], where: Where): (text
 }
 
 /** What show-to-everyone refuses to publish (see `namesSomebodyRestricted`). */
-export const NAME_NOT_TO_BE_SHOWN = "This description may name somebody who is no longer to be named, so it stays visible to the family only. Edit it to take the name out first.";
+export const NAME_NOT_TO_BE_SHOWN = "This description names somebody whose name isn't to be shown outside the family, so it stays visible to the family only. Edit it to take the name out first.";
 
 /**
- * Everybody the album may not name in what everyone reads: whose naming is switched off or was never agreed (not
- * known to be an adult), withdrawn, opted out, or waiting to be forgotten — the people `nameMayLeaveServer` refuses,
- * and more. Every name they have gone by.
+ * Everybody who said no, had their naming taken back, or cannot agree: opted out, waiting to be forgotten, a naming
+ * withdrawn (or taken back once its fortnight passed, or switched off by an admin — naming decided and not allowed
+ * now), and anybody whose birthday says they are a child. Not somebody nobody has asked: there the member who shows
+ * the helper's words decides, as they always did.
  */
-async function restrictedNames(): Promise<string[]> {
-  const people = await db.person.findMany({ where: { kind: "HUMAN" }, select: { name: true, formerNames: true, birthday: true, adultAttestedAt: true, adultConfirmedAt: true, faceIndexing: true, nameInDescriptions: true, optedOutAt: true, forgetPendingAt: true, namingWithdrawnAt: true } });
-  return people.filter((p) => p.namingWithdrawnAt || p.optedOutAt || p.forgetPendingAt || !nameMayLeaveServer(p)).flatMap((p) => [p.name, ...(p.formerNames ?? [])]);
+async function restrictedPeople(): Promise<{ names: string[] }[]> {
+  const people = await db.person.findMany({ where: { kind: "HUMAN" }, select: { name: true, formerNames: true, birthday: true, adultAttestedAt: true, adultConfirmedAt: true, faceIndexing: true, nameInDescriptions: true, nameInDescriptionsSetAt: true, optedOutAt: true, forgetPendingAt: true, namingWithdrawnAt: true } });
+  return people
+    .filter((p) => p.optedOutAt || p.forgetPendingAt || p.namingWithdrawnAt || (p.nameInDescriptionsSetAt && !nameMayLeaveServer(p)) || isMinor(p))
+    .map((p) => ({ names: [p.name, ...(p.formerNames ?? [])] }));
 }
 
 /**
- * Whether words about to be shown to everyone may name somebody the album may not name, by the members-only rule's
- * own look (annotation/names.ts; all capitals read as title case). Not only while a withdrawal waits out its
- * fortnight: once it has, or when naming was switched off, the words are still not to be published by a click.
+ * Whether the helper's words about to be shown to everyone name somebody who may not be named there (see
+ * `restrictedPeople`): by a full name or a first name, never a surname alone ("The Baker Street bakery" is no Ruth
+ * Baker), with the prose rules' own exceptions for dates and sayings ("Lake day in May.", "Will you…"), and an
+ * everyday word written as their name counting ("Rose At The Hut" for a Rose who said no). All capitals are read as
+ * title case.
  */
 export async function namesSomebodyRestricted(texts: (string | null | undefined)[]): Promise<boolean> {
   const words = texts.filter((t): t is string => typeof t === "string" && t.trim() !== "");
   if (!words.length) return false;
-  const names = await restrictedNames();
-  if (!names.length) return false;
-  return words.some((t) => mentionsAnyName(t, names) || (!/\p{Ll}/u.test(t) && mentionsAnyName(titled(t), names)));
+  const people = await restrictedPeople();
+  if (!people.length) return false;
+  const [everybody, members] = await Promise.all([db.person.findMany({ select: { name: true, formerNames: true } }), db.user.findMany({ where: { name: { not: null } }, select: { name: true } })]);
+  const all = [...everybody.flatMap((p) => [p.name, ...(p.formerNames ?? [])]), ...members.map((u) => u.name ?? "")];
+  // As on a photograph about them, though not their own: their first name counts, everyday or not, beside another
+  // capitalized word too ("Ximena Hut Walk"), and a place is a place ("St Mary's Church").
+  const about: Where = { tagged: true, onPhoto: false, noNeighbourExcuse: true };
+  return people.some(({ names }) => {
+    const own = new Set(names);
+    const m = nameMatcher(names, all.filter((n) => !own.has(n)));
+    return words.some((t) => m.mentions(t, about) || (!/\p{Ll}/u.test(t) && m.mentions(titled(t), about)));
+  });
 }
 
 /** Trips, activities and collections holding any of these photographs. */
@@ -729,12 +742,14 @@ export const WITHDRAWN_GRACE_DAYS = 14;
  */
 export async function scrubWithdrawnNames(now = new Date()): Promise<number> {
   const due = new Date(now.getTime() - WITHDRAWN_GRACE_DAYS * 86_400_000);
-  const people = await db.person.findMany({ where: { namingWithdrawnAt: { not: null } }, select: { id: true, name: true, formerNames: true, namingWithdrawnAt: true, namingPublicScrubbedAt: true } });
+  const people = await db.person.findMany({ where: { namingWithdrawnAt: { not: null } }, select: { id: true, name: true, formerNames: true, namingWithdrawnAt: true, namingPublicScrubbedAt: true, nameInDescriptionsSetAt: true } });
   let done = 0;
   for (const p of people) {
     if (p.namingWithdrawnAt! <= due) {
       await forgetNameEverywhere(p);
-      await db.person.update({ where: { id: p.id }, data: { namingWithdrawnAt: null, namingPublicScrubbedAt: null } });
+      // Taken back for good: recorded as a naming decided and not allowed, so what is shown to everyone still keeps
+      // their name out (see restrictedPeople).
+      await db.person.update({ where: { id: p.id }, data: { namingWithdrawnAt: null, namingPublicScrubbedAt: null, nameInDescriptions: false, nameInDescriptionsSetAt: p.nameInDescriptionsSetAt ?? new Date() } });
       done += 1;
     } else {
       // The whole album the first time; after that only what the helper has written since.

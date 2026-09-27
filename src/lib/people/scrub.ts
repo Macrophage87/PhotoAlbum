@@ -536,6 +536,11 @@ export type Where = {
    */
   away?: boolean;
   /**
+   * Deciding what everyone may read: a name beside another capitalized word is not excused by it ("Ximena Hut
+   * Walk, in the snow."). Dates, sayings and a saint's places still are.
+   */
+  noNeighbourExcuse?: boolean;
+  /**
    * With `tagged`: whether they are on this very photograph (the default), or only elsewhere in its trip, collection
    * or activity. Their short names count either way; only on their own photograph is a place-like name taken for
    * them wherever a place is not plainly meant ("Charlotte in the rain" of the "Charlotte, NC 2020" trip is the city).
@@ -740,7 +745,7 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
           // Away from their photographs, a one-word name of theirs beside another capitalized word is somebody's or
           // a place's even in a title written in title case ("Santa Barbara Pier", "Lake Louise"): nothing there
           // says it is them.
-          title: title && !(where.away && !where.tagged),
+          title: (title || Boolean(where.noNeighbourExcuse)) && !(where.away && !where.tagged),
           away: Boolean(where.away && !where.tagged),
           // A month or an everyday word in a date, on their own photographs: "in May", "May 5", "May Day".
           date: everyday,

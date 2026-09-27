@@ -225,8 +225,9 @@ export async function setTripDescription(slug: string, text: string): Promise<vo
  */
 export async function setTripDescriptionShared(slug: string, everyone: boolean): Promise<void> {
   const trip = await loadEditableTrip(slug);
-  // Never a description that may name somebody the album may not name (withdrawn, switched off, opted out).
-  if (everyone && (await namesSomebodyRestricted([trip.description]))) throw new Error(NAME_NOT_TO_BE_SHOWN);
+  // Never the helper's description while it names somebody who may not be named there (see namesSomebodyRestricted);
+  // a member's own words are theirs to show, as their captions are.
+  if (everyone && trip.descriptionByHelper && (await namesSomebodyRestricted([trip.description]))) throw new Error(NAME_NOT_TO_BE_SHOWN);
   await db.trip.update({ where: { id: trip.id }, data: { descriptionMembersOnly: !everyone, descriptionSharedAt: everyone ? new Date() : null } });
   revalidatePath(`/trips/${slug}`, "layout");
 }
