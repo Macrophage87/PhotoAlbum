@@ -24,7 +24,7 @@ export type VideoRenditions = { mp4: { key: string; w: number; h: number; bytes:
 
 /** A reason the member is meant to read as it is. Anything else is the machinery's (ffmpeg's output names paths on the server), so it is logged and the member reads CANNOT_CONVERT. */
 class ClipRefused extends Error {}
-export const CANNOT_CONVERT = "This clip could not be converted. It may be damaged, or in a format the album cannot read; if it plays on your device, use Re-process to try again.";
+export const CANNOT_CONVERT = "This clip could not be converted. Use Re-process to try again; if it fails again, it may be damaged or in a format the album cannot read.";
 
 /** `durationS` is null when all that is known is that it runs past the limit. */
 export function tooLongMessage(durationS: number | null, limit: number): string {
