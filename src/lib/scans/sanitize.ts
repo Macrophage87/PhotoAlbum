@@ -152,15 +152,56 @@ type Cleaned = {
   buffers?: { byteLength: number }[];
   images?: { bufferView?: number; mimeType?: string; uri?: string }[];
   accessors?: { bufferView?: number; sparse?: { indices?: { bufferView?: number }; values?: { bufferView?: number } } }[];
-  meshes?: { primitives?: { extensions?: { KHR_draco_mesh_compression?: { bufferView?: number } } }[] }[];
+  meshes?: { primitives?: { attributes?: Record<string, number>; indices?: number; targets?: Record<string, number>[]; extensions?: { KHR_draco_mesh_compression?: { bufferView?: number } } }[] }[];
+  skins?: { inverseBindMatrices?: number }[];
+  animations?: { samplers?: { input?: number; output?: number }[] }[];
   extensionsUsed?: string[];
   extensionsRequired?: string[];
   [k: string]: unknown;
 };
 
+type Ref = { get: () => number | undefined; set: (i: number) => void };
+
+/**
+ * Every place a glTF names an accessor, as get/set pairs: a primitive's attributes, indices and morph targets, a
+ * skin's inverse bind matrices, an animation sampler's input and output. (Sparse data names views, not accessors, and
+ * goes with the accessor it belongs to.) Draco's own `attributes` are ids inside its compressed data, not accessors.
+ */
+function accessorRefs(g: Cleaned): Ref[] {
+  const refs: Ref[] = [];
+  const at = <T extends object>(o: T | undefined, key: keyof T & string) => {
+    const rec = o as Record<string, number | undefined> | undefined;
+    if (rec?.[key] !== undefined) refs.push({ get: () => rec[key], set: (i) => (rec[key] = i) });
+  };
+  const each = (map: Record<string, number> | undefined) => map && Object.keys(map).forEach((k) => at(map, k));
+  for (const m of g.meshes ?? []) for (const p of m.primitives ?? []) {
+    each(p.attributes);
+    at(p, "indices");
+    for (const t of p.targets ?? []) each(t);
+  }
+  for (const s of g.skins ?? []) at(s, "inverseBindMatrices");
+  for (const a of g.animations ?? []) for (const s of a.samplers ?? []) {
+    at(s, "input");
+    at(s, "output");
+  }
+  return refs;
+}
+
+/** Keep only the items `refs` name, in their order, and point the refs at their new places; null when one names nothing. */
+function keepNamed<T>(items: T[], refs: Ref[]): T[] | null {
+  const named = [...new Set(refs.map((r) => r.get()).filter((i): i is number => i !== undefined))].sort((a, b) => a - b);
+  if (named.some((i) => !items[i])) return null;
+  const renumber = new Map(named.map((old, i) => [old, i]));
+  for (const r of refs) {
+    const i = r.get();
+    if (i !== undefined) r.set(renumber.get(i)!);
+  }
+  return named.map((i) => items[i]);
+}
+
 /** Every place a glTF names a bufferView, as get/set pairs, so the views can be renumbered once unused ones are gone. */
-function viewRefs(g: Cleaned): { get: () => number | undefined; set: (i: number) => void }[] {
-  const refs: { get: () => number | undefined; set: (i: number) => void }[] = [];
+function viewRefs(g: Cleaned): Ref[] {
+  const refs: Ref[] = [];
   const at = <T extends { bufferView?: number }>(o: T | undefined) => o && refs.push({ get: () => o.bufferView, set: (i) => (o.bufferView = i) });
   for (const a of g.accessors ?? []) {
     at(a);
@@ -268,8 +309,13 @@ export async function sanitizeGlb(input: Buffer): Promise<Buffer | null> {
     const type = input.readUInt32LE(at + 4);
     const body = input.subarray(at + 8, at + 8 + length);
     if (body.length !== length) return null;
-    if (type === CHUNK_JSON && !json) json = JSON.parse(body.toString("utf8").replace(/[\s\0]+$/, ""));
-    else if (type === CHUNK_BIN && !bin) bin = body;
+    if (type === CHUNK_JSON && !json) {
+      try {
+        json = JSON.parse(body.toString("utf8").replace(/[\s\0]+$/, ""));
+      } catch {
+        return null;
+      }
+    } else if (type === CHUNK_BIN && !bin) bin = body;
     // Any other chunk is somebody's own addition, and is left behind.
     at += 8 + pad4(length);
   }
@@ -290,6 +336,13 @@ export async function sanitizeGlb(input: Buffer): Promise<Buffer | null> {
   }
   const views = g.bufferViews ?? [];
   if (views.some((v) => (v.buffer ?? 0) !== 0 || v.byteLength === undefined) || (views.length && !bin)) return null;
+
+  // Only accessors something draws with are kept: one that nothing names would still have its bytes copied below, and
+  // could carry anything through. That includes one named only by what the lists above drop, like an app's `_ATTRIBUTE`.
+  const accessors = keepNamed(g.accessors ?? [], accessorRefs(g));
+  if (!accessors) return null;
+  if (accessors.length) g.accessors = accessors;
+  else delete g.accessors;
 
   // Only views something still reads are copied: an accessor's, an image's, a kept extension's. Anything else in the
   // binary chunk — a view nobody points at, the bytes between views — stays behind.
@@ -390,23 +443,44 @@ function chunkHeader(length: number, type: number): Buffer {
 export const PLY_HEADER_MAX = 64 * 1024;
 
 const PLY_TYPE_BYTES: Record<string, number> = { char: 1, uchar: 1, int8: 1, uint8: 1, short: 2, ushort: 2, int16: 2, uint16: 2, int: 4, uint: 4, int32: 4, uint32: 4, float: 4, float32: 4, double: 8, float64: 8 };
-const PLY_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,31}$/;
+/** What a name may be at all: printable ASCII without spaces, as exporters write them (CloudCompare's hyphens, dots). */
+const PLY_NAME = /^[\x21-\x7e]{1,64}$/;
+/** A name passed on as it is: a plain identifier, which every name a reader looks for (x, red, f_dc_0, vertex_indices) is. */
+const PLY_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]{0,31}$/;
 const PLY_FORMATS = new Set(["ascii", "binary_little_endian", "binary_big_endian"]);
 
 type PlyProperty = { type: string } | { list: [count: string, item: string] };
-export type PlyLayout = { header: Buffer; bodyStart: number; format: string; elements: { count: number; properties: PlyProperty[] }[] };
+export type PlyLayout = { header: Buffer; bodyStart: number; format: string; eol: string; elements: { count: number; properties: PlyProperty[] }[] };
+
+/**
+ * The names an element's properties (or a file's elements) are given in the copy: a plain identifier as it is, and
+ * anything else — a hyphen, a dot, more than 32 characters — as `<fallback>_<position>`, taking nothing from the name
+ * itself. No reader draws by a name like that, so nothing is lost, and allowing them adds nothing to what a name in the
+ * copy can say.
+ */
+function plyNames(names: string[], fallback: string): string[] {
+  const taken = new Set(names.filter((n) => PLY_IDENTIFIER.test(n)));
+  return names.map((n, i) => {
+    if (PLY_IDENTIFIER.test(n)) return n;
+    let out = `${fallback}_${i}`;
+    while (taken.has(out)) out += "_";
+    taken.add(out);
+    return out;
+  });
+}
 
 /**
  * A PLY's header made again from only what reading its points needs — `ply`, `format <type> <version>`,
  * `element <name> <count>`, `property <type> <name>`, `property list <type> <type> <name>`, `end_header` — each line
- * rebuilt from those tokens alone, and where the points start. `comment`, `obj_info` and anything else go, whatever
- * their case; a name that is not a plain identifier, or anything malformed, withholds the file. Null too when `head`
- * (the file's first bytes) holds no whole header.
+ * rebuilt from those tokens alone, with names that are not plain identifiers renamed, and where the points start.
+ * `comment`, `obj_info` and anything else go, whatever their case; a name that is not printable ASCII of at most 64
+ * characters, or anything malformed, withholds the file. Null too when `head` (the file's first bytes) holds no whole
+ * header.
  */
 export function plyHeader(head: Buffer): PlyLayout | null {
-  const lines: string[] = [];
-  const elements: PlyLayout["elements"] = [];
+  const elements: { name: string; count: number; properties: { def: PlyProperty; name: string }[] }[] = [];
   let format = "";
+  let version = "";
   let eol = "\n";
   for (let at = 0; at < Math.min(head.length, PLY_HEADER_MAX); ) {
     const nl = head.indexOf(0x0a, at);
@@ -416,7 +490,6 @@ export function plyHeader(head: Buffer): PlyLayout | null {
     if (at === 0) {
       if (line !== "ply") return null;
       if (raw.endsWith("\r")) eol = "\r\n";
-      lines.push("ply");
       at = nl + 1;
       continue;
     }
@@ -425,28 +498,33 @@ export function plyHeader(head: Buffer): PlyLayout | null {
     const word = t[0].toLowerCase();
     if (word === "end_header" && t.length === 1) {
       if (!format) return null;
+      const lines = ["ply", `format ${format} ${version}`];
+      const elementNames = plyNames(elements.map((e) => e.name), "element");
+      elements.forEach((e, i) => {
+        lines.push(`element ${elementNames[i]} ${e.count}`);
+        const names = plyNames(e.properties.map((p) => p.name), "property");
+        e.properties.forEach(({ def }, j) => lines.push("list" in def ? `property list ${def.list[0]} ${def.list[1]} ${names[j]}` : `property ${def.type} ${names[j]}`));
+      });
       lines.push("end_header");
-      return { header: Buffer.from(lines.map((l) => l + eol).join(""), "latin1"), bodyStart: at, format, elements };
+      const header = Buffer.from(lines.map((l) => l + eol).join(""), "latin1");
+      return { header, bodyStart: at, format, eol, elements: elements.map((e) => ({ count: e.count, properties: e.properties.map((p) => p.def) })) };
     }
     if (word === "format") {
       if (format || !PLY_FORMATS.has(t[1]) || !/^\d+(\.\d+)?$/.test(t[2] ?? "")) return null;
       format = t[1];
-      lines.push(`format ${t[1]} ${t[2]}`);
+      version = t[2];
     } else if (word === "element") {
       if (!PLY_NAME.test(t[1] ?? "") || !/^\d+$/.test(t[2] ?? "")) return null;
-      elements.push({ count: Number(t[2]), properties: [] });
-      lines.push(`element ${t[1]} ${t[2]}`);
+      elements.push({ name: t[1], count: Number(t[2]), properties: [] });
     } else if (word === "property") {
       const element = elements.at(-1);
       if (!element) return null;
       if (t[1] === "list") {
         if (!PLY_TYPE_BYTES[t[2]] || !PLY_TYPE_BYTES[t[3]] || !PLY_NAME.test(t[4] ?? "")) return null;
-        element.properties.push({ list: [t[2], t[3]] });
-        lines.push(`property list ${t[2]} ${t[3]} ${t[4]}`);
+        element.properties.push({ def: { list: [t[2], t[3]] }, name: t[4] });
       } else {
         if (!PLY_TYPE_BYTES[t[1]] || !PLY_NAME.test(t[2] ?? "")) return null;
-        element.properties.push({ type: t[1] });
-        lines.push(`property ${t[1]} ${t[2]}`);
+        element.properties.push({ def: { type: t[1] }, name: t[2] });
       }
     }
     // comment, obj_info, and anything this does not know: left behind.
@@ -470,24 +548,13 @@ export function plyFixedLength(layout: PlyLayout): number | null {
 }
 
 /**
- * How much of `body` the header's elements take — a text file's one line per record, a binary file's records walked
- * property by property, list lengths included — so nothing after the last record is kept. Null when the body is
- * shorter than the header says.
+ * How much of a binary `body` the header's elements take, its records walked property by property, list lengths
+ * included, so nothing after the last record is kept. Null when the body is shorter than the header says.
  */
 export function plyBodyLength(layout: PlyLayout, body: Buffer): number | null {
   const fixed = plyFixedLength(layout);
   if (fixed !== null) return fixed <= body.length ? fixed : null;
-  const records = layout.elements.reduce((n, e) => n + e.count, 0);
-  if (layout.format === "ascii") {
-    let at = 0;
-    for (let n = 0; n < records; n++) {
-      const nl = body.indexOf(0x0a, at);
-      // The last record may end the file without a newline.
-      if (nl < 0) return n === records - 1 && at < body.length ? body.length : null;
-      at = nl + 1;
-    }
-    return at;
-  }
+  if (layout.format === "ascii") return null;
   const little = layout.format === "binary_little_endian";
   const readCount = (type: string, at: number): number => {
     const size = PLY_TYPE_BYTES[type];
@@ -513,11 +580,206 @@ export function plyBodyLength(layout: PlyLayout, body: Buffer): number | null {
   return at;
 }
 
+const PLY_REAL = /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/;
+const PLY_NOT_FINITE = /^([+-]?)(nan|inf|infinity)$/i;
+/** What each integer type can hold; a value outside it is not one a reader could have read. */
+const PLY_INT_RANGE: Record<string, [number, number]> = { char: [-128, 127], int8: [-128, 127], uchar: [0, 255], uint8: [0, 255], short: [-32768, 32767], int16: [-32768, 32767], ushort: [0, 65535], uint16: [0, 65535], int: [-2147483648, 2147483647], int32: [-2147483648, 2147483647], uint: [0, 4294967295], uint32: [0, 4294967295] };
+/** The smallest normal float32: from there up, six significant digits always survive a float32 and back. */
+const FLOAT32_NORMAL = 2 ** -126;
+
+/** Significant digits in a number as `String` writes it. */
+function digits(s: string): number {
+  let n = 0;
+  let leading = true;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c === 101) break; // "e"
+    if (c < 48 || c > 57 || (leading && c === 48)) continue;
+    leading = false;
+    n++;
+  }
+  return n;
+}
+
+/**
+ * The fewest significant digits that read back as this float32. No other decimal of six digits or fewer reads back
+ * as the same float (six digits always survive the trip), so what the file wrote is kept when it is that short;
+ * otherwise the digits are found again from the float itself, starting from as many as the file wrote.
+ */
+function float32Text(f: number, written: string): string {
+  let p = Math.min(Math.max(digits(written), 1), 9);
+  // What the file wrote may be a number too small for a float32 at all.
+  if (f === 0) return "0";
+  if (Math.abs(f) >= FLOAT32_NORMAL && p <= 6) return written;
+  while (p > 1 && Math.fround(Number(f.toPrecision(p - 1))) === f) p--;
+  let s = f.toPrecision(p);
+  // Nine digits read back as any float32, so this ends there at the latest. The fewest digits end in no zero.
+  while (Math.fround(Number(s)) !== f) s = f.toPrecision(++p);
+  return s;
+}
+
+/**
+ * One text value, written again as the number it is, so a value stretched out with digits nobody reads cannot carry
+ * anything: an integer (a whole number written with a point too) as its digits, within what its type holds; a `float`
+ * as the fewest digits that read back as the same float32, and a `double` as the fewest that read back as the same
+ * double (a value of 15 significant digits or fewer, as exporters write them, keeps its exact decimal value);
+ * not-a-number and infinities as `nan`, `inf` and `-inf`. Null for anything that is not a number of `type`'s kind.
+ */
+function plyValue(token: string, type: string): string | null {
+  const range = PLY_INT_RANGE[type];
+  if (range) {
+    // Some exporters write a whole number as `255.0`, and readers take it as the integer.
+    if (!PLY_REAL.test(token)) return null;
+    const n = Number(token);
+    return Number.isInteger(n) && n >= range[0] && n <= range[1] ? String(n) : null;
+  }
+  const single = type === "float" || type === "float32";
+  let n: number;
+  let written = "";
+  if (PLY_REAL.test(token)) {
+    n = Number(token);
+    written = String(n);
+  } else {
+    const word = PLY_NOT_FINITE.exec(token);
+    if (!word) return null;
+    n = word[2].toLowerCase() === "nan" ? NaN : word[1] === "-" ? -Infinity : Infinity;
+  }
+  if (single) n = Math.fround(n);
+  if (Number.isNaN(n)) return "nan";
+  if (!Number.isFinite(n)) return n > 0 ? "inf" : "-inf";
+  if (Object.is(n, -0)) return "-0";
+  return single ? float32Text(n, written) : written;
+}
+
+/**
+ * Makes a text body's records again a line at a time, each from exactly the values the header declares for it (a
+ * list's length, then that many items): a record's extra tokens are left behind, and one with too few values, or a
+ * value that is not a number its type holds, withholds the file. `row` gives the record ("" for a blank line, which is
+ * skipped) or null; `done` says when the last record has been made, and nothing after it is read.
+ */
+function plyTextRows(layout: PlyLayout) {
+  const left = layout.elements.map((e) => e.count);
+  let element = 0;
+  const advance = () => {
+    while (element < left.length && left[element] === 0) element++;
+  };
+  advance();
+  // The line being read, and how far into it.
+  let line = "";
+  let at = 0;
+  const token = (): string | null => {
+    while (at < line.length && line.charCodeAt(at) <= 32) at++;
+    if (at >= line.length) return null;
+    const start = at;
+    while (at < line.length && line.charCodeAt(at) > 32) at++;
+    return line.slice(start, at);
+  };
+  const out: string[] = [];
+  /** The next token as a value of `type`, added to the record; null when there is none, or it is not one. */
+  const take = (type: string): string | null => {
+    const t = token();
+    const v = t === null ? null : plyValue(t, type);
+    if (v !== null) out.push(v);
+    return v;
+  };
+  return {
+    done: () => element >= left.length,
+    row(text: string): string | null {
+      line = text;
+      at = 0;
+      while (at < line.length && line.charCodeAt(at) <= 32) at++;
+      if (at >= line.length) return "";
+      out.length = 0;
+      for (const p of layout.elements[element].properties) {
+        if ("list" in p) {
+          const count = PLY_INT_RANGE[p.list[0]] ? take(p.list[0]) : null; // a list's length is an integer
+          if (count === null || Number(count) < 0) return null;
+          for (let k = Number(count); k > 0; k--) if (take(p.list[1]) === null) return null;
+        } else if (take(p.type) === null) return null;
+      }
+      left[element]--;
+      advance();
+      return out.join(" ") + layout.eol;
+    },
+  };
+}
+
+/** Thrown from `plyTextBody` for a text PLY that is not handed out. */
+export class PlyWithheld extends Error {}
+
+/** How long one text record may run; a list of a few thousand items fits many times over. */
+const PLY_LINE_MAX = 1024 * 1024;
+/** Records made between turns given back to the server. */
+const PLY_TEXT_BATCH = 5_000;
+
+/**
+ * A text PLY's records made again from its body as it streams in, a batch at a time with the server given its turn
+ * in between, so a point cloud of any size neither sits in memory nor holds up anything else. Stops reading after the
+ * last record; throws `PlyWithheld` for a file that is not handed out.
+ */
+export async function* plyTextBody(layout: PlyLayout, body: AsyncIterable<Buffer> | Iterable<Buffer>): AsyncGenerator<Buffer> {
+  const rows = plyTextRows(layout);
+  let out: string[] = [];
+  const take = (line: string) => {
+    let r: string | null;
+    try {
+      r = rows.row(line);
+    } catch {
+      r = null; // whatever it was, it was in reading the file, and answers the same way
+    }
+    if (r === null) throw new PlyWithheld("a text record that is not what its header declares");
+    if (r) out.push(r);
+  };
+  // latin1 is a byte to a character, so a chunk can be read as text wherever it was cut.
+  let carry = "";
+  for await (const chunk of body) {
+    const text = carry + chunk.toString("latin1");
+    let at = 0;
+    for (let nl = text.indexOf("\n"); nl >= 0 && !rows.done(); nl = text.indexOf("\n", at)) {
+      take(text.slice(at, nl));
+      at = nl + 1;
+      if (out.length >= PLY_TEXT_BATCH) {
+        yield Buffer.from(out.join(""), "latin1");
+        out = [];
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+    }
+    if (rows.done()) break;
+    carry = text.slice(at);
+    if (carry.length > PLY_LINE_MAX) throw new PlyWithheld("a text record longer than any real one");
+  }
+  // The last record may end the file without a newline.
+  if (!rows.done() && carry) take(carry);
+  if (!rows.done()) throw new PlyWithheld("fewer text records than its header declares");
+  yield Buffer.from(out.join(""), "latin1");
+}
+
+/** `plyTextBody` for a body already in memory; null for a file that is not handed out. */
+function plyTextBodySync(layout: PlyLayout, body: Buffer): Buffer | null {
+  const rows = plyTextRows(layout);
+  const text = body.toString("latin1");
+  const out: string[] = [];
+  for (let at = 0; !rows.done(); ) {
+    if (at >= text.length) return null;
+    let nl = text.indexOf("\n", at);
+    if (nl < 0) nl = text.length; // the last record may end the file without a newline
+    const r = rows.row(text.slice(at, nl));
+    at = nl + 1;
+    if (r === null) return null;
+    out.push(r);
+  }
+  return Buffer.from(out.join(""), "latin1");
+}
+
 /** A PLY with only its reading instructions left in the header, and its records and nothing after them. */
 export function sanitizePly(input: Buffer): Buffer | null {
   const layout = plyHeader(input);
   if (!layout) return null;
   const body = input.subarray(layout.bodyStart);
+  if (layout.format === "ascii") {
+    const records = plyTextBodySync(layout, body);
+    return records && Buffer.concat([layout.header, records]);
+  }
   const length = plyBodyLength(layout, body);
   return length === null ? null : Buffer.concat([layout.header, body.subarray(0, length)]);
 }
@@ -577,12 +839,10 @@ export async function sanitizeSpz(input: Buffer): Promise<Buffer | null> {
  * unreadable file of any format is withheld rather than guessed at.
  */
 export async function sanitizeScan(format: ScanFormat | null, input: Buffer): Promise<Buffer | null> {
-  try {
-    if (format === "GLB") return await sanitizeGlb(input);
-    if (format === "PLY") return sanitizePly(input);
-    if (format === "SPZ") return await sanitizeSpz(input);
-  } catch {
-    return null;
-  }
+  // Null is a refusal, and is remembered; an error (sharp running out of memory re-encoding a texture, say) is not an
+  // answer about the file, and is left to the caller, so it is tried again.
+  if (format === "GLB") return sanitizeGlb(input);
+  if (format === "PLY") return sanitizePly(input);
+  if (format === "SPZ") return sanitizeSpz(input);
   return null;
 }

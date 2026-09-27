@@ -6,8 +6,8 @@ import sharp from "sharp";
 import { db } from "@/lib/db";
 import type { Viewer } from "@/lib/auth/viewer";
 import { storage } from "@/lib/storage";
-import { sanitizeGlb, sanitizePly, sanitizeScan, sanitizeSpz } from "@/lib/scans/sanitize";
-import { publicScanKey } from "@/lib/scans/public-copy";
+import { PlyWithheld, plyHeader, plyTextBody, sanitizeGlb, sanitizePly, sanitizeScan, sanitizeSpz } from "@/lib/scans/sanitize";
+import { PUBLIC_SCAN_VERSION, publicScanKey, withheldScanKey } from "@/lib/scans/public-copy";
 import { toGridPhoto } from "@/components/photos/toGrid";
 import type { PhotoCard } from "@/lib/photos/queries";
 import { resetTestDb } from "../helpers/reset";
@@ -56,7 +56,7 @@ function parseGlb(glb: Buffer) {
     expect(v.byteOffset % 4).toBe(0);
     expect(v.byteOffset + v.byteLength).toBeLessThanOrEqual(binLength);
   }
-  for (const a of json.accessors ?? []) expect(json.bufferViews[a.bufferView]).toBeDefined();
+  for (const a of json.accessors ?? []) if (a.bufferView !== undefined) expect(json.bufferViews[a.bufferView]).toBeDefined();
   const view = (i: number) => bin.subarray(json.bufferViews[i].byteOffset, json.bufferViews[i].byteOffset + json.bufferViews[i].byteLength);
   return { json, bin, view };
 }
@@ -85,7 +85,7 @@ async function appGlb(texture: Buffer) {
     scene: 0,
     scenes: [{ nodes: [0], extensions: { KHR_xmp_json_ld: { packet: 0 } } }],
     nodes: [{ mesh: 0, name: "SECRET-NODE-NAME", extras: { gps: [44.35, -68.2] } }],
-    meshes: [{ primitives: [{ attributes: { POSITION: 1 }, indices: 2, material: 0 }] }],
+    meshes: [{ primitives: [{ attributes: { POSITION: 0 }, indices: 1, material: 0 }] }],
     materials: [{ pbrMetallicRoughness: { baseColorTexture: { index: 0, extensions: { KHR_texture_transform: { scale: [1, 1] } } } } }],
     textures: [{ source: 0 }],
     images: [{ bufferView: 0, mimeType: "image/jpeg", name: "IMG_SECRET.jpg" }],
@@ -153,10 +153,19 @@ describe("cleaning a GLB for visitors", () => {
   });
 
   it("keeps the album's own fixture drawable", async () => {
-    const { json, view } = parseGlb((await sanitizeGlb(await readFile(fx("scan.glb"))))!);
+    const original = await readFile(fx("scan.glb"));
+    const { json, view } = parseGlb((await sanitizeGlb(original))!);
     expect(json.bufferViews).toHaveLength(4);
     expect(json.nodes[0].name).toBeUndefined();
     expect((await sharp(view(json.images[0].bufferView)).metadata()).format).toBe("png");
+    // Every accessor it draws with is kept, under the same number, reading the same bytes.
+    const before = parseGlb(original);
+    const prim = json.meshes[0].primitives[0];
+    expect(prim).toEqual(before.json.meshes[0].primitives[0]);
+    expect(json.accessors).toEqual(before.json.accessors);
+    for (const i of [...Object.values(prim.attributes as Record<string, number>), prim.indices]) {
+      expect(view(json.accessors[i].bufferView).equals(before.view(before.json.accessors[i].bufferView)), `accessor ${i}`).toBe(true);
+    }
   });
 
   it("withholds a GLB it cannot rebuild safely, rather than guess", async () => {
@@ -286,6 +295,75 @@ describe("copying only the bytes something reads", () => {
   });
 });
 
+describe("which accessors a GLB keeps", () => {
+  const floats = (...xs: number[]) => {
+    const b = Buffer.alloc(xs.length * 4);
+    xs.forEach((x, i) => b.writeFloatLE(x, i * 4));
+    return b;
+  };
+  // What a skinned, animated, morphing mesh reads, each in a view of its own, and two runs of bytes only accessors
+  // that draw nothing point at: one named by nothing, one named only by an app's own attribute.
+  const parts = {
+    stray: Buffer.from("SECRET-STRAY-ACCESSR"),
+    position: floats(-1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 1, 0),
+    appOwn: Buffer.from("SECRET-APP-ATTRIBUTE-BYTES-SECRET-APP-ATTRIBUTE!"),
+    morph: floats(0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1),
+    inverseBind: floats(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1),
+    times: floats(0, 1),
+    moves: floats(0, 0, 0, 0, 1, 0),
+  };
+  const bin = Buffer.concat(Object.values(parts));
+  let at = 0;
+  const bufferViews = Object.values(parts).map((b) => ({ buffer: 0, byteOffset: (at += b.length) - b.length, byteLength: b.length }));
+  const accessors = [
+    { bufferView: 0, componentType: 5121, count: 20, type: "SCALAR" },
+    { bufferView: 1, componentType: 5126, count: 4, type: "VEC3", min: [-1, -1, 0], max: [1, 1, 0] },
+    { bufferView: 2, componentType: 5126, count: 4, type: "VEC3" },
+    { bufferView: 3, componentType: 5126, count: 4, type: "VEC3" },
+    { bufferView: 4, componentType: 5126, count: 1, type: "MAT4" },
+    { bufferView: 5, componentType: 5126, count: 2, type: "SCALAR", min: [0], max: [1] },
+    { bufferView: 6, componentType: 5126, count: 2, type: "VEC3" },
+  ];
+  const json = {
+    asset: { version: "2.0" }, scene: 0, scenes: [{ nodes: [0] }],
+    nodes: [{ mesh: 0, skin: 0 }],
+    meshes: [{ primitives: [{ attributes: { POSITION: 1, _SECRET_SCAN_POSE: 2 }, targets: [{ POSITION: 3 }] }], weights: [0] }],
+    skins: [{ inverseBindMatrices: 4, joints: [0] }],
+    animations: [{ channels: [{ sampler: 0, target: { node: 0, path: "translation" } }], samplers: [{ input: 5, output: 6 }] }],
+    accessors, bufferViews, buffers: [{ byteLength: bin.length }],
+  };
+
+  it("drops an accessor nothing draws with, and the bytes it reads, and renumbers the rest (unreferenced accessor)", async () => {
+    const out = (await sanitizeGlb(glbOf(json, bin)))!;
+    expect(out.includes(Buffer.from("SECRET"))).toBe(false);
+    const { json: g, view } = parseGlb(out);
+    expect(g.accessors).toHaveLength(5);
+    expect(g.bufferViews).toHaveLength(5);
+    const prim = g.meshes[0].primitives[0];
+    expect(prim.attributes).toEqual({ POSITION: 0 });
+    // Everything a mesh, a skin or an animation names is still there, reading the same bytes as before.
+    const reads = (i: number) => view(g.accessors[i].bufferView);
+    expect(reads(prim.attributes.POSITION).equals(parts.position)).toBe(true);
+    expect(reads(prim.targets[0].POSITION).equals(parts.morph)).toBe(true);
+    expect(reads(g.skins[0].inverseBindMatrices).equals(parts.inverseBind)).toBe(true);
+    expect(reads(g.animations[0].samplers[0].input).equals(parts.times)).toBe(true);
+    expect(reads(g.animations[0].samplers[0].output).equals(parts.moves)).toBe(true);
+    expect(g.accessors[g.animations[0].samplers[0].input]).toMatchObject({ count: 2, type: "SCALAR", min: [0], max: [1] });
+  });
+
+  it("keeps a sparse accessor's views with it, and withholds a file that names an accessor it does not have", async () => {
+    // The morph target stored sparse: two of its four vertices, by index, over zeros.
+    const sparse = { componentType: 5126, count: 4, type: "VEC3", sparse: { count: 2, indices: { bufferView: 5, componentType: 5125 }, values: { bufferView: 6 } } };
+    const withSparse = { ...json, accessors: accessors.map((a, i) => (i === 3 ? sparse : a)) };
+    const { json: g, view } = parseGlb((await sanitizeGlb(glbOf(withSparse, bin)))!);
+    const target = g.accessors[g.meshes[0].primitives[0].targets[0].POSITION];
+    expect(view(target.sparse.indices.bufferView).equals(parts.times)).toBe(true);
+    expect(view(target.sparse.values.bufferView).equals(parts.moves)).toBe(true);
+    const dangling = { ...json, meshes: [{ primitives: [{ attributes: { POSITION: 1 }, indices: 9 }] }] };
+    expect(await sanitizeGlb(glbOf(dangling, bin))).toBeNull();
+  });
+});
+
 describe("cleaning the other formats", () => {
   const points = Buffer.from([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
 
@@ -305,12 +383,43 @@ describe("cleaning the other formats", () => {
     expect(sanitizePly(Buffer.from("not a ply\nend_header\n"))).toBeNull();
   });
 
-  it("rebuilds each header line from its own tokens, and withholds a name that is not a plain identifier (PLY trailing tokens)", () => {
+  it("rebuilds each header line from its own tokens (PLY trailing tokens)", () => {
     const ply = Buffer.concat([Buffer.from("ply\nformat binary_little_endian 1.0 SECRET-FORMAT\nelement vertex 1 SECRET-ELEMENT\nproperty float x SECRET-PROPERTY\nproperty list uchar int vertex_indices SECRET-LIST\nend_header\n"), Buffer.from([0, 0, 128, 63, 0])]);
     const clean = sanitizePly(ply)!;
     expect(clean.toString("latin1")).toBe("ply\nformat binary_little_endian 1.0\nelement vertex 1\nproperty float x\nproperty list uchar int vertex_indices\nend_header\n\u0000\u0000\u0080?\u0000");
-    for (const bad of ["element vertex-44.35 1", "element vertex 1\nproperty float lat=44.35", `element vertex 1\nproperty float ${"x".repeat(33)}`, "element vertex many"]) {
-      expect(sanitizePly(Buffer.from(`ply\nformat ascii 1.0\n${bad}\nend_header\n`)), bad).toBeNull();
+    expect(sanitizePly(Buffer.from("ply\nformat ascii 1.0\nelement vertex many\nend_header\n"))).toBeNull();
+  });
+
+  it("shows a PLY whose names have hyphens, dots or run long, under names of its own making (PLY names)", () => {
+    // As CloudCompare and other exporters write them, beside the names readers draw by, which are kept.
+    const names = ["x", "y", "z", "red", "scalar_Return-number", "Jo-Smith.44.35,-68.2", `scalar_${"Illuminance".repeat(4)}`, "property_4", "f_dc_0"];
+    const header = `ply\nformat binary_little_endian 1.0\nelement vertex 1\n${names.map((n, i) => `property ${i < 3 ? "float" : "uchar"} ${n}`).join("\n")}\nelement cam-era.1 0\nend_header\n`;
+    const records = Buffer.from([0, 0, 128, 63, 0, 0, 0, 64, 0, 0, 64, 64, 1, 2, 3, 4, 5, 6]);
+    const clean = sanitizePly(Buffer.concat([Buffer.from(header), records, Buffer.from("SECRET")]))!;
+    expect(clean.toString("latin1")).toBe("ply\nformat binary_little_endian 1.0\nelement vertex 1\nproperty float x\nproperty float y\nproperty float z\nproperty uchar red\n"
+      + "property uchar property_4_\nproperty uchar property_5\nproperty uchar property_6\nproperty uchar property_4\nproperty uchar f_dc_0\nelement element_1 0\nend_header\n" + records.toString("latin1"));
+    for (const leak of ["Return", "Smith", "44.35", "Illuminance", "cam"]) expect(clean.includes(Buffer.from(leak)), leak).toBe(false);
+    // Up to 64 characters of printable ASCII: anything else is not a name any exporter writes.
+    for (const bad of [`s${"x".repeat(64)}`, "caf\u00e9", "x\u007f"]) {
+      expect(sanitizePly(Buffer.from(`ply\nformat ascii 1.0\nelement vertex 1\nproperty float ${bad}\nend_header\n1\n`, "latin1")), bad).toBeNull();
+    }
+    expect(sanitizePly(Buffer.from(`ply\nformat ascii 1.0\nelement vertex 1\nproperty float s${"x".repeat(63)}\nend_header\n1\n`))!.toString()).toContain("property float property_0\n");
+  });
+
+  it("makes each text record again from the values its header declares, and nothing else (PLY text rows)", () => {
+    const head = "ply\nformat ascii 1.0\ncomment VCGLIB generated\nelement vertex 2\nproperty float x\nproperty float y\nproperty uchar red\nelement face 1\nproperty list uchar int vertex_indices\nend_header\n";
+    const ply = Buffer.from(`${head}13.6601 -0 255 SECRET 44.35\n\n0.500000 1.00000000000000000000000000000000443500682 007 \n3 0 1 1 SECRET-FACE\nSECRETPLYTAIL\n`);
+    const clean = sanitizePly(ply)!.toString("latin1");
+    expect(clean).toBe("ply\nformat ascii 1.0\nelement vertex 2\nproperty float x\nproperty float y\nproperty uchar red\nelement face 1\nproperty list uchar int vertex_indices\nend_header\n13.6601 -0 255\n0.5 1 7\n3 0 1 1\n");
+    // Read back, every value is the same number it was.
+    const values = (text: string) => text.slice(text.indexOf("end_header\n") + 11).trim().split(/\s+/).slice(0, 10).map(Number);
+    expect(values(clean)).toEqual([13.6601, -0, 255, 0.5, 1, 7, 3, 0, 1, 1]);
+    expect(values(ply.toString().replace(" SECRET 44.35", "").replace("\n\n", "\n"))).toEqual(values(clean));
+    // Words that stand for numbers are numbers.
+    expect(sanitizePly(Buffer.from(`${head}nan -inf 1\n1 2 3\n3 0 1 1\n`))!.toString()).toContain("end_header\nnan -inf 1\n");
+    // Too few values, or a word where a number goes: withheld.
+    for (const body of ["1 2 3\n1 2\n3 0 1 1\n", "1 2 3\n1 2 3\n3 0 1\n", "1 2 3\n1 SECRET 3\n3 0 1 1\n", "1 2 3\n1 2 3.5\n3 0 1 1\n", "1 2 3\n1 2 3\n-1\n", "1 2 3\n1 2 3\n"]) {
+      expect(sanitizePly(Buffer.from(head + body)), body).toBeNull();
     }
   });
 
@@ -330,6 +439,67 @@ describe("cleaning the other formats", () => {
     expect(sanitizePly(text)!.toString("latin1").endsWith("end_header\n1.5\n2.5\n")).toBe(true);
     // Shorter than its header says: withheld.
     expect(sanitizePly(Buffer.concat([Buffer.from("ply\nformat binary_little_endian 1.0\nelement vertex 2\nproperty float x\nend_header\n"), Buffer.alloc(4)]))).toBeNull();
+  });
+
+  it("writes a float as no more than a float32, an integer only within its type, and not-a-number one way (PLY values)", () => {
+    const one = (type: string, value: string) => {
+      const out = sanitizePly(Buffer.from(`ply\nformat ascii 1.0\nelement vertex 1\nproperty ${type} v\nend_header\n${value}\n`));
+      return out && out.toString().split("end_header\n")[1].trim();
+    };
+    // A float keeps only what a float32 holds, in the fewest digits that read back as it; a double keeps its own.
+    expect(one("float", "0.1000000001")).toBe("0.1");
+    expect(one("float", "16777217")).toBe("16777216");
+    expect(one("float", "3.14159274101257324")).toBe("3.1415927");
+    expect(one("float32", "-12.345678")).toBe("-12.345678");
+    expect(one("float", "1e39")).toBe("inf");
+    // Too small for a float32 at all: zero, whatever the file wrote.
+    expect(one("float", "4.43186e-200")).toBe("0");
+    expect(one("float", "-4.43186e-200")).toBe("-0");
+    expect(one("double", "0.1000000001")).toBe("0.1000000001");
+    expect(one("double", "3.14159274101257324")).toBe("3.1415927410125732");
+    for (const [token, word] of [["NaN", "nan"], ["-nan", "nan"], ["+INF", "inf"], ["-Infinity", "-inf"], ["inf", "inf"]]) {
+      expect(one("float", token), token).toBe(word);
+      expect(one("double", token), token).toBe(word);
+    }
+    // An integer within what its type holds, including a whole number written with a point; nothing else.
+    for (const [type, ok, bad] of [["char", "-128", "128"], ["int8", "127", "-129"], ["uchar", "255", "256"], ["uint8", "0", "-1"], ["short", "-32768", "32768"], ["int16", "32767", "-32769"], ["ushort", "65535", "65536"], ["uint16", "0", "-1"], ["int", "-2147483648", "2147483648"], ["int32", "2147483647", "-2147483649"], ["uint", "4294967295", "4294967296"], ["uint32", "0", "-1"]]) {
+      expect(one(type, ok), `${type} ${ok}`).toBe(ok);
+      expect(one(type, bad), `${type} ${bad}`).toBeNull();
+    }
+    expect(one("uchar", "255.000000")).toBe("255");
+    expect(one("int", "-0.0")).toBe("0");
+    for (const bad of ["255.5", "1e-3", "nan", "0x10"]) expect(one("uchar", bad), bad).toBeNull();
+  });
+
+  it("reads integers written with a point, as three's loader does (PLY whole numbers)", () => {
+    const ply = Buffer.from("ply\nformat ascii 1.0\nelement vertex 1\nproperty float x\nproperty float y\nproperty float z\nproperty uchar red\nproperty uchar green\nproperty uchar blue\nend_header\n1 2 3 255.0 0.0 0.0\n");
+    expect(sanitizePly(ply)!.toString().endsWith("end_header\n1 2 3 255 0 0\n")).toBe(true);
+  });
+
+  it("makes a text PLY's records as it streams, a batch at a time, giving the server its turn between (PLY streaming)", async () => {
+    const rows = 12_000;
+    const head = `ply\nformat ascii 1.0\ncomment SECRET\nelement vertex ${rows}\nproperty float x\nproperty uchar red\nelement face 1\nproperty list uchar int vertex_indices\nend_header\n`;
+    const body = Array.from({ length: rows }, (_, i) => `${i / 8} ${i % 256} SECRET\r\n`).join("") + "3 0 1 2 SECRET\r\nSECRETPLYTAIL";
+    const ply = Buffer.from(head + body);
+    const layout = plyHeader(ply)!;
+    // Cut anywhere, mid-line and mid-number, it comes out the same as made in one piece.
+    const raw = ply.subarray(layout.bodyStart);
+    const chunks = Array.from({ length: Math.ceil(raw.length / 7) }, (_, i) => raw.subarray(i * 7, i * 7 + 7));
+    let ticked = false;
+    setImmediate(() => (ticked = true));
+    const made = plyTextBody(layout, chunks);
+    const parts = [(await made.next()).value as Buffer];
+    // The first batch is made without waiting on anything; before the next, the server has had a turn.
+    expect(ticked).toBe(false);
+    for (let r = await made.next(); !r.done; r = await made.next()) parts.push(r.value);
+    expect(ticked).toBe(true);
+    expect(parts.length).toBeGreaterThan(2);
+    expect(Buffer.concat([layout.header, ...parts]).equals(sanitizePly(ply)!)).toBe(true);
+    expect(Buffer.concat(parts).includes(Buffer.from("SECRET"))).toBe(false);
+    // What is not a record withholds the file, as does a line no record would run to.
+    const drain = async (b: Buffer) => { for await (const part of plyTextBody(plyHeader(b)!, [b.subarray(plyHeader(b)!.bodyStart)])) void part; };
+    await expect(drain(Buffer.from(head + "1 2\n"))).rejects.toBeInstanceOf(PlyWithheld);
+    await expect(drain(Buffer.concat([Buffer.from(head), Buffer.alloc(2 * 1024 * 1024, "1")]))).rejects.toBeInstanceOf(PlyWithheld);
   });
 
   /** An SPZ's decompressed bytes: header for `n` degree-0 version-2 points, then their arrays. */
@@ -444,8 +614,82 @@ describe("a scan's file, for somebody outside the family", () => {
     expect(body.includes(Buffer.from("SECRET"))).toBe(false);
     // Written under a name of its own and moved into place: nothing half-written is left beside it.
     const { readdir } = await import("node:fs/promises");
-    expect((await readdir(path.dirname(storage().localPath!("scans-test/ply/original.ply")))).sort()).toEqual(["model-public.ply", "original.ply"]);
+    expect((await readdir(path.dirname(storage().localPath!("scans-test/ply/original.ply")))).sort()).toEqual([`model-public-v${PUBLIC_SCAN_VERSION}.ply`, "original.ply"]);
     await storage().deletePrefix("scans-test/ply");
+  });
+
+  const plyScan = async (ply: Buffer) => {
+    await storage().deletePrefix("scans-test/ply");
+    await storage().putBuffer("scans-test/ply/original.ply", ply);
+    const trip = await db.trip.findFirstOrThrow();
+    const u = await db.user.findFirstOrThrow();
+    return (await db.photo.create({ data: { tripId: trip.id, uploaderId: u.id, kind: "SCAN", scanFormat: "PLY", originalName: "SECRET.ply", mimeType: "application/x-ply", storageKey: "scans-test/ply", originalPath: "scans-test/ply/original.ply", sizeBytes: ply.length, status: "READY" } })).id;
+  };
+  const plyFile = { storageKey: "scans-test/ply", originalPath: "scans-test/ply/original.ply", scanFormat: "PLY" };
+
+  it("streams a text PLY's records across made again, and nothing after them", async () => {
+    const ply = Buffer.from("ply\nformat ascii 1.0\ncomment SECRET-APP\nelement vertex 2\nproperty float x\nproperty uchar red\nend_header\n1.5 255.0 SECRET\n2.5 7\nSECRETPLYTAIL\n");
+    const id = await plyScan(ply);
+    who.viewer = anon;
+    const { res, body } = await get(id, "model");
+    expect(res.status).toBe(200);
+    expect(body.toString()).toBe("ply\nformat ascii 1.0\nelement vertex 2\nproperty float x\nproperty uchar red\nend_header\n1.5 255\n2.5 7\n");
+    await storage().deletePrefix("scans-test/ply");
+  });
+
+  it("finds a scan that cannot be cleaned to be so once, and writes down why", async () => {
+    const bad = Buffer.from("ply\nformat ascii 1.0\nelement vertex 2\nproperty float x\nproperty float y\nend_header\n1 2\n3\n");
+    const id = await plyScan(bad);
+    who.viewer = anon;
+    expect((await get(id, "model")).res.status).toBe(404);
+    const marker = storage().localPath!(withheldScanKey(plyFile));
+    expect(JSON.parse(await readFile(marker, "utf8"))).toEqual({ version: PUBLIC_SCAN_VERSION, reason: expect.stringMatching(/record/) });
+    // Asked again, it is not made again: even a file that could now be cleaned is answered from what was written down.
+    await storage().putBuffer("scans-test/ply/original.ply", Buffer.from("ply\nformat ascii 1.0\nelement vertex 1\nproperty float x\nend_header\n1\n"));
+    expect((await get(id, "model")).res.status).toBe(404);
+    expect(await storage().exists(publicScanKey(plyFile))).toBe(false);
+    await storage().deletePrefix("scans-test/ply");
+  });
+
+  it("makes again a copy an older cleaning made, and deletes the old one", async () => {
+    // What an older cleaning left beside the upload, holding what this one strips.
+    await storage().putBuffer("scans-test/glb/model-public.glb", original);
+    await storage().putBuffer(withheldScanKey({ storageKey: "scans-test/glb", originalPath: "", scanFormat: "GLB" }, 1), Buffer.from("{}"));
+    who.viewer = anon;
+    const { res, body } = await get(glbId, "model");
+    expect(res.status).toBe(200);
+    for (const leak of LEAKS) expect(body.includes(Buffer.from(leak)), leak).toBe(false);
+    const { readdir } = await import("node:fs/promises");
+    expect((await readdir(path.dirname(storage().localPath!("scans-test/glb/original.glb")))).sort()).toEqual([`model-public-v${PUBLIC_SCAN_VERSION}.glb`, "original.glb"]);
+  });
+
+  it("writes down a refusal, but not an error, which is tried again on the next request", async () => {
+    who.viewer = anon;
+    const glbFile = { storageKey: "scans-test/glb", originalPath: "scans-test/glb/original.glb", scanFormat: "GLB" };
+    // sharp failing while it re-encodes the texture (out of memory, say) says nothing about the file.
+    const failing = vi.spyOn(sharp.prototype, "toBuffer").mockRejectedValueOnce(new Error("VipsJpeg: out of memory"));
+    expect((await get(glbId, "model")).res.status).toBe(404);
+    failing.mockRestore();
+    expect(await storage().exists(withheldScanKey(glbFile))).toBe(false);
+    expect((await get(glbId, "model")).res.status).toBe(200);
+    // A texture of a kind this cannot clean is a refusal, and is written down.
+    const ktx = Buffer.from(original);
+    Buffer.from('"image/ktx2"').copy(ktx, ktx.indexOf(Buffer.from('"image/jpeg"')));
+    await storage().deletePrefix("scans-test/glb");
+    await storage().putBuffer("scans-test/glb/original.glb", ktx);
+    expect((await get(glbId, "model")).res.status).toBe(404);
+    expect(JSON.parse(await readFile(storage().localPath!(withheldScanKey(glbFile)), "utf8")).reason).toMatch(/GLB/);
+  });
+
+  it("clears away a copy left half-written an hour ago, and leaves one being written now", async () => {
+    const { utimes, readdir } = await import("node:fs/promises");
+    await storage().putBuffer(`scans-test/glb/model-public-v${PUBLIC_SCAN_VERSION}.glb.old.tmp`, Buffer.from("SECRET"));
+    await storage().putBuffer(`scans-test/glb/model-public-v${PUBLIC_SCAN_VERSION}.glb.new.tmp`, Buffer.from("x"));
+    const hoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    await utimes(storage().localPath!(`scans-test/glb/model-public-v${PUBLIC_SCAN_VERSION}.glb.old.tmp`), hoursAgo, hoursAgo);
+    who.viewer = anon;
+    expect((await get(glbId, "model")).res.status).toBe(200);
+    expect((await readdir(path.dirname(storage().localPath!("scans-test/glb/original.glb")))).sort()).toEqual([`model-public-v${PUBLIC_SCAN_VERSION}.glb`, `model-public-v${PUBLIC_SCAN_VERSION}.glb.new.tmp`, "original.glb"]);
   });
 
   it("shows visitors a line of text in place of a USDZ, and a GLB as a scan", () => {
