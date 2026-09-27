@@ -29,6 +29,20 @@ vi.mock("@/lib/images/renditions", async (importOriginal) => {
   };
 });
 
+// A 3D scan's slow part is its visitor copy, which streams the whole file.
+vi.mock("@/lib/scans/public-copy", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/lib/scans/public-copy")>();
+  return {
+    ...real,
+    publicScanCopy: async (...args: Parameters<typeof real.publicScanCopy>) => {
+      const run = meanwhile.run;
+      meanwhile.run = null;
+      if (run) await run();
+      return real.publicScanCopy(...args);
+    },
+  };
+});
+
 import { processPhoto } from "@/lib/jobs/handlers/process-photo";
 import { transcodeVideo } from "@/lib/jobs/handlers/transcode-video";
 import { deletePhoto } from "@/lib/jobs/handlers/delete-photo";
@@ -87,6 +101,14 @@ describe("an item deleted for good while it is processed", () => {
   it("cleans up after an earlier run when its retry finds no row", async () => {
     const { id, folder } = await stage("photo-with-gps.jpg", "original.jpg");
     await db.photo.delete({ where: { id } });
+    await processPhoto({ photoId: id });
+    expect(existsSync(folder)).toBe(false);
+  });
+
+  it("leaves no visitor copy of a 3D scan behind", async () => {
+    const { id, folder } = await stage("scan.glb", "original.glb");
+    await db.photo.update({ where: { id }, data: { kind: "SCAN", mimeType: "model/gltf-binary", scanFormat: "GLB" } });
+    meanwhile.run = () => deletedForGood(id);
     await processPhoto({ photoId: id });
     expect(existsSync(folder)).toBe(false);
   });

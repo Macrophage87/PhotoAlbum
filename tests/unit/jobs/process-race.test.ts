@@ -28,6 +28,20 @@ vi.mock("@/lib/images/renditions", async (importOriginal) => {
   };
 });
 
+// A 3D scan's slow part is its visitor copy, which streams the whole file.
+vi.mock("@/lib/scans/public-copy", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/lib/scans/public-copy")>();
+  return {
+    ...real,
+    publicScanCopy: async (...args: Parameters<typeof real.publicScanCopy>) => {
+      const run = meanwhile.run;
+      meanwhile.run = null;
+      if (run) await run();
+      return real.publicScanCopy(...args);
+    },
+  };
+});
+
 import { processPhoto } from "@/lib/jobs/handlers/process-photo";
 import { transcodeVideo } from "@/lib/jobs/handlers/transcode-video";
 
@@ -91,6 +105,15 @@ describe("choices a member makes while an item is processed", () => {
     expect(p.takenAt?.toISOString()).toBe(handDate.toISOString());
     expect(p.videoRenditions).not.toBeNull();
   }, 120_000);
+
+  it("keeps a date a member gave a 3D scan while its visitor copy was being made", async () => {
+    const id = await stage("scan.glb", { kind: "SCAN", mimeType: "model/gltf-binary", scanFormat: "GLB" }, "original.glb");
+    meanwhile.run = async () => void (await datedByHand(id));
+    await processPhoto({ photoId: id });
+    const p = await db.photo.findUniqueOrThrow({ where: { id } });
+    expect(p).toMatchObject({ status: "READY", takenAtSource: "MANUAL", tzOffsetMin: 0, dateSetById: memberId, tripId });
+    expect(p.takenAt?.toISOString()).toBe(handDate.toISOString());
+  });
 
   describe("a date set by hand with no zone recorded", () => {
     // 15:00 UTC on 1 June 1985 is 09:00 in Denver, six hours behind in summer.

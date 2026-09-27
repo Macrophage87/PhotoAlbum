@@ -66,18 +66,22 @@ export async function processPhoto(job: ProcessPhotoJob, signal?: AbortSignal): 
     if (photo.kind === "SCAN") {
       // The copy visitors are given, without what the app wrote into the file; made again on first request if this fails.
       await publicScanCopy(photo).catch(() => null);
+      // That copy streams the whole file, which for a splat is gigabytes: the date is judged from the row as it is
+      // now. Deleted for good meanwhile, the copy just made has nothing to belong to.
+      const scan = await db.photo.findUnique({ where: { id: photo.id } });
+      if (!scan) return void (await forgetFilesIfGone(photo.id));
       // A date somebody gave it (by hand, or Google's own record) is kept: the file's modified time is only a guess.
-      if (vouchedDate(photo)) {
-        await db.photo.update({ where: { id: photo.id }, data: { status: "READY" } });
-        await applyPhotoInstant(photo, photo.takenAt!, photo.tzOffsetMin ?? 0, photo.takenAtSource!, photo.dateSetById, { geotag: false });
+      if (vouchedDate(scan)) {
+        await db.photo.update({ where: { id: scan.id }, data: { status: "READY" } });
+        await applyPhotoInstant(scan, scan.takenAt!, scan.tzOffsetMin ?? 0, scan.takenAtSource!, scan.dateSetById, { geotag: false });
         return;
       }
-      const mtimeHeader = (photo.exif as { fileLastModified?: number } | null)?.fileLastModified;
+      const mtimeHeader = (scan.exif as { fileLastModified?: number } | null)?.fileLastModified;
       const s = mtimeHeader && Number.isFinite(mtimeHeader) ? null : await stat(localPath).catch(() => null);
-      const takenAt = mtimeHeader && Number.isFinite(mtimeHeader) ? new Date(mtimeHeader) : s ? s.mtime : photo.createdAt;
+      const takenAt = mtimeHeader && Number.isFinite(mtimeHeader) ? new Date(mtimeHeader) : s ? s.mtime : scan.createdAt;
       const takenAtSource = mtimeHeader && Number.isFinite(mtimeHeader) ? "FILE_MTIME" : s ? "FILE_MTIME" : "UPLOAD_TIME";
-      await db.photo.update({ where: { id: photo.id }, data: { status: "READY", takenAt, takenAtSource, tzOffsetMin: photo.tzOffsetMin ?? 0 } });
-      await applyPhotoInstant(photo, takenAt, photo.tzOffsetMin ?? 0, takenAtSource, null, { geotag: false });
+      await db.photo.update({ where: { id: scan.id }, data: { status: "READY", takenAt, takenAtSource, tzOffsetMin: scan.tzOffsetMin ?? 0 } });
+      await applyPhotoInstant(scan, takenAt, scan.tzOffsetMin ?? 0, takenAtSource, null, { geotag: false });
       return;
     }
 
