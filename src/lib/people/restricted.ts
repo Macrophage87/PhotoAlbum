@@ -18,9 +18,10 @@ async function restrictedPeople(): Promise<{ names: string[]; child: boolean }[]
 
 /**
  * Restricted for being a child and for nothing else: the only people the relaxed check (name-check.ts) is for.
- * Somebody who opted out, is waiting to be forgotten, had their naming withdrawn (a child's too, once a birthday
- * showed one), or was decided not to be named (nameInDescriptions off, by an admin or once a withdrawal's fortnight
- * passed) said no, or had it said for them: their name is matched strictly whatever the level.
+ * Somebody who opted out, is waiting to be forgotten, had their naming withdrawn, or was decided not to be named
+ * (nameInDescriptions off, by an admin or once a withdrawal's fortnight passed) said no, or had it said for them:
+ * their name is matched strictly whatever the level. (Somebody named as an adult and later recorded with a child's
+ * birthday is a child alone again.) Leaving this, what the relaxed check let out is judged again (rejudgeNameCheck).
  */
 export function childOnly(p: { birthday: Date | null; optedOutAt: Date | null; forgetPendingAt: Date | null; namingWithdrawnAt: Date | null; nameInDescriptions: boolean; nameInDescriptionsSetAt: Date | null }, now = new Date()): boolean {
   return isMinor(p, now) && !p.optedOutAt && !p.forgetPendingAt && !p.namingWithdrawnAt && !(p.nameInDescriptionsSetAt && !p.nameInDescriptions);

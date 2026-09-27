@@ -7,6 +7,7 @@ import { applyPlaceEstimate, needsPlaceEstimate } from "./place";
 import { isWeakDate, WEAK_DATE_SOURCES } from "@/lib/photos/date-from-neighbours";
 import { namesSomebodyRestricted } from "@/lib/people/restricted";
 import { nameCheckForPhoto } from "@/lib/people/name-check";
+import { noteRelaxedRelease } from "./relaxed-release";
 import { helperText, judgeHelperText, knownNames, knownNamesLook, mentionsAnyName, pastHelperTitles, sameTitle, titleIsHelpers, titleKey, unknownTitleAside, warnStuckTitle, type Judgement } from "./members-only";
 import { forgetState, unchangedSince } from "@/lib/people/names-changed";
 import { withoutOptedOutNames } from "@/lib/people/unpermitted";
@@ -246,6 +247,8 @@ export async function applyAnnotation(photoId: string, model: string, parsed: An
   // leaves it eligible for the backfill.
   // Asked in the same request, so it was written from the same things.
   if (needsPlaceEstimate(current)) await applyPlaceEstimate(photoId, parsed.estimatedPlace, { sent: membersOnly || opts.sent, requestedAt, tombstone });
+  // Shown only because a relaxed excuse let it be (or no longer needing one): marked or cleared (relaxed-release.ts).
+  await noteRelaxedRelease(photoId);
   // The description changed, so the semantic index for this item is stale.
   await enqueueEmbedding(photoId, true);
 }

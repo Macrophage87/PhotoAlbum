@@ -13,7 +13,8 @@ import { requireUserOrThrow } from "@/lib/auth/viewer";
 import { generateToken } from "@/lib/auth/tokens";
 import { uniqueSlug } from "@/lib/trips/slug";
 import { NAME_NOT_TO_BE_SHOWN, namesSomebodyRestricted } from "@/lib/people/forget";
-import { albumNameCheck } from "@/lib/people/name-check";
+import { nameCheckForContainer } from "@/lib/people/name-check";
+import { noteRelaxedDescription } from "@/lib/annotation/relaxed-release";
 import { fieldErrors } from "@/lib/trips/validation";
 import { collectionInputFromForm } from "@/lib/collections/validation";
 import { canEditContainer, editableMediaIds, NOT_YOUR_CONTAINER } from "@/lib/auth/ownership";
@@ -277,8 +278,9 @@ export async function setCollectionDescriptionShared(slug: string, everyone: boo
   const collection = await loadEditableCollection(slug);
   // Never the helper's description while it names somebody who may not be named there (see namesSomebodyRestricted),
   // checked at the album's level, which is a collection's (name-check.ts); a member's own words are theirs to show.
-  if (everyone && collection.descriptionByHelper && (await namesSomebodyRestricted([collection.description], [], await albumNameCheck()))) throw new Error(NAME_NOT_TO_BE_SHOWN);
+  if (everyone && collection.descriptionByHelper && (await namesSomebodyRestricted([collection.description], [], await nameCheckForContainer("collection", collection.id)))) throw new Error(NAME_NOT_TO_BE_SHOWN);
   await db.collection.update({ where: { id: collection.id }, data: { descriptionMembersOnly: !everyone, descriptionSharedAt: everyone ? new Date() : null } });
+  await noteRelaxedDescription("collection", collection.id);
   revalidatePath(`/collections/${slug}`, "layout");
 }
 

@@ -1906,30 +1906,32 @@ test("an admin chooses how names are checked before words are shown to everyone,
   const albumLevel = async () => (await withDb((c) => c.query(`SELECT "nameCheck"::text AS level FROM "AppSetting" WHERE id = 'app'`))).rows[0]?.level ?? "STRICT";
   const tripLevel = async () => (await withDb((c) => c.query(`SELECT "nameCheck"::text AS level FROM "Trip" WHERE slug = 'acadia'`))).rows[0]?.level ?? null;
 
-  // The album's: Strict until an admin says otherwise, and each level says what it means.
-  await page.goto("/admin");
-  const albumForm = page.getByTestId("album-name-check");
-  await expect(albumForm.getByRole("radio", { name: /^Strict \(recommended\)/ })).toBeChecked();
-  await expect(albumForm).toContainText("an occasional sentence could name a child to strangers");
-  await page.waitForLoadState("networkidle");
-  await albumForm.getByRole("radio", { name: /^Relaxed/ }).check();
-  await albumForm.getByRole("button", { name: "Save name check" }).click();
-  await expect.poll(albumLevel).toBe("RELAXED");
-  await page.reload();
-  await expect(page.getByTestId("album-name-check")).toContainText("Last changed by");
+  try {
+    // The album's: Strict until an admin says otherwise, and each level says what it means.
+    await page.goto("/admin");
+    const albumForm = page.getByTestId("album-name-check");
+    await expect(albumForm.getByRole("radio", { name: /^Strict \(recommended\)/ })).toBeChecked();
+    await expect(albumForm).toContainText("an occasional sentence could name a child to strangers");
+    await page.waitForLoadState("networkidle");
+    await albumForm.getByRole("radio", { name: /^Relaxed/ }).check();
+    await albumForm.getByRole("button", { name: "Save name check" }).click();
+    await expect.poll(albumLevel).toBe("RELAXED");
+    await page.reload();
+    await expect(page.getByTestId("album-name-check")).toContainText("Last changed by");
 
-  // A trip follows the album until whoever arranges it says otherwise.
-  await page.goto("/trips/acadia/settings");
-  const tripForm = page.getByTestId("trip-name-check");
-  await expect(tripForm.getByRole("radio", { name: /^Same as the album \(Relaxed\)/ })).toBeChecked();
-  await page.waitForLoadState("networkidle");
-  await tripForm.getByRole("radio", { name: /^Strict/ }).check();
-  await tripForm.getByRole("button", { name: "Save name check" }).click();
-  await expect.poll(tripLevel).toBe("STRICT");
-
-  // Back as it was, for the tests after this one.
-  await withDb((c) => c.query(`UPDATE "Trip" SET "nameCheck" = NULL WHERE slug = 'acadia'`));
-  await withDb((c) => c.query(`UPDATE "AppSetting" SET "nameCheck" = 'STRICT' WHERE id = 'app'`));
+    // A trip follows the album until whoever arranges it says otherwise.
+    await page.goto("/trips/acadia/settings");
+    const tripForm = page.getByTestId("trip-name-check");
+    await expect(tripForm.getByRole("radio", { name: /^Same as the album \(Relaxed\)/ })).toBeChecked();
+    await page.waitForLoadState("networkidle");
+    await tripForm.getByRole("radio", { name: /^Strict/ }).check();
+    await tripForm.getByRole("button", { name: "Save name check" }).click();
+    await expect.poll(tripLevel).toBe("STRICT");
+  } finally {
+    // Back as it was, for the tests after this one, whatever happened above.
+    await withDb((c) => c.query(`UPDATE "Trip" SET "nameCheck" = NULL, "nameCheckSetAt" = NULL, "nameCheckSetById" = NULL WHERE slug = 'acadia'`));
+    await withDb((c) => c.query(`UPDATE "AppSetting" SET "nameCheck" = 'STRICT', "nameCheckSetAt" = NULL, "nameCheckSetById" = NULL WHERE id = 'app'`));
+  }
 });
 
 test("a member's review queue is their own uploads, and somebody else's batch is theirs to read, not to mark", async ({ browser }) => {

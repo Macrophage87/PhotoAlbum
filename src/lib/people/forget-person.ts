@@ -3,7 +3,8 @@ import { forgetNameInText, forgetQueuedFileNames, forgetRawAnswers, leftoverItem
 import { containerKey, forgetKeyState, hashPlainScopes, rememberForgotten } from "./tombstone";
 import { isKinWord, isListedPlace, nameMatcher, notThePerson, type NameMatcher, type Neighbourhood } from "./scrub";
 import { clearScrubStamps, stampForget, withForgetLock } from "./names-changed";
-import { dropRejudgeJobs, forgetJudgedNames } from "@/lib/annotation/rejudge";
+import { dropRejudgeJobs, forgetJudgedNames, rejudgeLater } from "@/lib/annotation/rejudge";
+import { anyRelaxedRelease } from "@/lib/annotation/relaxed-release";
 
 /**
  * Opt a person out of recognition (see optOutPerson in src/app/people/actions.ts). Deletes their templates, clusters,
@@ -40,6 +41,8 @@ export async function forgetPerson(personId: string, opts: { keepName: boolean; 
       // connection, a timeout) is finished by the pending-forget pass rather than left half done with the name on it.
       data: { faceIndexing: false, nameInDescriptions: false, pendingDecision: false, keepNameOnPhotos: keepName, optedOutAt: person.optedOutAt ?? now, faceIndexingSetAt: now, namingWithdrawnAt: null, ...(!keepName ? { forgetPendingAt: person.forgetPendingAt ?? now, forgetPendingById: person.forgetPendingById ?? opts.byUserId } : {}) },
     });
+    // Opted out: whatever the relaxed name check let out is judged again, them strictly now (rejudge.ts).
+    if (await anyRelaxedRelease()) await rejudgeLater({ recheck: {} });
     const m = await matcherFor(person);
     // A first name that is a month is kept apart, with their own photographs only (see below).
     const forms = m.tombstoneForms.filter((f) => !f.month);

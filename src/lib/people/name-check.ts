@@ -44,10 +44,10 @@ export function tripNameCheck(trip: { nameCheck: NameCheck | null } | null | und
 /** The level for a trip's words (its description, its activities'). */
 export async function nameCheckForTrip(tripId: string): Promise<NameCheck> {
   const [trip, album] = await Promise.all([db.trip.findUnique({ where: { id: tripId }, select: { nameCheck: true } }), albumNameCheck()]);
-  return tripNameCheck(trip, album);
+  return trip ? tripNameCheck(trip, album) : "STRICT";
 }
 
-/** The level for a trip's or a collection's own words: a collection is shown under the album's. */
+/** The level for a trip's, an activity's or a collection's own words: a collection is shown under the album's. */
 export async function nameCheckForContainer(kind: "trip" | "collection" | "activity", id: string): Promise<NameCheck> {
   if (kind === "trip") return nameCheckForTrip(id);
   if (kind === "activity") {
@@ -78,7 +78,7 @@ export async function nameCheckForPhoto(photoId: string): Promise<NameCheck> {
   return p ? photoNameCheck(p, album) : "STRICT";
 }
 
-/** Whether anything in the album is checked RELAXED now: the album, or any trip. */
+/** Whether anything in the album is checked RELAXED now (the album, or any trip): when not, nothing is judged so. */
 export async function anyRelaxed(): Promise<boolean> {
   if ((await albumNameCheck()) === "RELAXED") return true;
   return (await db.trip.count({ where: { nameCheck: "RELAXED" } })) > 0;

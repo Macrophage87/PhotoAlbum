@@ -8,14 +8,16 @@ import { strictMatcher } from "@/lib/people/strict-names";
 type Row = { name: string; text: string; list?: boolean; others?: string[] };
 
 const SHARED: Record<"word" | "time" | "place", Row[]> = {
-  // (a) An everyday word in lower case, inside a sentence, in prose.
+  // (a) An everyday word in lower case, in prose, after a determiner or in a fixed phrase of its own.
   word: [
     { name: "Rose", text: "Grandpa planted a rose bush by the fence." },
     { name: "Grace", text: "We sat down after saying grace." },
+    { name: "Grace", text: "The grace period ended on Monday." },
     { name: "Hope", text: "Thanks for coming, we hope you enjoy the pictures." },
+    { name: "Hope", text: "There is still some hope for the tomatoes." },
     { name: "Will", text: "The kids will be back after lunch." },
-    { name: "Jack", text: "Dad changed the tire with the car jack." },
-    { name: "Summer", text: "Pictures from our summer vacation." },
+    { name: "May", text: "The picnic may be moved indoors." },
+    { name: "Jack", text: "Dad fixed the tire with a jack." },
   ],
   // (b) A month or season used as a time.
   time: [
@@ -27,6 +29,7 @@ const SHARED: Record<"word" | "time" | "place", Row[]> = {
     { name: "August", text: "The lake every August." },
     { name: "May", text: "May morning at the cabin." },
     { name: "Summer", text: "summer vacation", list: true },
+    { name: "Summer", text: "Pictures from our summer vacation." },
   ],
   // (c) A listed place used as the place.
   place: [
@@ -35,7 +38,7 @@ const SHARED: Record<"word" | "time" | "place", Row[]> = {
     { name: "Austin", text: "Driving to Austin." },
     { name: "Madison", text: "Madison Square Garden at night." },
     { name: "Jordan", text: "A float down the Jordan River." },
-    { name: "Paris", text: "Crepes near the Eiffel Tower, visiting Paris." },
+    { name: "Georgia", text: "Our Day At The Georgia Zoo" },
     { name: "Paris", text: "Flight from Paris." },
     { name: "Austin", text: "A road trip to Austin." },
     { name: "Madison", text: "A concert at Madison Square Garden." },
@@ -71,6 +74,23 @@ const HELD: Record<"word" | "time" | "place", Row[]> = {
     { name: "Rose", text: "Grandpa planted a ro​se bush." },
     { name: "Rose", text: "A rose-colored sunset over the bay." },
     { name: "Rose", text: "A vase of roses on the table." },
+    // Only in its two shapes: never because nothing seemed to open a sentence.
+    { name: "Rose", text: "happy birthday rose" },
+    { name: "Grace", text: "love you grace" },
+    { name: "Rose", text: "baby rose at the beach" },
+    { name: "Will", text: "uncle will at the beach" },
+    { name: "Rose", text: "our little rose" },
+    { name: "Rose", text: "🎂 rose at her party" },
+    { name: "Rose", text: "Party.” rose at the lake" },
+    { name: "Rose", text: "1) rose at the lake" },
+    { name: "Rose", text: "Party.\r\nrose at the lake" },
+    // Months (but "may") and seasons are never everyday words: only a time, by (b).
+    { name: "June", text: "grandma reading to june" },
+    { name: "June", text: "look at june!" },
+    { name: "June", text: "happy birthday june" },
+    { name: "April", text: "hugs to april" },
+    { name: "Summer", text: "grandpa hugging summer" },
+    { name: "Autumn", text: "a hug for the autumn baby" },
   ],
   time: [
     // Never after "with", "from", "by", "for", "and".
@@ -90,6 +110,11 @@ const HELD: Record<"word" | "time" | "place", Row[]> = {
     // Not after "this": that is somebody as often as a time.
     { name: "May", text: "Look at this May!" },
     { name: "May Chen", text: "Proud of this May." },
+    // Nor "up next", "the late", "all"; a comma does not hide what comes next.
+    { name: "June", text: "Up next June!" },
+    { name: "May", text: "Remembering the late May." },
+    { name: "Summer", text: "All summer at the lake." },
+    { name: "June", text: "Late June, is she ready?" },
     { name: "May", text: "A hug from May." },
     // A hyphen stays strict, so does an accent.
     { name: "June", text: "A mid-June picnic." },
@@ -112,8 +137,16 @@ const HELD: Record<"word" | "time" | "place", Row[]> = {
     { name: "Jordan", text: "Smiling at Jordan." },
     { name: "Florence", text: "Sitting near Florence." },
     { name: "Paris", text: "Postcards to Paris" },
+    { name: "Jordan", text: "Arms around Jordan" },
+    { name: "Madison", text: "Visiting Madison in the hospital" },
+    { name: "Georgia", text: "Visiting Georgia on her birthday" },
+    { name: "Jordan", text: "walking to Jordan!" },
+    { name: "Austin", text: "The bus to Austin" },
+    // In title case, a place word is only a place's after a determiner or a preposition.
+    { name: "Madison", text: "Madison Zoo Adventures" },
+    { name: "Jordan", text: "Jordan Beach Day" },
     // Never a surname, even a listed place.
-    { name: "Paris Jackson", text: "Visiting Jackson." },
+    { name: "Paris Jackson", text: "Driving to Jackson." },
     // Only a capitalized place word after it; nothing else makes it a place.
     { name: "Brooklyn", text: "Walking the Brooklyn bridge." },
     { name: "Brooklyn", text: "Brooklyn on the swings." },
@@ -148,9 +181,9 @@ describe("the relaxed name check", () => {
 
   it("excuses a first name only, never a surname", () => {
     // A child whose surname is a listed place: "Jackson" stays theirs; as a first name it is a place like any other.
-    expect(strictMatcher(["Paris Jackson"])("Visiting Jackson.")).toBe(true);
-    expect(strictMatcher(["Paris Jackson"], [], { relaxed: true })("Visiting Jackson.")).toBe(true);
-    expect(strictMatcher(["Jackson Smith"], [], { relaxed: true })("Visiting Jackson.")).toBe(false);
+    expect(strictMatcher(["Paris Jackson"])("Driving to Jackson.")).toBe(true);
+    expect(strictMatcher(["Paris Jackson"], [], { relaxed: true })("Driving to Jackson.")).toBe(true);
+    expect(strictMatcher(["Jackson Smith"], [], { relaxed: true })("Driving to Jackson.")).toBe(false);
   });
 
   it("keeps a month in a date's own shape and the lake rule, as the strict check does", () => {

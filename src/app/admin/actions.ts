@@ -202,7 +202,7 @@ export async function setAlbumNameCheck(fd: FormData): Promise<void> {
     const [before] = await tx.$queryRaw<{ nameCheck: string }[]>`SELECT "nameCheck"::text AS "nameCheck" FROM "AppSetting" WHERE id = 'app' FOR UPDATE`;
     const stricter = before?.nameCheck === "RELAXED" && level === "STRICT";
     const now = new Date();
-    await tx.appSetting.update({ where: { id: "app" }, data: { nameCheck: level, nameCheckSetAt: now, nameCheckSetById: admin.id, ...(stricter ? { nameCheckTightenedAt: now } : {}) } });
+    await tx.appSetting.update({ where: { id: "app" }, data: { nameCheck: level, nameCheckSetAt: now, nameCheckSetById: admin.id } });
     return stricter;
   });
   if (tightened) await rejudgeFromAction({ recheck: {} });

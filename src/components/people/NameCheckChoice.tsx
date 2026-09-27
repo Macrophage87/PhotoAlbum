@@ -10,7 +10,7 @@ export const NAME_CHECK_COPY: Record<NameCheck, { label: string; help: string; e
   },
   RELAXED: {
     label: "Relaxed",
-    help: "A child's name that is plainly used as an everyday word in lowercase, as a month or season, or as a place does not keep the words back. This means an occasional sentence could name a child to strangers.",
+    help: "A child's name that is plainly used as an everyday word in a common phrase, as a month or season, or as a place does not keep the words back. This means an occasional sentence could name a child to strangers.",
     examples: "“We hope you enjoy it,” “Summer vacation at the lake” and “The Duomo in Florence” can be shown to everyone. “A hug from May” and “Grace, 5, blows out the candles” still stay with the family.",
   },
 };
@@ -27,10 +27,11 @@ export function NameCheckChoice({ action, current, inherit, changed, testId }: {
   ];
   return (
     <form action={action} className="space-y-3" data-testid={testId}>
-      <fieldset className="space-y-3">
-        <legend className="text-sm text-muted mb-1">
-          Before captions, titles, descriptions, tags and the AI helper&apos;s words are shown to anyone outside the family, the album checks them for the names of children and of anyone who opted out or said no.
-        </legend>
+      <p id={`${testId}-about`} className="text-sm text-muted">
+        Before captions, titles, descriptions, tags and the AI helper&apos;s words are shown to anyone outside the family, the album checks them for the names of children and of anyone who opted out or said no.
+      </p>
+      <fieldset className="space-y-3" aria-describedby={`${testId}-about ${testId}-more`}>
+        <legend className="sr-only">Names in shared words</legend>
         {options.map((o) => (
           <label key={o.value} className="flex gap-3 items-start rounded-theme border border-border p-3 cursor-pointer has-[:checked]:border-primary has-[:checked]:ring-2 has-[:checked]:ring-ring">
             <input type="radio" name="nameCheck" value={o.value} defaultChecked={current === o.value} className="mt-1" />
@@ -42,7 +43,7 @@ export function NameCheckChoice({ action, current, inherit, changed, testId }: {
           </label>
         ))}
       </fieldset>
-      <p className="text-sm text-muted">
+      <p id={`${testId}-more`} className="text-sm text-muted">
         People who opted out, said no, or asked to have their name taken out are always checked strictly. Switching to Strict checks again everything already shown to everyone and takes back anything Strict would keep. Switching to Relaxed doesn&apos;t release anything already kept for the family; it applies to what is described or shown from then on.
       </p>
       <div className="flex flex-wrap items-center gap-3">

@@ -28,6 +28,7 @@ import { forgetTrackFiles } from "@/lib/tracks/files";
 import { isCoverable } from "@/lib/photos/cover";
 import { NAME_NOT_TO_BE_SHOWN, namesSomebodyRestricted } from "@/lib/people/forget";
 import { nameCheckForContainer, nameCheckForTrip } from "@/lib/people/name-check";
+import { noteRelaxedDescription } from "@/lib/annotation/relaxed-release";
 
 /** An activity is part of the shape of a trip, so it is the trip's maker (and admins) who arrange them. */
 async function loadTrip(slug: string) {
@@ -191,6 +192,7 @@ export async function setActivityDescriptionShared(slug: string, id: string, eve
   // checked at its trip's level (name-check.ts); a member's own words are theirs to show, as their captions are.
   if (everyone && activity.descriptionByHelper && (await namesSomebodyRestricted([activity.description], [], await nameCheckForTrip(trip.id)))) throw new Error(NAME_NOT_TO_BE_SHOWN);
   await db.activity.update({ where: { id }, data: { descriptionMembersOnly: !everyone, descriptionTitleOnly: false, descriptionSharedAt: everyone ? new Date() : null } });
+  await noteRelaxedDescription("activity", id);
   revalidatePath(`/trips/${slug}/activities/${id}`);
 }
 
@@ -251,6 +253,7 @@ export async function describeActivityWithAi(slug: string, id: string, note?: st
     if (forget.underWay || forget.since || forget.reload || (await namesChangedSince(activity.photos.map((p) => p.id), requestedAt))) throw new Error(NAMES_CHANGED);
     await tx.activity.update({ where: { id }, data: { description: parsed.description, descriptionMembersOnly: judged.membersOnly, descriptionTitleOnly: judged.titleOnly, descriptionTitleWords: judged.titleOnly ? (judged.titleWords ?? []) : [], descriptionSharedAt: null, descriptionByHelper: true } });
   });
+  await noteRelaxedDescription("activity", id);
   revalidatePath(`/trips/${slug}/activities/${id}`);
   return parsed.description;
 }

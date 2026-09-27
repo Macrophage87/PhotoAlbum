@@ -5,6 +5,10 @@ import { resetTestDb } from "../helpers/reset";
 const who = vi.hoisted(() => ({ id: "", role: "ADMIN" as "ADMIN" | "MEMBER", queued: [] as { queue: string; data: unknown }[] }));
 vi.mock("@/lib/auth/viewer", () => ({
   requireUserOrThrow: async () => ({ id: who.id, email: "x@example.com", name: "X", role: who.role }),
+  requireAdmin: async () => {
+    if (who.role !== "ADMIN") throw new Error("Admins only");
+    return { id: who.id, email: "x@example.com", name: "X", role: who.role };
+  },
   requireAdminOrThrow: async () => {
     if (who.role !== "ADMIN") throw new Error("Admins only");
     return { id: who.id, email: "x@example.com", name: "X", role: who.role };
@@ -17,7 +21,9 @@ vi.mock("@/lib/jobs/boss", () => ({ enqueue: async (queue: string, data: unknown
 import { setAlbumNameCheck } from "@/app/admin/actions";
 import { setTripDescriptionShared, setTripNameCheck } from "@/app/trips/[slug]/actions";
 import { setCollectionDescriptionShared } from "@/app/collections/actions";
-import { setAnnotationShared } from "@/app/annotation/actions";
+import { setAnnotationShared, updateAnnotation } from "@/app/annotation/actions";
+import { setNameInDescriptions } from "@/app/people/actions";
+import { noteRelaxedDescription, noteRelaxedRelease } from "@/lib/annotation/relaxed-release";
 import { NOT_YOUR_CONTAINER } from "@/lib/auth/ownership";
 import { NAME_NOT_TO_BE_SHOWN, namesSomebodyRestricted, withoutWithdrawnNames } from "@/lib/people/forget";
 import { nameCheckForContainer, nameCheckForPhoto, photoNameCheck, strictest } from "@/lib/people/name-check";
@@ -205,7 +211,8 @@ describe("the name check setting", () => {
       await db.photo.update({ where: { id: p.id }, data: { annotation: record("Late June at the lake, summer vacation at last.") } });
       const { annotationRevision: next } = await db.photo.findUniqueOrThrow({ where: { id: p.id } });
       await setAnnotationShared(p.id, next, true);
-      expect((await db.photo.findUniqueOrThrow({ where: { id: p.id } })).annotationMembersOnly).toBe(false);
+      // Shown only because the relaxed check excused it: marked, to be judged again should that change.
+      expect(await db.photo.findUniqueOrThrow({ where: { id: p.id } })).toMatchObject({ annotationMembersOnly: false, relaxedReleaseAt: expect.any(Date) });
     });
 
     it("shows a trip's description by the trip's level, and a collection's by the album's", async () => {
@@ -255,46 +262,60 @@ describe("the name check setting", () => {
 
   describe("making it stricter", () => {
     const summer = "Summer vacation at the lake.";
-    /** Words shown to everyone under the relaxed check, every way the album shows them. */
+    /** Words shown to everyone under the relaxed check, every way the album shows them, marked as the writes mark them. */
     const shownUnderRelaxed = async (trip: string) => {
       const shared = await photo({ tripId: trip, annotation: record(summer, { title: "Summer vacation" }), title: "Summer vacation", titleByHelper: true, annotationSharedAt: new Date() });
-      const judged = await photo({ tripId: trip, annotation: record("Pictures from our summer vacation."), placeEstimateName: "The lake", placeEstimateNote: "Sunshine on the dock all summer", placeEstimateMembersOnly: false });
+      const judged = await photo({ tripId: trip, annotation: record("Pictures from our summer vacation."), placeEstimateName: "The lake", placeEstimateNote: "Sunshine on the dock in the summer", placeEstimateMembersOnly: false });
       const plain = await photo({ tripId: trip, annotation: record("A sailboat on the lake.") });
       await db.trip.update({ where: { id: trip }, data: { description: summer, descriptionByHelper: true, descriptionSharedAt: new Date() } });
       const activity = await db.activity.create({ data: { tripId: trip, title: "Swim", description: summer, descriptionByHelper: true, startTime: new Date("2025-08-12T13:00:00Z"), endTime: new Date("2025-08-12T15:00:00Z") } });
+      for (const p of [shared, judged, plain]) await noteRelaxedRelease(p.id);
+      await noteRelaxedDescription("trip", trip);
+      await noteRelaxedDescription("activity", activity.id);
       return { shared, judged, plain, activity };
     };
     const runQueued = async () => {
       for (const recheck of rechecks()) await rejudgeText({ recheck: recheck! });
     };
 
-    it("checks again, album-wide, what was shown under the relaxed check, and takes back what the strict one holds", async () => {
+    it("marks only what needed a relaxed excuse", async () => {
+      await album("RELAXED");
+      const here = await shownUnderRelaxed(tripId);
+      expect(await db.photo.findUniqueOrThrow({ where: { id: here.shared.id } })).toMatchObject({ relaxedReleaseAt: expect.any(Date) });
+      expect(await db.photo.findUniqueOrThrow({ where: { id: here.judged.id } })).toMatchObject({ relaxedReleaseAt: expect.any(Date), placeRelaxedReleaseAt: expect.any(Date) });
+      expect(await db.photo.findUniqueOrThrow({ where: { id: here.plain.id } })).toMatchObject({ relaxedReleaseAt: null, placeRelaxedReleaseAt: null });
+      expect((await db.trip.findUniqueOrThrow({ where: { id: tripId } })).relaxedReleaseAt).not.toBeNull();
+      expect((await db.activity.findUniqueOrThrow({ where: { id: here.activity.id } })).relaxedReleaseAt).not.toBeNull();
+    });
+
+    it("checks again, album-wide, what the relaxed check let out, and takes back what the strict one holds", async () => {
       await album("RELAXED");
       const here = await shownUnderRelaxed(tripId);
       const collection = await db.collection.create({ data: { slug: "best", title: "Best", visibility: "PUBLIC", description: summer, descriptionByHelper: true, createdById: admin } });
+      await noteRelaxedDescription("collection", collection.id);
       // A trip that says Relaxed itself stays as it is.
       await db.trip.update({ where: { id: otherTripId }, data: { nameCheck: "RELAXED" } });
       const kept = await photo({ tripId: otherTripId, annotation: record(summer), annotationSharedAt: new Date() });
+      await noteRelaxedRelease(kept.id);
 
       await setAlbumNameCheck(fd("STRICT"));
       expect(rechecks()).toEqual([{}]);
-      expect((await db.appSetting.findUniqueOrThrow({ where: { id: "app" } })).nameCheckTightenedAt).not.toBeNull();
       await runQueued();
 
-      expect(await db.photo.findUniqueOrThrow({ where: { id: here.shared.id } })).toMatchObject({ annotationMembersOnly: true, annotationSharedAt: null, title: null, membersTitle: "Summer vacation" });
+      expect(await db.photo.findUniqueOrThrow({ where: { id: here.shared.id } })).toMatchObject({ annotationMembersOnly: true, annotationSharedAt: null, title: null, membersTitle: "Summer vacation", relaxedReleaseAt: null });
       expect(await db.photo.findUniqueOrThrow({ where: { id: here.judged.id } })).toMatchObject({ annotationMembersOnly: true, placeEstimateMembersOnly: true });
       expect((await db.photo.findUniqueOrThrow({ where: { id: here.plain.id } })).annotationMembersOnly).toBe(false);
       expect(await db.trip.findUniqueOrThrow({ where: { id: tripId } })).toMatchObject({ descriptionMembersOnly: true, descriptionSharedAt: null });
       expect((await db.activity.findUniqueOrThrow({ where: { id: here.activity.id } })).descriptionMembersOnly).toBe(true);
       expect((await db.collection.findUniqueOrThrow({ where: { id: collection.id } })).descriptionMembersOnly).toBe(true);
-      expect(await db.photo.findUniqueOrThrow({ where: { id: kept.id } })).toMatchObject({ annotationMembersOnly: false, annotationSharedAt: expect.any(Date) });
-      expect((await db.appSetting.findUniqueOrThrow({ where: { id: "app" } })).nameCheckRecheckedAt).not.toBeNull();
+      expect(await db.photo.findUniqueOrThrow({ where: { id: kept.id } })).toMatchObject({ annotationMembersOnly: false, annotationSharedAt: expect.any(Date), relaxedReleaseAt: expect.any(Date) });
     });
 
     it("checks again one trip made stricter, and nothing else", async () => {
       await db.trip.updateMany({ data: { nameCheck: "RELAXED" } });
       const here = await shownUnderRelaxed(tripId);
       const there = await photo({ tripId: otherTripId, annotation: record(summer), annotationSharedAt: new Date() });
+      await noteRelaxedRelease(there.id);
       who.id = member;
       who.role = "MEMBER";
       await setTripNameCheck("lake", fd("STRICT"));
@@ -308,20 +329,98 @@ describe("the name check setting", () => {
     it("is caught up by the nightly sweep when the job never ran", async () => {
       await album("RELAXED");
       const here = await shownUnderRelaxed(tripId);
-      await setAlbumNameCheck(fd("STRICT"));
-      who.queued = [];
+      await album("STRICT");
       await rejudgeSweep();
       expect((await db.photo.findUniqueOrThrow({ where: { id: here.shared.id } })).annotationMembersOnly).toBe(true);
       expect((await db.trip.findUniqueOrThrow({ where: { id: tripId } })).descriptionMembersOnly).toBe(true);
     });
 
-    it("takes back what joins a place checked strictly: a relaxed trip's photograph put in a public collection", async () => {
+    it("takes back what the strict members-only rule holds too: a month the strict matcher reads as a date", async () => {
+      await db.person.deleteMany();
+      await db.person.create({ data: { name: "May Reyes", createdById: admin, ...CHILD } });
+      await db.trip.update({ where: { id: tripId }, data: { nameCheck: "RELAXED" } });
+      const p = await photo({ tripId, annotation: record("A swim in May 2019.") });
+      await noteRelaxedRelease(p.id);
+      expect((await db.photo.findUniqueOrThrow({ where: { id: p.id } })).relaxedReleaseAt).not.toBeNull();
+      await setTripNameCheck("lake", fd("STRICT"));
+      await runQueued();
+      expect((await db.photo.findUniqueOrThrow({ where: { id: p.id } })).annotationMembersOnly).toBe(true);
+    });
+
+    it("takes back a relaxed trip's photograph that lost its trip and then joined a public collection", async () => {
       await db.trip.update({ where: { id: tripId }, data: { nameCheck: "RELAXED" } });
       const p = await photo({ tripId, annotation: record(summer), annotationSharedAt: new Date() });
-      const collection = await db.collection.create({ data: { slug: "best", title: "Best", visibility: "PUBLIC", createdById: admin } });
+      await noteRelaxedRelease(p.id);
+      await db.photo.update({ where: { id: p.id }, data: { tripId: null } });
+      await db.trip.delete({ where: { id: tripId } });
+      await album("RELAXED");
+      const collection = await db.collection.create({ data: { slug: "best", title: "Best", visibility: "PRIVATE", createdById: admin } });
       await db.collectionItem.create({ data: { collectionId: collection.id, photoId: p.id, addedById: admin } });
+      await album("STRICT");
+      await db.collection.update({ where: { id: collection.id }, data: { visibility: "PUBLIC" } });
       await rejudgeTitles({ collectionId: collection.id });
       expect(await db.photo.findUniqueOrThrow({ where: { id: p.id } })).toMatchObject({ annotationMembersOnly: true, annotationSharedAt: null });
+    });
+
+    it("never touches what the strict check let out: words shared on a strict trip before their child was restricted", async () => {
+      await db.person.deleteMany();
+      await db.trip.update({ where: { id: otherTripId }, data: { nameCheck: "RELAXED" } });
+      const p = await photo({ tripId, annotation: record("Rose at the lake."), annotationSharedAt: new Date() });
+      await noteRelaxedRelease(p.id);
+      await db.person.create({ data: { name: "Rose Reyes", createdById: admin, ...CHILD } });
+      await rejudgeTitles({ tripId });
+      await rejudgeTitles({ tripId: otherTripId });
+      await rejudgeText({ recheck: {} });
+      await rejudgeSweep();
+      expect(await db.photo.findUniqueOrThrow({ where: { id: p.id } })).toMatchObject({ annotationMembersOnly: false, annotationSharedAt: expect.any(Date), relaxedReleaseAt: null });
+    });
+
+    it("takes back what the relaxed check let out about a child whose naming is switched off, or who opts out", async () => {
+      await db.person.deleteMany();
+      const rose = await db.person.create({ data: { name: "Rose Reyes", createdById: admin, ...CHILD } });
+      await db.trip.update({ where: { id: tripId }, data: { nameCheck: "RELAXED", description: "A rose bush by the porch.", descriptionByHelper: true, descriptionMembersOnly: true } });
+      const p = await photo({ tripId, annotation: record("Grandpa planted a rose bush."), annotationMembersOnly: true, placeEstimateName: "The lake", placeEstimateNote: "A rose garden by the dock", placeEstimateMembersOnly: false });
+      const { annotationRevision } = await db.photo.findUniqueOrThrow({ where: { id: p.id } });
+      await setAnnotationShared(p.id, annotationRevision, true);
+      await setTripDescriptionShared("lake", true);
+      await noteRelaxedRelease(p.id);
+      expect(await db.photo.findUniqueOrThrow({ where: { id: p.id } })).toMatchObject({ annotationMembersOnly: false, relaxedReleaseAt: expect.any(Date), placeRelaxedReleaseAt: expect.any(Date) });
+      expect((await db.trip.findUniqueOrThrow({ where: { id: tripId } })).relaxedReleaseAt).not.toBeNull();
+
+      await setNameInDescriptions(rose.id, false);
+      expect(rechecks()).toEqual([{}]);
+      await runQueued();
+      expect(await db.photo.findUniqueOrThrow({ where: { id: p.id } })).toMatchObject({ annotationMembersOnly: true, annotationSharedAt: null, placeEstimateMembersOnly: true });
+      expect(await db.trip.findUniqueOrThrow({ where: { id: tripId } })).toMatchObject({ descriptionMembersOnly: true, descriptionSharedAt: null });
+
+      // Opting out, the same (here caught by the nightly pass).
+      await db.person.update({ where: { id: rose.id }, data: { nameInDescriptions: false, nameInDescriptionsSetAt: null } });
+      const q = await photo({ tripId, annotation: record("Grandpa planted a rose bush."), annotationSharedAt: new Date() });
+      await noteRelaxedRelease(q.id);
+      await db.person.update({ where: { id: rose.id }, data: { optedOutAt: new Date() } });
+      await rejudgeSweep();
+      expect((await db.photo.findUniqueOrThrow({ where: { id: q.id } })).annotationMembersOnly).toBe(true);
+    });
+
+    it("clears the mark from words edited so they need no excuse", async () => {
+      await db.trip.update({ where: { id: tripId }, data: { nameCheck: "RELAXED" } });
+      const p = await photo({ tripId, annotation: record("Pictures from our summer vacation."), annotationSharedAt: new Date() });
+      await noteRelaxedRelease(p.id);
+      expect((await db.photo.findUniqueOrThrow({ where: { id: p.id } })).relaxedReleaseAt).not.toBeNull();
+      const f = new FormData();
+      f.set("caption", "A sailboat on the lake.");
+      await updateAnnotation(p.id, f);
+      expect(await db.photo.findUniqueOrThrow({ where: { id: p.id } })).toMatchObject({ annotationMembersOnly: false, relaxedReleaseAt: null });
+    });
+
+    it("takes back every marked item, however many, clearing marks as it goes", async () => {
+      await db.trip.update({ where: { id: tripId }, data: { nameCheck: "RELAXED" } });
+      const n = 450;
+      await db.photo.createMany({ data: Array.from({ length: n }, (_, i) => ({ uploaderId: admin, originalName: `x${i}.jpg`, mimeType: "image/jpeg", storageKey: `k${i}`, originalPath: `k${i}/o.jpg`, sizeBytes: 1, status: "READY" as const, tripId, annotation: record("Pictures from our summer vacation."), relaxedReleaseAt: new Date(), placeEstimateName: "The lake", placeEstimateNote: "Sunshine in the summer", placeEstimateMembersOnly: false, placeRelaxedReleaseAt: new Date() })) });
+      await db.trip.update({ where: { id: tripId }, data: { nameCheck: "STRICT" } });
+      const result = await rejudgeText({ recheck: { tripId } });
+      expect(result).toMatchObject({ photos: n, places: n, missed: 0 });
+      expect(await db.photo.count({ where: { tripId, OR: [{ annotationMembersOnly: false }, { placeEstimateMembersOnly: false }] } })).toBe(0);
     });
 
     it("lets nothing out when made relaxed: what is held stays held until it is judged or shown again", async () => {

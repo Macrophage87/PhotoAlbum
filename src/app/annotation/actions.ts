@@ -20,6 +20,7 @@ import { enqueueEmbedding, refreshTextEmbedding } from "@/lib/jobs/handlers/embe
 import { NAME_NOT_TO_BE_SHOWN, withoutWithdrawnNames } from "@/lib/people/forget";
 import { dbNow } from "@/lib/people/names-changed";
 import { nameCheckForPhoto } from "@/lib/people/name-check";
+import { noteRelaxedRelease } from "@/lib/annotation/relaxed-release";
 
 /** The admin's half of the two gates. Recorded with who and when so the decision is auditable. */
 export async function setAnnotationOptIn(on: boolean): Promise<void> {
@@ -130,6 +131,8 @@ export async function updateAnnotation(photoId: string, fd: FormData): Promise<v
       annotationTitleWords: membersOnly && titleOnly ? [...new Set([...photo.annotationTitleWords, ...(judged.titleWords ?? [])])] : [],
       annotationTitleFrom: membersOnly && titleOnly ? [...new Set([...photo.annotationTitleFrom, ...(judged.titleFrom ?? [])])] : [],
       ...(membersOnly ? { annotationSharedAt: null } : {}) } });
+  // Shown only because a relaxed excuse lets it be, or edited so it needs none: marked or cleared (relaxed-release.ts).
+  await noteRelaxedRelease(photoId);
   // The caption and description are part of what the item is searched by.
   await refreshTextEmbedding(photoId);
   revalidatePath(`/photos/${photoId}`);
@@ -176,6 +179,7 @@ export async function setAnnotationShared(photoId: string, seenRevision: number,
   }
   const done = await db.photo.updateMany({ where: { id: photoId, annotationRevision: seenRevision }, data });
   if (!done.count) throw new Error(DESCRIPTION_CHANGED);
+  await noteRelaxedRelease(photoId);
   if (scrubbed) {
     // The semantic index was made from the words with the name.
     await db.$executeRaw`UPDATE "Photo" SET "textEmbedding" = NULL WHERE id = ${photoId}`;

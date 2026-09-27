@@ -12,6 +12,7 @@ import { permittedNames } from "@/lib/people/gates";
 import { annotationGates, notOptedOutWhere } from "./eligibility";
 import { descriptionFromMembersOnly } from "./members-only";
 import { nameCheckForContainer } from "@/lib/people/name-check";
+import { noteRelaxedDescription } from "./relaxed-release";
 import { memberTitle } from "./helper-text";
 import { unpermittedNameScrub, type NameScrub } from "@/lib/people/unpermitted";
 
@@ -217,5 +218,6 @@ export async function writeContainerDescription(kind: ContainerKind, id: string,
     if (kind === "trip") await tx.trip.update({ where: { id }, data });
     else await tx.collection.update({ where: { id }, data });
   });
+  await noteRelaxedDescription(kind, id);
   return data.description;
 }

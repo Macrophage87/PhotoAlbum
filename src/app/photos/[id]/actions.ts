@@ -96,6 +96,8 @@ export async function updatePhoto(id: string, fd: FormData): Promise<void> {
   await onActivity(() => db.photo.update({ where: { id }, data: { title, ...(title !== photo.title ? { titleByHelper: title ? false : null } : {}), caption: v.caption, context: v.context, ...(v.context !== photo.context ? { contextUpdatedAt: new Date(), annotationError: null } : {}), tripId: v.tripId, activityId, activitySetById } }));
   if (title !== photo.title || v.caption !== photo.caption || v.context !== photo.context) await refreshTextEmbedding(id);
   if (v.tripId && v.tripId !== photo.tripId) await rejudgeFromAction({ tripId: v.tripId });
+  // Off its trip onto none: its words are shown at the album's level now (see rejudgeNameCheck).
+  else if (!v.tripId && photo.tripId) await rejudgeFromAction({ recheck: {} });
   revalidatePath(`/photos/${id}`);
   if (photo.tripId) revalidatePath(`/trips`, "layout");
 }

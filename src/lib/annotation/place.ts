@@ -6,6 +6,7 @@ import { forgetState, unchangedSince } from "@/lib/people/names-changed";
 import { forgottenScope, loadTombstone, type Tombstone } from "@/lib/people/tombstone";
 import { thinkingParams } from "./client";
 import { placeFromMembersOnly } from "./members-only";
+import { noteRelaxedRelease } from "./relaxed-release";
 
 /**
  * What the helper may guess at, and what it must leave alone. Shared word for word by the full description request
@@ -217,5 +218,7 @@ export async function applyPlaceEstimate(photoId: string, estimate: PlaceEstimat
     if (err === stale) return "stale" as const;
     throw err;
   });
+  // Shown only because a relaxed excuse let it be: marked (relaxed-release.ts).
+  if (outcome === "placed") await noteRelaxedRelease(photoId);
   return outcome;
 }
