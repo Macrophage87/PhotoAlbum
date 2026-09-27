@@ -260,7 +260,7 @@ export async function rebindInstall(now = new Date()): Promise<{ ok: boolean; me
   if (blocked && "unreadable" in blocked) return { ok: false, message: `${not} The storage's ${INSTALL_MARKER} has a heartbeat that cannot be read, so another album may still be using it. Stop any other site that shares this folder; see "The install marker" in the deployment guide.` };
   if (blocked) return { ok: false, message: `${not} Another database used this storage ${minutesWord(blocked.minutesAgo)} ago; stop that album first, then wait until ${utcStamp(blocked.until)}.` };
   const unknown = await recentUnknownWrite(now);
-  if (unknown !== null) return { ok: false, message: `${not} Files were added here ${minutesWord(unknown)} ago that this database doesn't know. Another album is still using this storage; stop it first.` };
+  if (unknown !== null) return { ok: false, message: `${not} Files were added here ${minutesWord(unknown)} ago that this database doesn't know. Another album may still be using this storage (stop it first), or an upload failed here recently; try again once that is 48 hours old.` };
   const cover = await coverage(now);
   if (!cover.ok) return { ok: false, message: `${not} ${cover.problem}` };
   const id = await bind(binding, now);

@@ -123,7 +123,7 @@ describe("the install marker", { timeout: 30_000 }, () => {
     // Live adds a photo, then a GPX, twenty minutes ago: staging knows neither, and its claim is refused each time.
     const newPhoto = cuid();
     file(`photos/${newPhoto}/original.jpg`, 20 * 60_000);
-    expect(await rebindInstall(now)).toMatchObject({ ok: false, message: "Not claimed. Files were added here 20 minutes ago that this database doesn't know. Another album is still using this storage; stop it first." });
+    expect(await rebindInstall(now)).toMatchObject({ ok: false, message: "Not claimed. Files were added here 20 minutes ago that this database doesn't know. Another album may still be using this storage (stop it first), or an upload failed here recently; try again once that is 48 hours old." });
     rmSync(path.join(root, "photos", newPhoto), { recursive: true });
     const newGpx = uuidName("gpx");
     file(`imports/${newGpx}`, 20 * 60_000);
