@@ -240,10 +240,9 @@ export async function describeActivityWithAi(slug: string, id: string, note?: st
   // Somebody on these photographs forgotten, renamed or no longer to be named while it was being written, or anybody
   // forgotten at all: its answer may name them, so it is not kept.
   await db.$transaction(async (tx) => {
-    const forget = await forgetState(tx, tombstone.loadedAt);
-    if (forget.underWay || (await namesChangedSince(activity.photos.map((p) => p.id), requestedAt))) throw new Error(NAMES_CHANGED);
-    // Somebody forgotten since the forgotten names were read: read them again.
-    if (forget.reload) parsed.description = (await loadTombstone()).scrub(parsed.description, await forgottenScope({ containers: [{ kind: "activity", id }] }));
+    // Anybody forgotten since the request (and so since the forgotten names were read, after it): not kept.
+    const forget = await forgetState(tx, tombstone.loadedAt, requestedAt);
+    if (forget.underWay || forget.since || forget.reload || (await namesChangedSince(activity.photos.map((p) => p.id), requestedAt))) throw new Error(NAMES_CHANGED);
     await tx.activity.update({ where: { id }, data: { description: parsed.description, descriptionMembersOnly: judged.membersOnly, descriptionTitleOnly: judged.titleOnly, descriptionTitleWords: judged.titleOnly ? (judged.titleWords ?? []) : [], descriptionSharedAt: null, descriptionByHelper: true } });
   });
   revalidatePath(`/trips/${slug}/activities/${id}`);

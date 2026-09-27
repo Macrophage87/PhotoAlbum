@@ -89,7 +89,7 @@ describe("a forgotten name, after the person's record is gone", () => {
     expect(JSON.stringify(rows)).not.toMatch(/timothy|kent/i);
   });
 
-  it("is thrown away only while a forget is under way, or about a photograph the forget touched", async () => {
+  it("is thrown away while a forget is under way, and kept when none has happened since it was asked for", async () => {
     const before = new Date(Date.now() - 60_000);
     const other = (await db.photo.create({ data: { uploaderId: admin, originalName: "o.jpg", mimeType: "image/jpeg", storageKey: "o", originalPath: "o/o.jpg", sizeBytes: 1, status: "READY" } })).id;
     // A forget still running: nothing is stored, and the item is asked about again.
@@ -112,12 +112,23 @@ describe("a forgotten name, after the person's record is gone", () => {
     expect((await db.photo.findUniqueOrThrow({ where: { id: photoId } })).annotationError).toBe("names_changed");
   });
 
-  it("stamps a photograph whose members' words name them, and takes the name out of what the helper wrote there", async () => {
+  it("takes the name out of what the helper wrote on a photograph whose members' words name them, stamping nothing", async () => {
     await db.photo.update({ where: { id: photoId }, data: { annotation: record({ caption: "Timothy by the river", description: "Timothy Kent casts a line." }), annotatedAt: new Date() } });
     await forget();
     const p = await db.photo.findUniqueOrThrow({ where: { id: photoId } });
-    expect(p.namesScrubbedAt).not.toBeNull();
+    // Which photographs a forget covered is not written on them (see forgetState).
+    expect(p.namesScrubbedAt).toBeNull();
     expect((p.annotation as StoredAnnotation).description).toBe("A family member casts a line.");
+  });
+
+  it("throws away an answer asked for before a forget, whatever photograph it is about", async () => {
+    const before = new Date(Date.now() - 60_000);
+    const other = (await db.photo.create({ data: { uploaderId: admin, originalName: "o.jpg", mimeType: "image/jpeg", storageKey: "o", originalPath: "o/o.jpg", sizeBytes: 1, status: "READY" } })).id;
+    await forget();
+    await applyAnnotation(other, "m", record(), { content: [] }, { requestedAt: before });
+    expect((await db.photo.findUniqueOrThrow({ where: { id: other } })).annotationError).toBe("names_changed");
+    await applyAnnotation(other, "m", record(), { content: [] }, { requestedAt: new Date() });
+    expect((await db.photo.findUniqueOrThrow({ where: { id: other } })).annotation).not.toBeNull();
   });
 });
 
@@ -139,12 +150,14 @@ describe("forgotten names read before a forget", () => {
     expect(((await db.photo.findUniqueOrThrow({ where: { id: other } })).annotation as StoredAnnotation).caption).toBe("A family member blowing candles");
   });
 
-  it("stamp every photograph in a trip whose title names them", async () => {
+  it("throw away an answer about a photograph in a trip whose title names them, asked for before the forget", async () => {
     const kent = await db.person.create({ data: { name: "Timothy Kent", createdById: admin } });
     const trip = await db.trip.create({ data: { slug: "bday", title: "Timothy Kent's 5th birthday", startDate: new Date("2026-07-01"), endDate: new Date("2026-07-01"), createdById: admin } });
     const plain = (await db.photo.create({ data: { uploaderId: admin, originalName: "p.jpg", mimeType: "image/jpeg", storageKey: "p", originalPath: "p/o.jpg", sizeBytes: 1, status: "READY", tripId: trip.id } })).id;
+    const before = new Date(Date.now() - 60_000);
     await optOutPerson(kent.id, new FormData());
-    expect((await db.photo.findUniqueOrThrow({ where: { id: plain } })).namesScrubbedAt).not.toBeNull();
+    await applyAnnotation(plain, "m", record({ caption: "Timothy on his birthday" }), { content: [] }, { requestedAt: before });
+    expect(await db.photo.findUniqueOrThrow({ where: { id: plain } })).toMatchObject({ annotation: null, annotationError: "names_changed", namesScrubbedAt: null });
   });
 
   it("keep waiting forgets off the pool, give up after a while, and let go of the lock when a connection dies", async () => {
@@ -266,6 +279,14 @@ describe("names that are also words", () => {
       [may, "Photos from the May holiday", "Photos from the May holiday"],
       [may, "Our May trip at the lake", "Our May trip at the lake"],
       [may, "May lies ahead", "May lies ahead"],
+      [may, "May looks at the cake.", "A family member looks at the cake."],
+      [may, "May loves the swings.", "A family member loves the swings."],
+      [may, "May, Ben and Sue at the lake", "A family member, Ben and Sue at the lake"],
+      [may, "May, June and July were hot", "May, June and July were hot"],
+      [may, "May waves at the camera", "A family member waves at the camera"],
+      [june, "June waves crashed on the rocks", "June waves crashed on the rocks"],
+      [june, "June hugs are the best", "June hugs are the best"],
+      [may, "May is the best month", "May is the best month"],
     ];
     for (const [on, text, want] of cases) expect([text, ts.scrub(text, await sc(on))]).toEqual([text, want]);
     // Not in keywords or tags, and not off their photographs.
@@ -717,14 +738,15 @@ describe("names that are also words", () => {
 
   it("leaves notes about the place in a trip with no place in its name", async () => {
     const florence = await db.person.create({ data: { name: "Florence", createdById: admin } });
+    await db.person.create({ data: { name: "Ben Ortiz", createdById: admin } });
     const own = await photo();
     await db.face.create({ data: { photoId: own, personId: florence.id, status: "CONFIRMED", box: [0, 0, 1, 1], confidence: 0 } });
     const trip = await db.trip.create({ data: { slug: "tus", title: "Tuscany", description: "Two weeks driving around.", startDate: new Date("2019-05-01"), endDate: new Date("2019-05-14"), createdById: admin } });
     const note = async (context: string, tripId: string | null = trip.id) => (await db.photo.create({ data: { uploaderId: admin, originalName: "t.jpg", mimeType: "image/jpeg", storageKey: "t", originalPath: "t/o.jpg", sizeBytes: 1, status: "READY", tripId, context } })).id;
-    const place = [await note("Florence at night"), await note("Florence and Siena by train"), await note("Florence in the rain"), await note("Ponte Vecchio. Florence at dusk"), await note("Florence at night", null), await note("Florence vs Rome", null), await note("Florence at night with the Duomo lit up", null), await note("Florence at dusk with Siena beyond", null), await note("Florence at sunset with her camera", null)];
+    const place = [await note("Florence at night"), await note("Florence and Siena by train"), await note("Florence in the rain"), await note("Ponte Vecchio. Florence at dusk"), await note("Florence at night", null), await note("Florence vs Rome", null), await note("Florence at night with the Duomo lit up", null), await note("Florence at dusk with Siena beyond", null), await note("Florence at sunset with her camera", null), await note("Florence at sunset with Brunelleschi's dome", null), await note("Florence at dusk with Santa Croce", null), await note("Florence at night with Ponte Vecchio behind", null)];
     const pool = await note("Florence at the pool", null);
     // Somebody else in the scene: she is in it too.
-    const people = [await note("Florence at sunset with Grandpa", null), await note("Florence at night with Ben", null), await note("Florence in the rain with her dad", null)];
+    const people = [await note("Florence at sunset with Grandpa", null), await note("Florence at night with Ben", null), await note("Florence in the rain with her dad", null), await note("Florence at sunset, with friends", null), await note("Florence at dusk with the cousins", null)];
     await optOutPerson(florence.id, new FormData());
     const row = (await taggedOn(own))!;
     for (const id of place) expect(await covers(row, id)).toBe(false);

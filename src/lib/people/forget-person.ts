@@ -86,7 +86,7 @@ export async function forgetPerson(personId: string, opts: { keepName: boolean; 
       await db.appSetting.update({ where: { id: "app" }, data: { lastForgetAt: new Date() } });
     }
     await held.assertHeld();
-    await forgetNameInText(photoIds, m, { tagged: hers, personId });
+    await forgetNameInText(photoIds, m, { tagged: hers, personId, stamp: false });
     await forgetRawAnswers(m);
     await forgetQueuedFileNames(m);
     // What is left mentioning them is what members wrote (or the helper's trip descriptions, where only a name that
@@ -126,12 +126,11 @@ export async function forgetPerson(personId: string, opts: { keepName: boolean; 
       await held.assertHeld();
       await recleanShared(tagged);
     }
-    // Until the record was gone the remembered names still counted as somebody's: an answer asked for before now
-    // about any of these photographs is thrown away, and names read before now are read again.
+    // Until the record was gone the remembered names still counted as somebody's: an answer asked for before now,
+    // about any photograph, is thrown away, and names read before now are read again (see forgetState). No photograph
+    // is stamped: which ones this forget covered is nobody's to read from the database.
     await held.assertHeld();
-    const settled = new Date();
-    await db.photo.updateMany({ where: { id: { in: photoIds } }, data: { namesScrubbedAt: settled } });
-    await db.appSetting.update({ where: { id: "app" }, data: { lastForgetAt: settled } });
+    await db.appSetting.update({ where: { id: "app" }, data: { lastForgetAt: new Date() } });
   });
   // Nor in the queue: judging jobs asked for them are dropped, finished ones included.
   if (!keepName && !later) await dropRejudgeJobs(personId, [person.name, ...person.formerNames]);
@@ -154,22 +153,29 @@ const TRIP_WORD_AFTER = /^[ \t]+(?:trip|trips|holiday|holidays|vacation|visit|ge
 const SCENE_AFTER = /^[ \t]+(?:(?:at|by)[ \t]+(?:night|dusk|dawn|sunset|sunrise|twilight|midnight|daybreak)|in[ \t]+(?:the[ \t]+)?(?:rain|snow|fog|mist|drizzle|sun|sunshine)(?=[ \t]*(?:$|[\n.,;:!?)]|(?:and|with)(?![\p{L}\p{M}]))))(?![\p{L}\p{M}])/iu;
 /**
  * Somebody in the scene after it: "at sunset with Grandpa", "at night with Ben", "in the rain with her dad". Then the
- * name before the scene is somebody too, not the city ("Florence at sunset with Grandpa"); "at night with the Duomo
- * lit up" and "at dusk with Siena beyond" are still the place.
+ * name before the scene is somebody too, not the city ("Florence at sunset with Grandpa"). Only a kinship word or a
+ * name the album knows is somebody: "at night with the Duomo lit up", "at dusk with Siena beyond", "at sunset with
+ * Brunelleschi's dome" and "with Santa Croce" are still the place.
  */
-const WITH_SOMEBODY = /^[ \t]+with[ \t]+(?:(her|his|their|our|my)[ \t]+)?(\p{L}[\p{L}\p{M}'’.-]*)/iu;
+const WITH_SOMEBODY = /^[ \t]*,?[ \t]+with[ \t]+(?:(?:her|his|their|our|my|the|a|an|some)[ \t]+)?(\p{L}[\p{L}\p{M}'’.-]*)/iu;
+/** People, not things, after "with": "with friends", "with the cousins", "with her kids". */
+const PEOPLE_NOUNS = new Set([
+  "friends", "friend", "cousins", "cousin", "kids", "kid", "children", "child", "family", "parents", "grandparents", "grandkids", "grandchildren", "siblings",
+  "sisters", "brothers", "classmates", "class", "team", "teammates", "neighbors", "neighbours", "girls", "boys", "family's", "folks", "relatives", "aunts",
+  "uncles", "twins", "baby", "babies", "everyone", "everybody", "us", "them", "him", "her", "me",
+]);
 
 /** The time of day, the weather or the light after the place, with nobody in the scene: see SCENE_AFTER. */
-function sceneOfThePlace(after: string): boolean {
+function sceneOfThePlace(after: string, isNameWord: (word: string) => boolean): boolean {
   const scene = after.match(SCENE_AFTER);
   if (!scene) return false;
   const w = after.slice(scene[0].length).match(WITH_SOMEBODY);
   if (!w) return true;
-  const word = w[2].replace(/\.$/u, "");
+  const word = w[1].replace(/\.$/u, "").replace(/['’]s$/u, "");
+  if (PEOPLE_NOUNS.has(word.toLowerCase())) return false;
   // ("the", "our" and "my" are kinship words to the members-only rule, which reads "the Duomo" otherwise.)
   if (FUNCTION_WORDS.has(word.toLowerCase())) return true;
-  if (isKinWord(word)) return false;
-  return Boolean(w[1]) || !/^\p{Lu}/u.test(word) || isListedPlace(word);
+  return !(isKinWord(word) || (/^\p{Lu}/u.test(word) && isNameWord(word)));
 }
 
 /** Another place joined to it: "Florence and Siena", "Florence vs Rome", "Pisa to Florence". */
@@ -177,14 +183,14 @@ const JOINED_AFTER = /^[ \t]+(?:and|&|vs\.?|versus|or|to)[ \t]+(\p{Lu}[\p{L}\p{M
 const JOINED_BEFORE = /(\p{Lu}[\p{L}\p{M}'’.-]*)[ \t]+(?:and|&|vs\.?|versus|or|to)[ \t]+$/u;
 
 /** Whether any mention of these words in a text is the place, by the rules given. */
-function usedAsPlace(text: string | null | undefined, rx: RegExp, rules: Neighbourhood): boolean {
+function usedAsPlace(text: string | null | undefined, rx: RegExp, rules: Neighbourhood, isNameWord: (word: string) => boolean = () => false): boolean {
   if (!text) return false;
   return [...text.matchAll(rx)].some((m) => {
     const end = m.index! + m[0].length;
     const after = text.slice(end);
     const before = text.slice(0, m.index!);
     const joined = [after.match(JOINED_AFTER)?.[1], before.match(JOINED_BEFORE)?.[1]].some((w) => w && isListedPlace(w));
-    return joined || sceneOfThePlace(after) || TRIP_WORD_AFTER.test(after) || notThePerson(text, m.index!, end, rules);
+    return joined || sceneOfThePlace(after, isNameWord) || TRIP_WORD_AFTER.test(after) || notThePerson(text, m.index!, end, rules);
   });
 }
 
@@ -200,6 +206,10 @@ function usedAsPlace(text: string | null | undefined, rx: RegExp, rules: Neighbo
  */
 async function notesNaming(words: string[], places: boolean): Promise<string[]> {
   if (!words.length) return [];
+  // Words of the names of everybody the album knows, people and members: "with Ben" is somebody in the scene.
+  const known = places ? await Promise.all([db.person.findMany({ select: { name: true, formerNames: true } }), db.user.findMany({ where: { name: { not: null } }, select: { name: true } })]) : [[], []] as const;
+  const nameWords = new Set([...known[0].flatMap((p) => [p.name, ...(p.formerNames ?? [])]), ...known[1].map((u) => u.name ?? "")].flatMap((n) => n.toLowerCase().split(/[\s-]+/u)).filter(Boolean));
+  const isNameWord = (w: string) => nameWords.has(w.toLowerCase());
   const rows = await db.photo.findMany({
     where: { OR: words.map((w) => ({ context: { contains: w } })) },
     select: {
@@ -224,7 +234,7 @@ async function notesNaming(words: string[], places: boolean): Promise<string[]> 
       if ([r.placeName, r.placeEstimateName].some((t) => t && anyCase.test(t))) return false;
       const around = [r.trip, r.activity, ...r.collections.map((c) => c.collection)].flatMap((c) => (c ? [c.title, c.description] : []));
       if (around.some((t) => usedAsPlace(t, rx, { place: "wide", number: true }))) return false;
-      return !usedAsPlace(r.context, rx, { place: "near", opening: "clear", number: true });
+      return !usedAsPlace(r.context, rx, { place: "near", opening: "clear", number: true }, isNameWord);
     })
     .map((r) => r.id);
 }

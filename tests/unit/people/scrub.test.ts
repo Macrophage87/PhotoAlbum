@@ -133,7 +133,10 @@ describe("keywords", () => {
     const here = { tagged: true };
     expect(ruth.scrubKeywords("jones family reunion", here)).toBe("A family member family reunion");
     expect(ruth.scrubKeywords("picnic, jones family", { tagged: true, onPhoto: false })).toBe("picnic, a family member family");
-    for (const t of ["jones beach picnic", "picnic at jones park", "jones 2019", "florence jones"]) expect(ruth.scrubKeywords(t, here)).toBe(t);
+    for (const t of ["jones beach picnic", "picnic at jones park", "jones 2019"]) expect(ruth.scrubKeywords(t, here)).toBe(t);
+    // A bag of words: the word before says nothing.
+    expect(ruth.scrubKeywords("barbara pier jones family", here)).toBe("barbara pier a family member family");
+    expect(ruth.scrubKeywords("florence jones", here)).toBe("florence a family member");
     // Not off their photographs, nor where somebody tagged there shares it, nor an everyday surname ("wood fire").
     expect(ruth.scrubKeywords("jones family reunion")).toBe("jones family reunion");
     expect(ruth.scrubKeywords("jones family reunion", { tagged: true, others: ["Ben Jones"] })).toBe("jones family reunion");
@@ -238,9 +241,14 @@ describe("words around a first name", () => {
     expect(nameMatcher(["Will Turner"]).scrub("Will you look at that!", { tagged: true })).toBe("Will you look at that!");
     // A name that is also a verb, used as one, on their own photograph; anything a person does is still them.
     for (const [name, text, want] of [
-      ["Will Turner", "Will be fun. Will anyone swim?", "Will be fun. Will anyone swim?"],
+      ["Will Turner", "Will anyone swim? Will the kids remember?", "Will anyone swim? Will the kids remember?"],
       ["May Lee", "May you have many more.", "May you have many more."],
-      ["Hope Kent", "Hope you like it!", "Hope you like it!"],
+      ["Hope Kent", "Hope you like it! Hope to see you soon.", "Hope you like it! Hope to see you soon."],
+      // "be", "not", "all" and "so" say nothing: it is as often them.
+      ["Will Turner", "Will not impressed by the snow.", "A family member not impressed by the snow."],
+      ["May Lee", "May all smiles at her party.", "A family member all smiles at her party."],
+      ["Hope Kent", "Hope so proud of her medal.", "A family member so proud of her medal."],
+      ["Hope Kent", "Hope to the rescue!", "A family member to the rescue!"],
       ["Will Turner", "Will swam faster than Ben.", "A family member swam faster than Ben."],
       ["Will Turner", "Will and Ben at the lake.", "A family member and Ben at the lake."],
       ["Hope Kent", "Hope hugs the dog.", "A family member hugs the dog."],

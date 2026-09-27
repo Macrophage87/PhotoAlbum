@@ -408,8 +408,10 @@ model Photo {
   /// The helper's title when it is members-only: shown to members where the item has no title of its own, never to
   /// anybody else. `title` itself only ever holds what anybody who may see the item may read.
   membersTitle              String?
-  /// When a forgotten person's name was last taken out of this item's machine-written text. An answer from the
-  /// helper to a request built before then is thrown away rather than stored, since it may name them again.
+  /// When somebody's name was last taken out of this item's machine-written text because they were untagged from it
+  /// or their naming was withdrawn. An answer from the helper to a request built before then is thrown away rather
+  /// than stored, since it may name them again. A forget stamps nothing here (the stamps would say which photographs
+  /// it covered): an answer asked for before any forget is thrown away instead (AppSetting.lastForgetAt).
   namesScrubbedAt           DateTime?
   /// Members-only only because the text repeats a word from the title of a trip or collection strangers cannot
   /// open: making that trip or collection public lifts it (see src/lib/annotation/rejudge.ts).
@@ -981,7 +983,8 @@ model ForgottenName {
   /// For a one-word name, the photographs the forget went through, and the trips, collections and activities that
   /// named them ("trip:<id>"), each hashed under the row's key like the name: without the key they say nothing of
   /// which photographs it covers. It is looked for nowhere else. (Rows kept before they were hashed hold plain ids
-  /// until the start-up pass hashes them: see hashPlainScopes.)
+  /// until the start-up pass hashes them: see hashPlainScopes.) ForgetLeftover.items keeps plain ids by design: it
+  /// is the list of what members wrote, for them to edit, until it is dismissed.
   photoIds        String[] @default([])
   containerIds    String[] @default([])
   /// Of photoIds, the ones its owner was tagged on: there a place-like name is them unless a place is plainly meant.

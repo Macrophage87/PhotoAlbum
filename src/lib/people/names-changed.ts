@@ -126,18 +126,19 @@ export async function withNamePassesLock(fn: () => Promise<void>): Promise<boole
 }
 
 /**
- * Read inside the transaction that stores an answer. `underWay`: a forget is running. Which photographs it will touch
- * is not known yet, so nothing is stored; once it has finished, the photographs it touched carry `namesScrubbedAt`
- * (see `unchangedSince`), and only answers about those are thrown away. `reload`: a forget has begun since the
+ * Read inside the transaction that stores an answer. `underWay`: a forget is running, so nothing is stored. `since`:
+ * a forget began or finished after the request was built at `requestedAt`, so its answer is thrown away, whatever it
+ * is about: the photographs a forget touched are not stamped one by one, which would say which they were (see
+ * Photo.namesScrubbedAt). Forgets are rare; the item is described again. `reload`: a forget has begun since the
  * forgotten names were read at `loadedAt` (see Tombstone.loadedAt), which may be missing one, so they are read again
  * before anything is stored.
  */
-export async function forgetState(tx: Prisma.TransactionClient, loadedAt?: Date): Promise<{ underWay: boolean; reload: boolean }> {
+export async function forgetState(tx: Prisma.TransactionClient, loadedAt?: Date, requestedAt?: Date): Promise<{ underWay: boolean; since: boolean; reload: boolean }> {
   // Held until this transaction ends, so a forget cannot begin between this check and the write.
   const [{ free }] = await tx.$queryRaw<{ free: boolean }[]>`SELECT pg_try_advisory_xact_lock_shared(${FORGET_LOCK}::bigint) AS free`;
   const rows = await tx.$queryRaw<{ lastForgetAt: Date | null }[]>`SELECT "lastForgetAt" FROM "AppSetting" WHERE id = 'app'`;
   const started = rows[0]?.lastForgetAt;
-  return { underWay: !free, reload: Boolean(loadedAt && started && started >= loadedAt) };
+  return { underWay: !free, since: Boolean(requestedAt && started && started >= requestedAt), reload: Boolean(loadedAt && started && started >= loadedAt) };
 }
 
 /** Whether somebody is being forgotten right now: for deciding whether to wait, not for writing. */

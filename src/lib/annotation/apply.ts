@@ -155,8 +155,8 @@ export async function applyAnnotation(photoId: string, model: string, parsed: An
   const textChanged = Symbol("text changed");
   const reload = Symbol("reload");
   const kept = await db.$transaction(async (tx) => {
-    const forget = await forgetState(tx, tombstone.loadedAt);
-    if (forget.underWay) throw stale;
+    const forget = await forgetState(tx, tombstone.loadedAt, requestedAt);
+    if (forget.underWay || forget.since) throw stale;
     // Somebody was forgotten since the forgotten names were read: read them again, and judge the answer afresh.
     if (forget.reload) throw reload;
     // The text as it was read, too: a member's edit (or anything else that rewrote it) after the read is newer than

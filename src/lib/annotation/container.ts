@@ -209,10 +209,9 @@ export async function writeContainerDescription(kind: ContainerKind, id: string,
   // Somebody on these photographs forgotten, renamed or no longer to be named while it was being written, or anybody
   // forgotten at all: its answer may name them, so it is not kept.
   await db.$transaction(async (tx) => {
-    const forget = await forgetState(tx, tombstone.loadedAt);
-    if (forget.underWay || (await namesChangedSince(container.photos.map((p) => p.id), requestedAt))) throw new Error(NAMES_CHANGED);
-    // Somebody forgotten since the forgotten names were read: read them again.
-    if (forget.reload) data.description = (await loadTombstone()).scrub(data.description, await forgottenScope({ containers: [{ kind, id }] }));
+    // Anybody forgotten since the request (and so since the forgotten names were read, after it): not kept.
+    const forget = await forgetState(tx, tombstone.loadedAt, requestedAt);
+    if (forget.underWay || forget.since || forget.reload || (await namesChangedSince(container.photos.map((p) => p.id), requestedAt))) throw new Error(NAMES_CHANGED);
     if (kind === "trip") await tx.trip.update({ where: { id }, data });
     else await tx.collection.update({ where: { id }, data });
   });

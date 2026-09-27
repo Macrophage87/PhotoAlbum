@@ -8,6 +8,7 @@ vi.mock("@/lib/jobs/boss", () => ({ enqueue: async () => {} }));
 import { forgetPerson } from "@/lib/people/forget-person";
 import { looseMatcher, memberTextMentioning, namesSomebodyRestricted, scrubWithdrawnNames, withoutWithdrawnNames } from "@/lib/people/forget";
 import { nameMatcher } from "@/lib/people/scrub";
+import { forgottenScope, loadTombstone } from "@/lib/people/tombstone";
 import type { LeftoverItems } from "@/lib/people/forget";
 import { annotationSchema, type StoredAnnotation } from "@/lib/annotation/schema";
 import { applyAnnotation } from "@/lib/annotation/apply";
@@ -278,10 +279,11 @@ describe("show to everyone and the nightly public pass, for a withdrawn naming",
 });
 
 /**
- * Places, dates and sayings around a name, when deciding what everyone may read: the share guard for anybody who
- * may not be named, and show to everyone while a withdrawal waits out its fortnight, judge them alike. A name that is
- * part of a place's name, a date or a saying is shared as written; a real mention is refused by the guard, and taken
- * out (or held) by the withdrawal.
+ * Places, dates and sayings around a name, when deciding what everyone may read: the share guard for a child (or
+ * anybody who may not be named), and show to everyone while a withdrawal waits out its fortnight on a photograph she
+ * is not tagged on. A date or a saying is shared as written, and so is "Lake" or "Mount" with a listed place; every
+ * other place that holds her name is refused, since a child's name in a headline looks just the same ("Mia Falls
+ * Asleep"), and a withdrawal holds whatever may still be her, never publishing the name.
  */
 describe("the share guard and a withdrawn naming, around places, dates and sayings", () => {
   let admin: string;
@@ -291,35 +293,69 @@ describe("the share guard and a withdrawn naming, around places, dates and sayin
   });
   const record = (text: string): StoredAnnotation => ({ title: text, caption: text, description: "", tags: [], place: null, activity: null, objects: [], visibleText: null, season: "summer", mood: null, searchSummary: "" });
 
-  /** [their name, the helper's words, whether the words are a place, a date or a saying rather than them] */
+  /** [their name, the helper's words, whether the guard shares them] */
   const ROWS: [string, string, boolean][] = [
-    ["Louise Smith", "Lake Louise at dawn", true],
-    ["Louise Smith", "LAKE LOUISE AT DAWN", true],
-    ["Paris Jones", "The Eiffel Tower, Paris", true],
-    ["Brooklyn Jones", "Walking the Brooklyn Bridge", true],
-    ["Jordan Lee", "Crossing the Jordan River", true],
-    ["Madison Kemp", "Madison Square Garden", true],
-    ["Harbor Lee", "Mount Harbor from the ferry", true],
+    // Dates, sayings, a surname alone and "Lake" or "Mount" with a listed place: shared by both.
     ["May Smith", "Lake day in May.", true],
     ["May Smith", "May 2019 at the lake", true],
+    ["May Smith", "The May Day parade in town.", true],
     ["Will Turner", "Will you look at that!", true],
     ["Ruth Baker", "The Baker Street bakery", true],
+    ["Geneva Smith", "Lake Geneva at dawn", true],
+    ["Victoria Lee", "Mount Victoria from the trail.", true],
+    // Refused: a real mention, and every place excuse that could be one (the language review's B1-B4, the share
+    // guard review's attacks and its place-named children).
     ["Louise Smith", "Louise at the lake", false],
     ["Paris Jones", "Paris blows out the candles", false],
-    ["Louise Park", "Louise Park at the lake", false],
-    ["Jordan Lee", "Grandpa Jordan River walk", false],
+    ["Jordan Price", "Jordan at bat.", false],
+    ["Austin Blake", "Austin and Leo at the lake.", false],
+    ["Madison Clark", "Madison at the lake with Grandpa.", false],
+    ["Florence Adams", "Florence and Ben at the Duomo.", false],
+    ["May Chen", "Photo of May with her grandmother.", false],
+    ["June Carter", "Photo of June.", false],
+    ["Mia Lopez", "Mia Falls Asleep In The Car", false],
+    ["Mia Lopez", "Mia Springs Into The Pool", false],
+    ["Madison Clark", "Madison Square Dancing At School", false],
+    ["Mia Lopez", "A day at Crater Lake. Mia caught a frog.", false],
+    ["Paris Moreau", "At the Bronx Zoo, Paris fed the goats.", false],
+    ["Ximena", "Ximena Beach Day", false],
+    ["Ximena", "Ximena Garden Party", false],
+    ["Ximena", "Ximena Park Picnic", false],
+    ["Ximena", "Ximena Zoo Trip", false],
+    ["Ximena", "Fort Ximena", false],
+    ["Jordan Price", "Jordan River Walk", false],
+    ["Sydney Lee", "Sydney Harbour cruise with Grandpa", false],
+    ["Rose", "Rose Garden Party", false],
+    ["Paris Moreau", "In Grandpa's Garden, Paris plants tulips.", false],
+    ["Madison Clark", "At The Park, Madison Feeds The Ducks", false],
+    ["Jordan Price", "By The River, Jordan Skips Stones", false],
+    ["Madison Clark", "Madison at the park.", false],
+    ["Jordan Price", "Jordan by the river", false],
+    ["Geneva Smith", "Lake Geneva Swims", false],
+    // Places that may be her are refused too: refusing is the safe side, and members can edit.
+    ["Louise Smith", "Lake Louise at dawn", false],
+    ["Paris Jones", "The Eiffel Tower, Paris", false],
+    ["Brooklyn Jones", "Walking the Brooklyn Bridge", false],
+    ["Jordan Lee", "Crossing the Jordan River", false],
+    ["Madison Kemp", "Madison Square Garden", false],
+    ["Austin Blake", "The Austin skyline from the river.", false],
   ];
 
-  it.each(ROWS)("%s: %s", async (name, text, notThem) => {
-    const person = await db.person.create({ data: { name, optedOutAt: new Date(), createdById: admin } });
+  it.each(ROWS)("%s: %s", async (name, text, shares) => {
+    // A child by birthday: the share guard's.
+    const person = await db.person.create({ data: { name, birthday: new Date("2016-05-01"), createdById: admin } });
     const refused = await namesSomebodyRestricted([text]);
-    await db.person.update({ where: { id: person.id }, data: { optedOutAt: null, namingWithdrawnAt: new Date() } });
+    // A withdrawal in its fortnight, on a photograph she is not tagged on.
+    await db.person.update({ where: { id: person.id }, data: { birthday: null, namingWithdrawnAt: new Date() } });
     const p = await db.photo.create({ data: { uploaderId: admin, originalName: "x.jpg", mimeType: "image/jpeg", storageKey: "k", originalPath: "k/o.jpg", sizeBytes: 1, status: "READY", title: text, titleByHelper: true, annotation: record(text), annotatedAt: new Date() } });
     const shown = await withoutWithdrawnNames(p.id, { annotation: record(text), title: text });
     const first = name.split(" ")[0];
-    const words = [shown.title, (shown.annotation as StoredAnnotation).title, (shown.annotation as StoredAnnotation).caption];
-    if (notThem) expect({ refused, hold: shown.hold, words }).toEqual({ refused: false, hold: false, words: [text, text, text] });
-    else expect({ refused, published: shown.hold ? [] : words.filter((w) => new RegExp(first, "i").test(w ?? "")) }).toEqual({ refused: true, published: [] });
+    const published = shown.hold ? [] : [shown.title, (shown.annotation as StoredAnnotation).title, (shown.annotation as StoredAnnotation).caption];
+    if (shares) expect({ refused, hold: shown.hold, published }).toEqual({ refused: false, hold: false, published: [text, text, text] });
+    else expect({ refused, leaked: published.filter((w) => new RegExp(first, "i").test(w ?? "")) }).toEqual({ refused: true, leaked: [] });
+    // Never garbled: what is shown is what was written, or what is certainly her taken out ("The Eiffel Tower, A
+    // Family Member." is neither).
+    expect(published.some((w) => /(?:the|our|my|,)[ \t]+a family member/iu.test(w ?? ""))).toBe(false);
   });
 });
 
@@ -345,8 +381,35 @@ describe("on her own photograph, when she is forgotten and in a later answer", (
     ["May Lee", "May Day at the fair.", "May Day at the fair."],
     ["Will Turner", "Will swam faster than Ben.", "A family member swam faster than Ben."],
     ["Will Turner", "Will you look at that!", "Will you look at that!"],
-    ["Will Turner", "Will be fun.", "Will be fun."],
+    // "be" says nothing ("Will be ten next week" is him): over-removal is the lesser evil.
+    ["Will Turner", "Will be fun.", "A family member be fun."],
     ["Ada Byron", "Little Sister Ada and Big Brother Ada.", "A family member and a family member."],
+    // A name that is also a verb, used as a name (the language review's B5).
+    ["Will Turner", "Will not impressed by the snow.", "A family member not impressed by the snow."],
+    ["Hope Adams", "Hope so proud of her medal.", "A family member so proud of her medal."],
+    // And used as the verb (S2).
+    ["Hope Adams", "Hope the weather holds for the picnic.", "Hope the weather holds for the picnic."],
+    ["May Chen", "May the fourth be with you!", "May the fourth be with you!"],
+    ["Will Turner", "Will the kids remember this trip?", "Will the kids remember this trip?"],
+    // A month that is her name: plainly her (S1), or the month (S2, the first review's "June waves").
+    ["May Chen", "May's first day of school.", "A family member's first day of school."],
+    ["May Chen", "Happy birthday, May!", "Happy birthday, a family member!"],
+    ["May Chen", "\"May, come look!\" Mom called.", "\"A family member, come look!\" Mom called."],
+    ["May Chen", "Photo of May with her grandmother.", "Photo of a family member with her grandmother."],
+    ["May Chen", "Grandma and May on the porch.", "Grandma and a family member on the porch."],
+    ["May Chen", "Ben, Leo and May on the dock.", "Ben, Leo and a family member on the dock."],
+    ["May Chen", "May blowing out the candles on her cake.", "A family member blowing out the candles on her cake."],
+    ["May Chen", "May is holding the new puppy.", "A family member is holding the new puppy."],
+    ["May Chen", "May loves the swings.", "A family member loves the swings."],
+    ["June Carter", "Photo of June.", "Photo of a family member."],
+    ["June Carter", "Grandpa holding baby June.", "Grandpa holding a family member."],
+    ["June Carter", "Little June in her Easter dress.", "A family member in her Easter dress."],
+    ["June Carter", "Sunset with June on the beach.", "Sunset with a family member on the beach."],
+    ["June Carter", "June, May and Ben on the dock.", "A family member, May and Ben on the dock."],
+    ["June Carter", "The June sun was brutal.", "The June sun was brutal."],
+    ["June Carter", "June waves crashed on the rocks.", "June waves crashed on the rocks."],
+    ["June Carter", "Late June at the lake house.", "Late June at the lake house."],
+    ["May Chen", "Our May trip to the coast.", "Our May trip to the coast."],
   ];
 
   it.each(ROWS)("%s: %s", async (name, text, want) => {
@@ -358,5 +421,48 @@ describe("on her own photograph, when she is forgotten and in a later answer", (
     const forgotten = await caption();
     await applyAnnotation(p.id, "m", annotationSchema.parse({ ...record(text), estimatedYear: null, estimatedPlace: null }), { content: [] }, { requestedAt: new Date() });
     expect({ forgotten, later: await caption() }).toEqual({ forgotten: want, later: want });
+  });
+});
+
+/** The first review of this round: a row from before places were hashed, notes about the city, and keywords. */
+describe("forgotten names kept by place, notes about a place, and keywords", () => {
+  let admin: string;
+  beforeEach(async () => {
+    await resetTestDb();
+    admin = (await db.user.create({ data: { email: "admin@example.com", role: "ADMIN" } })).id;
+  });
+  const photo = (data: Record<string, unknown> = {}) => db.photo.create({ data: { uploaderId: admin, originalName: "x.jpg", mimeType: "image/jpeg", storageKey: "k", originalPath: "k/o.jpg", sizeBytes: 1, status: "READY", ...data } });
+
+  it("a whole trip counts a photograph a row from before places were hashed keeps as it is", async () => {
+    const ximena = await db.person.create({ data: { name: "Ximena", createdById: admin } });
+    const tagged = await photo();
+    await db.face.create({ data: { photoId: tagged.id, personId: ximena.id, status: "CONFIRMED", box: [0.1, 0.1, 0.2, 0.2], confidence: 0 } });
+    await forgetPerson(ximena.id, { keepName: false, byUserId: admin });
+    const trip = await db.trip.create({ data: { slug: "lake", title: "Lake", startDate: new Date("2025-08-10"), endDate: new Date("2025-08-11"), createdById: admin } });
+    const inTrip = await photo({ tripId: trip.id });
+    const [row] = await db.forgottenName.findMany();
+    await db.forgottenName.update({ where: { hash: row.hash }, data: { photoIds: [inTrip.id], taggedPhotoIds: [], containerIds: [] } });
+    const ts = await loadTombstone();
+    expect(ts.scrub("Ximena at the lake", await forgottenScope({ containers: [{ kind: "trip", id: trip.id }] }, ts))).toBe("A family member at the lake");
+  });
+
+  it("a note of the city with a dome or a church in it is the city's; one with Grandpa or friends in it is hers", async () => {
+    const florence = await db.person.create({ data: { name: "Florence", createdById: admin } });
+    const own = await photo();
+    await db.face.create({ data: { photoId: own.id, personId: florence.id, status: "CONFIRMED", box: [0.1, 0.1, 0.2, 0.2], confidence: 0 } });
+    const city = [await photo({ context: "Florence at sunset with Brunelleschi's dome" }), await photo({ context: "Florence at dusk with Santa Croce" }), await photo({ context: "Florence at night with Ponte Vecchio behind" })];
+    const hers = [await photo({ context: "Florence at sunset with Grandpa" }), await photo({ context: "Florence at sunset, with friends" })];
+    await forgetPerson(florence.id, { keepName: false, byUserId: admin });
+    const ts = await loadTombstone();
+    for (const p of city) expect(ts.scrub("Florence at sunset", await forgottenScope({ photoIds: [p.id] }, ts))).toBe("Florence at sunset");
+    for (const p of hers) expect(ts.scrub("Florence smiles", await forgottenScope({ photoIds: [p.id] }, ts))).toBe("A family member smiles");
+  });
+
+  it("her surname alone leaves a search summary about her whatever stands before it, but not before a place's word", () => {
+    const m = nameMatcher(["Ruth Jones"], []);
+    expect(m.scrubKeywords("barbara pier jones family", { tagged: true })).toBe("barbara pier a family member family");
+    expect(m.scrubKeywords("picnic at jones beach", { tagged: true })).toBe("picnic at jones beach");
+    // A surname that is an everyday word stays: "price tag".
+    expect(nameMatcher(["Ruth Price"], []).scrubKeywords("price tag on the cake", { tagged: true })).toBe("price tag on the cake");
   });
 });

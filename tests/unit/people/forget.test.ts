@@ -96,7 +96,8 @@ describe("forgetting somebody", () => {
     expect(p.estimatedDateNote).toBe("1990–1995: a family member looks about ten");
     expect(p.placeEstimateName).toBe("A family member's cabin, Maine");
     expect(p.placeEstimateNote).toBe("the sign reads a family member's cabin");
-    expect(p.namesScrubbedAt).not.toBeNull();
+    // Not stamped: which photographs a forget covered is not written on them (see forgetState).
+    expect(p.namesScrubbedAt).toBeNull();
     expect((await db.$queryRaw<{ n: number }[]>`SELECT count(*)::int AS n FROM "Photo" WHERE id = ${photoId} AND "textEmbedding" IS NOT NULL`)[0].n).toBe(0);
     expect(await db.mediaAnnotationRaw.count({ where: { photoId } })).toBe(0);
 
@@ -124,8 +125,8 @@ describe("forgetting somebody", () => {
     // Trips by id: an address can be the name.
     expect(items.trips.map((t) => t.id)).toContain(ownTripId);
     expect(JSON.stringify(left.items)).not.toMatch(/ada|byron/i);
-    // Stamped too, so no answer already on its way is written over it.
-    expect((await db.photo.findUniqueOrThrow({ where: { id: handTitled } })).namesScrubbedAt).not.toBeNull();
+    // Not stamped either: an answer already on its way about any photograph is thrown away (see forgetState).
+    expect((await db.photo.findUniqueOrThrow({ where: { id: handTitled } })).namesScrubbedAt).toBeNull();
 
     expect(await found("searchVectorMembers", "byron")).toEqual([handTitled]);
     expect(await db.person.findUnique({ where: { id: adaId } })).toBeNull();
