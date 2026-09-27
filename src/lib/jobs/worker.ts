@@ -98,10 +98,18 @@ export async function startWorker(): Promise<void> {
   const { scrubWithdrawnNames } = await import("@/lib/people/forget");
   // And forgets asked for while FORGET_KEY was missing, once it is set.
   const { completePendingForgets } = await import("@/lib/people/forget-person");
+  const { withNamePassesLock } = await import("@/lib/people/names-changed");
+  // One run of the two at a time, whoever starts it: the start-up run below and the nightly job may overlap.
+  const namePasses = (errors: "throw" | "log") =>
+    withNamePassesLock(async () => {
+      for (const [what, pass] of [["withdrawn-name scrub", scrubWithdrawnNames], ["pending forgets", completePendingForgets]] as const) {
+        if (errors === "throw") await pass();
+        else await pass().catch((err) => console.error(`[worker] ${what} failed`, err));
+      }
+    }).then((ran) => void (ran || console.warn("[worker] the name passes are already running; this run is skipped")));
   await boss.work(QUEUES.flagNewAdults, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60 }, async () => {
     await flagNewAdults();
-    await scrubWithdrawnNames();
-    await completePendingForgets();
+    await namePasses("throw");
   });
   await boss.work(QUEUES.purgeUnnamedFaces, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60 }, async () => void (await purgeUnnamedFaces()));
   await boss.work(QUEUES.purgeAnnotationRaw, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60 }, async () => void (await purgeAnnotationRaw()));
@@ -129,10 +137,7 @@ export async function startWorker(): Promise<void> {
   console.log("[worker] pg-boss handlers registered");
   // A naming the album withdrew by itself: what strangers can read loses the name at once, not at the next night.
   // Both can take a while over a big album, so they run beside the rest of start-up rather than ahead of it.
-  void (async () => {
-    await scrubWithdrawnNames().catch((err) => console.error("[worker] withdrawn-name scrub failed", err));
-    await completePendingForgets().catch((err) => console.error("[worker] pending forgets failed", err));
-  })();
+  void namePasses("log").catch((err) => console.error("[worker] the name passes could not start", err));
   // Before the reconciliation below, so a Picker download lost in the restart is told to be picked again rather
   // than re-processed (it has no file to process).
   await (await import("@/lib/media/stranded")).sweepStrandedUploads().catch((err) => console.error("[worker] stranded-upload sweep failed", err));

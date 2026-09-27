@@ -19,6 +19,7 @@ vi.mock("@/lib/jobs/boss", async (orig) => ({
 // The two slow start-up passes never finish here: registration must not wait for them.
 vi.mock("@/lib/people/forget", async (orig) => ({ ...((await orig()) as object), scrubWithdrawnNames: () => new Promise(() => {}) }));
 vi.mock("@/lib/people/forget-person", async (orig) => ({ ...((await orig()) as object), completePendingForgets: () => new Promise(() => {}) }));
+vi.mock("@/lib/people/names-changed", async (orig) => ({ ...((await orig()) as object), withNamePassesLock: async (fn: () => Promise<void>) => (await fn(), true) }));
 
 import { startWorker } from "@/lib/jobs/worker";
 import { HEAVY_HEARTBEAT_REFRESH_SECONDS, HEAVY_HEARTBEAT_SECONDS, HEAVY_QUEUES, queueOptions } from "@/lib/jobs/boss";
