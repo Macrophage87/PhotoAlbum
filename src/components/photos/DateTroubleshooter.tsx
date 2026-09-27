@@ -38,10 +38,10 @@ export function DateTroubleshooter({ photoId, dark = false, readOnly = false, on
       setOpen(true);
     });
 
-  const use = (iso: string) =>
+  const use = (key: string) =>
     start(async () => {
       setMessage(null);
-      const r = await applyReportedDate(photoId, iso);
+      const r = await applyReportedDate(photoId, key);
       if (!r.ok) { setMessage(r.message); return; }
       setOpen(false);
       if (onApplied) onApplied({ takenAt: r.takenAt, tzOffsetMin: r.tzOffsetMin, source: r.source, setBy: r.setBy });
@@ -86,12 +86,12 @@ export function DateTroubleshooter({ photoId, dark = false, readOnly = false, on
             <span className="font-medium">{w.label}</span>
             {w.current && <span className={`text-xs rounded-full px-2 py-0.5 ${dark ? "bg-white/15" : "bg-surface-alt"}`}>this is the one in use</span>}
             <span className={`w-full text-xs ${dark ? "text-white/60" : "text-muted"}`}>{w.note}</span>
-            <span className="flex-1">{when(w.at, report.current.tzOffsetMin) ?? <span className={dark ? "text-white/60" : "text-muted"}>nothing</span>}</span>
+            <span className="flex-1">{when(w.at, w.tzOffsetMin ?? report.current.tzOffsetMin) ?? <span className={dark ? "text-white/60" : "text-muted"}>nothing</span>}</span>
             {!readOnly && w.usable && w.at && !w.current && (
               dark ? (
-                <button type="button" disabled={pending} onClick={() => use(w.at!)} className="px-2 py-1 rounded bg-white text-black text-xs font-medium disabled:opacity-60">Use this</button>
+                <button type="button" disabled={pending} onClick={() => use(w.key)} className="px-2 py-1 rounded bg-white text-black text-xs font-medium disabled:opacity-60">Use this</button>
               ) : (
-                <Button size="sm" variant="secondary" disabled={pending} onClick={() => use(w.at!)}>Use this</Button>
+                <Button size="sm" variant="secondary" disabled={pending} onClick={() => use(w.key)}>Use this</Button>
               )
             )}
           </li>
