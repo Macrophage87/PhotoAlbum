@@ -3,6 +3,7 @@ import { forgetNameInText, matcherFor, memberTextMentioning, photosInContainers,
 import { containerKey, forgetKeyState, rememberForgotten } from "./tombstone";
 import { isListedPlace, nameMatcher, notThePerson, type NameMatcher, type Neighbourhood } from "./scrub";
 import { withForgetLock } from "./names-changed";
+import { dropRejudgeJobs, forgetJudgedNames } from "@/lib/annotation/rejudge";
 
 /**
  * Opt a person out of recognition (see optOutPerson in src/app/people/actions.ts). Deletes their templates, clusters,
@@ -81,9 +82,13 @@ export async function forgetPerson(personId: string, opts: { keepName: boolean; 
       // Waiting for the key, their tags stay (without templates) to say where to look once it is set.
       await db.$executeRaw`UPDATE "Face" SET embedding = NULL, "clusterId" = NULL WHERE "personId" = ${personId}`;
     } else {
-      await db.face.deleteMany({ where: { personId } });
       // Forgetting entirely also removes the person page; the record of who is in which photo went with the faces.
-      await db.person.delete({ where: { id: personId } });
+      // Their names recorded as judged go with the record, rather than waiting in clear for the next sweep.
+      await db.$transaction(async (tx) => {
+        await tx.face.deleteMany({ where: { personId } });
+        await forgetJudgedNames(tx, personId);
+        await tx.person.delete({ where: { id: personId } });
+      });
     }
     // Until the record was gone the remembered names still counted as somebody's: an answer asked for before now
     // about any of these photographs is thrown away, and names read before now are read again.
@@ -93,6 +98,8 @@ export async function forgetPerson(personId: string, opts: { keepName: boolean; 
     await db.appSetting.update({ where: { id: "app" }, data: { lastForgetAt: settled } });
     return after;
   });
+  // Nor in the queue: judging jobs asked for them are dropped, finished ones included.
+  if (!keepName && !later) await dropRejudgeJobs(personId, [person.name, ...person.formerNames]);
   // The list stays until an admin (or whoever forgot them) has seen to it: ids and fields, never the name.
   const count = left.photos.length + left.trips.length + left.collections.length + left.activities.length;
   if (!keepName && count && opts.list !== false) {

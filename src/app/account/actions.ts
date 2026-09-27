@@ -14,11 +14,9 @@ export async function updateMyName(fd: FormData): Promise<void> {
   const name = nameSchema.parse(fd.get("name") ?? "");
   const before = await db.user.findUnique({ where: { id: user.id }, select: { name: true } });
   await db.user.update({ where: { id: user.id }, data: { name } });
-  // An uploader's name is members-only too: what the helper wrote before it was known is judged again.
-  if (name !== before?.name) {
-    const names = [name, before?.name].filter((n): n is string => Boolean(n?.trim()));
-    if (names.length) await rejudgeFromAction({ names });
-  }
+  // An uploader's name is members-only too: what the helper wrote before it was known is judged again, and
+  // the old one once that was judged (see `namesOfJob`).
+  if (name !== before?.name) await rejudgeFromAction({ members: [user.id] });
   revalidatePath("/", "layout");
 }
 
@@ -29,9 +27,6 @@ export async function setMemberName(userId: string, fd: FormData): Promise<void>
   const name = nameSchema.parse(fd.get("name") ?? "");
   const before = await db.user.findUnique({ where: { id: userId }, select: { name: true } });
   await db.user.update({ where: { id: userId }, data: { name } });
-  if (name !== before?.name) {
-    const names = [name, before?.name].filter((n): n is string => Boolean(n?.trim()));
-    if (names.length) await rejudgeFromAction({ names });
-  }
+  if (name !== before?.name) await rejudgeFromAction({ members: [userId] });
   revalidatePath("/", "layout");
 }

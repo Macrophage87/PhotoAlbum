@@ -25,7 +25,19 @@ import { nameMatcher, namePatterns, spokenWords, titleWords } from "./names";
  * What it will not do: move a title the family typed (see `titleIsHelpers`), or touch anything a member chose to
  * show to everyone (`annotationSharedAt`, `descriptionSharedAt`) — that stays shown until it is written again.
  */
-export type RejudgeJob = { names?: string[]; tripId?: string; collectionId?: string; sweep?: boolean };
+export type RejudgeJob = {
+  /**
+   * Whose names to look for: people and members by id, never by name — a queued job outlives the request, and a
+   * forgotten person's name must not wait in the queue for days. Their names are read when the job runs.
+   */
+  people?: string[];
+  members?: string[];
+  /** Only in jobs queued before names were asked for by id; still run, never queued. */
+  names?: string[];
+  tripId?: string;
+  collectionId?: string;
+  sweep?: boolean;
+};
 
 /** `missed`: writes that could not land after judging again; while there are any, nothing is recorded as judged. */
 export type RejudgeResult = { photos: number; titles: number; unflagged: number; places: number; descriptions: number; missed: number; /** Which rows missed, for the log. */ missedIds?: string[] };
@@ -338,13 +350,61 @@ const add = (a: RejudgeResult, b: RejudgeResult): RejudgeResult => ({ photos: a.
 const keyOwner = (key: string) => key.split(":").slice(0, 2).join(":");
 const keyName = (key: string) => key.split(":").slice(2).join(":");
 
-/** Record names as judged: merged with what is recorded now, and only for people and members still in the album. */
+/**
+ * Record names as judged: merged with what is recorded now, and only for people and members still in the album. The
+ * settings row is locked first, and who is still in the album read after, so a person deleted meanwhile (see
+ * `forgetJudgedNames`) is never written back.
+ */
 async function recordJudged(keys: string[], extra: { membersOnlyMatcher?: string; membersOnlyJudgedAt?: Date } = {}): Promise<void> {
-  const current = new Set((await knownNameEntries()).map((e) => e.key));
-  const setting = await db.appSetting.findUnique({ where: { id: "app" }, select: { membersOnlyNames: true } });
-  const merged = [...new Set([...(setting?.membersOnlyNames ?? []), ...keys])].filter((k) => current.has(k));
-  const data = { membersOnlyNames: merged, ...extra };
-  await db.appSetting.upsert({ where: { id: "app" }, create: { id: "app", ...data }, update: data });
+  await db.$transaction(async (tx) => {
+    await tx.appSetting.upsert({ where: { id: "app" }, create: { id: "app" }, update: {} });
+    await tx.$queryRaw`SELECT id FROM "AppSetting" WHERE id = 'app' FOR UPDATE`;
+    const current = new Set((await knownNameEntries(tx)).map((e) => e.key));
+    const setting = await tx.appSetting.findUnique({ where: { id: "app" }, select: { membersOnlyNames: true } });
+    const merged = [...new Set([...(setting?.membersOnlyNames ?? []), ...keys])].filter((k) => current.has(k));
+    await tx.appSetting.update({ where: { id: "app" }, data: { membersOnlyNames: merged, ...extra } });
+  });
+}
+
+/**
+ * A person's record is being deleted: the names recorded as judged for them go in the same transaction, so their
+ * name is not left in clear in the settings until the next sweep.
+ */
+export async function forgetJudgedNames(tx: Prisma.TransactionClient, personId: string): Promise<void> {
+  await tx.$executeRaw`UPDATE "AppSetting" SET "membersOnlyNames" = ARRAY(SELECT k FROM unnest("membersOnlyNames") k WHERE k NOT LIKE ${`person:${personId}:%`}) WHERE id = 'app'`;
+}
+
+/**
+ * Take a person's judging jobs out of the queue: new ones carry only their id, and jobs queued before names were
+ * asked for by id carry the names themselves (in their data and their singleton key). Every state, the finished
+ * ones kept for days included. Never fails the forget it is part of: an unreadable queue is logged.
+ */
+export async function dropRejudgeJobs(personId: string, names: string[]): Promise<void> {
+  const forms = [...new Set(names.filter((n) => n.trim()))];
+  try {
+    await db.$executeRaw`
+      DELETE FROM pgboss.job WHERE name = ${QUEUES.rejudgeText}
+        AND (jsonb_exists(COALESCE(data->'people', '[]'::jsonb), ${personId})
+          OR jsonb_exists_any(COALESCE(data->'names', '[]'::jsonb), ${forms}::text[]))`;
+  } catch (err) {
+    console.error("[rejudge] could not clear queued judging for a forgotten person", err instanceof Error ? err.message : err);
+  }
+}
+
+/**
+ * The names a job asks about, read now: each person's name and former names, each member's name, and any older name
+ * of theirs recorded as judged (a rename). Somebody deleted since has none.
+ */
+async function namesOfJob(job: RejudgeJob): Promise<{ names: string[]; owners: Set<string> }> {
+  const [people, members, setting] = await Promise.all([
+    job.people?.length ? db.person.findMany({ where: { id: { in: job.people } }, select: { id: true, name: true, formerNames: true } }) : [],
+    job.members?.length ? db.user.findMany({ where: { id: { in: job.members } }, select: { id: true, name: true } }) : [],
+    db.appSetting.findUnique({ where: { id: "app" }, select: { membersOnlyNames: true } }),
+  ]);
+  const owners = new Set([...people.map((p) => `person:${p.id}`), ...members.map((m) => `user:${m.id}`)]);
+  const recorded = (setting?.membersOnlyNames ?? []).filter((k) => owners.has(keyOwner(k))).map(keyName);
+  const names = [...people.flatMap((p) => [p.name, ...p.formerNames]), ...members.map((m) => m.name ?? ""), ...recorded].filter((n) => n.trim());
+  return { names: [...new Set(names)], owners };
 }
 
 /**
@@ -390,7 +450,8 @@ export async function rejudgeSweep(): Promise<RejudgeResult> {
  * seconds is queued for the next slot rather than dropped (a trip made public and private again is judged twice).
  */
 export async function enqueueRejudge(job: RejudgeJob): Promise<void> {
-  const key = job.sweep ? "sweep" : job.tripId ? `trip:${job.tripId}` : job.collectionId ? `collection:${job.collectionId}` : job.names ? `names:${[...job.names].sort().join("|")}` : "all";
+  const ids = (xs?: string[]) => [...(xs ?? [])].sort().join("|");
+  const key = job.sweep ? "sweep" : job.tripId ? `trip:${job.tripId}` : job.collectionId ? `collection:${job.collectionId}` : job.people || job.members ? `people:${ids(job.people)}:members:${ids(job.members)}` : "all";
   await enqueue(QUEUES.rejudgeText, job, { singletonKey: `rejudge:${key}`.slice(0, 200), singletonSeconds: 10, singletonNextSlot: true, retryLimit: 3, retryDelay: 30 });
 }
 
@@ -411,16 +472,29 @@ export async function rejudgeLater(job: RejudgeJob): Promise<boolean> {
   return false;
 }
 
-/** The job: the sweep, one trip's or collection's title words, the names given, or — with nothing given — all of it. */
+/**
+ * The job: the sweep, one trip's or collection's title words, the names of the people and members given, or — with
+ * nothing given — all of it.
+ */
 export async function rejudgeText(job: RejudgeJob): Promise<RejudgeResult> {
   if (job.sweep) return rejudgeSweep();
   if (job.tripId || job.collectionId) return rejudgeTitles({ tripId: job.tripId, collectionId: job.collectionId });
-  const result = await rejudgeNames(job.names);
-  // A name is recorded as judged only once every write for it has landed; otherwise the next sweep tries again.
-  if (job.names && !result.missed) {
-    const asked = new Set(job.names);
-    await recordJudged((await knownNameEntries()).filter((e) => asked.has(e.name)).map((e) => e.key));
+  if (job.people || job.members) {
+    const { names, owners } = await namesOfJob(job);
+    // Forgotten, or gone, since it was asked: nothing of theirs is left to look for.
+    if (!names.length) return empty();
+    const result = await rejudgeNames(names);
+    // A name is recorded as judged only once every write for it has landed; otherwise the next sweep tries again.
+    if (!result.missed) await recordJudged((await knownNameEntries()).filter((e) => owners.has(keyOwner(e.key))).map((e) => e.key));
+    return result;
   }
-  if (job.names) return result;
-  return add(result, await rejudgeTitles());
+  if (job.names) {
+    const result = await rejudgeNames(job.names);
+    if (!result.missed) {
+      const asked = new Set(job.names);
+      await recordJudged((await knownNameEntries()).filter((e) => asked.has(e.name)).map((e) => e.key));
+    }
+    return result;
+  }
+  return add(await rejudgeNames(), await rejudgeTitles());
 }

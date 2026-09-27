@@ -208,10 +208,10 @@ export async function privateTitlesOf(photoId: string): Promise<string[]> {
  * The same, each with who it belongs to (`person:<id>` or `user:<id>`), so that somebody new with an old name, or a
  * rename, is a name the sweep has not judged yet.
  */
-export async function knownNameEntries(): Promise<{ key: string; name: string }[]> {
+export async function knownNameEntries(client: Pick<typeof db, "person" | "user"> = db): Promise<{ key: string; name: string }[]> {
   const [people, members] = await Promise.all([
-    db.person.findMany({ select: { id: true, name: true } }),
-    db.user.findMany({ where: { name: { not: null } }, select: { id: true, name: true } }),
+    client.person.findMany({ select: { id: true, name: true } }),
+    client.user.findMany({ where: { name: { not: null } }, select: { id: true, name: true } }),
   ]);
   return [...people.map((p) => ({ key: `person:${p.id}:${p.name}`, name: p.name })), ...members.map((m) => ({ key: `user:${m.id}:${m.name}`, name: m.name ?? "" }))].filter((e) => e.name.trim());
 }

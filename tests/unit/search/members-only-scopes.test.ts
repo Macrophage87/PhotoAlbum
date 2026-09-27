@@ -197,7 +197,7 @@ describe("what strangers may search, container by container, and the words' scop
     const real = db.photo.updateMany.bind(db.photo);
     let misses = 1;
     const spy = vi.spyOn(db.photo, "updateMany").mockImplementation(((args: never) => (misses-- > 0 ? Promise.resolve({ count: 0 }) : real(args))) as never);
-    const once = await rejudgeText({ names: ["Ada"] });
+    const once = await rejudgeText({ people: [ada.id] });
     expect(once).toMatchObject({ photos: 1, missed: 0 });
     expect((await db.appSetting.findUniqueOrThrow({ where: { id: "app" } })).membersOnlyNames).toEqual([`person:${ada.id}:Ada`]);
 
@@ -205,7 +205,7 @@ describe("what strangers may search, container by container, and the words' scop
     await db.appSetting.update({ where: { id: "app" }, data: { membersOnlyNames: [] } });
     await db.photo.update({ where: { id: p.id }, data: { annotationMembersOnly: false } });
     spy.mockImplementation((() => Promise.resolve({ count: 0 })) as never);
-    const never = await rejudgeText({ names: ["Ada"] });
+    const never = await rejudgeText({ people: [ada.id] });
     expect(never.missed).toBeGreaterThan(0);
     expect((await db.appSetting.findUniqueOrThrow({ where: { id: "app" } })).membersOnlyNames).toEqual([]);
     spy.mockRestore();

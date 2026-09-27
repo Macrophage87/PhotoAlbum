@@ -21,7 +21,7 @@ import { confirmPlaceEstimate } from "@/app/photos/[id]/actions";
 import { updatePerson } from "@/app/people/actions";
 import { tripTimeline } from "@/lib/timeline/queries";
 import { NO_FILTER } from "@/lib/photos/filters";
-import { rejudgeNames, rejudgeSweep } from "@/lib/annotation/rejudge";
+import { rejudgeNames, rejudgeSweep, rejudgeText } from "@/lib/annotation/rejudge";
 import { applyAnnotation } from "@/lib/annotation/apply";
 import { annotationSchema } from "@/lib/annotation/schema";
 
@@ -162,13 +162,17 @@ describe("descriptions that stay in the family", () => {
   it("queues the judging of a new name instead of doing it in the request", async () => {
     const pet = await db.person.create({ data: { name: "Rex", kind: "HUMAN", createdById: who.id } });
     const p = await photo({ annotation: { title: "Biscuit asleep", caption: "Biscuit asleep", description: "", tags: [], searchSummary: "" } });
+    const old = await photo({ annotation: { title: "Rex asleep", caption: "Rex asleep", description: "", tags: [], searchSummary: "" } });
     who.queued.length = 0;
     const fd = new FormData();
     fd.set("name", "Biscuit");
     await updatePerson(pet.id, fd);
-    // The old name too: what was written with it is still about them.
-    expect(who.queued).toEqual([{ queue: "rejudge-text", data: { names: ["Biscuit", "Rex"] } }]);
+    // Who, never the name: a queued job outlives the request.
+    expect(who.queued).toEqual([{ queue: "rejudge-text", data: { people: [pet.id] } }]);
     expect((await db.photo.findUniqueOrThrow({ where: { id: p.id } })).annotationMembersOnly).toBe(false);
+    // The old name too, read when it runs: what was written with it is still about them.
+    expect((await rejudgeText(who.queued[0].data as never)).photos).toBe(2);
+    expect((await db.photo.findUniqueOrThrow({ where: { id: old.id } })).annotationMembersOnly).toBe(true);
   });
 
   it("never takes a title a member typed before the album kept track, whoever it names", async () => {
