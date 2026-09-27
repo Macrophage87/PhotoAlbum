@@ -223,6 +223,35 @@ describe("two people acting on one group of faces at once", () => {
     }
   });
 
+  it("locks the group, then its faces, then their photographs, the order every other writer of faces takes", async () => {
+    as(admin, "ADMIN");
+    seam.seen = [];
+    await nameClusterAs(clusterId, jo);
+    const at = (needle: string) => seam.seen.findIndex((q) => q.includes(needle));
+    const group = at(`FROM "FaceCluster" WHERE id = ? FOR UPDATE`);
+    const faces = at(`FROM "Face" WHERE id = ANY(?) ORDER BY id FOR UPDATE`);
+    const photos = at(`ORDER BY p.id FOR NO KEY UPDATE`);
+    expect(group).toBeGreaterThanOrEqual(0);
+    expect(faces).toBeGreaterThan(group);
+    expect(photos).toBeGreaterThan(faces);
+  });
+
+  it("starts a group's centre from the new face when the group has none left, and recounts only the groups it lightened", async () => {
+    ml.detect.mockResolvedValue([{ box: [0.6, 0.6, 0.1, 0.1], confidence: 0.9, embedding: near(0.05), age: 30 }]);
+    const elsewhere = (await db.faceCluster.create({ data: { faceCount: 7 } })).id;
+    await db.$executeRaw`UPDATE "FaceCluster" SET centroid = ${vectorLiteral(near(0.9))}::vector WHERE id = ${elsewhere}`;
+    seam.match = `FROM "FaceCluster" WHERE "personId" IS NULL AND centroid IS NOT NULL`;
+    seam.then = async () => {
+      await db.$executeRaw`UPDATE "Face" SET embedding = NULL WHERE "clusterId" = ${clusterId}`;
+      await db.$executeRaw`UPDATE "FaceCluster" SET centroid = NULL WHERE id = ${clusterId}`;
+    };
+    await detectFacesJob({ photoId: theirs });
+    const after = await centroid(clusterId);
+    after.centroid!.slice(0, 2).forEach((x, i) => expect(x).toBeCloseTo(near(0.05)[i], 5));
+    // A group this scan took nothing from keeps the count it had, right or wrong: it is not this scan's to redo.
+    expect((await centroid(elsewhere)).faceCount).toBe(7);
+  });
+
   it("tries once more when the database breaks a deadlock, and says so plainly if it happens again", async () => {
     as(admin, "ADMIN");
     seam.fail = 1;

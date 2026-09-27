@@ -76,6 +76,10 @@ export async function nameCluster(clusterId: string, fd: FormData): Promise<void
     const faces = await tx.face.findMany({ where: { clusterId, personId: null }, select: { id: true, photo: { select: { uploaderId: true } } } });
     const own = faces.filter((f) => canEditMedia(user, f.photo)).map((f) => f.id);
     if (!own.length) throw new Error(NOT_YOURS);
+    // Locks are taken group, then faces, then photographs, the order every other writer of faces takes them in
+    // (their writes reach the photograph through face_search_trigger); the faces in id order, so two namings of
+    // groups that share none still never hold one each of a pair.
+    await tx.$queryRaw`SELECT id FROM "Face" WHERE id = ANY(${own}) ORDER BY id FOR UPDATE`;
     const named = own.length === faces.length ? clusterId : await carveOut(tx, clusterId, own);
     const who =
       existing ??
@@ -222,7 +226,7 @@ export async function markNotAFace(faceId: string): Promise<void> {
   if (face.personId) throw new Error("That face is named; remove the name first");
   await db.$transaction(async (tx) => {
     if (face.clusterId && (await lockCluster(tx, face.clusterId))?.personId) throw new Error("That face is named; remove the name first");
-    const marked = await tx.face.updateMany({ where: { id: faceId, personId: null }, data: { status: "NOT_A_FACE", clusterId: null, proposedPersonId: null } });
+    const marked = await tx.face.updateMany({ where: { id: faceId, personId: null, clusterId: face.clusterId }, data: { status: "NOT_A_FACE", clusterId: null, proposedPersonId: null } });
     if (!marked.count) throw new Error("That face is named; remove the name first");
     await tx.$executeRaw`UPDATE "Face" SET embedding = NULL WHERE id = ${faceId}`;
     if (face.clusterId) await settleCluster(tx, face.clusterId);

@@ -55,11 +55,16 @@ export async function detectFacesJob(job: DetectFacesJob, signal?: AbortSignal):
       }
     }
     for (const personId of restoredFor) await rebuildCentroids(personId);
-    // Deleted faces leave their unnamed clusters lighter; keep the counts the running mean relies on honest.
-    await db.$executeRaw`UPDATE "FaceCluster" fc SET "faceCount" = (SELECT count(*) FROM "Face" f WHERE f."clusterId" = fc.id) WHERE fc."personId" IS NULL`;
-    await db.faceCluster.deleteMany({ where: { personId: null, faces: { none: {} } } });
-    // Their running means still carry the deleted faces, which are about to be added again: take them back out.
-    await rebuildUnnamedCentroids(lightened);
+    // Deleted faces leave their unnamed clusters lighter: their counts, and running means that still carry the faces
+    // about to be added again, are made again from what they hold now — only those clusters, and under their locks,
+    // so a group being named or carved at the same moment is neither counted from a stale read nor overwritten.
+    if (lightened.length) {
+      await db.$transaction(async (tx) => {
+        await tx.$queryRaw`SELECT id FROM "FaceCluster" WHERE id = ANY(${lightened}) ORDER BY id FOR UPDATE`;
+        await rebuildUnnamedCentroids(lightened, tx);
+        await tx.faceCluster.deleteMany({ where: { id: { in: lightened }, personId: null, faces: { none: {} } } });
+      });
+    }
     // Unnamed clusters only: named ones are the matcher's business.
     const clusters = (await db.$queryRaw<{ id: string; centroid: string; faceCount: number }[]>`SELECT id, centroid::text AS centroid, "faceCount" FROM "FaceCluster" WHERE "personId" IS NULL AND centroid IS NOT NULL`).map((c) => ({ id: c.id, centroid: JSON.parse(c.centroid) as number[], faceCount: c.faceCount }));
     for (const f of found) {
@@ -75,7 +80,8 @@ export async function detectFacesJob(job: DetectFacesJob, signal?: AbortSignal):
             clusterId = hit.cluster.id;
             // The centre and count as they are now, not as read before the lock: a face carved out or split off
             // meanwhile has already been taken out of them.
-            const next = updatedCentroid(row.c ? (JSON.parse(row.c) as number[]) : hit.cluster.centroid, row.n, f.embedding);
+            // A group whose faces have all lost their templates has no centre left, and this face becomes it.
+            const next = row.c ? updatedCentroid(JSON.parse(row.c) as number[], row.n, f.embedding) : f.embedding;
             hit.cluster.centroid = next;
             hit.cluster.faceCount = row.n + 1;
             await tx.$executeRaw`UPDATE "FaceCluster" SET centroid = ${vectorLiteral(next)}::vector, "faceCount" = "faceCount" + 1, "updatedAt" = now() WHERE id = ${clusterId}`;
