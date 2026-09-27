@@ -7,6 +7,10 @@ on:
   # Run by hand on staging or main to redeploy its tip once it passes again.
   workflow_dispatch:
 
+# Read the code, nothing more; the deploy workflows it calls ask for less still.
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest

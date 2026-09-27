@@ -449,7 +449,12 @@ server, one for the server to read GitHub):
    runs git as the checkout's owner and docker via sudo), then add the
    repository secrets `DEPLOY_HOST` (the server's hostname, no `https://`),
    `DEPLOY_USER` and `DEPLOY_SSH_KEY` (the private half). Delete the
-   private key file afterwards.
+   private key file afterwards. Add `DEPLOY_HOST_FINGERPRINT` too, the
+   server's host key fingerprint from `ssh-keygen -l -f
+   /etc/ssh/ssh_host_ed25519_key.pub | cut -d ' ' -f2` on the server (it
+   starts `SHA256:`); without it the runner does not check whom it hands the
+   deploy key to. If the deploy then fails on the fingerprint, the server
+   offered another key type: use that key's `.pub` file instead.
 2. **Server → GitHub.** The checkout's owner needs a key that can read the
    repo: a read-only deploy key in their `~/.ssh` (step 4 above) or a
    personal key that already has access.
