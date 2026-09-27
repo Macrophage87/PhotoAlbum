@@ -46,7 +46,7 @@ const PLACE_BEFORE = new Set(["in", "around", "across", "visiting", "leaving"]);
 /** Words of travel that make "to" or "from" after them a journey's: "Driving to Austin", "Flight from Paris". */
 const TRAVEL = new Set([
   "drive", "drives", "driving", "drove", "driven", "fly", "flies", "flying", "flew", "flown", "flight", "flights", "trip", "trips", "journey", "travel", "travels",
-  "traveling", "travelling", "traveled", "travelled", "headed", "heading", "back", "moving", "moved", "train", "bus", "ferry", "walk", "walked", "walking",
+  "traveling", "travelling", "traveled", "travelled", "headed", "heading", "moving", "moved", "train", "bus", "ferry", "walk", "walked", "walking",
   "arrive", "arrived", "arriving", "return", "returned", "returning", "sailed", "sailing",
 ]);
 const PLACE_AFTER = new Set(["bridge", "square", "park", "garden", "river", "street", "avenue", "station", "harbor", "harbour", "valley", "beach", "airport", "zoo", "museum", "cathedral"]);
