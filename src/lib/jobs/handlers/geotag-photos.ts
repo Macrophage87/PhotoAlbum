@@ -6,6 +6,7 @@ import type { GeotagPhotosJob } from "../queues";
 import { NOT_TRASHED } from "@/lib/photos/trash";
 import { TRUSTED_TIME_SOURCES } from "@/lib/photos/date-from-neighbours";
 import { haversine } from "@/lib/geo/haversine";
+import { openTo } from "@/lib/photos/assign";
 
 /** A recorded position of the uploader's own farther than this from another member's activity track: not together. */
 const TOGETHER_M = 300;
@@ -141,9 +142,14 @@ export async function geotagPhotos(job: GeotagPhotosJob): Promise<{ updated: num
   // worth looking at again.
   const tracks = await db.track.findMany({
     where: { tripId: job.tripId },
-    select: { id: true, source: true, uploaderId: true, startTime: true, endTime: true, pointsBlob: true },
+    select: { id: true, source: true, uploaderId: true, startTime: true, endTime: true, pointsBlob: true, activity: { select: { participants: { select: { id: true } } } } },
     orderBy: { startTime: "asc" },
   });
+  // Another member's track places only the photographs of those its activity names, where it names anybody: a ride
+  // Dad did with one of the children says nothing about where Mom was, however well it covers her photo's moment.
+  // One with no activity, or nobody named, stays everybody's, as before. The uploader's own track is always theirs.
+  const onIt = (track: (typeof tracks)[number], uploaderId: string) =>
+    track.uploaderId === uploaderId || !track.activity || openTo([track.activity], uploaderId).length > 0;
   if (!tracks.length) return { updated: 0 };
   const fresh = job.trackIds?.length ? tracks.filter((t) => job.trackIds!.includes(t.id)) : tracks;
   if (!fresh.length) return { updated: 0 };
@@ -181,7 +187,7 @@ export async function geotagPhotos(job: GeotagPhotosJob): Promise<{ updated: num
   let updated = 0;
   for (const photo of photos) {
     const t = photo.takenAt!.getTime();
-    const chosen = choose(tracks, photo.uploaderId, t, (track) => {
+    const chosen = choose(tracks.filter((track) => onIt(track, photo.uploaderId)), photo.uploaderId, t, (track) => {
       if (t < track.startTime.getTime() || t > track.endTime.getTime()) return null;
       const points = pointsOf(track), pos = positionAt(points, t);
       return pos && { pos, kind: positionKindAt(points, t) ?? "soft", points };

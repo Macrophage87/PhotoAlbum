@@ -408,3 +408,49 @@ describe("geotagPhotos upgrades coarse positions", () => {
     expect(await db.photo.findUniqueOrThrow({ where: { id: p.id } })).toMatchObject({ lat: 1, lng: 2, gpsSource: "MANUAL" });
   });
 });
+
+describe("geotagPhotos and who was on another member's ride", () => {
+  let tripId: string, dad: string, mom: string, kid: string;
+  beforeEach(async () => {
+    await resetTestDb();
+    dad = (await db.user.create({ data: { email: "dad@example.com" } })).id;
+    mom = (await db.user.create({ data: { email: "mom@example.com" } })).id;
+    kid = (await db.user.create({ data: { email: "kid@example.com" } })).id;
+    tripId = (await db.trip.create({ data: { slug: "p", title: "P", startDate: new Date("2025-08-10"), endDate: new Date("2025-08-16"), createdById: dad } })).id;
+  });
+  const ride = async (participants: string[] | null, lat = 44) => {
+    const track = await makeTrack(tripId, dad, line(10).map((p) => ({ ...p, lat: p.lat - 44 + lat })), "GPX");
+    if (participants) await db.activity.create({ data: { tripId, title: "Ride", type: "BIKE", startTime: track.startTime, endTime: track.endTime, trackId: track.id, participants: { connect: participants.map((id) => ({ id })) } } });
+    return track;
+  };
+  const place = async (uploaderId: string) => {
+    const p = await makePhoto(tripId, uploaderId, new Date(T0 + 3 * 60_000));
+    await geotagPhotos({ tripId });
+    return db.photo.findUniqueOrThrow({ where: { id: p.id } });
+  };
+
+  it("does not place a photo on a ride whose activity names others, only those it names", async () => {
+    await ride([dad, kid]);
+    expect(await place(mom)).toMatchObject({ lat: null, gpsSource: null });
+    expect(await place(kid)).toMatchObject({ gpsSource: "TRACK" });
+  });
+
+  it("takes the ride that names her over one that does not", async () => {
+    await ride([dad, kid], 50);
+    await ride([dad, mom], 44);
+    const p = await place(mom);
+    expect(p.gpsSource).toBe("TRACK");
+    expect(p.lat).toBeCloseTo(44.003, 5);
+  });
+
+  it("still places anybody's photo from a track with no activity, or an activity that names nobody", async () => {
+    await ride(null);
+    expect(await place(mom)).toMatchObject({ gpsSource: "TRACK" });
+    await resetTestDb();
+    dad = (await db.user.create({ data: { email: "dad@example.com" } })).id;
+    mom = (await db.user.create({ data: { email: "mom@example.com" } })).id;
+    tripId = (await db.trip.create({ data: { slug: "p", title: "P", startDate: new Date("2025-08-10"), endDate: new Date("2025-08-16"), createdById: dad } })).id;
+    await ride([]);
+    expect(await place(mom)).toMatchObject({ gpsSource: "TRACK" });
+  });
+});
