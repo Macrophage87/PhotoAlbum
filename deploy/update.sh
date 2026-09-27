@@ -122,8 +122,25 @@ echo "== at $(as_owner git rev-parse --short HEAD) =="
 
 # 3b. FORGET_KEY: the secret forgotten people's names are hashed under (docs/DEPLOY.md). Made once if .env has none.
 # It is not in the database dumps above, so it has to be backed up with .env; lost or changed, names forgotten under
-# it are no longer recognized, and forgetting and the AI helper pause until it is put back.
-if as_root test -f .env && ! as_root grep -qE '^FORGET_KEY=.+' .env; then
+# it are no longer recognized, and forgetting and the AI helper pause until it is put back. `export FORGET_KEY=…`
+# counts (compose reads it), and so does a key kept in the override file instead.
+KEY_LINE='^[[:space:]]*(export[[:space:]]+)?FORGET_KEY='
+NEED_KEY=
+if as_root test -f .env && ! as_root grep -qE "${KEY_LINE}[^[:space:]]" .env; then
+  if as_root grep -qs FORGET_KEY docker-compose.override.yml; then
+    echo "== .env has no FORGET_KEY, but docker-compose.override.yml names it: making none (make sure it holds the key) =="
+  else
+    NEED_KEY=1
+  fi
+fi
+# Stopping here leaves the checkout at the new commit, but nothing is rebuilt, so the album keeps running as it was.
+not_deployed() {
+  echo "!! Not deployed: the checkout is at $(as_owner git rev-parse --short HEAD), but nothing was rebuilt and the album" >&2
+  echo "!! keeps running its previous build. Once .env has the key, re-run this deploy (its deploy job in the CI run," >&2
+  echo "!! or this script with the same variables)." >&2
+  exit 1
+}
+if [ -n "$NEED_KEY" ]; then
   # A database that already keeps names under a key needs that key put back, never a new one. Ask it (step 4 starts
   # it anyway); to_jsonb, so a database from before the forget key, without those columns, reads as having none.
   KEPT=$(as_root docker compose up -d --wait db >/dev/null 2>&1 &&
@@ -146,22 +163,22 @@ SQL
     none) ;;
     kept)
       echo "!! $APP_DIR/.env has no FORGET_KEY, but its database already keeps forgotten names under one. Not making a" >&2
-      echo "!! new key: put the original FORGET_KEY back in .env from its backup, then deploy again. Under any other key" >&2
-      echo "!! those names are not recognized, and forgetting and the AI helper stay paused. Nothing was rebuilt." >&2
-      exit 1
+      echo "!! new key: put the original FORGET_KEY back in .env from its backup. Under any other key those names are" >&2
+      echo "!! not recognized, and forgetting and the AI helper stay paused." >&2
+      not_deployed
       ;;
     *)
       echo "!! $APP_DIR/.env has no FORGET_KEY, and the database could not be asked whether it keeps names under one." >&2
       echo "!! Not making a key blind: put the original back from its backup (or, if this album never had one, add" >&2
-      echo "!! FORGET_KEY= with the output of openssl rand -base64 32), then deploy again. Nothing was rebuilt." >&2
-      exit 1
+      echo "!! FORGET_KEY= with the output of openssl rand -base64 32)." >&2
+      not_deployed
       ;;
   esac
   KEY=$(openssl rand -base64 32)
   # Handed over on stdin (printf is a bash builtin), never as an argument, so it shows in neither ps nor sudo's log.
   # Written in place (not replaced), so .env keeps its owner and mode.
   printf 'FORGET_KEY=%s\n' "$KEY" |
-    as_root sh -c 'tmp=$(mktemp) && grep -vE "^FORGET_KEY=" .env > "$tmp"; cat >> "$tmp" && cat "$tmp" > .env && rm -f "$tmp"'
+    as_root sh -c 'tmp=$(mktemp) && grep -vE "^[[:space:]]*(export[[:space:]]+)?FORGET_KEY=" .env > "$tmp"; cat >> "$tmp" && cat "$tmp" > .env && rm -f "$tmp"'
   unset KEY
   echo "!! made a new FORGET_KEY in $APP_DIR/.env. Back it up now, somewhere other than $BACKUP_DIR (the database dumps do not contain it)." >&2
 fi
