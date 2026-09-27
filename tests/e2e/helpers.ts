@@ -1,6 +1,8 @@
 import "dotenv/config";
 import { Client } from "pg";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
 import type { BrowserContext, Page } from "@playwright/test";
 
 const dbUrl = process.env.E2E_DATABASE_URL ?? process.env.DATABASE_URL?.replace(/\/([^/?]+)(\?.*)?$/, "/$1_e2e$2");
@@ -15,11 +17,25 @@ export async function withDb<T>(fn: (c: Client) => Promise<T>): Promise<T> {
   }
 }
 
+/** The e2e server's storage root, as scripts/e2e-server.mjs chooses it. */
+const photoRoot = process.env.E2E_PHOTO_ROOT ?? "/tmp/photoalbum-e2e-photos";
+
 export async function resetDb() {
   await withDb(async (c) => {
     await c.query('TRUNCATE "_TripParticipants", "_ActivityParticipants", "Visit", "VisitSalt", "AnimalDetection", "TakeoutImport", "GoogleAccount", "MediaSimilarity", "Face", "FaceCluster", "Person", "MediaAnnotationRaw", "AnnotationBatch", "AppSetting", "CollectionItem", "Collection", "PhotoLink", "TrackStats", "Track", "Photo", "Activity", "Trip", "Session", "MagicLinkToken", "Invite", "User" CASCADE');
     // Jobs left by a previous run (a server killed mid-job) would otherwise sit until they expire.
     await c.query("DELETE FROM pgboss.job").catch(() => {});
+    // Emptying AppSetting also took the install id the worker gave the album as it started, while the storage root's
+    // .album-install-id still holds it: the Admin page would call them two albums' and the sweeps would stop. Put the
+    // marker's id back (or give both a new one, on a root with none yet), as a worker restart would.
+    const marker = path.join(photoRoot, ".album-install-id");
+    let id = (await readFile(marker, "utf8").catch(() => "")).trim();
+    if (!id) {
+      id = randomUUID();
+      await mkdir(photoRoot, { recursive: true });
+      await writeFile(marker, `${id}\n`);
+    }
+    await c.query(`INSERT INTO "AppSetting" (id, "installId", "updatedAt") VALUES ('app', $1, now())`, [id]);
   });
 }
 
