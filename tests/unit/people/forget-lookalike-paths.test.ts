@@ -232,7 +232,8 @@ describe("show to everyone and the nightly public pass, for a withdrawn naming",
   const record = (title: string, description = ""): StoredAnnotation => ({ title, caption: "", description, tags: [], place: null, activity: null, objects: [], visibleText: null, season: "summer", mood: null, searchSummary: "" });
   /** What strangers read of the item, by each strict path: nothing while it is held. */
   async function readable(name: string, withdrawn: boolean, title: string, description = "") {
-    await db.person.create({ data: { name, createdById: admin, ...(withdrawn ? { namingWithdrawnAt: new Date() } : {}) } });
+    // Not withdrawn: a grown-up who agreed to be named, whom the album may name anywhere.
+    await db.person.create({ data: { name, createdById: admin, ...(withdrawn ? { namingWithdrawnAt: new Date() } : { nameInDescriptions: true, adultAttestedAt: new Date() }) } });
     const a = record(title, description);
     const p = await db.photo.create({ data: { uploaderId: admin, originalName: "x.jpg", mimeType: "image/jpeg", storageKey: "k", originalPath: "k/o.jpg", sizeBytes: 1, status: "READY", title, titleByHelper: true, annotation: a, annotatedAt: new Date() } });
     const shown = await withoutWithdrawnNames(p.id, { annotation: a, title });
