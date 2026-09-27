@@ -19,8 +19,9 @@ export async function Timeline({ groups: built, tripSlug, timezone, member, idPr
   if (groups.length === 0) return <p className="text-muted text-sm">Nothing on the timeline yet. Upload photos or add an activity.</p>;
   // The timeline is where most photographs are actually looked at, so it carries the same hearts as the grids: whose
   // favorites they are, loaded for the whole page in two small queries. Members only — a favorite is a person's.
-  const hearts = member ? await photoFavourites(groups.flatMap((g) => g.items.flatMap((i) => i.photos.map((p) => p.id))), await getViewer()) : new Map();
-  const tile = (p: PhotoCard) => toGridPhoto(p, null, member, hearts.get(p.id) ?? (member ? { mine: false, count: 0 } : null));
+  const viewer = member ? await getViewer() : null;
+  const hearts = viewer ? await photoFavourites(groups.flatMap((g) => g.items.flatMap((i) => i.photos.map((p) => p.id))), viewer) : new Map();
+  const tile = (p: PhotoCard) => toGridPhoto(p, null, viewer?.user ?? null, hearts.get(p.id) ?? (member ? { mine: false, count: 0 } : null));
   const days = groups.map((g) => {
     const id = `${idPrefix}-${g.dayKey ?? "undated"}`;
     const activities = g.items.flatMap((i) => (i.kind === "activity" ? [{ id: `${id}-${i.activity.id}`, title: i.activity.title, count: i.photos.length }] : []));

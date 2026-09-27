@@ -78,7 +78,7 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
   if (!photo) notFound();
 
   const tripTheme = photo.trip ? (await db.trip.findUnique({ where: { id: photo.trip.id }, select: { themeKey: true } }))?.themeKey ?? null : null;
-  const [gates, optOutWhy, faces, proposals, similar, people] = await Promise.all([annotationGates(), optOutReason(photo.id), peopleOnPhoto(photo.id), proposalsFor([photo.id]), similarTo(viewer, photo.id), db.person.findMany({ where: { kind: "HUMAN", optedOutAt: null }, orderBy: { name: "asc" }, select: { id: true, name: true } })]);
+  const [gates, optOutWhy, faces, proposals, similar, people] = await Promise.all([annotationGates(), optOutReason(photo.id), peopleOnPhoto(photo.id), proposalsFor([photo.id], me), similarTo(viewer, photo.id), db.person.findMany({ where: { kind: "HUMAN", optedOutAt: null }, orderBy: { name: "asc" }, select: { id: true, name: true } })]);
   // No list of every trip and every collection any more: the pickers search for them, so this page loads the same
   // whether the album holds five of each or five hundred.
   const [activities, links, candidates, collections] = await Promise.all([
@@ -223,7 +223,7 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
             {isClip && photo.durationS && <p className="mt-2 text-sm text-muted">{Math.round(photo.durationS)} second clip{photo.status === "READY" ? " · original kept" : ""}</p>}
             {isVideo && photo.externalStatus === "UNAVAILABLE" && <p className="mt-1 text-sm text-amber-800">This video is no longer available on YouTube (deleted or made private). Replace the link below or delete the item.</p>}
             {photo.caption && <p className="mt-3 text-lg">{photo.caption}</p>}
-            <div className="mt-2 space-y-2"><PersonChips photoId={photo.id} faces={faces} people={people} /><ProposalList proposals={proposals} /></div>
+            <div className="mt-2 space-y-2"><PersonChips photoId={photo.id} faces={faces} people={people} editable={mine} /><ProposalList proposals={proposals} /></div>
             {photo.takenAt && <p className="text-sm text-muted mt-1">{formatTakenAt(photo.takenAt, photo.tzOffsetMin, photo.trip?.timezone)}</p>}
           </div>
 

@@ -49,7 +49,7 @@ export default async function ReviewPage({ searchParams }: PageProps<"/review">)
   // A batch named in the address can hold somebody else's items: they are shown, but the panel acts on these alone.
   const ownIds = photos.filter((p) => admin || p.uploaderId === me.id).map((p) => p.id);
   const allIds = photos.map((p) => p.id);
-  const [suggestions, proposals, unnamedFaces] = await Promise.all([suggestionsFor(allIds), proposalsFor(allIds), db.face.count({ where: { photoId: { in: allIds }, personId: null, clusterId: { not: null }, status: { in: ["DETECTED", "REJECTED"] } } })]);
+  const [suggestions, proposals, unnamedFaces] = await Promise.all([suggestionsFor(allIds), proposalsFor(allIds, me), db.face.count({ where: { photoId: { in: allIds }, personId: null, clusterId: { not: null }, status: { in: ["DETECTED", "REJECTED"] } } })]);
   const optedOut = (p: (typeof photos)[number]) => p.annotationOptOut || Boolean(p.trip?.annotationOptOut) || p.collections.some((c) => c.collection.annotationOptOut);
   return (
     <AppShell viewer={viewer}>
@@ -91,7 +91,7 @@ export default async function ReviewPage({ searchParams }: PageProps<"/review">)
             )}
             {editable && <YouTubeAddForm />}
             {google && <GooglePickerButton status={google} configured next="/review" />}
-            <PhotoGrid photos={photos.map((p) => toGridPhoto(p, p.reviewedAt ? null : "unreviewed", true))} />
+            <PhotoGrid photos={photos.map((p) => toGridPhoto(p, p.reviewedAt ? null : "unreviewed", me))} />
             {(proposals.length > 0 || unnamedFaces > 0) && (
               <section className="space-y-2">
                 <h2 className="font-display text-lg font-semibold">Who might be in these</h2>

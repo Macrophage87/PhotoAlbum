@@ -63,6 +63,15 @@ describe("the lightbox's words for a stranger", () => {
     expect(body.placeEstimate).toMatchObject({ name: "Baltimore, Maryland", note: "the notes say Hopkins" });
   });
 
+  it("answers a member previewing a share page as that page's visitors, not with the members' layer", async () => {
+    who.viewer = member;
+    const { status, body } = await info(photoId, "?view=share");
+    expect(status).toBe(200);
+    expect(body).toMatchObject({ trip: null, title: null, description: null, uploadedBy: null, favourite: null, editable: false, placeSetBy: null, dateSetBy: null });
+    expect(body.placeEstimate).toMatchObject({ name: null, note: null });
+    expect(JSON.stringify(body)).not.toMatch(/Mum|Hopkins|waiting|Dana/);
+  });
+
   it("refuses a trashed photograph on its trip's token in the address", async () => {
     who.viewer = anon;
     expect((await info(trashedId, `?share=${linkTripToken}&kind=trip`)).status).toBe(401);

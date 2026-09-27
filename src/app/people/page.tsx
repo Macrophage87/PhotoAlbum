@@ -15,7 +15,7 @@ export const metadata = { title: "People", robots: { index: false, follow: false
 export default async function PeoplePage() {
   const user = await requireUser("/people");
   const viewer = await getViewer();
-  const [everyone, clusters, gates, proposals] = await Promise.all([listPeople(), listUnnamedClusters(), faceGates(), proposalsFor()]);
+  const [everyone, clusters, gates, proposals] = await Promise.all([listPeople(), listUnnamedClusters(user), faceGates(), proposalsFor(undefined, user)]);
   const petsActive = petGates().active;
   const people = everyone.filter((p) => p.kind === "HUMAN");
   const pets = everyone.filter((p) => p.kind === "PET");
@@ -54,7 +54,7 @@ export default async function PeoplePage() {
         {proposals.length > 0 && (
           <section className="space-y-3">
             <h2 className="font-display text-xl font-semibold">Probably…</h2>
-            <p className="text-sm text-muted">Faces that look like someone already named, or people named in the notes. Nothing is named until you say so.</p>
+            <p className="text-sm text-muted">Faces that look like someone already named, or people named in the notes. Nothing is named until whoever uploaded the photo, or an admin, says so; yours come first.</p>
             <ProposalList proposals={proposals} />
           </section>
         )}
@@ -101,6 +101,7 @@ export default async function PeoplePage() {
                   cluster={{
                     id: c.id,
                     faceCount: c.faceCount,
+                    editableCount: c.editableCount,
                     looksLike: c.looksLike ? { id: c.looksLike.id, name: c.looksLike.name, kind: c.looksLike.kind } : null,
                     faces: c.faces.map((f) => ({ ...f, updatedAt: f.updatedAt.toISOString() })),
                   }}

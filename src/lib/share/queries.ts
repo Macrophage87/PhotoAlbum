@@ -1,12 +1,14 @@
 import { db } from "@/lib/db";
 import { coverPhotoSelect as coverSelect } from "@/lib/photos/cover";
+import { NOT_TRASHED } from "@/lib/photos/trash";
 
 /** Trip behind a share token, only while the trip is actually in LINK mode. */
 export async function getSharedTrip(token: string) {
   if (!token || token.length > 128) return null;
   const trip = await db.trip.findUnique({
     where: { shareToken: token },
-    include: { coverPhoto: coverSelect, _count: { select: { photos: true, activities: true, tracks: true } } },
+    include: { coverPhoto: coverSelect, // Counted as the members' pages count: what is in the trash is off every link, so it is not on the card either.
+    _count: { select: { photos: { where: NOT_TRASHED }, activities: true, tracks: true } } },
   });
   if (!trip || trip.visibility !== "LINK") return null;
   return trip;
@@ -34,7 +36,7 @@ export async function getSharedCollection(token: string) {
   if (!token || token.length > 128) return null;
   const collection = await db.collection.findUnique({
     where: { shareToken: token },
-    include: { coverPhoto: coverSelect, _count: { select: { items: true } } },
+    include: { coverPhoto: coverSelect, _count: { select: { items: { where: { photo: NOT_TRASHED } } } } },
   });
   if (!collection || collection.visibility !== "LINK") return null;
   return collection;

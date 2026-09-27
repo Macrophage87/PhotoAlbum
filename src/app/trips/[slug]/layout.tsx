@@ -21,8 +21,10 @@ import { readableContainerDescription, withReadableDescription } from "@/lib/pho
 
 export async function generateMetadata({ params }: LayoutProps<"/trips/[slug]">): Promise<Metadata> {
   const { slug } = await params;
-  const trip = await getTripBySlug(slug);
+  const [viewer, trip] = await Promise.all([getViewer(), getTripBySlug(slug)]);
   if (!trip) return { title: "Trip" };
+  // The body sends a stranger to sign in, but the tab title is written first: it names a private trip to nobody.
+  if (!canViewTrip(viewer, trip)) return { title: "Trip", robots: { index: false, follow: false } };
   const isPublic = trip.visibility === "PUBLIC";
   // Only public trips get a preview card: a private URL would leak the cover photo to link scrapers.
   const card = isPublic ? await tripCard(trip, new URL(`/trips/${slug}`, env().APP_URL).toString()) : null;

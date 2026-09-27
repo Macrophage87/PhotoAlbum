@@ -13,8 +13,9 @@ export async function GET(req: Request, { params }: RouteContext<"/api/activitie
   const viewer = await getViewer();
   const activity = await db.activity.findUnique({ where: { id }, select: { id: true, shareToken: true, trip: { select: { id: true, visibility: true, shareToken: true } } } });
   if (!activity) return Response.json({ error: "Not found" }, { status: 404 });
-  const tripOpen = canViewTrip(viewer, activity.trip);
-  if (!tripOpen && !canViewActivity(viewer, activity)) return Response.json({ error: "Not found" }, { status: 404 });
-  // A shared link's map is drawn as anybody holding the link sees it, a member looking at it included.
-  return Response.json(await buildActivityMapPayload(viewerFor(viewer, new URL(req.url).searchParams.get("view")), activity.id, tripOpen), { headers: { "Cache-Control": "private, no-store" } });
+  if (!canViewTrip(viewer, activity.trip) && !canViewActivity(viewer, activity)) return Response.json({ error: "Not found" }, { status: 404 });
+  // A shared link's map is drawn as anybody holding the link sees it, a member looking at it included: whether the
+  // trip is named is asked of that visitor too, so a private trip's slug and title stay off the link's map.
+  const shown = viewerFor(viewer, new URL(req.url).searchParams.get("view"));
+  return Response.json(await buildActivityMapPayload(shown, activity.id, canViewTrip(shown, activity.trip)), { headers: { "Cache-Control": "private, no-store" } });
 }

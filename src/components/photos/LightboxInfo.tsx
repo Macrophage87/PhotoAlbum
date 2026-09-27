@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useTransition } from "react";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { StaticMapTile } from "@/components/map/StaticMapTile";
 import { PlaceEditor, PlaceProvenance } from "./PlaceEditor";
 import { mapThemeOf } from "@/lib/map/theme";
@@ -43,17 +44,21 @@ export function LightboxInfo({ photoId, share }: { photoId: string; share?: { to
   const [editingDate, setEditingDate] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [pending, start] = useTransition();
+  // On a share page the panel shows what anybody holding the link sees, even to a member previewing it.
+  const onSharePage = usePathname()?.startsWith("/share/") ?? false;
 
   // The lightbox mounts this panel afresh per photo (keyed by id), so there is no state to reset here.
   useEffect(() => {
     let live = true;
-    const q = share ? `?share=${encodeURIComponent(share.token)}&kind=${encodeURIComponent(share.kind)}` : "";
-    fetch(`/api/photos/${photoId}/info${q}`, { credentials: "same-origin" })
+    const q = new URLSearchParams(share ? { share: share.token, kind: share.kind } : {});
+    if (onSharePage) q.set("view", "share");
+    const qs = q.toString();
+    fetch(`/api/photos/${photoId}/info${qs ? `?${qs}` : ""}`, { credentials: "same-origin" })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((j: PhotoInfo) => { if (live) setInfo(j); })
       .catch(() => { if (live) setFailed(true); });
     return () => { live = false; };
-  }, [photoId, share]);
+  }, [photoId, share, onSharePage]);
 
   if (failed) return null;
   if (!info) return <div className="text-white/50 text-sm p-4" aria-busy="true">Loading…</div>;

@@ -128,11 +128,20 @@ export async function joinEraCluster(faceId: string, personId: string, embedding
   }
 }
 
+/**
+ * Take a face out of its unnamed group, under the group's lock (as naming, splitting and detection take it), and
+ * make the group's count and centre again from what is left, or clear it away when nothing is.
+ */
 async function leaveCluster(faceId: string, clusterId: string) {
-  await db.face.update({ where: { id: faceId }, data: { clusterId: null } });
-  const left = await db.face.count({ where: { clusterId } });
-  if (left === 0) await db.faceCluster.delete({ where: { id: clusterId } }).catch(() => undefined);
-  else await db.faceCluster.update({ where: { id: clusterId }, data: { faceCount: left } });
+  const { rebuildUnnamedCentroids } = await import("@/lib/jobs/handlers/detect-faces");
+  await db.$transaction(async (tx) => {
+    const [group] = await tx.$queryRaw<{ personId: string | null }[]>`SELECT "personId" FROM "FaceCluster" WHERE id = ${clusterId} FOR UPDATE`;
+    await tx.face.updateMany({ where: { id: faceId, clusterId }, data: { clusterId: null } });
+    // Named meanwhile: the group is the person's now, and the matcher keeps its count.
+    if (!group || group.personId !== null) return;
+    if ((await tx.face.count({ where: { clusterId } })) === 0) await tx.faceCluster.deleteMany({ where: { id: clusterId, personId: null } });
+    else await rebuildUnnamedCentroids([clusterId], tx);
+  });
 }
 
 /** A rejected proposal becomes a negative example for that person and returns to the unnamed pool. */

@@ -56,7 +56,7 @@ export default async function UnassignedPhotosPage({ searchParams }: PageProps<"
           {/* Keyed on what is shown, so once a selection has been filed on a trip the grid starts again without it. */}
           <UnassignedGallery
             key={`${query}:${matched}:${photos[0]?.id ?? ""}`}
-            photos={photos.map((p) => toGridPhoto(p, null, true))}
+            photos={photos.map((p) => toGridPhoto(p, null, viewer.user))}
             emptyMessage={active ? "Nothing here matches that. Try fewer words, or clear the filters." : "Every photo is on a trip."}
             more={{ url: `/api/photos/unassigned${query ? `?${query}` : ""}`, nextCursor, total: matched }}
           />

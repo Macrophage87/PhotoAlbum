@@ -10,7 +10,7 @@ import { ShowAnother } from "@/components/photos/ShowAnother";
 
 export default async function TripOverviewPage({ params }: PageProps<"/trips/[slug]/overview">) {
   const { slug } = await params;
-  const { trip, editable } = await loadViewableTrip(slug);
+  const { viewer, trip, editable } = await loadViewableTrip(slug);
 
   const [sample, trackAgg] = await Promise.all([
     randomTripPhotos(trip.id, OVERVIEW_SAMPLE),
@@ -49,7 +49,7 @@ export default async function TripOverviewPage({ params }: PageProps<"/trips/[sl
             </Link>
           </div>
         </div>
-        <PhotoGrid photos={sample.map((p) => toGridPhoto(p, null, editable))} emptyMessage={editable ? "No photos yet. Upload some to get started." : "No photos yet."} />
+        <PhotoGrid photos={sample.map((p) => toGridPhoto(p, null, viewer.user))} emptyMessage={editable ? "No photos yet. Upload some to get started." : "No photos yet."} />
       </section>
     </div>
   );

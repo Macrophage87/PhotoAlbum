@@ -103,6 +103,20 @@ describe("a shared activity on a private trip", () => {
     expect(points.headers.get("Cache-Control")).toBe("private, max-age=3600");
   });
 
+  it("a member looking at the link's map sees what the link shows: the private trip is not named", async () => {
+    who.member = true;
+    const body = await (await activityGeojson(req(`/api/activities/${walkId}/geojson?view=share`), ctx({ id: walkId }))).json();
+    expect(body.tracks.features[0].properties).toMatchObject({ trackId: walkTrack, tripSlug: "", tripTitle: "" });
+    const text = JSON.stringify(body);
+    expect(text).not.toContain("Secret Acadia");
+    expect(text).not.toContain("acadia");
+    expect(text).not.toContain("Grandma Jo");
+    // A public trip is named to anybody, so to the link's map as well.
+    await db.trip.update({ where: { id: tripId }, data: { visibility: "PUBLIC" } });
+    const open = await (await activityGeojson(req(`/api/activities/${walkId}/geojson?view=share`), ctx({ id: walkId }))).json();
+    expect(open.tracks.features[0].properties).toMatchObject({ tripSlug: "acadia", tripTitle: "Secret Acadia" });
+  });
+
   it("the link's preview names the trip only when the trip is public", async () => {
     const meta = async () => generateMetadata({ params: Promise.resolve({ token: "walk-token" }) } as never);
     const hidden = await meta();

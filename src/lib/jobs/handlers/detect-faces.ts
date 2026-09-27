@@ -32,9 +32,14 @@ export async function detectFacesJob(job: DetectFacesJob, signal?: AbortSignal):
     // Timed out while the sidecar answered: the retry owns this photo now.
     signal?.throwIfAborted();
     // A re-scan keeps what people decided (confirmed and rejected faces) and only re-finds the rest.
-    const rescanned = { photoId: photo.id, status: { in: ["DETECTED" as const, "PROPOSED" as const] } };
-    const lightened = (await db.face.findMany({ where: { ...rescanned, clusterId: { not: null } }, select: { clusterId: true }, distinct: ["clusterId"] })).map((f) => f.clusterId!);
-    await db.face.deleteMany({ where: rescanned });
+    // The groups come from the delete itself, so a face moved between a read and the delete is still counted.
+    const lightened = [
+      ...new Set(
+        (await db.$queryRaw<{ clusterId: string | null }[]>`DELETE FROM "Face" WHERE "photoId" = ${photo.id} AND status IN ('DETECTED', 'PROPOSED') RETURNING "clusterId"`)
+          .map((r) => r.clusterId)
+          .filter((c): c is string => c !== null),
+      ),
+    ];
     const kept = await db.face.findMany({ where: { photoId: photo.id }, select: { id: true, box: true, personId: true, confidence: true, clusterId: true, ageAtCaptureYears: true } });
     const found = detected.filter((f) => !kept.some((k) => k.confidence > 0 && boxIou(k.box as [number, number, number, number], f.box) > 0.5));
     // Kept faces of consented people get their template back (it was nulled while recognition was off), and their
@@ -55,30 +60,47 @@ export async function detectFacesJob(job: DetectFacesJob, signal?: AbortSignal):
       }
     }
     for (const personId of restoredFor) await rebuildCentroids(personId);
-    // Deleted faces leave their unnamed clusters lighter; keep the counts the running mean relies on honest.
-    await db.$executeRaw`UPDATE "FaceCluster" fc SET "faceCount" = (SELECT count(*) FROM "Face" f WHERE f."clusterId" = fc.id) WHERE fc."personId" IS NULL`;
-    await db.faceCluster.deleteMany({ where: { personId: null, faces: { none: {} } } });
-    // Their running means still carry the deleted faces, which are about to be added again: take them back out.
-    await rebuildUnnamedCentroids(lightened);
+    // Deleted faces leave their unnamed clusters lighter: their counts, and running means that still carry the faces
+    // about to be added again, are made again from what they hold now — only those clusters, and under their locks,
+    // so a group being named or carved at the same moment is neither counted from a stale read nor overwritten.
+    if (lightened.length) {
+      await db.$transaction(async (tx) => {
+        await tx.$queryRaw`SELECT id FROM "FaceCluster" WHERE id = ANY(${lightened}) ORDER BY id FOR UPDATE`;
+        await rebuildUnnamedCentroids(lightened, tx);
+        await tx.faceCluster.deleteMany({ where: { id: { in: lightened }, personId: null, faces: { none: {} } } });
+      });
+    }
     // Unnamed clusters only: named ones are the matcher's business.
     const clusters = (await db.$queryRaw<{ id: string; centroid: string; faceCount: number }[]>`SELECT id, centroid::text AS centroid, "faceCount" FROM "FaceCluster" WHERE "personId" IS NULL AND centroid IS NOT NULL`).map((c) => ({ id: c.id, centroid: JSON.parse(c.centroid) as number[], faceCount: c.faceCount }));
     for (const f of found) {
       const hit = nearestCluster(f.embedding, clusters);
-      let clusterId: string;
-      if (hit) {
-        clusterId = hit.cluster.id;
-        const next = updatedCentroid(hit.cluster.centroid, hit.cluster.faceCount, f.embedding);
-        hit.cluster.centroid = next;
-        hit.cluster.faceCount += 1;
-        await db.$executeRaw`UPDATE "FaceCluster" SET centroid = ${vectorLiteral(next)}::vector, "faceCount" = "faceCount" + 1, "updatedAt" = now() WHERE id = ${clusterId}`;
-      } else {
-        const created = await db.faceCluster.create({ data: { faceCount: 1 }, select: { id: true } });
-        clusterId = created.id;
-        await db.$executeRaw`UPDATE "FaceCluster" SET centroid = ${vectorLiteral(f.embedding)}::vector WHERE id = ${clusterId}`;
-        clusters.push({ id: clusterId, centroid: f.embedding, faceCount: 1 });
-      }
-      const face = await db.face.create({ data: { photoId: photo.id, clusterId, box: f.box, confidence: f.confidence, ageAtCaptureYears: f.age, status: "DETECTED" }, select: { id: true } });
-      await db.$executeRaw`UPDATE "Face" SET embedding = ${vectorLiteral(f.embedding)}::vector WHERE id = ${face.id}`;
+      await db.$transaction(async (tx) => {
+        let clusterId: string | null = null;
+        if (hit) {
+          // The groups were read before this face was placed, and one may have been named since. Naming holds the
+          // group's row while it works, so ask again under the same lock: a face never joins a named group, and so
+          // somebody, without anybody saying so.
+          const [row] = await tx.$queryRaw<{ personId: string | null; c: string | null; n: number }[]>`SELECT "personId", centroid::text AS c, "faceCount" AS n FROM "FaceCluster" WHERE id = ${hit.cluster.id} FOR UPDATE`;
+          if (row && row.personId === null) {
+            clusterId = hit.cluster.id;
+            // The centre and count as they are now, not as read before the lock: a face carved out or split off
+            // meanwhile has already been taken out of them.
+            // A group whose faces have all lost their templates has no centre left, and this face becomes it.
+            const next = row.c ? updatedCentroid(JSON.parse(row.c) as number[], row.n, f.embedding) : f.embedding;
+            hit.cluster.centroid = next;
+            hit.cluster.faceCount = row.n + 1;
+            await tx.$executeRaw`UPDATE "FaceCluster" SET centroid = ${vectorLiteral(next)}::vector, "faceCount" = "faceCount" + 1, "updatedAt" = now() WHERE id = ${clusterId}`;
+          } else clusters.splice(clusters.indexOf(hit.cluster), 1);
+        }
+        if (!clusterId) {
+          const created = await tx.faceCluster.create({ data: { faceCount: 1 }, select: { id: true } });
+          clusterId = created.id;
+          await tx.$executeRaw`UPDATE "FaceCluster" SET centroid = ${vectorLiteral(f.embedding)}::vector WHERE id = ${clusterId}`;
+          clusters.push({ id: clusterId, centroid: f.embedding, faceCount: 1 });
+        }
+        const face = await tx.face.create({ data: { photoId: photo.id, clusterId, box: f.box, confidence: f.confidence, ageAtCaptureYears: f.age, status: "DETECTED" }, select: { id: true } });
+        await tx.$executeRaw`UPDATE "Face" SET embedding = ${vectorLiteral(f.embedding)}::vector WHERE id = ${face.id}`;
+      });
     }
     await db.photo.update({ where: { id: photo.id }, data: { facesDetectedAt: new Date() } });
   }, signal);
@@ -108,19 +130,19 @@ export async function rebuildCentroids(personId: string): Promise<void> {
  * does for a person's eras. The count is every face in the cluster, as everywhere else; a cluster left with no
  * templates loses its centroid rather than keep one made of faces that are gone. Named clusters are left to the matcher.
  */
-export async function rebuildUnnamedCentroids(clusterIds: string[]): Promise<void> {
+export async function rebuildUnnamedCentroids(clusterIds: string[], client: Prisma.TransactionClient = db): Promise<void> {
   if (!clusterIds.length) return;
-  const rows = await db.$queryRaw<{ id: string; c: string | null; n: number }[]>`
+  const rows = await client.$queryRaw<{ id: string; c: string | null; n: number }[]>`
     SELECT fc.id, (avg(f.embedding) FILTER (WHERE f.embedding IS NOT NULL))::text AS c, count(f.id)::int AS n
     FROM "FaceCluster" fc LEFT JOIN "Face" f ON f."clusterId" = fc.id
     WHERE fc."personId" IS NULL AND fc.id IN (${Prisma.join(clusterIds)}) GROUP BY fc.id`;
   for (const r of rows) {
     if (r.c === null) {
-      await db.$executeRaw`UPDATE "FaceCluster" SET centroid = NULL, "faceCount" = ${r.n}, "updatedAt" = now() WHERE id = ${r.id}`;
+      await client.$executeRaw`UPDATE "FaceCluster" SET centroid = NULL, "faceCount" = ${r.n}, "updatedAt" = now() WHERE id = ${r.id}`;
       continue;
     }
     const centroid = normalise(JSON.parse(r.c) as number[]);
-    await db.$executeRaw`UPDATE "FaceCluster" SET centroid = ${vectorLiteral(centroid)}::vector, "faceCount" = ${r.n}, "updatedAt" = now() WHERE id = ${r.id}`;
+    await client.$executeRaw`UPDATE "FaceCluster" SET centroid = ${vectorLiteral(centroid)}::vector, "faceCount" = ${r.n}, "updatedAt" = now() WHERE id = ${r.id}`;
   }
 }
 

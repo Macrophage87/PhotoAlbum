@@ -52,7 +52,7 @@ async function drawnFraction(blob: Blob): Promise<number> {
   }
 }
 
-export function ScanViewer({ photoId, modelUrl, format, posterUrl, canPoster, alt, className }: {
+export function ScanViewer({ photoId, modelUrl, format, posterUrl, canPoster, alt, className, withheld = false }: {
   photoId: string;
   modelUrl: string;
   format: string | null;
@@ -62,6 +62,8 @@ export function ScanViewer({ photoId, modelUrl, format, posterUrl, canPoster, al
   canPoster: boolean;
   alt: string;
   className?: string;
+  /** A format with no copy cleaned for visitors (USDZ): they are told what it is, and given nothing to fetch. */
+  withheld?: boolean;
 }) {
   const ref = useRef<ModelViewerElement | null>(null);
   const [ready, setReady] = useState(false);
@@ -127,6 +129,14 @@ export function ScanViewer({ photoId, modelUrl, format, posterUrl, canPoster, al
     begin();
     return () => { live = false; el.removeEventListener("model-visibility", begin); };
   }, [ready, canPoster, posterUrl, photoId]);
+
+  if (withheld) {
+    return (
+      <p className={`rounded-theme border border-border bg-surface-alt p-4 text-sm text-muted ${className ?? ""}`} data-testid="scan-withheld">
+        3D scan shown to family members
+      </p>
+    );
+  }
 
   if (!viewable) {
     return (

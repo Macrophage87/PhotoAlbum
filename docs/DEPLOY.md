@@ -188,7 +188,7 @@ docker compose --profile ml up -d --build
 
 `docker compose exec app node -e "fetch('http://ml:8000/health').then(r=>r.json()).then(j=>console.log(j))"` should print `models: idle` or `loaded`. The app refuses to start if `ML_URL` is set without `ML_TOKEN`.
 
-For faces, also set `FACE_INDEXING_ENABLED=true` in `.env` and press **Turn on face detection** on the Admin page; faces nobody names are deleted after `FACE_UNNAMED_RETENTION_DAYS` (default 180). Put `COMPOSE_PROFILES=ml` in `.env` (add `,worker` if you use the separate worker) so every later `docker compose up`, including `deploy/update.sh`, starts the sidecar too; otherwise pass `--profile ml` each time.
+For faces, also set `FACE_INDEXING_ENABLED=true` in `.env` and press **Turn on face detection** on the Admin page; faces nobody names are deleted after `FACE_UNNAMED_RETENTION_DAYS` (default 180). Face detection relies on the heavy-work lock (see section 11, "Optional: separate worker container"): it scans one photo at a time and groups each face against the groups as it last read them, so run a single worker process. Put `COMPOSE_PROFILES=ml` in `.env` (add `,worker` if you use the separate worker) so every later `docker compose up`, including `deploy/update.sh`, starts the sidecar too; otherwise pass `--profile ml` each time.
 
 ### Media, AI and ML variables
 

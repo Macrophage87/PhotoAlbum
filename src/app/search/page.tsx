@@ -3,7 +3,7 @@ import { getViewer } from "@/lib/auth/viewer";
 import { normalizeQuery, searchFacets, searchMedia } from "@/lib/search/query";
 import { photoUrl } from "@/lib/photos/urls";
 import { formatLocalTime } from "@/lib/time/format";
-import { uploaderLabel } from "@/components/photos/toGrid";
+import { outsiderAlt, uploaderLabel } from "@/components/photos/toGrid";
 import { AppShell, Container } from "@/components/layout/AppShell";
 import { SearchBox } from "@/components/search/SearchBox";
 import { CollectionFacetField, TripFacetField } from "@/components/containers/FacetFields";
@@ -47,7 +47,8 @@ export default async function SearchPage({ searchParams }: PageProps<"/search">)
     height: h.height,
     caption: h.caption,
     title: h.title,
-    alt: h.caption ?? h.title ?? h.originalName,
+    // A file's own name is the family's; anybody else hears what the item is and when (see `outsiderAlt`).
+    alt: h.caption ?? h.title ?? (member ? h.originalName : outsiderAlt(h)),
     snippet: h.snippet,
     tripSlug: h.tripSlug,
     tripTitle: h.tripTitle,

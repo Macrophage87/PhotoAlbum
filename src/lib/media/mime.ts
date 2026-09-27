@@ -35,6 +35,14 @@ export type ScanFormat = "GLB" | "USDZ" | "PLY" | "SPZ";
 
 const SCAN_FORMAT: Record<string, ScanFormat> = { "model/gltf-binary": "GLB", "model/vnd.usdz+zip": "USDZ", "application/x-ply": "PLY", "application/x-spz": "SPZ" };
 
+/**
+ * Whether a scan in this format has a copy visitors may be given, with what the app wrote into it taken out (see
+ * `lib/scans/sanitize`). A USDZ has none, and is shown to visitors as a line of text instead.
+ */
+export function scanShareable(format: string | null): boolean {
+  return format === "GLB" || format === "PLY" || format === "SPZ";
+}
+
 export function scanFormatOf(mime: string): ScanFormat | null {
   return SCAN_FORMAT[mime] ?? null;
 }

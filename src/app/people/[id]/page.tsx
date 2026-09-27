@@ -61,7 +61,7 @@ export default async function PersonPage({ params, searchParams }: PageProps<"/p
         </div>
 
         {busy && <p className="rounded-theme border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900" role="status">Another person is being forgotten; try again in a few minutes.</p>}
-        <PhotoGrid photos={photos.map((p) => toGridPhoto(p, null, true))} emptyMessage="No photos you can see." />
+        <PhotoGrid photos={photos.map((p) => toGridPhoto(p, null, user))} emptyMessage="No photos you can see." />
 
         {/* Naming somebody does nothing to the descriptions already written, and hunting down the run that fixes
             them on the Admin page was the step everybody got stuck on. It is offered here, where the naming is. */}

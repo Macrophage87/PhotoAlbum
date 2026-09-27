@@ -44,7 +44,7 @@ export default async function AddToTripPage({ params, searchParams }: PageProps<
       filter={filter}
       members={members.map((m) => ({ id: m.id, label: uploaderLabel(m.name, m.email) }))}
       people={people}
-      initial={{ photos: page.photos.map((p) => toGridPhoto(p, null, true)), nextCursor: page.nextCursor, total: page.total }}
+      initial={{ photos: page.photos.map((p) => toGridPhoto(p, null, me)), nextCursor: page.nextCursor, total: page.total }}
       extra={
         <TakeWindow
           kind="trip"

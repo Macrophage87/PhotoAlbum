@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import { db } from "@/lib/db";
 import { storage } from "@/lib/storage";
+import { publicScanCopy } from "@/lib/scans/public-copy";
 import { cameraLabel, readExif, resolveDigitizedTakenAt, resolveTakenAt, type TakenAtResolution } from "@/lib/images/exif";
 import { resolveFilenameTakenAt } from "@/lib/images/filename-date";
 import { timezoneForCoords } from "@/lib/geo/tz";
@@ -63,6 +64,8 @@ export async function processPhoto(job: ProcessPhotoJob, signal?: AbortSignal): 
     // A 3D scan has no pixels to read or render: it is dated by the file itself, filed on a trip by that date, and
     // otherwise kept exactly as it arrived. A poster for the grids comes later, from the first member to open it.
     if (photo.kind === "SCAN") {
+      // The copy visitors are given, without what the app wrote into the file; made again on first request if this fails.
+      await publicScanCopy(photo).catch(() => null);
       // A date somebody gave it (by hand, or Google's own record) is kept: the file's modified time is only a guess.
       if (vouchedDate(photo)) {
         await db.photo.update({ where: { id: photo.id }, data: { status: "READY" } });
