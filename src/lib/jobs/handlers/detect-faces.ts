@@ -32,9 +32,14 @@ export async function detectFacesJob(job: DetectFacesJob, signal?: AbortSignal):
     // Timed out while the sidecar answered: the retry owns this photo now.
     signal?.throwIfAborted();
     // A re-scan keeps what people decided (confirmed and rejected faces) and only re-finds the rest.
-    const rescanned = { photoId: photo.id, status: { in: ["DETECTED" as const, "PROPOSED" as const] } };
-    const lightened = (await db.face.findMany({ where: { ...rescanned, clusterId: { not: null } }, select: { clusterId: true }, distinct: ["clusterId"] })).map((f) => f.clusterId!);
-    await db.face.deleteMany({ where: rescanned });
+    // The groups come from the delete itself, so a face moved between a read and the delete is still counted.
+    const lightened = [
+      ...new Set(
+        (await db.$queryRaw<{ clusterId: string | null }[]>`DELETE FROM "Face" WHERE "photoId" = ${photo.id} AND status IN ('DETECTED', 'PROPOSED') RETURNING "clusterId"`)
+          .map((r) => r.clusterId)
+          .filter((c): c is string => c !== null),
+      ),
+    ];
     const kept = await db.face.findMany({ where: { photoId: photo.id }, select: { id: true, box: true, personId: true, confidence: true, clusterId: true, ageAtCaptureYears: true } });
     const found = detected.filter((f) => !kept.some((k) => k.confidence > 0 && boxIou(k.box as [number, number, number, number], f.box) > 0.5));
     // Kept faces of consented people get their template back (it was nulled while recognition was off), and their

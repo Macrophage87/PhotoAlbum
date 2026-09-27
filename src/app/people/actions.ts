@@ -227,7 +227,7 @@ export async function markNotAFace(faceId: string): Promise<void> {
   await db.$transaction(async (tx) => {
     if (face.clusterId && (await lockCluster(tx, face.clusterId))?.personId) throw new Error("That face is named; remove the name first");
     const marked = await tx.face.updateMany({ where: { id: faceId, personId: null, clusterId: face.clusterId }, data: { status: "NOT_A_FACE", clusterId: null, proposedPersonId: null } });
-    if (!marked.count) throw new Error("That face is named; remove the name first");
+    if (!marked.count) throw new Error("That face has changed since the page was drawn");
     await tx.$executeRaw`UPDATE "Face" SET embedding = NULL WHERE id = ${faceId}`;
     if (face.clusterId) await settleCluster(tx, face.clusterId);
   });
