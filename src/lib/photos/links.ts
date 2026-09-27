@@ -8,8 +8,8 @@ export async function linkedPhotos(photoId: string) {
     // A link to something in the trash is not shown: the strip of related photographs is a gallery like any other.
     where: { OR: [{ photoAId: photoId, photoB: NOT_TRASHED }, { photoBId: photoId, photoA: NOT_TRASHED }] },
     include: {
-      photoA: { select: { id: true, caption: true, originalName: true, updatedAt: true, status: true, width: true, height: true } },
-      photoB: { select: { id: true, caption: true, originalName: true, updatedAt: true, status: true, width: true, height: true } },
+      photoA: { select: { id: true, caption: true, originalName: true, updatedAt: true, imageVersion: true, status: true, width: true, height: true } },
+      photoB: { select: { id: true, caption: true, originalName: true, updatedAt: true, imageVersion: true, status: true, width: true, height: true } },
     },
     orderBy: { createdAt: "asc" },
   });

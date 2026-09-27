@@ -35,7 +35,7 @@ export async function unplacedForTray(user: ViewerUser, opts: { tripId?: string 
       orderBy: [{ takenAt: { sort: "asc", nulls: "last" } }, { createdAt: "asc" }, { id: "asc" }],
       take: take + 1,
       ...(opts.cursor ? { cursor: { id: opts.cursor }, skip: 1 } : {}),
-      select: { id: true, updatedAt: true, caption: true, title: true, membersTitle: true, originalName: true, takenAt: true, lat: true, lng: true, placeEstimateName: true, trip: { select: { title: true } } },
+      select: { id: true, updatedAt: true, imageVersion: true, caption: true, title: true, membersTitle: true, originalName: true, takenAt: true, lat: true, lng: true, placeEstimateName: true, trip: { select: { title: true } } },
     }),
     db.photo.count({ where }),
   ]);

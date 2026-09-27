@@ -413,6 +413,10 @@ model Photo {
   /// than stored, since it may name them again. A forget stamps nothing here (the stamps would say which photographs
   /// it covered): an answer asked for before any forget is thrown away instead (AppSetting.lastForgetAt).
   namesScrubbedAt           DateTime?
+  /// What the photo's image addresses are versioned by (`?v=`): moved by a trigger when its files, edits, state,
+  /// trip or activity change, and by hand when who may see it changes. Never by text, so a rewrite of its words
+  /// (a forget's) changes no address strangers can see.
+  imageVersion              Int      @default(0)
   /// Members-only only because the text repeats a word from the title of a trip or collection strangers cannot
   /// open: making that trip or collection public lifts it (see src/lib/annotation/rejudge.ts).
   annotationTitleOnly       Boolean  @default(false)

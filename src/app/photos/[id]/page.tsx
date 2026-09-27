@@ -85,7 +85,7 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
     photo.tripId ? db.activity.findMany({ where: { tripId: photo.tripId }, orderBy: { startTime: "asc" }, select: { id: true, title: true, startTime: true } }) : Promise.resolve([]),
     linkedPhotos(photo.id),
     photo.tripId
-      ? db.photo.findMany({ where: { tripId: photo.tripId, ...NOT_TRASHED, status: "READY", id: { not: photo.id } }, orderBy: [{ takenAt: "asc" }], select: { id: true, caption: true, originalName: true, takenAt: true, updatedAt: true } })
+      ? db.photo.findMany({ where: { tripId: photo.tripId, ...NOT_TRASHED, status: "READY", id: { not: photo.id } }, orderBy: [{ takenAt: "asc" }], select: { id: true, caption: true, originalName: true, takenAt: true, updatedAt: true, imageVersion: true } })
       : Promise.resolve([]),
     collectionsForPhoto(photo.id),
   ]);

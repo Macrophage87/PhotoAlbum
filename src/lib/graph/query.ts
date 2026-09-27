@@ -71,7 +71,7 @@ export async function graphPayload(viewer: Viewer, scope: GraphScope, minScore: 
     where: { ...visibleMediaWhere(viewer), ...scopeWhere, embeddedAt: { not: null }, status: "READY" },
     orderBy: { createdAt: "desc" },
     take: MAX_NODES + 1,
-    select: { id: true, updatedAt: true, caption: true, title: true, membersTitle: true, originalName: true, kind: true, takenAt: true, tripId: true, trip: { select: { title: true } }, uploader: { select: { name: true, email: true } }, collections: { select: { collectionId: true } }, faces: { where: { status: "CONFIRMED", personId: { not: null }, person: { optedOutAt: null } }, select: { personId: true } } },
+    select: { id: true, updatedAt: true, imageVersion: true, caption: true, title: true, membersTitle: true, originalName: true, kind: true, takenAt: true, tripId: true, trip: { select: { title: true } }, uploader: { select: { name: true, email: true } }, collections: { select: { collectionId: true } }, faces: { where: { status: "CONFIRMED", personId: { not: null }, person: { optedOutAt: null } }, select: { personId: true } } },
   });
   const capped = photos.length > MAX_NODES;
   const kept = capped ? photos.slice(0, MAX_NODES) : photos;

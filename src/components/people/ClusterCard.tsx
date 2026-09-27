@@ -7,7 +7,7 @@ import { FaceThumb } from "./FaceThumb";
 import { NameClusterForm, type Known } from "./NameClusterForm";
 import { markNotAFace, nameClusterAs, splitFaceFromCluster } from "@/app/people/actions";
 
-export type ClusterFaceView = { faceId: string; photoId: string; updatedAt: string; width: number | null; height: number | null; box: [number, number, number, number]; /** On this member's own upload (any, for an admin). */ editable: boolean };
+export type ClusterFaceView = { faceId: string; photoId: string; imageVersion: number; width: number | null; height: number | null; box: [number, number, number, number]; /** On this member's own upload (any, for an admin). */ editable: boolean };
 export type ClusterView = {
   id: string;
   faceCount: number;
@@ -59,7 +59,7 @@ export function ClusterCard({ cluster, isAdmin, people, pets }: { cluster: Clust
         {cluster.faces.map((f) => (
           <li key={f.faceId} className="w-[72px] text-center">
             <a href={`/photos/${f.photoId}`} title="Open this photograph">
-              <FaceThumb photo={{ id: f.photoId, updatedAt: new Date(f.updatedAt), width: f.width, height: f.height }} box={f.box} />
+              <FaceThumb photo={{ id: f.photoId, imageVersion: f.imageVersion, width: f.width, height: f.height }} box={f.box} />
             </a>
             {f.editable && (
               <div className="mt-1 flex flex-col gap-0.5">

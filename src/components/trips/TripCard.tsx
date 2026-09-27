@@ -10,7 +10,7 @@ import type { FavouriteState } from "@/lib/favourites/queries";
 
 const visibilityLabel = { PRIVATE: null, LINK: "Link", PUBLIC: "Public" } as const;
 
-export function TripCard({ trip, cover, showVisibility, favourite }: { trip: TripCardData; cover: { id: string; updatedAt: Date } | null; showVisibility: boolean; /** Members only: this member\u2019s mark and the family\u2019s total, which is also the order these are listed in. */ favourite?: FavouriteState | null }) {
+export function TripCard({ trip, cover, showVisibility, favourite }: { trip: TripCardData; cover: { id: string; imageVersion: number } | null; showVisibility: boolean; /** Members only: this member\u2019s mark and the family\u2019s total, which is also the order these are listed in. */ favourite?: FavouriteState | null }) {
   const theme = getTheme(trip.themeKey);
   const vis = visibilityLabel[trip.visibility];
   return (

@@ -82,7 +82,7 @@ export async function photosForPlacing(
       where,
       orderBy: [{ takenAt: { sort: "asc", nulls: "last" } }, { createdAt: "asc" }, { id: "asc" }],
       take: PLACING_LIMIT,
-      select: { id: true, updatedAt: true, caption: true, title: true, membersTitle: true, originalName: true, takenAt: true, tzOffsetMin: true, lat: true, lng: true, gpsSource: true, placeEstimateName: true },
+      select: { id: true, updatedAt: true, imageVersion: true, caption: true, title: true, membersTitle: true, originalName: true, takenAt: true, tzOffsetMin: true, lat: true, lng: true, gpsSource: true, placeEstimateName: true },
     }),
     db.photo.count({ where }),
   ]);

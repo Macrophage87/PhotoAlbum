@@ -71,7 +71,7 @@ export async function updateTrip(slug: string, _prev: TripFormState, fd: FormDat
   if (changed || v.title !== trip.title) await rejudgeFromAction({ tripId: trip.id });
   if (changed) {
     // Bump photo versions so public caches stop matching after a change in exposure.
-    await db.photo.updateMany({ where: { tripId: trip.id }, data: { updatedAt: new Date() } });
+    await db.photo.updateMany({ where: { tripId: trip.id }, data: { updatedAt: new Date(), imageVersion: { increment: 1 } } });
     revalidatePath("/");
   }
   revalidatePath(`/trips/${slug}`, "layout");
@@ -83,7 +83,7 @@ export async function rotateShareToken(slug: string): Promise<void> {
   if (trip.visibility !== "LINK") return;
   await db.trip.update({ where: { id: trip.id }, data: { shareToken: generateToken() } });
   // New token, new rendition URLs: private caches keyed on the old ?v= stop matching.
-  await db.photo.updateMany({ where: { tripId: trip.id }, data: { updatedAt: new Date() } });
+  await db.photo.updateMany({ where: { tripId: trip.id }, data: { updatedAt: new Date(), imageVersion: { increment: 1 } } });
   revalidatePath(`/trips/${slug}/settings`);
 }
 
@@ -173,7 +173,7 @@ export async function detachExposedFromCollections(slug: string): Promise<void> 
     await db.collectionItem.deleteMany({ where: { id: { in: doomed.map((d) => d.id) } } });
     const covers = doomed.filter((d) => d.collection.coverPhotoId === d.photoId);
     for (const c of covers) await db.collection.update({ where: { id: c.collection.id }, data: { coverPhotoId: null } });
-    await db.photo.updateMany({ where: { id: { in: doomed.map((d) => d.photoId) } }, data: { updatedAt: new Date() } });
+    await db.photo.updateMany({ where: { id: { in: doomed.map((d) => d.photoId) } }, data: { updatedAt: new Date(), imageVersion: { increment: 1 } } });
   }
   revalidatePath(`/trips/${slug}`, "layout");
   revalidatePath("/", "layout");

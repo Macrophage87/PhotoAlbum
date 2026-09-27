@@ -50,7 +50,7 @@ export async function changeCollectionSlug(slug: string, fd: FormData): Promise<
 
 /** Bump the versioned URLs of a collection's items so shared caches stop matching after a change in exposure. */
 async function bumpItemVersions(collectionId: string) {
-  await db.photo.updateMany({ where: { collections: { some: { collectionId } } }, data: { updatedAt: new Date() } });
+  await db.photo.updateMany({ where: { collections: { some: { collectionId } } }, data: { updatedAt: new Date(), imageVersion: { increment: 1 } } });
 }
 
 export async function createCollection(_prev: CollectionFormState, fd: FormData): Promise<CollectionFormState> {
@@ -183,7 +183,7 @@ export async function removeFromCollection(collectionId: string, photoIds: strin
   if (!collection) return { removed: 0, notYours };
   await db.collectionItem.deleteMany({ where: { collectionId, photoId: { in: list } } });
   if (collection.coverPhotoId && list.includes(collection.coverPhotoId)) await db.collection.update({ where: { id: collectionId }, data: { coverPhotoId: null } });
-  await db.photo.updateMany({ where: { id: { in: list } }, data: { updatedAt: new Date() } });
+  await db.photo.updateMany({ where: { id: { in: list } }, data: { updatedAt: new Date(), imageVersion: { increment: 1 } } });
   revalidatePath(`/collections/${collection.slug}`, "layout");
   revalidatePath("/", "layout");
   return { removed: list.length, notYours };
@@ -235,7 +235,7 @@ export async function detachExposedFromOtherCollections(slug: string): Promise<v
   if (doomed.length) {
     await db.collectionItem.deleteMany({ where: { id: { in: doomed.map((d) => d.id) } } });
     for (const c of doomed.filter((d) => d.collection.coverPhotoId === d.photoId)) await db.collection.update({ where: { id: c.collection.id }, data: { coverPhotoId: null } });
-    await db.photo.updateMany({ where: { id: { in: doomed.map((d) => d.photoId) } }, data: { updatedAt: new Date() } });
+    await db.photo.updateMany({ where: { id: { in: doomed.map((d) => d.photoId) } }, data: { updatedAt: new Date(), imageVersion: { increment: 1 } } });
   }
   revalidatePath(`/collections/${slug}`, "layout");
   revalidatePath("/", "layout");

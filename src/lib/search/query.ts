@@ -23,6 +23,7 @@ export type SearchHit = {
   takenAt: Date | null;
   tzOffsetMin: number | null;
   updatedAt: Date;
+  imageVersion: number;
   gpsSource: string | null;
   tripSlug: string | null;
   tripTitle: string | null;
@@ -116,7 +117,7 @@ export async function searchMedia(viewer: Viewer, params: SearchParams, limit = 
   const match = queryVec ? Prisma.sql`(${column} @@ query OR (p."textEmbedding" IS NOT NULL AND 1 - (p."textEmbedding" <=> ${vectorLiteral(queryVec)}::vector) >= ${SEMANTIC_FLOOR}))` : Prisma.sql`${column} @@ query`;
   const rows = await db.$queryRaw<(SearchHit & { similarity: number | null })[]>`
     SELECT p.id, p.kind, p.status, p.caption, ${text.title} AS title, p."originalName", p."externalId", p."externalStatus", p."durationS", p.width, p.height,
-           p."takenAt", p."tzOffsetMin", p."updatedAt", p."gpsSource",
+           p."takenAt", p."tzOffsetMin", p."updatedAt", p."imageVersion", p."gpsSource",
            CASE WHEN ${tripVisible} THEN t.slug END AS "tripSlug", CASE WHEN ${tripVisible} THEN t.title END AS "tripTitle", ${uploader} AS "uploaderName",
            ts_rank_cd(${column}, query) AS rank,
            ${similarity} AS similarity,

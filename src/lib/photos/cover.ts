@@ -15,7 +15,7 @@ export function coverUnlessTrashed<T extends { trashedAt?: Date | null }>(cover:
  * What every trip and collection reads of its hand-chosen cover: enough to draw it and put it on a link preview, and
  * enough to tell whether it still stands.
  */
-export const coverPhotoSelect = { select: { id: true, updatedAt: true, width: true, height: true, trashedAt: true, tripId: true } } as const;
+export const coverPhotoSelect = { select: { id: true, updatedAt: true, imageVersion: true, width: true, height: true, trashedAt: true, tripId: true } } as const;
 
 /**
  * A hand-chosen cover, while it is still one to lead with: out of the trash, and with pictures to draw. The size is

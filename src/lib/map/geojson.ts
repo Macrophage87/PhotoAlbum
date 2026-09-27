@@ -97,7 +97,7 @@ export async function buildMapPayload(viewer: Viewer, tripId?: string, given: Ga
             lng: { not: null },
             ...narrowed.where,
           },
-          select: { id: true, lat: true, lng: true, caption: true, takenAt: true, tzOffsetMin: true, updatedAt: true, tripId: true, activityId: true, gpsSource: true, activity: { select: { title: true } }, uploader: { select: { id: true, name: true, email: true } } },
+          select: { id: true, lat: true, lng: true, caption: true, takenAt: true, tzOffsetMin: true, updatedAt: true, imageVersion: true, tripId: true, activityId: true, gpsSource: true, activity: { select: { title: true } }, uploader: { select: { id: true, name: true, email: true } } },
           orderBy: { takenAt: "asc" },
         }),
     db.track.findMany({
@@ -185,7 +185,7 @@ export async function buildCollectionMapPayload(viewer: Viewer, collectionId: st
   const narrowed = await narrowing({ ...filter, member: filter.member && viewer.kind === "user" }, { collectionId, placed: true });
   const found = narrowed.nothing ? [] : await db.photo.findMany({
     where: { ...NOT_TRASHED, status: "READY", lat: { not: null }, lng: { not: null }, collections: { some: { collectionId } }, ...narrowed.where },
-    select: { id: true, lat: true, lng: true, caption: true, takenAt: true, tzOffsetMin: true, updatedAt: true, activityId: true, gpsSource: true, activity: { select: { title: true } }, uploader: { select: { id: true, name: true, email: true } }, trip: { select: { id: true, slug: true, title: true, visibility: true, shareToken: true, timezone: true } } },
+    select: { id: true, lat: true, lng: true, caption: true, takenAt: true, tzOffsetMin: true, updatedAt: true, imageVersion: true, activityId: true, gpsSource: true, activity: { select: { title: true } }, uploader: { select: { id: true, name: true, email: true } }, trip: { select: { id: true, slug: true, title: true, visibility: true, shareToken: true, timezone: true } } },
     orderBy: { takenAt: "asc" },
   });
   let all: Bounds | null = null;
@@ -244,7 +244,7 @@ export async function buildActivityMapPayload(viewer: Viewer, activityId: string
   const named = { tripSlug: tripOpen ? trip.slug : "", tripTitle: tripOpen ? trip.title : "" };
   const found = await db.photo.findMany({
     where: { activityId: activity.id, tripId: activity.tripId, ...NOT_TRASHED, status: "READY", lat: { not: null }, lng: { not: null } },
-    select: { id: true, lat: true, lng: true, caption: true, takenAt: true, tzOffsetMin: true, updatedAt: true, activityId: true, gpsSource: true, uploader: { select: { id: true, name: true, email: true } } },
+    select: { id: true, lat: true, lng: true, caption: true, takenAt: true, tzOffsetMin: true, updatedAt: true, imageVersion: true, activityId: true, gpsSource: true, uploader: { select: { id: true, name: true, email: true } } },
     orderBy: { takenAt: "asc" },
   });
   let photoBounds: Bounds | null = null;

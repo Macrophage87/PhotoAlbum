@@ -9,7 +9,7 @@ export async function GET(request: Request) {
   const ids = (new URL(request.url).searchParams.get("ids") ?? "").split(",").filter(Boolean).slice(0, 200);
   const photos = await db.photo.findMany({
     where: { id: { in: ids } },
-    select: { id: true, status: true, error: true, width: true, height: true, updatedAt: true, tripId: true, trip: { select: { slug: true, title: true } } },
+    select: { id: true, status: true, error: true, width: true, height: true, updatedAt: true, imageVersion: true, tripId: true, trip: { select: { slug: true, title: true } } },
   });
   return Response.json({
     photos: photos.map((p) => ({
