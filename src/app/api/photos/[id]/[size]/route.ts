@@ -9,9 +9,12 @@ import { jpegPreview } from "@/lib/images/preview";
 import { MEDIA_CSP } from "@/lib/security/csp";
 import { viewerFor } from "@/lib/auth/access";
 import { largestRendition } from "@/lib/photos/urls";
+import { visitorFullSize } from "@/lib/images/visitor-copy";
 import { publicScanCopy } from "@/lib/scans/public-copy";
 
 const MIME: Record<string, string> = { webp: "image/webp", jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", heic: "image/heic", heif: "image/heif", tif: "image/tiff", avif: "image/avif", gif: "image/gif", mp4: "video/mp4" };
+
+const mimeOf = (key: string) => MIME[key.split(".").pop() ?? ""] ?? "image/webp";
 
 /** Parse a single-range `Range` header against a known size; null when absent, an error response when unsatisfiable. */
 export function parseRange(header: string | null, size: number): { start: number; end: number } | null | "invalid" {
@@ -38,8 +41,10 @@ export function parseRange(header: string | null, size: number): { start: number
  *
  * The file as uploaded (and the editor's uncropped copy) is the family's: it carries the camera's EXIF, GPS included,
  * and whatever a crop or "remove place" took out. Anybody else — a visitor, a share link, a member reading a share
- * page (`?view=share`) — asking for it gets the largest rendition instead, which carries no metadata. A 3D scan has
- * no rendition to stand in for it: they get its model only, as a copy with its metadata taken out (see
+ * page (`?view=share`) — asking for it, or for the edited full size, gets the same picture at the same size as a
+ * copy the worker makes for them: upright, edited, and with no metadata (see `lib/images/visitor-copy`), and the
+ * largest rendition until it is made. Only a member on the album's own pages is ever given the file. A 3D scan has
+ * no picture to stand in for it: they get its model only, as a copy with its metadata taken out (see
  * `lib/scans/sanitize`), or nothing for a format that cannot be cleaned.
  */
 export async function GET(request: Request, { params }: { params: Promise<{ id: string; size: string }> }) {
@@ -48,7 +53,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
 
   const photo = await db.photo.findUnique({
     where: { id },
-    select: { id: true, status: true, originalPath: true, originalName: true, renditions: true, videoRenditions: true, storageKey: true, mimeType: true, kind: true, scanFormat: true, ...mediaAccessInclude },
+    select: { id: true, status: true, originalPath: true, originalName: true, renditions: true, videoRenditions: true, storageKey: true, mimeType: true, kind: true, scanFormat: true, edits: true, imageVersion: true, ...mediaAccessInclude },
   });
   if (!photo) return new Response("Not found", { status: 404 });
 
@@ -69,6 +74,16 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   }
   const withheld = outsider && (size === "original" || size === "edited" || size === "source");
   if (withheld) {
+    if (photo.kind === "PHOTO" && size !== "source") {
+      const answer = await visitorFullSize(photo);
+      if (!answer) return new Response("Not ready", { status: 404 });
+      // What stands in until the copy is made is kept by nobody, so the next look asks for the copy again.
+      const noStore = { "Cache-Control": "private, no-store", Vary: "Cookie" };
+      const res = await serve(request, answer.key, mimeOf(answer.key), answer.standIn ? noStore : byViewer(url));
+      // A newer copy took its place between finding it and reading it.
+      if (res.status !== 404 || !answer.otherwise) return res;
+      return serve(request, answer.otherwise, mimeOf(answer.otherwise), noStore);
+    }
     let key: string | undefined;
     if (photo.kind === "VIDEO") key = video?.mp4?.key;
     // The editor's copy is the picture before its crop, so the medium, which has it, answers instead.

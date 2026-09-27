@@ -1,5 +1,7 @@
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import sharp from "sharp";
+import type { StorageProvider } from "@/lib/storage";
 
 export function isHeic(mimeType: string, fileName: string): boolean {
   const ext = fileName.toLowerCase().split(".").pop() ?? "";
@@ -19,4 +21,11 @@ export async function heicToJpegBuffer(filePath: string): Promise<Buffer> {
     const out = await heicConvert({ buffer: input, format: "JPEG", quality: 0.92 });
     return Buffer.from(out);
   }
+}
+
+/** A HEIC original cannot be read by sharp, so a re-render uses the JPEG made at upload, or makes one again. */
+export async function heicSource(store: StorageProvider, storageKey: string, localPath: string): Promise<string | Buffer> {
+  const converted = store.localPath?.(`${storageKey}/original-converted.jpg`);
+  if (converted && existsSync(converted)) return converted;
+  return heicToJpegBuffer(localPath);
 }

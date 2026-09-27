@@ -116,6 +116,11 @@ export function Lightbox({ photos, index, onClose, onNavigate, share = null }: {
                 className="h-[46vh] lg:h-[72vh] w-full max-w-full bg-black/40"
               >
                 <PanoramaHint label={panoramaLabel(photo.panorama.projection)} />
+                {/* What is panned across is a smaller copy; the whole of it is a click away, as on its own page. Laid
+                    over the corner rather than under it, so a short screen gives none of its height to the link. */}
+                {photo.originalUrl ? (
+                  <a href={photo.originalUrl} target="_blank" rel="noreferrer" title="Open the full-size photo" className="absolute right-2 top-2 rounded-full bg-black/60 px-3 py-1 text-xs text-white/90 hover:text-white" data-testid="lightbox-full-size">Full size</a>
+                ) : null}
               </PanoramaView>
             </div>
           ) : photo.originalUrl ? (

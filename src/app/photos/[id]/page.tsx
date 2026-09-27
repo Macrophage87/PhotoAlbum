@@ -19,7 +19,7 @@ import { LinkedPhotos } from "@/components/photos/LinkedPhotos";
 import { PlaceEditor } from "@/components/photos/PlaceEditor";
 import { TrashButton } from "@/components/photos/TrashButton";
 import { PhotoEditorPanel } from "@/components/photos/PhotoEditorPanel";
-import { editsOf } from "@/lib/jobs/handlers/process-photo";
+import { editsOf } from "@/lib/images/edits";
 import { trashReasonLabel } from "@/lib/photos/trash";
 import { isWeakDate } from "@/lib/photos/date-from-neighbours";
 import { guessDateFromTrip } from "@/lib/photos/date-guess-query";

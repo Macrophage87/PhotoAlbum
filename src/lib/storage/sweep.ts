@@ -3,6 +3,7 @@ import path from "node:path";
 import { db } from "@/lib/db";
 import { storage } from "@/lib/storage";
 import { liveImportKeys } from "@/lib/jobs/live";
+import { forgetVisitorFiles } from "@/lib/images/visitor-copy";
 import { inboxDir } from "@/lib/takeout/inbox";
 import { installIdentity, touchHeartbeat } from "./identity";
 import { IMPORT_ABANDONED_MS, IMPORT_NAME, newestWrite, PHOTO_FOLDER } from "./layout";
@@ -227,4 +228,26 @@ export async function sweepOrphanFiles(now = new Date()): Promise<void> {
   await touchHeartbeat(now).catch((err) => console.error("[sweep] could not write the storage heartbeat", err));
   await sweepImportFiles(now).catch((err) => console.error("[sweep] track-file sweep failed", err));
   await recordOrphanPhotoFolders(now).catch((err) => console.error("[sweep] photo-folder check failed", err));
+  await sweepVisitorCopies().catch((err) => console.error("[sweep] visitor-copy sweep failed", err));
+}
+
+/**
+ * Visitors' full-size copies (see `lib/images/visitor-copy`) that nothing will serve again: made of a picture that has
+ * since changed (edited, moved, its trip or collection hidden), or of one in the trash, with the notes and half-written
+ * files of their makings. A later making clears older ones too, but an edited photo is served its own full size and a
+ * hidden one is not served at all, so nothing else would. A folder with no row is left for the check above.
+ */
+export async function sweepVisitorCopies(): Promise<number> {
+  const identity = await installIdentity();
+  if (!identity.ok) return 0;
+  const dir = storage().localPath?.("photos");
+  if (!dir) return 0;
+  const ids = (await readdir(dir, { withFileTypes: true }).catch(() => [])).filter((d) => d.isDirectory() && PHOTO_FOLDER.test(d.name)).map((d) => d.name);
+  let gone = 0;
+  for (let i = 0; i < ids.length; i += 500) {
+    const rows = await db.photo.findMany({ where: { id: { in: ids.slice(i, i + 500) } }, select: { id: true, imageVersion: true, trashedAt: true } });
+    for (const row of rows) gone += await forgetVisitorFiles(`photos/${row.id}`, row.trashedAt ? Infinity : row.imageVersion);
+  }
+  if (gone) console.warn(`[sweep] deleted ${gone} visitor copy file(s) of pictures that have changed or are in the trash`);
+  return gone;
 }
