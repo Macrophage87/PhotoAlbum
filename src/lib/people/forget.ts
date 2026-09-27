@@ -241,18 +241,21 @@ export async function forgetNameInText(photoIds: string[], m: NameMatcher, opts:
     ]);
     const now = new Date();
     for (const p of photos) {
-      const where: Where = { tagged: tagged.has(p.id), others: others.get(p.id) ?? [] };
+      // On somebody else's photograph only a full name is theirs to take out: a first name alone there is as often a
+      // place or somebody else ("Santa Barbara Pier"), and rewriting it would change words that are not about them.
+      const where: Where = { tagged: tagged.has(p.id), others: others.get(p.id) ?? [], ...(tagged.has(p.id) ? {} : { wholeOnly: true }) };
       const a = p.annotation && typeof p.annotation === "object" && !Array.isArray(p.annotation) ? (p.annotation as StoredAnnotation) : null;
       const h = helpersTitles(p, given.get(p.id));
       const helperText = !opts.publicOnly || !p.annotationMembersOnly;
       const evidence = !opts.publicOnly || !p.placeEstimateMembersOnly;
+      const evidenceWhere: Where = tagged.has(p.id) ? {} : { wholeOnly: true };
       const next = {
         ...(a && helperText ? { annotation: scrubAnnotation(a, m, where) } : {}),
         // A title is only rewritten while it is the helper's; a member's own title is theirs.
         ...(h.title ? { title: m.scrub(p.title, where) } : {}),
         ...(h.membersTitle && !opts.publicOnly ? { membersTitle: m.scrub(p.membersTitle, where) } : {}),
         // Evidence says "May 1990" as readily as "May at the lake": only names that could be nobody else's.
-        ...(evidence ? { placeEstimateName: m.scrub(p.placeEstimateName), placeEstimateNote: m.scrub(p.placeEstimateNote), estimatedDateNote: m.scrub(p.estimatedDateNote) } : {}),
+        ...(evidence ? { placeEstimateName: m.scrub(p.placeEstimateName, evidenceWhere), placeEstimateNote: m.scrub(p.placeEstimateNote, evidenceWhere), estimatedDateNote: m.scrub(p.estimatedDateNote, evidenceWhere) } : {}),
       };
       const changed = Object.entries(next).some(([k, v]) => JSON.stringify(v) !== JSON.stringify((p as Record<string, unknown>)[k]));
       if (changed) touched.push(p.id);

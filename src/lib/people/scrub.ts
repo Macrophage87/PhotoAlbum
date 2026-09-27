@@ -486,6 +486,13 @@ export type Where = {
    */
   fullOnly?: boolean;
   /**
+   * Away from their photographs, their full names and a one-word name that is all of their name — never a first name
+   * taken from a full one. For rewriting the helper's words on somebody else's photograph when they are forgotten:
+   * there a first name alone is as often a place or somebody else ("Santa Barbara Pier", "Leo Martinez Park",
+   * "Lake Louise"), and in a title written in title case nothing tells them apart.
+   */
+  wholeOnly?: boolean;
+  /**
    * With `tagged`: whether they are on this very photograph (the default), or only elsewhere in its trip, collection
    * or activity. Their short names count either way; only on their own photograph is a place-like name taken for
    * them wherever a place is not plainly meant ("Charlotte in the rain" of the "Charlotte, NC 2020" trip is the city).
@@ -648,7 +655,8 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
   const shortsFor = (where: Where) => {
     const there = new Set((where.others ?? []).flatMap((o) => wordsOf(splitNickname(o).name).map(bare)));
     const extra = where.tagged ? taggedOnly.filter((x) => !there.has(x.word)) : [];
-    const all = [...(where.tagged || !where.fullOnly ? safe : []), ...extra];
+    const away = where.fullOnly ? [] : where.wholeOnly ? safe.filter((x) => x.whole) : safe;
+    const all = [...(where.tagged ? safe : away), ...extra];
     const byForm = new Map<string, Short>([...all.map((x) => [x.form, x] as const)]);
     return { rx: rx(bounded(withCaps(all.map((x) => x.form))), "gu"), byForm, there, tagged: new Set(extra.map((x) => x.word)) };
   };
