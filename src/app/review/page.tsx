@@ -91,7 +91,7 @@ export default async function ReviewPage({ searchParams }: PageProps<"/review">)
             )}
             {editable && <YouTubeAddForm />}
             {google && <GooglePickerButton status={google} configured next="/review" />}
-            <PhotoGrid photos={photos.map((p) => toGridPhoto(p, p.reviewedAt ? null : "unreviewed", true))} />
+            <PhotoGrid photos={photos.map((p) => toGridPhoto(p, p.reviewedAt ? null : "unreviewed", me))} />
             {(proposals.length > 0 || unnamedFaces > 0) && (
               <section className="space-y-2">
                 <h2 className="font-display text-lg font-semibold">Who might be in these</h2>

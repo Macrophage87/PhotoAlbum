@@ -16,7 +16,7 @@ export const metadata = { title: "Add photos" };
  */
 export default async function AddPhotosPage({ params, searchParams }: PageProps<"/collections/[slug]/add">) {
   const { slug } = await params;
-  const { collection, editable } = await loadViewableCollection(slug, `/collections/${slug}/add`);
+  const { viewer, collection, editable } = await loadViewableCollection(slug, `/collections/${slug}/add`);
   if (!editable) redirect(`/collections/${slug}`);
   const filter = parsePickerFilter(await searchParams);
   // Only the trip the filter already names, so the page does not carry a list of every trip there has ever been.
@@ -34,7 +34,7 @@ export default async function AddPhotosPage({ params, searchParams }: PageProps<
       filter={filter}
       members={members.map((m) => ({ id: m.id, label: uploaderLabel(m.name, m.email) }))}
       people={people}
-      initial={{ photos: page.photos.map((p) => toGridPhoto(p, null, true)), nextCursor: page.nextCursor, total: page.total }}
+      initial={{ photos: page.photos.map((p) => toGridPhoto(p, null, viewer.user)), nextCursor: page.nextCursor, total: page.total }}
     />
   );
 }

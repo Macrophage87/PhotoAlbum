@@ -48,7 +48,7 @@ export default async function CollectionOverviewPage({ params }: PageProps<"/col
             <div className="flex flex-wrap gap-2 pt-1"><ButtonLink href={`/collections/${slug}/add`} size="sm">Add existing photos</ButtonLink>{upload}</div>
           </Card>
         ) : (
-          <PhotoGrid photos={ready.slice(0, 12).map((p) => toGridPhoto(p, null, editable))} emptyMessage="Nothing here yet." />
+          <PhotoGrid photos={ready.slice(0, 12).map((p) => toGridPhoto(p, null, viewer.user))} emptyMessage="Nothing here yet." />
         )}
       </section>
     </div>

@@ -48,7 +48,7 @@ export async function FavouritesView({ viewer, scope, who, base, where }: { view
           {who === "mine" ? ", the most recently marked first." : ", the ones most of us marked first."}
         </p>
       )}
-      <PhotoGrid photos={photos.map((p) => toGridPhoto(p, null, true, hearts.get(p.id)))} emptyMessage={empty} />
+      <PhotoGrid photos={photos.map((p) => toGridPhoto(p, null, viewer.user, hearts.get(p.id)))} emptyMessage={empty} />
     </div>
   );
 }

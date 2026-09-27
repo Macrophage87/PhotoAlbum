@@ -18,7 +18,7 @@ import { SortToggle } from "@/components/ui/SortToggle";
 export default async function TripPhotosPage({ params, searchParams }: PageProps<"/trips/[slug]/photos">) {
   const { slug } = await params;
   const sp = await searchParams;
-  const { trip, editable, owns } = await loadViewableTrip(slug, `/trips/${slug}/photos`);
+  const { viewer, trip, editable, owns } = await loadViewableTrip(slug, `/trips/${slug}/photos`);
   // Who uploaded what is members-only, so an anonymous visitor never sees the member list nor filters by it.
   const filter = parseGalleryFilter(sp, { member: editable, inTrip: true });
   // Favourites first for a member unless they have asked for the grid by date; a visitor gets the dates only.
@@ -75,7 +75,7 @@ export default async function TripPhotosPage({ params, searchParams }: PageProps
         <p className="text-muted text-sm" data-testid="no-matches">Nothing here matches that. Try fewer words, or clear the filters.</p>
       )}
       {editable && <YouTubeAddForm tripId={trip.id} defaultDate={dateColumnToDay(trip.startDate)} />}
-      <TripGallery tripSlug={slug} key={`${moreUrl}:${page.total}:${photos[0]?.id ?? ""}:${photos[photos.length - 1]?.id ?? ""}`} photos={photos.map((p) => toGridPhoto(p, null, editable, favourites.get(p.id)))} more={{ url: moreUrl, nextCursor: page.nextCursor, total: page.total }} activities={activities} editable={editable} emptyMessage={editable ? "No photos yet. Upload some to get started." : "No photos yet."} />
+      <TripGallery tripSlug={slug} key={`${moreUrl}:${page.total}:${photos[0]?.id ?? ""}:${photos[photos.length - 1]?.id ?? ""}`} photos={photos.map((p) => toGridPhoto(p, null, viewer.user, favourites.get(p.id)))} more={{ url: moreUrl, nextCursor: page.nextCursor, total: page.total }} activities={activities} editable={editable} emptyMessage={editable ? "No photos yet. Upload some to get started." : "No photos yet."} />
     </div>
   );
 }

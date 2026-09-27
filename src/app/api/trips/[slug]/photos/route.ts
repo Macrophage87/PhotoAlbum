@@ -35,5 +35,5 @@ export async function GET(request: NextRequest, { params }: RouteContext<"/api/t
   const page = await tripPhotoPage(trip.id, ids ? { ...common, ids, take: Math.max(ids.length, 1) } : { ...common, cursor: sp.get("cursor") });
   // Hearts as the page draws them, so a tile from a later page has one too.
   const favourites = member ? await photoFavourites(page.photos.map((p) => p.id), viewer) : new Map();
-  return NextResponse.json({ photos: page.photos.map((p) => toGridPhoto(p, null, member, favourites.get(p.id))), nextCursor: ids ? null : page.nextCursor, total: page.total }, { headers: { "Cache-Control": "private, no-store" } });
+  return NextResponse.json({ photos: page.photos.map((p) => toGridPhoto(p, null, member ? viewer.user : null, favourites.get(p.id))), nextCursor: ids ? null : page.nextCursor, total: page.total }, { headers: { "Cache-Control": "private, no-store" } });
 }

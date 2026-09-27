@@ -25,6 +25,8 @@ export const photoCardSelect = {
   originalName: true,
   updatedAt: true,
   uploader: { select: { name: true, email: true } },
+  /** Only to decide whether this viewer may tag it (their own upload); never rendered. */
+  uploaderId: true,
   collections: { select: { collection: { select: { slug: true, title: true } } } },
   kind: true,
   scanFormat: true,

@@ -18,5 +18,5 @@ export async function GET(request: NextRequest) {
   // same filter; without it the answer would be the first page, and every photo held from a later one would drop out.
   const ids = sp.get("ids")?.split(",").filter(Boolean).slice(0, REREAD_MAX);
   const page = await unassignedPhotoPage(filter, ids ? { ids, take: Math.max(ids.length, 1) } : { cursor: sp.get("cursor") });
-  return NextResponse.json({ photos: page.photos.map((p) => toGridPhoto(p, null, true)), nextCursor: ids ? null : page.nextCursor, total: page.matched }, { headers: { "Cache-Control": "private, no-store" } });
+  return NextResponse.json({ photos: page.photos.map((p) => toGridPhoto(p, null, viewer.user)), nextCursor: ids ? null : page.nextCursor, total: page.matched }, { headers: { "Cache-Control": "private, no-store" } });
 }

@@ -233,12 +233,12 @@ export async function detachExposedFromOtherCollections(slug: string): Promise<v
  * itself is showing, so it is read back the same way the page read it and cannot mean something different here.
  */
 export async function moreCandidates(slug: string, query: string, cursor: string): Promise<{ photos: GridPhoto[]; nextCursor: string | null }> {
-  await requireUserOrThrow();
+  const me = await requireUserOrThrow();
   const collection = await db.collection.findUnique({ where: { slug }, select: { id: true } });
   if (!collection) throw new Error("Collection not found");
   const filter = parsePickerFilter(searchParamsObject(new URLSearchParams(query)));
   const page = await candidatePhotoPage({ kind: "collection", id: collection.id }, filter, { cursor });
-  return { photos: page.photos.map((p) => toGridPhoto(p, null, true)), nextCursor: page.nextCursor };
+  return { photos: page.photos.map((p) => toGridPhoto(p, null, me)), nextCursor: page.nextCursor };
 }
 
 /** Long enough to be either: a description somebody writes out, or a note for the helper to build one around. */

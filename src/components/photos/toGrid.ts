@@ -3,6 +3,8 @@ import type { FavouriteState } from "@/lib/favourites/queries";
 import { fullSizeUrl, photoUrl } from "@/lib/photos/urls";
 import type { GridPhoto } from "./PhotoGrid";
 import { readableTitle } from "@/lib/photos/readable-text";
+import { canEditMedia } from "@/lib/auth/ownership";
+import type { ViewerUser } from "@/lib/auth/viewer";
 
 /**
  * Uploader names are part of the members-only layer: pass `member` only for signed-in viewers. A member who has not
@@ -12,12 +14,18 @@ export function uploaderLabel(name: string | null | undefined, email?: string | 
   return name?.trim() || email?.split("@")[0]?.trim() || "a family member";
 }
 
-export function toGridPhoto(p: PhotoCard, badge?: string | null, member = false, favourite?: FavouriteState | null): GridPhoto {
+/**
+ * `member` is the signed-in member the tile is drawn for, or null for anybody else (a share page's viewer included):
+ * it opens the members-only layer, and says whether tagging from the lightbox is theirs to do.
+ */
+export function toGridPhoto(p: PhotoCard, badge?: string | null, viewer: Pick<ViewerUser, "id" | "role"> | null = null, favourite?: FavouriteState | null): GridPhoto {
+  const member = viewer !== null;
   // The helper's title that names somebody is a member's to read; anybody else sees the item's own title or none.
   const title = readableTitle(p, member);
   return {
     uploadedBy: member ? uploaderLabel(p.uploader?.name, p.uploader?.email) : null,
-    canTag: member && p.status === "READY",
+    // Tagging (and a scan's first still) changes the item, so it is its uploader's and an admin's, as on its page.
+    canTag: member && p.status === "READY" && canEditMedia(viewer, p),
     collections: member ? p.collections.map((c) => c.collection) : [],
     youtubeId: p.kind === "EXTERNAL_VIDEO" ? p.externalId : null,
     videoUrl: p.kind === "VIDEO" && p.status === "READY" ? photoUrl(p, "video") : null,

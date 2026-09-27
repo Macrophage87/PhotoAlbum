@@ -119,7 +119,7 @@ describe("the file as uploaded, for somebody outside the family", () => {
 
   it("links a visitor's grid tile to the largest rendition, never the original", async () => {
     const card = { id: plainId, kind: "PHOTO", status: "READY", updatedAt: new Date(), edits: null, renditions, uploader: null, collections: [] } as unknown as PhotoCard;
-    expect(toGridPhoto(card, null, true).originalUrl).toContain("/original?");
+    expect(toGridPhoto(card, null, { id: "someone", role: "MEMBER" }).originalUrl).toContain("/original?");
     expect(toGridPhoto(card).originalUrl).toBeNull();
     expect(toGridPhoto({ ...card, edits: {}, renditions: edited } as PhotoCard).originalUrl).toContain("/edited?");
     expect(toGridPhoto({ ...card, renditions: { ...renditions, pano: { key: "p.webp", w: 4096, h: 800 } } } as PhotoCard).originalUrl).toContain("/pano?");
