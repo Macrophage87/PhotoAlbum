@@ -157,12 +157,12 @@ export type ProposalRow = { faceId: string; photo: { id: string; updatedAt: Date
 
 /** Open proposals for some photos (or all), oldest first, marked with whether `user` may answer each. */
 export async function proposalsFor(photoIds?: string[], user: Pick<ViewerUser, "id" | "role"> | null = null): Promise<ProposalRow[]> {
-  const faces = await db.face.findMany({
-    where: { status: "PROPOSED", proposedPersonId: { not: null }, photo: NOT_TRASHED, ...(photoIds ? { photoId: { in: photoIds } } : {}) },
+  const faces = await answerableFirst(user, (photo, take) => db.face.findMany({
+    where: { status: "PROPOSED", proposedPersonId: { not: null }, photo, ...(photoIds ? { photoId: { in: photoIds } } : {}) },
     orderBy: { createdAt: "asc" },
-    take: 200,
+    take,
     select: { id: true, box: true, confidence: true, ageAtCaptureYears: true, photo: { select: { id: true, uploaderId: true, updatedAt: true, caption: true, title: true, membersTitle: true, originalName: true, takenAt: true, estimatedDate: true } }, proposedPerson: { select: { id: true, name: true, kind: true, birthday: true } } },
-  });
+  }));
   const rows: ProposalRow[] = faces.map((f) => {
     const p = f.proposedPerson!;
     const date = f.photo.takenAt ?? f.photo.estimatedDate;
@@ -171,15 +171,31 @@ export async function proposalsFor(photoIds?: string[], user: Pick<ViewerUser, "
     return { faceId: f.id, photo: { id: f.photo.id, updatedAt: f.photo.updatedAt }, box: f.box as [number, number, number, number], person: { id: p.id, name: p.name, kind: p.kind }, label, childhood: age !== null && age < 13, editable: canEditMedia(user, f.photo) };
   });
   // Animal proposals ride in the same list under an `animal:` id; the actions tell the two apart by the prefix.
-  const animals = await db.animalDetection.findMany({
-    where: { status: "PROPOSED", proposedPersonId: { not: null }, photo: NOT_TRASHED, ...(photoIds ? { photoId: { in: photoIds } } : {}) },
+  const animals = await answerableFirst(user, (photo, take) => db.animalDetection.findMany({
+    where: { status: "PROPOSED", proposedPersonId: { not: null }, photo, ...(photoIds ? { photoId: { in: photoIds } } : {}) },
     orderBy: { createdAt: "asc" },
-    take: 200,
+    take,
     select: { id: true, box: true, species: true, createdAt: true, photo: { select: { id: true, uploaderId: true, updatedAt: true, caption: true, title: true, membersTitle: true, originalName: true } }, proposedPerson: { select: { id: true, name: true, kind: true } } },
-  });
+  }));
   for (const a of animals) {
     const p = a.proposedPerson!;
     rows.push({ faceId: `animal:${a.id}`, photo: { id: a.photo.id, updatedAt: a.photo.updatedAt }, box: a.box as [number, number, number, number], person: { id: p.id, name: p.name, kind: p.kind }, label: `a ${a.species.toLowerCase()} spotted in ${a.photo.caption ?? readableTitle(a.photo, true) ?? a.photo.originalName}`, childhood: false, editable: canEditMedia(user, a.photo) });
   }
-  return rows;
+  // The ones this member can answer come first; sort is stable, so each part stays oldest first.
+  return rows.sort((a, b) => Number(b.editable) - Number(a.editable));
+}
+
+/** How many proposals of each kind a list holds at most. */
+const PROPOSAL_LIMIT = 200;
+
+/**
+ * Read up to the limit with this member's own photographs first, then anybody's. Only the uploader (or an admin)
+ * may answer a proposal, and the oldest few hundred in the album could otherwise all be somebody else's, leaving a
+ * member a page of questions they cannot answer and none of the ones they can.
+ */
+async function answerableFirst<T>(user: Pick<ViewerUser, "id" | "role"> | null, read: (photo: Prisma.PhotoWhereInput, take: number) => Promise<T[]>): Promise<T[]> {
+  if (!user || isAdmin(user)) return read(NOT_TRASHED, PROPOSAL_LIMIT);
+  const own = await read({ ...NOT_TRASHED, uploaderId: user.id }, PROPOSAL_LIMIT);
+  if (own.length >= PROPOSAL_LIMIT) return own;
+  return [...own, ...(await read({ ...NOT_TRASHED, uploaderId: { not: user.id } }, PROPOSAL_LIMIT - own.length))];
 }

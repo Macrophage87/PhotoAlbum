@@ -64,21 +64,30 @@ export async function detectFacesJob(job: DetectFacesJob, signal?: AbortSignal):
     const clusters = (await db.$queryRaw<{ id: string; centroid: string; faceCount: number }[]>`SELECT id, centroid::text AS centroid, "faceCount" FROM "FaceCluster" WHERE "personId" IS NULL AND centroid IS NOT NULL`).map((c) => ({ id: c.id, centroid: JSON.parse(c.centroid) as number[], faceCount: c.faceCount }));
     for (const f of found) {
       const hit = nearestCluster(f.embedding, clusters);
-      let clusterId: string;
-      if (hit) {
-        clusterId = hit.cluster.id;
-        const next = updatedCentroid(hit.cluster.centroid, hit.cluster.faceCount, f.embedding);
-        hit.cluster.centroid = next;
-        hit.cluster.faceCount += 1;
-        await db.$executeRaw`UPDATE "FaceCluster" SET centroid = ${vectorLiteral(next)}::vector, "faceCount" = "faceCount" + 1, "updatedAt" = now() WHERE id = ${clusterId}`;
-      } else {
-        const created = await db.faceCluster.create({ data: { faceCount: 1 }, select: { id: true } });
-        clusterId = created.id;
-        await db.$executeRaw`UPDATE "FaceCluster" SET centroid = ${vectorLiteral(f.embedding)}::vector WHERE id = ${clusterId}`;
-        clusters.push({ id: clusterId, centroid: f.embedding, faceCount: 1 });
-      }
-      const face = await db.face.create({ data: { photoId: photo.id, clusterId, box: f.box, confidence: f.confidence, ageAtCaptureYears: f.age, status: "DETECTED" }, select: { id: true } });
-      await db.$executeRaw`UPDATE "Face" SET embedding = ${vectorLiteral(f.embedding)}::vector WHERE id = ${face.id}`;
+      await db.$transaction(async (tx) => {
+        let clusterId: string | null = null;
+        if (hit) {
+          // The groups were read before this face was placed, and one may have been named since. Naming holds the
+          // group's row while it works, so ask again under the same lock: a face never joins a named group, and so
+          // somebody, without anybody saying so.
+          const [row] = await tx.$queryRaw<{ personId: string | null }[]>`SELECT "personId" FROM "FaceCluster" WHERE id = ${hit.cluster.id} FOR UPDATE`;
+          if (row && row.personId === null) {
+            clusterId = hit.cluster.id;
+            const next = updatedCentroid(hit.cluster.centroid, hit.cluster.faceCount, f.embedding);
+            hit.cluster.centroid = next;
+            hit.cluster.faceCount += 1;
+            await tx.$executeRaw`UPDATE "FaceCluster" SET centroid = ${vectorLiteral(next)}::vector, "faceCount" = "faceCount" + 1, "updatedAt" = now() WHERE id = ${clusterId}`;
+          } else clusters.splice(clusters.indexOf(hit.cluster), 1);
+        }
+        if (!clusterId) {
+          const created = await tx.faceCluster.create({ data: { faceCount: 1 }, select: { id: true } });
+          clusterId = created.id;
+          await tx.$executeRaw`UPDATE "FaceCluster" SET centroid = ${vectorLiteral(f.embedding)}::vector WHERE id = ${clusterId}`;
+          clusters.push({ id: clusterId, centroid: f.embedding, faceCount: 1 });
+        }
+        const face = await tx.face.create({ data: { photoId: photo.id, clusterId, box: f.box, confidence: f.confidence, ageAtCaptureYears: f.age, status: "DETECTED" }, select: { id: true } });
+        await tx.$executeRaw`UPDATE "Face" SET embedding = ${vectorLiteral(f.embedding)}::vector WHERE id = ${face.id}`;
+      });
     }
     await db.photo.update({ where: { id: photo.id }, data: { facesDetectedAt: new Date() } });
   }, signal);
@@ -108,19 +117,19 @@ export async function rebuildCentroids(personId: string): Promise<void> {
  * does for a person's eras. The count is every face in the cluster, as everywhere else; a cluster left with no
  * templates loses its centroid rather than keep one made of faces that are gone. Named clusters are left to the matcher.
  */
-export async function rebuildUnnamedCentroids(clusterIds: string[]): Promise<void> {
+export async function rebuildUnnamedCentroids(clusterIds: string[], client: Prisma.TransactionClient = db): Promise<void> {
   if (!clusterIds.length) return;
-  const rows = await db.$queryRaw<{ id: string; c: string | null; n: number }[]>`
+  const rows = await client.$queryRaw<{ id: string; c: string | null; n: number }[]>`
     SELECT fc.id, (avg(f.embedding) FILTER (WHERE f.embedding IS NOT NULL))::text AS c, count(f.id)::int AS n
     FROM "FaceCluster" fc LEFT JOIN "Face" f ON f."clusterId" = fc.id
     WHERE fc."personId" IS NULL AND fc.id IN (${Prisma.join(clusterIds)}) GROUP BY fc.id`;
   for (const r of rows) {
     if (r.c === null) {
-      await db.$executeRaw`UPDATE "FaceCluster" SET centroid = NULL, "faceCount" = ${r.n}, "updatedAt" = now() WHERE id = ${r.id}`;
+      await client.$executeRaw`UPDATE "FaceCluster" SET centroid = NULL, "faceCount" = ${r.n}, "updatedAt" = now() WHERE id = ${r.id}`;
       continue;
     }
     const centroid = normalise(JSON.parse(r.c) as number[]);
-    await db.$executeRaw`UPDATE "FaceCluster" SET centroid = ${vectorLiteral(centroid)}::vector, "faceCount" = ${r.n}, "updatedAt" = now() WHERE id = ${r.id}`;
+    await client.$executeRaw`UPDATE "FaceCluster" SET centroid = ${vectorLiteral(centroid)}::vector, "faceCount" = ${r.n}, "updatedAt" = now() WHERE id = ${r.id}`;
   }
 }
 

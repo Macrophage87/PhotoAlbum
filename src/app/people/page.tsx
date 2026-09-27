@@ -54,7 +54,7 @@ export default async function PeoplePage() {
         {proposals.length > 0 && (
           <section className="space-y-3">
             <h2 className="font-display text-xl font-semibold">Probably…</h2>
-            <p className="text-sm text-muted">Faces that look like someone already named, or people named in the notes. Nothing is named until you say so.</p>
+            <p className="text-sm text-muted">Faces that look like someone already named, or people named in the notes. Nothing is named until whoever uploaded the photo, or an admin, says so; yours come first.</p>
             <ProposalList proposals={proposals} />
           </section>
         )}

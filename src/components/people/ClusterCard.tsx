@@ -27,6 +27,9 @@ export type ClusterView = {
  * waits on its own. And one face may be no face at all — a statue, a portrait on the wall — which is said once and
  * never found again.
  */
+/** "one" for 1, as a sentence says it; digits otherwise. */
+const count = (n: number) => (n === 1 ? "one" : String(n));
+
 export function ClusterCard({ cluster, isAdmin, people, pets }: { cluster: ClusterView; isAdmin: boolean; people: Known[]; pets: Known[] }) {
   const [busy, start] = useTransition();
   const [acted, setActed] = useState<string | null>(null);
@@ -95,18 +98,18 @@ export function ClusterCard({ cluster, isAdmin, people, pets }: { cluster: Clust
             onClick={() => start(async () => { await nameClusterAs(cluster.id, cluster.looksLike!.id); router.refresh(); })}
             className="rounded-theme border border-primary text-primary px-2 py-0.5 text-xs hover:bg-primary hover:text-primary-fg disabled:opacity-50"
           >
-            Yes, {others > 0 ? "yours" : "these"} are {cluster.looksLike.name}
+            {others > 0 ? `Yes, the ones on my photos are ${cluster.looksLike.name}` : `Yes, these are ${cluster.looksLike.name}`}
           </button>}
         </div>
       )}
 
       {!canName ? (
-        <p className="text-sm text-muted" data-testid="cluster-not-yours">These are on photographs somebody else uploaded. They, or an admin, can name them.</p>
+        <p className="text-sm text-muted" data-testid="cluster-not-yours">Only whoever uploaded these, or an admin, can name them.</p>
       ) : (
         <>
           {others > 0 && (
             <p className="text-sm text-muted" data-testid="cluster-some-not-yours">
-              Naming these names the {cluster.editableCount} on your photographs. The other {others} {others === 1 ? "stays" : "stay"} here for whoever uploaded {others === 1 ? "it" : "them"}, or an admin.
+              Naming this group names only the {count(cluster.editableCount)} on your photos; the other {count(others)} {others === 1 ? "stays" : "stay"} here for whoever uploaded {others === 1 ? "it" : "them"}, or an admin.
             </p>
           )}
           <NameClusterForm clusterId={cluster.id} isAdmin={isAdmin} people={people} pets={pets} />
