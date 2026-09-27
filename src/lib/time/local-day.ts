@@ -13,6 +13,8 @@ export function localDayFromOffset(instant: Date, tzOffsetMin: number): LocalDay
 /** Local calendar day for an instant in an IANA zone. */
 export function localDayInZone(instant: Date, timezone: string): LocalDay {
   const z = new TZDate(instant, timezone);
+  // A zone nothing knows (only a direct write to the database can store one) reads as UTC, as the SQL reads it.
+  if (Number.isNaN(z.getFullYear()) && timezone !== "UTC") return localDayInZone(instant, "UTC");
   return `${z.getFullYear()}-${pad(z.getMonth() + 1)}-${pad(z.getDate())}`;
 }
 
@@ -47,7 +49,9 @@ export function localToday(now = new Date()): LocalDay {
 
 /** UTC offset (minutes east of UTC) that `timezone` has at `instant`. */
 export function offsetMinutesInZone(instant: Date, timezone: string): number {
-  return -new TZDate(instant, timezone).getTimezoneOffset();
+  const offset = -new TZDate(instant, timezone).getTimezoneOffset();
+  // A zone nothing knows reads as UTC (see localDayInZone).
+  return Number.isNaN(offset) ? 0 : offset;
 }
 
 /** Interpret a wall-clock time in `timezone` and return the UTC instant. */

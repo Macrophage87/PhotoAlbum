@@ -48,6 +48,8 @@ describe("the zones trips are kept under", () => {
     expect(normalizedTimezone("+00:00")).toBe("UTC");
     expect(normalizedTimezone("+05:30")).toBe("UTC");
     expect(normalizedTimezone("Atlantis/Lost")).toBe("UTC");
+    // The pages read a zone nothing knows as UTC too, as the SQL does, rather than "Invalid Date".
+    expect(photoDay(new Date("2026-01-01T02:30:00Z"), null, "Atlantis/Lost")).toBe("2026-01-01");
     expect(normalizedTimezone("Europe/Kiev")).toBe("Europe/Kyiv");
   });
 });
