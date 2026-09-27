@@ -1,48 +1,12 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Button, Label, Select } from "@/components/ui";
 import { formatDistance } from "@/lib/time/format";
+import { sendTrackFile, waitForImport, type ImportSummary } from "@/lib/tracks/import-client";
 
-type Summary = { kind: string; format?: string; tracks: { trackId: string; activityId: string | null; name: string; pointCount: number; distanceM: number; type: string | null }[]; skipped: string[]; pointsRead: number };
-type Item = { id: string; name: string; status: "uploading" | "importing" | "done" | "failed"; progress: number; jobId?: string; summary?: Summary; error?: string };
-
-function upload(file: File, tripId: string, hint: string, replaceGoogle: boolean, onProgress: (p: number) => void): Promise<{ jobId: string }> {
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    xhr.open("POST", "/api/tracks/import");
-    xhr.setRequestHeader("x-file-name", encodeURIComponent(file.name));
-    xhr.setRequestHeader("x-trip-id", tripId);
-    xhr.setRequestHeader("x-source-hint", hint);
-    if (replaceGoogle) xhr.setRequestHeader("x-replace-google", "1");
-    xhr.setRequestHeader("content-type", "application/octet-stream");
-    xhr.upload.onprogress = (e) => e.lengthComputable && onProgress(e.loaded / e.total);
-    xhr.onload = () => {
-      try {
-        const body = JSON.parse(xhr.responseText);
-        if (xhr.status < 300) resolve(body);
-        else reject(new Error(body.error ?? `Upload failed (${xhr.status})`));
-      } catch {
-        reject(new Error(`Upload failed (${xhr.status})`));
-      }
-    };
-    xhr.onerror = () => reject(new Error("Network error"));
-    xhr.send(file);
-  });
-}
-
-async function waitForJob(jobId: string): Promise<Summary> {
-  for (let i = 0; i < 900; i++) {
-    await new Promise((r) => setTimeout(r, i < 10 ? 1000 : 3000));
-    const res = await fetch(`/api/tracks/import/${jobId}`);
-    if (!res.ok) throw new Error(`Status check failed (${res.status})`);
-    const j = (await res.json()) as { state: string; summary: Summary | null; error: string | null };
-    if (j.state === "completed" && j.summary) return j.summary;
-    if (j.state === "failed" || j.state === "cancelled") throw new Error(j.error ?? "Import failed");
-  }
-  throw new Error("Timed out waiting for the import");
-}
+type Item = { id: string; name: string; status: "uploading" | "importing" | "done" | "failed"; progress: number; jobId?: string; summary?: ImportSummary; error?: string; trouble?: boolean };
 
 export function TrackImporter({ tripId, tripSlug }: { tripId: string; tripSlug: string }) {
   const [items, setItems] = useState<Item[]>([]);
@@ -51,17 +15,30 @@ export function TrackImporter({ tripId, tripSlug }: { tripId: string; tripSlug: 
   const inputRef = useRef<HTMLInputElement>(null);
   const patch = (id: string, p: Partial<Item>) => setItems((prev) => prev.map((it) => (it.id === id ? { ...it, ...p } : it)));
 
+  // Closing the tab while a file is still going up loses it (a Google export can take minutes); once it is up, the
+  // import carries on without this page.
+  const sending = items.some((i) => i.status === "uploading");
+  useEffect(() => {
+    if (!sending) return;
+    const warn = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [sending]);
+
   const start = async (files: FileList) => {
     for (const file of Array.from(files)) {
       const id = `${file.name}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
       setItems((prev) => [...prev, { id, name: file.name, status: "uploading", progress: 0 }]);
       try {
-        const { jobId } = await upload(file, tripId, hint, replaceGoogle, (p) => patch(id, { progress: p }));
+        const { jobId } = await sendTrackFile(file, tripId, hint, replaceGoogle, (p) => patch(id, { progress: p }));
         patch(id, { status: "importing", jobId, progress: 1 });
-        const summary = await waitForJob(jobId);
-        patch(id, { status: "done", summary });
+        const summary = await waitForImport(jobId, { onTrouble: (trouble) => patch(id, { trouble }) });
+        patch(id, { status: "done", summary, trouble: false });
       } catch (err) {
-        patch(id, { status: "failed", error: (err as Error).message });
+        patch(id, { status: "failed", error: (err as Error).message, trouble: false });
       }
     }
   };
@@ -99,7 +76,7 @@ export function TrackImporter({ tripId, tripSlug }: { tripId: string; tripSlug: 
                 <span className="font-medium truncate">{it.name}</span>
                 <span className="text-muted shrink-0">
                   {it.status === "uploading" && `Uploading ${Math.round(it.progress * 100)}%`}
-                  {it.status === "importing" && <span className="animate-pulse">Importing…</span>}
+                  {it.status === "importing" && <span className="animate-pulse">{it.trouble ? "Importing… (reconnecting)" : "Importing…"}</span>}
                   {it.status === "done" && "Done"}
                   {it.status === "failed" && <span className="text-red-600">Failed</span>}
                 </span>
