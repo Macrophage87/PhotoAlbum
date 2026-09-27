@@ -34,6 +34,19 @@ async function loadEditableCollection(slug: string) {
   return collection;
 }
 
+/**
+ * A new web address for the collection: made from its first title and never following a rename, it can still say
+ * what the title no longer does. Links to the old address stop working; nothing keeps it to redirect from.
+ */
+export async function changeCollectionSlug(slug: string, fd: FormData): Promise<void> {
+  const collection = await loadEditableCollection(slug);
+  const wanted = z.string().trim().min(1).max(80).parse(fd.get("slug"));
+  const next = await uniqueSlug(wanted, async (s) => Boolean(await db.collection.findFirst({ where: { slug: s, id: { not: collection.id } }, select: { id: true } })));
+  if (next !== collection.slug) await db.collection.update({ where: { id: collection.id }, data: { slug: next } });
+  revalidatePath("/", "layout");
+  redirect(`/collections/${next}/settings?saved=1`);
+}
+
 /** Bump the versioned URLs of a collection's items so shared caches stop matching after a change in exposure. */
 async function bumpItemVersions(collectionId: string) {
   await db.photo.updateMany({ where: { collections: { some: { collectionId } } }, data: { updatedAt: new Date() } });

@@ -1,5 +1,5 @@
 import { db } from "@/lib/db";
-import { forgetNameInText, forgetRawAnswers, matcherFor, memberTextMentioning, photosInContainers, photosMentioning, taggedPhotoIds } from "./forget";
+import { forgetNameInText, forgetRawAnswers, leftoverItems, matcherFor, memberTextCount, memberTextMentioning, photosInContainers, photosMentioning, taggedPhotoIds } from "./forget";
 import { containerKey, forgetKeyState, rememberForgotten } from "./tombstone";
 import { isListedPlace, nameMatcher, notThePerson, type NameMatcher, type Neighbourhood } from "./scrub";
 import { withForgetLock } from "./names-changed";
@@ -102,11 +102,7 @@ export async function forgetPerson(personId: string, opts: { keepName: boolean; 
   // Nor in the queue: judging jobs asked for them are dropped, finished ones included.
   if (!keepName && !later) await dropRejudgeJobs(personId, [person.name, ...person.formerNames]);
   // The list stays until an admin (or whoever forgot them) has seen to it: ids and fields, never the name.
-  const count = left.photos.length + left.trips.length + left.collections.length + left.activities.length;
-  if (!keepName && count && opts.list !== false) {
-    const items = { photos: left.photos.map((p) => ({ id: p.id, fields: p.fields })), trips: left.trips.map((t) => ({ slug: t.slug })), collections: left.collections.map((c) => ({ slug: c.slug })), activities: left.activities.map((x) => ({ id: x.id })) };
-    await db.forgetLeftover.create({ data: { items, createdById: opts.byUserId } });
-  }
+  if (!keepName && memberTextCount(left) && opts.list !== false) await db.forgetLeftover.create({ data: { items: leftoverItems(left), createdById: opts.byUserId } });
 }
 
 /** Forget everybody waiting on FORGET_KEY, once it is set. At start-up and overnight. */

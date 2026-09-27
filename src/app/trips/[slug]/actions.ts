@@ -19,6 +19,7 @@ import { rejudgeFromAction } from "@/lib/annotation/rejudge-notice";
 import { descriptionStaysHelpers } from "@/lib/annotation/helper-text";
 import { forgetTrackFiles } from "@/lib/tracks/files";
 import { takeBackTripTracks } from "@/lib/tracks/remove";
+import { uniqueSlug } from "@/lib/trips/slug";
 import { isCoverable } from "@/lib/photos/cover";
 
 /** The trip, where this member may change it: whoever made it, and admins. */
@@ -84,6 +85,20 @@ export async function rotateShareToken(slug: string): Promise<void> {
   // New token, new rendition URLs: private caches keyed on the old ?v= stop matching.
   await db.photo.updateMany({ where: { tripId: trip.id }, data: { updatedAt: new Date() } });
   revalidatePath(`/trips/${slug}/settings`);
+}
+
+/**
+ * A new web address for the trip. It is made from the first title and never follows a rename, so it can still say
+ * what the title no longer does — a forgotten person's name, say. Links to the old address stop working; there is
+ * no redirect, since keeping the old address anywhere would keep what it said.
+ */
+export async function changeTripSlug(slug: string, fd: FormData): Promise<void> {
+  const trip = await loadEditableTrip(slug);
+  const wanted = z.string().trim().min(1).max(80).parse(fd.get("slug"));
+  const next = await uniqueSlug(wanted, async (s) => Boolean(await db.trip.findFirst({ where: { slug: s, id: { not: trip.id } }, select: { id: true } })));
+  if (next !== trip.slug) await db.trip.update({ where: { id: trip.id }, data: { slug: next } });
+  revalidatePath("/", "layout");
+  redirect(`/trips/${next}/settings?saved=1`);
 }
 
 /** Choose (or forget) the picture the trip is known by. The cover belongs to the trip, so it is the trip's to set. */

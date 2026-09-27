@@ -4,10 +4,10 @@ import { shareableCollectionUrl } from "@/lib/share/social";
 import { CollectionForm } from "@/components/collections/CollectionForm";
 import { ShareButtons } from "@/components/trips/ShareButtons";
 import { CopyLink } from "@/components/share/CopyLink";
-import { Button, ButtonLink, Card, ConfirmSubmitButton } from "@/components/ui";
+import { Button, ButtonLink, Card, ConfirmSubmitButton, Input, Label } from "@/components/ui";
 import { photoUrl } from "@/lib/photos/urls";
 import { chosenCollectionCover, collectionCoverFor } from "@/lib/collections/queries";
-import { deleteCollection, detachExposedFromOtherCollections, rotateCollectionShareToken, updateCollection } from "../../actions";
+import { changeCollectionSlug, deleteCollection, detachExposedFromOtherCollections, rotateCollectionShareToken, updateCollection } from "../../actions";
 import { OptOutToggle } from "@/components/annotation/OptOutToggle";
 import { visibilityWarnings } from "@/lib/visibility/settings";
 import Link from "next/link";
@@ -24,6 +24,7 @@ export default async function CollectionSettingsPage({ params, searchParams }: P
   const { user: me, collection } = await requireCollectionOwnerPage(slug, `/collections/${slug}/settings`);
   const update = updateCollection.bind(null, slug);
   const rotate = rotateCollectionShareToken.bind(null, slug);
+  const changeSlug = changeCollectionSlug.bind(null, slug);
   const remove = deleteCollection.bind(null, slug);
   const [cover, chosen] = await Promise.all([collectionCoverFor(collection), chosenCollectionCover(collection)]);
   const shareUrl = shareableCollectionUrl(collection, env().APP_URL);
@@ -97,6 +98,18 @@ export default async function CollectionSettingsPage({ params, searchParams }: P
             <ShareButtons url={shareUrl} />
           </Card>
         )}
+      </section>
+
+      <section>
+        <h2 className="font-display text-xl font-semibold mb-2">Web address</h2>
+        <p className="text-sm text-muted mb-3">Made from the first title, and not changed when the title is. Links to the old address stop working.</p>
+        <form action={changeSlug} className="flex flex-wrap items-end gap-2">
+          <div>
+            <Label htmlFor="slug">Address</Label>
+            <Input id="slug" name="slug" defaultValue={slug} required maxLength={80} />
+          </div>
+          <Button type="submit" variant="secondary">Change address</Button>
+        </form>
       </section>
 
       <section>

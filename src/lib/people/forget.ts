@@ -234,57 +234,156 @@ export async function forgetNameInText(photoIds: string[], m: NameMatcher, opts:
   for (const c of collections) if (m.mentions(c.description)) await db.collection.update({ where: { id: c.id }, data: { description: m.scrub(c.description) } });
 }
 
-export type MemberTextField = "title" | "caption" | "notes";
+export type MemberTextField = "title" | "caption" | "notes" | "file name" | "trash note" | "link note";
+export type ContainerTextField = "title" | "description" | "web address";
+export type PersonTextField = "relationship" | "descriptors" | "former names";
+export type TrackTextField = "name" | "file name";
 export type MemberText = {
-  photos: { id: string; label: string; fields: MemberTextField[] }[];
-  trips: { id: string; slug: string; title: string }[];
-  collections: { id: string; slug: string; title: string }[];
+  photos: { id: string; label: string; fields: MemberTextField[]; trashed?: boolean }[];
+  trips: { id: string; slug: string; title: string; fields: ContainerTextField[] }[];
+  collections: { id: string; slug: string; title: string; fields: ContainerTextField[] }[];
   activities: { id: string; title: string; tripSlug: string }[];
+  /** Other people's records: what a member typed about them. */
+  people: { id: string; label: string; fields: PersonTextField[] }[];
+  tracks: { id: string; label: string; href: string; fields: TrackTextField[] }[];
+  /** Takeout imports whose report lists a file or album by the name (admins'). */
+  imports: { id: string; label: string }[];
 };
+
+/**
+ * What a forget's leftover list keeps: ids and which fields, never words, so nothing stored is the name — trips and
+ * collections by id too, since a web address may be it.
+ */
+export type LeftoverItems = {
+  photos: { id: string; fields: MemberTextField[] }[];
+  trips: { id?: string; slug?: string; fields?: ContainerTextField[] }[];
+  collections: { id?: string; slug?: string; fields?: ContainerTextField[] }[];
+  activities: { id: string }[];
+  people: { id: string; fields: PersonTextField[] }[];
+  tracks: { id: string; fields: TrackTextField[] }[];
+  imports: { id: string }[];
+};
+
+/** The list as kept (see `LeftoverItems`). */
+export function leftoverItems(t: MemberText): LeftoverItems {
+  return {
+    photos: t.photos.map((p) => ({ id: p.id, fields: p.fields })),
+    trips: t.trips.map((x) => ({ id: x.id, fields: x.fields })),
+    collections: t.collections.map((x) => ({ id: x.id, fields: x.fields })),
+    activities: t.activities.map((x) => ({ id: x.id })),
+    people: t.people.map((x) => ({ id: x.id, fields: x.fields })),
+    tracks: t.tracks.map((x) => ({ id: x.id, fields: x.fields })),
+    imports: t.imports.map((x) => ({ id: x.id })),
+  };
+}
+
+/** Everything listed, counted. */
+export function memberTextCount(t: MemberText): number {
+  return t.photos.length + t.trips.length + t.collections.length + t.activities.length + t.people.length + t.tracks.length + t.imports.length;
+}
 
 /** How many of each are listed: enough to act on, not the whole album. */
 const MEMBER_TEXT_LIMIT = 100;
+
+/** Letters and digits only, lower-cased and hyphen-joined, the way a web address or a file name spells a name. */
+function hyphenated(text: string): string {
+  return `-${text.normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "-")}-`;
+}
+
+/**
+ * Whether text a member typed without thinking of it as prose names them: a file name ("zebulon_quince_80.jpg"), a
+ * web address, a note. By the rules for prose, or by one of their full names spelled out in any case — never by a
+ * first name alone, or a one-word name that is also a word.
+ */
+function looseMatcher(m: NameMatcher): (text: string | null | undefined) => boolean {
+  const forms = [...new Set([...m.albumForms, ...m.tombstoneForms.filter((f) => !f.derived && !f.capitalizedOnly).map((f) => f.form)])].map(hyphenated).filter((f) => f.length > 4);
+  return (text) => Boolean(text?.trim()) && (m.mentions(text) || forms.some((f) => hyphenated(text!).includes(f)));
+}
 
 /**
  * What forgetting leaves that mentions them: titles, captions and notes on photographs, and descriptions of trips,
  * collections and activities, written by members — or before the album kept track of who wrote them — and the
  * helper's descriptions of trips around their photographs where only a name that is also a word ("May") is left.
- * Listed so their authors (or an admin) can decide what to do with those words.
+ * And what else members typed that can hold a name: a photograph's file name, a note on why it is in the trash or
+ * how it is linked to another, a trip's or collection's web address (made from its first title, and not changed
+ * with it), other people's relationship, descriptors and former names, a track's name and file, and a Takeout
+ * import's report. Listed so their authors (or an admin) can decide what to do with those words.
  */
 export async function memberTextMentioning(m: NameMatcher, tagged: Set<string> = new Set(), personId?: string, limit = MEMBER_TEXT_LIMIT): Promise<MemberText> {
-  const out: MemberText = { photos: [], trips: [], collections: [], activities: [] };
+  const out: MemberText = { photos: [], trips: [], collections: [], activities: [], people: [], tracks: [], imports: [] };
   const words = probes(m.albumForms);
+  const loose = looseMatcher(m);
+  // For what is spelled without capitals or spaces: the long runs of every full name.
+  const anyCase = probes([...m.albumForms, ...m.tombstoneForms.filter((f) => !f.derived && !f.capitalizedOnly).map((f) => f.form)]);
   const taggedIds = [...tagged];
+  const linked = anyCase.length ? await db.photoLink.findMany({ where: { OR: anyCase.map((w) => ({ note: { contains: w, mode: "insensitive" as const } })) }, select: { photoAId: true, note: true } }) : [];
+  const linkNotes = new Map<string, string[]>();
+  for (const l of linked) linkNotes.set(l.photoAId, [...(linkNotes.get(l.photoAId) ?? []), l.note ?? ""]);
   const anywhere = words.length ? Prisma.sql`(${likeAny(Prisma.sql`title`, words)} OR ${likeAny(Prisma.sql`"membersTitle"`, words)} OR ${likeAny(Prisma.sql`caption`, words)} OR ${likeAny(Prisma.sql`context`, words)})` : Prisma.sql`false`;
+  const typed = anyCase.length ? Prisma.sql`(${likeAny(Prisma.sql`"originalName"`, anyCase)} OR ${likeAny(Prisma.sql`"trashNote"`, anyCase)})` : Prisma.sql`false`;
   const theirs = taggedIds.length ? Prisma.sql`id IN (${Prisma.join(taggedIds)})` : Prisma.sql`false`;
-  const photos = await db.$queryRaw<{ id: string; kind: string; title: string | null; membersTitle: string | null; titleByHelper: boolean | null; caption: string | null; context: string | null; annotation: unknown; originalName: string }[]>`
-    SELECT id, kind::text AS kind, title, "membersTitle", "titleByHelper", caption, context, annotation, "originalName" FROM "Photo"
-    WHERE "trashedAt" IS NULL AND (${anywhere} OR ${theirs})
+  const links = linkNotes.size ? Prisma.sql`id IN (${Prisma.join([...linkNotes.keys()])})` : Prisma.sql`false`;
+  const photos = await db.$queryRaw<{ id: string; kind: string; title: string | null; membersTitle: string | null; titleByHelper: boolean | null; caption: string | null; context: string | null; annotation: unknown; originalName: string; trashNote: string | null; trashedAt: Date | null }[]>`
+    SELECT id, kind::text AS kind, title, "membersTitle", "titleByHelper", caption, context, annotation, "originalName", "trashNote", "trashedAt" FROM "Photo"
+    WHERE ("trashedAt" IS NULL AND (${anywhere} OR ${theirs})) OR ${typed} OR ${links}
     ORDER BY "createdAt" ASC`;
   const [others, given] = await Promise.all([othersOn(taggedIds, personId), answerTitles(photos.map((p) => p.id))]);
   for (const p of photos) {
     const where: Where = { tagged: tagged.has(p.id), others: others.get(p.id) ?? [] };
     const h = helpersTitles(p, given.get(p.id));
     const fields: MemberTextField[] = [];
-    if ((!h.title && m.mentions(p.title, where)) || (!h.membersTitle && m.mentions(p.membersTitle, where))) fields.push("title");
-    if (m.mentions(p.caption, where)) fields.push("caption");
-    if (m.mentions(p.context, where)) fields.push("notes");
-    if (fields.length && out.photos.length < limit) out.photos.push({ id: p.id, label: p.title?.trim() || p.caption?.trim() || p.originalName, fields });
+    // A photograph in the trash is listed for what only it still carries, its file name and the note on why.
+    if (!p.trashedAt) {
+      if ((!h.title && m.mentions(p.title, where)) || (!h.membersTitle && m.mentions(p.membersTitle, where))) fields.push("title");
+      if (m.mentions(p.caption, where)) fields.push("caption");
+      if (m.mentions(p.context, where)) fields.push("notes");
+    }
+    if (loose(p.originalName)) fields.push("file name");
+    if (loose(p.trashNote)) fields.push("trash note");
+    if ((linkNotes.get(p.id) ?? []).some(loose)) fields.push("link note");
+    if (fields.length && out.photos.length < limit) out.photos.push({ id: p.id, label: p.title?.trim() || p.caption?.trim() || p.originalName, fields, ...(p.trashedAt ? { trashed: true } : {}) });
   }
   const near = await containersOf(taggedIds);
   // Around their photographs anybody's words count, the helper's too; elsewhere only members' — and a trip's,
-  // collection's or activity's title is always a member's.
+  // collection's or activity's title is always a member's. A web address is looked for by any case.
   const contains = (field: "title" | "description") => words.map((w) => ({ [field]: { contains: w, mode: "insensitive" as const } }));
+  const slugs = anyCase.map((w) => ({ slug: { contains: hyphenated(w).slice(1, -1) } }));
   const found = (ids: string[]) => ({ OR: [{ id: { in: ids } }, { descriptionByHelper: false, OR: contains("description") }, ...(words.length ? [{ OR: contains("title") }] : [])] });
+  const foundOrAddressed = (ids: string[]) => ({ OR: [...found(ids).OR, ...slugs] });
   const [trips, collections, activities] = await Promise.all([
-    db.trip.findMany({ where: found(near.trips), select: { id: true, slug: true, title: true, description: true }, orderBy: { startDate: "asc" } }),
-    db.collection.findMany({ where: found(near.collections), select: { id: true, slug: true, title: true, description: true }, orderBy: { title: "asc" } }),
+    db.trip.findMany({ where: foundOrAddressed(near.trips), select: { id: true, slug: true, title: true, description: true }, orderBy: { startDate: "asc" } }),
+    db.collection.findMany({ where: foundOrAddressed(near.collections), select: { id: true, slug: true, title: true, description: true }, orderBy: { title: "asc" } }),
     db.activity.findMany({ where: found(near.activities), select: { id: true, title: true, description: true, trip: { select: { slug: true } } }, orderBy: { startTime: "asc" } }),
   ]);
-  const names = (x: { title: string; description: string | null }, tagged: boolean) => m.mentions(x.description, { tagged }) || m.mentions(x.title, { tagged });
-  out.trips = trips.filter((t) => names(t, near.trips.includes(t.id))).slice(0, limit).map((t) => ({ id: t.id, slug: t.slug, title: t.title }));
-  out.collections = collections.filter((c) => names(c, near.collections.includes(c.id))).slice(0, limit).map((c) => ({ id: c.id, slug: c.slug, title: c.title }));
-  out.activities = activities.filter((a) => names(a, near.activities.includes(a.id))).slice(0, limit).map((a) => ({ id: a.id, title: a.title, tripSlug: a.trip.slug }));
+  const containerFields = (x: { title: string; description: string | null; slug?: string }, tagged: boolean): ContainerTextField[] => [
+    ...(m.mentions(x.title, { tagged }) ? ["title" as const] : []),
+    ...(m.mentions(x.description, { tagged }) ? ["description" as const] : []),
+    ...(x.slug !== undefined && loose(x.slug) ? ["web address" as const] : []),
+  ];
+  out.trips = trips.map((t) => ({ id: t.id, slug: t.slug, title: t.title, fields: containerFields(t, near.trips.includes(t.id)) })).filter((t) => t.fields.length).slice(0, limit);
+  out.collections = collections.map((c) => ({ id: c.id, slug: c.slug, title: c.title, fields: containerFields(c, near.collections.includes(c.id)) })).filter((c) => c.fields.length).slice(0, limit);
+  out.activities = activities.filter((a) => containerFields(a, near.activities.includes(a.id)).length).slice(0, limit).map((a) => ({ id: a.id, title: a.title, tripSlug: a.trip.slug }));
+
+  // Other people: few enough to read every one.
+  const people = await db.person.findMany({ where: { ...(personId ? { id: { not: personId } } : {}), OR: [{ relationship: { not: null } }, { descriptors: { not: null } }, { formerNames: { isEmpty: false } }] }, select: { id: true, name: true, relationship: true, descriptors: true, formerNames: true }, orderBy: { name: "asc" } });
+  for (const x of people) {
+    const fields: PersonTextField[] = [...(loose(x.relationship) ? ["relationship" as const] : []), ...(loose(x.descriptors) ? ["descriptors" as const] : []), ...(x.formerNames.some(loose) ? ["former names" as const] : [])];
+    if (fields.length && out.people.length < limit) out.people.push({ id: x.id, label: x.name, fields });
+  }
+  if (anyCase.length) {
+    const tracks = await db.track.findMany({
+      where: { OR: anyCase.flatMap((w) => [{ name: { contains: w, mode: "insensitive" as const } }, { originalFile: { contains: w, mode: "insensitive" as const } }]) },
+      select: { id: true, name: true, originalFile: true, trip: { select: { slug: true } }, activity: { select: { id: true } } },
+      orderBy: { startTime: "asc" },
+    });
+    for (const t of tracks) {
+      const fields: TrackTextField[] = [...(loose(t.name) ? ["name" as const] : []), ...(loose(t.originalFile) ? ["file name" as const] : [])];
+      if (fields.length && out.tracks.length < limit) out.tracks.push({ id: t.id, label: t.name, href: t.activity ? `/trips/${t.trip.slug}/activities/${t.activity.id}` : `/trips/${t.trip.slug}`, fields });
+    }
+    const imports = await db.$queryRaw<{ id: string; report: string; archiveName: string }[]>`
+      SELECT id, report::text AS report, "archiveName" FROM "TakeoutImport" WHERE ${likeAny(Prisma.sql`report::text`, anyCase)} ORDER BY "startedAt" ASC`;
+    out.imports = imports.filter((i) => loose(i.report)).slice(0, limit).map((i) => ({ id: i.id, label: i.archiveName }));
+  }
   return out;
 }
 

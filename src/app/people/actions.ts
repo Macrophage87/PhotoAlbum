@@ -263,7 +263,8 @@ export async function dismissForgetLeftover(id: string): Promise<void> {
   const user = await requireUserOrThrow();
   // Admins, or the member who forgot them: the list is theirs.
   const mine = user.role === "ADMIN" ? {} : { createdById: user.id };
-  await db.forgetLeftover.updateMany({ where: { id, dismissedAt: null, ...mine }, data: { dismissedAt: new Date(), dismissedById: user.id } });
+  // What it listed goes with it: ids and fields only, but nothing is kept about a forgotten person that is not needed.
+  await db.forgetLeftover.updateMany({ where: { id, dismissedAt: null, ...mine }, data: { dismissedAt: new Date(), dismissedById: user.id, items: {} } });
   revalidatePath("/people/forgotten");
   revalidatePath("/admin");
 }

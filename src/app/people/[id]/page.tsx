@@ -9,7 +9,7 @@ import { PhotoGrid } from "@/components/photos/PhotoGrid";
 import { toGridPhoto } from "@/components/photos/toGrid";
 import { Badge, Button, Card, ConfirmSubmitButton, Input, Label } from "@/components/ui";
 import { decideIndexing, deletePerson, optOutPerson, recordAdultAndName, scrubWithdrawnNow, setNameInDescriptions, updatePerson } from "../actions";
-import { matcherFor, memberTextMentioning, taggedPhotoIds, withdrawalDue, withdrawalNotice, withdrawalReason } from "@/lib/people/forget";
+import { matcherFor, memberTextCount, memberTextMentioning, taggedPhotoIds, withdrawalDue, withdrawalNotice, withdrawalReason } from "@/lib/people/forget";
 import { nameMayLeaveServer } from "@/lib/people/consent";
 import { MemberTextList } from "@/components/people/MemberTextList";
 import { PetForm } from "@/components/people/PetForm";
@@ -229,7 +229,7 @@ export default async function PersonPage({ params, searchParams }: PageProps<"/p
                 <p className="font-medium">Forget this person&apos;s face</p>
                 <p>The album stops recognizing {person.name} and takes their name out of everything the AI wrote; what members wrote themselves is left as it is.</p>
                 <p className="text-muted">In detail: deletes every face template, group and match for {person.name}; takes the name out of the AI helper&apos;s descriptions and titles (including descriptions a member has since corrected) and the trip, collection and activity descriptions it wrote, and out of the name search; and stops the name reaching the AI helper. Titles, captions, notes and descriptions members wrote by hand are left exactly as they wrote them. Afterwards the album keeps the name only as a code, to stop it coming back in anything sent to or written by the AI helper; if a member of the album has an account under the same name, that name stays theirs and cannot be kept out that way.</p>
-                {memberText && memberText.photos.length + memberText.trips.length + memberText.collections.length + memberText.activities.length > 0 && (
+                {memberText && memberTextCount(memberText) > 0 && (
                   <div className="rounded-theme border border-border bg-surface-alt p-3 space-y-1">
                     <p>These still mention {person.name} and were written by members, or before the album kept track of who wrote them; forgetting leaves them as they are, so edit them by hand (or ask whoever wrote them):</p>
                     <MemberTextList text={memberText} />
