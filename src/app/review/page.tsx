@@ -98,7 +98,7 @@ export default async function ReviewPage({ searchParams }: PageProps<"/review">)
                 <ProposalList proposals={proposals} />
                 {unnamedFaces > 0 && (
                   <p className="text-sm text-muted">
-                    {unnamedFaces} face{unnamedFaces === 1 ? " in this batch is" : "s in this batch are"} not named yet. <Link href="/people" className="text-primary hover:underline">Name them on the People page</Link>, or open an item&apos;s details.
+                    {unnamedFaces} face{unnamedFaces === 1 ? " in this batch is" : "s in this batch are"} not named yet. <Link href="/people" className="text-primary underline underline-offset-2">Name them on the People page</Link>, or open an item&apos;s details.
                   </p>
                 )}
               </section>

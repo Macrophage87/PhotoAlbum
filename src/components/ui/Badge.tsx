@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 
 const tones = {
   neutral: "bg-surface-alt text-muted",
-  primary: "bg-primary/10 text-primary",
+  primary: "bg-primary/10 text-primary-strong",
   accent: "bg-accent/15 text-text",
   success: "bg-emerald-100 text-emerald-800",
   warning: "bg-amber-100 text-amber-800",
