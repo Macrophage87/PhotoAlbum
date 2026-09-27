@@ -25,7 +25,7 @@ async function geotag(tripId: string) {
  */
 export async function attachToActivity(activityId: string, photoIds: string[]): Promise<number> {
   const user = await requireUserOrThrow();
-  const activity = await db.activity.findUnique({ where: { id: activityId }, select: { id: true, tripId: true, trip: { select: { slug: true } } } });
+  const activity = await db.activity.findUnique({ where: { id: activityId, trip: { deletingAt: null } }, select: { id: true, tripId: true, trip: { select: { slug: true } } } });
   if (!activity) throw new Error("Activity not found");
   const list = await editableMediaIds(user, ids.parse(photoIds));
   if (!list.length) return 0;
@@ -40,7 +40,7 @@ export async function attachToActivity(activityId: string, photoIds: string[]): 
 /** Everything taken during the activity that is free to take: see `activityWindow` for what is left alone. */
 export async function attachActivityWindow(activityId: string): Promise<{ added: number; elsewhere: number }> {
   const user = await requireUserOrThrow();
-  const activity = await db.activity.findUnique({ where: { id: activityId }, select: { id: true, tripId: true, startTime: true, endTime: true } });
+  const activity = await db.activity.findUnique({ where: { id: activityId, trip: { deletingAt: null } }, select: { id: true, tripId: true, startTime: true, endTime: true } });
   if (!activity) throw new Error("Activity not found");
   const { ids: found, elsewhere } = await activityWindow(user, activity);
   let added = 0;

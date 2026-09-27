@@ -32,7 +32,7 @@ export async function bulkAssignActivity(photoIds: string[], activityId: string 
   const list = await editableMediaIds(user, ids.parse(photoIds));
   if (!list.length) return;
   if (activityId) {
-    const activity = await db.activity.findUnique({ where: { id: activityId }, select: { tripId: true } });
+    const activity = await db.activity.findUnique({ where: { id: activityId, trip: { deletingAt: null } }, select: { tripId: true } });
     if (!activity) return;
     await onActivity(() => db.photo.updateMany({ where: { id: { in: list }, tripId: activity.tripId }, data: { activityId, activitySetById: user.id } }));
   } else {

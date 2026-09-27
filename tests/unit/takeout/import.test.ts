@@ -18,7 +18,7 @@ vi.mock("@/lib/jobs/live", () => ({ hasLiveProcessingJob: async () => false }));
 vi.mock("@/lib/jobs/boss", () => ({ enqueue: async (queue: string, data: unknown) => { if (refuse.queue === queue) { refuse.queue = null; throw new Error("queue unavailable"); } enqueued.push({ queue, data }); } }));
 
 /** What happens as a stored file is about to take its hash: nothing, a failure, or the same bytes landing by upload. */
-const claiming = vi.hoisted(() => ({ file: null as string | null, then: null as null | "fail" | "race" }));
+const claiming = vi.hoisted(() => ({ file: null as string | null, then: null as null | "fail" | "race", removeStarterAt: 0, claims: 0 }));
 vi.mock("@/lib/media/content-hash", async (orig) => {
   const real = (await orig()) as typeof import("@/lib/media/content-hash");
   const { db: store } = await import("@/lib/db");
@@ -26,6 +26,8 @@ vi.mock("@/lib/media/content-hash", async (orig) => {
     claimContentHash: async (photoId: string, hash: string, data?: Record<string, unknown>) => {
       const row = await store.photo.findUniqueOrThrow({ where: { id: photoId }, select: { originalName: true, uploaderId: true } });
       if (claiming.file === row.originalName && claiming.then === "fail") throw new Error("database went away");
+      // The importer's removal begins part-way through the archive.
+      if (++claiming.claims === claiming.removeStarterAt) await store.user.update({ where: { id: row.uploaderId }, data: { removingAt: new Date() } });
       if (claiming.file === row.originalName && claiming.then === "race") {
         await store.photo.create({ data: { uploaderId: row.uploaderId, status: "READY", originalName: "uploaded-meanwhile.jpg", mimeType: "image/jpeg", storageKey: "photos/u", originalPath: "photos/u/original.jpg", sizeBytes: 1, contentHash: hash } });
       }
@@ -34,7 +36,7 @@ vi.mock("@/lib/media/content-hash", async (orig) => {
   };
 });
 
-import { closeDeadImports, importTakeoutArchive } from "@/lib/takeout/import";
+import { closeDeadImports, importTakeoutArchive, STARTER_REMOVED } from "@/lib/takeout/import";
 import { copyFileSync, createWriteStream, readdirSync } from "node:fs";
 import { pipeline } from "node:stream/promises";
 import sharp from "sharp";
@@ -48,6 +50,8 @@ describe("importing a Takeout archive", () => {
     refuse.queue = null;
     claiming.file = null;
     claiming.then = null;
+    claiming.claims = 0;
+    claiming.removeStarterAt = 0;
     userId = (await db.user.create({ data: { email: "t@example.com", role: "ADMIN" } })).id;
     copyFileSync(path.join(process.cwd(), "tests/fixtures/takeout.zip"), path.join(inbox, "takeout-001.zip"));
   });
@@ -281,4 +285,27 @@ describe("importing a Takeout archive", () => {
     await importTakeoutArchive(row.id);
     expect((await db.takeoutImport.findUniqueOrThrow({ where: { id: row.id } })).status).toBe("FAILED");
   });
+
+  it("never starts for a member being removed, and stops within 25 files once their removal begins", async () => {
+    const pixels = sharp({ create: { width: 8, height: 8, channels: 3, background: { r: 10, g: 80, b: 40 } } });
+    const zip = new ZipFile();
+    for (let i = 0; i < 60; i++) zip.addBuffer(await pixels.clone().png({ palette: false }).composite([{ input: Buffer.from([i, i, i, 255]), raw: { width: 1, height: 1, channels: 4 }, left: 0, top: 0 }]).toBuffer(), `Takeout/Google Photos/Photos from 2025/p${i}.png`);
+    zip.end();
+    await pipeline(zip.outputStream, createWriteStream(path.join(inbox, "takeout-many.zip")));
+
+    claiming.removeStarterAt = 10;
+    const row = await db.takeoutImport.create({ data: { archiveName: "takeout-many.zip", startedById: userId } });
+    await importTakeoutArchive(row.id);
+    const r = await db.takeoutImport.findUniqueOrThrow({ where: { id: row.id } });
+    expect(r.status).toBe("FAILED");
+    expect((r.report as { failures: { reason: string }[] }).failures).toContainEqual({ file: "takeout-many.zip", reason: STARTER_REMOVED });
+    expect(r.imported).toBe(25);
+    expect(await db.photo.count()).toBe(25);
+
+    // One queued before the removal began never starts.
+    const queued = await db.takeoutImport.create({ data: { archiveName: "takeout-many.zip", startedById: userId } });
+    await importTakeoutArchive(queued.id);
+    expect(await db.takeoutImport.findUniqueOrThrow({ where: { id: queued.id } })).toMatchObject({ status: "FAILED", imported: 0 });
+    expect(await db.photo.count()).toBe(25);
+  }, 60_000);
 });

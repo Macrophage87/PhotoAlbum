@@ -102,25 +102,27 @@ async function beginRemoval(actorId: string, memberId: string): Promise<boolean>
 }
 
 /** Run a batch until it has nothing left to do. */
-async function drain(batch: () => Promise<number>): Promise<void> {
-  // A batch that loses a deadlock is simply run again; the next one picks up what it left.
+async function drain(size: number, batch: () => Promise<number>): Promise<void> {
+  // A batch that loses a deadlock is simply run again; the next one picks up what it left. A short batch means the
+  // rows have run out: whatever arrives after it (a member's saves still landing) is the last step's, which hands
+  // over everything under lock — so a writer that keeps adding rows cannot keep this loop going.
   for (;;) {
     const n = await batch().catch((err: unknown) => {
       if (isWriteConflict(err)) return -1;
       throw err;
     });
-    if (n === 0) return;
+    if (n >= 0 && n < size) return;
   }
 }
 
 /** Step two: everything that names them and is big enough to need it, a batch at a time. */
 async function handOver(member: string, heir: string): Promise<void> {
   const set = handedOver(member, heir);
-  await drain(() => db.$executeRaw`UPDATE "Photo" SET ${set} WHERE id IN (SELECT id FROM "Photo" WHERE "uploaderId" = ${member} ORDER BY id LIMIT ${BATCH} FOR UPDATE)`);
-  await drain(() => db.$executeRaw`UPDATE "Photo" SET ${set} WHERE id IN (SELECT id FROM "Photo" WHERE ${namesThem(member)} ORDER BY id LIMIT ${BATCH} FOR UPDATE)`);
-  await drain(() => db.$executeRaw`UPDATE "CollectionItem" SET "addedById" = ${heir} WHERE id IN (SELECT id FROM "CollectionItem" WHERE "addedById" = ${member} ORDER BY id LIMIT ${ROW_BATCH} FOR UPDATE)`);
+  await drain(BATCH, () => db.$executeRaw`UPDATE "Photo" SET ${set} WHERE id IN (SELECT id FROM "Photo" WHERE "uploaderId" = ${member} ORDER BY id LIMIT ${BATCH} FOR UPDATE)`);
+  await drain(BATCH, () => db.$executeRaw`UPDATE "Photo" SET ${set} WHERE id IN (SELECT id FROM "Photo" WHERE ${namesThem(member)} ORDER BY id LIMIT ${BATCH} FOR UPDATE)`);
+  await drain(ROW_BATCH, () => db.$executeRaw`UPDATE "CollectionItem" SET "addedById" = ${heir} WHERE id IN (SELECT id FROM "CollectionItem" WHERE "addedById" = ${member} ORDER BY id LIMIT ${ROW_BATCH} FOR UPDATE)`);
   // Their visits stay counted, as nobody's — what deleting the account does to them anyway.
-  await drain(() => db.$executeRaw`UPDATE "Visit" SET "userId" = NULL WHERE id IN (SELECT id FROM "Visit" WHERE "userId" = ${member} ORDER BY id LIMIT ${ROW_BATCH} FOR UPDATE)`);
+  await drain(ROW_BATCH, () => db.$executeRaw`UPDATE "Visit" SET "userId" = NULL WHERE id IN (SELECT id FROM "Visit" WHERE "userId" = ${member} ORDER BY id LIMIT ${ROW_BATCH} FOR UPDATE)`);
 }
 
 /** Step three. Null when somebody else's run got there first. */

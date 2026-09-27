@@ -112,7 +112,8 @@ const during = (w: Window): Prisma.PhotoWhereInput => ({ takenAt: { gte: w.start
  * list added this evening tidies up what the hours collected this afternoon.
  */
 export async function reassignPhotosForActivity(activityId: string): Promise<void> {
-  const activity = await db.activity.findUnique({ where: { id: activityId }, select: { id: true, tripId: true, startTime: true, endTime: true } });
+  // Not on a trip being deleted: it is letting go of its photographs, not gathering more.
+  const activity = await db.activity.findUnique({ where: { id: activityId, trip: { deletingAt: null } }, select: { id: true, tripId: true, startTime: true, endTime: true } });
   if (!activity) return;
   await refileByClock(activity.tripId, { OR: [{ activityId: activity.id }, during(activity)] });
 }

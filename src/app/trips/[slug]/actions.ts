@@ -31,6 +31,12 @@ async function loadEditableTrip(slug: string) {
   return trip;
 }
 
+/** A write that found no live trip: it was deleted, or marked for deletion, since it was read. */
+function tripGone(err: unknown): never {
+  if ((err as { code?: string }).code === "P2025") throw new Error("Trip not found");
+  throw err;
+}
+
 /** A description saved by hand, as stored; see `handWrittenDescription`. */
 async function handWrittenStored(before: Parameters<typeof handWrittenDescription>[0], text: string | null | undefined) {
   const { descriptionMembersOnly, descriptionSharedAt } = await handWrittenDescription(before, text);
@@ -50,8 +56,9 @@ export async function updateTrip(slug: string, _prev: TripFormState, fd: FormDat
   const visibility = chosen?.data;
   const changed = visibility !== undefined && visibility !== trip.visibility;
   const there = participantsFromForm(fd);
+  // Written only while it is not being deleted: a save that read the trip just before the mark must not share it again.
   await db.trip.update({
-    where: { id: trip.id },
+    where: { id: trip.id, deletingAt: null },
     data: {
       title: v.title,
       description: v.description,
@@ -66,7 +73,7 @@ export async function updateTrip(slug: string, _prev: TripFormState, fd: FormDat
       // `set` reconciles to exactly what was ticked; a form that never carried the control leaves the list alone.
       ...(there ? { participants: { set: there.map((id) => ({ id })) } } : {}),
     },
-  });
+  }).catch(tripGone);
   // Whether a word of its title gives anything away depends on who may open it: judged again in the background.
   if (changed || v.title !== trip.title) await rejudgeFromAction({ tripId: trip.id });
   if (changed) {
@@ -81,7 +88,8 @@ export async function updateTrip(slug: string, _prev: TripFormState, fd: FormDat
 export async function rotateShareToken(slug: string): Promise<void> {
   const trip = await loadEditableTrip(slug);
   if (trip.visibility !== "LINK") return;
-  await db.trip.update({ where: { id: trip.id }, data: { shareToken: generateToken() } });
+  // Not a trip marked for deletion since it was read: its link was withdrawn with the mark.
+  await db.trip.update({ where: { id: trip.id, deletingAt: null }, data: { shareToken: generateToken() } }).catch(tripGone);
   // New token, new rendition URLs: private caches keyed on the old ?v= stop matching.
   await db.photo.updateMany({ where: { tripId: trip.id }, data: { updatedAt: new Date() } });
   revalidatePath(`/trips/${slug}/settings`);

@@ -92,6 +92,6 @@ describe("media access is the union of its containers", () => {
   });
   it("the global media filter admits only public containers for anonymous visitors, and nothing in the trash for anyone", () => {
     expect(visibleMediaWhere(member)).toEqual({ trashedAt: null });
-    expect(visibleMediaWhere(anon([["collection_c2", "tok"]]))).toEqual({ trashedAt: null, OR: [{ trip: { visibility: "PUBLIC" } }, { collections: { some: { collection: { visibility: "PUBLIC" } } } }] });
+    expect(visibleMediaWhere(anon([["collection_c2", "tok"]]))).toEqual({ trashedAt: null, OR: [{ trip: { visibility: "PUBLIC", deletingAt: null } }, { collections: { some: { collection: { visibility: "PUBLIC" } } } }] });
   });
 });

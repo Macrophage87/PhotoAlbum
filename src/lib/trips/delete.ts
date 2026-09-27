@@ -74,7 +74,9 @@ export async function finishTripDeletion(tripId: string): Promise<"done" | "busy
           if (isWriteConflict(err)) return -1;
           throw err;
         });
-        if (n === 0) break;
+        // A short batch means they have run out: anything filed onto it since is the last step's, which lets go of
+        // everything under the trip's lock, so a writer that keeps filing cannot keep this loop going.
+        if (n >= 0 && n < BATCH) break;
       }
       try {
         return (await lastStep(tripId)) ?? ("gone" as const);

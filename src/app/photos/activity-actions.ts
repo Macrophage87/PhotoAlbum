@@ -85,7 +85,7 @@ export async function bulkPutInActivity(photoIds: string[], activityId: string):
   const user = await requireUserOrThrow();
   const asked = z.array(z.string().min(1)).min(1).max(500).parse(photoIds);
   const list = await editableMediaIds(user, asked);
-  const activity = await db.activity.findUnique({ where: { id: activityId }, select: { id: true, tripId: true } });
+  const activity = await db.activity.findUnique({ where: { id: activityId, trip: { deletingAt: null } }, select: { id: true, tripId: true } });
   if (!activity || !list.length) return { n: 0, notYours: asked.length - list.length };
   const r = await onActivity(() => db.photo.updateMany({ where: { id: { in: list } }, data: { activityId: activity.id, activitySetById: user.id, tripId: activity.tripId } }));
   await rejudgeFromAction({ tripId: activity.tripId });

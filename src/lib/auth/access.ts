@@ -99,7 +99,8 @@ export function visibleTripsWhere(viewer: Viewer): { visibility?: TripVisibility
  */
 export function visibleMediaWhere(viewer: Viewer): Prisma.PhotoWhereInput {
   if (viewer.kind === "user") return { ...NOT_TRASHED };
-  return { ...NOT_TRASHED, OR: [{ trip: { visibility: "PUBLIC" } }, { collections: { some: { collection: { visibility: "PUBLIC" } } } }] };
+  // A trip being deleted was made private as it was marked; asked for here as well.
+  return { ...NOT_TRASHED, OR: [{ trip: { visibility: "PUBLIC", deletingAt: null } }, { collections: { some: { collection: { visibility: "PUBLIC" } } } }] };
 }
 
 /** Is this viewer in read-only mode? (i.e. can view but not edit) */

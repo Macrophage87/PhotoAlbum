@@ -10,7 +10,11 @@ vi.mock("next/navigation", () => ({ redirect: (to: string) => { throw new Error(
 vi.mock("@/lib/jobs/boss", () => ({ enqueue: async (queue: string) => void who.queued.push(queue) }));
 vi.mock("@/lib/db", async () => (await import("../helpers/hooked-db")).hookedDb());
 
-import { deleteTrip } from "@/app/trips/[slug]/actions";
+import { deleteTrip, rotateShareToken, updateTrip } from "@/app/trips/[slug]/actions";
+import { bulkPutInActivity } from "@/app/photos/activity-actions";
+import { bulkAssignActivity } from "@/app/photos/bulk-actions";
+import { attachToActivity } from "@/app/photos/attach-actions";
+import { reassignPhotosForActivity } from "@/lib/activities/reassign";
 import { deleteCollection } from "@/app/collections/actions";
 import { finishPendingTripDeletions } from "@/lib/trips/delete";
 import { applyPhotoInstant } from "@/lib/photos/apply-date";
@@ -32,7 +36,7 @@ const dieAt = (n: number) => {
 describe("deleting trips and collections", () => {
   let photoId: string;
   beforeEach(async () => {
-    dbHooks.raw = dbHooks.transaction = null;
+    dbHooks.raw = dbHooks.transaction = dbHooks.model = null;
     who.queued = [];
     await resetTestDb();
     const user = await db.user.create({ data: { email: "x@example.com", role: "ADMIN" } });
@@ -171,5 +175,47 @@ describe("deleting trips and collections", () => {
     await expect(deleteTrip("gone")).rejects.toThrow("REDIRECT:/photos");
     expect(await db.trip.count()).toBe(0);
     expect(who.queued).toEqual([]);
+  });
+
+  it("never shares again a trip marked for deletion while its settings were being saved", async () => {
+    who.role = "ADMIN";
+    const trip = await db.trip.update({ where: { slug: "gone" }, data: { visibility: "LINK", shareToken: "old-link" } });
+    const mark = () => db.$executeRaw`UPDATE "Trip" SET "deletingAt" = now(), visibility = 'PRIVATE', "shareToken" = NULL WHERE id = ${trip.id}`;
+    // Each save read the trip before the mark, and writes after it.
+    const markBeforeWrite = (method: string) => {
+      dbHooks.model = async (model, called) => {
+        if (model !== "trip" || called !== method) return;
+        dbHooks.model = null;
+        await mark();
+      };
+    };
+    const fd = new FormData();
+    for (const [k, v] of Object.entries({ title: "Gone", startDate: "2025-08-10", endDate: "2025-08-16", timezone: "UTC", themeKey: "default", visibility: "PUBLIC" })) fd.set(k, v);
+    markBeforeWrite("update");
+    await expect(updateTrip("gone", { status: "idle" }, fd)).rejects.toThrow("Trip not found");
+    expect(await db.trip.findUniqueOrThrow({ where: { id: trip.id } })).toMatchObject({ visibility: "PRIVATE", shareToken: null });
+
+    await db.trip.update({ where: { id: trip.id }, data: { deletingAt: null, visibility: "LINK", shareToken: "old-link" } });
+    markBeforeWrite("update");
+    await expect(rotateShareToken("gone")).rejects.toThrow("Trip not found");
+    expect(await db.trip.findUniqueOrThrow({ where: { id: trip.id } })).toMatchObject({ shareToken: null });
+    // And a trip that somehow kept a token while marked is still not shared by it.
+    await db.trip.update({ where: { id: trip.id }, data: { visibility: "LINK", shareToken: "kept" } });
+    expect(await getSharedTrip("kept")).toBeNull();
+  });
+
+  it("files nothing onto an activity of a trip being deleted", async () => {
+    who.role = "ADMIN";
+    const trip = await db.trip.findUniqueOrThrow({ where: { slug: "gone" } });
+    const activity = await db.activity.findFirstOrThrow({ where: { tripId: trip.id } });
+    const loose = await db.photo.create({ data: { uploaderId: who.id, originalName: "l.jpg", mimeType: "image/jpeg", storageKey: "l", originalPath: "l/o.jpg", sizeBytes: 1, status: "READY", takenAt: new Date("2025-08-11T11:00:00Z"), takenAtSource: "EXIF_OFFSET" } });
+    const onTrip = await db.photo.create({ data: { uploaderId: who.id, tripId: trip.id, originalName: "t.jpg", mimeType: "image/jpeg", storageKey: "t", originalPath: "t/o.jpg", sizeBytes: 1, status: "READY", takenAt: new Date("2025-08-11T11:00:00Z"), takenAtSource: "EXIF_OFFSET" } });
+    await db.trip.update({ where: { id: trip.id }, data: { deletingAt: new Date() } });
+    expect(await bulkPutInActivity([loose.id], activity.id)).toMatchObject({ n: 0 });
+    await bulkAssignActivity([onTrip.id], activity.id);
+    await expect(attachToActivity(activity.id, [loose.id])).rejects.toThrow("Activity not found");
+    await reassignPhotosForActivity(activity.id);
+    expect(await db.photo.count({ where: { id: { in: [loose.id, onTrip.id] }, activityId: { not: null } } })).toBe(0);
+    expect((await db.photo.findUniqueOrThrow({ where: { id: loose.id } })).tripId).toBeNull();
   });
 });

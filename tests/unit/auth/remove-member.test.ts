@@ -230,18 +230,22 @@ describe("removing a member", () => {
     await photos(m.id, 300);
     await photos(admin, 40, {}, "mine");
     const others = (await db.photo.findMany({ where: { uploaderId: admin }, select: { id: true } })).map((p) => p.id);
+    // A bounded writer, stopped however the removal ends, so it can never outlive this test into the next one's reset.
     let running = true;
     const landed = { uploads: 0, dates: [] as string[] };
     const saves = (async () => {
-      for (let i = 0; running; i++) {
+      for (let i = 0; running && i < 400; i++) {
         await db.photo.create({ data: { uploaderId: m.id, originalName: `s${i}.jpg`, mimeType: "image/jpeg", storageKey: `s${i}`, originalPath: `s${i}/o.jpg`, sizeBytes: 1, status: "READY" } }).then(() => landed.uploads++, () => undefined);
         const id = others[i % others.length];
         await db.photo.update({ where: { id }, data: { dateSetById: m.id } }).then(() => landed.dates.push(id), () => undefined);
       }
     })();
-    await removeMember(m.id);
-    running = false;
-    await saves;
+    try {
+      await removeMember(m.id);
+    } finally {
+      running = false;
+      await saves;
+    }
     // Had the saves pushed them past what the request finishes, the worker would have: it finds nothing left then.
     await finishPendingRemovals();
     expect(landed.uploads).toBeGreaterThan(0);
@@ -251,6 +255,21 @@ describe("removing a member", () => {
     expect(await db.photo.count({ where: { uploaderId: admin } })).toBe(300 + 40 + landed.uploads);
     expect(await db.photo.count({ where: { id: { in: landed.dates }, dateSetById: null } })).toBe(0);
   }, 60_000);
+
+  it("stops handing over in batches once they run short, however fast the member's saves keep landing", async () => {
+    const m = await member();
+    await photos(m.id, 300);
+    // A new upload of theirs lands ahead of every batch: waiting for a batch that finds nothing would never end.
+    let landed = 0;
+    dbHooks.raw = async () => {
+      if (landed < 1000) await photos(m.id, 1, {}, `w${landed++}`);
+    };
+    await removeMember(m.id);
+    dbHooks.raw = null;
+    expect(landed).toBeLessThan(20);
+    expect(await db.user.count({ where: { id: m.id } })).toBe(0);
+    expect(await db.photo.count({ where: { uploaderId: admin } })).toBe(300 + landed);
+  });
 
   it("leaves nothing naming them when a fold runs at the same time, and the fold finishes on its next run", async () => {
     const m = await member();
