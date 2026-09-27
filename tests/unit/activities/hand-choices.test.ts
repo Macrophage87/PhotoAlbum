@@ -7,7 +7,7 @@ vi.mock("@/lib/auth/viewer", () => ({ requireUserOrThrow: async () => ({ id: who
 vi.mock("next/cache", () => ({ revalidatePath: () => undefined }));
 vi.mock("next/navigation", () => ({ redirect: (to: string) => { throw new Error(`REDIRECT:${to}`); } }));
 vi.mock("@/lib/jobs/boss", () => ({ enqueue: async () => {} }));
-vi.mock("@/lib/google/account", () => ({ disconnectGoogleAccount: async () => {} }));
+vi.mock("@/lib/google/account", () => ({ revokeRemovedConnection: async () => {} }));
 
 import { readFileSync } from "node:fs";
 import path from "node:path";

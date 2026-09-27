@@ -71,4 +71,18 @@ export async function disconnectGoogleAccount(userId: string): Promise<void> {
   }
 }
 
+/**
+ * Revoke at Google a connection whose row is already gone (a removed member's goes with their account), and stop
+ * handing out its cached access token.
+ */
+export async function revokeRemovedConnection(userId: string, encryptedRefreshToken: string | null): Promise<void> {
+  cache.delete(userId);
+  if (!encryptedRefreshToken) return;
+  try {
+    await revokeToken(decryptSecret(encryptedRefreshToken));
+  } catch {
+    /* an undecryptable token (rotated key) cannot be revoked; the local copy is gone */
+  }
+}
+
 export const _cacheForTests = cache;

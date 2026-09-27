@@ -13,7 +13,7 @@ import { QUEUES } from "@/lib/jobs/queues";
 import { ArchiveDeleteError, deleteArchive, safeArchivePath } from "@/lib/takeout/inbox";
 import { closeDeadImports } from "@/lib/takeout/import";
 import { stat } from "node:fs/promises";
-import { disconnectGoogleAccount } from "@/lib/google/account";
+import { revokeRemovedConnection } from "@/lib/google/account";
 import { foldDuplicates } from "@/lib/photos/duplicates";
 
 async function requireAdminOrThrow() {
@@ -66,23 +66,28 @@ export async function removeMember(userId: string): Promise<void> {
   if (userId === admin.id) throw new Error("You can't remove yourself.");
   const member = await db.user.findUnique({ where: { id: userId }, select: { email: true } });
   if (!member) return;
-  // Their Google connection goes with them (revoked at Google when possible, deleted here regardless).
-  await disconnectGoogleAccount(userId);
-  // Keep their uploads: reassign ownership to the acting admin, then delete the account, its sessions, and any
-  // sign-in link still outstanding for the address.
-  await db.$transaction([
-    db.photo.updateMany({ where: { uploaderId: userId }, data: { uploaderId: admin.id } }),
-    db.track.updateMany({ where: { uploaderId: userId }, data: { uploaderId: admin.id } }),
-    db.trip.updateMany({ where: { createdById: userId }, data: { createdById: admin.id } }),
+  // Keep their uploads and what they made: reassign ownership to the acting admin, then delete the account, its
+  // sessions, its Google connection, and any sign-in link still outstanding for the address. Every reference to
+  // them that would stop the delete is handed over here, or none of it happens.
+  const google = await db.$transaction(async (tx) => {
+    const account = await tx.googleAccount.findUnique({ where: { userId }, select: { encryptedRefreshToken: true } });
+    await tx.photo.updateMany({ where: { uploaderId: userId }, data: { uploaderId: admin.id } });
+    await tx.track.updateMany({ where: { uploaderId: userId }, data: { uploaderId: admin.id } });
+    await tx.trip.updateMany({ where: { createdById: userId }, data: { createdById: admin.id } });
+    await tx.collection.updateMany({ where: { createdById: userId }, data: { createdById: admin.id } });
+    await tx.collectionItem.updateMany({ where: { addedById: userId }, data: { addedById: admin.id } });
     // Their choices stay choices. Left to the foreign keys these would be emptied, and an empty setter means the
     // album's own guess: a photo they took off an activity would be put straight back on it, a place they removed
     // filled in again, a date they fixed re-read from the file.
-    db.photo.updateMany({ where: { activitySetById: userId }, data: { activitySetById: admin.id } }),
-    db.photo.updateMany({ where: { placeSetById: userId }, data: { placeSetById: admin.id } }),
-    db.photo.updateMany({ where: { dateSetById: userId }, data: { dateSetById: admin.id } }),
-    db.user.delete({ where: { id: userId } }),
-    db.magicLinkToken.deleteMany({ where: { email: member.email } }),
-  ]);
+    await tx.photo.updateMany({ where: { activitySetById: userId }, data: { activitySetById: admin.id } });
+    await tx.photo.updateMany({ where: { placeSetById: userId }, data: { placeSetById: admin.id } });
+    await tx.photo.updateMany({ where: { dateSetById: userId }, data: { dateSetById: admin.id } });
+    await tx.user.delete({ where: { id: userId } });
+    await tx.magicLinkToken.deleteMany({ where: { email: member.email } });
+    return account;
+  });
+  // Revoked at Google only once they are gone: a removal that failed leaves them connected as they were.
+  await revokeRemovedConnection(userId, google?.encryptedRefreshToken ?? null);
   revalidatePath("/admin");
 }
 
