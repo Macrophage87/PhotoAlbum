@@ -9,7 +9,8 @@ import { forgetPerson } from "@/lib/people/forget-person";
 import { looseMatcher, memberTextMentioning, namesSomebodyRestricted, scrubWithdrawnNames, withoutWithdrawnNames } from "@/lib/people/forget";
 import { nameMatcher } from "@/lib/people/scrub";
 import type { LeftoverItems } from "@/lib/people/forget";
-import type { StoredAnnotation } from "@/lib/annotation/schema";
+import { annotationSchema, type StoredAnnotation } from "@/lib/annotation/schema";
+import { applyAnnotation } from "@/lib/annotation/apply";
 
 /**
  * "Santa Barbara Pier" is nobody. Forgetting Barbara Jones, or somebody whose whole name is Barbara, must neither
@@ -319,5 +320,43 @@ describe("the share guard and a withdrawn naming, around places, dates and sayin
     const words = [shown.title, (shown.annotation as StoredAnnotation).title, (shown.annotation as StoredAnnotation).caption];
     if (notThem) expect({ refused, hold: shown.hold, words }).toEqual({ refused: false, hold: false, words: [text, text, text] });
     else expect({ refused, published: shown.hold ? [] : words.filter((w) => new RegExp(first, "i").test(w ?? "")) }).toEqual({ refused: true, published: [] });
+  });
+});
+
+/**
+ * On her own photograph, the words the forget rewrites and a later answer the forgotten names clean come out alike:
+ * a month or a verb that is her name only where it plainly is her, and the stand-in's capitals.
+ */
+describe("on her own photograph, when she is forgotten and in a later answer", () => {
+  let admin: string;
+  beforeEach(async () => {
+    await resetTestDb();
+    admin = (await db.user.create({ data: { email: "admin@example.com", role: "ADMIN" } })).id;
+  });
+  const record = (caption: string): StoredAnnotation => ({ title: "", caption, description: "", tags: [], place: null, activity: null, objects: [], visibleText: null, season: "summer", mood: null, searchSummary: "" });
+
+  /** [her name, the helper's words, what is left of them] */
+  const ROWS: [string, string, string][] = [
+    ["May Lee", "May at the lake.", "A family member at the lake."],
+    ["May Lee", "May and Ben built a fort.", "A family member and Ben built a fort."],
+    ["May Lee", "May swam across.", "A family member swam across."],
+    ["May Lee", "May 2020 at the lake.", "May 2020 at the lake."],
+    ["May Lee", "A swim in May.", "A swim in May."],
+    ["May Lee", "May Day at the fair.", "May Day at the fair."],
+    ["Will Turner", "Will swam faster than Ben.", "A family member swam faster than Ben."],
+    ["Will Turner", "Will you look at that!", "Will you look at that!"],
+    ["Will Turner", "Will be fun.", "Will be fun."],
+    ["Ada Byron", "Little Sister Ada and Big Brother Ada.", "A family member and a family member."],
+  ];
+
+  it.each(ROWS)("%s: %s", async (name, text, want) => {
+    const person = await db.person.create({ data: { name, createdById: admin } });
+    const p = await db.photo.create({ data: { uploaderId: admin, originalName: "x.jpg", mimeType: "image/jpeg", storageKey: "k", originalPath: "k/o.jpg", sizeBytes: 1, status: "READY", annotation: record(text), annotatedAt: new Date() } });
+    await db.face.create({ data: { photoId: p.id, personId: person.id, status: "CONFIRMED", box: [0.1, 0.1, 0.2, 0.2], confidence: 0 } });
+    await forgetPerson(person.id, { keepName: false, byUserId: admin });
+    const caption = async () => ((await db.photo.findUniqueOrThrow({ where: { id: p.id } })).annotation as StoredAnnotation).caption;
+    const forgotten = await caption();
+    await applyAnnotation(p.id, "m", annotationSchema.parse({ ...record(text), estimatedYear: null, estimatedPlace: null }), { content: [] }, { requestedAt: new Date() });
+    expect({ forgotten, later: await caption() }).toEqual({ forgotten: want, later: want });
   });
 });
