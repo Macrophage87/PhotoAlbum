@@ -139,5 +139,5 @@ export async function tripOfSelection(photoIds: string[]): Promise<{ id: string;
   const trips = await db.photo.findMany({ where: { id: { in: list } }, select: { tripId: true }, distinct: ["tripId"], take: 2 });
   const only = trips.length === 1 ? trips[0].tripId : null;
   if (!only) return null;
-  return db.trip.findUnique({ where: { id: only }, select: { id: true, title: true } });
+  return db.trip.findUnique({ where: { id: only, deletingAt: null }, select: { id: true, title: true } });
 }

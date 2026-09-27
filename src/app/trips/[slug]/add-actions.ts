@@ -14,7 +14,7 @@ import { searchParamsObject } from "@/lib/search-params";
  */
 export async function moreTripCandidates(slug: string, query: string, cursor: string): Promise<{ photos: GridPhoto[]; nextCursor: string | null }> {
   const me = await requireUserOrThrow();
-  const trip = await db.trip.findUnique({ where: { slug }, select: { id: true } });
+  const trip = await db.trip.findUnique({ where: { slug, deletingAt: null }, select: { id: true } });
   if (!trip) throw new Error("Trip not found");
   const filter = parsePickerFilter(searchParamsObject(new URLSearchParams(query)));
   const page = await candidatePhotoPage({ kind: "trip", id: trip.id }, filter, { cursor });

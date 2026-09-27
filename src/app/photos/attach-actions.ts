@@ -55,7 +55,7 @@ export async function attachActivityWindow(activityId: string): Promise<{ added:
  */
 export async function putTripWindow(tripId: string): Promise<{ added: number; elsewhere: number }> {
   const user = await requireUserOrThrow();
-  const trip = await db.trip.findUnique({ where: { id: tripId }, select: { id: true, slug: true, startDate: true, endDate: true, timezone: true } });
+  const trip = await db.trip.findUnique({ where: { id: tripId, deletingAt: null }, select: { id: true, slug: true, startDate: true, endDate: true, timezone: true } });
   if (!trip) throw new Error("Trip not found");
   const { ids: found, elsewhere } = await tripWindow(user, trip);
   if (!found.length) return { added: 0, elsewhere };

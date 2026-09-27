@@ -34,7 +34,7 @@ export async function listVisibleTrips(viewer: Viewer, opts: { q?: string | null
   // out in SQL because "mine" is not something an ordinary orderBy can express, then the rows are fetched by id.
   const ids = await db.$queryRaw<{ id: string }[]>`
     SELECT t.id FROM "Trip" t
-    WHERE ${viewer.kind === "user" ? Prisma.sql`TRUE` : Prisma.sql`t.visibility = 'PUBLIC'`}
+    WHERE t."deletingAt" IS NULL AND ${viewer.kind === "user" ? Prisma.sql`TRUE` : Prisma.sql`t.visibility = 'PUBLIC'`}
       AND ${opts.q ? Prisma.sql`t.title ILIKE ${"%" + opts.q + "%"}` : Prisma.sql`TRUE`}
     ${opts.order === "newest"
       ? Prisma.sql`ORDER BY t."startDate" DESC, t.id DESC`
@@ -55,9 +55,10 @@ export async function countVisibleTrips(viewer: Viewer, q?: string | null): Prom
   return db.trip.count({ where: { ...visibleTripsWhere(viewer), ...(q ? { title: { contains: q, mode: "insensitive" as const } } : {}) } });
 }
 
+/** A trip being deleted is gone for everybody already (see src/lib/trips/delete.ts). */
 export async function getTripBySlug(slug: string) {
   return db.trip.findUnique({
-    where: { slug },
+    where: { slug, deletingAt: null },
     include: { coverPhoto: coverPhotoSelect, _count: { select: { photos: { where: NOT_TRASHED }, activities: true, tracks: true } } },
   });
 }

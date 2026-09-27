@@ -87,7 +87,7 @@ export async function transcodeVideo(job: TranscodeVideoJob, signal?: AbortSigna
         instant = photo.createdAt;
         takenAtSource = "UPLOAD_TIME";
       }
-      let trip = job.tripId ? await db.trip.findUnique({ where: { id: job.tripId } }) : photo.tripId ? await db.trip.findUnique({ where: { id: photo.tripId } }) : null;
+      let trip = job.tripId ? await db.trip.findUnique({ where: { id: job.tripId, deletingAt: null } }) : photo.tripId ? await db.trip.findUnique({ where: { id: photo.tripId, deletingAt: null } }) : null;
       // On none of the uploader's trips' days (a ride on the last evening that runs past midnight): the trip out on an
       // activity or a track at that moment is chosen once the row is locked, from what is there then.
       let dayless: { id: string; startDate: Date; endDate: Date; timezone: string }[] | null = null;

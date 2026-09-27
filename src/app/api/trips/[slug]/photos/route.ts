@@ -15,7 +15,7 @@ const REREAD_MAX = 200;
 export async function GET(request: NextRequest, { params }: RouteContext<"/api/trips/[slug]/photos">) {
   const { slug } = await params;
   const viewer = await getViewer();
-  const trip = await db.trip.findUnique({ where: { slug }, select: { id: true, visibility: true, shareToken: true } });
+  const trip = await db.trip.findUnique({ where: { slug, deletingAt: null }, select: { id: true, visibility: true, shareToken: true } });
   if (!trip || !canViewTrip(viewer, trip)) return NextResponse.json({ error: "Not found" }, { status: 404 });
   const sp = request.nextUrl.searchParams;
   // A share page draws its first page as any visitor sees it, members included; its later pages must match.

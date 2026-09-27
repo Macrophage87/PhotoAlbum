@@ -79,7 +79,7 @@ export async function buildMapPayload(viewer: Viewer, tripId?: string, given: Ga
   const active = filterIsActive(filter);
   // Across every trip, the words are asked of what this viewer may see, so the limit on matches is spent there.
   const narrowed = await narrowing(filter, tripId ? { tripId, placed: true } : { publicOnly: !member, placed: true });
-  const tripWhere = tripId ? { id: tripId } : visibleTripsWhere(viewer);
+  const tripWhere = tripId ? { id: tripId, deletingAt: null } : visibleTripsWhere(viewer);
   const trips = await db.trip.findMany({ where: tripWhere, select: { id: true, slug: true, title: true, themeKey: true, timezone: true }, orderBy: { startDate: "desc" } });
   const tripIds = trips.map((t) => t.id);
   const tripById = new Map(trips.map((t) => [t.id, t]));

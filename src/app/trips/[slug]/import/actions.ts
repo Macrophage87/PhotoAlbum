@@ -15,7 +15,7 @@ import { forgetTrackFiles } from "@/lib/tracks/files";
  */
 export async function deleteLooseTrack(slug: string, trackId: string): Promise<void> {
   const user = await requireUserOrThrow();
-  const trip = await db.trip.findUnique({ where: { slug }, select: { id: true, createdById: true } });
+  const trip = await db.trip.findUnique({ where: { slug, deletingAt: null }, select: { id: true, createdById: true } });
   if (!trip) throw new Error("Trip not found");
   if (!canEditContainer(user, trip)) throw new Error(NOT_YOUR_CONTAINER);
   const track = await db.track.findFirst({ where: { id: trackId, tripId: trip.id, activity: null }, select: { id: true, originalFile: true } });

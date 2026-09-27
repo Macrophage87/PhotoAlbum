@@ -31,7 +31,7 @@ export default async function AddToTripPage({ params, searchParams }: PageProps<
   const filter = parsePickerFilter(await searchParams);
   const [page, members, people, during] = await Promise.all([
     candidatePhotoPage({ kind: "trip", id: trip.id }, filter),
-    db.user.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true, email: true } }),
+    db.user.findMany({ where: { removingAt: null }, orderBy: { name: "asc" }, select: { id: true, name: true, email: true } }),
     peopleInPhotos(),
     tripWindow(me, trip),
   ]);

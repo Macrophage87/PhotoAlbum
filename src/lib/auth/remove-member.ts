@@ -6,6 +6,7 @@ import { revokeRemovedConnection } from "@/lib/google/account";
 import { enqueue } from "@/lib/jobs/boss";
 import { QUEUES } from "@/lib/jobs/queues";
 import { isWriteConflict } from "@/lib/db-conflict";
+import { revokePending } from "@/lib/google/pending-revoke";
 
 /**
  * Removing a member, in steps, so that it takes as long as their uploads need and never more than a few seconds of
@@ -15,14 +16,18 @@ import { isWriteConflict } from "@/lib/db-conflict";
  * 1. `beginRemoval`, one short transaction: both accounts locked in id order; a member already gone is nothing to
  *    do; an acting admin removed or demoted meanwhile is refused; never the last admin. The member is marked as being
  *    removed, with who takes over what they made (`removingById`, the acting admin), no longer an admin, and signed
- *    out everywhere. From here on the removal is decided: nothing undoes it, and whatever interrupts it is finished
- *    later from the same mark — by an admin pressing Remove again, or by the worker (`finishPendingRemovals`).
+ *    out everywhere; the invitations they sent go, and their Google connection stops being used. From here on the
+ *    removal is decided: nothing undoes it, and whatever interrupts it is finished later from the same mark — by an
+ *    admin pressing Remove again, or by the worker (`finishPendingRemovals`). Only a member with a few hundred
+ *    photographs is finished inside the admin's request; anybody bigger is left to the worker at once, so the page
+ *    answers "Being removed" rather than a request that runs for minutes.
  * 2. `handOver`: their photographs pass to the admin a batch at a time, each batch its own transaction, locking its
  *    rows in id order as a fold does. Every batch only moves what still names them, so running it again, or
  *    beside another run, does nothing twice.
  * 3. The last transaction locks both accounts again, hands over whatever named them since (an upload of theirs still
  *    in flight, a fold copying their choice onto a keeper), and deletes the account. Anything that tries to name
- *    them afterwards fails on the foreign key. Google is told only once that has committed.
+ *    them afterwards fails on the foreign key. Google is told only once that has committed; the sealed token is kept
+ *    in the same transaction (PendingRevoke) until Google has been told, so a crash right after cannot lose it.
  *
  * A crash between the steps leaves a member marked as being removed, signed out and unable to sign in (see
  * `verifyMagicLink` and `readSessionUser`), with some of their photographs already the admin's: the next run
@@ -39,6 +44,8 @@ const REMOVAL_LOCK = 0x726d6d62; // "rmmb"
 const LAST_STEP_TX = { timeout: 120_000, maxWait: 10_000 };
 /** How often the last step is tried again after a deadlock or write conflict with something changing the same rows. */
 const ATTEMPTS = 3;
+/** Up to this many uploads the whole removal runs in the admin's request: a few seconds. */
+export const INLINE_LIMIT = 500;
 
 export class RemovalRefused extends Error {}
 
@@ -84,6 +91,12 @@ async function beginRemoval(actorId: string, memberId: string): Promise<boolean>
     // Signed out now, so nothing more of theirs is saved while the rest is handed over.
     await tx.session.deleteMany({ where: { userId: memberId } });
     await tx.magicLinkToken.deleteMany({ where: { email: member.email } });
+    // Nobody joins on their word any more: their pending invitations went with the account before, and would now
+    // outlive the mark by as long as the hand-over takes (see verifyMagicLink for one sent at this very moment).
+    await tx.invite.deleteMany({ where: { invitedById: memberId, acceptedAt: null } });
+    // Nor is their Google connection used again, by a Picker download already queued say (see accessTokenFor). The
+    // grant itself is revoked once the account has gone.
+    await tx.googleAccount.updateMany({ where: { userId: memberId }, data: { needsReconnect: true } });
     return true;
   });
 }
@@ -111,7 +124,7 @@ async function handOver(member: string, heir: string): Promise<void> {
 }
 
 /** Step three. Null when somebody else's run got there first. */
-async function lastStep(member: string, heir: string): Promise<{ token: string | null } | null> {
+async function lastStep(member: string, heir: string): Promise<{ revoke: string | null } | null> {
   return db.$transaction(async (tx) => {
     // In id order, as every step that locks accounts; nothing can name them after this commits.
     const users = await tx.$queryRaw<{ id: string; email: string }[]>`SELECT id, email FROM "User" WHERE id IN (${heir}, ${member}) ORDER BY id FOR UPDATE`;
@@ -123,12 +136,16 @@ async function lastStep(member: string, heir: string): Promise<{ token: string |
     await tx.track.updateMany({ where: { uploaderId: member }, data: { uploaderId: heir } });
     await tx.trip.updateMany({ where: { createdById: member }, data: { createdById: heir } });
     await tx.collection.updateMany({ where: { createdById: member }, data: { createdById: heir } });
-    const google = await tx.$queryRaw<{ token: string }[]>`DELETE FROM "GoogleAccount" WHERE "userId" = ${member} RETURNING "encryptedRefreshToken" AS token`;
+    await tx.invite.deleteMany({ where: { invitedById: member, acceptedAt: null } });
+    // Kept, sealed, until Google has been told: committed with the delete, so no crash can lose it.
+    const [revoke] = await tx.$queryRaw<{ id: string }[]>`
+      WITH gone AS (DELETE FROM "GoogleAccount" WHERE "userId" = ${member} RETURNING "encryptedRefreshToken")
+      INSERT INTO "PendingRevoke" (id, "userId", "encryptedRefreshToken") SELECT gen_random_uuid()::text, ${member}, "encryptedRefreshToken" FROM gone RETURNING id`;
     // Their name, recorded as judged, goes with them.
     await forgetJudgedNames(tx, `user:${member}`);
     await tx.user.delete({ where: { id: member } });
     await tx.magicLinkToken.deleteMany({ where: { email: gone.email } });
-    return { token: google[0]?.token ?? null };
+    return { revoke: revoke?.id ?? null };
   }, LAST_STEP_TX);
 }
 
@@ -154,29 +171,47 @@ export async function finishRemoval(memberId: string): Promise<"done" | "busy" |
   if (!run.ran) return "busy";
   if (typeof run.value === "string") return run.value;
   // Revoked at Google only once they are gone: a removal that has not finished leaves them connected. One Google
-  // could not be told about is tried again from the queue, carrying only the sealed token.
-  const token = run.value.token;
-  if ((await revokeRemovedConnection(memberId, token)) === "failed" && token) {
-    await enqueue(QUEUES.revokeGoogle, { encryptedRefreshToken: token }, { retryLimit: 10, retryDelay: 600, retryBackoff: true }).catch((err) => {
-      console.error("[admin] could not queue the retry of a removed member's Google revocation", err instanceof Error ? err.message : err);
-    });
-  }
+  // could not be told about stays pending, and the worker tries it again (revokePendingConnections).
+  if (run.value.revoke) await revokePending(run.value.revoke);
+  else await revokeRemovedConnection(memberId, null);
   return "done";
+}
+
+/** Their uploads: what decides whether the admin's request finishes the removal or leaves it to the worker. */
+const uploadsOf = (memberId: string) => db.photo.count({ where: { uploaderId: memberId } });
+
+/** Hand a removal to the worker now. A queue that is down is no loss: the quarter-hourly pass finds the mark anyway. */
+async function finishLater(): Promise<void> {
+  await enqueue(QUEUES.finishRemovals, {}, { singletonKey: "finish-removals", singletonSeconds: 5, singletonNextSlot: true }).catch((err) => {
+    console.error("[admin] could not queue the rest of a removal; the quarter-hourly pass will finish it", err instanceof Error ? err.message : err);
+  });
 }
 
 /**
  * Remove a member, keeping their uploads and what they made: handed over to the acting admin. Whoever is still
- * taking over from a removal that was interrupted has that finished first. Returns once they are gone, or once it is
- * clear another run is finishing it.
+ * taking over from a removal that was interrupted has that finished first, when it is small. "done" once they are
+ * gone (or were already); "later" when the worker finishes it — a big one, or one another run is finishing.
  */
-export async function removeMemberAs(actorId: string, memberId: string): Promise<void> {
-  for (const pending of await db.user.findMany({ where: { removingById: memberId }, select: { id: true } })) await finishRemoval(pending.id);
+export async function removeMemberAs(actorId: string, memberId: string): Promise<"done" | "later"> {
+  for (const pending of await db.user.findMany({ where: { removingById: memberId }, select: { id: true } })) {
+    if ((await uploadsOf(pending.id)) > INLINE_LIMIT) {
+      await finishLater();
+      throw new RemovalRefused("They are still taking over the photographs of a member being removed; try again once that has finished.");
+    }
+    await finishRemoval(pending.id);
+  }
   // A write conflict or deadlock with another admin's step is tried once more.
   const begun = await beginRemoval(actorId, memberId).catch((err: unknown) => {
     if (isWriteConflict(err)) return beginRemoval(actorId, memberId);
     throw err;
   });
-  if (begun) await finishRemoval(memberId);
+  if (!begun) return "done";
+  if ((await uploadsOf(memberId)) > INLINE_LIMIT) {
+    await finishLater();
+    return "later";
+  }
+  const finished = await finishRemoval(memberId);
+  return finished === "busy" ? "later" : "done";
 }
 
 /** At worker start and every quarter hour: finish every removal that was interrupted. One that fails is tried next time. */

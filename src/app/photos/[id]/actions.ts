@@ -57,7 +57,7 @@ export async function updatePhoto(id: string, fd: FormData): Promise<void> {
   if (!photo) throw new Error("Photo not found");
   const v = updateSchema.parse({ title: fd.get("title") ?? undefined, caption: fd.get("caption") ?? "", context: fd.get("context") ?? "", tripId: fd.get("tripId") ?? "", activityId: fd.get("activityId") ?? undefined });
 
-  if (v.tripId && !(await db.trip.findUnique({ where: { id: v.tripId }, select: { id: true } }))) throw new Error("That trip no longer exists");
+  if (v.tripId && !(await db.trip.findUnique({ where: { id: v.tripId, deletingAt: null }, select: { id: true } }))) throw new Error("That trip no longer exists");
 
   // Which activity, and whose answer that is. "auto" hands the question back to the clock; an activity, or "" for
   // none at all, is the member's own answer, which the activity's hours then respect. Saving the form without

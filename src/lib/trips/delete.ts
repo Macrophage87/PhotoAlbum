@@ -3,17 +3,21 @@ import { Prisma } from "@/generated/prisma/client";
 import { withTryLock } from "@/lib/advisory-lock";
 import { isWriteConflict } from "@/lib/db-conflict";
 import { forgetTrackFiles } from "@/lib/tracks/files";
+import { enqueue } from "@/lib/jobs/boss";
+import { QUEUES } from "@/lib/jobs/queues";
 
 /**
  * Deleting a trip, in steps, so that a trip of any size lets go of its photographs without one transaction having
  * to rewrite them all (each costs milliseconds: its search columns and both similarity indexes are written again).
  *
- * The trip is first marked as being deleted (`deletingAt`); from then on the deletion is decided, and filing a
- * photograph by its date passes it over. Its photographs then leave it a batch at a time, each batch
+ * The trip is first marked as being deleted (`deletingAt`), and in the same statement made private with its links
+ * withdrawn, its activities' too: from then on the deletion is decided, visitors have lost it by whatever route they
+ * came, members no longer find it listed or open, and nothing files a photograph onto it. Its photographs then leave it a batch at a time, each batch
  * its own transaction, locking its rows in id order as a fold does. The last transaction locks the trip, lets go of
  * whatever was filed onto it since, and deletes it with its activities and tracks: anything filed onto it after that
  * fails on the foreign key. A crash on the way leaves a marked trip with fewer photographs; whoever runs it next —
- * an admin pressing Delete again, or the worker (`finishPendingTripDeletions`) — carries on from there.
+ * an admin from the Admin page, or the worker (`finishPendingTripDeletions`) — carries on from there. Only a trip of
+ * a few hundred photographs is finished inside the admin's request; a bigger one is left to the worker at once.
  */
 
 /** Photographs let go of per transaction: a few seconds of row locks at most, however many there are. */
@@ -23,6 +27,8 @@ const TRIP_DELETE_LOCK = 0x74726474; // "trdt"
 /** The last step only lets go of what was filed since the batches: little, unless somebody filed a great deal. */
 const LAST_STEP_TX = { timeout: 120_000, maxWait: 10_000 };
 const ATTEMPTS = 3;
+/** Up to this many photographs the whole deletion runs in the admin's request: a few seconds. */
+export const INLINE_LIMIT = 500;
 
 /**
  * Off the trip: its activities go with it, and a choice about them goes too, or a photo left on no trip would carry
@@ -85,11 +91,25 @@ export async function finishTripDeletion(tripId: string): Promise<"done" | "busy
   return "done";
 }
 
-/** Mark the trip as being deleted, and delete it. Returns once it is gone, or once another run is finishing it. */
-export async function deleteTripById(tripId: string): Promise<void> {
-  // Not through Prisma, so the trip's updatedAt stays: nothing about it needs judging again.
-  await db.$executeRaw`UPDATE "Trip" SET "deletingAt" = now() WHERE id = ${tripId} AND "deletingAt" IS NULL`;
-  await finishTripDeletion(tripId);
+/**
+ * Mark the trip as being deleted, and delete it: "done" once it is gone, "later" when the worker finishes it (a big
+ * trip, or one another run is finishing).
+ */
+export async function deleteTripById(tripId: string): Promise<"done" | "later"> {
+  // Not through Prisma, so the trip's updatedAt stays: nothing about it needs judging again. Made private with the
+  // mark, which re-indexes none of its photographs (see the trip-title trigger): each batch does that as it goes.
+  await db.$transaction(async (tx) => {
+    const marked = await tx.$executeRaw`UPDATE "Trip" SET "deletingAt" = now(), visibility = 'PRIVATE', "shareToken" = NULL WHERE id = ${tripId} AND "deletingAt" IS NULL`;
+    if (marked) await tx.$executeRaw`UPDATE "Activity" SET "shareToken" = NULL WHERE "tripId" = ${tripId} AND "shareToken" IS NOT NULL`;
+  });
+  if ((await db.photo.count({ where: { tripId } })) > INLINE_LIMIT) {
+    // A queue that is down is no loss: the quarter-hourly pass finds the mark anyway.
+    await enqueue(QUEUES.finishRemovals, {}, { singletonKey: "finish-removals", singletonSeconds: 5, singletonNextSlot: true }).catch((err) => {
+      console.error("[trips] could not queue the rest of a deletion; the quarter-hourly pass will finish it", err instanceof Error ? err.message : err);
+    });
+    return "later";
+  }
+  return (await finishTripDeletion(tripId)) === "busy" ? "later" : "done";
 }
 
 /** At worker start and every quarter hour: finish every trip deletion that was interrupted. */

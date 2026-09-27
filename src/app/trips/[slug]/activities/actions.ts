@@ -31,7 +31,7 @@ import { NAME_NOT_TO_BE_SHOWN, namesSomebodyRestricted } from "@/lib/people/forg
 /** An activity is part of the shape of a trip, so it is the trip's maker (and admins) who arrange them. */
 async function loadTrip(slug: string) {
   const user = await requireUserOrThrow();
-  const trip = await db.trip.findUnique({ where: { slug }, select: { id: true, slug: true, timezone: true, createdById: true } });
+  const trip = await db.trip.findUnique({ where: { slug, deletingAt: null }, select: { id: true, slug: true, timezone: true, createdById: true } });
   if (!trip) throw new Error("Trip not found");
   if (!canEditContainer(user, trip)) throw new Error(NOT_YOUR_CONTAINER);
   return trip;

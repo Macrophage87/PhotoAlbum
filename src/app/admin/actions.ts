@@ -15,6 +15,7 @@ import { ArchiveDeleteError, deleteArchive, safeArchivePath } from "@/lib/takeou
 import { closeDeadImports } from "@/lib/takeout/import";
 import { stat } from "node:fs/promises";
 import { removeMemberAs } from "@/lib/auth/remove-member";
+import { deleteTripById } from "@/lib/trips/delete";
 import { foldDuplicates } from "@/lib/photos/duplicates";
 import { emptyQuarantine, quarantineOrphanPhotoFolders, type QuarantineResult } from "@/lib/storage/sweep";
 import { rebindInstall } from "@/lib/storage/identity";
@@ -32,7 +33,9 @@ export async function inviteMember(_prev: InviteState, fd: FormData): Promise<In
   const parsed = z.object({ email: z.string().email(), role: z.enum(["ADMIN", "MEMBER"]) }).safeParse({ email: fd.get("email"), role: fd.get("role") ?? "MEMBER" });
   if (!parsed.success) return { status: "error", message: "Enter a valid email address." };
   const email = normalizeEmail(parsed.data.email);
-  if (await db.user.findUnique({ where: { email } })) return { status: "error", message: "That person is already a member." };
+  const existing = await db.user.findUnique({ where: { email }, select: { removingAt: true } });
+  if (existing?.removingAt) return { status: "error", message: "They are still being removed; try again when that finishes." };
+  if (existing) return { status: "error", message: "That person is already a member." };
   await db.invite.deleteMany({ where: { email, acceptedAt: null } });
   // Links asked for before the invite were never sent (or were placeholders); clearing them means the invitee's
   // first request is not told a link is already on its way.
@@ -87,6 +90,13 @@ export async function removeMember(userId: string): Promise<void> {
   const admin = await requireAdminOrThrow();
   if (userId === admin.id) throw new Error("You can't remove yourself.");
   await removeMemberAs(admin.id, userId);
+  revalidatePath("/admin");
+}
+
+/** Carry on deleting a trip the worker has not finished yet (see lib/trips/delete); a big one is queued again. */
+export async function finishDeletingTrip(tripId: string): Promise<void> {
+  await requireAdminOrThrow();
+  if (await db.trip.count({ where: { id: tripId, deletingAt: { not: null } } })) await deleteTripById(tripId);
   revalidatePath("/admin");
 }
 

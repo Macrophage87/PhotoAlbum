@@ -67,14 +67,14 @@ export async function POST(request: Request) {
   if (!ALLOWED.has(mime)) return Response.json({ error: `Unsupported file type: ${fileName}` }, { status: 415 });
 
   if (tripId) {
-    const trip = await db.trip.findUnique({ where: { id: tripId }, select: { id: true } });
+    const trip = await db.trip.findUnique({ where: { id: tripId, deletingAt: null }, select: { id: true } });
     if (!trip) return Response.json({ error: "Trip not found" }, { status: 404 });
   }
   // Uploading into an activity says both where it belongs and which trip it is on, whatever its own date turns out
   // to be — a scan of a photograph from the walk belongs on the walk.
   const activityId = parsed.data.activityId;
   if (activityId) {
-    const activity = await db.activity.findUnique({ where: { id: activityId }, select: { id: true, tripId: true } });
+    const activity = await db.activity.findUnique({ where: { id: activityId, trip: { deletingAt: null } }, select: { id: true, tripId: true } });
     if (!activity) return Response.json({ error: "Activity not found" }, { status: 404 });
     tripId = activity.tripId;
   }

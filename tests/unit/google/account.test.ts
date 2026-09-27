@@ -71,6 +71,17 @@ describe("a member's Google connection", () => {
     expect(_cacheForTests.has(userId)).toBe(false);
     await expect(accessTokenFor(userId)).rejects.toMatchObject({ needsReconnect: true });
   });
+  it("stops handing out even a cached token once the account is parked from another process", async () => {
+    await storeRefreshToken(userId, "1//rt");
+    oauth.refresh.mockResolvedValue({ accessToken: "at", expiresIn: 3600 });
+    expect(await accessTokenFor(userId)).toBe("at");
+    // A member's removal begins in the web process; a Picker download queued for them runs in the worker's.
+    await db.googleAccount.update({ where: { userId }, data: { needsReconnect: true } });
+    await expect(accessTokenFor(userId)).rejects.toMatchObject({ needsReconnect: true });
+    expect(_cacheForTests.has(userId)).toBe(false);
+    expect(oauth.refresh).toHaveBeenCalledTimes(1);
+  });
+
   it("goes with the member when their account is deleted", async () => {
     await storeRefreshToken(userId, "1//rt");
     await db.user.delete({ where: { id: userId } });

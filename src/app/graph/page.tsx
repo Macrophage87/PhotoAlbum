@@ -17,7 +17,7 @@ export default async function GraphPage({ searchParams }: PageProps<"/graph">) {
   const scope = parseScope(sp);
   const isAdmin = user.role === "ADMIN";
   const [trips, collections, people] = await Promise.all([
-    db.trip.findMany({ orderBy: { startDate: "desc" }, select: { slug: true, title: true } }),
+    db.trip.findMany({ where: { deletingAt: null }, orderBy: { startDate: "desc" }, select: { slug: true, title: true } }),
     db.collection.findMany({ orderBy: { title: "asc" }, select: { slug: true, title: true } }),
     db.person.findMany({ where: { optedOutAt: null, faces: { some: { status: "CONFIRMED" } } }, orderBy: { name: "asc" }, select: { id: true, name: true } }),
   ]);

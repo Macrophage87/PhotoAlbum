@@ -867,6 +867,18 @@ model GoogleAccount {
   needsReconnect        Boolean  @default(false)
 }
 
+/// A removed member's Google grant, sealed as it was stored, waiting to be revoked at Google. Written by the same
+/// transaction that deletes the account, so a crash before Google is told cannot lose it; deleted once Google has
+/// been told (see src/lib/google/pending-revoke.ts).
+model PendingRevoke {
+  id                    String   @id @default(cuid())
+  /// The removed member's id, only to drop their cached access token; the account itself is gone.
+  userId                String
+  encryptedRefreshToken String
+  attempts              Int      @default(0)
+  createdAt             DateTime @default(now())
+}
+
 model PhotoLink {
   id        String        @id @default(cuid())
   photoAId  String

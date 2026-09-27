@@ -21,11 +21,14 @@ const TOKEN_MARGIN_MS = 5 * 60_000;
 
 /** A live access token for the member, refreshing from the stored refresh token; marks the account when Google says it is gone. */
 export async function accessTokenFor(userId: string): Promise<string> {
-  const hit = cache.get(userId);
-  if (hit && hit.expiresAt > Date.now() + TOKEN_MARGIN_MS) return hit.token;
+  // The row is asked every time, cached token or not: a member being removed has theirs parked by another process
+  // (see beginRemoval), and a download still queued for them must stop at once, not when the cached token expires.
   const account = await db.googleAccount.findUnique({ where: { userId } });
+  if (!account || account.needsReconnect) cache.delete(userId);
   if (!account) throw new GoogleAuthError("Google Photos is not connected", true);
   if (account.needsReconnect) throw new GoogleAuthError("Google Photos needs to be connected again", true);
+  const hit = cache.get(userId);
+  if (hit && hit.expiresAt > Date.now() + TOKEN_MARGIN_MS) return hit.token;
   try {
     const t = await refreshAccessToken(decryptSecret(account.encryptedRefreshToken));
     cache.set(userId, { token: t.accessToken, expiresAt: Date.now() + t.expiresIn * 1000 });

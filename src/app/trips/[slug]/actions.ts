@@ -22,10 +22,10 @@ import { uniqueSlug } from "@/lib/trips/slug";
 import { NAME_NOT_TO_BE_SHOWN, namesSomebodyRestricted } from "@/lib/people/forget";
 import { isCoverable } from "@/lib/photos/cover";
 
-/** The trip, where this member may change it: whoever made it, and admins. */
+/** The trip, where this member may change it: whoever made it, and admins. One being deleted is gone already. */
 async function loadEditableTrip(slug: string) {
   const user = await requireUserOrThrow();
-  const trip = await db.trip.findUnique({ where: { slug } });
+  const trip = await db.trip.findUnique({ where: { slug, deletingAt: null } });
   if (!trip) throw new Error("Trip not found");
   if (!canEditContainer(user, trip)) throw new Error(NOT_YOUR_CONTAINER);
   return trip;
@@ -124,9 +124,10 @@ export async function deleteTrip(slug: string): Promise<void> {
   const trip = await loadEditableTrip(slug);
   const me = await requireUserOrThrow();
   if (me.role !== "ADMIN") throw new Error("Only an admin can delete a trip");
-  await deleteTripById(trip.id);
+  const done = await deleteTripById(trip.id);
   revalidatePath("/", "layout");
-  redirect("/photos");
+  // A big one is finished by the worker; the Admin page says it is being deleted until then.
+  redirect(done === "done" ? "/photos" : "/admin#being-deleted");
 }
 
 /** Clear track-derived positions and recompute them from the trip's current tracks. */

@@ -122,13 +122,16 @@ export async function startWorker(): Promise<void> {
   const { revokeQueuedConnection } = await import("@/lib/google/account");
   await boss.work(QUEUES.revokeGoogle, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60 }, async ([job]) => revokeQueuedConnection(job.data as never));
   await boss.work(QUEUES.reconcilePhotos, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60 }, async () => void (await reconcileStalePhotos()));
-  // Removals of members and deletions of trips that a restart or a crash interrupted half-way, finished from their
-  // mark; one still running elsewhere is left to that run.
+  // Removals of members and deletions of trips too big to finish in the admin's request, or that a restart or a crash
+  // interrupted half-way, finished from their mark; one still running elsewhere is left to that run.
   const { finishPendingRemovals } = await import("@/lib/auth/remove-member");
   const { finishPendingTripDeletions } = await import("@/lib/trips/delete");
+  const { revokePendingConnections } = await import("@/lib/google/pending-revoke");
   const finishRemovals = async () => {
     await finishPendingRemovals();
     await finishPendingTripDeletions();
+    // And the Google grants of members removed since, which Google could not be told about (or a crash interrupted).
+    await revokePendingConnections();
   };
   await boss.work(QUEUES.finishRemovals, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60, heartbeatRefreshSeconds: HEAVY_HEARTBEAT_REFRESH_SECONDS }, async () => finishRemovals());
   await boss.work(QUEUES.sweepOrphanFiles, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60 }, async () => sweepOrphanFiles());

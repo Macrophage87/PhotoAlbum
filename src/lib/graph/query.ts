@@ -54,7 +54,7 @@ export async function graphPayload(viewer: Viewer, scope: GraphScope, minScore: 
   if (scope.kind === "all") {
     if (viewer.user.role !== "ADMIN") return null;
   } else if (scope.kind === "trip") {
-    const trip = await db.trip.findUnique({ where: { slug: scope.slug }, select: { id: true, visibility: true, shareToken: true } });
+    const trip = await db.trip.findUnique({ where: { slug: scope.slug, deletingAt: null }, select: { id: true, visibility: true, shareToken: true } });
     if (!trip || !canViewTrip(viewer, trip)) return null;
     scopeWhere = { tripId: trip.id };
   } else if (scope.kind === "collection") {

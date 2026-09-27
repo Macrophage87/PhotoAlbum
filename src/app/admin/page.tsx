@@ -8,7 +8,7 @@ import { getViewer, requireAdmin } from "@/lib/auth/viewer";
 import { AppShell, Container } from "@/components/layout/AppShell";
 import { InviteForm } from "@/components/admin/InviteForm";
 import { Badge, Button, Card, ConfirmSubmitButton } from "@/components/ui";
-import { removeMember, revokeInvite, setRole } from "./actions";
+import { finishDeletingTrip, removeMember, revokeInvite, setRole } from "./actions";
 import { setMemberName } from "@/app/account/actions";
 import { AnnotationAdmin } from "@/components/annotation/AnnotationAdmin";
 import { annotationGates } from "@/lib/annotation/eligibility";
@@ -40,9 +40,11 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
   const visits = await visitorStats([7, 30, 90].includes(askedDays) ? askedDays : 30);
   const viewer = await getViewer();
   const trashed = await db.photo.count({ where: { trashedAt: { not: null } } });
-  const [members, invites] = await Promise.all([
+  const [members, invites, deleting] = await Promise.all([
     db.user.findMany({ orderBy: { createdAt: "asc" }, include: { _count: { select: { photos: true, trips: true } } } }),
     db.invite.findMany({ where: { acceptedAt: null, expiresAt: { gt: new Date() } }, orderBy: { createdAt: "desc" }, include: { invitedBy: { select: { email: true, name: true } } } }),
+    // Trips too big to delete inside the request, and any a restart interrupted: the worker is letting go of them.
+    db.trip.findMany({ where: { deletingAt: { not: null } }, orderBy: { deletingAt: "asc" }, select: { id: true, title: true, _count: { select: { photos: true } } } }),
   ]);
   const smtp = Boolean(env().SMTP_HOST);
   const fg = await faceGates();
@@ -261,6 +263,27 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
             </Card>
           )}
         </section>
+
+        {deleting.length > 0 && (
+          <section id="being-deleted">
+            <h2 className="font-display text-xl font-semibold mb-3">Trips being deleted</h2>
+            <Card className="divide-y divide-border">
+              {deleting.map((t) => (
+                <div key={t.id} className="flex flex-wrap items-center justify-between gap-3 p-3 text-sm">
+                  <div className="min-w-0">
+                    <div className="font-medium">{t.title}</div>
+                    <div className="text-muted">
+                      {t._count.photos} photo{t._count.photos === 1 ? "" : "s"} still to let go of. It is no longer shown to anyone, and the album finishes it in the background.
+                    </div>
+                  </div>
+                  <form action={finishDeletingTrip.bind(null, t.id)}>
+                    <Button type="submit" variant="secondary" size="sm">Finish now</Button>
+                  </form>
+                </div>
+              ))}
+            </Card>
+          </section>
+        )}
 
         <section>
           <h2 className="font-display text-xl font-semibold mb-3">Members</h2>

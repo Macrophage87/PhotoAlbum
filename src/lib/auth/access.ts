@@ -87,8 +87,9 @@ export function visibleContainersWhere(viewer: Viewer): { visibility?: TripVisib
   return viewer.kind === "user" ? {} : { visibility: "PUBLIC" };
 }
 
-export function visibleTripsWhere(viewer: Viewer): { visibility?: TripVisibility } {
-  return visibleContainersWhere(viewer);
+/** Trips being deleted are left out for everybody, members too: they are letting go of their photographs, and then go. */
+export function visibleTripsWhere(viewer: Viewer): { visibility?: TripVisibility; deletingAt: null } {
+  return { ...visibleContainersWhere(viewer), deletingAt: null };
 }
 
 /**

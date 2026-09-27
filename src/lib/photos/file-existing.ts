@@ -55,7 +55,7 @@ export async function fileExisting(user: Pick<ViewerUser, "id" | "role">, photoI
       if (photo.tripId !== activity.tripId) await geotag(activity.tripId);
     }
   } else if (target.tripId) {
-    const trip = await db.trip.findUnique({ where: { id: target.tripId }, select: { id: true } });
+    const trip = await db.trip.findUnique({ where: { id: target.tripId, deletingAt: null }, select: { id: true } });
     if (trip) {
       // Onto another trip, it comes off its old trip's activity too: an activity is a part of one trip.
       if (photo.tripId !== trip.id) {

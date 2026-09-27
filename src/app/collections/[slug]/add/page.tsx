@@ -23,7 +23,7 @@ export default async function AddPhotosPage({ params, searchParams }: PageProps<
   const [page, named, members, people] = await Promise.all([
     candidatePhotoPage({ kind: "collection", id: collection.id }, filter),
     filter.trip && filter.trip !== "none" ? db.trip.findUnique({ where: { id: filter.trip }, select: { id: true, title: true } }) : Promise.resolve(null),
-    db.user.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true, email: true } }),
+    db.user.findMany({ where: { removingAt: null }, orderBy: { name: "asc" }, select: { id: true, name: true, email: true } }),
     peopleInPhotos(),
   ]);
   const initialTrip = filter.trip === "none" ? { id: "none", title: "Without a trip" } : named;

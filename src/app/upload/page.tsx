@@ -17,7 +17,7 @@ export default async function UploadPage({ searchParams }: PageProps<"/upload">)
   const viewer = await getViewer();
   const sp = await searchParams;
   const tripSlug = typeof sp.trip === "string" ? sp.trip : undefined;
-  const trips = await db.trip.findMany({ orderBy: { startDate: "desc" }, select: { id: true, slug: true, title: true } });
+  const trips = await db.trip.findMany({ where: { deletingAt: null }, orderBy: { startDate: "desc" }, select: { id: true, slug: true, title: true } });
   const selected = trips.find((t) => t.slug === tripSlug);
   // Reached from a collection's page, uploads go into that collection.
   const collectionSlug = typeof sp.collection === "string" ? sp.collection : undefined;

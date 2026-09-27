@@ -45,7 +45,7 @@ export async function pollPickerSession(sessionId: string, tripId: string | null
     const s = await getPickerSession(token, sessionId);
     if (!s.mediaItemsSet) return s.deadline <= Date.now() ? { state: "error", reconnect: false, message: "That picking session has ended; start again." } : { state: "picking" };
     const items = await listPickedItems(token, sessionId);
-    if (tripId && !(await db.trip.findUnique({ where: { id: tripId }, select: { id: true } }))) tripId = null;
+    if (tripId && !(await db.trip.findUnique({ where: { id: tripId, deletingAt: null }, select: { id: true } }))) tripId = null;
     // Nothing in the trash counts as already in the album: picking it again is how a member gets it back. Nor does
     // another member's row whose file never arrived: it is not in the album, and it is not this member's to fetch.
     const existing = new Map((await db.photo.findMany({ where: { sourceKind: "GOOGLE_PICKER", sourceId: { in: items.map((i) => i.id) }, trashedAt: null, OR: [{ originalPath: { not: "pending" } }, { uploaderId: user.id }] }, select: { id: true, sourceId: true, uploaderId: true, status: true, originalPath: true, updatedAt: true } })).map((r) => [r.sourceId, r]));

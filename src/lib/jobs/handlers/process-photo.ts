@@ -108,7 +108,7 @@ export async function processPhoto(job: ProcessPhotoJob, signal?: AbortSignal): 
     const exif = await readExif(localPath);
 
     // 3. Trip candidates: explicit trip wins, otherwise match by the photo's wall-clock day
-    const explicitTrip = job.tripId ? await db.trip.findUnique({ where: { id: job.tripId } }) : photo.tripId ? await db.trip.findUnique({ where: { id: photo.tripId } }) : null;
+    const explicitTrip = job.tripId ? await db.trip.findUnique({ where: { id: job.tripId, deletingAt: null } }) : photo.tripId ? await db.trip.findUnique({ where: { id: photo.tripId, deletingAt: null } }) : null;
     let trip = explicitTrip;
     // The name is read only when the file itself says nothing: a phone's IMG_20250812_143015 is the capture time,
     // where the file's modified time is usually just when it was copied onto something.

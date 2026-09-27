@@ -35,10 +35,12 @@ export async function importTrackFile(args: ImportArgs, signal?: AbortSignal): P
   const store = storage();
   const filePath = store.localPath?.(args.importKey);
   if (!filePath) throw new Error("import requires a storage driver with local paths");
-  const trip = await db.trip.findUnique({ where: { id: args.tripId } });
+  // A trip being deleted is letting go of what it has (see src/lib/trips/delete.ts), so nothing is imported into it.
+  const trip = await db.trip.findUnique({ where: { id: args.tripId, deletingAt: null } });
   if (!trip) throw new Error("Trip not found");
-  // The job trusts its payload, so the rule the route applied is asked again here: an import arranges the trip.
-  const user = await db.user.findUnique({ where: { id: args.userId }, select: { id: true, role: true } });
+  // The job trusts its payload, so the rule the route applied is asked again here: an import arranges the trip. Of the
+  // member as they are now, a removal begun since the job was queued included.
+  const user = await db.user.findUnique({ where: { id: args.userId }, select: { id: true, role: true, removingAt: true } });
   if (!canEditContainer(user, trip)) {
     // Refused, the file has no use: nothing of it is kept.
     await store.delete(args.importKey).catch(() => {});
