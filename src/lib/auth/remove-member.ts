@@ -118,11 +118,14 @@ async function drain(size: number, batch: () => Promise<number>): Promise<void> 
 /** Step two: everything that names them and is big enough to need it, a batch at a time. */
 async function handOver(member: string, heir: string): Promise<void> {
   const set = handedOver(member, heir);
-  await drain(BATCH, () => db.$executeRaw`UPDATE "Photo" SET ${set} WHERE id IN (SELECT id FROM "Photo" WHERE "uploaderId" = ${member} ORDER BY id LIMIT ${BATCH} FOR UPDATE)`);
-  await drain(BATCH, () => db.$executeRaw`UPDATE "Photo" SET ${set} WHERE id IN (SELECT id FROM "Photo" WHERE ${namesThem(member)} ORDER BY id LIMIT ${BATCH} FOR UPDATE)`);
-  await drain(ROW_BATCH, () => db.$executeRaw`UPDATE "CollectionItem" SET "addedById" = ${heir} WHERE id IN (SELECT id FROM "CollectionItem" WHERE "addedById" = ${member} ORDER BY id LIMIT ${ROW_BATCH} FOR UPDATE)`);
+  // Each batch picks and locks its rows in a CTE, which Postgres runs exactly once. The same pick as an IN (...)
+  // subquery may be run again for every row the planner joins it to, and each run passes over the rows this very
+  // statement has just changed and locks the next ones: one "batch" then took every row, however many.
+  await drain(BATCH, () => db.$executeRaw`WITH picked AS (SELECT id FROM "Photo" WHERE "uploaderId" = ${member} ORDER BY id LIMIT ${BATCH} FOR UPDATE) UPDATE "Photo" SET ${set} FROM picked WHERE "Photo".id = picked.id`);
+  await drain(BATCH, () => db.$executeRaw`WITH picked AS (SELECT id FROM "Photo" WHERE ${namesThem(member)} ORDER BY id LIMIT ${BATCH} FOR UPDATE) UPDATE "Photo" SET ${set} FROM picked WHERE "Photo".id = picked.id`);
+  await drain(ROW_BATCH, () => db.$executeRaw`WITH picked AS (SELECT id FROM "CollectionItem" WHERE "addedById" = ${member} ORDER BY id LIMIT ${ROW_BATCH} FOR UPDATE) UPDATE "CollectionItem" SET "addedById" = ${heir} FROM picked WHERE "CollectionItem".id = picked.id`);
   // Their visits stay counted, as nobody's — what deleting the account does to them anyway.
-  await drain(ROW_BATCH, () => db.$executeRaw`UPDATE "Visit" SET "userId" = NULL WHERE id IN (SELECT id FROM "Visit" WHERE "userId" = ${member} ORDER BY id LIMIT ${ROW_BATCH} FOR UPDATE)`);
+  await drain(ROW_BATCH, () => db.$executeRaw`WITH picked AS (SELECT id FROM "Visit" WHERE "userId" = ${member} ORDER BY id LIMIT ${ROW_BATCH} FOR UPDATE) UPDATE "Visit" SET "userId" = NULL FROM picked WHERE "Visit".id = picked.id`);
 }
 
 /** Step three. Null when somebody else's run got there first. */
@@ -133,7 +136,7 @@ async function lastStep(member: string, heir: string): Promise<{ revoke: string 
     const gone = users.find((u) => u.id === member);
     if (!gone) return null;
     const set = handedOver(member, heir);
-    await tx.$executeRaw`UPDATE "Photo" SET ${set} WHERE id IN (SELECT id FROM "Photo" WHERE "uploaderId" = ${member} OR ${namesThem(member)} ORDER BY id FOR UPDATE)`;
+    await tx.$executeRaw`WITH picked AS (SELECT id FROM "Photo" WHERE "uploaderId" = ${member} OR ${namesThem(member)} ORDER BY id FOR UPDATE) UPDATE "Photo" SET ${set} FROM picked WHERE "Photo".id = picked.id`;
     await tx.collectionItem.updateMany({ where: { addedById: member }, data: { addedById: heir } });
     await tx.track.updateMany({ where: { uploaderId: member }, data: { uploaderId: heir } });
     await tx.trip.updateMany({ where: { createdById: member }, data: { createdById: heir } });

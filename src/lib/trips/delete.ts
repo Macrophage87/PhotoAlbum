@@ -52,7 +52,7 @@ async function lastStep(tripId: string): Promise<{ originalFile: string | null }
     const [trip] = await tx.$queryRaw<{ id: string }[]>`SELECT id FROM "Trip" WHERE id = ${tripId} FOR UPDATE`;
     if (!trip) return null;
     const files = await tx.track.findMany({ where: { tripId }, select: { originalFile: true } });
-    await tx.$executeRaw`UPDATE "Photo" SET ${offTrip} WHERE id IN (SELECT id FROM "Photo" WHERE "tripId" = ${tripId} ORDER BY id FOR UPDATE)`;
+    await tx.$executeRaw`WITH picked AS (SELECT id FROM "Photo" WHERE "tripId" = ${tripId} ORDER BY id FOR UPDATE) UPDATE "Photo" SET ${offTrip} FROM picked WHERE "Photo".id = picked.id`;
     await tx.trip.deleteMany({ where: { id: tripId } });
     return files;
   }, LAST_STEP_TX);
@@ -69,8 +69,9 @@ export async function finishTripDeletion(tripId: string): Promise<"done" | "busy
       if (!trip) return "gone" as const;
       if (!trip.deletingAt) return "not-begun" as const;
       // Each batch only touches what is still on the trip, so a batch run again, or that lost a deadlock, is harmless.
+      // Picked and locked in a CTE, which runs once (see handOver in src/lib/auth/remove-member.ts).
       for (;;) {
-        const n = await db.$executeRaw`UPDATE "Photo" SET ${offTrip} WHERE id IN (SELECT id FROM "Photo" WHERE "tripId" = ${tripId} ORDER BY id LIMIT ${BATCH} FOR UPDATE)`.catch((err: unknown) => {
+        const n = await db.$executeRaw`WITH picked AS (SELECT id FROM "Photo" WHERE "tripId" = ${tripId} ORDER BY id LIMIT ${BATCH} FOR UPDATE) UPDATE "Photo" SET ${offTrip} FROM picked WHERE "Photo".id = picked.id`.catch((err: unknown) => {
           if (isWriteConflict(err)) return -1;
           throw err;
         });
