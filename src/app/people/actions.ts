@@ -511,11 +511,17 @@ export async function tagPersonAt(photoId: string, fd: FormData): Promise<void> 
     ? await db.person.findUniqueOrThrow({ where: { id: v.personId } })
     : await db.person.create({ data: { name: v.name!, kind: "HUMAN", createdById: user.id } });
   if (!v.personId) await rejudgeFromAction({ people: [person.id] });
-  if (person.optedOutAt) throw new Error("This person asked to be forgotten");
-  // One tag per person per photograph: tagging somebody twice moves their box rather than stacking another.
-  const already = await db.face.findFirst({ where: { photoId, personId: person.id, confidence: 0 }, select: { id: true } });
-  if (already) await db.face.update({ where: { id: already.id }, data: { box } });
-  else await db.face.create({ data: { photoId, personId: person.id, status: "CONFIRMED", box, confidence: 0 } });
+  // Whether they asked to be forgotten is read under a lock until the tag is written, as confirming a face reads it:
+  // a forget that has begun is not tagged onto a photograph it never looked at.
+  await db.$transaction(async (tx) => {
+    const [locked] = await tx.$queryRaw<{ forgetting: boolean }[]>`SELECT ("optedOutAt" IS NOT NULL OR "forgetPendingAt" IS NOT NULL) AS forgetting FROM "Person" WHERE id = ${person.id} FOR SHARE`;
+    if (!locked) throw new Error("That person is no longer in the album");
+    if (locked.forgetting) throw new Error("This person asked to be forgotten");
+    // One tag per person per photograph: tagging somebody twice moves their box rather than stacking another.
+    const already = await tx.face.findFirst({ where: { photoId, personId: person.id, confidence: 0 }, select: { id: true } });
+    if (already) await tx.face.update({ where: { id: already.id }, data: { box } });
+    else await tx.face.create({ data: { photoId, personId: person.id, status: "CONFIRMED", box, confidence: 0 } });
+  });
   if (person.kind === "PET" && (await claimAnimalsForPet(photoId, person.id)) > 0) await enqueueAnimalMatchAllOpen();
   revalidatePath(`/photos/${photoId}`);
   revalidatePath("/people", "layout");

@@ -35,8 +35,7 @@ export async function detectFacesJob(job: DetectFacesJob, signal?: AbortSignal):
     // The groups come from the delete itself, so a face moved between a read and the delete is still counted.
     const lightened = [
       ...new Set(
-        // The rows locked in id order first, as naming locks faces, so the two wait for each other rather than deadlock.
-        (await db.$queryRaw<{ clusterId: string | null }[]>`DELETE FROM "Face" WHERE id IN (SELECT id FROM "Face" WHERE "photoId" = ${photo.id} AND status IN ('DETECTED', 'PROPOSED') ORDER BY id FOR UPDATE) AND status IN ('DETECTED', 'PROPOSED') RETURNING "clusterId"`)
+        (await deleteRescannedFaces(photo.id))
           .map((r) => r.clusterId)
           .filter((c): c is string => c !== null),
       ),
@@ -114,6 +113,14 @@ export async function detectFacesJob(job: DetectFacesJob, signal?: AbortSignal):
     await db.photo.update({ where: { id: photo.id }, data: { facesDetectedAt: new Date() } });
   }, signal);
   await proposeForPhoto(photo.id);
+}
+
+/**
+ * A re-scan's delete of the faces nobody decided on (found or proposed), returning the groups they were in. The rows
+ * are locked in id order first, as naming locks faces, so the two wait for each other rather than deadlock.
+ */
+export async function deleteRescannedFaces(photoId: string): Promise<{ clusterId: string | null }[]> {
+  return db.$queryRaw<{ clusterId: string | null }[]>`DELETE FROM "Face" WHERE id IN (SELECT id FROM "Face" WHERE "photoId" = ${photoId} AND status IN ('DETECTED', 'PROPOSED') ORDER BY id FOR UPDATE) AND status IN ('DETECTED', 'PROPOSED') RETURNING "clusterId"`;
 }
 
 /**

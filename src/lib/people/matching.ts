@@ -99,7 +99,10 @@ async function ageFor(faceId: string, personId: string): Promise<AgeAtCapture> {
  */
 export async function confirmFaceAs(faceId: string, personId: string): Promise<void> {
   const face = await db.face.findUniqueOrThrow({ where: { id: faceId }, select: { id: true, clusterId: true, cluster: { select: { personId: true } } } });
-  const person = await db.person.findUniqueOrThrow({ where: { id: personId }, select: { kind: true } });
+  const person = await db.person.findUniqueOrThrow({ where: { id: personId }, select: { kind: true, optedOutAt: true, forgetPendingAt: true } });
+  // Refused before anything moves: a face confirmed for somebody being forgotten stays in its group, as it was. (Read
+  // again under the lock below, where it counts.)
+  if (person.optedOutAt || person.forgetPendingAt) throw new Error("This person asked to be forgotten");
   const age = person.kind === "HUMAN" ? await ageFor(faceId, personId) : null;
   if (face.clusterId && !face.cluster?.personId) await leaveCluster(face.id, face.clusterId);
   // Their recognition read under a lock until this commits (person, then face, then era group, as everywhere): an

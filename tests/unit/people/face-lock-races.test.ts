@@ -10,8 +10,8 @@ vi.mock("next/cache", () => ({ revalidatePath: () => undefined }));
 vi.mock("next/navigation", () => ({ redirect: () => undefined }));
 vi.mock("@/lib/jobs/boss", () => ({ enqueue: async () => {} }));
 
-import { decideIndexing } from "@/app/people/actions";
-import { rebuildCentroids } from "@/lib/jobs/handlers/detect-faces";
+import { decideIndexing, tagPersonAt } from "@/app/people/actions";
+import { deleteRescannedFaces, rebuildCentroids } from "@/lib/jobs/handlers/detect-faces";
 import { confirmFaceAs } from "@/lib/people/matching";
 
 async function waitBlocked(other: Client) {
@@ -89,11 +89,10 @@ describe("recognition switched off while templates are rebuilt", () => {
     expect(await db.face.findUniqueOrThrow({ where: { id: open } })).toMatchObject({ personId: null, status: "PROPOSED" });
   });
 });
-const NEW = (p: string) => db.$queryRaw`DELETE FROM "Face" WHERE id IN (SELECT id FROM "Face" WHERE "photoId" = ${p} AND status IN ('DETECTED', 'PROPOSED') ORDER BY id FOR UPDATE) AND status IN ('DETECTED', 'PROPOSED') RETURNING "clusterId"`;
 
-/** Detection's re-scan delete, as detect-faces.ts runs it: faces locked in id order, as naming locks them. */
+/** Detection's re-scan delete, the job's own: faces locked in id order, as naming locks them. */
 describe("re-scan delete", () => {
-  const del = NEW;
+  const del = deleteRescannedFaces;
   let photoId: string;
   beforeEach(async () => {
     await resetTestDb();
@@ -111,9 +110,56 @@ describe("re-scan delete", () => {
       await other.query(`SELECT id FROM "Face" WHERE id = 'aaaa' FOR UPDATE`);
       const d = del(photoId).then(() => null, (e) => e);
       await waitBlocked(other);
-      try { await other.query(`SELECT id FROM "Face" WHERE id = 'zzzz' FOR UPDATE`); await other.query("COMMIT"); } catch (e) { bErr = e; await other.query("ROLLBACK"); }
+      try {
+        await other.query(`SELECT id FROM "Face" WHERE id = 'zzzz' FOR UPDATE`);
+        await other.query("COMMIT");
+      } catch (e) {
+        bErr = e;
+        await other.query("ROLLBACK");
+      }
       const aErr = await d;
       expect(String(bErr ?? "") + String(aErr ?? "")).not.toMatch(/deadlock/);
-    } finally { await other.end(); }
+    } finally {
+      await other.end();
+    }
+  });
+});
+
+describe("a forget begun, and the tags and confirms that come after it", () => {
+  let admin: string, photoId: string, personId: string;
+  beforeEach(async () => {
+    await resetTestDb();
+    admin = (await db.user.create({ data: { email: "admin@example.com", role: "ADMIN" } })).id;
+    who.id = admin;
+    photoId = (await db.photo.create({ data: { uploaderId: admin, originalName: "a.jpg", mimeType: "image/jpeg", storageKey: "a", originalPath: "a/o.jpg", sizeBytes: 1, status: "READY" } })).id;
+    personId = (await db.person.create({ data: { name: "Jo", createdById: admin } })).id;
+  });
+
+  it("a refused confirm leaves the face in its group", async () => {
+    const cluster = (await db.faceCluster.create({ data: { faceCount: 2 }, select: { id: true } })).id;
+    const face = (await db.face.create({ data: { photoId, clusterId: cluster, proposedPersonId: personId, box: [0.1, 0.1, 0.2, 0.2], confidence: 0.9, status: "PROPOSED" }, select: { id: true } })).id;
+    await db.face.create({ data: { photoId, clusterId: cluster, box: [0.5, 0.5, 0.2, 0.2], confidence: 0.9, status: "DETECTED" } });
+    await db.person.update({ where: { id: personId }, data: { optedOutAt: new Date() } });
+    await expect(confirmFaceAs(face, personId)).rejects.toThrow(/forgotten/);
+    expect((await db.face.findUniqueOrThrow({ where: { id: face } })).clusterId).toBe(cluster);
+  });
+
+  it("a hand tag waits for a forget's switch-off and is then refused", async () => {
+    const other = new Client({ connectionString: process.env.DATABASE_URL });
+    await other.connect();
+    try {
+      await other.query("BEGIN");
+      await other.query(`UPDATE "Person" SET "optedOutAt" = now(), "forgetPendingAt" = now() WHERE id = $1`, [personId]);
+      const fd = new FormData();
+      fd.set("personId", personId);
+      fd.set("box", JSON.stringify([0.1, 0.1, 0.2, 0.2]));
+      const tagging = tagPersonAt(photoId, fd).then(() => null, (e: unknown) => e);
+      await waitBlocked(other);
+      await other.query("COMMIT");
+      expect(String(await tagging)).toMatch(/forgotten/);
+    } finally {
+      await other.end();
+    }
+    expect(await db.face.count({ where: { personId } })).toBe(0);
   });
 });
