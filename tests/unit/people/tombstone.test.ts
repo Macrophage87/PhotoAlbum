@@ -653,6 +653,20 @@ describe("names that are also words", () => {
     }
   });
 
+  it("capitalizes the stand-in the same way in both scrubs, judged without the titles that go with the name", async () => {
+    const on = await forget("Ada Byron");
+    const ts = await loadTombstone();
+    for (const [text, want] of [
+      ["Little Sister Ada and Big Brother Ada.", "A family member and a family member."],
+      ["Grandma Ada At The Lake", "A Family Member At The Lake"],
+      ["Big Sister Ada Swimming At The Lake", "A Family Member Swimming At The Lake"],
+      ["We met Aunt Ada at the lake.", "We met a family member at the lake."],
+    ]) {
+      expect([text, ts.scrub(text, await sc(on))]).toEqual([text, want]);
+      expect([text, nameMatcher(["Ada Byron"]).scrub(text, { tagged: true })]).toEqual([text, want]);
+    }
+  });
+
   it("reads 'Great' as a title only before a kinship word", async () => {
     const on = await forget("Ada Byron");
     const ts = await loadTombstone();

@@ -469,6 +469,27 @@ const KIN_BEFORE = /(?<![\p{L}\p{M}])((?:(?:great|step|half|grand|big|little|bab
 /** Words that make the kinship word after them another title: "Great Grandma" is not Grandma. */
 const TITLE_PREFIX = /(?<![\p{L}\p{M}])(?:great|step|half|grand)[ \t]+$/iu;
 
+/**
+ * The text with every run of kinship words just before one of these name words blanked out, offsets kept: "Little
+ * Sister Ada" reads "             Ada". Joining words are left ("the Ada", "our Ada").
+ */
+function withoutTitlesBefore(text: string, own: Set<string>): string {
+  const words = [...text.matchAll(/[\p{L}\p{M}][\p{L}\p{M}'’.]*/gu)];
+  let out = text;
+  for (let i = 1; i < words.length; i++) {
+    if (!own.has(bare(words[i][0]))) continue;
+    let k = i;
+    while (k > 0) {
+      const w = words[k - 1][0].replace(/\.$/u, "");
+      const sep = text.slice(words[k - 1].index! + words[k - 1][0].length, words[k].index!);
+      if (!/^(?:[ \t]+|[-‐])$/u.test(sep) || !isKin(w) || FUNCTION_WORDS.has(bare(w)) || own.has(bare(w))) break;
+      k--;
+    }
+    if (k < i) out = out.slice(0, words[k].index!) + " ".repeat(words[i].index! - words[k].index!) + out.slice(words[i].index!);
+  }
+  return out;
+}
+
 /** Marks a stand-in whose kinship word goes with it (see nameMatcher). */
 const KIN_MARK = "\u0001";
 
@@ -764,10 +785,15 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
   };
 
   const scrubText = (text: string, where: Where): string => {
+    // On their own photograph a kinship word before their name goes with it ("Little Sister Ada"), and the stand-in's
+    // capitals are judged without it, as the forgotten names' are (replaceSpans): "Little Sister Ada and Big Brother
+    // Ada." is no title in title case. Only the capitals: what is taken out is judged as before.
+    const titles = where.tagged && where.onPhoto !== false;
+    const standInTitle = (whole: string, offset: number) => titleCaseAt(titles ? withoutTitlesBefore(whole, own) : whole, offset, own);
     const put = (m: string, offset: number, whole: string) => {
       // "Great Grandma Ruth" is somebody else than Grandma Ruth.
       if (isKin(m.split(/[ \t]+/u)[0]) && TITLE_PREFIX.test(whole.slice(0, offset))) return m;
-      return standInFor(m, whole.slice(0, offset), whole.slice(offset + m.length), titleCaseAt(whole, offset, own));
+      return standInFor(m, whole.slice(0, offset), whole.slice(offset + m.length), standInTitle(whole, offset));
     };
     let out = longAnyRx ? text.replace(longAnyRx, put) : text;
     if (longCapRx) out = out.replace(longCapRx, put);
@@ -816,10 +842,10 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
           if (ownKin.size && !ownKin.has(kinshipKey(kin[1]))) return m;
           if (where.tagged && where.onPhoto !== false) {
             const rest = before.slice(0, before.length - kin[0].length);
-            return `${KIN_MARK}${standInFor(m, rest, whole.slice(offset + m.length), title)}`;
+            return `${KIN_MARK}${standInFor(m, rest, whole.slice(offset + m.length), standInTitle(whole, offset))}`;
           }
         }
-        return standInFor(m, before, whole.slice(offset + m.length), title);
+        return standInFor(m, before, whole.slice(offset + m.length), standInTitle(whole, offset));
       });
       // The kinship word goes with the name it was part of.
       if (out.includes(KIN_MARK)) out = out.replace(new RegExp(`${KIN_BEFORE.source.slice(0, -1)}${KIN_MARK}`, "giu"), "").replaceAll(KIN_MARK, "");
