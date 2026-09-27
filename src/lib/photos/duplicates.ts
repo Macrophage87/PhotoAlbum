@@ -8,9 +8,12 @@ const foldSelect = {
   id: true,
   caption: true,
   title: true,
+  titleByHelper: true,
   context: true,
   takenAt: true,
   takenAtSource: true,
+  tzOffsetMin: true,
+  dateSetById: true,
   lat: true,
   lng: true,
   placeName: true,
@@ -63,16 +66,22 @@ export async function foldDuplicates(byUserId: string, groups?: DuplicateGroup[]
     const copies = photos.filter((p) => p.id !== keeper.id);
 
     // Take what the keeper is missing, copy by copy, so an earlier copy's caption is not overwritten by a later one.
-    let filling = { ...keeper };
-    const data: Record<string, unknown> = {};
-    for (const copy of copies) {
-      const plan = planFold(filling, copy);
-      Object.assign(data, plan.data);
-      filling = { ...filling, ...(plan.data as Partial<FoldablePhoto>) };
-      for (const f of plan.filled) if (!report.filled.includes(f)) report.filled.push(f);
-      if (plan.conflict && !report.conflicts.includes(keeper.id)) report.conflicts.push(keeper.id);
-    }
-    if (Object.keys(data).length) await db.photo.update({ where: { id: keeper.id }, data });
+    // Planned from the keeper as it is under a row lock, so a caption, title or date a member saved meanwhile is
+    // what the plan sees, and one saved while it is written waits for it and then stands.
+    const filling = await db.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM "Photo" WHERE id = ${keeper.id} FOR UPDATE`;
+      let filling = ((await tx.photo.findUnique({ where: { id: keeper.id }, select: foldSelect })) ?? keeper) as FoldablePhoto;
+      const data: Record<string, unknown> = {};
+      for (const copy of copies) {
+        const plan = planFold(filling, copy);
+        Object.assign(data, plan.data);
+        filling = { ...filling, ...(plan.data as Partial<FoldablePhoto>) };
+        for (const f of plan.filled) if (!report.filled.includes(f)) report.filled.push(f);
+        if (plan.conflict && !report.conflicts.includes(keeper.id)) report.conflicts.push(keeper.id);
+      }
+      if (Object.keys(data).length) await tx.photo.update({ where: { id: keeper.id }, data });
+      return filling;
+    });
 
     // Wherever a copy was gathered, the keeper belongs instead.
     const memberships = await db.collectionItem.findMany({ where: { photoId: { in: copies.map((c) => c.id) } }, select: { collectionId: true, addedById: true, position: true } });

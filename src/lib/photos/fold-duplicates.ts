@@ -17,9 +17,14 @@ export type FoldablePhoto = {
   id: string;
   caption: string | null;
   title: string | null;
+  /** Whose the title is (see `titleIsHelpers`); it goes with the title. */
+  titleByHelper?: boolean | null;
   context: string | null;
   takenAt: Date | null;
   takenAtSource: string | null;
+  /** The zone the date was read in, and who set it by hand; both go with the date. */
+  tzOffsetMin?: number | null;
+  dateSetById?: string | null;
   lat: number | null;
   lng: number | null;
   placeName: string | null;
@@ -56,6 +61,7 @@ export function planFold(keeper: FoldablePhoto, copy: FoldablePhoto): FoldPlan {
   }
   if (!keeper.title?.trim() && copy.title?.trim()) {
     data.title = copy.title;
+    data.titleByHelper = copy.titleByHelper ?? null;
     filled.push("title");
   }
   if (!keeper.context?.trim() && copy.context?.trim()) {
@@ -69,6 +75,9 @@ export function planFold(keeper: FoldablePhoto, copy: FoldablePhoto): FoldPlan {
   if (keeperDateIsWeak && copyDateIsBetter) {
     data.takenAt = copy.takenAt;
     data.takenAtSource = copy.takenAtSource;
+    // The instant alone is not the date: the clock it was read on, and a member who set it, come with it.
+    data.tzOffsetMin = copy.tzOffsetMin ?? null;
+    data.dateSetById = copy.dateSetById ?? null;
     filled.push("date");
   }
 

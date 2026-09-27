@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { db } from "@/lib/db";
 import { duplicateGroups, foldDuplicates } from "@/lib/photos/duplicates";
 import { resetTestDb } from "../helpers/reset";
@@ -60,6 +60,28 @@ describe("folding the identical copies already in the album", () => {
     // Nothing is left to fold, and running it again changes nothing.
     expect(await duplicateGroups()).toEqual([]);
     expect(await foldDuplicates(user.id)).toMatchObject({ groups: 0, folded: 0 });
+  });
+
+  it("takes a copy's date with its zone and whoever set it, and never writes over words typed on the keeper meanwhile", async () => {
+    const user = await db.user.create({ data: { email: "fold@example.com", role: "ADMIN" } });
+    const cousin = await db.user.create({ data: { email: "cousin@example.com", role: "MEMBER" } });
+    const mk = (name: string, extra: Record<string, unknown> = {}) =>
+      db.photo.create({ data: { uploaderId: user.id, originalName: name, mimeType: "image/jpeg", storageKey: name, originalPath: `${name}/o.jpg`, sizeBytes: 1, status: "READY", contentHash: "same-bytes", ...extra } });
+    const keeper = await mk("first.jpg", { createdAt: new Date("2024-01-01"), takenAt: new Date("2025-06-01"), takenAtSource: "FILE_MTIME", tzOffsetMin: 0 });
+    // Dated by hand on the copy, in Maine in summer.
+    await mk("second.jpg", { createdAt: new Date("2025-01-01"), caption: "Biscuit in the kayak", title: "Kayak day", takenAt: new Date("2019-08-12T14:00:00Z"), takenAtSource: "MANUAL", tzOffsetMin: -240, dateSetById: cousin.id });
+    // The member captions and titles the keeper after the fold read the group.
+    const real = db.photo.findMany.bind(db.photo);
+    const spy = vi.spyOn(db.photo, "findMany").mockImplementationOnce((async (args: never) => {
+      const read = await real(args);
+      await db.photo.update({ where: { id: keeper.id }, data: { caption: "Our own words", title: "Our title", titleByHelper: false } });
+      return read;
+    }) as never);
+    await foldDuplicates(user.id, [{ contentHash: "same-bytes", ids: (await real({ where: { contentHash: "same-bytes" }, select: { id: true } })).map((p) => p.id) }]);
+    spy.mockRestore();
+    const kept = await db.photo.findUniqueOrThrow({ where: { id: keeper.id } });
+    expect(kept).toMatchObject({ caption: "Our own words", title: "Our title", titleByHelper: false, takenAtSource: "MANUAL", tzOffsetMin: -240, dateSetById: cousin.id });
+    expect(kept.takenAt?.toISOString()).toBe("2019-08-12T14:00:00.000Z");
   });
 
   it("puts the kept photograph wherever a copy of it had been chosen as the cover", async () => {
