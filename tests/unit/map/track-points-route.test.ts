@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@/lib/auth/viewer", () => ({ getViewer: async () => ({ kind: "anonymous", user: null }) }));
+const held = vi.hoisted(() => new Map<string, string>());
+vi.mock("@/lib/auth/viewer", () => ({ getViewer: async () => ({ kind: "anonymous", user: null, shareTokens: held }) }));
 
 import { db } from "@/lib/db";
 import { encodePoints } from "@/lib/tracks/encode";
@@ -24,5 +25,12 @@ describe("track points route", () => {
     const cache = res.headers.get("cache-control")!;
     expect(cache).toMatch(/\bprivate\b/);
     expect(cache).not.toMatch(/\bpublic\b/);
+
+    // Opened through the trip's share link: kept by no cache at all, since the link can be withdrawn.
+    await db.trip.update({ where: { id: trip.id }, data: { visibility: "LINK", shareToken: "tok" } });
+    held.set(`trip_${trip.id}`, "tok");
+    const viaLink = await GET(new Request(`https://album.example/api/tracks/${track.id}/points`), { params: Promise.resolve({ id: track.id }) });
+    expect(viaLink.status).toBe(200);
+    expect(viaLink.headers.get("cache-control")).toBe("private, no-store");
   });
 });
