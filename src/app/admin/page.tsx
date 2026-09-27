@@ -28,7 +28,7 @@ import { visitorStats } from "@/lib/visits/stats";
 import { VisitorStats } from "@/components/admin/VisitorStats";
 import { OrphanFoldersAdmin } from "@/components/admin/OrphanFoldersAdmin";
 import { StorageIdentityNotice } from "@/components/admin/StorageIdentityNotice";
-import { installIdentity } from "@/lib/storage/identity";
+import { HEARTBEAT_STALE_MS, installIdentity, rebindBlockedUntil, utcStamp } from "@/lib/storage/identity";
 import { QUARANTINE_KEEP_MS, quarantineContents } from "@/lib/storage/sweep";
 
 export const metadata = { title: "Admin" };
@@ -88,8 +88,9 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
     return { contentHash: g.contentHash, ids: g.ids, name: lead?.originalName ?? "", thumbUrl: lead && lead.renditions ? photoUrl(lead, "thumb") : null };
   });
   // Whether this database and the storage folder are the same album's, and what the hourly check found in it.
-  const [identity, storageFindings, quarantine] = await Promise.all([
+  const [identity, rebindBlock, storageFindings, quarantine] = await Promise.all([
     installIdentity(),
+    rebindBlockedUntil(),
     db.appSetting.findUnique({ where: { id: "app" }, select: { orphanFolderCount: true, orphanFolderSample: true, orphanFoldersCheckedAt: true } }),
     quarantineContents(),
   ]);
@@ -233,7 +234,7 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
         {(!identity.ok || storageFindings?.orphanFolderCount || quarantine.length > 0) && (
           <section className="space-y-3">
             <h2 className="font-display text-xl font-semibold mb-1">Storage</h2>
-            {!identity.ok && <StorageIdentityNotice problem={identity.problem} unknownFiles={identity.kind === "unknown-files"} />}
+            {!identity.ok && <StorageIdentityNotice kind={identity.kind} problem={identity.problem} blockedUntil={rebindBlock ? utcStamp(rebindBlock.until) : null} lastUsedMinutes={rebindBlock?.minutesAgo ?? null} keepHours={HEARTBEAT_STALE_MS / 3600_000} />}
             <OrphanFoldersAdmin count={identity.ok ? (storageFindings?.orphanFolderCount ?? 0) : 0} sample={storageFindings?.orphanFolderSample ?? []} checkedAt={storageFindings?.orphanFoldersCheckedAt?.toISOString() ?? null} quarantine={quarantine} keepDays={QUARANTINE_KEEP_MS / 86_400_000} />
           </section>
         )}

@@ -4,7 +4,7 @@ import { db } from "@/lib/db";
 import { storage } from "@/lib/storage";
 import { liveImportKeys } from "@/lib/jobs/live";
 import { inboxDir } from "@/lib/takeout/inbox";
-import { installIdentity } from "./identity";
+import { installIdentity, touchHeartbeat } from "./identity";
 import { IMPORT_ABANDONED_MS, IMPORT_NAME, PHOTO_FOLDER } from "./layout";
 
 // A Google export among the track files is years of somebody's whereabouts, so it is not kept for ever by accident.
@@ -234,6 +234,8 @@ export async function emptyQuarantine(now = new Date()): Promise<QuarantineResul
 
 /** The hourly storage job. Each part stands alone, so one that fails does not keep the other from running. */
 export async function sweepOrphanFiles(now = new Date()): Promise<void> {
+  // First, this database's word that it is still using the root (see identity.ts): no other may re-bind it meanwhile.
+  await touchHeartbeat(now).catch((err) => console.error("[sweep] could not write the storage heartbeat", err));
   await sweepImportFiles(now).catch((err) => console.error("[sweep] track-file sweep failed", err));
   await recordOrphanPhotoFolders(now).catch((err) => console.error("[sweep] photo-folder check failed", err));
 }

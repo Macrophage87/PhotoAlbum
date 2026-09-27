@@ -36,8 +36,8 @@ is the difference between sharing data and quietly corrupting it.
 **The install marker.** `.album-install-id` at the media root names the album and the database it belongs to (the
 same as `AppSetting.installId` and `installBinding`). The album cleans nothing up in a media folder whose marker does
 not match its database, so copy the dot file along with everything else (`rsync -a` and `tar -C … .` both do). If it
-is left behind, the Admin page says so; restarting the worker with the right database connected writes it again, or
-use **Re-bind the storage to this database** there. Moving the media leaves the database where it is, so nothing
+is left behind, the Admin page says so, and restarting the worker with the right database connected writes it
+again. Moving the media leaves the database where it is, so nothing
 else changes. See [DEPLOY.md §9](DEPLOY.md#the-install-marker) for the other cases.
 
 Check how much you are about to move:
@@ -300,16 +300,18 @@ cd ~/photoalbum-staging
 docker compose exec -T db sh -c 'exec psql -U "$POSTGRES_USER" -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;" "$POSTGRES_DB"'
 docker compose exec -T db sh -c 'exec psql -U "$POSTGRES_USER" "$POSTGRES_DB"' < /tmp/live.sql
 rm /tmp/live.sql
-# The media. --delete so items deleted from the live album go from the copy too.
-sudo rsync -aH --delete /mnt/album/photos/ /mnt/album-staging/photos/
+# The media. --delete so items deleted from the live album go from the copy too; the copy keeps its own install
+# marker, whose heartbeat is staging's, so staging can re-bind its copy straight away.
+sudo rsync -aH --delete --exclude=/.album-install-id /mnt/album/photos/ /mnt/album-staging/photos/
 sudo chown -R 1000:1000 /mnt/album-staging/photos
 docker compose up -d app
 ```
 
-The copy brings the live album's install marker and install id with it, but in another database, so after each
-refresh the staging Admin page says the storage is not bound to its database and staging cleans nothing up. Its
-storage is its own copy, so re-bind it there (**Re-bind the storage to this database**) after each refresh. Never do
-that on a staging site that shares the live folder. A copy costs a second full-size library. If that is what the new drive was for, option A is
+The dump brings the live album's install id and binding into staging's database, so after each refresh the staging
+Admin page says the storage is bound to another database and staging cleans nothing up. Its storage is its own copy,
+and its marker (kept out of the rsync) carries staging's own heartbeat, so re-bind it there (**Re-bind the storage to
+this database**) after each refresh. Never do that on a staging site that shares the live folder; the live album's
+heartbeat stops it there anyway. A copy costs a second full-size library. If that is what the new drive was for, option A is
 the reason to prefer it.
 
 ## If something goes wrong

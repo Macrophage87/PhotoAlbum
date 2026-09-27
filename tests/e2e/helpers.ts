@@ -17,8 +17,8 @@ export async function withDb<T>(fn: (c: Client) => Promise<T>): Promise<T> {
   }
 }
 
-/** The e2e server's storage root, as scripts/e2e-server.mjs chooses it. */
-const photoRoot = process.env.E2E_PHOTO_ROOT ?? "/tmp/photoalbum-e2e-photos";
+/** The e2e server's storage root, as scripts/e2e-server.mjs chooses it: one per e2e database. */
+const photoRoot = process.env.E2E_PHOTO_ROOT ?? `/tmp/${dbUrl ? new URL(dbUrl).pathname.slice(1) : "photoalbum-e2e"}-photos`;
 
 export async function resetDb() {
   await withDb(async (c) => {
@@ -34,7 +34,7 @@ export async function resetDb() {
     const installId = read?.installId || randomUUID();
     const { rows } = await c.query<{ binding: string }>("SELECT system_identifier::text || ':' || current_database() AS binding FROM pg_control_system()");
     await mkdir(photoRoot, { recursive: true });
-    await writeFile(marker, `${JSON.stringify({ installId, binding: rows[0].binding })}\n`);
+    await writeFile(marker, `${JSON.stringify({ installId, binding: rows[0].binding, heartbeatBinding: rows[0].binding, heartbeatAt: new Date().toISOString() })}\n`);
     await c.query(`INSERT INTO "AppSetting" (id, "installId", "installBinding", "updatedAt") VALUES ('app', $1, $2, now())`, [installId, rows[0].binding]);
   });
 }

@@ -15,7 +15,7 @@ const jobs = vi.hoisted(() => ({ importKeys: new Set<string>() as Set<string> | 
 vi.mock("@/lib/jobs/live", () => ({ liveImportKeys: async () => jobs.importKeys }));
 
 import { IMPORT_ABANDONED_MS, ORPHAN_FOLDER_MS, QUARANTINE_KEEP_MS, QUARANTINE_MANIFEST, emptyQuarantine, findOrphanPhotoFolders, quarantineOrphanPhotoFolders, recordOrphanPhotoFolders, sweepImportFiles } from "@/lib/storage/sweep";
-import { databaseBinding, ensureInstallIdentity, INSTALL_MARKER, installIdentity, rebindInstall } from "@/lib/storage/identity";
+import { databaseBinding, ensureInstallIdentity, HEARTBEAT_STALE_MS, INSTALL_MARKER, installIdentity, rebindInstall, touchHeartbeat } from "@/lib/storage/identity";
 
 const now = new Date("2026-09-27T12:00:00Z");
 const DAY = 86_400_000;
@@ -53,7 +53,7 @@ describe("the install marker", { timeout: 30_000 }, () => {
     expect(await db.appSetting.findUniqueOrThrow({ where: { id: "app" } })).toMatchObject({ installId: written.installId, installBinding: written.binding });
     // Starting again changes nothing.
     await ensureInstallIdentity();
-    expect(readFileSync(marker(), "utf8")).toBe(`${JSON.stringify(written)}\n`);
+    expect(JSON.parse(readFileSync(marker(), "utf8"))).toMatchObject({ installId: written.installId, binding: written.binding });
   });
 
   it("is not claimed by an empty database facing media that is already there", async () => {
@@ -75,8 +75,9 @@ describe("the install marker", { timeout: 30_000 }, () => {
     const uploaderId = (await db.user.create({ data: { email: "staging@example.com" } })).id;
     const own = cuid();
     await db.photo.create({ data: { id: own, uploaderId, originalName: "a.jpg", mimeType: "image/jpeg", storageKey: `photos/${own}`, originalPath: `photos/${own}/original.jpg`, sizeBytes: 1, status: "READY" } });
+    file(`photos/${own}/original.jpg`, DAY);
     const r = await ensureInstallIdentity(now);
-    expect(r).toMatchObject({ ok: false, kind: "unknown-files" });
+    expect(r).toMatchObject({ ok: false, kind: "unknown-files", problem: expect.stringMatching(/1 of 61 photo folders/) });
     expect(existsSync(marker())).toBe(false);
     // Its hourly sweep leaves live's file alone, and its admin cannot re-bind the root to it either.
     expect(await sweepImportFiles(now)).toBe(0);
@@ -92,16 +93,111 @@ describe("the install marker", { timeout: 30_000 }, () => {
     const addRows = (list: string[]) => db.photo.createMany({ data: list.map((id) => ({ id, uploaderId, originalName: "a.jpg", mimeType: "image/jpeg", storageKey: `photos/${id}`, originalPath: `photos/${id}/original.jpg`, sizeBytes: 1, status: "READY" as const })) });
     rmSync(marker());
     await db.appSetting.deleteMany();
-    // Eighteen of twenty is under 95%.
+    // Eighteen of twenty is under 95%; nineteen is not.
     await addRows(ids.slice(0, 18));
     expect((await ensureInstallIdentity(now)).ok).toBe(false);
-    // An uploaded track file nothing refers to is not this database's either.
     await addRows(ids.slice(18, 19));
-    const stray = file(`imports/${uuidName("gpx")}`, 30 * DAY);
-    expect(await ensureInstallIdentity(now)).toMatchObject({ ok: false, kind: "unknown-files", problem: expect.stringMatching(/1 uploaded track file is not/) });
-    rmSync(stray);
     expect((await ensureInstallIdentity(now)).ok).toBe(true);
     expect(existsSync(marker())).toBe(true);
+  });
+
+  it("is claimed for a healthy album whose imports/ holds an old failed upload, which the sweep then clears", async () => {
+    const uploaderId = (await db.user.create({ data: { email: "old@example.com" } })).id;
+    const ids = Array.from({ length: 60 }, () => cuid());
+    for (const id of ids) file(`photos/${id}/original.jpg`, 30 * DAY);
+    await db.photo.createMany({ data: ids.map((id) => ({ id, uploaderId, originalName: "a.jpg", mimeType: "image/jpeg", storageKey: `photos/${id}`, originalPath: `photos/${id}/original.jpg`, sizeBytes: 1, status: "READY" as const })) });
+    // Main never deleted a FIT file that gave no tracks.
+    const stray = file(`imports/${uuidName("fit")}`, 300 * DAY);
+    rmSync(marker());
+    await db.appSetting.deleteMany();
+    expect((await ensureInstallIdentity(now)).ok).toBe(true);
+    expect(await sweepImportFiles(now)).toBe(1);
+    expect(existsSync(stray)).toBe(false);
+  });
+
+  it("weighs the uploaded track files of an album that has no photos at all", async () => {
+    const user = await db.user.create({ data: { email: "tracks@example.com" } });
+    const trip = await db.trip.create({ data: { slug: "t", title: "T", startDate: now, endDate: now, createdById: user.id } });
+    const kept = uuidName("gpx");
+    file(`imports/${kept}`, 30 * DAY);
+    const stray = file(`imports/${uuidName("gpx")}`, 30 * DAY);
+    rmSync(marker());
+    await db.appSetting.deleteMany();
+    await db.track.create({ data: { tripId: trip.id, uploaderId: user.id, source: "GPX", name: "Walk", originalFile: `imports/${kept}`, startTime: now, endTime: now, pointCount: 0, minLat: 0, maxLat: 0, minLng: 0, maxLng: 0, simplified: [], pointsBlob: new Uint8Array() } });
+    expect(await ensureInstallIdentity(now)).toMatchObject({ ok: false, problem: expect.stringMatching(/1 of 2 uploaded track files/) });
+    rmSync(stray);
+    expect((await ensureInstallIdentity(now)).ok).toBe(true);
+  });
+
+  it("is written into a storage root that does not exist yet", async () => {
+    rmSync(root, { recursive: true, force: true });
+    await db.appSetting.deleteMany();
+    expect((await ensureInstallIdentity(now)).ok).toBe(true);
+    expect(existsSync(marker())).toBe(true);
+  });
+
+  it("carries the bound worker's heartbeat, and only that worker's", async () => {
+    const before = JSON.parse(readFileSync(marker(), "utf8")) as { heartbeatAt: string; heartbeatBinding: string };
+    expect(before.heartbeatBinding).toBe(await databaseBinding());
+    const later = new Date(now.getTime() + 3600_000);
+    expect(await touchHeartbeat(later)).toBe(true);
+    expect(JSON.parse(readFileSync(marker(), "utf8"))).toMatchObject({ heartbeatAt: later.toISOString() });
+    // A database the root is not bound to says nothing.
+    await db.appSetting.update({ where: { id: "app" }, data: { installBinding: "7000000000000000001:photoalbum" } });
+    expect(await touchHeartbeat(new Date(later.getTime() + 3600_000))).toBe(false);
+    expect(JSON.parse(readFileSync(marker(), "utf8"))).toMatchObject({ heartbeatAt: later.toISOString() });
+  });
+
+  it("is not re-bound by a staging clone while live still uses the folder, and is once live has stopped for two days", async () => {
+    // Live's album: sixty photos, each with its row; the clone has the same rows (it was made from live's database).
+    const uploaderId = (await db.user.create({ data: { email: "live@example.com" } })).id;
+    const ids = Array.from({ length: 60 }, () => cuid());
+    for (const id of ids) file(`photos/${id}/original.jpg`, 30 * DAY);
+    await db.photo.createMany({ data: ids.map((id) => ({ id, uploaderId, originalName: "a.jpg", mimeType: "image/jpeg", storageKey: `photos/${id}`, originalPath: `photos/${id}/original.jpg`, sizeBytes: 1, status: "READY" as const })) });
+    // The root is bound to live's database, whose worker checked in ten minutes ago; this database is the clone.
+    const { installId } = JSON.parse(readFileSync(marker(), "utf8")) as { installId: string };
+    const live = "7000000000000000001:photoalbum";
+    await db.appSetting.update({ where: { id: "app" }, data: { installBinding: live } });
+    writeFileSync(marker(), JSON.stringify({ installId, binding: live, heartbeatBinding: live, heartbeatAt: new Date(now.getTime() - 10 * 60_000).toISOString() }));
+    // Live then adds a GPX file it keeps; the clone knows nothing of it.
+    const gpx = file(`imports/${uuidName("gpx")}`, 2 * IMPORT_ABANDONED_MS);
+    expect(await installIdentity(now)).toMatchObject({ ok: false, kind: "other-database" });
+    const refused = await rebindInstall(now);
+    expect(refused).toMatchObject({ ok: false, message: expect.stringMatching(/^Not re-bound\. Another database used this storage 10 minutes ago; stop that album first, then wait until 2026-09-29 11:50 UTC\.$/) });
+    expect(await sweepImportFiles(now)).toBe(0);
+    expect(await recordOrphanPhotoFolders(now)).toBeNull();
+    expect(existsSync(gpx)).toBe(true);
+    // Live's worker was stopped (a genuine move): two days after its last heartbeat, the re-bind goes through.
+    rmSync(gpx);
+    const after = new Date(now.getTime() - 10 * 60_000 + HEARTBEAT_STALE_MS + 60_000);
+    expect(await rebindInstall(after)).toMatchObject({ ok: true });
+    expect(await installIdentity(after)).toEqual({ ok: true, id: installId });
+    expect(JSON.parse(readFileSync(marker(), "utf8"))).toMatchObject({ binding: await databaseBinding(), heartbeatBinding: await databaseBinding() });
+  });
+
+  it("refuses to sweep, and says how to fix it, when it cannot read which cluster this is", async () => {
+    // The client behind the db proxy, whose $queryRaw is what identity.ts reaches.
+    await db.user.count();
+    const client = (globalThis as unknown as { prisma: typeof db }).prisma;
+    const real = client.$queryRaw.bind(client);
+    const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const spy = vi.spyOn(client, "$queryRaw").mockImplementation(((strings: TemplateStringsArray, ...values: unknown[]) =>
+      strings.join("").includes("pg_control_system") ? Promise.reject(new Error("permission denied for function pg_control_system")) : real(strings, ...values)) as never);
+    try {
+      expect(await installIdentity(now)).toMatchObject({ ok: false, kind: "cannot-verify-database", problem: expect.stringMatching(/GRANT EXECUTE ON FUNCTION pg_control_system\(\) TO \w+;/) });
+      const stale = file(`imports/${uuidName()}`, 2 * IMPORT_ABANDONED_MS);
+      expect(await sweepImportFiles(now)).toBe(0);
+      expect(existsSync(stale)).toBe(true);
+      expect(await rebindInstall(now)).toMatchObject({ ok: false });
+      rmSync(marker());
+      expect(await ensureInstallIdentity(now)).toMatchObject({ ok: false, kind: "cannot-verify-database" });
+      expect(existsSync(marker())).toBe(false);
+      // Said once, not at every check.
+      expect(errors.mock.calls.filter((c) => String(c[0]).startsWith("[storage] cannot read the cluster's system identifier"))).toHaveLength(1);
+    } finally {
+      spy.mockRestore();
+      errors.mockRestore();
+    }
   });
 
   it("is written for an album from before the marker, whose database has its photos", async () => {
@@ -115,22 +211,22 @@ describe("the install marker", { timeout: 30_000 }, () => {
     expect(existsSync(marker())).toBe(true);
   });
 
-  it("refuses a copy of this database, and lets an admin re-bind after a genuine move once the files are accounted for", async () => {
+  it("refuses another database of this album, and lets an admin re-bind after a genuine move once the files are accounted for", async () => {
     const written = JSON.parse(readFileSync(marker(), "utf8")) as { installId: string; binding: string };
-    // A staging database cloned from live: live's id and live's binding, in a database that is neither.
+    // Restored from a dump of the album's database on another server, whose old worker left no heartbeat behind.
     await db.appSetting.update({ where: { id: "app" }, data: { installBinding: "7000000000000000001:photoalbum" } });
     writeFileSync(marker(), JSON.stringify({ installId: written.installId, binding: "7000000000000000001:photoalbum" }));
     const stale = file(`imports/${uuidName()}`, 2 * IMPORT_ABANDONED_MS);
     expect(await installIdentity()).toMatchObject({ ok: false, kind: "other-database" });
     expect(await sweepImportFiles(now)).toBe(0);
     expect(existsSync(stale)).toBe(true);
-    // The album restored on another server: its own id, and a database that accounts for the files (here, none but a
-    // stray track file, which it does not). Refused until that is so, then re-bound.
+    // A database that does not account for the files (here, none but a stray track file, in an album with no photos)
+    // is refused until it does, then re-bound.
     expect(await rebindInstall(now)).toMatchObject({ ok: false });
     rmSync(stale);
     expect(await rebindInstall(now)).toMatchObject({ ok: true });
     expect(await installIdentity()).toEqual({ ok: true, id: written.installId });
-    expect(JSON.parse(readFileSync(marker(), "utf8"))).toEqual({ installId: written.installId, binding: await databaseBinding() });
+    expect(JSON.parse(readFileSync(marker(), "utf8"))).toMatchObject({ installId: written.installId, binding: await databaseBinding() });
   });
 
   it("takes a bare id in the marker for the album, but not for this database", async () => {
