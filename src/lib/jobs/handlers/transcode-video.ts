@@ -10,7 +10,7 @@ import { ffmpeg, posterArgs, probe, transcodeArgs } from "@/lib/video/ffmpeg";
 import { pickTripByDay, whoWasThere } from "@/lib/photos/assign";
 import { pickTripByCoverage } from "@/lib/photos/trip-by-coverage";
 import { activityFor } from "@/lib/activities/reassign";
-import { dateByHand, dateMovedSince, lockedPhoto } from "@/lib/photos/member-owned";
+import { dateByHand, dateMovedSince, lockedPhoto, offsetForKeptDate } from "@/lib/photos/member-owned";
 import { localDayFromOffset, offsetMinutesInZone } from "@/lib/time/local-day";
 import { withHeavyLock } from "../heavy-lock";
 import { workerStopping } from "../shutdown";
@@ -127,6 +127,8 @@ export async function transcodeVideo(job: TranscodeVideoJob, signal?: AbortSigna
         }
         // A clip uploaded into an activity, or filed (or taken off one) by hand, stays where the member put it.
         const filing = await activityFor(now, tripId, keepDate ? now.takenAt : instant, tx);
+        // A kept date with no zone recorded still gets its trip's; the date itself stays as the member set it.
+        const keptZone = keepDate ? await offsetForKeptDate(tx, now, tripId) : null;
         await tx.photo.update({
           where: { id: photo.id },
           data: {
@@ -138,7 +140,7 @@ export async function transcodeVideo(job: TranscodeVideoJob, signal?: AbortSigna
             durationS: out.durationS ?? info.durationS,
             renditions,
             videoRenditions,
-            ...(keepDate ? {} : { takenAt: instant, takenAtSource, tzOffsetMin: zoned }),
+            ...(keepDate ? (keptZone === null ? {} : { tzOffsetMin: keptZone }) : { takenAt: instant, takenAtSource, tzOffsetMin: zoned }),
             tripId,
             activityId: filing.activityId,
             activitySetById: filing.activitySetById,

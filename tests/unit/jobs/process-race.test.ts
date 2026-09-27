@@ -89,4 +89,51 @@ describe("choices a member makes while an item is processed", () => {
     expect(p.takenAt?.toISOString()).toBe(handDate.toISOString());
     expect(p.videoRenditions).not.toBeNull();
   }, 120_000);
+
+  describe("a date set by hand with no zone recorded", () => {
+    // 15:00 UTC on 1 June 1985 is 09:00 in Denver, six hours behind in summer.
+    const inDenver = async () => (await db.trip.create({ data: { slug: "d", title: "D", startDate: new Date("1985-05-30"), endDate: new Date("1985-06-03"), timezone: "America/Denver", createdById: memberId } })).id;
+    const zoneless = (tripId: string | null) => ({ takenAt: handDate, takenAtSource: "MANUAL", tzOffsetMin: null, dateSetById: memberId, tripId });
+
+    it("takes a clip's trip's zone through a transcode, and keeps the date", async () => {
+      const denver = await inDenver();
+      const id = await stage("clip.mp4", { kind: "VIDEO", ...zoneless(denver) }, "original.mp4");
+      await transcodeVideo({ photoId: id });
+      const p = await db.photo.findUniqueOrThrow({ where: { id } });
+      expect(p).toMatchObject({ status: "READY", takenAtSource: "MANUAL", tzOffsetMin: -360, dateSetById: memberId, tripId: denver });
+      expect(p.takenAt?.toISOString()).toBe(handDate.toISOString());
+    }, 120_000);
+
+    it("takes a photo's trip's zone too", async () => {
+      const denver = await inDenver();
+      const id = await stage("photo-with-gps.jpg", zoneless(denver), "original.jpg");
+      await processPhoto({ photoId: id });
+      const p = await db.photo.findUniqueOrThrow({ where: { id } });
+      expect(p).toMatchObject({ status: "READY", takenAtSource: "MANUAL", tzOffsetMin: -360, tripId: denver });
+      expect(p.takenAt?.toISOString()).toBe(handDate.toISOString());
+    });
+
+    it("takes the zone of the trip a member moved the clip to meanwhile, and a zone a member gave meanwhile stands", async () => {
+      const denver = await inDenver();
+      const moved = await stage("clip.mp4", { kind: "VIDEO", ...zoneless(null) }, "original.mp4");
+      meanwhile.run = async () => void (await db.photo.update({ where: { id: moved }, data: { tripId: denver } }));
+      await transcodeVideo({ photoId: moved });
+      expect(await db.photo.findUniqueOrThrow({ where: { id: moved } })).toMatchObject({ tzOffsetMin: -360, tripId: denver });
+      const zoned = await stage("clip.mp4", { kind: "VIDEO", ...zoneless(denver) }, "original.mp4");
+      meanwhile.run = async () => void (await db.photo.update({ where: { id: zoned }, data: { tzOffsetMin: 120 } }));
+      await transcodeVideo({ photoId: zoned });
+      expect(await db.photo.findUniqueOrThrow({ where: { id: zoned } })).toMatchObject({ tzOffsetMin: 120, takenAtSource: "MANUAL" });
+    }, 120_000);
+
+    it("stays without one when the clip is on no trip", async () => {
+      // None to be filed on by its day either.
+      await db.activity.deleteMany();
+      await db.trip.deleteMany();
+      const id = await stage("clip.mp4", { kind: "VIDEO", ...zoneless(null) }, "original.mp4");
+      await transcodeVideo({ photoId: id });
+      const p = await db.photo.findUniqueOrThrow({ where: { id } });
+      expect(p).toMatchObject({ status: "READY", takenAtSource: "MANUAL", tzOffsetMin: null, tripId: null });
+      expect(p.takenAt?.toISOString()).toBe(handDate.toISOString());
+    }, 120_000);
+  });
 });

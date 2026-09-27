@@ -15,7 +15,7 @@ import { editsSchema, hasEdits, type PhotoEdits } from "@/lib/images/edits";
 import { pickTripByDay, whoWasThere } from "@/lib/photos/assign";
 import { pickTripByCoverage } from "@/lib/photos/trip-by-coverage";
 import { activityFor } from "@/lib/activities/reassign";
-import { dateByHand, dateMovedSince, lockedPhoto, placeByHand } from "@/lib/photos/member-owned";
+import { dateByHand, dateMovedSince, lockedPhoto, offsetForKeptDate, placeByHand } from "@/lib/photos/member-owned";
 import { localDayFromOffset, offsetMinutesInZone } from "@/lib/time/local-day";
 import { enqueue } from "../boss";
 import { QUEUES, type ProcessPhotoJob } from "../queues";
@@ -213,6 +213,8 @@ export async function processPhoto(job: ProcessPhotoJob, signal?: AbortSignal): 
       // Activity assignment within the trip. A member who uploaded this into an activity, or put it there (or took it
       // off) by hand, has already answered the question — the time window does not get to overrule them.
       const filing = await activityFor(now, tripId, date.takenAt, tx);
+      // A kept date with no zone recorded still gets its trip's; the date itself stays as the member set it.
+      const keptZone = keepDate ? await offsetForKeptDate(tx, now, tripId) : null;
       // A place a member pinned, or took away, is theirs: the file's own GPS does not come back over it, and none of
       // the place is written at all.
       const byHand = placeByHand(now);
@@ -226,7 +228,7 @@ export async function processPhoto(job: ProcessPhotoJob, signal?: AbortSignal): 
           status: "READY",
           width,
           height,
-          ...(keepDate ? {} : { takenAt: date.takenAt, takenAtSource: source, tzOffsetMin: date.tzOffsetMin }),
+          ...(keepDate ? (keptZone === null ? {} : { tzOffsetMin: keptZone }) : { takenAt: date.takenAt, takenAtSource: source, tzOffsetMin: date.tzOffsetMin }),
           ...(byHand
             ? {}
             : {

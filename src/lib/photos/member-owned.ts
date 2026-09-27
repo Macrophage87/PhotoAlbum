@@ -1,4 +1,5 @@
 import type { Prisma } from "@/generated/prisma/client";
+import { offsetMinutesInZone } from "@/lib/time/local-day";
 
 /**
  * What a processing job may and may not write back over, once its slow part (reading the file, rendering, ffmpeg) is
@@ -46,4 +47,15 @@ export function dateMovedSince(before: MemberFields, now: MemberFields): boolean
     before.tzOffsetMin !== now.tzOffsetMin ||
     before.dateSetById !== now.dateSetById
   );
+}
+
+/**
+ * The offset for a kept date that has none recorded: the zone of the trip the item ends up on, at that instant, as the
+ * job would have given it. Only the offset is filled in, never the date. Null when it has one already, or there is no
+ * trip to take one from.
+ */
+export async function offsetForKeptDate(tx: Prisma.TransactionClient, now: Pick<MemberFields, "takenAt" | "tzOffsetMin">, tripId: string | null): Promise<number | null> {
+  if (now.tzOffsetMin !== null || !now.takenAt || !tripId) return null;
+  const trip = await tx.trip.findUnique({ where: { id: tripId }, select: { timezone: true } });
+  return trip ? offsetMinutesInZone(now.takenAt, trip.timezone) : null;
 }
