@@ -86,19 +86,95 @@ describe.each([["Barbara Jones"], ["Barbara"]])("forgetting %s, on every text pa
     expect(rows.filter(([, got, want]) => !isDeepStrictEqual(got, want))).toEqual([]);
   });
 
-  it("the withdrawn-name scrub, and showing text to everyone, leave it alone too", async () => {
+  it("a withdrawn naming, deciding what everyone may read, publishes no match the neighbour rule alone would excuse", async () => {
     const f = await fixture();
     await db.person.update({ where: { id: f.person.id }, data: { namingWithdrawnAt: new Date(Date.now() - 30 * 86_400_000) } });
+    // Showing text to everyone, and the nightly pass, keep to the strict rule: not "Santa Barbara Pier" with her
+    // name possibly in it.
     const shown = await withoutWithdrawnNames(f.helpers.id, { annotation: helper, title: PIER });
-    expect(shown.changed).toBe(false);
+    expect(shown.changed).toBe(true);
+    expect(shown.title).not.toContain("Barbara");
     await scrubWithdrawnNames();
-    expect((await db.photo.findUniqueOrThrow({ where: { id: f.helpers.id } })).annotation).toEqual(helper);
-    expect((await db.trip.findUniqueOrThrow({ where: { id: f.trip.id } })).description).toBe(`${PIER} At Sunset`);
     expect((await db.photo.findUniqueOrThrow({ where: { id: f.hers.id } })).title).toBe("A Family Member At The Lake");
   });
 
   it("the queue's file names and the typed fields' matcher leave it alone", () => {
     const loose = looseMatcher(nameMatcher([name], []));
     for (const t of [PIER, `${PIER}.jpg`, `${PIER} Walk.gpx`, JSON.stringify({ albums: [PIER] }), `Met at the ${PIER}`]) expect([t, loose(t)]).toEqual([t, false]);
+  });
+});
+
+/**
+ * And the other side of it: away from her photographs her first name in plain prose is still hers, as it always
+ * was — on a photograph whose notes name her, on one whose helper's words alone do, and for a naming withdrawn
+ * from a minor, which is what keeps it out of what everyone may read.
+ */
+describe("a first name in prose away from her photographs is still hers", () => {
+  let admin: string;
+  beforeEach(async () => {
+    await resetTestDb();
+    admin = (await db.user.create({ data: { email: "admin@example.com", role: "ADMIN" } })).id;
+  });
+  const photo = (data: Record<string, unknown>) => db.photo.create({ data: { uploaderId: admin, originalName: "x.jpg", mimeType: "image/jpeg", storageKey: "k", originalPath: "k/o.jpg", sizeBytes: 1, status: "READY", ...data } });
+  const record = (caption: string, tags: string[] = []): StoredAnnotation => ({ title: "", caption, description: "", tags, place: null, activity: null, objects: [], visibleText: null, season: "summer", mood: null, searchSummary: "" });
+
+  it("S1: notes that name her in full make the photograph hers, and the helper's first name goes", async () => {
+    const barbara = await db.person.create({ data: { name: "Barbara Jones", createdById: admin } });
+    const p = await photo({ context: "Barbara Jones turns 80 at the lake house", annotation: record("Barbara blows out the candles"), annotatedAt: new Date() });
+    await forgetPerson(barbara.id, { keepName: false, byUserId: admin });
+    expect(((await db.photo.findUniqueOrThrow({ where: { id: p.id } })).annotation as StoredAnnotation).caption).toBe("A family member blows out the candles");
+  });
+
+  it("S2: the helper's first name in prose goes, with its raw answer and tag, and the notes are listed", async () => {
+    const barbara = await db.person.create({ data: { name: "Barbara Jones", createdById: admin } });
+    const helper = record("Barbara blows out the candles on her 80th", ["barbara", "cake"]);
+    const p = await photo({ context: "Barbara's 80th", annotation: helper, annotatedAt: new Date() });
+    await db.mediaAnnotationRaw.create({ data: { photoId: p.id, model: "m", response: { content: [{ type: "text", text: JSON.stringify(helper) }] } } });
+    await forgetPerson(barbara.id, { keepName: false, byUserId: admin });
+    const a = (await db.photo.findUniqueOrThrow({ where: { id: p.id } })).annotation as StoredAnnotation;
+    expect(a).toMatchObject({ caption: "A family member blows out the candles on her 80th", tags: ["cake"] });
+    expect(await db.mediaAnnotationRaw.count({ where: { photoId: p.id } })).toBe(0);
+    const [left] = await db.forgetLeftover.findMany();
+    expect((left.items as LeftoverItems).photos).toEqual([{ id: p.id, fields: ["notes"] }]);
+  });
+
+  it("S4: a naming withdrawn from a minor keeps her first name out of what everyone may read", async () => {
+    const mia = await db.person.create({ data: { name: "Mia Kent", birthday: new Date("2019-01-01"), namingWithdrawnAt: new Date(), createdById: admin } });
+    const p = await photo({ annotation: record("Mia blows bubbles"), annotatedAt: new Date() });
+    const shown = await withoutWithdrawnNames(p.id, { annotation: record("Mia blows bubbles"), title: "Mia Blows Bubbles" });
+    expect(shown.changed).toBe(true);
+    expect((shown.annotation as StoredAnnotation).caption).toBe("A family member blows bubbles");
+    expect(shown.title).toBe("A Family Member Blows Bubbles");
+    expect(mia.id).toBeTruthy();
+  });
+
+  describe.each([["Ximena At The Hut"], ["XIMENA AT THE HUT"], ["Ximena And Ben At The Hut"], ["Ximena Beside The Lake"]])("a helper's title %s", (title) => {
+    const annotated = (t: string) => photo({ title: t, titleByHelper: true, annotation: { ...record(`${t}, in the snow.`), title: t }, annotatedAt: new Date() });
+    const gone = (t: string | null | undefined) => !/ximena/i.test(t ?? "");
+
+    it("is never shown to everyone while a naming is withdrawn, nor left by the nightly public pass", async () => {
+      await db.person.create({ data: { name: "Ximena", namingWithdrawnAt: new Date(), createdById: admin } });
+      const p = await annotated(title);
+      const shown = await withoutWithdrawnNames(p.id, { annotation: (await db.photo.findUniqueOrThrow({ where: { id: p.id } })).annotation, title });
+      expect([gone(shown.title), gone((shown.annotation as StoredAnnotation).title), gone((shown.annotation as StoredAnnotation).caption)]).toEqual([true, true, true]);
+      await scrubWithdrawnNames();
+      const after = await db.photo.findUniqueOrThrow({ where: { id: p.id } });
+      expect([gone(after.title), gone((after.annotation as StoredAnnotation).title), gone((after.annotation as StoredAnnotation).caption)]).toEqual([true, true, true]);
+    });
+
+    it("is taken out when she is forgotten", async () => {
+      const ximena = await db.person.create({ data: { name: "Ximena", createdById: admin } });
+      const p = await annotated(title);
+      await forgetPerson(ximena.id, { keepName: false, byUserId: admin });
+      const after = await db.photo.findUniqueOrThrow({ where: { id: p.id } });
+      expect([gone(after.title), gone((after.annotation as StoredAnnotation).title), gone((after.annotation as StoredAnnotation).caption)]).toEqual([true, true, true]);
+    });
+  });
+
+  it("still leaves every place and every lookalike alone, in title case and in capitals", () => {
+    const text = (name: string, t: string) => nameMatcher([name], []).scrub(t, { away: true });
+    for (const [name, t] of [["Barbara Jones", "Santa Barbara Pier"], ["Barbara Jones", "SANTA BARBARA PIER"], ["Leo Martin", "Leo Martinez Park At Dusk"], ["Louise Penny", "Sunrise At Lake Louise"], ["Barbara", "Santa Barbara Pier"]]) expect([name, text(name, t)]).toEqual([name, t]);
+    const loose = looseMatcher(nameMatcher(["Barbara"], []));
+    expect(loose("SANTA BARBARA PIER")).toBe(false);
   });
 });

@@ -51,7 +51,12 @@ export async function forgetPerson(personId: string, opts: { keepName: boolean; 
     // A first name of a full one, not on a photograph whose notes give somebody the album knows by it in full ("Sam
     // Kent and Sam Ortiz at the lake"): there it could be either.
     const derivedNoted = await withoutNamesakes(notedFull, derived.map((f) => f.form), personId);
-    const noted = [...new Set([...(await notesNaming(wholeOneWords.filter((f) => !isListedPlace(f.form)).map((f) => f.form), false)), ...notedPlace, ...notedFull])];
+    const notedOneWord = await notesNaming(wholeOneWords.filter((f) => !isListedPlace(f.form)).map((f) => f.form), false);
+    const noted = [...new Set([...notedOneWord, ...notedPlace, ...notedFull])];
+    // The photographs the album keeps her names with as hers (see rememberForgotten below): those she is tagged on,
+    // and those whose notes plainly name her — in full with nobody of the same first name beside her, or by a
+    // one-word name. On them her first name alone is hers, as on the photographs she is tagged on.
+    const hers = new Set([...tagged, ...notedOneWord, ...notedPlace, ...derivedNoted]);
     const photoIds = [...new Set([...tagged, ...before.photos.map((p) => p.id), ...noted, ...(place ? [] : [...(await photosMentioning(m)), ...(await photosInContainers(before))])])];
     const containerIds = place ? [] : [...before.trips.map((t) => containerKey("trip", t.id)), ...before.collections.map((c) => containerKey("collection", c.id)), ...before.activities.map((a) => containerKey("activity", a.id))];
     await held.assertHeld();
@@ -76,7 +81,7 @@ export async function forgetPerson(personId: string, opts: { keepName: boolean; 
       await db.appSetting.update({ where: { id: "app" }, data: { lastForgetAt: new Date() } });
     }
     await held.assertHeld();
-    await forgetNameInText(photoIds, m, { tagged, personId });
+    await forgetNameInText(photoIds, m, { tagged: hers, personId });
     await forgetRawAnswers(m);
     await forgetQueuedFileNames(m);
     // What is left mentioning them is what members wrote (or the helper's trip descriptions, where only a name that

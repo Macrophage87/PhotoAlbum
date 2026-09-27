@@ -84,6 +84,18 @@ const STARTERS = new Set([
   "for", "from", "to", "of", "into", "is", "was", "the", "a", "an", "this", "that", "look", "see", "meet", "oh", "yes", "no", "our", "my", "little", "baby",
 ]);
 
+/**
+ * Words that join a title's words rather than name anybody: "Ximena At The Hut", "Ximena And Ben", "Ximena Beside
+ * The Lake". Beside a name, capitalized or not, they never make it somebody else's; a name-like word does ("Santa
+ * Barbara", "Leo Martinez", "Lake Louise").
+ */
+export const FUNCTION_WORDS = new Set([
+  "a", "an", "the", "and", "or", "but", "nor", "&", "of", "at", "in", "on", "with", "without", "within", "by", "beside", "besides", "near", "to", "for", "from",
+  "under", "over", "into", "onto", "upon", "up", "down", "off", "out", "after", "before", "behind", "across", "around", "along", "among", "through", "past",
+  "during", "outside", "inside", "towards", "toward", "against", "via", "vs", "as", "her", "his", "their", "our", "my", "your", "its", "is", "was", "are", "were",
+  "be", "s", "has", "had",
+]);
+
 const WORD = "\\p{L}\\p{M}\\p{N}";
 const CJK = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
 
@@ -253,7 +265,7 @@ export type Neighbourhood = {
   /** Words of their own name: beside one, a match is still them ("Mary Ann swam" for Mary Ann Smith). */
   own?: Set<string>;
   /**
-   * Away from their photographs (Where.wholeOnly): beside another capitalized word a match is somebody else's name
+   * Away from their photographs (Where.away): beside another capitalized word a match is somebody else's name
    * or a place's however the text is written, in title case or all in capitals ("SANTA BARBARA PIER").
    */
   away?: boolean;
@@ -325,9 +337,9 @@ export function notThePerson(text: string, start: number, end: number, n: Neighb
   const caps = isUpperWord(match.replace(/[^\p{L}]/gu, ""));
   if (n.away || (!n.title && !caps)) {
     // "Ann Jones", "Robin Hood", "Florence Nightingale" (but "Mary Ann swam" is Mary Ann Smith)...
-    if (next && /^\p{Lu}/u.test(next) && !n.own?.has(bare(next))) return true;
+    if (next && /^\p{Lu}/u.test(next) && !n.own?.has(bare(next)) && !FUNCTION_WORDS.has(bare(next))) return true;
     // ..."Mary Ann" and "Union Jack", unless the word before only says when or who she is to them.
-    if (prev && /^\p{Lu}/u.test(prev) && !isKin(prev.replace(/\.$/u, "")) && !STARTERS.has(p!) && !n.own?.has(p!)) return true;
+    if (prev && /^\p{Lu}/u.test(prev) && !isKin(prev.replace(/\.$/u, "")) && !STARTERS.has(p!) && !FUNCTION_WORDS.has(p!) && !n.own?.has(p!)) return true;
   }
   return false;
 }
@@ -491,12 +503,13 @@ export type Where = {
    */
   fullOnly?: boolean;
   /**
-   * Away from their photographs, their full names and a one-word name that is all of their name — never a first name
-   * taken from a full one. For rewriting the helper's words on somebody else's photograph when they are forgotten:
-   * there a first name alone is as often a place or somebody else ("Santa Barbara Pier", "Leo Martinez Park",
-   * "Lake Louise"), and in a title written in title case nothing tells them apart.
+   * Away from their photographs, for a forget and a withdrawn naming: their names as anywhere else, a safe first
+   * name included ("Barbara blows out the candles", "Mia blows bubbles"), but one beside another capitalized word is
+   * somebody else's name or a place's however the text is written, in title case or all in capitals ("Santa Barbara
+   * Pier", "Leo Martinez Park", "Lake Louise", "SANTA BARBARA PIER"), and a one-word name inside keywords or a tag
+   * ("santa barbara") is not theirs on its own.
    */
-  wholeOnly?: boolean;
+  away?: boolean;
   /**
    * With `tagged`: whether they are on this very photograph (the default), or only elsewhere in its trip, collection
    * or activity. Their short names count either way; only on their own photograph is a place-like name taken for
@@ -660,8 +673,7 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
   const shortsFor = (where: Where) => {
     const there = new Set((where.others ?? []).flatMap((o) => wordsOf(splitNickname(o).name).map(bare)));
     const extra = where.tagged ? taggedOnly.filter((x) => !there.has(x.word)) : [];
-    const away = where.fullOnly ? [] : where.wholeOnly ? safe.filter((x) => x.whole) : safe;
-    const all = [...(where.tagged ? safe : away), ...extra];
+    const all = [...(where.tagged || !where.fullOnly ? safe : []), ...extra];
     const byForm = new Map<string, Short>([...all.map((x) => [x.form, x] as const)]);
     return { rx: rx(bounded(withCaps(all.map((x) => x.form))), "gu"), byForm, there, tagged: new Set(extra.map((x) => x.word)) };
   };
@@ -703,8 +715,8 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
           // Away from their photographs, a one-word name of theirs beside another capitalized word is somebody's or
           // a place's even in a title written in title case ("Santa Barbara Pier", "Lake Louise"): nothing there
           // says it is them.
-          title: title && !(where.wholeOnly && !where.tagged),
-          away: Boolean(where.wholeOnly && !where.tagged),
+          title: title && !(where.away && !where.tagged),
+          away: Boolean(where.away && !where.tagged),
           // A month or an everyday word in a date, on their own photographs: "in May", "May 5", "May Day".
           date: everyday,
           // Away from their photographs a first name that is also a place is one after "to", "in", "near" ("to
@@ -764,8 +776,8 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
       if (k.pairRx) out = out.replace(k.pairRx, put);
       if (k.strongRx) out = out.replace(k.strongRx, put);
       // A one-word name that is all of theirs is them in lower case too, anywhere: "ximena fishing" — except, away
-      // from their photographs under `wholeOnly`, where keywords run words together ("santa barbara pier").
-      if (wholeRx && !(where.wholeOnly && !where.tagged)) out = out.replace(wholeRx, put);
+      // from their photographs under `away`, where keywords run words together ("santa barbara pier").
+      if (wholeRx && !(where.away && !where.tagged)) out = out.replace(wholeRx, put);
       return out === t ? out : withoutDoubledArticle(out);
     });
   const mentions = (text: unknown, where: Where = {}) => typeof text === "string" && text !== "" && scrub(text, where) !== text;
@@ -781,8 +793,8 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
       if ((where.tagged ? [...cjkAlbum, ...cjkTagged] : cjkAlbum).some((f) => t.replace(/\s+/g, "").includes(f.replace(/\s+/g, "")))) return true;
       if (safe.some((x) => t === x.form.toLowerCase() || t === `${x.form.toLowerCase()}'s`)) return true;
       // A safe one-word name is all of their name: a tag containing it ("sam's bike") is about them — not, away from
-      // their photographs under `wholeOnly`, one where it is part of something else's name ("santa barbara").
-      return Boolean((!(where.wholeOnly && !where.tagged) && wholeTest?.test(tag)) || longAnyTest?.test(tag));
+      // their photographs under `away`, one where it is part of something else's name ("santa barbara").
+      return Boolean((!(where.away && !where.tagged) && wholeTest?.test(tag)) || longAnyTest?.test(tag));
     } catch {
       return false;
     }
@@ -814,10 +826,10 @@ export function scrubAnnotation(a: StoredAnnotation, m: NameMatcher, where: Wher
   const text = (v: unknown) => (typeof v === "string" ? m.scrub(v, where) : "");
   const maybe = (v: unknown) => (typeof v === "string" ? m.scrub(v, where) : null);
   const prose = { title: text(a.title), caption: text(a.caption), description: text(a.description), place: maybe(a.place), activity: maybe(a.activity), visibleText: maybe(a.visibleText), mood: maybe(a.mood) };
-  // Away from their photographs (wholeOnly) a one-word name inside keywords or a tag is not taken for them on its
+  // Away from their photographs (`away`) a one-word name inside keywords or a tag is not taken for them on its
   // own ("santa barbara"); once the record's own words named them ("Sam at the fair"), it is ("sam's pony").
-  const named = where.wholeOnly && !where.tagged && (Object.keys(prose) as (keyof typeof prose)[]).some((k) => m.mentions(a[k], where));
-  const words: Where = named ? { ...where, wholeOnly: false, fullOnly: true } : where;
+  const named = where.away && !where.tagged && (Object.keys(prose) as (keyof typeof prose)[]).some((k) => m.mentions(a[k], where));
+  const words: Where = named ? { ...where, away: false, fullOnly: true } : where;
   const list = (v: unknown) => (Array.isArray(v) ? v.filter((t): t is string => typeof t === "string" && !m.namesTag(t, words)) : []);
   return {
     ...a,

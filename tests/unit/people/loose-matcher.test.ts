@@ -40,6 +40,10 @@ describe("a forgotten name in file names, web addresses and the like", () => {
     expect(looks("Barbara")("Barbara's cabin")).toBe(true);
     expect(looks("Barbara")("barbara_80.jpg")).toBe(true);
     expect(looks("Barbara")("Barbara_80.JPG")).toBe(true);
+    expect(looks("Barbara")("SANTA BARBARA PIER")).toBe(false);
+    // A joining word beside it says nothing: "Ximena At The Hut" is hers.
+    expect(looks("Ximena")("Ximena At The Hut")).toBe(true);
+    expect(looks("Ximena")("Ximena And Ben")).toBe(true);
   });
 
   it("runs a name together when only its last word is also a first name, since only the joined spelling decides", () => {
