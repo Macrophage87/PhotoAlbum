@@ -18,6 +18,7 @@ import { handWrittenDescription } from "@/lib/annotation/members-only";
 import { rejudgeFromAction } from "@/lib/annotation/rejudge-notice";
 import { descriptionStaysHelpers } from "@/lib/annotation/helper-text";
 import { forgetTrackFiles } from "@/lib/tracks/files";
+import { takeBackTripTracks } from "@/lib/tracks/remove";
 import { isCoverable } from "@/lib/photos/cover";
 
 /** The trip, where this member may change it: whoever made it, and admins. */
@@ -115,6 +116,9 @@ export async function deleteTrip(slug: string): Promise<void> {
     // Its activities go with it; a choice about them goes too, or a photo left on no trip would carry a setter that
     // reads as "kept off by hand" wherever it is filed next.
     await tx.photo.updateMany({ where: { tripId: trip.id }, data: { activityId: null, activitySetById: null } });
+    // Its tracks go too, and with them the positions they gave: a photo off the trip is not left pinned to a route
+    // the album no longer has.
+    await takeBackTripTracks(tx, trip.id);
     await tx.trip.deleteMany({ where: { id: trip.id } });
     return files;
   });

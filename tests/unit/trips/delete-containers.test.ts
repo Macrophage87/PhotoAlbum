@@ -38,6 +38,18 @@ describe("deleting trips and collections", () => {
     const p = await db.photo.findUniqueOrThrow({ where: { id: photoId } });
     expect(p).toMatchObject({ tripId: null, activityId: null, status: "READY" });
   });
+  it("takes back the positions the trip's tracks gave its photos, and keeps every other", async () => {
+    who.role = "ADMIN";
+    const trip = await db.trip.findUniqueOrThrow({ where: { slug: "gone" } });
+    const mk = (name: string, data: Record<string, unknown>) => db.photo.create({ data: { uploaderId: who.id, tripId: trip.id, originalName: name, mimeType: "image/jpeg", storageKey: name, originalPath: `${name}/o.jpg`, sizeBytes: 1, status: "READY", takenAt: new Date("2025-08-11T11:00:00Z"), ...data } });
+    const fromTrack = await mk("t.jpg", { lat: 44.3, lng: -68.2, gpsSource: "TRACK" });
+    const overGuess = await mk("g.jpg", { lat: 44.3, lng: -68.2, gpsSource: "TRACK", placeEstimateName: "Bar Harbor", placeEstimatedAt: new Date() });
+    const ownGps = await mk("e.jpg", { lat: 44.4, lng: -68.1, gpsSource: "EXIF" });
+    await expect(deleteTrip("gone")).rejects.toThrow("REDIRECT:/photos");
+    expect(await db.photo.findUniqueOrThrow({ where: { id: fromTrack.id } })).toMatchObject({ lat: null, lng: null, gpsSource: null });
+    expect(await db.photo.findUniqueOrThrow({ where: { id: overGuess.id } })).toMatchObject({ lat: null, gpsSource: null, placeEstimatedAt: null });
+    expect(await db.photo.findUniqueOrThrow({ where: { id: ownGps.id } })).toMatchObject({ lat: 44.4, gpsSource: "EXIF" });
+  });
   it("an admin deletes the collection and the photos stay on their trip", async () => {
     who.role = "ADMIN";
     await expect(deleteCollection("best")).rejects.toThrow("REDIRECT:/");
