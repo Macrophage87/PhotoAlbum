@@ -2909,6 +2909,11 @@ test("a search can ask for a particular person or pet, and the rest of the quest
   // The same question on the album-wide search, which reaches every trip.
   await page.goto(`/search?q=&person=${personId}`);
   await expect(page.getByTestId("who-filter")).toBeVisible();
+  // The words and the filters are one form: Enter in the box keeps the person, and the box is not a form of its own.
+  await expect(page.locator("form form")).toHaveCount(0);
+  await page.locator("main").getByRole("searchbox", { name: "Search photos" }).fill("lobster");
+  await page.locator("main").getByRole("searchbox", { name: "Search photos" }).press("Enter");
+  await expect(page).toHaveURL(new RegExp(`q=lobster[^]*person=${personId}`));
 
   // A visitor who is not family can neither see the question nor ask it by hand.
   await setVisibility("acadia", "PUBLIC");
