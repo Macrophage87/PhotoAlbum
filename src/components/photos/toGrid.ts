@@ -1,6 +1,6 @@
 import type { PhotoCard } from "@/lib/photos/queries";
 import type { FavouriteState } from "@/lib/favourites/queries";
-import { photoUrl } from "@/lib/photos/urls";
+import { fullSizeUrl, photoUrl } from "@/lib/photos/urls";
 import type { GridPhoto } from "./PhotoGrid";
 import { readableTitle } from "@/lib/photos/readable-text";
 
@@ -23,8 +23,8 @@ export function toGridPhoto(p: PhotoCard, badge?: string | null, member = false,
     videoUrl: p.kind === "VIDEO" && p.status === "READY" ? photoUrl(p, "video") : null,
     // A scan has no picture of its own until somebody has opened it once: until then the tile says what it is.
     scan: p.kind === "SCAN" ? { format: p.scanFormat, modelUrl: photoUrl(p, "model"), hasPoster: Boolean(p.renditions) } : null,
-    // The full-size view follows the picture as it is now; an item nobody has edited links straight to its own file.
-    originalUrl: p.kind === "PHOTO" && p.status === "READY" ? photoUrl(p, p.edits ? "edited" : "original") : null,
+    // The full-size view follows the picture as it is now; only a member is linked to the file as uploaded.
+    originalUrl: p.kind === "PHOTO" && p.status === "READY" ? fullSizeUrl(p, member) : null,
     durationS: p.durationS,
     title,
     unavailable: p.externalStatus === "UNAVAILABLE",
