@@ -236,7 +236,10 @@ export async function optOutPerson(personId: string, fd: FormData): Promise<void
   }
   revalidatePath("/people", "layout");
   revalidatePath("/admin");
-  if (!keepName && !later) redirect("/people/forgotten");
+  // Either way the page after it says what was done: the person page is gone after a full forget, so that goes to
+  // the list of what is left to edit by hand.
+  if (!keepName && !later) redirect("/people/forgotten?done=1");
+  if (keepName) redirect(`/people/${personId}?forgot=face`);
 }
 
 /**

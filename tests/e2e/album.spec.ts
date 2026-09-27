@@ -977,11 +977,15 @@ test("faces are found once an admin opts in, named with consent recorded, shown 
 
   // Forgetting deletes the templates and the appearance record.
   await page.goto(`/people/${person.rows[0].id}`);
-  page.once("dialog", (d) => void d.accept());
+  // The question says what the chosen mode takes: by default the person page and the tags as well as the face data.
+  let forgetQuestion = "";
+  page.once("dialog", (d) => { forgetQuestion = d.message(); void d.accept(); });
   await page.getByRole("button", { name: "Forget face data" }).click();
   await expect
     .poll(async () => (await withDb((c) => c.query('SELECT count(*)::int AS n FROM "Face" WHERE "personId" = $1', [person.rows[0].id]))).rows[0].n, { timeout: 15_000 })
     .toBe(0);
+  expect(forgetQuestion).toContain("person page");
+  await expect(page.getByTestId("forget-done")).toBeVisible();
   const clusters = await withDb((c) => c.query('SELECT count(*)::int AS n FROM "FaceCluster" WHERE "personId" = $1', [person.rows[0].id]));
   expect(clusters.rows[0].n).toBe(0);
 });
