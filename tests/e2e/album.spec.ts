@@ -988,8 +988,12 @@ test("faces are found once an admin opts in, named with consent recorded, shown 
   await page.goto(`/people/${person.rows[0].id}`);
   // The question says what the chosen mode takes: by default the person page and the tags as well as the face data.
   let forgetQuestion = "";
+  // The button is named for the mode chosen, and follows the choice.
+  await page.getByLabel("Keep the name on the photos already confirmed").check();
+  await expect(page.getByRole("button", { name: "Forget face data, keep the name" })).toBeVisible();
+  await page.getByLabel("Also remove the record of which photos they appear in").check();
   page.once("dialog", (d) => { forgetQuestion = d.message(); void d.accept(); });
-  await page.getByRole("button", { name: "Forget face data" }).click();
+  await page.getByRole("button", { name: "Forget completely" }).click();
   await expect
     .poll(async () => (await withDb((c) => c.query('SELECT count(*)::int AS n FROM "Face" WHERE "personId" = $1', [person.rows[0].id]))).rows[0].n, { timeout: 15_000 })
     .toBe(0);

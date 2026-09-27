@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { forgetConfirmMessage } from "@/components/people/ForgetPersonButton";
+import { forgetButtonLabel, forgetConfirmMessage } from "@/components/people/ForgetPersonButton";
 
 describe("the question asked before forgetting somebody", () => {
   it("says the person page and the tags go too, in the default mode", () => {
@@ -14,5 +14,10 @@ describe("the question asked before forgetting somebody", () => {
     const m = forgetConfirmMessage("Vi", "keep-name");
     expect(m).toMatch(/^Forget Vi's face data\?/);
     expect(m).toContain("person page and the name on photos already confirmed stay");
+  });
+
+  it("is asked by a button named for the same mode", () => {
+    expect(forgetButtonLabel("remove-all")).toBe("Forget completely");
+    expect(forgetButtonLabel("keep-name")).toBe("Forget face data, keep the name");
   });
 });

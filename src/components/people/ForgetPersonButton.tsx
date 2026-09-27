@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui";
 
 /**
@@ -12,19 +13,36 @@ export function forgetConfirmMessage(name: string, mode: string): string {
     : `Forget ${name} completely? This deletes their person page, every tag of them on photos and their face data, and takes their name out of everything the AI helper wrote. Words members wrote themselves are left as they are. This cannot be undone.`;
 }
 
-/** The forget form's submit button, asking first in the words of whichever mode is chosen. */
+/** The button says what it does in the mode chosen, as the question after it does. */
+export function forgetButtonLabel(mode: string): string {
+  return mode === "keep-name" ? "Forget face data, keep the name" : "Forget completely";
+}
+
+const chosenMode = (form: HTMLFormElement | null | undefined) => form?.querySelector<HTMLInputElement>("input[name=mode]:checked")?.value ?? "remove-all";
+
+/** The forget form's submit button: named for whichever mode is chosen, and asking first in that mode's words. */
 export function ForgetPersonButton({ name }: { name: string }) {
+  const ref = useRef<HTMLButtonElement>(null);
+  const [mode, setMode] = useState("remove-all");
+  useEffect(() => {
+    const form = ref.current?.form;
+    if (!form) return;
+    const follow = () => setMode(chosenMode(form));
+    follow();
+    form.addEventListener("change", follow);
+    return () => form.removeEventListener("change", follow);
+  }, []);
   return (
     <Button
+      ref={ref}
       type="submit"
       variant="danger"
       size="sm"
       onClick={(e) => {
-        const mode = e.currentTarget.form?.querySelector<HTMLInputElement>("input[name=mode]:checked")?.value ?? "remove-all";
-        if (typeof window.confirm === "function" && !window.confirm(forgetConfirmMessage(name, mode))) e.preventDefault();
+        if (typeof window.confirm === "function" && !window.confirm(forgetConfirmMessage(name, chosenMode(e.currentTarget.form)))) e.preventDefault();
       }}
     >
-      Forget face data
+      {forgetButtonLabel(mode)}
     </Button>
   );
 }

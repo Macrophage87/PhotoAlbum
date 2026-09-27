@@ -1,4 +1,4 @@
-import type { ButtonHTMLAttributes, AnchorHTMLAttributes, ReactNode } from "react";
+import type { ButtonHTMLAttributes, AnchorHTMLAttributes, ReactNode, Ref } from "react";
 import Link from "next/link";
 
 type Variant = "primary" | "secondary" | "ghost" | "ghostOnDark" | "danger";
@@ -25,7 +25,7 @@ export function Button({
   size = "md",
   className = "",
   ...props
-}: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: Variant; size?: Size }) {
+}: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: Variant; size?: Size; ref?: Ref<HTMLButtonElement> }) {
   return <button className={buttonClasses(variant, size, className)} {...props} />;
 }
 
