@@ -57,6 +57,23 @@ describe("the files an import leaves behind", () => {
     await forgetTrackFiles([key]);
     expect(stillThere(key)).toBe(false);
   });
+  it("skips a GPX file already imported into the trip, says so, and keeps no second copy of the file", async () => {
+    const first = uploaded("sample.gpx", "imports/walk.gpx");
+    const once = (await importTrack(job(first, "walk.gpx"))) as { tracks: unknown[] };
+    expect(once.tracks.length).toBeGreaterThan(0);
+    const tracks = await db.track.count(), activities = await db.activity.count();
+    const again = uploaded("sample.gpx", "imports/walk-again.gpx");
+    const twice = (await importTrack(job(again, "walk.gpx"))) as { tracks: unknown[]; skipped: string[] };
+    expect(twice.tracks).toEqual([]);
+    expect(twice.skipped).toEqual([expect.stringContaining("already on this trip")]);
+    expect([await db.track.count(), await db.activity.count()]).toEqual([tracks, activities]);
+    expect(stillThere(again)).toBe(false);
+    expect(stillThere(first)).toBe(true);
+    // Into another trip, it is a track of that trip.
+    const other = (await db.trip.create({ data: { slug: "other", title: "Other", startDate: new Date("2025-08-10"), endDate: new Date("2025-08-16"), timezone: "America/New_York", createdById: userId } })).id;
+    const elsewhere = (await importTrack({ ...job(uploaded("sample.gpx", "imports/walk-3.gpx"), "walk.gpx"), tripId: other })) as { tracks: unknown[] };
+    expect(elsewhere.tracks.length).toBe(once.tracks.length);
+  });
   it("deletes the Google exports earlier imports kept, once, and forgets them on their tracks", async () => {
     const key = uploaded("google-records.json", "imports/old-export.json");
     const gpx = uploaded("sample.gpx", "imports/kept.gpx");

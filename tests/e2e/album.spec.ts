@@ -171,8 +171,11 @@ test("importing a GPX file creates an activity with stats and a track on the map
   await signIn(context, ADMIN);
   await page.goto("/trips/acadia/import");
   await chooseFile(page, "sample-hr.gpx");
-  await expect(page.getByRole("link", { name: "Ocean Path loop" })).toBeVisible({ timeout: 60_000 });
-  await page.getByRole("link", { name: "Ocean Path loop" }).click();
+  // The seed imported this same file into the trip: importing it again says so rather than adding the ride twice.
+  await expect(page.getByText(/Ocean Path loop: already on this trip/)).toBeVisible({ timeout: 60_000 });
+  const act = await withDb((c) => c.query(`SELECT a.id FROM "Activity" a JOIN "Trip" t ON t.id = a."tripId" WHERE t.slug = 'acadia' AND a.title = 'Ocean Path loop'`));
+  expect(act.rows).toHaveLength(1);
+  await page.goto(`/trips/acadia/activities/${act.rows[0].id}`);
   await expect(page.getByText("Distance")).toBeVisible();
   await expect(page.getByText("Avg heart rate")).toBeVisible();
   await expect(page.getByText(/136 bpm/)).toBeVisible();
