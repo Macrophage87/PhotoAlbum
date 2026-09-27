@@ -141,7 +141,7 @@ export async function photosMentioning(m: NameMatcher, away: Where = AWAY): Prom
  * debugging copy.
  */
 export async function forgetRawAnswers(m: NameMatcher): Promise<number> {
-  const words = probes([...m.albumForms, ...m.tombstoneForms.filter((f) => !f.derived).map((f) => f.form)]);
+  const words = probes([...m.albumForms, ...m.tombstoneForms.filter((f) => !f.derived && !f.month).map((f) => f.form)]);
   if (!words.length) return 0;
   const rows = await db.$queryRaw<{ id: string; text: string }[]>`SELECT id, response::text AS text FROM "MediaAnnotationRaw" WHERE ${likeAny(Prisma.sql`response::text`, words)}`;
   const ids = rows.filter((r) => m.mentions(r.text, AWAY) || m.scrubKeywords(r.text, AWAY) !== r.text).map((r) => r.id);

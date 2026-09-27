@@ -234,9 +234,10 @@ describe("names that are also words", () => {
     expect(ts.scrub("We met a Ximena at the fair", await sc(on))).toBe("We met a family member at the fair");
   });
 
-  it("never keeps a one-word name that is a month, an everyday word, a herb or a bird", async () => {
-    for (const n of ["June", "May", "Grace", "Jack", "Will", "Sage", "Basil", "Robin", "Rosemary", "Wren", "Holly"]) await forget(n);
+  it("never keeps a one-word name that is an everyday word, a herb or a bird, and a month only for their photographs", async () => {
+    for (const n of ["Grace", "Jack", "Will", "Sage", "Basil", "Robin", "Rosemary", "Wren", "Holly"]) await forget(n);
     expect(await db.forgottenName.count()).toBe(0);
+    for (const n of ["June", "May"]) await forget(n);
     const ts = await loadTombstone();
     for (const t of ["Our trip in June", "Taken in May 2019", "Amazing Grace", "Grace Bay", "Union Jack", "Jack Russell", "Will you come?", "Sage green walls.", "Robin Hood"]) expect(ts.scrub(t)).toBe(t);
     const other = await photo();
@@ -244,6 +245,34 @@ describe("names that are also words", () => {
     const p = await db.photo.findUniqueOrThrow({ where: { id: other } });
     expect((p.annotation as StoredAnnotation).caption).toBe("Our trip in June");
     expect(p.estimatedDateNote).toBe("2019–2019: Taken in May 2019");
+  });
+
+  it("takes a month that is their first name out of their own photographs only where it plainly names somebody", async () => {
+    const may = await forget("May Lee");
+    const june = await forget("Aunt June");
+    const ts = await loadTombstone();
+    const cases: [string, string, string][] = [
+      [may, "May at the lake", "A family member at the lake"],
+      [may, "May and Ben built a fort.", "A family member and Ben built a fort."],
+      [may, "May swam across. Then May waved.", "A family member swam across. Then a family member waved."],
+      [may, "May At The Lake", "A Family Member At The Lake"],
+      [june, "Aunt June smiled.", "A family member smiled."],
+      [may, "May 2020 at the lake", "May 2020 at the lake"],
+      [may, "A swim in May", "A swim in May"],
+      [may, "May Day at the fair", "May Day at the fair"],
+      [may, "May and June were hot", "May and June were hot"],
+      [may, "May flowers by the lake", "May flowers by the lake"],
+      [may, "Early May at the lake", "Early May at the lake"],
+    ];
+    for (const [on, text, want] of cases) expect([text, ts.scrub(text, await sc(on))]).toEqual([text, want]);
+    // Not in keywords or tags, and not off their photographs.
+    expect(ts.scrubSummary("may lake swim", await sc(may))).toBe("may lake swim");
+    expect(ts.namesTag("may", await sc(may))).toBe(false);
+    expect(ts.scrub("May at the lake", await sc(await photo()))).toBe("May at the lake");
+    expect(ts.scrub("May at the lake")).toBe("May at the lake");
+    // A later answer on her photograph.
+    await applyAnnotation(may, "m", record({ caption: "May at the lake in May 2020" }), { content: [] }, { requestedAt: new Date() });
+    expect(((await db.photo.findUniqueOrThrow({ where: { id: may } })).annotation as StoredAnnotation).caption).toBe("A family member at the lake in May 2020");
   });
 
   it("leaves a place plainly meant alone, even on their photographs", async () => {

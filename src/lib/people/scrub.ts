@@ -364,6 +364,35 @@ export function notThePerson(text: string, start: number, end: number, n: Neighb
   return false;
 }
 
+/** Things a person does and a month does not, after a month that is somebody's name: "May swam", "June waved". */
+const PERSON_VERBS = new Set([
+  "smiles", "smiled", "laughs", "laughed", "waves", "waved", "swims", "swam", "plays", "played", "sits", "sat", "stands", "stood", "holds", "held", "hugs",
+  "hugged", "poses", "posed", "walks", "walked", "rides", "rode", "jumps", "jumped", "climbs", "climbed", "blows", "blew", "eats", "ate", "sleeps", "slept",
+  "naps", "napped", "dances", "danced", "sings", "sang", "cries", "cried", "grins", "grinned", "hikes", "hiked", "bakes", "baked", "cooks", "cooked",
+  "feeds", "fed", "carries", "carried", "kisses", "kissed", "catches", "caught", "throws", "threw", "kicks", "kicked", "splashes", "splashed", "paddles",
+  "paddled", "builds", "built", "digs", "dug", "pushes", "pushed", "pulls", "pulled", "points", "pointed", "watches", "watched", "wears", "wore",
+  "celebrates", "celebrated", "cuddles", "cuddled", "reads", "opens", "opened", "helps", "helped", "reaches", "reached", "leans", "leaned", "lies",
+]);
+/** Descriptors and title prefixes that say nothing of a person before a month: "Great May sale", "Old June". */
+const NOT_KIN_BEFORE_MONTH = new Set(["great", "grand", "step", "half", "big", "little", "baby", "old", "young", "st", "saint"]);
+
+/**
+ * Whether a month written as somebody's name ("May", "June") plainly names them there: a kinship word before it
+ * ("Aunt June"), or after it "at the" ("May at the lake"), "and" another name ("May and Ben", not "May and June"), or
+ * something a person does ("May swam"). "May 2020", "in May", "May Day" and "May flowers" do not.
+ */
+export function personShaped(text: string, start: number, end: number): boolean {
+  const before = text.slice(0, start);
+  const after = text.slice(end);
+  const prev = before.match(/(?<![\p{L}\p{M}'’.-])([\p{L}\p{M}'’.-]+)[ \t]+$/u)?.[1]?.replace(/\.$/u, "");
+  if (prev && isKin(prev) && !NOT_KIN_BEFORE_MONTH.has(bare(prev))) return true;
+  if (/^[ \t]+at[ \t]+the(?![\p{L}\p{M}])/iu.test(after)) return true;
+  const joined = after.match(/^[ \t]+(?:and|&)[ \t]+(\p{Lu}[\p{L}\p{M}'’-]*)/u)?.[1];
+  if (joined && !WHEN_WORDS.has(bare(joined)) && !FUNCTION_WORDS.has(bare(joined))) return true;
+  const next = after.match(/^[ \t]+(\p{L}+)(?![\p{L}\p{M}'’-])/u)?.[1];
+  return Boolean(next && PERSON_VERBS.has(next.toLowerCase()));
+}
+
 const WHEN_WORDS = new Set([...MONTHS, ...DATE_BEFORE, "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "spring", "summer", "autumn", "fall", "winter", "christmas", "easter", "today", "yesterday"]);
 
 /** Whether a name is a single word that is also a place the album knows ("Florence", "Georgia"). */
@@ -436,6 +465,11 @@ const KIN_MARK = "\u0001";
 /** Whether a word is a title or kinship word ("Uncle", "Grandma", "Dr."). */
 export function isKinWord(word: string): boolean {
   return isKin(word);
+}
+
+/** Whether a word is a month ("May", "june"). */
+export function isMonth(word: string): boolean {
+  return MONTHS.has(bare(word));
 }
 
 /** Whether a word is an everyday word or a month ("may", "grace", "summer"): a name made of them is written as one. */
@@ -565,10 +599,11 @@ export type NameMatcher = {
   /**
    * What is remembered of them once they are forgotten (hashed, see tombstone.ts): their full names, and a one-word
    * name that is all of their name and could be nobody's word — never a first name taken from a full one, and never
-   * "June", "Grace" or "Will" (their own photographs were scrubbed when they were forgotten). A full name of everyday
-   * words, and every one-word name, only as a name is written: "Sage", not "sage green".
+   * "Grace" or "Will" (their own photographs were scrubbed when they were forgotten). A full name of everyday words,
+   * and every one-word name, only as a name is written: "Sage", not "sage green". A first name that is a month
+   * ("May", "June") is kept `month`: for their own photographs only, where it plainly names somebody ("May swam").
    */
-  tombstoneForms: { form: string; capitalizedOnly: boolean; derived?: boolean; kinship?: string[] }[];
+  tombstoneForms: { form: string; capitalizedOnly: boolean; derived?: boolean; kinship?: string[]; month?: boolean }[];
 };
 
 /** `whole`: all of their name ("Florence"), not the first name of a full one ("Florence" of Florence Adams). */
@@ -603,6 +638,7 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
   const weak = new Set<string>(); // in keywords only as the whole tag, or beside another word of the name
   const oneWord: string[] = []; // a one-word name that is all of their name, for the tombstone
   const firstNames: { form: string; kinship: string[] }[] = []; // the first name of a full one, for the tombstone (kept only where they were)
+  const months: { form: string; kinship: string[]; derived: boolean }[] = []; // a first name that is a month, for the tombstone (their own photographs only)
   const ownKin = new Set<string>(); // kinship words of their own name ("grandma" of Grandma Ruth)
   const cjkAlbum: string[] = [];
   const cjkTagged: string[] = [];
@@ -650,6 +686,9 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
       // Their title as one: "Great Aunt" and "Great-Aunt" alike.
       const kinship = k ? [kinshipKey(tokens.slice(0, k).join(" "))] : [];
       for (const w of kinship) ownKin.add(w);
+      // A month ("May" of May Lee, "June") is remembered apart, and looked for only on their own photographs where it
+      // plainly names somebody (see personShaped).
+      if (ni === 0 && MONTHS.has(bare(core[0]))) months.push({ form: capitalized(core[0]), kinship, derived: tokens.length > 1 });
       // "June", "Grace", "Will": remembered, they would take every month and every question with them.
       if (ni === 0 && tokens.length === 1 && letters(s) >= 3 && !isKin(s) && !NOT_SAFE.has(bare(s)) && !MONTHS.has(bare(s))) oneWord.push(s);
       // "Sam" of Sam Kent, "Ruth" of Grandma Ruth, "Jack" and "Mary Ann": on the photographs they were tagged on,
@@ -846,6 +885,7 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
       ...longCap.map((form) => ({ form, capitalizedOnly: true })),
       ...oneWord.map((form) => ({ form, capitalizedOnly: true })),
       ...firstNames.map(({ form, kinship }) => ({ form, capitalizedOnly: true, derived: true, kinship })),
+      ...months.map(({ form, kinship, derived }) => ({ form, capitalizedOnly: true, derived, kinship, month: true })),
       ...cjkAlbum.map((form) => ({ form, capitalizedOnly: false })),
     ],
   };

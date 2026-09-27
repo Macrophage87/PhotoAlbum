@@ -4,7 +4,7 @@ import { db } from "@/lib/db";
 import { forgetKeySecret, INVALID_FORGET_KEY } from "./forget-key";
 import { Prisma } from "@/generated/prisma/client";
 import type { StoredAnnotation } from "@/lib/annotation/schema";
-import { inTitleCase, isEverydayWord, isKinWord, isTitlePrefix, kinshipKey, isPlaceOrDateWord, normalizeName, notThePerson, replaceSpans, type Neighbourhood } from "./scrub";
+import { inTitleCase, isEverydayWord, isKinWord, isMonth, isTitlePrefix, kinshipKey, isPlaceOrDateWord, normalizeName, notThePerson, personShaped, replaceSpans, type Neighbourhood } from "./scrub";
 
 /**
  * What the album remembers of somebody it has forgotten: keyed hashes of their names, never the names.
@@ -465,6 +465,9 @@ export async function loadTombstone(): Promise<Tombstone> {
             if (!scope?.rows.has(found.key)) return null;
             // Somebody the album knows by that name is on these photographs: it is theirs here.
             if (found.people && [...found.people].some((id) => scope.tagged.has(id))) return null;
+            // A month ("May" of May Lee) only in prose on their own photographs, where it plainly names somebody: "May
+            // at the lake", "May and Ben", "May swam" — never "May 2020", "in May" or "May Day".
+            if (n === 1 && isMonth(run[0].raw) && (mode !== "prose" || !scope.own.has(found.key) || !personShaped(text, run[0].start, run[0].end))) return null;
             if (mode === "tag") {
               if (!wholeTag) return null;
             } else if (mode === "summary") {

@@ -33,6 +33,9 @@ export async function forgetPerson(personId: string, opts: { keepName: boolean; 
     const now = new Date();
     await db.appSetting.upsert({ where: { id: "app" }, create: { id: "app", lastForgetAt: now }, update: { lastForgetAt: now } });
     const m = await matcherFor(person);
+    // A first name that is a month is kept apart, with their own photographs only (see below).
+    const forms = m.tombstoneForms.filter((f) => !f.month);
+    const months = m.tombstoneForms.filter((f) => f.month);
     const tagged = await taggedPhotoIds(personId);
     // Photographs whose members' words name them too — their own, or their trip's, collection's or activity's: what
     // the helper wrote there was written from those words.
@@ -43,8 +46,8 @@ export async function forgetPerson(personId: string, opts: { keepName: boolean; 
     // Notes naming them ("Florence at the pool"): what the helper writes from them is about her. A name that is also
     // a place counts only where nothing says the place is meant (see notesNaming). A first name of a full one ("Sam"
     // of Sam Kent) is looked for only on their own photographs and where notes give the full name.
-    const derived = m.tombstoneForms.filter((f) => f.derived);
-    const wholeOneWords = m.tombstoneForms.filter((f) => !f.derived && !/\s/u.test(f.form));
+    const derived = forms.filter((f) => f.derived);
+    const wholeOneWords = forms.filter((f) => !f.derived && !/\s/u.test(f.form));
     const placeLike = wholeOneWords.filter((f) => isListedPlace(f.form));
     const notedPlace = await notesNaming(placeLike.map((f) => f.form), true);
     const notedFull = await notesNamingInFull(m);
@@ -75,9 +78,11 @@ export async function forgetPerson(personId: string, opts: { keepName: boolean; 
       // her; any other with everything the forget went through.
       // A first name of a full one only with their own photographs and notes naming them in full.
       const placeForms = new Set(placeLike.map((f) => f.form));
-      await rememberForgotten(m.tombstoneForms.filter((f) => !f.derived && !placeForms.has(f.form)), { photoIds, taggedPhotoIds: tagged, containerIds });
+      await rememberForgotten(forms.filter((f) => !f.derived && !placeForms.has(f.form)), { photoIds, taggedPhotoIds: tagged, containerIds });
       if (placeForms.size) await rememberForgotten(placeLike, { photoIds: notedPlace, taggedPhotoIds: tagged });
       if (derived.length) await rememberForgotten(derived, { photoIds: derivedNoted, taggedPhotoIds: tagged });
+      // "May" or "June": only on the photographs they were tagged on, and only where it plainly names somebody.
+      if (months.length) await rememberForgotten(months, { photoIds: tagged, taggedPhotoIds: tagged });
       await db.appSetting.update({ where: { id: "app" }, data: { lastForgetAt: new Date() } });
     }
     await held.assertHeld();
