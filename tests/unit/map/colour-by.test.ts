@@ -1,15 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { dayScale, MAX_DAY_SLOTS, NONE_SLOT, OTHER_SLOT, RING_HUES, ringsFor, SLOT_COLOURS, SLOT_COUNT, viridis } from "@/lib/map/colour-by";
-import type { PhotoFeatureProps, TrackFeatureProps } from "@/lib/map/geojson";
+import { dayScale, MAX_DAY_SLOTS, NONE_SLOT, OTHER_SLOT, RING_HUES, ringsFor, SLOT_COLOURS, SLOT_COUNT, viridis, type Colourable } from "@/lib/map/colour-by";
 
-const photo = (id: string, over: Partial<PhotoFeatureProps> = {}): PhotoFeatureProps => ({
-  id, thumbUrl: "", mediumUrl: "", caption: null, takenAt: "2025-08-12T12:00:00Z", tripSlug: "", tripTitle: "", activityId: null, gpsSource: null,
-  day: "2025-08-12", activityTitle: null, uploaderId: null, uploaderName: null, ...over,
+/** A photograph or track as the rings see it; `takenAt` stands for when it was taken or began. */
+type Over = Partial<Omit<Colourable, "at">> & { takenAt?: string | null };
+const colourable = (at: string, { takenAt = at, ...over }: Over): Colourable => ({
+  day: "2025-08-12", activityId: null, activityTitle: null, uploaderId: null, uploaderName: null, at: takenAt ? Date.parse(takenAt) : null, ...over,
 });
-const track = (over: Partial<TrackFeatureProps> = {}): TrackFeatureProps => ({
-  trackId: "t", activityId: null, activityTitle: null, activityType: null, source: "GPX", name: "", tripSlug: "", tripTitle: "", color: "", startTime: "2025-08-12T09:00:00Z", distanceM: null,
-  day: "2025-08-12", uploaderId: null, uploaderName: null, ...over,
-});
+// The id says which photograph it is in the test; the rings never see it.
+const photo = (_id: string, over: Over = {}): Colourable => colourable("2025-08-12T12:00:00Z", over);
+const track = (over: Over = {}): Colourable => colourable("2025-08-12T09:00:00Z", over);
 
 describe("coloring the map's rings", () => {
   it("gives each day its own color, in order, and names the undated", () => {

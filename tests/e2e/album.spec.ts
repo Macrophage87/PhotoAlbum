@@ -163,7 +163,10 @@ test("the map across everything shows a photo that is on no trip", async ({ cont
   const payload = await page.request.get("/api/map/geojson");
   expect(payload.ok()).toBe(true);
   const body = await payload.json();
-  expect(body.photos.features.map((f: { properties: { id: string } }) => f.properties.id)).toContain("e2eloosephoto");
+  // A pin is sent as [id, lng, lat, day, …ring slots]; what it is comes when it is clicked.
+  expect(body.photos.points.map((p: [string]) => p[0])).toContain("e2eloosephoto");
+  const clicked = await (await page.request.get("/api/map/photos?ids=e2eloosephoto")).json();
+  expect(clicked.photos).toEqual([expect.objectContaining({ id: "e2eloosephoto", trip: null, uploadedBy: expect.any(String) })]);
   await withDb((c) => c.query(`DELETE FROM "Photo" WHERE id = 'e2eloosephoto'`));
 });
 
@@ -3255,8 +3258,13 @@ test("the map's rings can be colored by day, by activity, or by who uploaded, an
     const anonPage = await anon.newPage();
     const res = await anonPage.request.get("/api/trips/acadia/geojson");
     const body = await res.json();
-    expect(body.photos.features.length).toBeGreaterThan(0);
-    expect(body.photos.features.every((f: { properties: { uploaderId: unknown; uploaderName: unknown } }) => f.properties.uploaderId === null && f.properties.uploaderName === null)).toBe(true);
+    expect(body.photos.points.length).toBeGreaterThan(0);
+    // Not a name, and not even a key to tell one uploader's photographs from another's.
+    expect(body.rings.uploader).toBeNull();
+    expect(body.photos.points.every((p: unknown[]) => p[6] === null)).toBe(true);
+    const clicked = await (await anonPage.request.get(`/api/map/photos?ids=${body.photos.points[0][0]}`)).json();
+    expect(clicked.photos).toHaveLength(1);
+    expect(clicked.photos[0].uploadedBy).toBeNull();
     await anonPage.goto("/trips/acadia/map");
     const theirs = anonPage.getByTestId("map-colour-by").getByRole("combobox");
     await expect(theirs).toBeVisible();

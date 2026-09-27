@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
-import { buildCollectionMapPayload, buildMapPayload } from "@/lib/map/geojson";
+import { buildCollectionMapPayload, buildCollectionMapView, buildMapPayload, buildMapView, type MapPhotos } from "@/lib/map/geojson";
+import { gridCells, inViewport, MAX_CELLS, parseViewport, POINT_LIMIT } from "@/lib/map/view";
+import { NO_FILTER } from "@/lib/photos/filters";
 import { JITTER_STEP_M, spreadOverlapping } from "@/lib/map/jitter";
 import { haversine } from "@/lib/geo/haversine";
 import type { Viewer } from "@/lib/auth/viewer";
@@ -8,6 +10,7 @@ import { resetTestDb } from "../helpers/reset";
 
 const member: Viewer = { kind: "user", user: { id: "u", email: "m@example.com", name: null, role: "MEMBER" }, shareTokens: new Map() };
 const stranger: Viewer = { kind: "anonymous", user: null, shareTokens: new Map() };
+const idsOf = (photos: MapPhotos) => photos.points.map((p) => p[0]);
 
 describe("pins on the same spot", () => {
   const at = (id: string, lat: number, lng: number) => ({ id, lat, lng });
@@ -65,7 +68,7 @@ describe("the map across everything", () => {
   });
 
   it("shows a member every placed photo, including ones on no trip at all", async () => {
-    const ids = (await buildMapPayload(member)).photos.features.map((f) => f.properties.id);
+    const ids = idsOf((await buildMapPayload(member)).photos);
     expect(ids.sort()).toEqual([onTrip, noTrip, collectionOnly].sort());
   });
 
@@ -78,23 +81,139 @@ describe("the map across everything", () => {
   });
 
   it("shows a visitor what a public collection holds, without naming the private trip", async () => {
-    const features = (await buildMapPayload(stranger)).photos.features;
-    expect(features.map((f) => f.properties.id)).toEqual([collectionOnly]);
-    expect(features[0].properties.tripSlug).toBe("");
+    const payload = await buildMapPayload(stranger);
+    expect(idsOf(payload.photos)).toEqual([collectionOnly]);
+    expect(payload.trips).toEqual([]);
   });
 
   it("keeps one trip's map to that trip", async () => {
     const trip = await db.trip.findFirstOrThrow();
-    const ids = (await buildMapPayload(member, trip.id)).photos.features.map((f) => f.properties.id);
-    expect(ids).toEqual([onTrip]);
+    expect(idsOf((await buildMapPayload(member, trip.id)).photos)).toEqual([onTrip]);
   });
 
   it("spreads a stack on a collection's map too", async () => {
     const user = await db.user.findFirstOrThrow();
     const twin = await db.photo.create({ data: { uploaderId: user.id, mimeType: "image/jpeg", storageKey: "k", originalPath: "k/o.jpg", sizeBytes: 1, status: "READY", gpsSource: "MANUAL", originalName: "twin.jpg", lat: 39.28, lng: -76.61 } });
     await db.collectionItem.create({ data: { collectionId, photoId: twin.id, addedById: user.id } });
-    const features = (await buildCollectionMapPayload(member, collectionId)).photos.features;
-    expect(features).toHaveLength(2);
-    expect(features[0].geometry.coordinates).not.toEqual(features[1].geometry.coordinates);
+    const points = (await buildCollectionMapPayload(member, collectionId)).photos.points;
+    expect(points).toHaveLength(2);
+    expect(points[0].slice(1, 3)).not.toEqual(points[1].slice(1, 3));
+  });
+});
+
+describe("what a map sends of each photograph", () => {
+  let uploaderId: string, tripId: string;
+  beforeEach(async () => {
+    await resetTestDb();
+    const user = await db.user.create({ data: { email: "m@example.com", name: "Grandma Jo", role: "ADMIN" } });
+    uploaderId = user.id;
+    tripId = (await db.trip.create({ data: { slug: "t", title: "T", startDate: new Date("2025-08-10"), endDate: new Date("2025-08-16"), createdById: user.id, visibility: "PUBLIC" } })).id;
+    await db.photo.create({ data: { uploaderId, tripId, mimeType: "image/jpeg", storageKey: "k", originalPath: "k/o.jpg", sizeBytes: 1, status: "READY", gpsSource: "EXIF", originalName: "a.jpg", caption: "Jo at the lighthouse", lat: 44.35, lng: -68.2, takenAt: new Date("2025-08-12T15:00:00Z"), tzOffsetMin: -240 } });
+  });
+
+  it("sends where and when and the ring slots, and nothing a caption or a name could be read from", async () => {
+    const payload = await buildMapPayload(member, tripId);
+    expect(payload.total).toBe(1);
+    const [point] = payload.photos.points;
+    expect(point).toHaveLength(7);
+    expect(point.slice(1, 4)).toEqual([-68.2, 44.35, "2025-08-12"]);
+    expect(JSON.stringify(payload.photos)).not.toMatch(/lighthouse|Grandma|\/api\/photos/);
+    // A member may colour by who uploaded: the legend names them, the photograph carries only a slot.
+    expect(payload.rings.uploader!.groups.map((g) => g.label)).toEqual(["Grandma Jo"]);
+    expect(point[6]).toBe(payload.rings.uploader!.groups[0].slot);
+  });
+
+  it("gives a visitor no way to colour by who uploaded, not even a key", async () => {
+    const payload = await buildMapPayload(stranger, tripId);
+    expect(payload.photos.points[0][6]).toBeNull();
+    expect(payload.rings.uploader).toBeNull();
+    expect(JSON.stringify(payload)).not.toContain("Grandma");
+    expect(JSON.stringify(payload)).not.toContain(uploaderId);
+  });
+});
+
+describe("a map bigger than one answer", () => {
+  let tripId: string;
+  const count = POINT_LIMIT + 300;
+  beforeEach(async () => {
+    await resetTestDb();
+    const user = await db.user.create({ data: { email: "m@example.com", role: "ADMIN" } });
+    tripId = (await db.trip.create({ data: { slug: "t", title: "T", startDate: new Date("2025-08-10"), endDate: new Date("2025-08-16"), createdById: user.id, visibility: "PRIVATE" } })).id;
+    // Most in one town, a few far away.
+    await db.photo.createMany({
+      data: Array.from({ length: count }, (_, i) => ({
+        uploaderId: user.id, tripId, mimeType: "image/jpeg", storageKey: "k", originalPath: "k/o.jpg", sizeBytes: 1, status: "READY" as const, gpsSource: "EXIF" as const, originalName: `${i}.jpg`,
+        lat: i < 10 ? 10 + i : 44.3 + (i % 50) * 0.001, lng: i < 10 ? 10 + i : -68.2 + Math.floor(i / 50) * 0.001, takenAt: new Date(Date.UTC(2025, 7, 10 + (i % 5))),
+      })),
+    });
+  });
+
+  it("sends no photographs up front, but says how many there are and how to colour them all", async () => {
+    const payload = await buildMapPayload(member, tripId);
+    expect(payload.photos).toEqual({ points: [], cells: [], complete: false });
+    expect(payload.total).toBe(count);
+    expect(payload.rings.day.groups.reduce((n, g) => n + g.count, 0)).toBe(count);
+    expect(payload.bounds).not.toBeNull();
+  });
+
+  it("groups a crowded view into cells that count every photograph in it, coloured as the whole map is", async () => {
+    const view = { west: -180, south: -85, east: 180, north: 85, zoom: 2 };
+    const answer = await buildMapView(member, tripId, NO_FILTER, view);
+    expect(answer.cells.length).toBeGreaterThan(0);
+    expect(answer.cells.length + answer.points.length).toBeLessThan(50);
+    // Nothing is left out: every photograph is in a cell or is sent as itself.
+    expect(answer.cells.reduce((n, c) => n + c.n, 0) + answer.points.length).toBe(count);
+    for (const c of answer.cells) {
+      const days = c.rings.day.filter((_, i) => i % 2 === 1).reduce((a, b) => a + b, 0);
+      expect(days).toBe(c.n);
+      expect(c.box[0]).toBeLessThanOrEqual(c.at[0]);
+      expect(c.box[2]).toBeGreaterThanOrEqual(c.at[0]);
+    }
+  });
+
+  it("sends the photographs one by one once the view holds few enough of them", async () => {
+    const far = await buildMapView(member, tripId, NO_FILTER, { west: 9, south: 9, east: 20, north: 20, zoom: 6 });
+    expect(far.cells).toEqual([]);
+    expect(far.points).toHaveLength(10);
+    // In the order they were taken, like the whole map.
+    const days = far.points.map((p) => p[3]!);
+    expect([...days].sort()).toEqual(days);
+  });
+
+  it("answers the same way for a collection's map", async () => {
+    const user = await db.user.findFirstOrThrow();
+    const collection = await db.collection.create({ data: { slug: "c", title: "C", createdById: user.id, visibility: "PUBLIC" } });
+    const photos = await db.photo.findMany({ select: { id: true } });
+    await db.collectionItem.createMany({ data: photos.map((p) => ({ collectionId: collection.id, photoId: p.id, addedById: user.id })) });
+    expect((await buildCollectionMapPayload(stranger, collection.id)).photos.complete).toBe(false);
+    const answer = await buildCollectionMapView(stranger, collection.id, NO_FILTER, { west: -180, south: -85, east: 180, north: 85, zoom: 2 });
+    expect(answer.cells.reduce((n, c) => n + c.n, 0) + answer.points.length).toBe(count);
+    expect(answer.cells.every((c) => c.rings.uploader === null)).toBe(true);
+  });
+});
+
+describe("views and cells", () => {
+  it("reads a view from the address, and refuses one that is not a view", () => {
+    expect(parseViewport(new URLSearchParams(""))).toBeNull();
+    expect(parseViewport(new URLSearchParams("bbox=-10,-5,10,5&zoom=3"))).toEqual({ west: -10, south: -5, east: 10, north: 5, zoom: 3 });
+    expect(parseViewport(new URLSearchParams("bbox=-10,-5,10,5&zoom=99"))!).toMatchObject({ zoom: 24 });
+    for (const bad of ["bbox=1,2,3&zoom=1", "bbox=a,b,c,d&zoom=1", "bbox=-10,-5,10,5", "zoom=3", "bbox=10,-5,-10,5&zoom=1", "bbox=-10,5,10,-5&zoom=1", "bbox=-10,-5,10,5&zoom=x"]) {
+      expect(parseViewport(new URLSearchParams(bad))).toBe("bad");
+    }
+  });
+
+  it("sees across the date line", () => {
+    const pacific = { west: 170, south: -30, east: 190, north: 30, zoom: 4 };
+    expect(inViewport(pacific, 0, -175)).toBe(true);
+    expect(inViewport(pacific, 0, 175)).toBe(true);
+    expect(inViewport(pacific, 0, 160)).toBe(false);
+    expect(inViewport(pacific, 40, 175)).toBe(false);
+  });
+
+  it("never makes more cells than an answer may hold, however far in the view says it is zoomed", () => {
+    const scattered = Array.from({ length: 5000 }, (_, i) => ({ lat: -60 + (i % 100) * 1.2, lng: -170 + Math.floor(i / 100) * 6.8 }));
+    const cells = gridCells(scattered, 24);
+    expect(cells.length).toBeLessThanOrEqual(MAX_CELLS);
+    expect(cells.reduce((n, c) => n + c.n, 0)).toBe(5000);
   });
 });

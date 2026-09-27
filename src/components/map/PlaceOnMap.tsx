@@ -1,17 +1,18 @@
 "use client";
 
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui";
 import { MapViewDynamic } from "./MapViewDynamic";
 import { PHOTO_DRAG_TYPE, photoPickedUp } from "@/components/timeline/TimelineDrop";
 import { placeOnMap } from "@/app/photos/bulk-actions";
-import type { MapPayload, PhotoFeatureProps } from "@/lib/map/geojson";
 import type { MapTheme } from "@/lib/map/theme";
 import type { TrayPhoto } from "@/lib/photos/unplaced";
 import { spreadFeatures, withMoved } from "@/lib/map/jitter";
+import type { MapPhotoProps } from "./MapView";
+import { cellFeatures, pointFeatures, useDescribe, useMapData } from "./map-data";
 
-type Pin = GeoJSON.Feature<GeoJSON.Point, PhotoFeatureProps>;
+type Pin = GeoJSON.Feature<GeoJSON.Point, MapPhotoProps>;
 
 /**
  * Putting photographs on the map by pointing at where they were taken.
@@ -28,9 +29,10 @@ export function PlaceOnMap({ src, theme, initial, tripTitle }: { src: string; th
   const router = useRouter();
   const [tray, setTray] = useState<TrayPhoto[]>(initial.photos);
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [data, setData] = useState<MapPayload | null>(null);
+  const { data, error, photos: sent, onViewChange } = useMapData(src);
+  const { describe, known } = useDescribe(src);
   // The map opens on the album, so it waits for the album: bounds given after the map is made are not looked at.
-  const [ready, setReady] = useState(false);
+  const ready = data !== null || error !== null;
   /** Pins placed on this screen, by photograph: each replaces whatever pin that photograph had. */
   const [placed, setPlaced] = useState<ReadonlyMap<string, Pin>>(new Map());
   const [notice, setNotice] = useState<string | null>(null);
@@ -38,21 +40,13 @@ export function PlaceOnMap({ src, theme, initial, tripTitle }: { src: string; th
   const [moving, setMoving] = useState<{ id: string; label: string } | null>(null);
   const [pending, start] = useTransition();
 
-  useEffect(() => {
-    let alive = true;
-    fetch(src)
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error("map"))))
-      .then((d: MapPayload) => { if (alive) setData(d); })
-      .catch(() => {})
-      .finally(() => { if (alive) setReady(true); });
-    return () => { alive = false; };
-  }, [src]);
-
-  const photos = useMemo(() => {
-    const base = data?.photos ?? { type: "FeatureCollection" as const, features: [] };
+  const base = useMemo(() => pointFeatures(sent?.points ?? [], "none"), [sent]);
+  const cells = useMemo(() => cellFeatures(sent?.cells ?? [], "none"), [sent]);
+  const photos = useMemo(
     // Several dropped on one spot would otherwise be one pin with the rest hidden under it.
-    return { ...base, features: placed.size ? spreadFeatures(withMoved(base.features, placed)) : base.features } as MapPayload["photos"];
-  }, [data, placed]);
+    () => ({ ...base, features: placed.size ? spreadFeatures(withMoved(base.features, placed)) : base.features }),
+    [base, placed],
+  );
 
   const toggle = (id: string) =>
     setSelected((prev) => {
@@ -74,13 +68,9 @@ export function PlaceOnMap({ src, theme, initial, tripTitle }: { src: string; th
       setPlaced((prev) => {
         const next = new Map(prev);
         for (const id of saved) {
-          const was = prev.get(id)?.properties ?? data?.photos.features.find((f) => f.properties.id === id)?.properties;
+          const was = prev.get(id)?.properties ?? base.features.find((f) => f.properties.id === id)?.properties;
           const t = tray.find((p) => p.id === id);
-          const properties: PhotoFeatureProps | null = was
-            ? { ...was, gpsSource: "MANUAL" }
-            : t
-              ? { id: t.id, thumbUrl: t.thumbUrl, mediumUrl: t.thumbUrl, caption: t.label, takenAt: t.takenAt, tripSlug: "", tripTitle: t.tripTitle ?? "", activityId: null, gpsSource: "MANUAL", day: null, activityTitle: null, uploaderId: null, uploaderName: null }
-              : null;
+          const properties: MapPhotoProps | null = was ? { ...was } : t ? { id: t.id, day: null, thumbUrl: t.thumbUrl, caption: t.label } : null;
           if (properties) next.set(id, { type: "Feature", geometry: { type: "Point", coordinates: [at.lng, at.lat] }, properties });
         }
         return next;
@@ -104,6 +94,9 @@ export function PlaceOnMap({ src, theme, initial, tripTitle }: { src: string; th
         ) : (
           <MapViewDynamic
             photos={photos}
+            cells={cells}
+            describe={describe}
+            onViewChange={onViewChange}
             tracks={data?.tracks ?? { type: "FeatureCollection", features: [] }}
             bounds={data?.bounds ?? null}
             theme={theme}
@@ -115,7 +108,8 @@ export function PlaceOnMap({ src, theme, initial, tripTitle }: { src: string; th
             // A pin that is in the wrong spot is picked up by touching it, and put down with the next point at the map.
             onPhotoClick={(id) => {
               const f = photos.features.find((x) => x.properties.id === id);
-              setMoving({ id, label: f?.properties.caption ?? "that photograph" });
+              // Its caption came with it from the tray, or was looked up for the preview it was picked up from.
+              setMoving({ id, label: f?.properties.caption ?? known.get(id)?.caption ?? "that photograph" });
               setNotice(null);
             }}
             acceptsDrop={(e) => e.dataTransfer.types.includes(PHOTO_DRAG_TYPE)}
