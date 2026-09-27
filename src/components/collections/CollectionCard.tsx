@@ -8,7 +8,7 @@ import type { FavouriteState } from "@/lib/favourites/queries";
 
 const visibilityLabel = { PRIVATE: null, LINK: "Link", PUBLIC: "Public" } as const;
 
-export function CollectionCard({ collection, cover, showVisibility, favourite }: { collection: CollectionCardData; cover: { id: string; updatedAt: Date } | null; showVisibility: boolean; favourite?: FavouriteState | null }) {
+export function CollectionCard({ collection, cover, showVisibility, favourite }: { collection: CollectionCardData; cover: { id: string; imageVersion: number } | null; showVisibility: boolean; favourite?: FavouriteState | null }) {
   const theme = getTheme(collection.themeKey);
   const vis = visibilityLabel[collection.visibility];
   return (

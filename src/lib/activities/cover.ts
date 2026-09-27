@@ -3,8 +3,8 @@ import { NOT_TRASHED } from "@/lib/photos/trash";
 import { COVERABLE, HAS_PICTURES } from "@/lib/photos/cover";
 
 /** What a cover needs to be drawn and put on a link preview: the preview is often dropped without its size. */
-const select = { id: true, updatedAt: true, width: true, height: true } as const;
-export type ActivityCoverPhoto = { id: string; updatedAt: Date; width: number | null; height: number | null };
+const select = { id: true, updatedAt: true, imageVersion: true, width: true, height: true } as const;
+export type ActivityCoverPhoto = { id: string; imageVersion: number; width: number | null; height: number | null };
 
 /**
  * The picture an activity is known by: the one chosen by hand, while it is still one of the activity's own
@@ -31,7 +31,7 @@ export async function activityCoverCandidates(activityId: string, cursor?: strin
     db.photo.findMany({
       where,
       orderBy: [{ takenAt: { sort: "asc", nulls: "last" } }, { createdAt: "asc" }, { id: "asc" }],
-      select: { id: true, updatedAt: true, caption: true, title: true, membersTitle: true, originalName: true },
+      select: { id: true, updatedAt: true, imageVersion: true, caption: true, title: true, membersTitle: true, originalName: true },
       take: take + 1,
       ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
     }),

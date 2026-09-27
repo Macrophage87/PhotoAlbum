@@ -30,10 +30,21 @@ export const COMMON_WORD_NAMES = new Set([
 
 const CJK = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
 
-/** Accents off, case kept: "José" is "Jose". */
+/**
+ * Accents off, case kept: "José" is "Jose". Invisible characters go too (a zero-width space or a soft hyphen inside
+ * "Madison"), and compatibility forms are folded first (full-width letters), so neither hides a name.
+ */
 export function foldAccents(s: string): string {
-  return s.normalize("NFKD").replace(/\p{M}+/gu, "");
+  return s
+    .normalize("NFKC")
+    .replace(/\p{Cf}/gu, "")
+    .normalize("NFKD")
+    .replace(/\p{M}+/gu, "")
+    .replace(/[łŁøØæÆœŒßđĐþÞı]/gu, (c) => FOLD[c] ?? c);
 }
+
+/** Letters that do not come apart into a plain letter and an accent, spelled the way a keyboard without them does. */
+const FOLD: Record<string, string> = { ł: "l", Ł: "L", ø: "o", Ø: "O", æ: "ae", Æ: "Ae", œ: "oe", Œ: "Oe", ß: "ss", đ: "d", Đ: "D", þ: "th", Þ: "Th", ı: "i" };
 
 /** Lower case, accents off. */
 export function foldForNames(s: string): string {
@@ -92,20 +103,30 @@ export function nameMatcher(patterns: NamePattern[]): ((text: string) => boolean
   // Letters and digits only in each alternative, so nothing needs escaping.
   const regexFor = (key: string, alts: Set<string>) => {
     let re = compiled.get(key);
-    if (!re) compiled.set(key, (re = new RegExp(`(?<![\\p{L}\\p{N}])(?:${[...alts].join("|")})(?:['’]s|s)?(?![\\p{L}\\p{N}])`, "u")));
+    // Letters only at the edges: digits run against a name ("madison2016") do not hide it.
+    if (!re) compiled.set(key, (re = new RegExp(`(?<![\\p{L}])(?:${[...alts].join("|")})(?:['’]s|s)?(?![\\p{L}])`, "u")));
     return re;
   };
   const cjkRes = [...new Set(patterns.filter((p) => p.cjk).map((p) => p.words[0]))].map((c) => {
     const escaped = c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     return [...c].length === 1 ? new RegExp(`(?<![\\p{Script=Han}\\p{Script=Hiragana}\\p{Script=Katakana}\\p{Script=Hangul}])${escaped}(?![\\p{Script=Han}\\p{Script=Hiragana}\\p{Script=Katakana}\\p{Script=Hangul}])`, "u") : new RegExp(escaped, "u");
   });
-  return (text: string) => {
+  // Any name of three letters or more inside a hashtag, run together or not: "#happybirthdaymay", "#TeamMay".
+  const inTags = [...new Set(patterns.filter((p) => !p.cjk).map((p) => p.words.join("").toLowerCase()).filter((w) => w.length >= 3))];
+  const test = (text: string): boolean => {
     if (!text) return false;
     if (cjkRes.some((r) => r.test(text))) return true;
     const folded = foldAccents(text);
+    const tags = [...folded.matchAll(/[#＃]([\p{L}\p{N}_]+)/gu)].map((m) => m[1]);
+    if (tags.length) {
+      if (tags.some((t) => inTags.some((w) => t.toLowerCase().includes(w)))) return true;
+      // Written in camel case, word by word: "#MayTheBirthdayGirl" is "May The Birthday Girl".
+      const spaced = tags.map(splitCamel).filter((t, i) => t !== tags[i]);
+      if (spaced.length && test(spaced.join("\n"))) return true;
+    }
     const lowered = folded.toLowerCase();
     const tried = new Set<string>();
-    for (const w of folded.split(/[^\p{L}\p{N}]+/u)) {
+    for (const w of folded.split(/[^\p{L}]+/u)) {
       if (!w) continue;
       // A plural or possessive "s" in any case: "EMMAS" is Emma's too.
       for (const exact of /s$/i.test(w) ? [w, w.slice(0, -1)] : [w]) {
@@ -124,6 +145,12 @@ export function nameMatcher(patterns: NamePattern[]): ((text: string) => boolean
     }
     return false;
   };
+  return test;
+}
+
+/** A hashtag's words written in camel case, spaced: "MayTheBirthdayGirl" → "May The Birthday Girl", "Team_May" too. */
+export function splitCamel(tag: string): string {
+  return tag.replace(/_/gu, " ").replace(/(\p{Ll})(\p{Lu})/gu, "$1 $2").replace(/(\p{Lu})(\p{Lu}\p{Ll})/gu, "$1 $2").replace(/(\p{L})(\p{N})/gu, "$1 $2").replace(/(\p{N})(\p{L})/gu, "$1 $2");
 }
 
 /** Whether any of these names is mentioned in the text. */

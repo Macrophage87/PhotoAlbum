@@ -35,7 +35,7 @@ export async function detectFacesJob(job: DetectFacesJob, signal?: AbortSignal):
     // The groups come from the delete itself, so a face moved between a read and the delete is still counted.
     const lightened = [
       ...new Set(
-        (await db.$queryRaw<{ clusterId: string | null }[]>`DELETE FROM "Face" WHERE "photoId" = ${photo.id} AND status IN ('DETECTED', 'PROPOSED') RETURNING "clusterId"`)
+        (await deleteRescannedFaces(photo.id))
           .map((r) => r.clusterId)
           .filter((c): c is string => c !== null),
       ),
@@ -48,16 +48,24 @@ export async function detectFacesJob(job: DetectFacesJob, signal?: AbortSignal):
     for (const k of kept) {
       const again = detected.find((f) => k.confidence > 0 && boxIou(k.box as [number, number, number, number], f.box) > 0.5);
       if (!again || !k.personId) continue;
-      const person = await db.person.findUnique({ where: { id: k.personId }, select: { faceIndexing: true, birthday: true } });
-      if (!person?.faceIndexing) continue;
-      const n = await db.$executeRaw`UPDATE "Face" SET embedding = ${vectorLiteral(again.embedding)}::vector WHERE id = ${k.id} AND embedding IS NULL`;
-      if (n > 0) restoredFor.add(k.personId);
-      // A face named while recognition was off has no era cluster yet; give it one now so the matcher can find this person.
-      if (!k.clusterId) {
-        restoredFor.add(k.personId);
-        const realDate = photo.takenAt && photo.takenAtSource !== "FILE_MTIME" && photo.takenAtSource !== "UPLOAD_TIME" ? photo.takenAt : null;
-        await joinEraCluster(k.id, k.personId, again.embedding, ageAtCapture(person.birthday, realDate, photo.estimatedDate, k.ageAtCaptureYears));
-      }
+      const personId = k.personId;
+      // Their recognition read under a lock until the template is back (person, then face, then era group): switched
+      // off meanwhile, the switch either comes first and is seen here, or waits and nulls what this restores.
+      await db.$transaction(async (tx) => {
+        const [person] = await tx.$queryRaw<{ on: boolean; birthday: Date | null }[]>`SELECT ("faceIndexing" AND "optedOutAt" IS NULL AND "forgetPendingAt" IS NULL) AS on, birthday FROM "Person" WHERE id = ${personId} FOR SHARE`;
+        if (!person?.on) return;
+        // Still theirs, read under the face's lock: a face tagged as somebody else or rejected meanwhile is left alone.
+        const [now] = await tx.$queryRaw<{ personId: string | null; clusterId: string | null; status: string }[]>`SELECT "personId", "clusterId", status::text AS status FROM "Face" WHERE id = ${k.id} FOR UPDATE`;
+        if (!now || now.personId !== personId || now.status !== "CONFIRMED") return;
+        const n = await tx.$executeRaw`UPDATE "Face" SET embedding = ${vectorLiteral(again.embedding)}::vector WHERE id = ${k.id} AND "personId" = ${personId} AND embedding IS NULL`;
+        if (n > 0) restoredFor.add(personId);
+        // A face named while recognition was off has no era cluster yet; give it one now so the matcher can find this person.
+        if (!now.clusterId) {
+          restoredFor.add(personId);
+          const realDate = photo.takenAt && photo.takenAtSource !== "FILE_MTIME" && photo.takenAtSource !== "UPLOAD_TIME" ? photo.takenAt : null;
+          await joinEraCluster(k.id, personId, again.embedding, ageAtCapture(person.birthday, realDate, photo.estimatedDate, k.ageAtCaptureYears), tx);
+        }
+      });
     }
     for (const personId of restoredFor) await rebuildCentroids(personId);
     // Deleted faces leave their unnamed clusters lighter: their counts, and running means that still carry the faces
@@ -108,18 +116,35 @@ export async function detectFacesJob(job: DetectFacesJob, signal?: AbortSignal):
 }
 
 /**
+ * A re-scan's delete of the faces nobody decided on (found or proposed), returning the groups they were in. The rows
+ * are locked in id order first, as naming locks faces, so the two wait for each other rather than deadlock.
+ */
+export async function deleteRescannedFaces(photoId: string): Promise<{ clusterId: string | null }[]> {
+  return db.$queryRaw<{ clusterId: string | null }[]>`DELETE FROM "Face" WHERE id IN (SELECT id FROM "Face" WHERE "photoId" = ${photoId} AND status IN ('DETECTED', 'PROPOSED') ORDER BY id FOR UPDATE) AND status IN ('DETECTED', 'PROPOSED') RETURNING "clusterId"`;
+}
+
+/**
  * Recompute a person's era centroids from the faces in each cluster (mean of unit vectors, renormalised in JS since
  * the running mean elsewhere assumes unit centroids), after templates were nulled and restored. Clusters that still
  * have no templates keep a NULL centroid.
  */
 export async function rebuildCentroids(personId: string): Promise<void> {
-  const rows = await db.$queryRaw<{ clusterId: string; c: string; n: number }[]>`
-    SELECT f."clusterId", avg(f.embedding)::text AS c, count(*)::int AS n FROM "Face" f JOIN "FaceCluster" fc ON fc.id = f."clusterId"
-    WHERE f.embedding IS NOT NULL AND fc."personId" = ${personId} GROUP BY f."clusterId"`;
-  for (const r of rows) {
-    const centroid = normalise(JSON.parse(r.c) as number[]);
-    await db.$executeRaw`UPDATE "FaceCluster" SET centroid = ${vectorLiteral(centroid)}::vector, "faceCount" = ${r.n}, "updatedAt" = now() WHERE id = ${r.clusterId}`;
-  }
+  // Their recognition read under a lock until the centres are written (person, then groups in id order): switched off
+  // or forgotten meanwhile, the switch either comes first and nothing is written, or waits and nulls what this wrote.
+  const rebuilt = await db.$transaction(async (tx) => {
+    const [person] = await tx.$queryRaw<{ on: boolean }[]>`SELECT ("faceIndexing" AND "optedOutAt" IS NULL AND "forgetPendingAt" IS NULL) AS on FROM "Person" WHERE id = ${personId} FOR SHARE`;
+    if (!person?.on) return false;
+    await tx.$queryRaw`SELECT id FROM "FaceCluster" WHERE "personId" = ${personId} ORDER BY id FOR UPDATE`;
+    const rows = await tx.$queryRaw<{ clusterId: string; c: string; n: number }[]>`
+      SELECT f."clusterId", avg(f.embedding)::text AS c, count(*)::int AS n FROM "Face" f JOIN "FaceCluster" fc ON fc.id = f."clusterId"
+      WHERE f.embedding IS NOT NULL AND fc."personId" = ${personId} GROUP BY f."clusterId"`;
+    for (const r of rows) {
+      const centroid = normalise(JSON.parse(r.c) as number[]);
+      await tx.$executeRaw`UPDATE "FaceCluster" SET centroid = ${vectorLiteral(centroid)}::vector, "faceCount" = ${r.n}, "updatedAt" = now() WHERE id = ${r.clusterId}`;
+    }
+    return true;
+  });
+  if (!rebuilt) return;
   // Every open face may now match this person.
   const { enqueueMatchAllOpen } = await import("./match-photo");
   await enqueueMatchAllOpen();

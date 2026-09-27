@@ -6,10 +6,12 @@ import type { Rendition, Renditions } from "@/lib/images/renditions";
  */
 export type PhotoSize = "thumb" | "medium" | "pano" | "preview" | "original" | "edited" | "source" | "video" | "poster" | "model";
 
-/** Versioned URL so caches drop stale copies after edits or visibility changes. */
-export function photoUrl(photo: { id: string; updatedAt: Date | string }, size: PhotoSize): string {
-  const v = typeof photo.updatedAt === "string" ? Date.parse(photo.updatedAt) : photo.updatedAt.getTime();
-  return `/api/photos/${photo.id}/${size}?v=${v}`;
+/**
+ * Versioned URL so caches drop stale copies after edits or visibility changes. By `imageVersion`, never `updatedAt`:
+ * a text-only write (a caption, the helper's words, a forget's rewrite) must not change what strangers can see.
+ */
+export function photoUrl(photo: { id: string; imageVersion: number }, size: PhotoSize): string {
+  return `/api/photos/${photo.id}/${size}?v=${photo.imageVersion}`;
 }
 
 /**
@@ -27,7 +29,7 @@ export function largestRendition(r: Renditions | null | undefined): { size: "edi
  * Where "open the full-size photo" goes. A member gets the picture as it is now, which for an item nobody has edited
  * is its own file; anybody else gets the largest rendition, and nothing when that is the medium already on screen.
  */
-export function fullSizeUrl(photo: { id: string; updatedAt: Date | string; edits: unknown; renditions: unknown }, member: boolean): string | null {
+export function fullSizeUrl(photo: { id: string; imageVersion: number; edits: unknown; renditions: unknown }, member: boolean): string | null {
   if (member) return photoUrl(photo, photo.edits ? "edited" : "original");
   const largest = largestRendition(photo.renditions as Renditions | null);
   return largest && largest.size !== "medium" ? photoUrl(photo, largest.size) : null;

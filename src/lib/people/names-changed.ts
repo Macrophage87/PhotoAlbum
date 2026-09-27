@@ -113,18 +113,78 @@ export async function withNamePassesLock(fn: () => Promise<void>): Promise<boole
 }
 
 /**
- * Read inside the transaction that stores an answer. `underWay`: a forget is running. Which photographs it will touch
- * is not known yet, so nothing is stored; once it has finished, the photographs it touched carry `namesScrubbedAt`
- * (see `unchangedSince`), and only answers about those are thrown away. `reload`: a forget has begun since the
+ * Read inside the transaction that stores an answer. `underWay`: a forget is running, so nothing is stored. `since`:
+ * a forget began or finished after the request was built at `requestedAt`, so its answer is thrown away, whatever it
+ * is about: the photographs a forget touched are not stamped one by one, which would say which they were (see
+ * Photo.namesScrubbedAt). Forgets are rare; the item is described again. `reload`: a forget has begun since the
  * forgotten names were read at `loadedAt` (see Tombstone.loadedAt), which may be missing one, so they are read again
  * before anything is stored.
  */
-export async function forgetState(tx: Prisma.TransactionClient, loadedAt?: Date): Promise<{ underWay: boolean; reload: boolean }> {
+export async function forgetState(tx: Prisma.TransactionClient, loadedAt?: Date, requestedAt?: Date): Promise<{ underWay: boolean; since: boolean; reload: boolean }> {
   // Held until this transaction ends, so a forget cannot begin between this check and the write.
   const [{ free }] = await tx.$queryRaw<{ free: boolean }[]>`SELECT pg_try_advisory_xact_lock_shared(${FORGET_LOCK}::bigint) AS free`;
   const rows = await tx.$queryRaw<{ lastForgetAt: Date | null }[]>`SELECT "lastForgetAt" FROM "AppSetting" WHERE id = 'app'`;
   const started = rows[0]?.lastForgetAt;
-  return { underWay: !free, reload: Boolean(loadedAt && started && started >= loadedAt) };
+  return { underWay: !free, since: Boolean(requestedAt && started && started >= requestedAt), reload: Boolean(loadedAt && started && started >= loadedAt) };
+}
+
+/**
+ * The database's clock, for times compared with a forget's (AppSetting.lastForgetAt is stamped by it): two servers'
+ * clocks, or a worker's and the web process's, never decide which came first.
+ */
+export async function dbNow(): Promise<Date> {
+  const [{ now }] = await db.$queryRaw<{ now: Date }[]>`SELECT clock_timestamp() AS now`;
+  return now;
+}
+
+/**
+ * Stamp these photographs `namesScrubbedAt`, by the database's clock and after their text was written: an answer
+ * asked for before the stamp (by the same clock) is thrown away (see namesChangedSince).
+ */
+export async function stampScrubbed(photoIds: string[]): Promise<void> {
+  // The rows locked in id order, as everything else that locks photographs does.
+  if (photoIds.length) await db.$executeRaw`UPDATE "Photo" SET "namesScrubbedAt" = clock_timestamp() WHERE id IN (SELECT id FROM "Photo" WHERE id = ANY(${photoIds}::text[]) ORDER BY id FOR NO KEY UPDATE)`;
+}
+
+const CLEAR_BATCH = 1000;
+
+/** Whether a database error is a deadlock (40P01), which a retry of the same work resolves. */
+function deadlocked(err: unknown): boolean {
+  const e = err as { code?: string; meta?: { code?: string }; message?: string } | null;
+  return e?.code === "40P01" || e?.meta?.code === "40P01" || /40P01|deadlock detected/u.test(String(e?.message ?? err));
+}
+
+/**
+ * Take the untagging and withdrawal stamps a forget supersedes (every stamp written before the clear began, or with
+ * `beforeLastForget` only those older than the last forget): a batch at a time, the rows locked in id order as
+ * everything else that locks photographs does (nameCluster), and a batch that meets a deadlock tried again.
+ */
+export async function clearScrubStamps(opts: { beforeLastForget?: boolean } = {}): Promise<number> {
+  let cleared = 0;
+  // Only stamps written before the clear began: one an untagging writes meanwhile stays, and still protects its
+  // photograph should the forget's own stamp after this fail.
+  const until = await dbNow();
+  for (;;) {
+    let n = 0;
+    for (let attempt = 1; ; attempt++) {
+      try {
+        n = opts.beforeLastForget
+          ? await db.$executeRaw`UPDATE "Photo" SET "namesScrubbedAt" = NULL WHERE id IN (SELECT id FROM "Photo" WHERE "namesScrubbedAt" < (SELECT "lastForgetAt" FROM "AppSetting" WHERE id = 'app') ORDER BY id LIMIT ${CLEAR_BATCH} FOR NO KEY UPDATE)`
+          : await db.$executeRaw`UPDATE "Photo" SET "namesScrubbedAt" = NULL WHERE id IN (SELECT id FROM "Photo" WHERE "namesScrubbedAt" <= ${until} ORDER BY id LIMIT ${CLEAR_BATCH} FOR NO KEY UPDATE)`;
+        break;
+      } catch (err) {
+        if (!deadlocked(err) || attempt >= 5) throw err;
+        await new Promise((r) => setTimeout(r, 50 * attempt));
+      }
+    }
+    cleared += n;
+    if (n < CLEAR_BATCH) return cleared;
+  }
+}
+
+/** Stamp that a forget began or finished now, by the database's clock (see forgetState). */
+export async function stampForget(): Promise<void> {
+  await db.$executeRaw`INSERT INTO "AppSetting" (id, "lastForgetAt", "updatedAt") VALUES ('app', clock_timestamp(), now()) ON CONFLICT (id) DO UPDATE SET "lastForgetAt" = clock_timestamp()`;
 }
 
 /** Whether somebody is being forgotten right now: for deciding whether to wait, not for writing. */

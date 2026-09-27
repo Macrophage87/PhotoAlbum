@@ -78,7 +78,7 @@ export async function fileExisting(user: Pick<ViewerUser, "id" | "role">, photoI
         await db.collectionItem.create({ data: { collectionId: collection.id, photoId: photo.id, addedById: user.id, position: (last?.position ?? -1) + 1 } });
         await db.collection.update({ where: { id: collection.id }, data: { updatedAt: new Date() } });
         // The same as adding from the picker: who may see a photograph has changed, so its addresses change with it.
-        await db.photo.updateMany({ where: { collections: { some: { collectionId: collection.id } } }, data: { updatedAt: new Date() } });
+        await db.photo.updateMany({ where: { collections: { some: { collectionId: collection.id } } }, data: { updatedAt: new Date(), imageVersion: { increment: 1 } } });
       }
       out.collection = true;
     }

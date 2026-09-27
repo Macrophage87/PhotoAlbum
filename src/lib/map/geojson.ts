@@ -426,7 +426,7 @@ export async function buildActivityMapPayload(viewer: Viewer, activityId: string
   const named = { tripSlug: tripOpen ? trip.slug : "", tripTitle: tripOpen ? trip.title : "" };
   const found = await db.photo.findMany({
     where: { activityId: activity.id, tripId: activity.tripId, ...NOT_TRASHED, status: "READY", lat: { not: null }, lng: { not: null } },
-    select: { id: true, lat: true, lng: true, caption: true, takenAt: true, tzOffsetMin: true, updatedAt: true, activityId: true, gpsSource: true, uploader: { select: { id: true, name: true, email: true } } },
+    select: { id: true, lat: true, lng: true, caption: true, takenAt: true, tzOffsetMin: true, updatedAt: true, imageVersion: true, activityId: true, gpsSource: true, uploader: { select: { id: true, name: true, email: true } } },
     orderBy: [{ takenAt: "asc" }, { id: "asc" }],
   });
   let photoBounds: Bounds | null = null;

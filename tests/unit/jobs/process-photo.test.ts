@@ -13,6 +13,7 @@ vi.mock("@/lib/jobs/boss", () => ({ enqueue: async (queue: string, data: unknown
 
 import { processPhoto } from "@/lib/jobs/handlers/process-photo";
 import { transcodeVideo } from "@/lib/jobs/handlers/transcode-video";
+import { photoUrl } from "@/lib/photos/urls";
 
 describe("processPhoto with Takeout sidecar data", () => {
   let userId: string;
@@ -154,5 +155,65 @@ describe("re-processing keeps what a member chose", () => {
     const p = await db.photo.findUniqueOrThrow({ where: { id } });
     expect(p).toMatchObject({ status: "READY", takenAtSource: "MANUAL", tzOffsetMin: 60 });
     expect(p.takenAt?.toISOString()).toBe("1999-12-31T23:00:00.000Z");
+  });
+});
+
+/** The hashing review: new pictures under the same file names must be served under new addresses. */
+describe("image addresses when the renditions are made again", () => {
+  let userId: string;
+  beforeEach(async () => {
+    await resetTestDb();
+    userId = (await db.user.create({ data: { email: "iv@example.com", role: "ADMIN" } })).id;
+  });
+  async function staged() {
+    const photo = await db.photo.create({ data: { uploaderId: userId, originalName: "a.jpg", mimeType: "image/jpeg", storageKey: "pending", originalPath: "pending", sizeBytes: 1, status: "PENDING" } });
+    const key = `photos/${photo.id}`;
+    mkdirSync(path.join(photoRoot, key), { recursive: true });
+    copyFileSync(path.join(process.cwd(), "tests/fixtures", "photo-with-gps.jpg"), path.join(photoRoot, key, "original.jpg"));
+    await db.photo.update({ where: { id: photo.id }, data: { storageKey: key, originalPath: `${key}/original.jpg` } });
+    return photo.id;
+  }
+  const url = async (id: string) => photoUrl(await db.photo.findUniqueOrThrow({ where: { id }, select: { id: true, imageVersion: true } }), "medium");
+
+  it("a flip edit and then its render each end with an address the one before never had", async () => {
+    const id = await staged();
+    await processPhoto({ photoId: id });
+    const rendered = await url(id);
+    // The edit is saved first; its renditions are made after, under the same file names.
+    await db.photo.update({ where: { id }, data: { edits: { flip: true } } });
+    const edited = await url(id);
+    expect(edited).not.toBe(rendered);
+    await processPhoto({ photoId: id, mode: "renditions" });
+    expect(await url(id)).not.toBe(edited);
+    expect(await url(id)).not.toBe(rendered);
+    // A second edit renders to exactly the same file names and sizes: nothing in the row but the render's own bump
+    // moves the address, so a copy cached between the edit and the render (the picture before it, under the edited
+    // address) would otherwise be served for the new one.
+    await db.photo.update({ where: { id }, data: { edits: { flip: true, brightness: 1.2 } } });
+    const again = await url(id);
+    const was = (await db.photo.findUniqueOrThrow({ where: { id } })).renditions;
+    await processPhoto({ photoId: id, mode: "renditions" });
+    expect((await db.photo.findUniqueOrThrow({ where: { id } })).renditions).toEqual(was);
+    expect(await url(id)).not.toBe(again);
+    // And the full pipeline too.
+    const before = await url(id);
+    await processPhoto({ photoId: id });
+    expect(await url(id)).not.toBe(before);
+  });
+
+  it("never hands out a version used before: at least the clock's seconds, for a bump by a writer too", async () => {
+    const id = await staged();
+    const now = Math.floor(Date.now() / 1000) - 1_700_000_000;
+    await db.photo.update({ where: { id }, data: { imageVersion: { increment: 1 } } });
+    const bumped = (await db.photo.findUniqueOrThrow({ where: { id } })).imageVersion;
+    expect(bumped).toBeGreaterThanOrEqual(now - 5);
+    // Twice in the same second still moves it.
+    await db.photo.update({ where: { id }, data: { edits: { rotate: 90 } } });
+    await db.photo.update({ where: { id }, data: { edits: { rotate: 180 } } });
+    expect((await db.photo.findUniqueOrThrow({ where: { id } })).imageVersion).toBeGreaterThanOrEqual(bumped + 2);
+    // Text never moves it.
+    const v = (await db.photo.findUniqueOrThrow({ where: { id } })).imageVersion;
+    await db.photo.update({ where: { id }, data: { caption: "A new caption", namesScrubbedAt: new Date() } });
+    expect((await db.photo.findUniqueOrThrow({ where: { id } })).imageVersion).toBe(v);
   });
 });

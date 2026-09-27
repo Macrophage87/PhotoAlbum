@@ -1,6 +1,7 @@
 import { db } from "@/lib/db";
 import type { StoredAnnotation } from "./schema";
 import { mentionsAnyName, mentionsAnyTitle, titleWordsIn } from "./names";
+import { namesSomebodyRestricted } from "@/lib/people/restricted";
 
 export { foldForNames, mentionsAnyName, mentionsAnyTitle, NAME_PARTICLES, namePatterns } from "./names";
 
@@ -54,7 +55,8 @@ export function titleHits(text: string, containers: PrivateContainer[]): { words
  */
 export async function judgeHelperText(photoId: string, text: Pick<StoredAnnotation, "title" | "caption" | "description" | "searchSummary" | "place" | "tags">, context: string | null, sent?: boolean | null): Promise<Judgement> {
   const said = helperText(text);
-  const hard = Boolean(sent || context?.trim()) || (await taggedOn(photoId)) || mentionsAnyName(said, await knownNames());
+  // And anybody who may not be named, found strictly (any case, any spelling): "HAPPY BIRTHDAY ROSE" on a banner.
+  const hard = Boolean(sent || context?.trim()) || (await taggedOn(photoId)) || mentionsAnyName(said, await knownNames()) || (await namesSomebodyRestricted([text.title, text.caption, text.description, text.place], [text.searchSummary, ...(text.tags ?? [])]));
   const hits = titleHits(said, await privateContainersOf(photoId));
   return { ...judged(hard, hits.from.length > 0), ...(hits.from.length ? { titleWords: hits.words, titleFrom: hits.from } : {}) };
 }
@@ -77,7 +79,7 @@ export function helperText(text: Partial<Pick<StoredAnnotation, "title" | "capti
 export async function placeFromMembersOnly(photoId: string, place: { name: string | null; evidence: string | null }, context: string | null, sent?: boolean | null): Promise<boolean> {
   if (sent || context?.trim()) return true;
   const said = [place.name, place.evidence].filter(Boolean).join("\n");
-  return mentionsAnyName(said, await knownNames()) || mentionsAnyTitle(said, await privateTitlesOf(photoId));
+  return mentionsAnyName(said, await knownNames()) || mentionsAnyTitle(said, await privateTitlesOf(photoId)) || (await namesSomebodyRestricted([said]));
 }
 
 /**
@@ -109,7 +111,7 @@ export function parseAnnotationCustomId(customId: string): { photoId: string; se
  * of a trip strangers cannot open; or what it wrote names somebody the album knows.
  */
 export async function judgeDescription(description: string, given: { names: string[]; notes: boolean; previous?: boolean; privateTitles?: string[] }): Promise<Judgement> {
-  const hard = Boolean(given.names.length || given.notes || given.previous) || mentionsAnyName(description, await knownNames());
+  const hard = Boolean(given.names.length || given.notes || given.previous) || mentionsAnyName(description, await knownNames()) || (await namesSomebodyRestricted([description]));
   const words = titleWordsIn(description, given.privateTitles ?? []);
   return { ...judged(hard, words.length > 0), ...(words.length ? { titleWords: words } : {}) };
 }

@@ -142,6 +142,8 @@ export async function transcodeVideo(job: TranscodeVideoJob, signal?: AbortSigna
             durationS: out.durationS ?? info.durationS,
             renditions,
             videoRenditions,
+            // New files under the same names: their addresses move (see photoUrl).
+            imageVersion: { increment: 1 },
             ...(keepDate ? (keptZone === null ? {} : { tzOffsetMin: keptZone }) : { takenAt: instant, takenAtSource, tzOffsetMin: zoned }),
             tripId,
             activityId: filing.activityId,

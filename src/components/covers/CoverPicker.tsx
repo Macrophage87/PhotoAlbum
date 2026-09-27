@@ -19,9 +19,9 @@ export function CoverPicker({ title, backHref, current, automatic, photos, nextC
   title: string;
   backHref: string;
   /** The photograph chosen by hand, where one has been. */
-  current: { id: string; updatedAt: Date } | null;
+  current: { id: string; imageVersion: number } | null;
   /** What the album would lead with on its own, named for the reader. */
-  automatic: { id: string; updatedAt: Date } | null;
+  automatic: { id: string; imageVersion: number } | null;
   photos: CoverCandidate[];
   nextCursor: string | null;
   total: number;

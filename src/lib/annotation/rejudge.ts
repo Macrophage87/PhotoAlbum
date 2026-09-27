@@ -7,6 +7,7 @@ import { withTryLock } from "@/lib/advisory-lock";
 import type { StoredAnnotation } from "./schema";
 import { helperText, knownNameEntries, knownNames, pastHelperTitles, sameTitle, titleHits, titleIsHelpers, titleKey, unknownTitleAside, warnStuckTitle, type PrivateContainer } from "./members-only";
 import { nameMatcher, namePatterns, spokenWords, titleWords } from "./names";
+import { namesSomebodyRestricted } from "@/lib/people/restricted";
 
 /**
  * Judging again what was written before something changed.
@@ -341,7 +342,8 @@ export async function rejudgeTitles(scope: { tripId?: string; collectionId?: str
     // on it), any name the album knows, the notes, anybody tagged.
     const text = textOf(r);
     if ([...spokenWords(text)].some((w) => privateWords.has(w))) continue;
-    if (r.context?.trim() || names?.(text) || (await tagged(r.id))) {
+    // (All of its fields run together here, keywords too: judged as a list, where nobody else's full name excuses.)
+    if (r.context?.trim() || names?.(text) || (await tagged(r.id)) || (await namesSomebodyRestricted([], [text]))) {
       await db.photo.updateMany({ where: { id: r.id, updatedAt: r.updatedAt, annotationTitleOnly: true }, data: { annotationTitleOnly: false, annotationTitleWords: [], annotationTitleFrom: [] } });
       continue;
     }

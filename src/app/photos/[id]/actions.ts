@@ -375,6 +375,6 @@ export async function retakeScanStill(id: string): Promise<void> {
   const user = await editor(id);
   const photo = await db.photo.findUnique({ where: { id }, select: { id: true, kind: true } });
   if (!photo || photo.kind !== "SCAN") throw new Error("That is not a 3D scan");
-  await db.photo.update({ where: { id: photo.id }, data: { renditions: Prisma.DbNull, editedById: user.id } });
+  await db.photo.update({ where: { id: photo.id }, data: { renditions: Prisma.DbNull, editedById: user.id, imageVersion: { increment: 1 } } });
   revalidatePath("/", "layout");
 }

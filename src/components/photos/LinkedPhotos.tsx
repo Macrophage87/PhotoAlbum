@@ -3,7 +3,7 @@ import { photoUrl } from "@/lib/photos/urls";
 import { RELATION_LABEL } from "@/lib/photos/relations";
 import type { PhotoRelation } from "@/generated/prisma/enums";
 
-export type LinkedPhoto = { linkId: string; relation: PhotoRelation; note: string | null; other: { id: string; caption: string | null; originalName: string; updatedAt: Date; status: string } };
+export type LinkedPhoto = { linkId: string; relation: PhotoRelation; note: string | null; other: { id: string; caption: string | null; originalName: string; imageVersion: number; status: string } };
 
 export function LinkedPhotos({ links, unlink }: { links: LinkedPhoto[]; unlink?: (linkId: string) => Promise<void> }) {
   if (!links.length) return null;

@@ -7,8 +7,14 @@ import { QUEUES } from "@/lib/jobs/queues";
 import { mentionsAnyName } from "@/lib/annotation/names";
 import { unknownTitleAside, warnStuckTitle } from "@/lib/annotation/members-only";
 import { bossJobs } from "@/lib/jobs/schema";
-import { isMinor, knownAdult, nameMayLeaveServer } from "./consent";
-import { annotationMentions, FUNCTION_WORDS, isEverydayWord, isPlaceOrDateWord, nameMatcher, scrubAnnotation, type NameMatcher, type Where } from "./scrub";
+import { isMinor, knownAdult } from "./consent";
+import { annotationMentions, FUNCTION_WORDS, isEverydayWord, isListedPlace, isPlaceOrDateWord, nameMatcher, scrubAnnotation, type NameMatcher, type Where } from "./scrub";
+import { forgottenScope, loadTombstone, scrubRecord, sharedByNamesakes } from "./tombstone";
+import { strictMatcher } from "./strict-names";
+import { namesSomebodyRestricted } from "./restricted";
+import { stampScrubbed } from "./names-changed";
+
+export { namesSomebodyRestricted };
 
 /**
  * Taking a forgotten person's name out of what the helper wrote, and finding what members wrote that still says it.
@@ -42,6 +48,21 @@ export async function taggedPhotoIds(personId: string): Promise<Set<string>> {
   const [faces, animals] = await Promise.all([
     db.face.findMany({ where: who, select: { photoId: true }, distinct: ["photoId"] }),
     db.animalDetection.findMany({ where: who, select: { photoId: true }, distinct: ["photoId"] }),
+  ]);
+  return new Set([...faces, ...animals].map((f) => f.photoId));
+}
+
+/**
+ * The photographs they are tagged on, or proposed as them and not yet decided ("Probably Timothy?", a proposal made
+ * because the notes name them): where the strict matcher decides (see Where.noted). Not those whose tag or proposal
+ * the family took back or turned down ("Ada from next door"), which `taggedPhotoIds` still covers. A proposal names
+ * them only in `proposedPersonId`.
+ */
+export async function ownPhotoIds(personId: string): Promise<Set<string>> {
+  const theirs = { OR: [{ personId, status: { in: ["CONFIRMED" as const, "PROPOSED" as const] } }, { proposedPersonId: personId, status: "PROPOSED" as const }] };
+  const [faces, animals] = await Promise.all([
+    db.face.findMany({ where: theirs, select: { photoId: true }, distinct: ["photoId"] }),
+    db.animalDetection.findMany({ where: theirs, select: { photoId: true }, distinct: ["photoId"] }),
   ]);
   return new Set([...faces, ...animals].map((f) => f.photoId));
 }
@@ -113,7 +134,7 @@ function helpersTitles(p: Pick<MachineText, "kind" | "title" | "membersTitle" | 
 /** Whether the helper's words on an item mention them. Evidence notes only by names that are nobody else's. */
 function machineMentions(p: MachineText, m: NameMatcher, where: Where, given?: Set<string>): boolean {
   const h = helpersTitles(p, given);
-  const evidence: Where = where.tagged ? {} : where.away ? AWAY : {};
+  const evidence: Where = where.tagged ? where : where.away ? AWAY : {};
   return annotationMentions(p.annotation, m, where) || (h.title && m.mentions(p.title, where)) || (h.membersTitle && m.mentions(p.membersTitle, where)) || [p.placeEstimateName, p.placeEstimateNote, p.estimatedDateNote].some((t) => m.mentions(t, evidence));
 }
 
@@ -140,7 +161,7 @@ export async function photosMentioning(m: NameMatcher, away: Where = AWAY): Prom
  * debugging copy.
  */
 export async function forgetRawAnswers(m: NameMatcher): Promise<number> {
-  const words = probes([...m.albumForms, ...m.tombstoneForms.filter((f) => !f.derived).map((f) => f.form)]);
+  const words = probes([...m.albumForms, ...m.tombstoneForms.filter((f) => !f.derived && !f.month).map((f) => f.form)]);
   if (!words.length) return 0;
   const rows = await db.$queryRaw<{ id: string; text: string }[]>`SELECT id, response::text AS text FROM "MediaAnnotationRaw" WHERE ${likeAny(Prisma.sql`response::text`, words)}`;
   const ids = rows.filter((r) => m.mentions(r.text, AWAY) || m.scrubKeywords(r.text, AWAY) !== r.text).map((r) => r.id);
@@ -222,42 +243,6 @@ export function stillNames(m: NameMatcher, names: string[], where: Where): (text
 /** What show-to-everyone refuses to publish (see `namesSomebodyRestricted`). */
 export const NAME_NOT_TO_BE_SHOWN = "This description names somebody whose name isn't to be shown outside the family, so it stays visible to the family only. Edit it to take the name out first.";
 
-/**
- * Everybody who said no, had their naming taken back, or cannot agree: opted out, waiting to be forgotten, a naming
- * withdrawn (or taken back once its fortnight passed, or switched off by an admin — naming decided and not allowed
- * now), and anybody whose birthday says they are a child. Not somebody nobody has asked: there the member who shows
- * the helper's words decides, as they always did.
- */
-async function restrictedPeople(): Promise<{ names: string[] }[]> {
-  const people = await db.person.findMany({ where: { kind: "HUMAN" }, select: { name: true, formerNames: true, birthday: true, adultAttestedAt: true, adultConfirmedAt: true, faceIndexing: true, nameInDescriptions: true, nameInDescriptionsSetAt: true, optedOutAt: true, forgetPendingAt: true, namingWithdrawnAt: true } });
-  return people
-    .filter((p) => p.optedOutAt || p.forgetPendingAt || p.namingWithdrawnAt || (p.nameInDescriptionsSetAt && !nameMayLeaveServer(p)) || isMinor(p))
-    .map((p) => ({ names: [p.name, ...(p.formerNames ?? [])] }));
-}
-
-/**
- * Whether the helper's words about to be shown to everyone name somebody who may not be named there (see
- * `restrictedPeople`): by a full name or a first name, never a surname alone ("The Baker Street bakery" is no Ruth
- * Baker), with the prose rules' own exceptions for dates and sayings ("Lake day in May.", "Will you…"), and an
- * everyday word written as their name counting ("Rose At The Hut" for a Rose who said no). All capitals are read as
- * title case.
- */
-export async function namesSomebodyRestricted(texts: (string | null | undefined)[]): Promise<boolean> {
-  const words = texts.filter((t): t is string => typeof t === "string" && t.trim() !== "");
-  if (!words.length) return false;
-  const people = await restrictedPeople();
-  if (!people.length) return false;
-  const [everybody, members] = await Promise.all([db.person.findMany({ select: { name: true, formerNames: true } }), db.user.findMany({ where: { name: { not: null } }, select: { name: true } })]);
-  const all = [...everybody.flatMap((p) => [p.name, ...(p.formerNames ?? [])]), ...members.map((u) => u.name ?? "")];
-  // As on a photograph about them, though not their own: their first name counts, everyday or not, beside another
-  // capitalized word too ("Ximena Hut Walk"), and a place is a place ("St Mary's Church").
-  const about: Where = { tagged: true, onPhoto: false, noNeighbourExcuse: true };
-  return people.some(({ names }) => {
-    const own = new Set(names);
-    const m = nameMatcher(names, all.filter((n) => !own.has(n)));
-    return words.some((t) => m.mentions(t, about) || (!/\p{Ll}/u.test(t) && m.mentions(titled(t), about)));
-  });
-}
 
 /** Trips, activities and collections holding any of these photographs. */
 async function containersOf(photoIds: string[]) {
@@ -281,6 +266,11 @@ export type ForgetScope = {
   /** The items they are, or were, on. */
   tagged?: Set<string>;
   /**
+   * Of `tagged`, those they are or were tagged on, when `tagged` also holds photographs whose notes plainly name
+   * them: only there is the strict matcher used (see Where.noted). All of `tagged` when not given.
+   */
+  taggedOn?: Set<string>;
+  /**
    * Deciding what everyone may read rather than forgetting (a naming withdrawn or never permitted): what is certainly
    * them is rewritten as for a forget, and anything still uncertain — a name only the neighbour rule excuses ("Santa
    * Barbara Pier", "Ximena Hut Walk"), or an everyday word the members-only rule takes for their name ("Rose At The
@@ -300,14 +290,20 @@ export type ForgetScope = {
   publicOnly?: boolean;
   /** Only what the helper wrote after this (for the nightly public pass). */
   since?: Date | null;
+  /**
+   * Stamp each item `namesScrubbedAt` (the default). A forget does not: the stamps would say which photographs it
+   * covered, and every answer asked for before a forget is thrown away anyway (see forgetState).
+   */
+  stamp?: boolean;
 };
 
 /**
  * Take the name out of the helper's words on these items, and (unless told otherwise) out of the trip, collection
  * and activity descriptions the helper wrote that mention a name of theirs that could be nobody else's.
  *
- * Each item is stamped `namesScrubbedAt`, so an answer to a request built before now is thrown away rather than
- * writing the name back. The keyword index is rebuilt by the item's own trigger on the write; the semantic one is
+ * Each item is stamped `namesScrubbedAt` (except by a forget, which throws away every answer asked for before it:
+ * see ForgetScope.stamp), so an answer to a request built before now is thrown away rather than writing the name
+ * back. The keyword index is rebuilt by the item's own trigger on the write; the semantic one is
  * emptied at once and queued to be recomputed, so neither carries the name meanwhile. The helper's raw answers,
  * kept briefly for debugging, go too: they are the name as it was first written. Safe to run again.
  */
@@ -324,16 +320,18 @@ export async function forgetNameInText(photoIds: string[], m: NameMatcher, opts:
       othersOn(ids.filter((id) => tagged.has(id)), opts.personId),
       answerTitles(ids),
     ]);
-    const now = new Date();
+    const stamped: string[] = [];
     for (const p of photos) {
       // On somebody else's photograph only a full name is theirs to take out: a first name alone there is as often a
       // place or somebody else ("Santa Barbara Pier"), and rewriting it would change words that are not about them.
-      const where: Where = { tagged: tagged.has(p.id), others: others.get(p.id) ?? [], ...(tagged.has(p.id) ? {} : away) };
+      const noted = tagged.has(p.id) && Boolean(opts.taggedOn) && !opts.taggedOn!.has(p.id);
+      const where: Where = { tagged: tagged.has(p.id), others: others.get(p.id) ?? [], ...(tagged.has(p.id) ? {} : away), ...(noted ? { noted } : {}) };
       const a = p.annotation && typeof p.annotation === "object" && !Array.isArray(p.annotation) ? (p.annotation as StoredAnnotation) : null;
       const h = helpersTitles(p, given.get(p.id));
       const helperText = !opts.publicOnly || !p.annotationMembersOnly;
       const evidence = !opts.publicOnly || !p.placeEstimateMembersOnly;
-      const evidenceWhere: Where = tagged.has(p.id) ? {} : away;
+      // On their own photograph as strictly as the rest (see NameMatcher); elsewhere only names nobody else has.
+      const evidenceWhere: Where = tagged.has(p.id) ? where : away;
       const next = {
         ...(a && helperText ? { annotation: scrubAnnotation(a, m, where) } : {}),
         // A title is only rewritten while it is the helper's; a member's own title is theirs.
@@ -344,7 +342,7 @@ export async function forgetNameInText(photoIds: string[], m: NameMatcher, opts:
       };
       // What everyone could still read after the rewrite, judged strictly: the helper's text unless kept for members,
       // its title, and the place guess's words.
-      const strictWhere: Where = tagged.has(p.id) ? { tagged: true, others: others.get(p.id) ?? [] } : {};
+      const strictWhere: Where = tagged.has(p.id) ? { tagged: true, others: others.get(p.id) ?? [], ...(noted ? { noted } : {}) } : {};
       const still = uncertain(strictWhere);
       const shown = (next.annotation ?? a) as StoredAnnotation | null;
       const holdText = !p.annotationMembersOnly && Boolean(shown) && (still(helperWordsOf(shown)) || annotationMentions(shown, m, strictWhere));
@@ -364,15 +362,33 @@ export async function forgetNameInText(photoIds: string[], m: NameMatcher, opts:
       };
       const changed = Object.entries({ ...next, ...held }).some(([k, v]) => JSON.stringify(v) !== JSON.stringify((p as Record<string, unknown>)[k]));
       if (changed) touched.push(p.id);
-      // A forget stamps every photograph it looked at, so no answer about any of them is written over it; the
-      // withdrawal's public pass writes (and stamps) only what it changed.
-      if (changed || !opts.publicOnly) await db.photo.update({ where: { id: p.id }, data: { ...next, ...held, namesScrubbedAt: now } });
+      // Untagging and a withdrawal stamp every photograph they looked at, so no answer about any of them is written
+      // over it (the withdrawal's public pass only what it changed); a forget writes only what changed, unstamped.
+      const stamp = opts.stamp !== false;
+      if (changed) await db.photo.update({ where: { id: p.id }, data: { ...next, ...held } });
+      if (stamp && (changed || !opts.publicOnly)) stamped.push(p.id);
     }
-    const found = opts.publicOnly ? touched : photos.map((p) => p.id);
+    // After every write, by the database's clock: an answer asked for before this read the words before them.
+    await stampScrubbed(stamped);
+    // The semantic index is rebuilt for what changed (and, stamping, for all it looked at); the helper's raw answers
+    // go for all it looked at, whatever they said then.
+    const found = opts.publicOnly || opts.stamp === false ? touched : photos.map((p) => p.id);
     if (found.length) {
       await db.$executeRaw`UPDATE "Photo" SET "textEmbedding" = NULL WHERE id IN (${Prisma.join(found)})`;
-      if (!opts.publicOnly) await db.mediaAnnotationRaw.deleteMany({ where: { photoId: { in: found } } });
       for (const id of found) await enqueueEmbedding(id, true);
+    }
+    if (!opts.publicOnly && photos.length) {
+      const looked = photos.map((p) => p.id);
+      if (opts.stamp !== false) await db.mediaAnnotationRaw.deleteMany({ where: { photoId: { in: looked } } });
+      else {
+        // A forget deletes only the raw answers that name them (any form, a first name of a full one included): which
+        // debugging copies went is otherwise another list of the photographs it covered.
+        const forms = [...new Set([...m.albumForms, ...m.tombstoneForms.map((f) => f.form)])].filter((f) => f.trim());
+        const rx = forms.length ? new RegExp(`(?<![\\p{L}\\p{N}])(?:${forms.map((f) => f.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})(?![\\p{L}\\p{N}])`, "iu") : null;
+        const raws = rx ? await db.$queryRaw<{ id: string; text: string }[]>`SELECT id, response::text AS text FROM "MediaAnnotationRaw" WHERE "photoId" = ANY(${looked}::text[])` : [];
+        const naming = raws.filter((r) => rx!.test(r.text.normalize("NFKD").replace(/\p{M}/gu, "")) || rx!.test(r.text)).map((r) => r.id);
+        if (naming.length) await db.mediaAnnotationRaw.deleteMany({ where: { id: { in: naming } } });
+      }
     }
   }
   if (opts.containers === false) return;
@@ -400,6 +416,43 @@ export async function forgetNameInText(photoIds: string[], m: NameMatcher, opts:
   for (const t of trips) await settle((data) => db.trip.update({ where: { id: t.id }, data }), t.description, around(near.trips, t.id));
   for (const x of activities) await settle((data) => db.activity.update({ where: { id: x.id }, data }), x.description, around(near.activities, x.id));
   for (const c of collections) await settle((data) => db.collection.update({ where: { id: c.id }, data }), c.description, around(near.collections, c.id));
+}
+
+/**
+ * Photographs somebody forgotten shared with a namesake forgotten too ("Ada" of Ada Byron and of Ada Lovelace, both
+ * tagged there): the first forget left the shared first name to the one still in the album, and each took out only
+ * its own titles ("Aunt Ada", not "Grandma Ada"). Once the second is gone the helper's words there are cleaned again
+ * with every forgotten entry, as a new answer about them would be.
+ */
+export async function recleanShared(photoIds: Iterable<string>): Promise<number> {
+  const shared = await sharedByNamesakes([...new Set(photoIds)]);
+  if (!shared.length) return 0;
+  const ts = await loadTombstone();
+  if (ts.empty) return 0;
+  const [photos, given] = await Promise.all([
+    db.photo.findMany({ where: { id: { in: shared } }, select: { id: true, kind: true, title: true, membersTitle: true, titleByHelper: true, annotation: true } }),
+    answerTitles(shared),
+  ]);
+  const touched: string[] = [];
+  for (const p of photos) {
+    const scope = await forgottenScope({ photoIds: [p.id] }, ts);
+    const a = p.annotation && typeof p.annotation === "object" && !Array.isArray(p.annotation) ? (p.annotation as StoredAnnotation) : null;
+    const h = helpersTitles(p, given.get(p.id));
+    const next = {
+      ...(a ? { annotation: scrubRecord(a, ts, scope) } : {}),
+      ...(h.title && p.title ? { title: ts.scrub(p.title, scope) } : {}),
+      ...(h.membersTitle && p.membersTitle ? { membersTitle: ts.scrub(p.membersTitle, scope) } : {}),
+    };
+    if (!Object.entries(next).some(([k, v]) => JSON.stringify(v) !== JSON.stringify((p as Record<string, unknown>)[k]))) continue;
+    // Unstamped, as the forget's own rewrite is (see ForgetScope.stamp).
+    await db.photo.update({ where: { id: p.id }, data: next });
+    touched.push(p.id);
+  }
+  if (touched.length) {
+    await db.$executeRaw`UPDATE "Photo" SET "textEmbedding" = NULL WHERE id IN (${Prisma.join(touched)})`;
+    for (const id of touched) await enqueueEmbedding(id, true);
+  }
+  return touched.length;
 }
 
 export type MemberTextField = "title" | "caption" | "notes" | "place" | "file name" | "trash note" | "link note";
@@ -658,7 +711,7 @@ export async function forgetOnPhoto(photoId: string, person: PersonNames): Promi
   if (!p) return;
   const others = (await othersOn([photoId], person.id)).get(photoId) ?? [];
   if (machineMentions(p, m, { tagged: true, others }, (await answerTitles([photoId])).get(photoId))) await forgetNameInText([photoId], m, { tagged: new Set([photoId]), personId: person.id, containers: false });
-  else await db.photo.update({ where: { id: photoId }, data: { namesScrubbedAt: new Date() } });
+  else await stampScrubbed([photoId]);
 }
 
 /**
@@ -674,7 +727,7 @@ export async function forgetNameEverywhere(person: PersonNames, opts: { publicOn
   // may name them is looked at, a first name alone included ("Mia blows bubbles at her party"), not only what the
   // album-wide search for names nobody else has finds.
   const scope = [...tagged, ...(await photosMentioning(m, {})), ...(await photosNamingAnyWay(m, names))];
-  await forgetNameInText(scope, m, { tagged, personId: person.id, publicOnly: opts.publicOnly, since: opts.since, strict: true, names });
+  await forgetNameInText(scope, m, { tagged, taggedOn: await ownPhotoIds(person.id), personId: person.id, publicOnly: opts.publicOnly, since: opts.since, strict: true, names });
 }
 
 /**
@@ -698,37 +751,80 @@ async function photosNamingAnyWay(m: NameMatcher, names: string[]): Promise<stri
 }
 
 /**
+ * What show-to-everyone would publish of the helper's words on an item, or index for strangers' search: its title,
+ * its prose (place and visible text included), its keywords, tags and objects.
+ */
+function shownWords(title: string | null, record: StoredAnnotation | null): string[] {
+  return [title, helperWordsOf(record)].filter((t): t is string => typeof t === "string" && t.trim() !== "");
+}
+
+/** The keywords, tags and objects of what would be shown: lists, where words run together (see StrictOptions). */
+function shownLists(record: StoredAnnotation | null): string[] {
+  return [record?.searchSummary, ...(record?.tags ?? []), ...(record?.objects ?? [])].filter((t): t is string => typeof t === "string" && t.trim() !== "");
+}
+
+/**
  * The helper's text on an item, and its title, without the name of anybody whose naming the album withdrew by itself:
  * for text a member is about to show to everyone, which the nightly public pass would otherwise not reach for days.
+ * What is certainly them is taken out, as for a forget. The words are held back, and never shown, if what is left
+ * may still name them by any of: the strict matcher (strict-names.ts, as the share guard), the forget's rules for
+ * this photograph, the members-only rule's look (stillNames, as the nightly pass), or their name in the keywords or
+ * tags. A name used as a thing's ("The Austin skyline"), or off their photographs one that is also a place, is not
+ * rewritten at all, which would garble it.
  */
 export async function withoutWithdrawnNames(photoId: string, text: { annotation: unknown; title: string | null }): Promise<{ annotation: unknown; title: string | null; changed: boolean; hold: boolean }> {
   const people = await db.person.findMany({ where: { namingWithdrawnAt: { not: null } }, select: { id: true, name: true, formerNames: true } });
   let annotation = text.annotation;
   let title = text.title;
   let hold = false;
-  if (!people.length) {
-    const record = annotation && typeof annotation === "object" && !Array.isArray(annotation) ? (annotation as StoredAnnotation) : null;
-    return { annotation, title, changed: false, hold: await namesSomebodyRestricted([title, helperWordsOf(record), record?.searchSummary, ...(record?.tags ?? [])]) };
-  }
+  const recordOf = (a: unknown) => (a && typeof a === "object" && !Array.isArray(a) ? (a as StoredAnnotation) : null);
+  if (!people.length) return { annotation, title, changed: false, hold: await namesSomebodyRestricted(shownWords(title, recordOf(annotation)), shownLists(recordOf(annotation))) };
   const tagged = await db.face.findMany({ where: { photoId, OR: [{ personId: { in: people.map((p) => p.id) } }, { proposedPersonId: { in: people.map((p) => p.id) } }] }, select: { personId: true, proposedPersonId: true } });
   const on = new Set(tagged.flatMap((f) => [f.personId, f.proposedPersonId]));
+  const [everybody, members] = await Promise.all([db.person.findMany({ select: { name: true, formerNames: true } }), db.user.findMany({ where: { name: { not: null } }, select: { name: true } })]);
+  const all = [...everybody.flatMap((x) => [x.name, ...(x.formerNames ?? [])]), ...members.map((u) => u.name ?? "")];
   for (const p of people) {
+    const names = [p.name, ...(p.formerNames ?? [])];
     const m = await matcherFor(p);
     const others = on.has(p.id) ? ((await othersOn([photoId], p.id)).get(photoId) ?? []) : [];
-    // What is certainly them is taken out, as for a forget; what still may be keeps the text from being shown to
-    // everyone at all (see ForgetScope.strict).
-    const where: Where = on.has(p.id) ? { tagged: true, others } : AWAY;
-    if (annotation && typeof annotation === "object" && !Array.isArray(annotation)) annotation = scrubAnnotation(annotation as StoredAnnotation, m, where);
-    title = m.scrub(title, where);
     const strictWhere: Where = on.has(p.id) ? { tagged: true, others } : {};
-    const still = stillNames(m, [p.name, ...(p.formerNames ?? [])], strictWhere);
-    const record = annotation && typeof annotation === "object" && !Array.isArray(annotation) ? (annotation as StoredAnnotation) : null;
-    if (still(title) || still(helperWordsOf(record)) || (record && annotationMentions(record, m, strictWhere))) hold = true;
+    const strict = strictMatcher(names, all.filter((n) => !names.includes(n)));
+    const still = stillNames(m, names, strictWhere);
+    // Every check, in every case: the strict one, the forget's rules and the nightly pass's, keywords and tags.
+    const holds = (t: string | null, record: StoredAnnotation | null) => {
+      const words = shownWords(t, record);
+      const lists = shownLists(record);
+      if (words.some((w) => strict(w)) || lists.some((w) => strict(w, { list: true })) || [...words, ...lists].some((w) => still(w))) return true;
+      if (!record) return false;
+      const keywords = (typeof record.searchSummary === "string" && m.scrubKeywords(record.searchSummary, strictWhere) !== record.searchSummary) || [record.tags, record.objects].some((l) => Array.isArray(l) && l.some((x) => m.namesTag(x, strictWhere)));
+      return keywords || annotationMentions(record, m, strictWhere);
+    };
+    // Their name used as a thing's ("The Austin skyline", "our June trip"), or, off their photographs, a name that is
+    // also a place ("The Eiffel Tower, Paris."): rewriting it would garble the words, so it is left as written.
+    const placeNamed = !on.has(p.id) && names.some((n) => isListedPlace(n.trim().split(/\s+/u)[0] ?? ""));
+    if (!placeNamed && !attributive(p, [...shownWords(title, recordOf(annotation)), ...shownLists(recordOf(annotation))])) {
+      const where: Where = on.has(p.id) ? { tagged: true, others } : AWAY;
+      const before = recordOf(annotation);
+      if (before) annotation = scrubAnnotation(before, m, where);
+      title = m.scrub(title, where);
+    }
+    if (holds(title, recordOf(annotation))) hold = true;
   }
   // And everybody else the album may not name, withdrawn long ago or never agreed: not rewritten here, just not shown.
-  const record = annotation && typeof annotation === "object" && !Array.isArray(annotation) ? (annotation as StoredAnnotation) : null;
-  if (!hold && (await namesSomebodyRestricted([title, helperWordsOf(record), record?.searchSummary, ...(record?.tags ?? [])]))) hold = true;
+  if (!hold && (await namesSomebodyRestricted(shownWords(title, recordOf(annotation)), shownLists(recordOf(annotation))))) hold = true;
   return { annotation, title, changed: JSON.stringify(annotation) !== JSON.stringify(text.annotation) || title !== text.title, hold };
+}
+
+/** Whether a first name of theirs stands before a thing, after "the", "our" or "my": "The Austin skyline". */
+function attributive(p: PersonNames, texts: string[]): boolean {
+  const firsts = [p.name, ...(p.formerNames ?? [])].map((n) => n.trim().split(/\s+/u)[0]).filter((w) => w && /^\p{L}/u.test(w));
+  if (!firsts.length) return false;
+  const alternatives = firsts.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+  const rx = new RegExp(`(?<![\\p{L}\\p{M}])(?:[Tt]he|[Oo]ur|[Mm]y|[Tt]his|[Tt]hat)[ \\t]+(?:${alternatives})[ \\t]+(\\p{Ll}[\\p{L}\\p{M}]*)`, "u");
+  return texts.some((t) => {
+    const next = t.match(rx)?.[1];
+    return Boolean(next && !FUNCTION_WORDS.has(next.toLowerCase()));
+  });
 }
 
 /** How long a withdrawal nobody asked for waits for an admin to record evidence before members-only text is scrubbed. */

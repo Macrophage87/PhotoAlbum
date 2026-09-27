@@ -98,10 +98,14 @@ describe("deleting trips and collections", () => {
   }, 120_000);
   it("an admin deletes the collection and the photos stay on their trip", async () => {
     who.role = "ADMIN";
+    const before = (await db.photo.findUniqueOrThrow({ where: { id: photoId } })).imageVersion;
     await expect(deleteCollection("best")).rejects.toThrow("REDIRECT:/");
     expect(await db.collection.count()).toBe(0);
     expect(await db.collectionItem.count()).toBe(0);
-    expect((await db.photo.findUniqueOrThrow({ where: { id: photoId } })).tripId).not.toBeNull();
+    const p = await db.photo.findUniqueOrThrow({ where: { id: photoId } });
+    expect(p.tripId).not.toBeNull();
+    // Who may fetch it changed with the collection: its addresses move (the hashing review).
+    expect(p.imageVersion).toBeGreaterThan(before);
   });
 
   it("finishes a deletion interrupted half-way from its mark, and files nothing onto the trip meanwhile", async () => {

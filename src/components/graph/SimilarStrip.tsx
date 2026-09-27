@@ -2,7 +2,7 @@ import Link from "next/link";
 import { photoUrl } from "@/lib/photos/urls";
 
 /** A small strip of look-alike items, already filtered by what the viewer may see. */
-export function SimilarStrip({ items, graphHref }: { items: { photo: { id: string; updatedAt: Date; caption: string | null; title: string | null; originalName: string }; score: number }[]; graphHref?: string }) {
+export function SimilarStrip({ items, graphHref }: { items: { photo: { id: string; imageVersion: number; caption: string | null; title: string | null; originalName: string }; score: number }[]; graphHref?: string }) {
   if (!items.length) return null;
   return (
     <div className="space-y-2 min-w-0">

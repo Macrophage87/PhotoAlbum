@@ -39,7 +39,7 @@ export async function describeMapPhotos(viewer: Viewer, ids: string[], view: str
     select: {
       id: true,
       caption: true,
-      updatedAt: true,
+      imageVersion: true,
       uploader: { select: { name: true, email: true } },
       ...mediaAccessInclude,
       trip: { select: { id: true, slug: true, title: true, visibility: true, shareToken: true } },

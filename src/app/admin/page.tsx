@@ -83,7 +83,7 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
   const [archives, takeoutImports] = await Promise.all([listArchives(), db.takeoutImport.findMany({ orderBy: { startedAt: "desc" }, take: 10 })]);
   // The same file in the album more than once, with one tile each to recognise them by.
   const dupeGroups = await duplicateGroups(60);
-  const dupeLeaders = await db.photo.findMany({ where: { id: { in: dupeGroups.map((g) => g.ids[0]) } }, select: { id: true, originalName: true, status: true, updatedAt: true, renditions: true } });
+  const dupeLeaders = await db.photo.findMany({ where: { id: { in: dupeGroups.map((g) => g.ids[0]) } }, select: { id: true, originalName: true, status: true, updatedAt: true, imageVersion: true, renditions: true } });
   const byId = new Map(dupeLeaders.map((p) => [p.id, p]));
   const duplicateRows = dupeGroups.slice(0, 24).map((g) => {
     const lead = byId.get(g.ids[0]);

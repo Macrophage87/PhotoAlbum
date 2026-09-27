@@ -26,6 +26,7 @@
 import type { StoredAnnotation } from "@/lib/annotation/schema";
 import { COMMON_WORD_NAMES, KINSHIP_WORDS, NAME_PARTICLES } from "@/lib/annotation/names";
 import { PLACE_NAMES } from "./places";
+import { hashtagSpans, strictFinder, strictForms, strictNormalize, type StrictFinder } from "./strict-names";
 
 export const STAND_IN = "a family member";
 
@@ -64,11 +65,15 @@ const KIN = new Set([...KINSHIP, ...KINSHIP_WORDS]);
 const NOT_A_NAME_WORD = new Set([...KIN, ...NAME_PARTICLES, "and", "the", "of", "al", "el"]);
 /** Everyday words and months: a name made only of them ("Holly Berry", "Rose Hill") is matched only as a name is written. */
 const EVERYDAY_WORDS = new Set([...EVERYDAY, ...COMMON_WORD_NAMES].filter((w) => !KIN.has(w)));
+const SEASONS = new Set(["spring", "summer", "autumn", "fall", "winter"]);
 const MONTHS = new Set(["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"]);
-/** Words that put a month (or an everyday word) in a date rather than a person in a sentence: "in May", "last May". */
-const DATE_BEFORE = new Set(["in", "on", "by", "since", "until", "till", "early", "late", "mid", "last", "next", "this", "of", "from", "through"]);
+/** Words before a month or a season that make it a date: "in May", "last June", "early August". */
+const WHEN_BEFORE_MONTH = new Set(["in", "during", "since", "until", "till", "early", "late", "mid", "last", "next", "this", "through", "throughout", "every"]);
 /** Words that put a place, not a person, after them: "a train to Florence", "back in Georgia". */
 const PLACE_BEFORE = new Set(["to", "in", "from", "near", "at", "visiting", "visit", "around", "through", "via", "into", "toward", "towards", "outside", "downtown", "across", "of"]);
+
+/** Words that are a kinship word only before another: "Great Aunt", not "the Great". */
+const KIN_MODIFIERS = new Set(["great", "grand", "step", "half"]);
 
 /** Whether a name word is a title or kinship word ("Great-Aunt" as much as "Aunt"). */
 function isKin(word: string): boolean {
@@ -82,6 +87,7 @@ const STARTERS = new Set([
   "then", "when", "on", "in", "at", "after", "before", "today", "yesterday", "tomorrow", "tonight", "here", "there", "later", "now", "while", "with", "and", "but",
   "visiting", "visited", "visit", "so", "as", "since", "meanwhile", "finally", "also", "even", "only", "just", "maybe", "perhaps", "dear", "happy", "love", "hi", "hello", "thanks", "by",
   "for", "from", "to", "of", "into", "is", "was", "the", "a", "an", "this", "that", "look", "see", "meet", "oh", "yes", "no", "our", "my", "little", "baby",
+  "goodnight", "goodbye", "bye", "welcome", "congrats", "congratulations", "cheers", "wow", "go", "well", "sweet",
 ]);
 
 /**
@@ -127,7 +133,7 @@ function unaccented(s: string) {
 }
 
 /** "Ann (Nan) Smith" is "Ann Smith", also called "Nan"; 'Robert "Bob" Jones' is also "Bob". */
-function splitNickname(name: string): { name: string; nicknames: string[] } {
+export function splitNickname(name: string): { name: string; nicknames: string[] } {
   const nicknames: string[] = [];
   const rest = name.replace(/\(([^()]+)\)|"([^"]+)"|“([^”]+)”|‘([^’]+)’/gu, (_m: string, a?: string, b?: string, c?: string, d?: string) => {
     const nick = (a ?? b ?? c ?? d ?? "").trim().replace(/\s+/g, " ");
@@ -293,6 +299,22 @@ export type Neighbourhood = {
   isNameWord?: (word: string) => boolean;
 };
 
+/** Words that make the word before them a place's in keywords: "jones beach", "byron bay", "kent street". */
+const PLACE_TYPES = new Set([
+  "harbour", "harbor", "bridge", "square", "river", "park", "station", "garden", "gardens", "street", "avenue", "road", "lane", "boulevard", "beach", "bay",
+  "island", "falls", "canyon", "creek", "valley", "mountain", "mountains", "peak", "hill", "hills", "heights", "point", "pier", "wharf", "quay", "marina",
+  "tower", "castle", "palace", "cathedral", "abbey", "museum", "gallery", "zoo", "airport", "stadium", "arena", "market", "plaza", "springs", "forest",
+  "glacier", "reservoir", "canal", "cove", "county", "township", "lake", "farm", "ranch", "hall", "college", "school", "university",
+]);
+/** Surnames that are everyday words too: alone in keywords they are as often the word ("price tag", "page one"). */
+const WORD_SURNAMES = new Set([
+  "price", "turner", "page", "clark", "carter", "adams", "baker", "cook", "miller", "smith", "taylor", "walker", "young", "long", "little", "short", "brown",
+  "green", "white", "black", "gray", "grey", "wise", "bird", "fox", "wolf", "lamb", "bush", "fisher", "fowler", "porter", "mason", "cooper", "marsh", "lane",
+  "bell", "ward", "hall", "moore", "hunt", "rice", "bishop", "church", "chapel", "castle", "house", "may", "day", "knight", "sharp", "strong", "golden",
+  "parker", "potter", "weaver", "archer", "butler", "chandler", "fletcher", "gardner", "gardener", "glass", "wall", "banks", "burns", "cross", "frost",
+  "gold", "silver", "pond", "lake", "ford", "shepherd", "sparks", "stone", "storm", "summers", "winter", "winters", "spring", "springs", "noble", "lord",
+]);
+
 /**
  * Whether the words around a match of a short name (or a name made of everyday words) say it is somebody or
  * something else: "Ann Jones" and "Mary Ann" (another capitalized word beside it, unless the one before only says
@@ -308,12 +330,30 @@ export function notThePerson(text: string, start: number, end: number, n: Neighb
   const { prev, next, possessive } = neighbours(before, after);
   const p = prev ? bare(prev.replace(/\.$/u, "")) : null;
   if (n.otherWords && ((p && n.otherWords.has(p)) || (next && n.otherWords.has(bare(next))))) return true;
-  if (n.date) {
-    // "by May's side" is her.
-    if (p && DATE_BEFORE.has(p) && !(p === "by" && possessive)) return true;
-    if (/^[\s,]*\d/u.test(after)) return true;
-    if (next && DAY_AFTER.has(bare(next))) return true;
-    if (next && isUpperWord(match.replace(/[^\p{L}]/gu, "")) && isUpperWord(next)) return true;
+  // Only a month or a season is ever a date ("Grace, 4, on the swings" is her), and only in a date's own shape: a day
+  // or a year beside it ("May 5", "May 2019", "Summer, 2019"), never an age (", 4,").
+  const month = MONTHS.has(bare(match));
+  if (n.date && (month || SEASONS.has(bare(match)))) {
+    const day = month ? /^[ \t]+(?:\d{1,2}(?:st|nd|rd|th)?|\d{4})(?![\p{L}\p{N}])/u : /^[ \t]+\d{4}(?![\p{L}\p{N}])/u;
+    if (!possessive && (day.test(after) || /^,[ \t]*\d{4}(?![\p{L}\p{N}])/u.test(after))) return true;
+    // A month that plainly names somebody is them whatever date words are around it: "Photo of May with her
+    // grandmother", "Happy birthday, June!".
+    if (!(month && monthPerson(text, start, end) === "strong")) {
+      // "in May", "last June": only words that say when. After "on", "of", "from" or "by" it is her unless a day or a
+      // year follows ("on May 5", above): "Waiting on May", "A card from May", "So proud of June". Never before a
+      // possessive: "last May's party" is hers.
+      if (p && WHEN_BEFORE_MONTH.has(p) && !possessive) return true;
+      if (month && next && DAY_AFTER.has(bare(next))) return true;
+      // "May is the best month", "June was a wet month".
+      if (month && /^[ \t]+(?:is|was)[ \t]+(?:[\p{L}'’]+[ \t]+){0,3}months?(?![\p{L}\p{M}])/iu.test(after)) return true;
+      // Beside another month: "May and June were hot", "June to August", "April, May and June".
+      const otherMonth = (w: string | undefined) => Boolean(w && MONTHS.has(bare(w)) && bare(w) !== bare(match));
+      if (month && (otherMonth(after.match(/^[ \t]*(?:,|and|&|to|or|-|–|through)[ \t]*(\p{L}+)/u)?.[1]) || otherMonth(before.match(/(\p{L}+)[ \t]*(?:,|and|&|to|or|-|–|through)[ \t]*$/u)?.[1]))) return true;
+      // "The June sun", "Our May trip": the month's, with a thing after it.
+      if (month && p && MONTH_THING_BEFORE.has(p) && next && /^\p{Ll}/u.test(next) && !FUNCTION_WORDS.has(bare(next)) && !doneByPerson(after)) return true;
+      // "June waves crashed on the rocks": a noun in "-s" before a verb.
+      if (month && monthsThing(after)) return true;
+    }
   }
   if (n.number && /^[ \t]+\d/u.test(after)) return true;
   // Only a place the album knows is one ("a train to Florence", "Florence, Italy"); anybody else after "to" or "at"
@@ -364,7 +404,90 @@ export function notThePerson(text: string, start: number, end: number, n: Neighb
   return false;
 }
 
-const WHEN_WORDS = new Set([...MONTHS, ...DATE_BEFORE, "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "spring", "summer", "autumn", "fall", "winter", "christmas", "easter", "today", "yesterday"]);
+/** Things a person does and a month does not, after a month that is somebody's name: "May swam", "June waved". */
+const PERSON_VERBS = new Set([
+  "smiles", "smiled", "laughs", "laughed", "waves", "waved", "swims", "swam", "plays", "played", "sits", "sat", "stands", "stood", "holds", "held", "hugs",
+  "hugged", "poses", "posed", "walks", "walked", "rides", "rode", "jumps", "jumped", "climbs", "climbed", "blows", "blew", "eats", "ate", "sleeps", "slept",
+  "naps", "napped", "dances", "danced", "sings", "sang", "cries", "cried", "grins", "grinned", "hikes", "hiked", "bakes", "baked", "cooks", "cooked",
+  "feeds", "fed", "carries", "carried", "kisses", "kissed", "catches", "caught", "throws", "threw", "kicks", "kicked", "splashes", "splashed", "paddles",
+  "paddled", "builds", "built", "digs", "dug", "pushes", "pushed", "pulls", "pulled", "points", "pointed", "watches", "watched", "wears", "wore",
+  "celebrates", "celebrated", "cuddles", "cuddled", "helps", "helped", "leans", "leaned", "looks", "looked", "loves", "loved", "likes", "liked", "tries",
+  "tried", "gets", "got", "made", "makes", "took", "takes", "went", "goes", "came", "comes", "saw", "sees", "gave", "gives", "fell", "falls", "ran", "runs",
+  "found", "finds", "drew", "draws", "wrote", "writes", "won", "wins", "met", "meets", "turned", "turns", "asleep", "awake",
+]);
+/** After a verb in "-s" that is also a plural noun, what makes it the noun: "June waves crashed", "May hugs are the best". */
+const NOUN_AFTER = /^[ \t]+(?:are|were|have|had|bring|brought|come|came|fill|filled|of|and)(?![\p{L}\p{M}])/iu;
+/** Words in "-ing" and "-ed" that are things, not something a person does: "the May wedding", "June seed packets". */
+const NOT_VERBS = new Set(["morning", "evening", "wedding", "meeting", "outing", "gathering", "painting", "building", "clearing", "opening", "clothing", "king", "ring", "spring", "string", "thing", "wing", "ceiling", "pudding", "need", "speed", "breed", "seed", "weed", "feed", "hundred", "sacred", "bed", "red", "shed"]);
+/** Title prefixes and descriptors that say nothing of a person before a month: "Great May sale", "Old June". */
+const NOT_KIN_BEFORE_MONTH = new Set(["great", "grand", "step", "half", "big", "old", "young", "st", "saint"]);
+/** Words before a month that make the month a thing's ("The June sun", "Our May trip"), with a noun after it. */
+const MONTH_THING_BEFORE = new Set(["the", "our", "a", "an", "this", "that", "every", "each", "my", "your", "their", "his", "her"]);
+
+/** Whether the words after a month make it a thing's: "June waves crashed", "May hugs are the best". */
+function monthsThing(after: string): boolean {
+  const verb = after.match(/^[ \t]+(\p{Ll}+)(?![\p{L}\p{M}'’-])/u);
+  if (!verb || !/s$/u.test(verb[1])) return false;
+  const then = after.slice(verb[0].length);
+  const nextWord = then.match(/^[ \t]+(\p{L}+)(?![\p{L}\p{M}])/u)?.[1]?.toLowerCase();
+  return NOUN_AFTER.test(then) || (nextWord !== undefined && (PERSON_VERBS.has(nextWord) || /ed$/u.test(nextWord)));
+}
+
+/** Whether a word after a month is something a person does: "swam", "is holding", "blowing out". */
+function doneByPerson(after: string): boolean {
+  const verb = after.match(/^[ \t]+(\p{L}+)(?![\p{L}\p{M}'’-])/u);
+  if (!verb) return false;
+  const w = verb[1].toLowerCase();
+  const then = after.slice(verb[0].length);
+  const nextWord = then.match(/^[ \t]+(\p{L}+)(?![\p{L}\p{M}])/u)?.[1]?.toLowerCase();
+  // "May is holding the puppy", "June was sleeping": not "May is the best month".
+  if ((w === "is" || w === "was") && nextWord && /ing$/u.test(nextWord) && !NOT_VERBS.has(nextWord)) return true;
+  if (!/^\p{Ll}/u.test(verb[1])) return false;
+  if (/ing$/u.test(w) && !NOT_VERBS.has(w)) return true;
+  if (!PERSON_VERBS.has(w) && !(w.length >= 5 && /ed$/u.test(w) && !NOT_VERBS.has(w))) return false;
+  // "June waves crashed on the rocks": a verb in "-s" before another verb is a noun.
+  return !monthsThing(after);
+}
+
+/** A capitalized word that may be somebody's name in a list with a month: not a month, a day, a place or "And". */
+function nameInList(w: string | undefined): boolean {
+  return Boolean(w && /^\p{Lu}/u.test(w) && !WHEN_WORDS.has(bare(w)) && !FUNCTION_WORDS.has(bare(w)) && !PLACE_NAMES.has(bare(w)) && !STARTERS.has(bare(w)));
+}
+
+/**
+ * How plainly a month written as somebody's name ("May", "June") names them there. "strong": nothing else it could
+ * be, whatever the date words around it — "May's", "Happy birthday, May!", "Photo of June.", "with May on the beach",
+ * a kinship word ("Aunt June", "baby June", "Little May"), or one of a list of names ("Ben, Leo and May", "June, May
+ * and Ben"). "weak": after it "at the", "and" a name, or something a person does ("May swam", "May blowing out the
+ * candles") — unless a date says otherwise ("Late June at the lake house"). Null: "May 2020", "May flowers".
+ */
+function monthPerson(text: string, start: number, end: number): "strong" | "weak" | null {
+  const before = text.slice(0, start);
+  const after = text.slice(end);
+  const prev = before.match(/(?<![\p{L}\p{M}'’.-])([\p{L}\p{M}'’.-]+)[ \t]+$/u)?.[1]?.replace(/\.$/u, "");
+  if (/^\s*\d/u.test(after)) return null;
+  if (/^['’]s(?![\p{L}\p{M}])/u.test(after)) return "strong";
+  // ("the", "our" and "my" count as kinship words to the members-only rule: "the May holiday" is no person.)
+  if (prev && isKin(prev) && !NOT_KIN_BEFORE_MONTH.has(bare(prev)) && !FUNCTION_WORDS.has(bare(prev))) return "strong";
+  // Spoken to: "Happy birthday, May!", "Well done, June".
+  if (/,[ \t]*$/u.test(before) && /^[ \t]*(?:[!.?…]|$)/u.test(after)) return "strong";
+  if (/(?<![\p{L}\p{M}])(?:photo|photos|picture|pictures|portrait|pic|video|snapshot)[ \t]+of[ \t]+$/iu.test(before)) return "strong";
+  if (/(?<![\p{L}\p{M}])with[ \t]+$/iu.test(before) && /^[ \t]*(?:[!.?,;:…]|$|[ \t]+(?:on|at|and|in|by|near)(?![\p{L}\p{M}]))/u.test(after)) return "strong";
+  // In a list of names: "Grandma and May", "Ben, Leo and May", "June, May and Ben".
+  const listBefore = before.match(/([\p{L}\p{M}'’-]+)[ \t]*(?:,|[ \t]and|[ \t]&)[ \t]+$/u)?.[1];
+  if (nameInList(listBefore) || (listBefore && isKin(listBefore) && !FUNCTION_WORDS.has(bare(listBefore)))) return "strong";
+  const listAfter = after.match(/^[ \t]*,[ \t]*((?:\p{Lu}[\p{L}\p{M}'’-]*[ \t]*,[ \t]*)*)\p{Lu}[\p{L}\p{M}'’-]*[ \t]+(?:and|&)[ \t]+(\p{Lu}[\p{L}\p{M}'’-]*)/u);
+  if (listAfter && [...listAfter[0].matchAll(/\p{Lu}[\p{L}\p{M}'’-]*/gu)].some((x) => nameInList(x[0]))) return "strong";
+  if (/^[ \t]+at[ \t]+the(?![\p{L}\p{M}])/iu.test(after)) return "weak";
+  // Spoken to first: "May, come look!" (not "May, the month of flowers").
+  const told = after.match(/^,[ \t]+(\p{Ll}+)(?![\p{L}\p{M}])/u)?.[1];
+  if (told && !FUNCTION_WORDS.has(told) && !WHEN_WORDS.has(told)) return "weak";
+  const joined = after.match(/^[ \t]+(?:and|&)[ \t]+(\p{Lu}[\p{L}\p{M}'’-]*)/u)?.[1];
+  if (nameInList(joined)) return "weak";
+  return doneByPerson(after) ? "weak" : null;
+}
+
+const WHEN_WORDS = new Set([...MONTHS, ...WHEN_BEFORE_MONTH, "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "spring", "summer", "autumn", "fall", "winter", "christmas", "easter", "today", "yesterday"]);
 
 /** Whether a name is a single word that is also a place the album knows ("Florence", "Georgia"). */
 export function isListedPlace(name: string): boolean {
@@ -379,6 +502,18 @@ export function isPlaceOrDateWord(word: string): boolean {
 }
 
 /**
+ * The words after a name that make it the verb it also is: a pronoun ("Will you…", "May we…", "Hope you like it"),
+ * and two sayings ("May the fourth be with you", "May the force be with you"). Nothing else: after a determiner or a
+ * possessive it is as often them ("Will the ring bearer", "Hope my little helper", "May this morning at the park").
+ */
+const PRONOUN_AFTER = /^[ \t]+(?:you|we|they|it|he|she|i)(?![\p{L}\p{M}'’])/iu;
+const VERB_USES: Record<string, (after: string) => boolean> = {
+  will: (a) => PRONOUN_AFTER.test(a),
+  may: (a) => PRONOUN_AFTER.test(a) || /^[ \t]+the[ \t]+(?:fourth|4th|force)(?![\p{L}\p{M}])/iu.test(a),
+  hope: (a) => PRONOUN_AFTER.test(a),
+};
+
+/**
  * Sayings and words that happen to be a first name: "Uncle Sam", "the Book of Ruth", "Amazing Grace", "Jack in the
  * box", and "Will" asking something ("Will you look at that!").
  */
@@ -389,7 +524,10 @@ function isIdiom(before: string, match: string, after: string, ownPhotos = false
   if (m === "ruth" && /(?<![\p{L}])book[ \t]+of[ \t]+$/iu.test(before)) return true;
   if (m === "grace" && /(?<![\p{L}])amazing[ \t]+$/iu.test(before)) return true;
   if (m === "jack" && /^[ \t]+in[ \t]+the[ \t]+box(?![\p{L}])/iu.test(after)) return true;
-  if (m === "will" && /^[ \t]+(?:you|we|they|it|he|she|i|this|that|there)(?![\p{L}\p{M}'’])/iu.test(after)) return true;
+  // A name that is also a verb, used as one ("Will you…", "May it be…", "Hope you like it"): only before words that
+  // can follow the verb and never a person's name, so "Will swam faster" and "Hope the dog" are still them.
+  const verb = VERB_USES[m];
+  if (verb && verb(after)) return true;
   // An epithet: "Catherine the Great", "Peter The Great", "Alfred the Great".
   if (/^[ \t]+the[ \t]+great(?![\p{L}\p{M}])/iu.test(after)) return true;
   // The apostles: "Saints Peter and Paul", "Peter And Paul Church".
@@ -430,12 +568,53 @@ const KIN_BEFORE = /(?<![\p{L}\p{M}])((?:(?:great|step|half|grand|big|little|bab
 /** Words that make the kinship word after them another title: "Great Grandma" is not Grandma. */
 const TITLE_PREFIX = /(?<![\p{L}\p{M}])(?:great|step|half|grand)[ \t]+$/iu;
 
+/**
+ * The text with every run of kinship words just before one of these name words blanked out, offsets kept: "Little
+ * Sister Ada" reads "             Ada". Joining words are left ("the Ada", "our Ada").
+ */
+function withoutTitlesBefore(text: string, own: Set<string>): string {
+  const words = [...text.matchAll(/[\p{L}\p{M}][\p{L}\p{M}'’.]*/gu)];
+  let out = text;
+  for (let i = 1; i < words.length; i++) {
+    if (!own.has(bare(words[i][0]))) continue;
+    let k = i;
+    while (k > 0) {
+      const w = words[k - 1][0].replace(/\.$/u, "");
+      const sep = text.slice(words[k - 1].index! + words[k - 1][0].length, words[k].index!);
+      if (!/^(?:[ \t]+|[-‐])$/u.test(sep) || !isKin(w) || FUNCTION_WORDS.has(bare(w)) || own.has(bare(w))) break;
+      k--;
+    }
+    if (k < i) out = out.slice(0, words[k].index!) + " ".repeat(words[i].index! - words[k].index!) + out.slice(words[i].index!);
+  }
+  return out;
+}
+
 /** Marks a stand-in whose kinship word goes with it (see nameMatcher). */
 const KIN_MARK = "\u0001";
 
 /** Whether a word is a title or kinship word ("Uncle", "Grandma", "Dr."). */
 export function isKinWord(word: string): boolean {
   return isKin(word);
+}
+
+/** Whether a word is a month ("May", "june"). */
+export function isMonth(word: string): boolean {
+  return MONTHS.has(bare(word));
+}
+
+/** Whether a surname is also an everyday word ("price", "turner"): alone it is as often the word. */
+export function isWordSurname(word: string): boolean {
+  return WORD_SURNAMES.has(bare(word)) || NOT_SAFE.has(bare(word));
+}
+
+/** Whether a word is a particle or a word that is never a name on its own ("van", "de", "the"). */
+export function isNotANameWord(word: string): boolean {
+  return NOT_A_NAME_WORD.has(bare(word));
+}
+
+/** Whether a word is something a person does ("swam", "blows"): after a month, it is somebody. */
+export function isPersonVerb(word: string): boolean {
+  return PERSON_VERBS.has(word.toLowerCase());
 }
 
 /** Whether a word is an everyday word or a month ("may", "grace", "summer"): a name made of them is written as one. */
@@ -476,6 +655,9 @@ export function replaceSpans(text: string, spans: [number, number][]): string {
       from = Math.min(s1, y);
     }
     const sentence = rest + text.slice(from, s1);
+    // A long word in lower case is no title's: "Great-grandma Grace Kelly holding a family member." (somebody else's
+    // name is capitalized anyway, and would otherwise make it look like one).
+    if ((sentence.match(/(?<![\p{L}\p{M}'’-])\p{Ll}[\p{L}\p{M}]{4,}/gu) ?? []).length) return false;
     // A sentence of two capitalized words is judged with the whole text too (see titleCaseAt).
     if ((sentence.match(/[\p{L}][\p{L}\p{M}'’-]*/gu) ?? []).filter((w) => letters(w) >= 2).length >= 3) return titleCase(sentence, new Set());
     let all = "";
@@ -536,16 +718,17 @@ export type Where = {
    */
   away?: boolean;
   /**
-   * Deciding what everyone may read: a name beside another capitalized word is not excused by it ("Ximena Hut
-   * Walk, in the snow."). Dates, sayings and a saint's places still are.
-   */
-  noNeighbourExcuse?: boolean;
-  /**
    * With `tagged`: whether they are on this very photograph (the default), or only elsewhere in its trip, collection
    * or activity. Their short names count either way; only on their own photograph is a place-like name taken for
    * them wherever a place is not plainly meant ("Charlotte in the rain" of the "Charlotte, NC 2020" trip is the city).
    */
   onPhoto?: boolean;
+  /**
+   * With `tagged`: a photograph whose notes plainly name them, but that they were never tagged on. Their own
+   * photograph's language rules apply there, not the strict matcher, which is for the photographs they are or were
+   * tagged on.
+   */
+  noted?: boolean;
 };
 
 export type NameMatcher = {
@@ -565,10 +748,11 @@ export type NameMatcher = {
   /**
    * What is remembered of them once they are forgotten (hashed, see tombstone.ts): their full names, and a one-word
    * name that is all of their name and could be nobody's word — never a first name taken from a full one, and never
-   * "June", "Grace" or "Will" (their own photographs were scrubbed when they were forgotten). A full name of everyday
-   * words, and every one-word name, only as a name is written: "Sage", not "sage green".
+   * "Grace" or "Will" (their own photographs were scrubbed when they were forgotten). A full name of everyday words,
+   * and every one-word name, only as a name is written: "Sage", not "sage green". A first name that is a month
+   * ("May", "June") is kept `month`: for their own photographs only, where it plainly names somebody ("May swam").
    */
-  tombstoneForms: { form: string; capitalizedOnly: boolean; derived?: boolean; kinship?: string[] }[];
+  tombstoneForms: { form: string; capitalizedOnly: boolean; derived?: boolean; kinship?: string[]; month?: boolean }[];
 };
 
 /** `whole`: all of their name ("Florence"), not the first name of a full one ("Florence" of Florence Adams). */
@@ -587,7 +771,8 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
   const list = (Array.isArray(names) ? names : []).filter((n): n is string => typeof n === "string" && n.trim() !== "");
   const otherNames = (Array.isArray(others) ? others : []).filter((o): o is string => typeof o === "string" && o.trim() !== "");
   const own = new Set(list.flatMap((n) => wordsOf(splitNickname(n).name).map(bare)));
-  const theirs = otherNames.flatMap((o) => wordsOf(splitNickname(o).name).map(bare));
+  // Never a kinship word: "Aunt Kay" and "Baby Leo" make "Aunt May" and "Baby June" nobody else's.
+  const theirs = otherNames.flatMap((o) => wordsOf(splitNickname(o).name).map(bare)).filter((w) => !KIN.has(w));
   // Any word of anybody else's name makes a short name of theirs ambiguous away from their photographs; beside a
   // match, only words not also theirs say it is somebody else ("Lovelace" beside "Ada", not "Byron").
   const shared = new Set(theirs);
@@ -601,8 +786,11 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
   const taggedOnly: Short[] = []; // as written, their photographs only
   const strong = new Set<string>(); // any case, in keywords on their photographs: a first name that is no word
   const weak = new Set<string>(); // in keywords only as the whole tag, or beside another word of the name
+  const surnames = new Set<string>(); // of those, a surname (or middle name) that is no everyday word: in a search summary on its own too
+  const everydayFirst = new Set<string>(); // a first name that is an everyday word ("grace"): in a search summary on their photographs, on its own
   const oneWord: string[] = []; // a one-word name that is all of their name, for the tombstone
   const firstNames: { form: string; kinship: string[] }[] = []; // the first name of a full one, for the tombstone (kept only where they were)
+  const months: { form: string; kinship: string[]; derived: boolean }[] = []; // a first name that is a month, for the tombstone (their own photographs only)
   const ownKin = new Set<string>(); // kinship words of their own name ("grandma" of Grandma Ruth)
   const cjkAlbum: string[] = [];
   const cjkTagged: string[] = [];
@@ -650,6 +838,9 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
       // Their title as one: "Great Aunt" and "Great-Aunt" alike.
       const kinship = k ? [kinshipKey(tokens.slice(0, k).join(" "))] : [];
       for (const w of kinship) ownKin.add(w);
+      // A month ("May" of May Lee, "June") is remembered apart, and looked for only on their own photographs where it
+      // plainly names somebody (see personShaped).
+      if (ni === 0 && MONTHS.has(bare(core[0]))) months.push({ form: capitalized(core[0]), kinship, derived: tokens.length > 1 });
       // "June", "Grace", "Will": remembered, they would take every month and every question with them.
       if (ni === 0 && tokens.length === 1 && letters(s) >= 3 && !isKin(s) && !NOT_SAFE.has(bare(s)) && !MONTHS.has(bare(s))) oneWord.push(s);
       // "Sam" of Sam Kent, "Ruth" of Grandma Ruth, "Jack" and "Mary Ann": on the photographs they were tagged on,
@@ -667,6 +858,8 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
           if (letters(part) < 2 || isKin(part)) continue;
           if (i === 0 && !EVERYDAY_WORDS.has(bare(part)) && !NOT_SAFE.has(bare(part))) strong.add(part);
           else weak.add(part);
+          if (i === 0 && letters(part) >= 3 && EVERYDAY_WORDS.has(bare(part)) && !MONTHS.has(bare(part))) everydayFirst.add(part);
+          if (i > 0 && letters(part) >= 3 && !NOT_SAFE.has(bare(part)) && !WORD_SURNAMES.has(bare(part)) && !isPlaceOrDateWord(part)) surnames.add(part);
         }
       });
       // "Mary Ann Smith" is also "Mary Smith"; and "Mary Ann", written as a name, is her first name (below).
@@ -688,6 +881,7 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
   const longAnyRx = rx(bounded(variants(longAny)), "giu");
   const longAnyTest = rx(bounded(variants(longAny)), "iu");
   const longCapRx = rx(bounded(withCaps(longCap)), "gu");
+  const longCapAnyRx = rx(bounded(variants(longCap)), "giu");
   const wholeTest = rx(bounded(variants(whole)), "iu");
   const wholeRx = rx(bounded(variants(whole)), "giu");
   const cjkBodies = (forms: string[]) => [...new Set(forms)].sort((a, b) => b.length - a.length).map(cjkBody).join("|");
@@ -714,14 +908,71 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
     return title && out !== STAND_IN.toUpperCase() ? "A Family Member" : out;
   };
 
-  const scrubText = (text: string, where: Where): string => {
+  /**
+   * On their own photograph, strictly (see strict-names.ts): every whole-word match of any of their names, in any
+   * case and any spelling, a kinship word before it taken with it ("Aunt May at the picnic"), and only a month used
+   * as a date left ("May 2019"). Not a word of somebody else tagged on the same photograph. Over-removal here loses a
+   * word on their own photograph; the language rules are for everywhere else, where it would damage somebody else's.
+   */
+  const ownFinders = new Map<string, StrictFinder>();
+  const strictHere = (where: Where): StrictFinder => {
+    const there = [...new Set((where.others ?? []).flatMap((o) => strictNormalize(splitNickname(o).name).split(/[\s-]+/u)).filter((w) => w && !isKin(w)))];
+    const key = there.join(" ");
+    let f = ownFinders.get(key);
+    if (!f) ownFinders.set(key, (f = strictFinder(list, otherNames, new Set(there))));
+    return f;
+  };
+  const scrubOwn = (text: string, where: Where, keywords = false): string => {
+    const found = strictHere(where).spans(text, { list: keywords });
+    if (!found.length) return text;
+    const spans: [number, number][] = [];
+    for (const [a, b] of found) {
+      let start = a;
+      // "Great", "Grand", "Step" or "Half" only as part of a kinship word taken already: "The Great Ada show."
+      let core = isKin(text.slice(a, b).split(/[ \t]+/u)[0].replace(/\.$/u, ""));
+      for (;;) {
+        const kin = text.slice(0, start).match(/([\p{L}\p{M}'’.]+)(?:[ \t]+|[-‐])$/u);
+        if (!kin || !isKin(kin[1].replace(/\.$/u, "")) || FUNCTION_WORDS.has(bare(kin[1]))) break;
+        const modifier = bare(kin[1]).split(/[-‐]/u).every((w) => KIN_MODIFIERS.has(w));
+        if (modifier && !core) break;
+        core = true;
+        start -= kin[0].length;
+      }
+      const last = spans[spans.length - 1];
+      // Two of their names side by side are one mention: "byron ada".
+      if (last && (start <= last[1] || /^[ \t]+$/u.test(text.slice(last[1], start)))) last[1] = Math.max(last[1], b);
+      else spans.push([start, b]);
+    }
+    return replaceSpans(text, spans);
+  };
+  const ownPhoto = (where: Where) => Boolean(where.tagged) && where.onPhoto !== false && !where.noted;
+
+  // Off their own photographs a hashtag is read as prose is there (see hashtagSpans): no month, and a name run into
+  // other letters only when it is five letters or more. On a photograph about them any of their names; elsewhere a
+  // full name, or a one-word name that is all of theirs ("#TeamXimena", as "Ximena" in prose).
+  let aboutForms: string[] | null = null;
+  let awayForms: string[] | null = null;
+  const scrubText = (text: string, where: Where, keywords = false): string => {
+    if (ownPhoto(where)) return scrubOwn(text, where, keywords);
+    if (/[#＃]/u.test(text)) {
+      const forms = where.tagged ? (aboutForms ??= strictForms(list)) : (awayForms ??= [...strictForms(list).filter((f) => /\s/u.test(f)), ...whole.map((w) => strictNormalize(w))]);
+      const tags = hashtagSpans(text, forms, { minSubstring: 5, noMonths: true });
+      if (tags.length) text = replaceSpans(text, tags);
+    }
+    // On their own photograph a kinship word before their name goes with it ("Little Sister Ada"), and the stand-in's
+    // capitals are judged without it, as the forgotten names' are (replaceSpans): "Little Sister Ada and Big Brother
+    // Ada." is no title in title case. Only the capitals: what is taken out is judged as before.
+    const titles = where.tagged && where.onPhoto !== false;
+    const standInTitle = (whole: string, offset: number) => titleCaseAt(titles ? withoutTitlesBefore(whole, own) : whole, offset, own);
     const put = (m: string, offset: number, whole: string) => {
       // "Great Grandma Ruth" is somebody else than Grandma Ruth.
       if (isKin(m.split(/[ \t]+/u)[0]) && TITLE_PREFIX.test(whole.slice(0, offset))) return m;
-      return standInFor(m, whole.slice(0, offset), whole.slice(offset + m.length), titleCaseAt(whole, offset, own));
+      return standInFor(m, whole.slice(0, offset), whole.slice(offset + m.length), standInTitle(whole, offset));
     };
     let out = longAnyRx ? text.replace(longAnyRx, put) : text;
-    if (longCapRx) out = out.replace(longCapRx, put);
+    // A full name made only of everyday words ("Holly Berry") in keywords or a tag is the thing, in any case, off a
+    // photograph about them: "Holly Berry wreath" (the forget review's C).
+    if (longCapRx && !(keywords && !where.tagged)) out = out.replace(longCapRx, put);
     if (where.tagged && longTagged.length) {
       const r = rx(bounded(withCaps(longTagged)), "gu");
       if (r) out = out.replace(r, put);
@@ -745,7 +996,7 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
           // Away from their photographs, a one-word name of theirs beside another capitalized word is somebody's or
           // a place's even in a title written in title case ("Santa Barbara Pier", "Lake Louise"): nothing there
           // says it is them.
-          title: (title || Boolean(where.noNeighbourExcuse)) && !(where.away && !where.tagged),
+          title: title && !(where.away && !where.tagged),
           away: Boolean(where.away && !where.tagged),
           // A month or an everyday word in a date, on their own photographs: "in May", "May 5", "May Day".
           date: everyday,
@@ -767,10 +1018,10 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
           if (ownKin.size && !ownKin.has(kinshipKey(kin[1]))) return m;
           if (where.tagged && where.onPhoto !== false) {
             const rest = before.slice(0, before.length - kin[0].length);
-            return `${KIN_MARK}${standInFor(m, rest, whole.slice(offset + m.length), title)}`;
+            return `${KIN_MARK}${standInFor(m, rest, whole.slice(offset + m.length), standInTitle(whole, offset))}`;
           }
         }
-        return standInFor(m, before, whole.slice(offset + m.length), title);
+        return standInFor(m, before, whole.slice(offset + m.length), standInTitle(whole, offset));
       });
       // The kinship word goes with the name it was part of.
       if (out.includes(KIN_MARK)) out = out.replace(new RegExp(`${KIN_BEFORE.source.slice(0, -1)}${KIN_MARK}`, "giu"), "").replaceAll(KIN_MARK, "");
@@ -780,13 +1031,14 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
 
   /** Name words in keywords, on their own photographs; not a word somebody else tagged there shares. */
   const keywordsFor = (where: Where) => {
-    if (!where.tagged) return { strongRx: null, pairRx: null, weakWords: [] as string[] };
+    if (!where.tagged) return { strongRx: null, pairRx: null, surnameRx: null, weakWords: [] as string[] };
     const there = new Set((where.others ?? []).flatMap((o) => wordsOf(splitNickname(o).name).map(bare)));
     const s = [...strong].filter((w) => !there.has(bare(w)));
     const all = [...new Set([...strong, ...weak])].filter((w) => !there.has(bare(w)));
     // Two words of the name side by side ("byron ada", "grace hopper") are her, whatever each is on its own.
     const pairs = all.flatMap((a) => all.filter((b) => b !== a).map((b) => `${a} ${b}`));
-    return { strongRx: rx(bounded(variants(s)), "giu"), pairRx: rx(bounded(variants(pairs)), "giu"), weakWords: all.map((w) => bare(w)) };
+    const sur = [...surnames, ...everydayFirst].filter((w) => !there.has(bare(w)) && !strong.has(w));
+    return { strongRx: rx(bounded(variants(s)), "giu"), pairRx: rx(bounded(variants(pairs)), "giu"), surnameRx: rx(bounded(variants(sur)), "giu"), weakWords: all.map((w) => bare(w)) };
   };
 
   const guard = <T,>(text: T, f: (t: string) => string): T => {
@@ -803,10 +1055,23 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
       // Off their own photograph, "st. mary's church" in the keywords is still a church.
       const saintly = !(where.tagged && where.onPhoto !== false);
       const put = (m: string, offset: number, w: string) => (saintly && SAINT_BEFORE.test(w.slice(0, offset)) ? m : standIn(m, w.slice(0, offset), w.slice(offset + m.length)));
-      let out = scrubText(t, where);
+      let out = scrubText(t, where, true);
+      // A full name made of everyday words, side by side, in any case, on a photograph about them: keywords are all
+      // lower case ("may chen pool"). Not elsewhere, where "holly berry wreath" is the plant.
+      if (longCapAnyRx && where.tagged) out = out.replace(longCapAnyRx, put);
       const k = keywordsFor(where);
       if (k.pairRx) out = out.replace(k.pairRx, put);
       if (k.strongRx) out = out.replace(k.strongRx, put);
+      // Their surname alone, on a photograph about them ("jones family"), or a first name that is an everyday word
+      // ("grace pool swimming", as the forgotten names read it): not before a place's word, a place or a date, which
+      // make it the place's ("byron bay", "jones beach", "kent 2019"). Keywords are a bag of words, so the word
+      // before says nothing ("barbara pier jones family").
+      if (k.surnameRx) {
+        out = out.replace(k.surnameRx, (m: string, offset: number, w: string) => {
+          const next = w.slice(offset + m.length).match(/^[ \t]+([\p{L}\p{M}\p{N}'’-]+)/u)?.[1];
+          return next && (isPlaceOrDateWord(next) || PLACE_TYPES.has(bare(next))) ? m : put(m, offset, w);
+        });
+      }
       // A one-word name that is all of theirs is them in lower case too, anywhere: "ximena fishing" — except, away
       // from their photographs under `away`, where keywords run words together ("santa barbara pier").
       if (wholeRx && !(where.away && !where.tagged)) out = out.replace(wholeRx, put);
@@ -816,6 +1081,7 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
   const namesTag = (tag: unknown, where: Where = {}) => {
     if (typeof tag !== "string" || !tag.trim()) return false;
     try {
+      if (ownPhoto(where)) return strictHere(where).finds(tag, { list: true });
       const t = tag.trim().toLowerCase().replace(/’/g, "'");
       const k = keywordsFor(where);
       // Off their own photograph a saint's name in a tag is a place's ("st. mary's church").
@@ -846,6 +1112,7 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
       ...longCap.map((form) => ({ form, capitalizedOnly: true })),
       ...oneWord.map((form) => ({ form, capitalizedOnly: true })),
       ...firstNames.map(({ form, kinship }) => ({ form, capitalizedOnly: true, derived: true, kinship })),
+      ...months.map(({ form, kinship, derived }) => ({ form, capitalizedOnly: true, derived, kinship, month: true })),
       ...cjkAlbum.map((form) => ({ form, capitalizedOnly: false })),
     ],
   };

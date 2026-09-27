@@ -58,9 +58,9 @@ export async function visitorStats(days = 30): Promise<VisitorStats> {
              count(*) FILTER (WHERE v.kind = 'SHARE')::int AS "shareVisits", max(v."at") AS last
       FROM "Visit" v JOIN "Collection" c ON c.id = v."collectionId"
       WHERE v."at" >= ${since} GROUP BY c.id ORDER BY visitors DESC, visits DESC LIMIT 8`,
-    db.$queryRaw<(ThingCount & { updatedAt: Date; renditions: unknown })[]>`
+    db.$queryRaw<(ThingCount & { imageVersion: number; renditions: unknown })[]>`
       SELECT p.id, coalesce(nullif(btrim(p.title), ''), nullif(btrim(p."membersTitle"), ''), nullif(p.caption, ''), p."originalName") AS title,
-             '/photos/' || p.id AS href, p."updatedAt", p.renditions,
+             '/photos/' || p.id AS href, p."imageVersion", p.renditions,
              count(*)::int AS visits, count(DISTINCT v."visitorHash")::int AS visitors,
              count(*) FILTER (WHERE v.kind = 'SHARE')::int AS "shareVisits", max(v."at") AS last
       FROM "Visit" v JOIN "Photo" p ON p.id = v."photoId"

@@ -65,7 +65,7 @@ export async function getTripBySlug(slug: string) {
 
 export type TripWithCounts = NonNullable<Awaited<ReturnType<typeof getTripBySlug>>>;
 
-type ChosenCover = { id: string; updatedAt: Date; width: number | null; height?: number | null; trashedAt?: Date | null; tripId: string | null };
+type ChosenCover = { id: string; imageVersion: number; width: number | null; height?: number | null; trashedAt?: Date | null; tripId: string | null };
 
 /**
  * The cover chosen by hand, while it still stands: with pictures to draw, out of the trash, and still on this trip. A
@@ -87,6 +87,6 @@ export async function coverFor(trip: { id: string; coverPhoto: ChosenCover | nul
     where: { tripId: trip.id, ...COVERABLE },
     orderBy: [{ takenAt: "asc" }],
     // Width and height go into the link preview: a card without them is often drawn small, or not at all.
-    select: { id: true, updatedAt: true, width: true, height: true },
+    select: { id: true, updatedAt: true, imageVersion: true, width: true, height: true },
   });
 }

@@ -16,7 +16,7 @@ import { unpermittedNameScrub, type NameScrub } from "@/lib/people/unpermitted";
 
 /** What a describe says when somebody on its photographs changed while the helper was writing. */
 export const NAMES_CHANGED = "Somebody on these photographs changed while the helper was writing; try again";
-import { forgetState, namesChangedSince } from "@/lib/people/names-changed";
+import { dbNow, forgetState, namesChangedSince } from "@/lib/people/names-changed";
 import { forgottenScope, loadTombstone } from "@/lib/people/tombstone";
 import { anthropic, thinkingParams } from "./client";
 import { activityDescriptionSchema, parseActivityDescription, type ActivityDescription } from "./activity";
@@ -186,7 +186,8 @@ export async function writeContainerDescription(kind: ContainerKind, id: string,
   if (container.annotationOptOut) throw new Error(`${container.title} is opted out of the AI helper`);
   if (!container.photos.length) throw new Error(`There are no photographs in this ${kind} to describe it from`);
 
-  const requestedAt = new Date();
+  // By the database's clock, as forgets are stamped.
+  const requestedAt = await dbNow();
   const names = [...new Set((await Promise.all(container.photos.map((p) => permittedNames(p.id)))).flat())];
   // The family's words go without the names the helper may not be told: the photographs', the container's own, and
   // the note typed beside the button.
@@ -209,10 +210,9 @@ export async function writeContainerDescription(kind: ContainerKind, id: string,
   // Somebody on these photographs forgotten, renamed or no longer to be named while it was being written, or anybody
   // forgotten at all: its answer may name them, so it is not kept.
   await db.$transaction(async (tx) => {
-    const forget = await forgetState(tx, tombstone.loadedAt);
-    if (forget.underWay || (await namesChangedSince(container.photos.map((p) => p.id), requestedAt))) throw new Error(NAMES_CHANGED);
-    // Somebody forgotten since the forgotten names were read: read them again.
-    if (forget.reload) data.description = (await loadTombstone()).scrub(data.description, await forgottenScope({ containers: [{ kind, id }] }));
+    // Anybody forgotten since the request (and so since the forgotten names were read, after it): not kept.
+    const forget = await forgetState(tx, tombstone.loadedAt, requestedAt);
+    if (forget.underWay || forget.since || forget.reload || (await namesChangedSince(container.photos.map((p) => p.id), requestedAt))) throw new Error(NAMES_CHANGED);
     if (kind === "trip") await tx.trip.update({ where: { id }, data });
     else await tx.collection.update({ where: { id }, data });
   });

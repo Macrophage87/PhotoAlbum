@@ -2,9 +2,12 @@ import { createHash, createHmac, hkdfSync, randomBytes } from "node:crypto";
 import { env } from "@/lib/env";
 import { db } from "@/lib/db";
 import { forgetKeySecret, INVALID_FORGET_KEY } from "./forget-key";
+import { dbNow } from "./names-changed";
 import { Prisma } from "@/generated/prisma/client";
 import type { StoredAnnotation } from "@/lib/annotation/schema";
-import { inTitleCase, isEverydayWord, isKinWord, isTitlePrefix, kinshipKey, isPlaceOrDateWord, normalizeName, notThePerson, replaceSpans, type Neighbourhood } from "./scrub";
+import { FUNCTION_WORDS, inTitleCase, isEverydayWord, isKinWord, isMonth, isTitlePrefix, kinshipKey, isPlaceOrDateWord, normalizeName, notThePerson, replaceSpans, type Neighbourhood } from "./scrub";
+import { lakeSpans, monthAsDate, strictNormalize } from "./strict-names";
+import { splitCamel } from "@/lib/annotation/names";
 
 /**
  * What the album remembers of somebody it has forgotten: keyed hashes of their names, never the names.
@@ -15,7 +18,7 @@ import { inTitleCase, isEverydayWord, isKinWord, isTitlePrefix, kinshipKey, isPl
  * "Grace", "Sage" or "Will", and never a first name taken from a full one), are kept as HMACs, and text going to or
  * coming from the helper is checked against them a run of one to four words at a time. A full name counts anywhere
  * (one made of everyday words only as a name is written). A one-word name counts only in text about a photograph they
- * were tagged on or that named them (kept with it as ids) — capitalized, and not where the words around it make it something else
+ * were tagged on or that named them (kept with it, hashed) — capitalized, and not where the words around it make it something else
  * ("Florence Nightingale", "Florence, Italy"; see `notThePerson`); in tags there only as the whole tag or its
  * possessive ("ximena's pool"), and in a search summary only as a word of its own, not beside a place or a date. A name somebody the album knows now also answers to is
  * not treated as forgotten: that is their name, not the forgotten person's.
@@ -102,6 +105,63 @@ function hash(key: Buffer, normalized: string): string {
   return createHmac("sha256", key).update(normalized).digest("hex");
 }
 
+/** What a photograph is hashed as, in a row's places and its kinship groups. */
+function photoScope(id: string): string {
+  return `photo:${id}`;
+}
+
+/** A photograph's, trip's, collection's or activity's place in a row (see `containerKey`), under the row's key. */
+function scopeHash(key: Buffer, value: string): string {
+  return hash(key, value);
+}
+
+/** Every hashed place is this; a place kept before they were hashed is a plain id or `containerKey`. */
+const HASHED = /^[0-9a-f]{64}$/;
+
+/** Places (photograph ids, or `containerKey`s) as each key's rows keep them. */
+export type Places = { versions: number[]; under(version: number, values: string[], kind: "photo" | "container"): string[] };
+
+/**
+ * Places hashed before, by key and value: a trip's photographs are hashed once per process, not on every request
+ * about it (a description asks two or three times). Bounded; emptied when full.
+ */
+const hashedPlaces = new Map<string, Map<string, string>>();
+const HASHED_PLACES_MAX = 100_000;
+
+/** Places as the rows under each of these keys keep them: hashed under the key (see rememberForgotten). */
+function placesUnder(keys: VersionKey[]): Places {
+  const caches = new Map(
+    keys.map((k) => {
+      const print = fingerprint(k.key);
+      if (!hashedPlaces.has(print)) hashedPlaces.set(print, new Map());
+      return [k.version, { key: k.key, cache: hashedPlaces.get(print)! }] as const;
+    }),
+  );
+  return {
+    versions: keys.map((k) => k.version),
+    under: (version, values, kind) => {
+      const c = caches.get(version);
+      if (!c) return [];
+      return values.map((v) => {
+        const input = kind === "photo" ? photoScope(v) : v;
+        let h = c.cache.get(input);
+        if (!h) {
+          if (c.cache.size >= HASHED_PLACES_MAX) c.cache.clear();
+          h = scopeHash(c.key, input);
+          c.cache.set(input, h);
+        }
+        return h;
+      });
+    },
+  };
+}
+
+/** How a row under this key version keeps this photograph (for tests); nothing turns a hash back into an id. */
+export async function hashedPhotoId(photoId: string, keyVersion: number): Promise<string | null> {
+  const k = (await forgetKeyState()).keys.find((x) => x.version === keyVersion);
+  return k ? scopeHash(k.key, photoScope(photoId)) : null;
+}
+
 /** Refuse to forget anybody while their names could not be remembered safely. */
 export async function assertCanForget(): Promise<void> {
   const state = await forgetKeyState();
@@ -110,14 +170,15 @@ export async function assertCanForget(): Promise<void> {
 
 /** How a typed or stored name is hashed: CJK names without spaces, anything else normalized. */
 function normalizedForm(f: string): string {
-  return CJK.test(f) ? f.replace(/\s+/g, "") : normalizeName(f);
+  // A colon is how places and kinship titles are hashed ("photo:", "kin:", "trip:"): in a name it is a space.
+  return CJK.test(f) ? f.replace(/\s+/g, "") : normalizeName(f.replace(/:/g, " "));
 }
 
 /**
  * Remember these names of somebody being forgotten. A one-word name is kept with the photographs whose text the
  * forget went through (they were tagged on it, or it or its trip, collection or activity named them) and those
- * trips, collections and activities (see `containerKey`) — ids only — and is only ever looked for there: "Florence"
- * anywhere else is a city.
+ * trips, collections and activities (see `containerKey`) — hashed under the same key as the name — and is only ever
+ * looked for there: "Florence" anywhere else is a city.
  */
 /** One forgotten person's kinship titles and the photographs they were tagged on, both hashed under the row's key. */
 type KinshipGroup = { photos: string[]; kin: string[] };
@@ -130,13 +191,16 @@ export async function rememberForgotten(forms: { form: string; capitalizedOnly: 
   const w = state.write;
   if (!w) throw new Error(`Forgetting is paused: ${state.problem ?? "no key"}`);
   const rows = new Map<string, { hash: string; keyVersion: number; capitalizedOnly: boolean; derived: boolean; kinshipGroups: KinshipGroup[]; photoIds: string[]; taggedPhotoIds: string[]; containerIds: string[] }>();
+  // Where it is looked for is kept hashed under the same key as the name: a copy of the database says nothing of
+  // which photographs a forgotten entry covers.
+  const hashed = { photoIds: photoIds.map((id) => scopeHash(w.key, photoScope(id))), taggedPhotoIds: taggedPhotoIds.map((id) => scopeHash(w.key, photoScope(id))), containerIds: containerIds.map((k) => scopeHash(w.key, k)) };
   for (const f of forms) {
     const n = normalizedForm(f.form);
     if (!n || n.split(" ").length > MAX_WORDS) continue;
     const h = hash(w.key, n);
     const oneWord = (!CJK.test(n) && !n.includes(" ")) || Boolean(f.derived);
     // A spelling stored both ways is matched the stricter way.
-    rows.set(h, { hash: h, keyVersion: w.version, capitalizedOnly: (rows.get(h)?.capitalizedOnly ?? true) && f.capitalizedOnly, derived: (rows.get(h)?.derived ?? true) && Boolean(f.derived), kinshipGroups: oneWord ? [{ photos: taggedPhotoIds.map((id) => hash(w.key, `photo:${id}`)), kin: [...new Set([...(rows.get(h)?.kinshipGroups[0]?.kin ?? []), ...(f.kinship ?? []).map((k) => hash(w.key, `kin:${kinshipKey(k)}`))])] }] : [], photoIds: oneWord ? photoIds : [], taggedPhotoIds: oneWord ? taggedPhotoIds : [], containerIds: oneWord ? containerIds : [] });
+    rows.set(h, { hash: h, keyVersion: w.version, capitalizedOnly: (rows.get(h)?.capitalizedOnly ?? true) && f.capitalizedOnly, derived: (rows.get(h)?.derived ?? true) && Boolean(f.derived), kinshipGroups: oneWord ? [{ photos: hashed.taggedPhotoIds, kin: [...new Set([...(rows.get(h)?.kinshipGroups[0]?.kin ?? []), ...(f.kinship ?? []).map((k) => hash(w.key, `kin:${kinshipKey(k)}`))])] }] : [], photoIds: oneWord ? hashed.photoIds : [], taggedPhotoIds: oneWord ? hashed.taggedPhotoIds : [], containerIds: oneWord ? hashed.containerIds : [] });
   }
   if (!rows.size) return;
   // From the first name hashed under FORGET_KEY, running without that very key is noticed (see forgetKeyState).
@@ -224,17 +288,24 @@ export const NO_SCOPE: Scope = { rows: new Set(), own: new Set(), tagged: new Se
  * activities'), or about these trips, collections and activities (all their photographs, found in the database, not
  * only the few a request shows).
  */
-export async function forgottenScope(where: { photoIds?: string[]; containers?: { kind: "trip" | "collection" | "activity"; id: string }[] }, ts?: Pick<Tombstone, "scoped">): Promise<Scope> {
+export async function forgottenScope(where: { photoIds?: string[]; containers?: { kind: "trip" | "collection" | "activity"; id: string }[] }, ts?: Pick<Tombstone, "scoped" | "places">): Promise<Scope> {
   const photoIds = where.photoIds ?? [];
   const containers = where.containers ?? [];
   if (!photoIds.length && !containers.length) return NO_SCOPE;
-  // Nothing forgotten is kept by place: nothing to look up (read once per load of the forgotten names).
-  if (!(ts ? ts.scoped : await anyScoped())) return NO_SCOPE;
-  const around = photoIds.length ? await db.photo.findMany({ where: { id: { in: photoIds } }, select: { tripId: true, activityId: true, collections: { select: { collectionId: true } } } }) : [];
-  const keys = [
-    ...containers.map((c) => containerKey(c.kind, c.id)),
-    ...around.flatMap((p) => [p.tripId ? containerKey("trip", p.tripId) : null, p.activityId ? containerKey("activity", p.activityId) : null, ...p.collections.map((c) => containerKey("collection", c.collectionId))]).filter((k): k is string => Boolean(k)),
-  ];
+  // Nothing forgotten is kept by place: nothing to look up (read once per load of the forgotten names). Only the keys
+  // that have such rows are hashed under.
+  const places = ts ? (ts.scoped ? ts.places : null) : await scopedPlaces();
+  if (!places?.versions.length) return NO_SCOPE;
+  // The ids sent once each, not once per part: a whole trip's are thousands.
+  const around = photoIds.length
+    ? await db.$queryRaw<{ key: string }[]>`
+        WITH asked AS (SELECT unnest(${photoIds}::text[]) AS id)
+        SELECT DISTINCT 'trip:' || p."tripId" AS key FROM asked JOIN "Photo" p ON p.id = asked.id WHERE p."tripId" IS NOT NULL
+        UNION SELECT DISTINCT 'activity:' || p."activityId" FROM asked JOIN "Photo" p ON p.id = asked.id WHERE p."activityId" IS NOT NULL
+        UNION SELECT DISTINCT 'collection:' || c."collectionId" FROM asked JOIN "CollectionItem" c ON c."photoId" = asked.id`
+    : [];
+  // (As containerKey spells them.)
+  const keys = [...new Set([...containers.map((c) => containerKey(c.kind, c.id)), ...around.map((r) => r.key)])];
   const of = (kind: string) => containers.filter((c) => c.kind === kind).map((c) => c.id);
   // Each part on its own index; only when a whole container is asked about.
   const inContainers = containers.length
@@ -242,23 +313,137 @@ export async function forgottenScope(where: { photoIds?: string[]; containers?: 
         UNION SELECT id FROM "Photo" WHERE "activityId" = ANY(${of("activity")}::text[])
         UNION SELECT "photoId" FROM "CollectionItem" WHERE "collectionId" = ANY(${of("collection")}::text[])`
     : null;
-  const [rows, tagged] = await Promise.all([
-    db.$queryRaw<{ keyVersion: number; hash: string; own: boolean }[]>`
-      SELECT "keyVersion", hash, (${containers.length === 0} AND "taggedPhotoIds" && ${photoIds}::text[]) AS own FROM "ForgottenName"
-      WHERE "photoIds" && ${photoIds}::text[] OR "containerIds" && ${keys}::text[] ${inContainers ? Prisma.sql`OR "photoIds" && ARRAY(${inContainers})` : Prisma.empty}`,
+  const [inside, index, tagged] = await Promise.all([
+    inContainers ? db.$queryRaw<{ id: string }[]>`${inContainers}`.then((r) => r.map((x) => x.id)) : Promise.resolve([] as string[]),
+    placeIndex(),
     db.$queryRaw<{ personId: string }[]>`
-      SELECT "personId" FROM "Face" WHERE "personId" IS NOT NULL AND "photoId" = ANY(${photoIds}::text[])
-      UNION SELECT "personId" FROM "AnimalDetection" WHERE "personId" IS NOT NULL AND "photoId" = ANY(${photoIds}::text[])
-      ${inContainers ? Prisma.sql`UNION SELECT "personId" FROM "Face" WHERE "personId" IS NOT NULL AND "photoId" IN (${inContainers}) UNION SELECT "personId" FROM "AnimalDetection" WHERE "personId" IS NOT NULL AND "photoId" IN (${inContainers})` : Prisma.empty}`,
+      WITH asked AS (SELECT unnest(${photoIds}::text[]) AS id ${inContainers ? Prisma.sql`UNION ${inContainers}` : Prisma.empty})
+      SELECT DISTINCT f."personId" FROM asked JOIN "Face" f ON f."photoId" = asked.id WHERE f."personId" IS NOT NULL
+      UNION SELECT DISTINCT a."personId" FROM asked JOIN "AnimalDetection" a ON a."photoId" = asked.id WHERE a."personId" IS NOT NULL`,
   ]);
+  // Rows keep their places hashed under their own key (see rememberForgotten), so the places are hashed under each
+  // key that has rows and looked up in the rows' own (placeIndex) — and as they are too, for a row from before places
+  // were hashed (see hashPlainScopes). In memory: a whole trip is thousands of photographs, and comparing arrays in
+  // SQL went pairwise and took seconds.
+  const rows = new Set<string>();
+  const own = new Set<string>();
+  const find = (map: Map<string, string[]>, values: string[], into: Set<string>) => {
+    for (const v of values) for (const r of map.get(v) ?? []) into.add(r);
+  };
+  const all = [...new Set([...photoIds, ...inside])];
+  for (const version of places.versions) {
+    find(index.photos, [...places.under(version, all, "photo"), ...all], rows);
+    find(index.containers, [...places.under(version, keys, "container"), ...keys], rows);
+    if (!containers.length) find(index.tagged, [...places.under(version, photoIds, "photo"), ...photoIds], own);
+  }
+  for (const r of own) rows.add(r);
   // A whole trip, collection or activity is about many photographs, few of them hers: the wider place guard there.
-  return { rows: new Set(rows.map((r) => `${r.keyVersion}:${r.hash}`)), own: new Set(rows.filter((r) => r.own).map((r) => `${r.keyVersion}:${r.hash}`)), tagged: new Set(tagged.map((t) => t.personId)), photos: new Set(containers.length ? [] : photoIds), whole: containers.length > 0 };
+  return { rows, own, tagged: new Set(tagged.map((t) => t.personId)), photos: new Set(containers.length ? [] : photoIds), whole: containers.length > 0 };
 }
 
-/** Whether any forgotten name is kept with the places it was found. */
-async function anyScoped(): Promise<boolean> {
-  const [{ any }] = await db.$queryRaw<{ any: boolean }[]>`SELECT EXISTS (SELECT 1 FROM "ForgottenName" WHERE cardinality(COALESCE("photoIds", '{}')) > 0 OR cardinality(COALESCE("containerIds", '{}')) > 0) AS any`;
-  return any;
+/** Where the one-word forgotten names are kept, value by value: `${keyVersion}:${hash}` of every row keeping it. */
+type PlaceIndex = { sig: string; photos: Map<string, string[]>; tagged: Map<string, string[]>; containers: Map<string, string[]> };
+let placeIndexCache: PlaceIndex | null = null;
+
+/**
+ * Every row's places, read once and kept while no row has changed (any write gives a row a new xmin): the table is
+ * small, a row for each forgotten name, and a lookup is then a few map reads.
+ */
+async function placeIndex(): Promise<PlaceIndex> {
+  const [{ sig }] = await db.$queryRaw<{ sig: string }[]>`SELECT md5(COALESCE(string_agg(hash || ':' || xmin::text, ',' ORDER BY hash), '')) AS sig FROM "ForgottenName"`;
+  if (placeIndexCache?.sig === sig) return placeIndexCache;
+  const found = await db.$queryRaw<{ hash: string; keyVersion: number; photoIds: string[]; taggedPhotoIds: string[]; containerIds: string[] }[]>`
+    SELECT hash, "keyVersion", "photoIds", "taggedPhotoIds", "containerIds" FROM "ForgottenName"
+    WHERE cardinality(COALESCE("photoIds", '{}')) > 0 OR cardinality(COALESCE("containerIds", '{}')) > 0`;
+  const index: PlaceIndex = { sig, photos: new Map(), tagged: new Map(), containers: new Map() };
+  const add = (map: Map<string, string[]>, values: string[] | null, row: string) => {
+    for (const v of values ?? []) map.set(v, [...(map.get(v) ?? []), row]);
+  };
+  for (const r of found) {
+    const row = `${r.keyVersion}:${r.hash}`;
+    add(index.photos, r.photoIds, row);
+    add(index.tagged, r.taggedPhotoIds, row);
+    add(index.containers, r.containerIds, row);
+  }
+  placeIndexCache = index;
+  return index;
+}
+
+/** The keys that have one-word names kept by place, to hash places under; none when there are no such names. */
+async function scopedPlaces(): Promise<Places | null> {
+  await hashPlainScopesOnce();
+  const found = await db.$queryRaw<{ keyVersion: number }[]>`SELECT DISTINCT "keyVersion" FROM "ForgottenName" WHERE cardinality(COALESCE("photoIds", '{}')) > 0 OR cardinality(COALESCE("containerIds", '{}')) > 0`;
+  if (!found.length) return null;
+  const versions = new Set(found.map((f) => f.keyVersion));
+  return placesUnder((await forgetKeyState()).keys.filter((k) => versions.has(k.version)));
+}
+
+/**
+ * hashPlainScopes once in this process, before its first lookup (the web process also runs it before serving: see
+ * instrumentation.ts). Tried again on the next lookup if it failed; plain rows are matched as they are meanwhile.
+ */
+let hashedOnce: Promise<void> | null = null;
+export function hashPlainScopesOnce(): Promise<void> {
+  hashedOnce ??= hashPlainScopes().then(
+    () => undefined,
+    (err) => {
+      hashedOnce = null;
+      console.error("[forget] could not hash the places of forgotten names", err instanceof Error ? err.message : err);
+    },
+  );
+  return hashedOnce;
+}
+
+/**
+ * Rows kept before their places were hashed, rewritten with them hashed under the row's own key. At start-up and
+ * overnight, with the pending forgets; a row under a key this install cannot reproduce waits until it is back. Until
+ * then its places are matched as they are (see `placesUnder`). Only a row nothing else changed meanwhile is written.
+ */
+export async function hashPlainScopes(): Promise<number> {
+  // Only rows still holding a plain place: the pass that finds none is one cheap query.
+  const plainRows = await db.$queryRaw<{ hash: string }[]>`
+    SELECT hash FROM "ForgottenName" WHERE EXISTS (
+      SELECT 1 FROM unnest(COALESCE("photoIds", '{}') || COALESCE("taggedPhotoIds", '{}') || COALESCE("containerIds", '{}')) AS x(v) WHERE x.v !~ '^[0-9a-f]{64}$')`;
+  if (!plainRows.length) return 0;
+  const state = await forgetKeyState();
+  const rows = await db.forgottenName.findMany({ where: { hash: { in: plainRows.map((r) => r.hash) }, keyVersion: { in: state.keys.map((k) => k.version) } }, select: { hash: true, keyVersion: true, photoIds: true, taggedPhotoIds: true, containerIds: true } });
+  let done = 0;
+  for (const r of rows) {
+    const plain = (xs: string[]) => xs.some((x) => !HASHED.test(x));
+    if (![r.photoIds, r.taggedPhotoIds, r.containerIds].some(plain)) continue;
+    const key = state.keys.find((k) => k.version === r.keyVersion)!.key;
+    const hashed = (xs: string[], kind: "photo" | "container") => [...new Set(xs.map((x) => (HASHED.test(x) ? x : scopeHash(key, kind === "photo" ? photoScope(x) : x))))];
+    const written = await db.forgottenName.updateMany({
+      where: { hash: r.hash, photoIds: { equals: r.photoIds }, taggedPhotoIds: { equals: r.taggedPhotoIds }, containerIds: { equals: r.containerIds } },
+      data: { photoIds: hashed(r.photoIds, "photo"), taggedPhotoIds: hashed(r.taggedPhotoIds, "photo"), containerIds: hashed(r.containerIds, "container") },
+    });
+    done += written.count;
+  }
+  return done;
+}
+
+/**
+ * Of these photographs, those tagged with more than one forgotten person under the same name ("Ada" of Ada Byron
+ * and of Ada Lovelace): each forget went only by its own person's names there, so they are cleaned again with
+ * every forgotten entry once the second is gone (see recleanShared).
+ */
+export async function sharedByNamesakes(photoIds: string[]): Promise<string[]> {
+  if (!photoIds.length) return [];
+  const state = await forgetKeyState();
+  const places = placesUnder(state.keys);
+  const out = new Set<string>();
+  for (const version of places.versions) {
+    const hashed = places.under(version, photoIds, "photo");
+    // As they are too, for a row from before places were hashed.
+    const rows = await db.$queryRaw<{ id: string }[]>`
+      SELECT DISTINCT t.id FROM (SELECT unnest("taggedPhotoIds") AS id FROM "ForgottenName" WHERE "keyVersion" = ${version} AND jsonb_array_length(COALESCE("kinshipGroups", '[]'::jsonb)) > 1) t
+      JOIN unnest(${[...hashed, ...photoIds]}::text[]) AS h(id) ON h.id = t.id`;
+    const kept = new Set(rows.map((r) => r.id));
+    photoIds.forEach((id, i) => {
+      if (kept.has(hashed[i]) || kept.has(id)) out.add(id);
+    });
+  }
+  return [...out];
 }
 
 /**
@@ -271,6 +456,8 @@ export type Tombstone = {
   scoped: boolean;
   /** When it was read: a forget since then may have added names (see `tombstoneStale`). */
   loadedAt: Date;
+  /** Places as the rows keep them, under each key it was read with (see `forgottenScope`). */
+  places: Places;
   scrub(text: string, scope?: Scope): string;
   mentions(text: string, scope?: Scope): boolean;
   /** The helper's search summary: a one-word name only as a word of its own, not beside a place, a date or a name. */
@@ -279,7 +466,7 @@ export type Tombstone = {
   namesTag(tag: string, scope?: Scope): boolean;
 };
 
-const empty = (loadedAt: Date): Tombstone => ({ empty: true, scoped: false, loadedAt, scrub: (t) => t, mentions: () => false, scrubSummary: (t) => t, namesTag: () => false });
+const empty = (loadedAt: Date, keys: VersionKey[]): Tombstone => ({ empty: true, scoped: false, loadedAt, places: placesUnder(keys), scrub: (t) => t, mentions: () => false, scrubSummary: (t) => t, namesTag: () => false });
 
 /** Whether a forget has begun since this was read: its names may be missing from it. */
 export async function tombstoneStale(ts: Tombstone): Promise<boolean> {
@@ -289,12 +476,14 @@ export async function tombstoneStale(ts: Tombstone): Promise<boolean> {
 
 /** The forgotten names, ready to check text against. */
 export async function loadTombstone(): Promise<Tombstone> {
-  const loadedAt = new Date();
+  await hashPlainScopesOnce();
+  // By the database's clock, as forgets are stamped (see stampForget).
+  const loadedAt = await dbNow();
   const state = await forgetKeyState();
   const rows = await db.$queryRaw<{ hash: string; keyVersion: number; capitalizedOnly: boolean; derived: boolean; kinshipGroups: KinshipGroup[] | null; scoped: boolean }[]>`
     SELECT hash, "keyVersion", "capitalizedOnly", derived, "kinshipGroups", (cardinality(COALESCE("photoIds", '{}')) + cardinality(COALESCE("containerIds", '{}')) > 0) AS scoped
     FROM "ForgottenName" WHERE "keyVersion" = ANY(${state.keys.map((k) => k.version)}::int[])`;
-  if (!rows.length) return empty(loadedAt);
+  if (!rows.length) return empty(loadedAt, state.keys);
   const keys = state.keys.filter((k) => rows.some((r) => r.keyVersion === k.version));
   // Anybody the album knows now keeps their own name, whole or word by word. A one-word name kept with the places
   // it was found (scoped) is theirs only where they are tagged: "Ximena" is still taken out of the forgotten
@@ -323,7 +512,7 @@ export async function loadTombstone(): Promise<Tombstone> {
         return [key, { key, capOnly: r.capitalizedOnly, derived: r.derived, kinshipGroups: r.kinshipGroups ?? [], scoped: r.scoped, people: r.scoped ? whoseForm.get(key) : undefined }] as const;
       }),
   );
-  if (!byHash.size) return empty(loadedAt);
+  if (!byHash.size) return empty(loadedAt, keys);
   /** A forgotten name this normalized run is, if any. */
   type Found = { readonly key: string; readonly capOnly: boolean; readonly derived: boolean; readonly kinshipGroups: KinshipGroup[]; readonly scoped: boolean; readonly people: Set<string> | undefined };
   /** Every forgotten name this normalized run is, under any key (forgotten before FORGET_KEY was set, and after). */
@@ -338,15 +527,61 @@ export async function loadTombstone(): Promise<Tombstone> {
   type Mode = "prose" | "summary" | "tag";
   const spansIn = (text: string, scope: Scope | undefined, mode: Mode): [number, number][] => {
     const spans: [number, number][] = [];
-    const tokens = [...text.matchAll(/[\p{L}\p{M}\p{N}][\p{L}\p{M}\p{N}'’.]*/gu)].map((m) => {
-      // A possessive and a sentence's full stop stay outside the name.
-      const raw = m[0].replace(/['’]s$/u, "").replace(/\.$/u, (d) => (/^\p{L}\.(\p{L}\.)*$/u.test(m[0]) ? d : ""));
-      return { start: m.index!, end: m.index! + raw.length, raw, norm: normalizeName(raw) };
+    // Letters apart from digits ("madison2016" is Madison and a year), invisible characters inside a word kept in it.
+    const tokens = [...text.matchAll(/[\p{L}\p{M}][\p{L}\p{M}\p{Cf}'’.]*|\p{N}+/gu)].map((m) => {
+      // A possessive, a closing quote and a sentence's full stop stay outside the name ("May's", "‘May’", "'May'.");
+      // an initial keeps its stop ("J.").
+      let raw = m[0].replace(/['’]s$/u, "");
+      if (!/^\p{L}\.(\p{L}\.)*$/u.test(m[0])) raw = raw.replace(/[.'’]+$/u, "").replace(/['’]s$/u, "");
+      return { start: m.index!, end: m.index! + raw.length, raw, norm: normalizeName(raw.replace(/\p{Cf}/gu, "")) };
     });
+    let lakeCache: [number, number][] | null = null;
+    const lakes = () => (lakeCache ??= lakeSpans(text));
+    /** On a photograph a forgotten person was tagged on: see `strictHere`. */
+    const ownRow = (f: Found) => Boolean(scope && !scope.whole && scope.own.has(f.key));
     // A tag that is a one-word name, or its possessive: "ximena", "ximena's".
     const wholeTag = mode === "tag" && tokens.length === 1 && /^[\s]*[\p{L}\p{M}\p{N}'’.-]+[\s]*$/u.test(text);
     const titlePrefix = (t: { raw: string }) => /^(?:great|step|half|grand)$/iu.test(t.raw);
+    // A hashtag holding a forgotten name goes whole: a camel-case word or run of words of it that is a name kept here
+    // ("#MayTheBirthdayGirl", "#AdaByron"), or on their own photograph any name of theirs inside it
+    // ("#happybirthdaymay", "#amazinggrace").
+    const usable = (f: Found, n: number) => {
+      if (f.people && scope && [...f.people].some((id) => scope.tagged.has(id))) return false;
+      if (ownRow(f)) return !((n === 1 || f.scoped) && !scope!.rows.has(f.key));
+      // A name kept with this photograph (one its notes plainly name them on), as the forget reads it there.
+      if (scope && !scope.whole && scope.rows.has(f.key)) return true;
+      return n > 1 && !f.scoped && !f.derived;
+    };
+    const tagSpans: [number, number][] = [];
+    for (const h of text.matchAll(/[#＃]([\p{L}\p{M}\p{N}_\p{Cf}]+)/gu)) {
+      const words = splitCamel(h[1].replace(/\p{Cf}/gu, "")).split(/[^\p{L}\p{M}]+/u).filter(Boolean);
+      let hit = false;
+      // Off their own photographs as prose is read there: never a month ("#MayDay" of a photograph May was untagged
+      // from), and a name run into other letters only when it is five letters or more ("#planning" is no Ann).
+      const allowed = (f: Found, n: number, norm: string, run: boolean) => usable(f, n) && (ownRow(f) || (!isMonth(norm) && (!run || norm.length >= 5)));
+      for (let a = 0; a < words.length && !hit; a++) {
+        for (let n = Math.min(MAX_WORDS, words.length - a); n >= 1 && !hit; n--) {
+          const norm = normalizeName(words.slice(a, a + n).join(" "));
+          hit = lookupAll(norm).some((f) => allowed(f, n, norm, false));
+        }
+      }
+      const letters = normalizeName(h[1].replace(/[\p{N}_\p{Cf}]+/gu, "")).replace(/\s+/gu, "");
+      // Only where a name is kept with this photograph at all: the lookups are many. Three letters on their own
+      // photographs, five elsewhere.
+      if (scope && !scope.whole && scope.rows.size) {
+        const shortest = scope.own.size ? 3 : 5;
+        for (let a = 0; a + shortest <= letters.length && a < 60 && !hit; a++) {
+          for (let b = Math.min(letters.length, a + 30); b >= a + shortest && !hit; b--) {
+            const norm = letters.slice(a, b);
+            hit = lookupAll(norm).some((f) => scope.rows.has(f.key) && allowed(f, 1, norm, true));
+          }
+        }
+      }
+      if (hit) tagSpans.push([h.index!, h.index! + h[0].length]);
+    }
+    spans.push(...tagSpans);
     for (let i = 0; i < tokens.length; i++) {
+      if (tagSpans.some(([a, b]) => tokens[i].start >= a && tokens[i].end <= b)) continue;
       // Not inside a title: "Great-Grandma Ruth" and "Great Grandma Ruth" are not Grandma Ruth.
       if (i > 0 && isKinWord(tokens[i].raw) && isKinWord(tokens[i - 1].raw)) {
         const sep = text.slice(tokens[i - 1].end, tokens[i].start);
@@ -357,13 +592,32 @@ export async function loadTombstone(): Promise<Tombstone> {
         // Only words next to each other: a run broken by anything but a hyphen or a space is not a name.
         if (run.some((t, j) => j > 0 && !/^[\s\-‐]+$/u.test(text.slice(run[j - 1].end, t.start)))) continue;
         // The same name may have been forgotten more than once, under either key: whichever is in play here counts.
-        const attempt = (found: Found): number | null => {
+        const attempt = (found: Found, plural = false): number | null => {
           let start = run[0].start;
+          // On their own photograph (a full name whose first name is theirs here counts too), strictly: every match,
+          // in any case and any field, a kinship word before it taken with it, and only a month used as a date left
+          // (see strict-names.ts). Over-removal there loses a word on their own photograph; the language rules below,
+          // which decide what is somebody else's or a place's, are for everywhere else.
+          if (ownRow(found) || (n > 1 && lookupAll(run[0].norm).some(ownRow))) {
+            if ((n === 1 || found.scoped) && !scope?.rows.has(found.key)) return null;
+            if (found.people && [...found.people].some((id) => scope!.tagged.has(id))) return null;
+            // "Lake Geneva at dawn.", as the forget reads it there (strict-names.ts).
+            if (lakes().some(([a, b]) => run[0].start >= a && run[n - 1].end <= b)) return null;
+            if (n === 1 && !plural && isMonth(run[0].raw) && monthAsDate(strictNormalize(text.slice(0, run[0].start)), strictNormalize(text.slice(run[0].end)), text.slice(run[0].end))) return null;
+            let k = i;
+            // "Great", "Grand", "Step" or "Half" only as part of a kinship word taken already: "The Great Ada show."
+            while (k > 0 && isKinWord(tokens[k - 1].raw) && !FUNCTION_WORDS.has(tokens[k - 1].norm) && /^(?:[ \t]+|[-‐])$/u.test(text.slice(tokens[k - 1].end, tokens[k].start)) && (k < i || !titlePrefix(tokens[k - 1]))) k--;
+            return tokens[k].start;
+          }
+          if (plural) return null;
           if (n === 1 || found.scoped) {
             // Only where the forget found them; a row from before that was kept, nowhere.
             if (!scope?.rows.has(found.key)) return null;
             // Somebody the album knows by that name is on these photographs: it is theirs here.
             if (found.people && [...found.people].some((id) => scope.tagged.has(id))) return null;
+            // A month ("May" of May Lee) only in prose on their own photographs, and not where it is a date ("May 2020",
+            // "in May", "May Day", "The June sun": see notThePerson), as the forget reads it there.
+            if (n === 1 && isMonth(run[0].raw) && (mode !== "prose" || !scope.own.has(found.key))) return null;
             if (mode === "tag") {
               if (!wholeTag) return null;
             } else if (mode === "summary") {
@@ -386,7 +640,7 @@ export async function loadTombstone(): Promise<Tombstone> {
               // forgotten Adas keep their own ("Great Aunt Ada" on hers, "Grandma Ada" on Ada Byron's).
               const accepts = (groups: KinshipGroup[]) => groups.length === 0 || groups.some((g) => g.kin.length === 0 || g.kin.includes(kinRun));
               // Their photographs are kept hashed too, so the groups say nothing without the key.
-              const here = new Set([...scope.photos].map((id) => hash(keyOf(found.key), `photo:${id}`)));
+              const here = new Set([...scope.photos].map((id) => scopeHash(keyOf(found.key), photoScope(id))));
               const theirs = found.kinshipGroups.filter((g) => g.photos.some((p) => here.has(p)));
               if (scope.own.has(found.key) && theirs.length) {
                 if (!accepts(theirs)) return null;
@@ -396,13 +650,22 @@ export async function loadTombstone(): Promise<Tombstone> {
                 if (found.derived) return null;
               }
             }
-          } else if (found.capOnly && !guarded(text, run, true)) return null;
+            // A full name made only of everyday words ("Holly Berry") in keywords or a tag is the thing, in any case,
+            // off their own photographs (the forget review's C).
+          } else if (found.capOnly && (mode !== "prose" || !guarded(text, run, true))) return null;
           return start;
         };
         let start: number | null = null;
         for (const found of lookupAll(run.map((t) => t.norm).join(" "))) {
           start = attempt(found);
           if (start !== null) break;
+        }
+        // A plural or possessive without its apostrophe ("Madisons", "mays"), on their own photograph only.
+        if (start === null && n === 1 && /s$/u.test(run[0].norm)) {
+          for (const found of lookupAll(run[0].norm.slice(0, -1))) {
+            start = attempt(found, true);
+            if (start !== null) break;
+          }
         }
         if (start === null) continue;
         spans.push([start, run[n - 1].end]);
@@ -445,6 +708,7 @@ export async function loadTombstone(): Promise<Tombstone> {
     empty: false,
     scoped: [...byHash.values()].some((v) => v.scoped),
     loadedAt,
+    places: placesUnder(keys),
     scrub: (text, scope) => (typeof text === "string" && text ? replaceSpans(text, spansIn(text, scope, "prose")) : text),
     mentions: (text, scope) => typeof text === "string" && spansIn(text, scope, "prose").length > 0,
     scrubSummary: (text, scope) => (typeof text === "string" && text ? replaceSpans(text, spansIn(text, scope, "summary")) : text),

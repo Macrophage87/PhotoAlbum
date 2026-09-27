@@ -103,7 +103,7 @@ export default async function PeoplePage() {
                     faceCount: c.faceCount,
                     editableCount: c.editableCount,
                     looksLike: c.looksLike ? { id: c.looksLike.id, name: c.looksLike.name, kind: c.looksLike.kind } : null,
-                    faces: c.faces.map((f) => ({ ...f, updatedAt: f.updatedAt.toISOString() })),
+                    faces: c.faces,
                   }}
                 />
               ))}

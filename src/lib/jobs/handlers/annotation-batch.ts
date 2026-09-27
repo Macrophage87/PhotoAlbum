@@ -4,7 +4,7 @@ import { annotationGates, notOptedOutWhere } from "@/lib/annotation/eligibility"
 import { buildPlaceRequest, buildRequest, loadItem } from "@/lib/annotation/request";
 import { nameScrubber } from "@/lib/people/unpermitted";
 import { loadTombstone, tombstoneStale } from "@/lib/people/tombstone";
-import { forgetRunning } from "@/lib/people/names-changed";
+import { dbNow, forgetRunning } from "@/lib/people/names-changed";
 import { applyAnnotation, parseMessageContent, recordFailure } from "@/lib/annotation/apply";
 import { applyPlaceEstimate, parsePlaceContent, recordPlaceFailure } from "@/lib/annotation/place";
 import { enqueue } from "../boss";
@@ -250,7 +250,7 @@ export async function annotationBackfill(job: AnnotationBackfillJob): Promise<vo
         // Skips belong to the part, so only its first row carries them.
         const skipData = gi === 0 ? { skipped, skippedReasons: reasons } : {};
         if (chunkNo > 0) {
-          rowId = (await db.annotationBatch.create({ data: { anthropicBatchId: `pending-${batch.id}-${chunkNo}`, parentId: batch.id, scope: batch.scope as object, requested: 0, createdById: batch.createdById }, select: { id: true } })).id;
+          rowId = (await db.annotationBatch.create({ data: { anthropicBatchId: `pending-${batch.id}-${chunkNo}`, parentId: batch.id, scope: batch.scope as object, requested: 0, createdById: batch.createdById, createdAt: await dbNow() }, select: { id: true } })).id;
           rowLive = false;
         }
         chunkNo += 1;

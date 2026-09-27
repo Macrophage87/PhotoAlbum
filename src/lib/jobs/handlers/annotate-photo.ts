@@ -3,6 +3,7 @@ import { annotationGates, optOutReason } from "@/lib/annotation/eligibility";
 import { buildRequest, loadItem } from "@/lib/annotation/request";
 import { applyAnnotation, parseMessageContent, recordFailure } from "@/lib/annotation/apply";
 import { permittedNames } from "@/lib/people/gates";
+import { dbNow } from "@/lib/people/names-changed";
 import { requestCarriesMembersOnly } from "@/lib/annotation/members-only";
 import type { AnnotatePhotoJob } from "../queues";
 
@@ -18,7 +19,7 @@ export async function annotatePhoto(job: AnnotatePhotoJob): Promise<void> {
   const reason = await optOutReason(item.id);
   if (reason) return;
   // Taken before the names are read: an answer to a request older than a forget or a consent change is not stored.
-  const requestedAt = new Date();
+  const requestedAt = await dbNow();
   // Names go to the helper only for confirmed people whose indexing is on and who are not minors; pets always.
   const names = await permittedNames(item.id);
   const request = await buildRequest(item, gates.model, names);

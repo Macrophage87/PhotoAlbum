@@ -19,7 +19,7 @@ import type { ActivityType } from "@/generated/prisma/enums";
 import type { ActivityFormState } from "@/components/activities/ActivityForm";
 import { handWrittenDescription, handWrittenMembersOnly, judgeDescription } from "@/lib/annotation/members-only";
 import { descriptionStaysHelpers } from "@/lib/annotation/helper-text";
-import { namesChangedSince } from "@/lib/people/names-changed";
+import { dbNow, namesChangedSince } from "@/lib/people/names-changed";
 import { NAMES_CHANGED, withoutUnpermittedNames } from "@/lib/annotation/container";
 import { forgetState } from "@/lib/people/names-changed";
 import { forgottenScope, loadTombstone } from "@/lib/people/tombstone";
@@ -132,7 +132,7 @@ export async function setActivityShare(slug: string, id: string, on: boolean): P
   // otherwise open an afternoon of a trip that is already gone.
   const shared = await db.activity.updateMany({ where: { id, trip: { deletingAt: null } }, data: { shareToken: on ? generateToken() : null } });
   if (!shared.count) throw new Error("Trip not found");
-  await db.photo.updateMany({ where: { activityId: id }, data: { updatedAt: new Date() } });
+  await db.photo.updateMany({ where: { activityId: id }, data: { updatedAt: new Date(), imageVersion: { increment: 1 } } });
   revalidatePath(`/trips/${slug}/activities/${id}`);
 }
 
@@ -215,7 +215,8 @@ export async function describeActivityWithAi(slug: string, id: string, note?: st
   if (activity.trip.annotationOptOut) throw new Error(`The trip ${activity.trip.title} is opted out of the AI helper`);
   if (!activity.photos.length) throw new Error("There are no photographs on this activity to describe it from");
 
-  const requestedAt = new Date();
+  // By the database's clock, as forgets are stamped.
+  const requestedAt = await dbNow();
   const names = [...new Set((await Promise.all(activity.photos.map((p) => permittedNames(p.id)))).flat())];
   // The family's words go without the names the helper may not be told, the note beside the button included.
   // One-word forgotten names count by every photograph in it, not only the few it is shown.
@@ -243,10 +244,9 @@ export async function describeActivityWithAi(slug: string, id: string, note?: st
   // Somebody on these photographs forgotten, renamed or no longer to be named while it was being written, or anybody
   // forgotten at all: its answer may name them, so it is not kept.
   await db.$transaction(async (tx) => {
-    const forget = await forgetState(tx, tombstone.loadedAt);
-    if (forget.underWay || (await namesChangedSince(activity.photos.map((p) => p.id), requestedAt))) throw new Error(NAMES_CHANGED);
-    // Somebody forgotten since the forgotten names were read: read them again.
-    if (forget.reload) parsed.description = (await loadTombstone()).scrub(parsed.description, await forgottenScope({ containers: [{ kind: "activity", id }] }));
+    // Anybody forgotten since the request (and so since the forgotten names were read, after it): not kept.
+    const forget = await forgetState(tx, tombstone.loadedAt, requestedAt);
+    if (forget.underWay || forget.since || forget.reload || (await namesChangedSince(activity.photos.map((p) => p.id), requestedAt))) throw new Error(NAMES_CHANGED);
     await tx.activity.update({ where: { id }, data: { description: parsed.description, descriptionMembersOnly: judged.membersOnly, descriptionTitleOnly: judged.titleOnly, descriptionTitleWords: judged.titleOnly ? (judged.titleWords ?? []) : [], descriptionSharedAt: null, descriptionByHelper: true } });
   });
   revalidatePath(`/trips/${slug}/activities/${id}`);

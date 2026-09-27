@@ -8,7 +8,7 @@ import { photoCardSelect } from "@/lib/photos/queries";
 import { isMinor, minorsCheckPasses } from "./consent";
 import { readableTitle } from "@/lib/photos/readable-text";
 
-export type PersonCard = { id: string; name: string; kind: "HUMAN" | "PET"; species: string | null; isFlock: boolean; relationship: string | null; faceIndexing: boolean; pendingDecision: boolean; optedOut: boolean; basis: "birthday" | "attestation" | "none"; minor: boolean; photoCount: number; sample: { id: string; updatedAt: Date } | null };
+export type PersonCard = { id: string; name: string; kind: "HUMAN" | "PET"; species: string | null; isFlock: boolean; relationship: string | null; faceIndexing: boolean; pendingDecision: boolean; optedOut: boolean; basis: "birthday" | "attestation" | "none"; minor: boolean; photoCount: number; sample: { id: string; imageVersion: number } | null };
 
 export async function listPeople(): Promise<PersonCard[]> {
   // Counted in the database rather than by loading every face: a person on thousands of photographs is one row here.
@@ -17,7 +17,7 @@ export async function listPeople(): Promise<PersonCard[]> {
   // A pet the animal matcher found and somebody agreed with is on those photographs as surely as a tagged one.
   const [people, counts] = await Promise.all([
     db.person.findMany({ orderBy: { name: "asc" } }),
-    db.$queryRaw<{ personId: string; n: number; sampleId: string | null; sampleUpdatedAt: Date | null }[]>`
+    db.$queryRaw<{ personId: string; n: number; sampleId: string | null; sampleImageVersion: number | null }[]>`
       WITH seen AS (
         SELECT "personId", "photoId" FROM "Face" WHERE status = 'CONFIRMED' AND "personId" IS NOT NULL
         UNION
@@ -25,18 +25,18 @@ export async function listPeople(): Promise<PersonCard[]> {
       )
       SELECT s."personId", count(*)::int AS n,
         (array_agg(p.id ORDER BY p."takenAt" NULLS LAST, p.id) FILTER (WHERE p.status = 'READY'))[1] AS "sampleId",
-        (array_agg(p."updatedAt" ORDER BY p."takenAt" NULLS LAST, p.id) FILTER (WHERE p.status = 'READY'))[1] AS "sampleUpdatedAt"
+        (array_agg(p."imageVersion" ORDER BY p."takenAt" NULLS LAST, p.id) FILTER (WHERE p.status = 'READY'))[1] AS "sampleImageVersion"
       FROM seen s JOIN "Photo" p ON p.id = s."photoId" AND p."trashedAt" IS NULL
       GROUP BY s."personId"`,
   ]);
   const byPerson = new Map(counts.map((c) => [c.personId, c]));
   return people.map((p) => {
     const c = byPerson.get(p.id);
-    return { id: p.id, name: p.name, kind: p.kind, species: p.species, isFlock: p.isFlock, relationship: p.relationship, faceIndexing: p.faceIndexing, pendingDecision: p.pendingDecision, optedOut: Boolean(p.optedOutAt), basis: p.adultAttestedAt ? "attestation" : p.birthday && minorsCheckPasses(p) ? "birthday" : "none", minor: isMinor(p), photoCount: c?.n ?? 0, sample: c?.sampleId && c.sampleUpdatedAt ? { id: c.sampleId, updatedAt: c.sampleUpdatedAt } : null };
+    return { id: p.id, name: p.name, kind: p.kind, species: p.species, isFlock: p.isFlock, relationship: p.relationship, faceIndexing: p.faceIndexing, pendingDecision: p.pendingDecision, optedOut: Boolean(p.optedOutAt), basis: p.adultAttestedAt ? "attestation" : p.birthday && minorsCheckPasses(p) ? "birthday" : "none", minor: isMinor(p), photoCount: c?.n ?? 0, sample: c?.sampleId && c.sampleImageVersion !== null ? { id: c.sampleId, imageVersion: c.sampleImageVersion } : null };
   });
 }
 
-export type ClusterFace = { faceId: string; photoId: string; updatedAt: Date; width: number | null; height: number | null; box: [number, number, number, number]; /** On a photograph this member may say who is in: theirs, or any for an admin. */ editable: boolean };
+export type ClusterFace = { faceId: string; photoId: string; imageVersion: number; width: number | null; height: number | null; box: [number, number, number, number]; /** On a photograph this member may say who is in: theirs, or any for an admin. */ editable: boolean };
 export type UnnamedCluster = {
   id: string;
   faceCount: number;
@@ -70,7 +70,7 @@ export async function listUnnamedClusters(user: Pick<ViewerUser, "id" | "role"> 
         where: { status: { in: ["DETECTED", "REJECTED"] }, photo: { ...NOT_TRASHED, status: "READY" } },
         take: CLUSTER_FACE_LIMIT,
         orderBy: { confidence: "desc" },
-        select: { id: true, photoId: true, box: true, createdAt: true, photo: { select: { updatedAt: true, width: true, height: true, uploaderId: true } } },
+        select: { id: true, photoId: true, box: true, createdAt: true, photo: { select: { imageVersion: true, width: true, height: true, uploaderId: true } } },
       },
     },
   });
@@ -82,7 +82,7 @@ export async function listUnnamedClusters(user: Pick<ViewerUser, "id" | "role"> 
     oldest: c.faces.reduce((m, f) => (f.createdAt < m ? f.createdAt : m), c.faces[0].createdAt),
     looksLike: suggestions.get(c.id) ?? null,
     editableCount: user && isAdmin(user) ? c.faceCount : own.get(c.id) ?? 0,
-    faces: c.faces.map((f) => ({ faceId: f.id, photoId: f.photoId, updatedAt: f.photo.updatedAt, width: f.photo.width, height: f.photo.height, box: f.box as [number, number, number, number], editable: canEditMedia(user, f.photo) })),
+    faces: c.faces.map((f) => ({ faceId: f.id, photoId: f.photoId, imageVersion: f.photo.imageVersion, width: f.photo.width, height: f.photo.height, box: f.box as [number, number, number, number], editable: canEditMedia(user, f.photo) })),
   }));
 }
 
@@ -153,7 +153,7 @@ export async function peopleOnPhoto(photoId: string) {
   return faces.map((f) => ({ id: f.id, box: f.box as [number, number, number, number], status: f.status, hand: f.confidence === 0, person: f.person, proposedPerson: f.proposedPerson, clusterId: f.cluster?.id ?? null }));
 }
 
-export type ProposalRow = { faceId: string; photo: { id: string; updatedAt: Date }; box: [number, number, number, number]; person: { id: string; name: string; kind: "HUMAN" | "PET" }; label: string; childhood: boolean; /** Whether this member may answer it: the photograph's uploader, or an admin. */ editable: boolean };
+export type ProposalRow = { faceId: string; photo: { id: string; imageVersion: number }; box: [number, number, number, number]; person: { id: string; name: string; kind: "HUMAN" | "PET" }; label: string; childhood: boolean; /** Whether this member may answer it: the photograph's uploader, or an admin. */ editable: boolean };
 
 /** Open proposals for some photos (or all), oldest first, marked with whether `user` may answer each. */
 export async function proposalsFor(photoIds?: string[], user: Pick<ViewerUser, "id" | "role"> | null = null): Promise<ProposalRow[]> {
@@ -161,25 +161,25 @@ export async function proposalsFor(photoIds?: string[], user: Pick<ViewerUser, "
     where: { status: "PROPOSED", proposedPersonId: { not: null }, photo, ...(photoIds ? { photoId: { in: photoIds } } : {}) },
     orderBy: { createdAt: "asc" },
     take,
-    select: { id: true, box: true, confidence: true, ageAtCaptureYears: true, photo: { select: { id: true, uploaderId: true, updatedAt: true, caption: true, title: true, membersTitle: true, originalName: true, takenAt: true, estimatedDate: true } }, proposedPerson: { select: { id: true, name: true, kind: true, birthday: true } } },
+    select: { id: true, box: true, confidence: true, ageAtCaptureYears: true, photo: { select: { id: true, uploaderId: true, imageVersion: true, caption: true, title: true, membersTitle: true, originalName: true, takenAt: true, estimatedDate: true } }, proposedPerson: { select: { id: true, name: true, kind: true, birthday: true } } },
   }));
   const rows: ProposalRow[] = faces.map((f) => {
     const p = f.proposedPerson!;
     const date = f.photo.takenAt ?? f.photo.estimatedDate;
     const age = p.birthday && date ? Math.floor((date.getTime() - p.birthday.getTime()) / (365.25 * 86_400_000)) : null;
     const label = f.confidence === 0 ? `named in the notes on ${f.photo.caption ?? readableTitle(f.photo, true) ?? f.photo.originalName}` : age !== null ? `about ${age} years old in ${f.photo.caption ?? readableTitle(f.photo, true) ?? f.photo.originalName}` : (f.photo.caption ?? readableTitle(f.photo, true) ?? f.photo.originalName);
-    return { faceId: f.id, photo: { id: f.photo.id, updatedAt: f.photo.updatedAt }, box: f.box as [number, number, number, number], person: { id: p.id, name: p.name, kind: p.kind }, label, childhood: age !== null && age < 13, editable: canEditMedia(user, f.photo) };
+    return { faceId: f.id, photo: { id: f.photo.id, imageVersion: f.photo.imageVersion }, box: f.box as [number, number, number, number], person: { id: p.id, name: p.name, kind: p.kind }, label, childhood: age !== null && age < 13, editable: canEditMedia(user, f.photo) };
   });
   // Animal proposals ride in the same list under an `animal:` id; the actions tell the two apart by the prefix.
   const animals = await answerableFirst(user, (photo, take) => db.animalDetection.findMany({
     where: { status: "PROPOSED", proposedPersonId: { not: null }, photo, ...(photoIds ? { photoId: { in: photoIds } } : {}) },
     orderBy: { createdAt: "asc" },
     take,
-    select: { id: true, box: true, species: true, createdAt: true, photo: { select: { id: true, uploaderId: true, updatedAt: true, caption: true, title: true, membersTitle: true, originalName: true } }, proposedPerson: { select: { id: true, name: true, kind: true } } },
+    select: { id: true, box: true, species: true, createdAt: true, photo: { select: { id: true, uploaderId: true, imageVersion: true, caption: true, title: true, membersTitle: true, originalName: true } }, proposedPerson: { select: { id: true, name: true, kind: true } } },
   }));
   for (const a of animals) {
     const p = a.proposedPerson!;
-    rows.push({ faceId: `animal:${a.id}`, photo: { id: a.photo.id, updatedAt: a.photo.updatedAt }, box: a.box as [number, number, number, number], person: { id: p.id, name: p.name, kind: p.kind }, label: `a ${a.species.toLowerCase()} spotted in ${a.photo.caption ?? readableTitle(a.photo, true) ?? a.photo.originalName}`, childhood: false, editable: canEditMedia(user, a.photo) });
+    rows.push({ faceId: `animal:${a.id}`, photo: { id: a.photo.id, imageVersion: a.photo.imageVersion }, box: a.box as [number, number, number, number], person: { id: p.id, name: p.name, kind: p.kind }, label: `a ${a.species.toLowerCase()} spotted in ${a.photo.caption ?? readableTitle(a.photo, true) ?? a.photo.originalName}`, childhood: false, editable: canEditMedia(user, a.photo) });
   }
   // The ones this member can answer come first; sort is stable, so each part stays oldest first.
   return rows.sort((a, b) => Number(b.editable) - Number(a.editable));

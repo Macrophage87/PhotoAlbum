@@ -174,8 +174,8 @@ export async function applyPlaceEstimate(photoId: string, estimate: PlaceEstimat
   // in the write itself.
   const stale = Symbol("stale");
   const outcome = await db.$transaction(async (tx) => {
-    const forget = await forgetState(tx, tombstone.loadedAt);
-    if (forget.underWay) throw stale;
+    const forget = await forgetState(tx, tombstone.loadedAt, requestedAt);
+    if (forget.underWay || forget.since) throw stale;
     // Somebody forgotten since the forgotten names were read: read them again.
     if (forget.reload && place) {
       const fresh = await loadTombstone();

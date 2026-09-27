@@ -18,7 +18,7 @@ export default async function TrashPage() {
     where: { trashedAt: { not: null } },
     orderBy: { trashedAt: "desc" },
     select: {
-      id: true, title: true, membersTitle: true, caption: true, originalName: true, kind: true, updatedAt: true, takenAt: true, trashedAt: true, trashReason: true, trashNote: true,
+      id: true, title: true, membersTitle: true, caption: true, originalName: true, kind: true, updatedAt: true, imageVersion: true, takenAt: true, trashedAt: true, trashReason: true, trashNote: true,
       trashedBy: { select: { name: true, email: true } },
       uploader: { select: { name: true, email: true } },
       trip: { select: { slug: true, title: true } },
