@@ -3,7 +3,8 @@
  * a child's name that is also an everyday word, a month or season, or a place. Everything else stays as strict as
  * ever: accents, invisible characters, plurals and possessives, hyphens, dashes, hashtags, somebody's full name.
  *
- * Only a match that is exactly one of their single-word names (no "'s", no plural "s"), written in plain letters (no
+ * Only a match that is exactly one of their single-word first names (no "'s", no plural "s", never a surname: see
+ * strictForms), written in plain letters (no
  * accent, invisible character or compatibility form inside it), with nothing but a space or a stop against it (no
  * hyphen, digit or apostrophe), is ever excused, and only by one of these:
  *
@@ -12,14 +13,16 @@
  *     (lower case by design); never after "with", "and", "&", "+", "by", "for" or "from", or before "and", "&" or "+"
  *     ("presents for rose", "rose and ben"); never before something a person does ("will swim").
  * (b) "time": a month or season after a time word ("in", "during", "since", "until", optionally with "the", or
- *     "early", "late", "mid", "last", "next", "this", "every", "all"), or before a time noun ("vacation", "break",
+ *     "early", "late", "mid", "last", "next", "every", "all"; not "this": "Look at this May!"), or before a time noun ("vacation", "break",
  *     "holidays", "sun", "sunshine", "morning", "evening", "weather", "day", "night"): "A swim in May", "Late June at
  *     the lake", "Summer vacation", "June sunshine". Never after "with", "from", "by", "for", "and", "&" or "+"
  *     ("Flowers from June"), never before something a person does or "is", "was", "has", "had", "and", "&", "+"
  *     ("Last May swam", "This June is so happy").
- * (c) "place": a listed place (PLACE_NAMES) before a capitalized place word ("Brooklyn Bridge", "Madison Square
- *     Garden"), or after "in", "at", "to", "from", "near", "around", "across", "visiting" or "leaving", optionally with
- *     "the": "The Duomo in Florence", "Driving to Austin". Never after "with", "and", "&", "+", "for" or "by"; never
+ * (c) "place": a listed place (PLACE_NAMES) before a capitalized place word ("Brooklyn Bridge", "at Madison Square
+ *     Garden"), or after "in", "across", "around", "visiting" or "leaving", optionally with "the" ("The Duomo in
+ *     Florence"), or after "to" or "from" right after a word of travel ("Driving to Austin", "Flight from Paris"; not
+ *     "A letter to Austin" or "A drawing from Madison"). "At" and "near" alone never make it a place ("Smiling at
+ *     Jordan"). Never after "with", "and", "&", "+", "for" or "by"; never
  *     before something a person does, "is", "was", "has", "had", "at the" ("Madison at the zoo"), or "and" and a name
  *     ("Paris and Leo"). Their full name is never a place.
  *
@@ -35,11 +38,17 @@ export type Excuse = "word" | "time" | "place";
 const EVERYDAY = new Set([...COMMON_WORD_NAMES, "jack"].filter((w) => w !== "the"));
 const MONTH_WORDS = new Set(["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"]);
 const SEASONS = new Set(["spring", "summer", "autumn", "fall", "winter"]);
-const TIME_BEFORE = new Set(["in", "during", "since", "until", "early", "late", "mid", "last", "next", "this", "every", "all"]);
+const TIME_BEFORE = new Set(["in", "during", "since", "until", "early", "late", "mid", "last", "next", "every", "all"]);
 /** Time words that may have "the" before the month or season: "in the summer". */
 const TIME_BEFORE_THE = new Set(["in", "during", "since", "until"]);
 const TIME_AFTER = new Set(["vacation", "break", "holidays", "sun", "sunshine", "morning", "evening", "weather", "day", "night"]);
-const PLACE_BEFORE = new Set(["in", "at", "to", "from", "near", "around", "across", "visiting", "leaving"]);
+const PLACE_BEFORE = new Set(["in", "around", "across", "visiting", "leaving"]);
+/** Words of travel that make "to" or "from" after them a journey's: "Driving to Austin", "Flight from Paris". */
+const TRAVEL = new Set([
+  "drive", "drives", "driving", "drove", "driven", "fly", "flies", "flying", "flew", "flown", "flight", "flights", "trip", "trips", "journey", "travel", "travels",
+  "traveling", "travelling", "traveled", "travelled", "headed", "heading", "back", "moving", "moved", "train", "bus", "ferry", "walk", "walked", "walking",
+  "arrive", "arrived", "arriving", "return", "returned", "returning", "sailed", "sailing",
+]);
 const PLACE_AFTER = new Set(["bridge", "square", "park", "garden", "river", "street", "avenue", "station", "harbor", "harbour", "valley", "beach", "airport", "zoo", "museum", "cathedral"]);
 /** Words before a name that make it somebody's: "with Rose", "from June", "and Paris". */
 const NEVER_BEFORE_WORD = new Set(["with", "and", "&", "+", "by", "for", "from"]);
@@ -116,7 +125,7 @@ export function relaxedExcuse(m: Match, form: string): Excuse | null {
     const original = m.text.slice(m.end);
     if (/^[ \t]+at[ \t]+the(?![\p{L}])/iu.test(original) || /^[ \t]*(?:and|&|\+)[ \t]+\p{Lu}/u.test(original)) return null;
     const placeWord = /^[ \t]+(\p{Lu}\p{Ll}+)(?![\p{L}\p{M}'’-])/u.exec(original)?.[1];
-    const placeBefore = PLACE_BEFORE.has(prev) || (prev === "the" && PLACE_BEFORE.has(prev2));
+    const placeBefore = PLACE_BEFORE.has(prev) || (prev === "the" && PLACE_BEFORE.has(prev2)) || ((prev === "to" || prev === "from") && TRAVEL.has(prev2));
     if (placeBefore || (placeWord && PLACE_AFTER.has(placeWord.toLowerCase()))) return "place";
   }
   return null;

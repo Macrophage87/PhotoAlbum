@@ -36,6 +36,11 @@ const SHARED: Record<"word" | "time" | "place", Row[]> = {
     { name: "Madison", text: "Madison Square Garden at night." },
     { name: "Jordan", text: "A float down the Jordan River." },
     { name: "Paris", text: "Crepes near the Eiffel Tower, visiting Paris." },
+    { name: "Paris", text: "Flight from Paris." },
+    { name: "Austin", text: "A road trip to Austin." },
+    { name: "Madison", text: "A concert at Madison Square Garden." },
+    { name: "Jordan", text: "Wading across the Jordan." },
+    { name: "Paris Jackson", text: "Crepes in Paris." },
     { name: "Florence Okafor", text: "The Duomo in Florence." },
     { name: "Florence", text: "trip to florence", list: true },
   ],
@@ -82,6 +87,9 @@ const HELD: Record<"word" | "time" | "place", Row[]> = {
     { name: "June", text: "Junes vacation photos." },
     // No time word before and no time noun after.
     { name: "Summer", text: "Summer at the beach." },
+    // Not after "this": that is somebody as often as a time.
+    { name: "May", text: "Look at this May!" },
+    { name: "May Chen", text: "Proud of this May." },
     { name: "May", text: "A hug from May." },
     // A hyphen stays strict, so does an accent.
     { name: "June", text: "A mid-June picnic." },
@@ -98,6 +106,14 @@ const HELD: Record<"word" | "time" | "place", Row[]> = {
     { name: "Austin", text: "Driving to Austin's school." },
     { name: "Madison", text: "Back in Madison at the zoo." },
     { name: "Paris", text: "We went to Paris and Leo came too." },
+    // "To" and "from" only after a word of travel; "at" and "near" never by themselves.
+    { name: "Austin", text: "A letter to Austin." },
+    { name: "Madison", text: "A drawing from Madison." },
+    { name: "Jordan", text: "Smiling at Jordan." },
+    { name: "Florence", text: "Sitting near Florence." },
+    { name: "Paris", text: "Postcards to Paris" },
+    // Never a surname, even a listed place.
+    { name: "Paris Jackson", text: "Visiting Jackson." },
     // Only a capitalized place word after it; nothing else makes it a place.
     { name: "Brooklyn", text: "Walking the Brooklyn bridge." },
     { name: "Brooklyn", text: "Brooklyn on the swings." },
@@ -130,9 +146,11 @@ describe("the relaxed name check", () => {
     expect(strictMatcher(["Rose"], [], { relaxed: true })("A rose bush, and Rose beside it.")).toBe(true);
   });
 
-  it("shares a month after \"this\" as a time, even where it is somebody: the cost Relaxed says it has", () => {
-    // Refused by the strict check (share-guard-r3); a time word before a month is the excuse, as written.
-    for (const t of ["Look at this May!", "Proud of this May."]) expect([t, strictMatcher(["May Chen"], [], { relaxed: true })(t)]).toEqual([t, false]);
+  it("excuses a first name only, never a surname", () => {
+    // A child whose surname is a listed place: "Jackson" stays theirs; as a first name it is a place like any other.
+    expect(strictMatcher(["Paris Jackson"])("Visiting Jackson.")).toBe(true);
+    expect(strictMatcher(["Paris Jackson"], [], { relaxed: true })("Visiting Jackson.")).toBe(true);
+    expect(strictMatcher(["Jackson Smith"], [], { relaxed: true })("Visiting Jackson.")).toBe(false);
   });
 
   it("keeps a month in a date's own shape and the lake rule, as the strict check does", () => {

@@ -13,6 +13,10 @@ export type { NameCheck };
  * opted out, is waiting to be forgotten, had their naming withdrawn, or was decided not to be named is matched strictly
  * whatever the level (restricted.ts), and a withdrawn naming's own check is strict always (withoutWithdrawnNames).
  *
+ * The same excuses apply, at the same level, to the members-only rule's look for a name the album knows (names.ts,
+ * `knownNamesLook`), which also decides whether the helper's words are published by themselves: only for the
+ * single-word first names of those children, and only where nobody else in the album has that first name.
+ *
  * The album has one level (AppSetting.nameCheck, an admin's) and a trip may override it (Trip.nameCheck, whoever
  * arranges the trip). Collections and activities have none of their own: a collection gathers photographs from many
  * trips and is shown under the album's level; an activity is its trip's. Words are shown wherever their item is, so an

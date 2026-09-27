@@ -15,10 +15,11 @@ import { estimateCost, TOKENS_PER_PLACE, type Estimate } from "@/lib/annotation/
 import { BACKFILL_CAP, backfillCandidates, backfillExclusions, taskOf, type BackfillScope, type BackfillTask } from "@/lib/jobs/handlers/annotation-batch";
 import { annotationSchema, toStored, type StoredAnnotation } from "@/lib/annotation/schema";
 import { anthropic } from "@/lib/annotation/client";
-import { helperText, judgeHelperText, knownNames, mentionsAnyName, pastHelperTitles, sameTitle, titleIsHelpers, unknownTitleAside, warnStuckTitle } from "@/lib/annotation/members-only";
+import { helperText, judgeHelperText, knownNames, knownNamesLook, mentionsAnyName, pastHelperTitles, sameTitle, titleIsHelpers, unknownTitleAside, warnStuckTitle } from "@/lib/annotation/members-only";
 import { enqueueEmbedding, refreshTextEmbedding } from "@/lib/jobs/handlers/embed-photo";
 import { NAME_NOT_TO_BE_SHOWN, withoutWithdrawnNames } from "@/lib/people/forget";
 import { dbNow } from "@/lib/people/names-changed";
+import { nameCheckForPhoto } from "@/lib/people/name-check";
 
 /** The admin's half of the two gates. Recorded with who and when so the decision is auditable. */
 export async function setAnnotationOptIn(on: boolean): Promise<void> {
@@ -118,7 +119,7 @@ export async function updateAnnotation(photoId: string, fd: FormData): Promise<v
   // "show it to everyone". Text somebody has shown to everyone is theirs, and is held again only if it now names
   // somebody.
   const judged = photo.annotationSharedAt
-    ? { membersOnly: mentionsAnyName(helperText(merged), await knownNames()), titleOnly: false }
+    ? { membersOnly: (await knownNamesLook(await nameCheckForPhoto(photoId)))({ texts: [merged.title, merged.caption, merged.description, merged.place], lists: [merged.searchSummary, ...merged.tags], said: helperText(merged) }), titleOnly: false }
     : await judgeHelperText(photoId, merged, photo.context);
   const membersOnly = photo.annotationMembersOnly || judged.membersOnly;
   // Held only for a private title's word before, and nothing stronger now: publishing that trip still lifts it.

@@ -25,7 +25,7 @@
  */
 import { PLACE_NAMES } from "./places";
 import { isKinWord, isNotANameWord, isPersonVerb, isWordSurname, splitNickname } from "./scrub";
-import { splitCamel } from "@/lib/annotation/names";
+import { foldAccents, splitCamel } from "@/lib/annotation/names";
 import { relaxedExcuse } from "./relaxed-names";
 
 /** Letters that do not come apart into a plain letter and an accent, spelled the way a keyboard without them does. */
@@ -89,8 +89,12 @@ function escape(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-/** The forms of one person's names to look for, normalized. `others`: words of other people's names. */
-export function strictForms(names: string[], others: Set<string> = new Set()): string[] {
+/**
+ * The forms of one person's names to look for, normalized. `others`: words of other people's names. `firsts`, when
+ * given, collects their first names (of each name and nickname, past any title): the only forms the relaxed check
+ * ever excuses (relaxed-names.ts), never a surname that is also a place ("Jackson").
+ */
+export function strictForms(names: string[], others: Set<string> = new Set(), firsts?: Set<string>): string[] {
   const forms = new Set<string>();
   for (const raw of names) {
     const { name, nicknames } = splitNickname(raw.trim().replace(/\s+/g, " "));
@@ -113,7 +117,10 @@ export function strictForms(names: string[], others: Set<string> = new Set()): s
       const core = words.slice(k).filter((w) => !isNotANameWord(w) || words.length === 1);
       if (!core.length) continue;
       const first = core[0];
-      if (first.replace(/[^\p{L}]/gu, "").length >= 2) forms.add(first);
+      if (first.replace(/[^\p{L}]/gu, "").length >= 2) {
+        forms.add(first);
+        firsts?.add(first);
+      }
       if (core.length >= 2) forms.add(core.join(" "));
       // "Mary Ann Smith" is also "Mary Smith".
       if (core.length >= 3) forms.add(`${core[0]} ${core[core.length - 1]}`);
@@ -125,6 +132,13 @@ export function strictForms(names: string[], others: Set<string> = new Set()): s
     }
   }
   return [...forms];
+}
+
+/** A person's first names, normalized, as `strictForms` finds them. */
+export function strictFirstNames(names: string[]): Set<string> {
+  const firsts = new Set<string>();
+  strictForms(names, new Set(), firsts);
+  return firsts;
 }
 
 /**
@@ -252,7 +266,8 @@ export function strictFinder(names: string[], others: string[] = [], skip: Set<s
   const cjk = forms.filter((f) => CJK.test(f));
   const small = new Set(forms.filter((f) => SMALL_WORDS.has(f)));
   const words = forms.filter((f) => !CJK.test(f)).sort((a, b) => b.length - a.length);
-  const exact = new Set(words);
+  // Only a first name of theirs, exactly, is ever excused by the relaxed check.
+  const firstNames = strictFirstNames(names);
   // Whole words, letters only at the edges (digits or a hyphen run against a name do not hide it).
   const rx = words.length ? new RegExp(`(?<![\\p{L}])(?:${words.map((w) => escape(w).replace(/[ -]/g, "[\\s\\-]+")).join("|")})(?:'?s)?(?![\\p{L}])`, "gu") : null;
   // Written as one person's name: each word with a capital, and exactly one space or tab between them, as written.
@@ -298,8 +313,8 @@ export function strictFinder(names: string[], others: string[] = [], skip: Set<s
       // "An", not "an": a small word is only a name written with a capital.
       if (small.has(word) && !/^\p{Lu}/u.test(text.slice(start, end).replace(/\p{Cf}/gu, ""))) continue;
       if (MONTHS.has(m[0]) && monthAsDate(t.slice(0, m.index), t.slice(m.index! + m[0].length), text.slice(end))) continue;
-      // Exactly one of their forms, never a plural or possessive of it.
-      if (finder.relaxed && exact.has(m[0]) && relaxedExcuse({ text, start, end, norm: t, at: m.index!, to: m.index! + m[0].length, list: Boolean(opts.list) }, m[0])) continue;
+      // Exactly one of their first names, never a plural or possessive of it, nor a surname.
+      if (finder.relaxed && firstNames.has(m[0]) && relaxedExcuse({ text, start, end, norm: t, at: m.index!, to: m.index! + m[0].length, list: Boolean(opts.list) }, m[0])) continue;
       // A possessive's "'s" stays outside the span ("May's side" is "a family member's side"); a plural goes with it.
       out.push([start, /'s$/u.test(m[0]) ? from[m.index! + m[0].length - 2] : end]);
     }
@@ -311,4 +326,31 @@ export function strictFinder(names: string[], others: string[] = [], skip: Set<s
 /** A test for any mention of one person in words strangers may read (see `strictFinder`). */
 export function strictMatcher(names: string[], others: string[] = [], opts: { relaxed?: boolean } = {}): (text: unknown, opts?: StrictOptions) => boolean {
   return strictFinder(names, others, new Set(), opts).finds;
+}
+
+/**
+ * The members-only rule's look (annotation/names.ts) for one single-word first name of a child, under the relaxed
+ * check: every place names.ts finds it (with a capital only, for a name that is also an everyday word; any hashtag
+ * holding it) holds the words, but for exactly the name, excused by relaxed-names.ts. `list`: keywords or tags.
+ */
+export function relaxedWordHolds(text: string, pattern: { words: string[]; exactCase: boolean }, list: boolean): boolean {
+  if (!text.trim()) return false;
+  // Only ever asked about one word; anything else is held.
+  if (pattern.words.length !== 1) return true;
+  const word = pattern.words[0];
+  const form = strictNormalize(word);
+  if (!/^\p{L}+$/u.test(form)) return true;
+  if (hashtagSpans(text, [form]).length) return true;
+  const { text: t, from } = normalizeText(text);
+  const asNamesReads = new RegExp(`^${escape(pattern.exactCase ? word : word.toLowerCase())}(?:['’]s|s)?$`, "u");
+  for (const m of t.matchAll(new RegExp(`(?<![\\p{L}])${escape(form)}(?:'?s)?(?![\\p{L}])`, "gu"))) {
+    const start = from[m.index!];
+    const end = from[m.index! + m[0].length];
+    const written = foldAccents(text.slice(start, end));
+    // Not a match to names.ts ("summer" for a Summer): nothing for it to excuse.
+    if (!asNamesReads.test(pattern.exactCase ? written : written.toLowerCase())) continue;
+    if (m[0] === form && relaxedExcuse({ text, start, end, norm: t, at: m.index!, to: m.index! + m[0].length, list }, form)) continue;
+    return true;
+  }
+  return false;
 }

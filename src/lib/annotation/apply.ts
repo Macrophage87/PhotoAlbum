@@ -7,7 +7,7 @@ import { applyPlaceEstimate, needsPlaceEstimate } from "./place";
 import { isWeakDate, WEAK_DATE_SOURCES } from "@/lib/photos/date-from-neighbours";
 import { namesSomebodyRestricted } from "@/lib/people/restricted";
 import { nameCheckForPhoto } from "@/lib/people/name-check";
-import { helperText, judgeHelperText, knownNames, mentionsAnyName, pastHelperTitles, sameTitle, titleIsHelpers, titleKey, unknownTitleAside, warnStuckTitle, type Judgement } from "./members-only";
+import { helperText, judgeHelperText, knownNames, knownNamesLook, mentionsAnyName, pastHelperTitles, sameTitle, titleIsHelpers, titleKey, unknownTitleAside, warnStuckTitle, type Judgement } from "./members-only";
 import { forgetState, unchangedSince } from "@/lib/people/names-changed";
 import { withoutOptedOutNames } from "@/lib/people/unpermitted";
 import { forgottenScope, loadTombstone, scrubRecord, type Tombstone } from "@/lib/people/tombstone";
@@ -122,7 +122,8 @@ export async function applyAnnotation(photoId: string, model: string, parsed: An
   // shared text (held again only if they now name somebody), and only the helper's refreshed fields are judged as the
   // helper's. Refreshed fields that are for members only are not published over the shared text; the ones the member
   // read and shared stay instead.
-  const sharedStays = edited && current.annotationSharedAt !== null && !mentionsAnyName(helperText(memberWords(stored)), await knownNames()) && !(await namesSomebodyRestricted([stored.caption, stored.description, stored.place], stored.tags ?? [], await nameCheckForPhoto(photoId)));
+  const level = await nameCheckForPhoto(photoId);
+  const sharedStays = edited && current.annotationSharedAt !== null && !(await knownNamesLook(level))({ texts: [stored.caption, stored.description, stored.place], lists: stored.tags ?? [], said: helperText(memberWords(stored)) }) && !(await namesSomebodyRestricted([stored.caption, stored.description, stored.place], stored.tags ?? [], level));
   if (sharedStays && (await judgeHelperText(photoId, helperWords(stored), current.context, opts.sent)).membersOnly) {
     stored = await scrub({ ...stored, ...helperFieldsOf(current.annotation, stored) });
   }

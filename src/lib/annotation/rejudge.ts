@@ -5,10 +5,10 @@ import { QUEUES } from "@/lib/jobs/queues";
 import { bossJobs } from "@/lib/jobs/schema";
 import { withTryLock } from "@/lib/advisory-lock";
 import type { StoredAnnotation } from "./schema";
-import { helperText, knownNameEntries, knownNames, pastHelperTitles, sameTitle, titleHits, titleIsHelpers, titleKey, unknownTitleAside, warnStuckTitle, type PrivateContainer } from "./members-only";
+import { helperText, knownNameEntries, knownNames, knownNamesLook, pastHelperTitles, sameTitle, titleHits, titleIsHelpers, titleKey, unknownTitleAside, warnStuckTitle, type PrivateContainer } from "./members-only";
 import { nameMatcher, namePatterns, spokenWords, titleWords } from "./names";
 import { namesSomebodyRestricted, restrictedMatchers } from "@/lib/people/restricted";
-import { albumNameCheck, anyRelaxed, photoNameCheck, tripNameCheck, type NameCheck } from "@/lib/people/name-check";
+import { albumNameCheck, anyRelaxed, photoNameCheck, PLACED_SELECT, tripNameCheck, type NameCheck, type Placed } from "@/lib/people/name-check";
 import type { StrictOptions } from "@/lib/people/strict-names";
 
 /**
@@ -198,6 +198,9 @@ async function settle(first: Row, decide: (r: Row) => Promise<"flag" | "hits" | 
   if (r) miss(result, r.id);
 }
 
+/** A guess's words, and where it is (for its level). */
+const guessSelect = { id: true, placeEstimateName: true, placeEstimateNote: true, ...PLACED_SELECT } as const;
+
 /** A guess the album still holds, shown or not: it has a name or evidence to judge. */
 const HELD_GUESS = { OR: [{ placeEstimateName: { not: null } }, { placeEstimateNote: { not: null } }] } satisfies Prisma.PhotoWhereInput;
 
@@ -207,15 +210,26 @@ const HELD_GUESS = { OR: [{ placeEstimateName: { not: null } }, { placeEstimateN
  */
 export async function rejudgeNames(names?: string[], signal?: AbortSignal): Promise<RejudgeResult> {
   const result = empty();
-  const test = nameMatcher((names ?? (await knownNames())).flatMap(namePatterns));
+  const asked = names ?? (await knownNames());
+  const test = nameMatcher(asked.flatMap(namePatterns));
   if (!test) return result;
+  // Where the name check is relaxed, the same look as at writing (see `knownNamesLook`), field by field.
+  const album = await albumNameCheck();
+  const relaxed = (await anyRelaxed()) ? await knownNamesLook("RELAXED", asked) : null;
+  const relaxedAt = (level: NameCheck) => (relaxed && level === "RELAXED" ? relaxed : null);
+  const mentions = (r: Row) => {
+    const look = relaxedAt(photoNameCheck(r, album));
+    if (!look) return test(textOf(r)) || test(titlesOf(r));
+    const a = (r.annotation ?? {}) as Partial<StoredAnnotation>;
+    return look({ texts: [a.title, a.caption, a.description, a.place], lists: [a.searchSummary, ...(a.tags ?? [])], said: textOf(r) }) || look({ texts: [r.kind !== "EXTERNAL_VIDEO" && r.titleByHelper !== false ? r.title : null, r.membersTitle] });
+  };
   const decide = async (r: Row) => {
     if (r.annotationSharedAt) return null;
     const hard = r.annotationMembersOnly && !r.annotationTitleOnly;
     // The titles too, not only the helper's text as it is now: a title the helper gave in an earlier answer ("Ada's
     // birthday cake", from notes since cleared) outlives the text that is judged. A title a member typed since the
     // album kept track, and an embedded video's own, are theirs to publish and hold nothing back.
-    if (!hard && (test(textOf(r)) || test(titlesOf(r)))) return "flag" as const;
+    if (!hard && mentions(r)) return "flag" as const;
     if (r.annotationMembersOnly && r.title?.trim() && r.titleByHelper !== false) return "title" as const;
     return null;
   };
@@ -225,16 +239,18 @@ export async function rejudgeNames(names?: string[], signal?: AbortSignal): Prom
   // place right now. One under a place set by hand comes back when that move is undone, with whatever flag it had.
   let cursor: string | null = null;
   for (;;) {
-    const guesses: { id: string; placeEstimateName: string | null; placeEstimateNote: string | null }[] = await db.photo.findMany({ where: { ...HELD_GUESS, placeEstimateMembersOnly: false }, orderBy: { id: "asc" }, take: BATCH, ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}), select: { id: true, placeEstimateName: true, placeEstimateNote: true } });
+    const guesses: ({ id: string; placeEstimateName: string | null; placeEstimateNote: string | null } & Placed)[] = await db.photo.findMany({ where: { ...HELD_GUESS, placeEstimateMembersOnly: false }, orderBy: { id: "asc" }, take: BATCH, ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}), select: guessSelect });
     if (!guesses.length) break;
     for (const first of guesses) {
       let g: (typeof guesses)[number] | null = first;
       let settled = false;
       for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
-        if (!g || !test([g.placeEstimateName, g.placeEstimateNote].filter(Boolean).join("\n"))) { settled = true; break; }
+        const said = g ? [g.placeEstimateName, g.placeEstimateNote].filter(Boolean).join("\n") : "";
+        const look = g && relaxedAt(photoNameCheck(g, album));
+        if (!g || !(look ? look({ texts: [said] }) : test(said))) { settled = true; break; }
         const done = await db.photo.updateMany({ where: { id: g.id, ...HELD_GUESS, placeEstimateMembersOnly: false, placeEstimateName: g.placeEstimateName, placeEstimateNote: g.placeEstimateNote }, data: { placeEstimateMembersOnly: true } });
         if (done.count) { result.places++; settled = true; break; }
-        g = await db.photo.findFirst({ where: { id: g.id, ...HELD_GUESS, placeEstimateMembersOnly: false }, select: { id: true, placeEstimateName: true, placeEstimateNote: true } });
+        g = await db.photo.findFirst({ where: { id: g.id, ...HELD_GUESS, placeEstimateMembersOnly: false }, select: guessSelect });
       }
       if (!settled) miss(result, first.id);
       await pace(signal);
@@ -242,13 +258,19 @@ export async function rejudgeNames(names?: string[], signal?: AbortSignal): Prom
     cursor = guesses[guesses.length - 1].id;
   }
 
-  // Descriptions, guarded on their words and flags as read.
-  const judgeAll = async <T extends { id: string; description: string | null; descriptionMembersOnly: boolean }>(load: () => Promise<T[]>, reload: (id: string) => Promise<T | null>, write: (d: T) => Promise<number>) => {
+  // Descriptions, guarded on their words and flags as read; each at its own level (a trip's and its activities' by the
+  // trip, a collection's by the album).
+  const described = (level: NameCheck) => (description: string) => {
+    const look = relaxedAt(level);
+    return look ? look({ texts: [description] }) : test(description);
+  };
+  const tripLevels = new Map((await db.trip.findMany({ where: { nameCheck: { not: null } }, select: { id: true, nameCheck: true } })).map((t) => [t.id, t.nameCheck]));
+  const judgeAll = async <T extends { id: string; description: string | null; descriptionMembersOnly: boolean }>(load: () => Promise<T[]>, reload: (id: string) => Promise<T | null>, write: (d: T) => Promise<number>, levelOf: (d: T) => NameCheck) => {
     for (const first of await load()) {
       let d: T | null = first;
       let settled = false;
       for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
-        if (!d || !d.description || !test(d.description)) { settled = true; break; }
+        if (!d || !d.description || !described(levelOf(d))(d.description)) { settled = true; break; }
         if ((await write(d)) > 0) { result.descriptions++; settled = true; break; }
         d = await reload(d.id);
       }
@@ -261,18 +283,21 @@ export async function rejudgeNames(names?: string[], signal?: AbortSignal): Prom
     () => db.trip.findMany({ where: { ...unshown, descriptionMembersOnly: false }, select: { id: true, description: true, descriptionMembersOnly: true } }),
     (id) => db.trip.findFirst({ where: { id, ...unshown, descriptionMembersOnly: false }, select: { id: true, description: true, descriptionMembersOnly: true } }),
     async (t) => (await db.trip.updateMany({ where: { id: t.id, description: t.description, descriptionMembersOnly: false, descriptionSharedAt: null }, data: { descriptionMembersOnly: true } })).count,
+    (t) => tripNameCheck({ nameCheck: tripLevels.get(t.id) ?? null }, album),
   );
   await judgeAll(
     () => db.collection.findMany({ where: { ...unshown, descriptionMembersOnly: false }, select: { id: true, description: true, descriptionMembersOnly: true } }),
     (id) => db.collection.findFirst({ where: { id, ...unshown, descriptionMembersOnly: false }, select: { id: true, description: true, descriptionMembersOnly: true } }),
     async (c) => (await db.collection.updateMany({ where: { id: c.id, description: c.description, descriptionMembersOnly: false, descriptionSharedAt: null }, data: { descriptionMembersOnly: true } })).count,
+    () => album,
   );
   const openActivity = { ...unshown, OR: [{ descriptionMembersOnly: false }, { descriptionTitleOnly: true }] };
-  const activitySelect = { id: true, description: true, descriptionMembersOnly: true, descriptionTitleOnly: true } as const;
+  const activitySelect = { id: true, tripId: true, description: true, descriptionMembersOnly: true, descriptionTitleOnly: true } as const;
   await judgeAll(
     () => db.activity.findMany({ where: openActivity, select: activitySelect }),
     (id) => db.activity.findFirst({ where: { id, ...openActivity }, select: activitySelect }),
     async (a) => (await db.activity.updateMany({ where: { id: a.id, description: a.description, descriptionMembersOnly: a.descriptionMembersOnly, descriptionTitleOnly: a.descriptionTitleOnly, descriptionSharedAt: null }, data: { descriptionMembersOnly: true, descriptionTitleOnly: false, descriptionTitleWords: [] } })).count,
+    (a) => tripNameCheck({ nameCheck: tripLevels.get(a.tripId) ?? null }, album),
   );
   return result;
 }
@@ -332,6 +357,9 @@ export async function rejudgeTitles(scope: { tripId?: string; collectionId?: str
   const privateWords = await privateTitleWords();
   const names = nameMatcher((await knownNames()).flatMap(namePatterns));
   const album = await albumNameCheck();
+  const relaxed = (await anyRelaxed()) ? await knownNamesLook("RELAXED") : null;
+  // A name the album knows, at the level of where the words are (see `knownNamesLook`), all fields run together.
+  const named = (text: string, level: NameCheck) => (relaxed && level === "RELAXED" ? relaxed({ texts: [], lists: [text], said: text }) : Boolean(names?.(text)));
   const hitsOf = (r: Row) => titleHits(textOf(r), privateContainers(r));
   const decide = async (r: Row) => {
     if (r.annotationSharedAt) return null;
@@ -353,7 +381,7 @@ export async function rejudgeTitles(scope: { tripId?: string; collectionId?: str
     if ([...spokenWords(text)].some((w) => privateWords.has(w))) continue;
     // (All of its fields run together here, keywords too: judged as a list, where nobody else's full name excuses; at
     // the item's level, name-check.ts.)
-    if (r.context?.trim() || names?.(text) || (await tagged(r.id)) || (await namesSomebodyRestricted([], [text], photoNameCheck(r, album)))) {
+    if (r.context?.trim() || named(text, photoNameCheck(r, album)) || (await tagged(r.id)) || (await namesSomebodyRestricted([], [text], photoNameCheck(r, album)))) {
       await db.photo.updateMany({ where: { id: r.id, updatedAt: r.updatedAt, annotationTitleOnly: true }, data: { annotationTitleOnly: false, annotationTitleWords: [], annotationTitleFrom: [] } });
       continue;
     }
@@ -364,7 +392,7 @@ export async function rejudgeTitles(scope: { tripId?: string; collectionId?: str
   if (scope.collectionId || scope.photoIds) return result;
   const activities = await db.activity.findMany({
     where: { ...(scope.tripId ? { tripId: scope.tripId } : {}), description: { not: null }, descriptionSharedAt: null },
-    select: { id: true, tripId: true, updatedAt: true, description: true, descriptionMembersOnly: true, descriptionTitleOnly: true, descriptionTitleWords: true, trip: { select: { title: true, visibility: true } } },
+    select: { id: true, tripId: true, updatedAt: true, description: true, descriptionMembersOnly: true, descriptionTitleOnly: true, descriptionTitleWords: true, trip: { select: { title: true, visibility: true, nameCheck: true } } },
   });
   for (const a of activities) {
     await pace(signal);
@@ -372,8 +400,8 @@ export async function rejudgeTitles(scope: { tripId?: string; collectionId?: str
     if (words.length && !a.descriptionMembersOnly) {
       result.descriptions += (await db.activity.updateMany({ where: { id: a.id, description: a.description, descriptionMembersOnly: false, descriptionSharedAt: null }, data: { descriptionMembersOnly: true, descriptionTitleOnly: true, descriptionTitleWords: words } })).count;
     } else if (!words.length && a.descriptionTitleOnly && (await titleWordsArePublic(a.descriptionTitleWords, [`trip:${a.tripId}`], privateWords)) && ![...spokenWords(a.description!)].some((w) => privateWords.has(w))) {
-      const named = Boolean(names?.(a.description!));
-      result.descriptions += (await db.activity.updateMany({ where: { id: a.id, updatedAt: a.updatedAt, descriptionTitleOnly: true }, data: named ? { descriptionTitleOnly: false, descriptionTitleWords: [] } : { descriptionMembersOnly: false, descriptionTitleOnly: false, descriptionTitleWords: [] } })).count;
+      const namesSomebody = named(a.description!, tripNameCheck(a.trip, album));
+      result.descriptions += (await db.activity.updateMany({ where: { id: a.id, updatedAt: a.updatedAt, descriptionTitleOnly: true }, data: namesSomebody ? { descriptionTitleOnly: false, descriptionTitleWords: [] } : { descriptionMembersOnly: false, descriptionTitleOnly: false, descriptionTitleWords: [] } })).count;
     }
   }
   return result;

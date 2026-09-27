@@ -21,8 +21,8 @@ import { setAnnotationShared } from "@/app/annotation/actions";
 import { NOT_YOUR_CONTAINER } from "@/lib/auth/ownership";
 import { NAME_NOT_TO_BE_SHOWN, namesSomebodyRestricted, withoutWithdrawnNames } from "@/lib/people/forget";
 import { nameCheckForContainer, nameCheckForPhoto, photoNameCheck, strictest } from "@/lib/people/name-check";
-import { judgeHelperText } from "@/lib/annotation/members-only";
-import { rejudgeSweep, rejudgeText, rejudgeTitles, type RejudgeJob } from "@/lib/annotation/rejudge";
+import { judgeDescription, judgeHelperText, placeFromMembersOnly } from "@/lib/annotation/members-only";
+import { rejudgeNames, rejudgeSweep, rejudgeText, rejudgeTitles, type RejudgeJob } from "@/lib/annotation/rejudge";
 import type { StoredAnnotation } from "@/lib/annotation/schema";
 import { QUEUES } from "@/lib/jobs/queues";
 
@@ -135,14 +135,64 @@ describe("the name check setting", () => {
   });
 
   describe("where it is used", () => {
-    it("judges the helper's words at the item's level", async () => {
-      // (Written with a capital, "Summer" is also a name the album knows to the members-only rule, names.ts, which
-      // holds it at any level.)
-      const text = record("Pictures from our summer vacation.");
+    it("judges the helper's words at the item's level, the members-only rule's look at names included", async () => {
       const p = await photo({ tripId });
-      expect((await judgeHelperText(p.id, text, null)).membersOnly).toBe(true);
+      for (const caption of ["Pictures from our summer vacation.", "Summer vacation at the lake.", "Crabbing in the summer, the lake at its best."]) {
+        await db.trip.update({ where: { id: tripId }, data: { nameCheck: null } });
+        expect([caption, (await judgeHelperText(p.id, record(caption), null)).membersOnly]).toEqual([caption, true]);
+        await db.trip.update({ where: { id: tripId }, data: { nameCheck: "RELAXED" } });
+        expect([caption, (await judgeHelperText(p.id, record(caption), null)).membersOnly]).toEqual([caption, false]);
+      }
+      // Keywords as well, but for a lower-case word.
+      expect((await judgeHelperText(p.id, record("A day at the lake.", { searchSummary: "Summer vacation, lake, swimming" }), null)).membersOnly).toBe(false);
+      expect((await judgeHelperText(p.id, record("A day at the lake.", { tags: ["summer"] }), null)).membersOnly).toBe(true);
+      // Never where the child is: tagged, or named in a way no excuse covers.
+      expect((await judgeHelperText(p.id, record("Summer at the lake."), null)).membersOnly).toBe(true);
+      expect((await judgeHelperText(p.id, record("A card from Summer."), null)).membersOnly).toBe(true);
+      const child = await db.person.findFirstOrThrow();
+      await db.face.create({ data: { photoId: p.id, personId: child.id, status: "CONFIRMED", box: [0.1, 0.1, 0.2, 0.2], confidence: 0 } });
+      expect((await judgeHelperText(p.id, record("Summer vacation at the lake."), null)).membersOnly).toBe(true);
+    });
+
+    it("leaves the members-only rule as it was for anybody but a child, and for a first name an adult shares", async () => {
       await db.trip.update({ where: { id: tripId }, data: { nameCheck: "RELAXED" } });
-      expect((await judgeHelperText(p.id, text, null)).membersOnly).toBe(false);
+      const p = await photo({ tripId });
+      const judge = async (caption: string) => (await judgeHelperText(p.id, record(caption), null)).membersOnly;
+      // A child's surname that is a place: not a first name.
+      await db.person.create({ data: { name: "Paris Jackson", createdById: admin, ...CHILD } });
+      expect(await judge("Crepes in Paris.")).toBe(false);
+      expect(await judge("Visiting Jackson.")).toBe(true);
+      // An adult the album knows, restricted or not.
+      await db.person.create({ data: { name: "Florence Jones", createdById: admin, birthday: new Date("1960-01-01"), nameInDescriptions: true, nameInDescriptionsSetAt: new Date() } });
+      expect(await judge("The Duomo in Florence.")).toBe(true);
+      await db.person.create({ data: { name: "Austin Price", createdById: admin, optedOutAt: new Date() } });
+      expect(await judge("Driving to Austin.")).toBe(true);
+      // A member of the album, or an adult, with the child's first name.
+      expect(await judge("Summer vacation at the lake.")).toBe(false);
+      await db.user.update({ where: { id: member }, data: { name: "Summer Hale" } });
+      expect(await judge("Summer vacation at the lake.")).toBe(true);
+    });
+
+    it("does not flag again, when names are judged, what the relaxed check let out", async () => {
+      await db.trip.update({ where: { id: otherTripId }, data: { nameCheck: "RELAXED" } });
+      const relaxed = await photo({ tripId: otherTripId, annotation: record("Summer vacation at the lake."), placeEstimateName: "The lake", placeEstimateNote: "Swims in Summer sunshine", placeEstimateMembersOnly: false });
+      const strict = await photo({ tripId, annotation: record("Summer vacation at the lake.") });
+      await db.trip.update({ where: { id: otherTripId }, data: { description: "Summer vacation at the lake.", descriptionByHelper: true } });
+      await db.trip.update({ where: { id: tripId }, data: { description: "Summer vacation at the lake.", descriptionByHelper: true } });
+      await rejudgeNames();
+      expect(await db.photo.findUniqueOrThrow({ where: { id: relaxed.id } })).toMatchObject({ annotationMembersOnly: false, placeEstimateMembersOnly: false });
+      expect((await db.trip.findUniqueOrThrow({ where: { id: otherTripId } })).descriptionMembersOnly).toBe(false);
+      expect((await db.photo.findUniqueOrThrow({ where: { id: strict.id } })).annotationMembersOnly).toBe(true);
+      expect((await db.trip.findUniqueOrThrow({ where: { id: tripId } })).descriptionMembersOnly).toBe(true);
+    });
+
+    it("judges a place guess and a description at their level", async () => {
+      const p = await photo({ tripId });
+      expect(await placeFromMembersOnly(p.id, { name: "The lake", evidence: "Swims in Summer sunshine" }, null)).toBe(true);
+      expect(await judgeDescription("Summer vacation at the lake.", { names: [], notes: false })).toMatchObject({ membersOnly: true });
+      await db.trip.update({ where: { id: tripId }, data: { nameCheck: "RELAXED" } });
+      expect(await placeFromMembersOnly(p.id, { name: "The lake", evidence: "Swims in Summer sunshine" }, null)).toBe(false);
+      expect(await judgeDescription("Summer vacation at the lake.", { names: [], notes: false, level: "RELAXED" })).toMatchObject({ membersOnly: false });
     });
 
     it("lets a member show the words to everyone only where the level allows it", async () => {

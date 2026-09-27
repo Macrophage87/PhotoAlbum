@@ -1,7 +1,8 @@
 import { db } from "@/lib/db";
 import type { StoredAnnotation } from "./schema";
-import { mentionsAnyName, mentionsAnyTitle, titleWordsIn } from "./names";
-import { namesSomebodyRestricted } from "@/lib/people/restricted";
+import { mentionsAnyName, mentionsAnyTitle, nameMatcher, namePatterns, titleWordsIn, type NamePattern } from "./names";
+import { childOnly, namesSomebodyRestricted } from "@/lib/people/restricted";
+import { relaxedWordHolds, strictFirstNames, strictNormalize } from "@/lib/people/strict-names";
 import { nameCheckForPhoto, type NameCheck } from "@/lib/people/name-check";
 
 export { foldForNames, mentionsAnyName, mentionsAnyTitle, NAME_PARTICLES, namePatterns } from "./names";
@@ -56,9 +57,12 @@ export function titleHits(text: string, containers: PrivateContainer[]): { words
  */
 export async function judgeHelperText(photoId: string, text: Pick<StoredAnnotation, "title" | "caption" | "description" | "searchSummary" | "place" | "tags">, context: string | null, sent?: boolean | null): Promise<Judgement> {
   const said = helperText(text);
-  // And anybody who may not be named, found strictly (any case, any spelling): "HAPPY BIRTHDAY ROSE" on a banner; at
-  // the item's level (name-check.ts).
-  const hard = Boolean(sent || context?.trim()) || (await taggedOn(photoId)) || mentionsAnyName(said, await knownNames()) || (await namesSomebodyRestricted([text.title, text.caption, text.description, text.place], [text.searchSummary, ...(text.tags ?? [])], await nameCheckForPhoto(photoId)));
+  // And anybody who may not be named, found strictly (any case, any spelling): "HAPPY BIRTHDAY ROSE" on a banner. Both
+  // at the item's level (name-check.ts).
+  const level = await nameCheckForPhoto(photoId);
+  const texts = [text.title, text.caption, text.description, text.place];
+  const lists = [text.searchSummary, ...(text.tags ?? [])];
+  const hard = Boolean(sent || context?.trim()) || (await taggedOn(photoId)) || (await knownNamesLook(level))({ texts, lists, said }) || (await namesSomebodyRestricted(texts, lists, level));
   const hits = titleHits(said, await privateContainersOf(photoId));
   return { ...judged(hard, hits.from.length > 0), ...(hits.from.length ? { titleWords: hits.words, titleFrom: hits.from } : {}) };
 }
@@ -81,7 +85,8 @@ export function helperText(text: Partial<Pick<StoredAnnotation, "title" | "capti
 export async function placeFromMembersOnly(photoId: string, place: { name: string | null; evidence: string | null }, context: string | null, sent?: boolean | null): Promise<boolean> {
   if (sent || context?.trim()) return true;
   const said = [place.name, place.evidence].filter(Boolean).join("\n");
-  return mentionsAnyName(said, await knownNames()) || mentionsAnyTitle(said, await privateTitlesOf(photoId)) || (await namesSomebodyRestricted([said], [], await nameCheckForPhoto(photoId)));
+  const level = await nameCheckForPhoto(photoId);
+  return (await knownNamesLook(level))({ texts: [said] }) || mentionsAnyTitle(said, await privateTitlesOf(photoId)) || (await namesSomebodyRestricted([said], [], level));
 }
 
 /**
@@ -114,7 +119,7 @@ export function parseAnnotationCustomId(customId: string): { photoId: string; se
  * (name-check.ts), strict when not given.
  */
 export async function judgeDescription(description: string, given: { names: string[]; notes: boolean; previous?: boolean; privateTitles?: string[]; level?: NameCheck }): Promise<Judgement> {
-  const hard = Boolean(given.names.length || given.notes || given.previous) || mentionsAnyName(description, await knownNames()) || (await namesSomebodyRestricted([description], [], given.level));
+  const hard = Boolean(given.names.length || given.notes || given.previous) || (await knownNamesLook(given.level ?? "STRICT"))({ texts: [description] }) || (await namesSomebodyRestricted([description], [], given.level));
   const words = titleWordsIn(description, given.privateTitles ?? []);
   return { ...judged(hard, words.length > 0), ...(words.length ? { titleWords: words } : {}) };
 }
@@ -260,4 +265,49 @@ export async function knownNames(): Promise<string[]> {
     db.user.findMany({ where: { name: { not: null } }, select: { name: true } }),
   ]);
   return [...people.map((p) => p.name), ...members.map((m) => m.name ?? "")];
+}
+
+/**
+ * The members-only rule's look for a name the album knows (names.ts), at a level (name-check.ts). Strict: as it always
+ * was, over `said` (every field run together). Relaxed: the same, but for the single-word first names of children
+ * restricted for being children and nothing else, which are looked for field by field and let through where one of
+ * the relaxed check's excuses applies (relaxed-names.ts; never in keywords or tags for a lower-case word). A first name
+ * somebody else in the album (an adult, a member, anybody not a child alone) also has keeps the rule unchanged, as do
+ * everybody's surnames and whole names. `only`: these names rather than everybody's (a judging pass for some names).
+ */
+export type NamesLook = (words: { texts: (string | null | undefined)[]; lists?: (string | null | undefined)[]; said?: string }) => boolean;
+
+export async function knownNamesLook(level: NameCheck, only?: string[]): Promise<NamesLook> {
+  const present = (l: (string | null | undefined)[]) => l.filter((t): t is string => typeof t === "string" && t.trim() !== "");
+  const joined = (w: Parameters<NamesLook>[0]) => w.said ?? [...present(w.texts), ...present(w.lists ?? [])].join("\n");
+  if (level !== "RELAXED") {
+    const test = nameMatcher((only ?? (await knownNames())).flatMap(namePatterns));
+    return (w) => Boolean(test?.(joined(w)));
+  }
+  const [people, members] = await Promise.all([
+    db.person.findMany({ select: { name: true, formerNames: true, kind: true, birthday: true, optedOutAt: true, forgetPendingAt: true, namingWithdrawnAt: true, nameInDescriptions: true, nameInDescriptionsSetAt: true } }),
+    db.user.findMany({ where: { name: { not: null } }, select: { name: true } }),
+  ]);
+  const single = (p: NamePattern) => p.words.length === 1 && !p.cjk;
+  const key = (p: NamePattern) => `${p.exactCase ? "cs" : "ci"}:${p.words[0]}`;
+  const excusable = new Map<string, NamePattern>();
+  const others = new Set<string>();
+  for (const p of people) {
+    const firsts = p.kind === "HUMAN" && childOnly(p) ? strictFirstNames([p.name, ...(p.formerNames ?? [])]) : null;
+    for (const pat of namePatterns(p.name).filter(single)) {
+      if (firsts?.has(strictNormalize(pat.words[0]))) excusable.set(key(pat), pat);
+      else others.add(key(pat));
+    }
+  }
+  for (const m of members) for (const pat of namePatterns(m.name ?? "").filter(single)) others.add(key(pat));
+  for (const k of others) excusable.delete(k);
+  const asked = (only ?? [...people.map((p) => p.name), ...members.map((m) => m.name ?? "")]).flatMap(namePatterns);
+  const test = nameMatcher(asked.filter((p) => !(single(p) && excusable.has(key(p)))));
+  const relaxed = [...new Set(asked.filter((p) => single(p) && excusable.has(key(p))).map(key))].map((k) => excusable.get(k)!);
+  return (w) => {
+    if (test?.(joined(w))) return true;
+    const texts = present(w.texts);
+    const lists = present(w.lists ?? []);
+    return relaxed.some((p) => texts.some((t) => relaxedWordHolds(t, p, false)) || lists.some((t) => relaxedWordHolds(t, p, true)));
+  };
 }
