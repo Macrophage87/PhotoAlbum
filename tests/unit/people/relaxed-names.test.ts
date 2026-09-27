@@ -84,6 +84,11 @@ const HELD: Record<"word" | "time" | "place", Row[]> = {
     { name: "Rose", text: "Party.” rose at the lake" },
     { name: "Rose", text: "1) rose at the lake" },
     { name: "Rose", text: "Party.\r\nrose at the lake" },
+    // Said to a child, not a phrase: "you" before the word does not make it one.
+    { name: "Hope", text: "thank you hope!" },
+    { name: "Hope", text: "love you hope" },
+    { name: "May", text: "love you may" },
+    { name: "Will", text: "miss you will" },
     // Months (but "may") and seasons are never everyday words: only a time, by (b).
     { name: "June", text: "grandma reading to june" },
     { name: "June", text: "look at june!" },

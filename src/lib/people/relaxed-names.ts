@@ -46,11 +46,14 @@ const SEASONS = new Set(["spring", "summer", "autumn", "fall", "winter"]);
  */
 const EVERYDAY = new Set([...COMMON_WORD_NAMES, "jack"].filter((w) => w !== "the" && !SEASONS.has(w) && (!MONTH_WORDS.has(w) || w === "may")));
 const DETERMINERS = new Set(["a", "an", "the", "some", "any", "every", "each", "no", "this", "that", "these", "those"]);
-/** A word's own fixed phrases: the words that may come just before it, or just after it. */
+/**
+ * A word's own fixed phrases: the words that may come just before it, or just after it. Not "you" before: "thank you
+ * hope", "love you may" are said to a child; "you will be" still counts by the word after.
+ */
 const PHRASES: Record<string, { before?: string[]; after?: string[] }> = {
-  hope: { before: ["i", "we", "they", "you"], after: ["you", "it", "to", "that", "so", "everyone"] },
-  may: { before: ["i", "you", "it", "we", "they"], after: ["be", "have", "not"] },
-  will: { before: ["i", "it", "we", "they", "you"], after: ["be", "have", "not", "never", "always"] },
+  hope: { before: ["i", "we", "they"], after: ["you", "it", "to", "that", "so", "everyone"] },
+  may: { before: ["i", "it", "we", "they"], after: ["be", "have", "not"] },
+  will: { before: ["i", "it", "we", "they"], after: ["be", "have", "not", "never", "always"] },
   grace: { before: ["say", "says", "said", "saying"], after: ["period"] },
 };
 const TIME_BEFORE = new Set(["in", "during", "since", "until", "early", "late", "mid", "last", "next", "every"]);
