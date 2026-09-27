@@ -64,7 +64,7 @@ export default async function ForgottenPage() {
         {shown.length === 0 && <p>Nothing left to see to.</p>}
         {shown.map((l) => (
           <section key={l.id} className="space-y-2 rounded-theme border border-border p-4" data-testid="forget-leftover">
-            <p className="text-sm text-muted">Forgotten on {day(l.createdAt)}. Written by members, or before the album kept track of who wrote them: open each to edit it, or ask whoever wrote it.</p>
+            <p className="text-sm text-muted">Forgotten on {day(l.createdAt)}. Written by members, or before the album kept track of who wrote them. Each says what can be done about it; some things, like a file name, can&apos;t be edited, only removed. Ask whoever wrote it if it isn&apos;t yours to change.</p>
             {l.count ? <MemberTextList text={l.text} /> : <p className="text-sm">Everything listed has since been removed.</p>}
             <form action={dismissForgetLeftover.bind(null, l.id)}>
               <Button type="submit" size="sm" variant="secondary">Done with this list</Button>

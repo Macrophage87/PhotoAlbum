@@ -13,6 +13,10 @@ import { changeTripSlug } from "@/app/trips/[slug]/actions";
 import { changeCollectionSlug } from "@/app/collections/actions";
 import { forgetPerson } from "@/lib/people/forget-person";
 import type { LeftoverItems } from "@/lib/people/forget";
+import { clearTakeoutReport } from "@/app/admin/actions";
+import { MemberTextList } from "@/components/people/MemberTextList";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 
 /**
  * What forgetting somebody leaves that members typed without thinking of it as words about them: a file name, a
@@ -69,6 +73,18 @@ describe("what a forget lists besides titles, captions and notes", () => {
     expect((await db.trip.findUniqueOrThrow({ where: { id: trip.id } })).slug).toBe("grandpa-s-80th");
     // Another trip's address is not a collection's concern; within trips it would have been made unique.
     await expect(changeTripSlug("grandpa-s-80th", fd("coast"))).rejects.toThrow("REDIRECT:/trips/coast-2/settings?saved=1");
+
+    // Each field says what can be done about it; one that cannot be edited says so.
+    const html = renderToStaticMarkup(createElement(MemberTextList, { text: { photos: [{ id: named.id, label: "A photo", fields: ["file name", "place"] }], trips: [{ id: trip.id, slug: "x", title: "The trip", fields: ["web address"] }], collections: [], activities: [], people: [{ id: other.id, label: "Mabel", fields: ["former names"] }], tracks: [{ id: track.id, label: "A track", href: "/trips/x", fields: ["file name"] }], imports: [{ id: report.id, label: "The import" }] } }));
+    expect(html).toContain("a file name can&#x27;t be changed; delete the photo to remove it");
+    expect(html).toContain("set the place again on the photo&#x27;s page");
+    expect(html).toContain("change it under Web address in settings");
+    expect(html).toContain("former names: can&#x27;t be edited");
+    expect(html).toContain("a track can&#x27;t be renamed");
+    expect(html).toContain("Clear the report");
+    // An admin clears an import's report; its counts stay.
+    await clearTakeoutReport(report.id);
+    expect(await db.takeoutImport.findUniqueOrThrow({ where: { id: report.id } })).toMatchObject({ report: null, archiveName: "takeout-1.zip" });
 
     // Done with the list: it keeps nothing.
     await dismissForgetLeftover(left.id);

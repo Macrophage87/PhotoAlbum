@@ -39,7 +39,9 @@ export default async function PersonPage({ params, searchParams }: PageProps<"/p
   const creator = await db.user.findUnique({ where: { id: person.createdById }, select: { name: true } });
   const askWhom = creator?.name?.trim() ? `${creator.name.trim()} (who added them) or an admin` : "an admin";
   // What members wrote by hand that forgetting would leave as it is, shown before anybody presses the button.
-  const memberText = person.kind === "HUMAN" && canChange ? await memberTextMentioning(await matcherFor(person), await taggedPhotoIds(person.id), person.id) : null;
+  const found = person.kind === "HUMAN" && canChange ? await memberTextMentioning(await matcherFor(person), await taggedPhotoIds(person.id), person.id) : null;
+  // Imports and their reports are an admin's to see and clear.
+  const memberText = found && (user.role === "ADMIN" ? found : { ...found, imports: [] });
   // Turning something off that is all that lets the helper use their name takes it out of what was written, too.
   const unNames = `This also takes ${person.name} out of descriptions already written; turning it back on means describing them again.`;
   const withdrawnUntil = person.namingWithdrawnAt ? withdrawalDue(person.namingWithdrawnAt) : null;

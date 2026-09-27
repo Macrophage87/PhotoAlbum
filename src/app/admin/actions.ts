@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { db } from "@/lib/db";
+import { Prisma } from "@/generated/prisma/client";
 import { env } from "@/lib/env";
 import { requireUserOrThrow } from "@/lib/auth/viewer";
 import { createInvite } from "@/lib/auth/magic-link";
@@ -118,6 +119,17 @@ export async function removeMember(userId: string): Promise<void> {
     });
   }
   revalidatePath("/admin");
+}
+
+/**
+ * Clear what a Google Photos import reported (the files and albums it skipped or could not read, by name): a name in
+ * it may be one the album was asked to forget. The counts stay.
+ */
+export async function clearTakeoutReport(importId: string): Promise<void> {
+  await requireAdminOrThrow();
+  await db.takeoutImport.updateMany({ where: { id: importId }, data: { report: Prisma.DbNull } });
+  revalidatePath("/admin");
+  revalidatePath("/people/forgotten");
 }
 
 /** Queue one Takeout archive from the inbox. One import runs at a time so the worker's memory stays bounded. */
