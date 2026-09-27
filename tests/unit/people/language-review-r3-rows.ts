@@ -1,5 +1,5 @@
 /**
- * The language review's third to seventh rounds: the mention rows of table_3 to table_7 (table_7's "@MayChen" and
+ * The language review's third to eighth rounds: the mention rows of table_3 to table_8 (table_7's "@MayChen" and
  * "HAPPYBIRTHDAYMAY" are a follow-up). [..] marks her; a hashtag row
  * (table_6) holds her name inside the hashtag.
  */
@@ -171,4 +171,16 @@ export const TABLE_7: [string, string][] = [
   ["May Chen", "#May's_party"],
   ["May Chen", "#Team_May"],
   ["May Chen", "#mAyThEbEsT"],
+];
+
+export const TABLE_8: [string, string][] = [
+  ["May Chen", "Photo by [May] 2021."],
+  ["May Chen", "A card from [May], 2020."],
+  ["May Chen", "Swimming lessons.\n[May] 2019 splashes Ben."],
+  ["May Chen", "Portrait of [May] 2019 by Grandma."],
+  ["June Carter", "Flowers from [June] 2021 for Grandma."],
+  ["June Carter", "Ben leaning on [June], 2021."],
+  ["June Carter", "Snow day!\n[June] 2020 builds a snowman."],
+  ["April Reyes", "Hugs from [April], 2019!"],
+  ["August Lind", "Thank-you note from [August] 2020."],
 ];

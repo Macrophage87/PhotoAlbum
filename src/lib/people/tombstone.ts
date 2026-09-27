@@ -556,14 +556,25 @@ export async function loadTombstone(): Promise<Tombstone> {
     for (const h of text.matchAll(/[#＃]([\p{L}\p{M}\p{N}_\p{Cf}]+)/gu)) {
       const words = splitCamel(h[1].replace(/\p{Cf}/gu, "")).split(/[^\p{L}\p{M}]+/u).filter(Boolean);
       let hit = false;
+      // Off their own photographs as prose is read there: never a month ("#MayDay" of a photograph May was untagged
+      // from), and a name run into other letters only when it is five letters or more ("#planning" is no Ann).
+      const allowed = (f: Found, n: number, norm: string, run: boolean) => usable(f, n) && (ownRow(f) || (!isMonth(norm) && (!run || norm.length >= 5)));
       for (let a = 0; a < words.length && !hit; a++) {
-        for (let n = Math.min(MAX_WORDS, words.length - a); n >= 1 && !hit; n--) hit = lookupAll(normalizeName(words.slice(a, a + n).join(" "))).some((f) => usable(f, n));
+        for (let n = Math.min(MAX_WORDS, words.length - a); n >= 1 && !hit; n--) {
+          const norm = normalizeName(words.slice(a, a + n).join(" "));
+          hit = lookupAll(norm).some((f) => allowed(f, n, norm, false));
+        }
       }
       const letters = normalizeName(h[1].replace(/[\p{N}_\p{Cf}]+/gu, "")).replace(/\s+/gu, "");
-      // Only where a name is kept with this photograph at all: the lookups are many.
+      // Only where a name is kept with this photograph at all: the lookups are many. Three letters on their own
+      // photographs, five elsewhere.
       if (scope && !scope.whole && scope.rows.size) {
-        for (let a = 0; a + 3 <= letters.length && a < 60 && !hit; a++) {
-          for (let b = Math.min(letters.length, a + 30); b >= a + 3 && !hit; b--) hit = lookupAll(letters.slice(a, b)).some((f) => scope.rows.has(f.key) && usable(f, 1));
+        const shortest = scope.own.size ? 3 : 5;
+        for (let a = 0; a + shortest <= letters.length && a < 60 && !hit; a++) {
+          for (let b = Math.min(letters.length, a + 30); b >= a + shortest && !hit; b--) {
+            const norm = letters.slice(a, b);
+            hit = lookupAll(norm).some((f) => scope.rows.has(f.key) && allowed(f, 1, norm, true));
+          }
         }
       }
       if (hit) tagSpans.push([h.index!, h.index! + h[0].length]);

@@ -80,6 +80,10 @@ const REFUSED: [string, string][] = [
   ["May Chen", "May 2019 learned to ride without training wheels."],
   ["May Chen", "ben, may 2019"],
   ["May Chen", "＃HappyBirthdayMay on the cake"],
+  // Round eight: "by" and "from" make no date of a month and a year, but for a range.
+  ["May Chen", "Photo by May 2021."],
+  ["June Carter", "Flowers from June 2021 for Grandma."],
+  ["August Lind", "Thank-you note from August 2020."],
 ];
 
 const SHARED: [string, string][] = [
@@ -97,6 +101,7 @@ const SHARED: [string, string][] = [
   ["May Chen", "May 5th."],
   ["May Chen", "In May 2019 we went to the lake."],
   ["May Chen", "May 2019"],
+  ["May Chen", "Photos from May 2019 to June 2020."],
   ["May Chen", "Our trip. May 2019 photos from the cabin."],
   ["June Carter", "Since June 2021."],
   ["Do Kim", "#dothedishes"],
@@ -174,7 +179,12 @@ describe("the share guard, round five", () => {
     for (const t of ["Cake says #happybirthdaymay", "#MayTheBirthdayGirl", "Banner: #TeamMay"]) expect([t, mentionsAnyName(t, ["May Chen"])]).toEqual([t, true]);
     expect(mentionsAnyName("#dothedishes", ["May Chen"])).toBe(false);
     const m = nameMatcher(["May Chen"]);
-    expect(m.scrub("Cake says #happybirthdaymay", { tagged: true, noted: true })).toBe("Cake says a family member");
+    // On a photograph only her notes name, as prose is read there: a name of five letters or more run into a
+    // hashtag, never a month (round eight).
+    expect(m.scrub("Cake says #happybirthdaymay", { tagged: true, noted: true })).toBe("Cake says #happybirthdaymay");
+    expect(nameMatcher(["Ximena Ruiz"]).scrub("Cake says #happybirthdayximena", { tagged: true, noted: true })).toBe("Cake says a family member");
+    expect(nameMatcher(["Ann Ruiz"]).scrub("Party #planning", { tagged: true, noted: true })).toBe("Party #planning");
+    expect(nameMatcher(["Ann Ruiz"]).scrub("Party #TeamAnn", { tagged: true, noted: true })).toBe("Party a family member");
     // Off her photographs, only her full name.
     expect(m.scrub("Banner: #TeamMay", { away: true })).toBe("Banner: #TeamMay");
     expect(m.scrub("Banner: #MayChenRocks", { away: true })).toBe("Banner: a family member");

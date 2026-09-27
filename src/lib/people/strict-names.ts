@@ -76,6 +76,8 @@ const DATE_WORDS = new Set(["in", "during", "since", "until", "till", "early", "
 const NOT_DOING = new Set(["photos", "pictures", "pics", "memories", "holidays", "vacations", "highlights", "adventures", "events", "trips", "plans", "news", "games", "classes", "lessons", "results", "festivities", "during", "morning", "evening", "spring", "wedding", "outing", "gathering", "meeting", "christening", "housewarming", "thanksgiving", "clothing", "building", "king", "thing", "something", "nothing", "everything", "anything", "ring", "string", "wing", "swing"]);
 /** Words before a month and an ordinal day at the end that make them a date: "On May 5th.", "until June 1st!". */
 const ORDINAL_DATE_WORDS = new Set([...DATE_WORDS, "on", "by", "before", "after", "from", "through"]);
+/** Words right before a month and a year that make them a date: "In May 2019", "Since June 2021" (not "by", "from"). */
+const YEAR_DATE_WORDS = new Set([...DATE_WORDS, "on", "before", "after", "through"]);
 /** A person after a month and a year: "June 2019 champion!", "May 2020 graduate". */
 const PERSON_AFTER = /^[ \t]+(?:champion|champ|graduate|grad|winner|runner-up|girl|boy|baby|babe|star|queen|king|princess|prince|mvp|hero|kid|toddler|newborn|player|captain|student|athlete|swimmer|dancer|scholar|leader|helper|superstar|cutie|sweetie)s?(?![\p{L}])/u;
 const TIME_WORDS = "dawn|dusk|sunrise|sunset|night|noon|midnight|twilight|daybreak|morning|evening|afternoon";
@@ -127,8 +129,9 @@ export function strictForms(names: string[], others: Set<string> = new Set()): s
 /**
  * A month used as a date, in normalized text, only in these shapes (the language review's fourth to seventh rounds):
  * - with a year, opening the text, a sentence or a line, or right after a date word ("May 2019", "In May 2019 we",
- *   "Since June 2021.", and with a comma "Late June, 2019"); after anything else it is them ("Grandpa with May
- *   2019.", "Ben + May 2019", "ben, may 2019"); and not before something a person does ("May 2020 swims",
+ *   "Since June 2021.", and with a comma "Late June, 2019"), or "from" in a range ("from May 2019 to June 2020");
+ *   after anything else it is them ("Grandpa with May 2019.", "Ben + May 2019", "ben, may 2019", "Photo by May
+ *   2021.", "Flowers from June 2021"); and not before something a person does ("May 2020 swims",
  *   "smiling", "learned"), an age or a birth ("June 2019 months", "May 2016 born") or a person ("June 2019
  *   champion!");
  * - with a day and a year: "May 5, 2019"; or an ordinal day with a year ("May 5th, 2019"), or at the end after a date
@@ -148,7 +151,10 @@ export function monthAsDate(before: string, after: string, originalAfter?: strin
     // Only opening the text, a sentence or a line, or right after a date word ("In May 2019", "Since June 2021."):
     // after anything else it is her ("Grandpa with May 2019.", "Ben + May 2019", "ben, may 2019").
     const opens = /(?:^|[\n.!?;:])[\s"'“‘(\[*_#>•-]*$/u.test(before);
-    if (!opens && !ORDINAL_DATE_WORDS.has(prevWord)) return false;
+    // Not after "by" or "from" ("Photo by May 2021.", "Flowers from June 2021"), but for a range ("from May 2019 to
+    // June 2020").
+    const range = prevWord === "from" && /^[ \t]*(?:-|to|until|till|through|thru)(?![\p{L}])/u.test(rest);
+    if (!opens && !YEAR_DATE_WORDS.has(prevWord) && !range) return false;
     // Nor before an age, a birth, a person or something going on: "May 2016 born", "May 1999 age 5", "June 2019
     // champion!", "May 2020 smiling", "May 2020 loses her first tooth!", "May 2019 learned to ride".
     if (/^[ \t]+(?:months?|years?|weeks?|days?|old|born|age|aged)(?![\p{L}])/u.test(rest) || PERSON_AFTER.test(rest)) return false;
@@ -193,24 +199,25 @@ export type StrictFinder = {
   finds(text: unknown, opts?: StrictOptions): boolean;
   /** Where in the text (original offsets), to rewrite on their own photographs. */
   spans(text: string, opts?: StrictOptions): [number, number][];
-  /** The hashtags holding a name of theirs (see `hashtagSpans`); with `fullOnly`, only a full name. */
-  hashtags(text: string, fullOnly?: boolean): [number, number][];
 };
 
 /**
  * The whole hashtags that hold one of these forms: a word of it written in camel case ("#MayTheBirthdayGirl",
  * "#TeamMay"), or any form of three letters or more anywhere inside it ("#happybirthdaymay", "#amazinggrace").
- * `forms` normalized, as strictForms gives them; a two-letter one only as a capitalized word.
+ * `forms` normalized, as strictForms gives them; a two-letter one only as a capitalized word. Off their own
+ * photographs, as prose is read there: `noMonths` leaves a month alone ("#MayDay", "#dismay"), and `minSubstring` 5
+ * leaves a short name run into another word ("#planning" is no Ann).
  */
-export function hashtagSpans(text: string, forms: string[]): [number, number][] {
+export function hashtagSpans(text: string, forms: string[], opts: { minSubstring?: number; noMonths?: boolean } = {}): [number, number][] {
   const out: [number, number][] = [];
-  const joined = forms.filter((f) => !CJK.test(f)).map((f) => ({ f, run: f.replace(/[\s-]+/gu, "") }));
+  const min = opts.minSubstring ?? 3;
+  const joined = forms.filter((f) => !CJK.test(f) && !(opts.noMonths && MONTHS.has(f))).map((f) => ({ f, run: f.replace(/[\s-]+/gu, "") }));
   for (const h of text.matchAll(/[#＃]([\p{L}\p{M}\p{N}_\p{Cf}]+)/gu)) {
     const body = strictNormalize(h[1]).replace(/[_\d]+/gu, "");
     const words = splitCamel(h[1].replace(/\p{Cf}/gu, "")).split(/[^\p{L}\p{M}]+/u).filter(Boolean);
     const spaced = ` ${words.map(strictNormalize).join(" ")} `;
     const hit = joined.some(({ f, run }) => {
-      if (run.length >= 3 && body.includes(run)) return true;
+      if (run.length >= min && body.includes(run)) return true;
       if (!spaced.includes(` ${f.replace(/-/gu, " ")} `)) return false;
       return !SMALL_WORDS.has(f) || words.some((w) => strictNormalize(w) === f && /^\p{Lu}/u.test(w));
     });
@@ -293,8 +300,7 @@ export function strictFinder(names: string[], others: string[] = [], skip: Set<s
     }
     return out.sort((a, b) => a[0] - b[0]);
   };
-  const full = forms.filter((f) => /\s/u.test(f));
-  return { spans, finds: (text, opts) => typeof text === "string" && spans(text, opts).length > 0, hashtags: (text, fullOnly) => hashtagSpans(text, fullOnly ? full : forms) };
+  return { spans, finds: (text, opts) => typeof text === "string" && spans(text, opts).length > 0 };
 }
 
 /** A test for any mention of one person in words strangers may read (see `strictFinder`). */

@@ -26,7 +26,7 @@
 import type { StoredAnnotation } from "@/lib/annotation/schema";
 import { COMMON_WORD_NAMES, KINSHIP_WORDS, NAME_PARTICLES } from "@/lib/annotation/names";
 import { PLACE_NAMES } from "./places";
-import { strictFinder, strictNormalize, type StrictFinder } from "./strict-names";
+import { hashtagSpans, strictFinder, strictForms, strictNormalize, type StrictFinder } from "./strict-names";
 
 export const STAND_IN = "a family member";
 
@@ -947,13 +947,16 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
   };
   const ownPhoto = (where: Where) => Boolean(where.tagged) && where.onPhoto !== false && !where.noted;
 
-  let tagFinder: StrictFinder | null = null;
+  // Off their own photographs a hashtag is read as prose is there (see hashtagSpans): no month, and a name run into
+  // other letters only when it is five letters or more. On a photograph about them any of their names; elsewhere a
+  // full name, or a one-word name that is all of theirs ("#TeamXimena", as "Ximena" in prose).
+  let aboutForms: string[] | null = null;
+  let awayForms: string[] | null = null;
   const scrubText = (text: string, where: Where, keywords = false): string => {
     if (ownPhoto(where)) return scrubOwn(text, where, keywords);
-    // A hashtag holding a name of theirs goes whole: on a photograph about them any of their names ("#TeamMay",
-    // "#happybirthdaymay"), elsewhere only a full name ("#AdaByron").
     if (/[#＃]/u.test(text)) {
-      const tags = (tagFinder ??= strictFinder(list, otherNames)).hashtags(text, !where.tagged);
+      const forms = where.tagged ? (aboutForms ??= strictForms(list)) : (awayForms ??= [...strictForms(list).filter((f) => /\s/u.test(f)), ...whole.map((w) => strictNormalize(w))]);
+      const tags = hashtagSpans(text, forms, { minSubstring: 5, noMonths: true });
       if (tags.length) text = replaceSpans(text, tags);
     }
     // On their own photograph a kinship word before their name goes with it ("Little Sister Ada"), and the stand-in's

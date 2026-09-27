@@ -180,4 +180,42 @@ describe("round five", () => {
     // Where no name is kept with the photograph, nothing is looked up inside it.
     expect(ts.scrub("#TeamXimena", await forgottenScope({ photoIds: [elsewhere.id] }))).toBe("#TeamXimena");
   });
+
+  it("reads a hashtag off her photographs as prose is read there: no month, and no short name run into a word (round eight)", async () => {
+    const ximena = await db.person.create({ data: { name: "Ximena", createdById: admin } });
+    const may = await db.person.create({ data: { name: "May Lee", createdById: admin } });
+    const trip = await db.trip.create({ data: { slug: "lake", title: "Lake", startDate: new Date("2025-08-10"), endDate: new Date("2025-08-11"), createdById: admin } });
+    const CAPTION = "Fun #planning #MayDay #dismay #TeamXimena #mena";
+    const hers = await mk("h", { namesScrubbedAt: null, tripId: trip.id });
+    const mays = await mk("m", { namesScrubbedAt: null, tripId: trip.id });
+    // May was proposed here and the family turned it down; this one is in the trip with them.
+    const untagged = await mk("u", { namesScrubbedAt: null, annotation: record({ caption: CAPTION }), annotatedAt: new Date() });
+    const inTrip = await mk("t", { namesScrubbedAt: null, tripId: trip.id, annotation: record({ caption: CAPTION }), annotatedAt: new Date() });
+    await db.face.create({ data: { photoId: hers.id, personId: ximena.id, status: "CONFIRMED", box: [0, 0, 1, 1], confidence: 0 } });
+    await db.face.create({ data: { photoId: mays.id, personId: may.id, status: "CONFIRMED", box: [0, 0, 1, 1], confidence: 0 } });
+    await db.face.create({ data: { photoId: untagged.id, proposedPersonId: may.id, status: "REJECTED", box: [0, 0, 1, 1], confidence: 0.9 } });
+    await forgetPerson(may.id, { keepName: false, byUserId: admin });
+    await forgetPerson(ximena.id, { keepName: false, byUserId: admin });
+    const caption = async (id: string) => ((await db.photo.findUniqueOrThrow({ where: { id } })).annotation as StoredAnnotation).caption;
+    const ts = await loadTombstone();
+    const later = async (id: string) => ts.scrub(CAPTION, await forgottenScope({ photoIds: [id] }));
+    // Not hers, and in a trip with them: nothing of May is taken, at forget time or later. "#TeamXimena" may go, as
+    // "Ximena" (a name nobody else has) would in prose anywhere the forget went through.
+    for (const id of [untagged.id, inTrip.id]) for (const out of [await caption(id), await later(id)]) expect([id, out.replace(/ a family member| #TeamXimena/u, "")]).toEqual([id, "Fun #planning #MayDay #dismay #mena"]);
+    // On her own photograph, all of it.
+    expect(ts.scrub("Fun #dismay #MayDay", await forgottenScope({ photoIds: [mays.id] }))).toBe("Fun a family member a family member");
+  });
+
+  it("does not take a short forgotten name named in a trip's title out of a longer word in a hashtag (round eight)", async () => {
+    const ann = await db.person.create({ data: { name: "Ann", createdById: admin } });
+    const trip = await db.trip.create({ data: { slug: "ann", title: "Ann's birthday weekend", startDate: new Date("2025-08-10"), endDate: new Date("2025-08-11"), createdById: admin } });
+    const hers = await mk("a", { namesScrubbedAt: null, tripId: trip.id });
+    const other = await mk("b", { namesScrubbedAt: null, tripId: trip.id, annotation: record({ caption: "Party #planning" }), annotatedAt: new Date() });
+    await db.face.create({ data: { photoId: hers.id, personId: ann.id, status: "CONFIRMED", box: [0, 0, 1, 1], confidence: 0 } });
+    await forgetPerson(ann.id, { keepName: false, byUserId: admin });
+    const ts = await loadTombstone();
+    expect(((await db.photo.findUniqueOrThrow({ where: { id: other.id } })).annotation as StoredAnnotation).caption).toBe("Party #planning");
+    expect(ts.scrub("Party #planning", await forgottenScope({ photoIds: [other.id] }))).toBe("Party #planning");
+    expect(ts.scrub("Party #planning", await forgottenScope({ containers: [{ kind: "trip", id: trip.id }] }))).toBe("Party #planning");
+  });
 });
