@@ -12,6 +12,7 @@ import {
   visitorHash,
 } from "@/lib/visits/record";
 import { fillGaps, visitorStats } from "@/lib/visits/stats";
+import { databaseZone } from "@/lib/time/local-day-sql";
 import { barLabel, plural, whenAgo } from "@/lib/visits/format";
 import { resetTestDb } from "../helpers/reset";
 
@@ -208,6 +209,28 @@ describe("what the Admin page is told", () => {
     await db.visit.updateMany({ data: { at: new Date(Date.now() - 40 * 24 * 60 * 60 * 1000) } });
     expect((await visitorStats(30)).totals.visits).toBe(0);
     expect((await visitorStats(90)).totals.visits).toBe(1);
+  });
+
+  it("counts the days in a server zone under any name, never failing the page (#144)", async () => {
+    await recordVisit(note("/trips/acadia"));
+    const was = process.env.TZ;
+    try {
+      // A legacy name (which a Postgres without the legacy links rejects), and one nothing knows.
+      for (const tz of ["America/Buenos_Aires", "Atlantis/Lost"]) {
+        process.env.TZ = tz;
+        const stats = await visitorStats(7);
+        expect(stats.totals.visits).toBe(1);
+        expect(stats.daily).toHaveLength(7);
+        expect(stats.daily.reduce((n, d) => n + d.visits, 0)).toBe(1);
+      }
+    } finally {
+      if (was === undefined) delete process.env.TZ;
+      else process.env.TZ = was;
+    }
+    const known = new Set((await db.$queryRaw<{ name: string }[]>`SELECT name FROM pg_timezone_names`).map((r) => r.name));
+    expect(known.has(await databaseZone("America/Buenos_Aires"))).toBe(true);
+    expect(await databaseZone("Atlantis/Lost")).toBe("UTC");
+    expect(await databaseZone("+05:00")).toBe("Etc/GMT-5");
   });
 
   it("says nothing happened when nothing has", async () => {

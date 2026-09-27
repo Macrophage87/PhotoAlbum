@@ -8,14 +8,10 @@ export type ZoneFix = [stored: string, readAs: string];
 let knownZones: Promise<Set<string>> | null = null;
 
 /**
- * How to read the trips' zones this database does not know: a renamed zone's old name (America/Buenos_Aires, where
- * Postgres was built without the legacy links) in its new one, a bare offset in the fixed-offset zone that says the
- * same, and anything else in UTC, so that no trip's zone can fail a query for the whole album. Normally there are
- * none: trips are saved under names Postgres knows (see `canonicalTimezone`), and older ones were tidied by a
- * migration. `pg_timezone_names` reads the zone files, which costs more than the queries that need it, so it is
- * read once per process; the trips' own zones are few and read each time.
+ * The zone names this database knows. `pg_timezone_names` reads the zone files, which costs more than the queries
+ * that need it, and what it holds changes only with the server's tz data, so it is read once per process.
  */
-export async function tripZoneFixes(): Promise<ZoneFix[]> {
+function databaseZones(): Promise<Set<string>> {
   knownZones ??= db.$queryRaw<{ name: string }[]>`SELECT name FROM pg_timezone_names`.then(
     (rows) => new Set(rows.map((r) => r.name)),
     (err) => {
@@ -23,14 +19,31 @@ export async function tripZoneFixes(): Promise<ZoneFix[]> {
       throw err;
     },
   );
-  const [known, trips] = await Promise.all([knownZones, db.trip.findMany({ distinct: ["timezone"], select: { timezone: true } })]);
-  return trips
-    .map((t) => t.timezone)
-    .filter((tz) => !known.has(tz))
-    .map((tz): ZoneFix => {
-      const readAs = normalizedTimezone(tz);
-      return [tz, known.has(readAs) ? readAs : "UTC"];
-    });
+  return knownZones;
+}
+
+/**
+ * A zone for `AT TIME ZONE` that cannot fail the query: under the name Postgres knows it by (a renamed zone's old
+ * name in its new one, a bare offset as the fixed-offset zone that says the same; see `normalizedTimezone`), or UTC
+ * when this database does not know it at all.
+ */
+export async function databaseZone(tz: string): Promise<string> {
+  const known = await databaseZones();
+  if (known.has(tz)) return tz;
+  const readAs = normalizedTimezone(tz);
+  return known.has(readAs) ? readAs : "UTC";
+}
+
+/**
+ * How to read the trips' zones this database does not know (see `databaseZone`), so that no trip's zone can fail a
+ * query for the whole album: America/Buenos_Aires where Postgres was built without the legacy links, say. Normally
+ * there are none: trips are saved under names Postgres knows (see `canonicalTimezone`), and older ones were tidied
+ * by a migration. The trips' own zones are few and read each time.
+ */
+export async function tripZoneFixes(): Promise<ZoneFix[]> {
+  const [known, trips] = await Promise.all([databaseZones(), db.trip.findMany({ distinct: ["timezone"], select: { timezone: true } })]);
+  const unknown = trips.map((t) => t.timezone).filter((tz) => !known.has(tz));
+  return Promise.all(unknown.map(async (tz): Promise<ZoneFix> => [tz, await databaseZone(tz)]));
 }
 
 /**

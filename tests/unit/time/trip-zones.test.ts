@@ -85,7 +85,7 @@ describe("trips saved under a name Postgres reads differently or not at all", ()
   it("renames trips saved under an old name or a bare offset, in the migration", async () => {
     const saved = { goa: "Asia/Calcutta", ba: "America/Buenos_Aires", sf: "US/Pacific", east: "+05:00", west: "-0800", half: "+05:30", zero: "+00", la: "America/Los_Angeles" };
     for (const [slug, tz] of Object.entries(saved)) await trip(slug, tz);
-    const migration = readFileSync(path.join(process.cwd(), "prisma/migrations/20260927150000_trip_timezone_names/migration.sql"), "utf8");
+    const migration = readFileSync(path.join(process.cwd(), "prisma/migrations/20260927160000_trip_timezone_names/migration.sql"), "utf8");
     for (const statement of migration.replace(/^--.*$/gm, "").split(";").map((x) => x.trim()).filter(Boolean)) await db.$executeRawUnsafe(statement);
     const now = Object.fromEntries((await db.trip.findMany({ select: { slug: true, timezone: true } })).map((t) => [t.slug, t.timezone]));
     expect(now).toEqual({ goa: "Asia/Kolkata", ba: "America/Argentina/Buenos_Aires", sf: "America/Los_Angeles", east: "Etc/GMT-5", west: "Etc/GMT+8", half: "UTC", zero: "UTC", la: "America/Los_Angeles" });
