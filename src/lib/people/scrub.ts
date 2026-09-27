@@ -291,7 +291,41 @@ export type Neighbourhood = {
   opening?: "clear" | "wide";
   /** Whether a word is somebody's name the album knows: "Left to right: Ada, Ben" is no place and its region. */
   isNameWord?: (word: string) => boolean;
+  /** Deciding what everyone may read: a name inside a place's name is the place's (see `inPlaceName`). */
+  placeNames?: boolean;
+  /** Nor is a saint's name a place's ("Santa Barbara Pier"): while a withdrawn naming waits out its fortnight. */
+  noSaintExcuse?: boolean;
 };
+
+/** Words that make the name before them a place's: "Brooklyn Bridge", "Jordan River", "Madison Square Garden". */
+const PLACE_TYPES = new Set([
+  "harbour", "harbor", "bridge", "square", "river", "park", "station", "garden", "gardens", "street", "avenue", "road", "lane", "boulevard", "beach", "bay",
+  "island", "falls", "canyon", "creek", "valley", "mountain", "mountains", "peak", "hill", "hills", "heights", "point", "pier", "wharf", "quay", "marina",
+  "tower", "castle", "palace", "cathedral", "abbey", "museum", "gallery", "zoo", "airport", "stadium", "arena", "market", "plaza", "springs", "forest",
+  "glacier", "reservoir", "canal", "cove", "county", "township",
+]);
+/** Words that make the name after them a place's: "Lake Louise", "Mount Rainier", "Port Charlotte", "Cape Ann". */
+const PLACE_TYPE_BEFORE = /(?<![\p{L}\p{M}])(\p{Lu}[\p{L}]*)\.?[ \t]+$/u;
+const PLACE_TYPES_BEFORE = new Set(["lake", "loch", "mount", "mt", "port", "fort", "cape"]);
+
+/**
+ * Whether a name is part of a place's name, when deciding what everyone may read: a place's word after it ("Brooklyn
+ * Bridge", "Crossing the Jordan River") unless another name-like word stands before it ("Leo Martin Park" may be
+ * named after anybody), "Lake" or "Mount" before it ("Lake Louise at dawn"), or a listed place after a place and a
+ * comma ("The Eiffel Tower, Paris"). Never a word of their own name ("Louise Park" for Louise Park). "Louise at the
+ * lake" and "Paris blows out the candles" are them.
+ */
+function inPlaceName(before: string, match: string, after: string, own: Set<string> = new Set()): boolean {
+  const capital = (w: string | undefined): w is string => Boolean(w && /^\p{Lu}/u.test(w) && !own.has(bare(w)));
+  const next = after.match(/^[ \t]+([\p{L}\p{M}'’-]+)(?![\p{L}\p{M}])/u)?.[1];
+  const prev = startsSentence(before) ? undefined : before.match(/([\p{L}\p{M}'’.-]+)[ \t]+$/u)?.[1]?.replace(/\.$/u, "");
+  const nameBefore = capital(prev) && !FUNCTION_WORDS.has(bare(prev)) && !STARTERS.has(bare(prev));
+  if (capital(next) && PLACE_TYPES.has(bare(next)) && !nameBefore) return true;
+  const kind = before.match(PLACE_TYPE_BEFORE)?.[1];
+  if (capital(kind) && PLACE_TYPES_BEFORE.has(bare(kind))) return true;
+  const place = before.match(/(\p{Lu}[\p{L}\p{M}'’-]*),[ \t]*$/u)?.[1];
+  return PLACE_NAMES.has(bare(match)) && capital(place) && PLACE_TYPES.has(bare(place));
+}
 
 /**
  * Whether the words around a match of a short name (or a name made of everyday words) say it is somebody or
@@ -305,6 +339,7 @@ export function notThePerson(text: string, start: number, end: number, n: Neighb
   const after = text.slice(end);
   const match = text.slice(start, end);
   if (isIdiom(before, match, after, Boolean(n.ownPhotos))) return true;
+  if (n.placeNames && inPlaceName(before, match, after, n.own)) return true;
   const { prev, next, possessive } = neighbours(before, after);
   const p = prev ? bare(prev.replace(/\.$/u, "")) : null;
   if (n.otherWords && ((p && n.otherWords.has(p)) || (next && n.otherWords.has(bare(next))))) return true;
@@ -348,7 +383,7 @@ export function notThePerson(text: string, start: number, end: number, n: Neighb
   // Away from their own photographs a saint's name is a place's, never a title before theirs: "St Mary's Church",
   // "Christening at St. Mary's church", "Saint Peter's Basilica". Read from the text itself, so "St." is not taken
   // for the end of a sentence.
-  if (!n.ownPhotos && SAINT_BEFORE.test(before)) return true;
+  if (!n.ownPhotos && !n.noSaintExcuse && SAINT_BEFORE.test(before)) return true;
   if (n.away) {
     // "Isle Of Barbara", "Church Of Barbara": a place's noun and "Of" before it make it the place's name ("Of" is no
     // joining word). Only a place's noun: "Portrait Of Barbara", "The Wedding Of Barbara And Ben" are her.
@@ -611,6 +646,10 @@ export type Where = {
    * them wherever a place is not plainly meant ("Charlotte in the rain" of the "Charlotte, NC 2020" trip is the city).
    */
   onPhoto?: boolean;
+  /** Deciding what everyone may read: a name inside a place's name is the place's ("Lake Louise"; see inPlaceName). */
+  placeNames?: boolean;
+  /** Nor is a saint's name a place's ("Santa Barbara Pier"): for a withdrawn naming during its fortnight. */
+  noSaintExcuse?: boolean;
 };
 
 export type NameMatcher = {
@@ -831,6 +870,8 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
           place: !where.tagged || where.onPhoto === false ? "wide" : "travel",
           ownPhotos: Boolean(where.tagged) && where.onPhoto !== false,
           number: !where.tagged,
+          placeNames: where.placeNames,
+          noSaintExcuse: where.noSaintExcuse,
         });
         if (somebodyElse) return m;
         const before = whole.slice(0, offset);

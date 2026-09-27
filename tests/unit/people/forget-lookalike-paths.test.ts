@@ -6,7 +6,7 @@ import { resetTestDb } from "../helpers/reset";
 vi.mock("@/lib/jobs/boss", () => ({ enqueue: async () => {} }));
 
 import { forgetPerson } from "@/lib/people/forget-person";
-import { looseMatcher, memberTextMentioning, scrubWithdrawnNames, withoutWithdrawnNames } from "@/lib/people/forget";
+import { looseMatcher, memberTextMentioning, namesSomebodyRestricted, scrubWithdrawnNames, withoutWithdrawnNames } from "@/lib/people/forget";
 import { nameMatcher } from "@/lib/people/scrub";
 import type { LeftoverItems } from "@/lib/people/forget";
 import type { StoredAnnotation } from "@/lib/annotation/schema";
@@ -261,5 +261,51 @@ describe("show to everyone and the nightly public pass, for a withdrawn naming",
     admin = (await db.user.create({ data: { email: "admin@example.com", role: "ADMIN" } })).id;
     const named = await readable("Rose", false, "Rose At The Hut");
     expect([named.everyone.split("\n")[0], named.nightly.split("\n")[0], named.row.annotationMembersOnly]).toEqual(["Rose At The Hut", "Rose At The Hut", false]);
+  });
+});
+
+/**
+ * Places, dates and sayings around a name, when deciding what everyone may read: the share guard for anybody who
+ * may not be named, and show to everyone while a withdrawal waits out its fortnight, judge them alike. A name that is
+ * part of a place's name, a date or a saying is shared as written; a real mention is refused by the guard, and taken
+ * out (or held) by the withdrawal.
+ */
+describe("the share guard and a withdrawn naming, around places, dates and sayings", () => {
+  let admin: string;
+  beforeEach(async () => {
+    await resetTestDb();
+    admin = (await db.user.create({ data: { email: "admin@example.com", role: "ADMIN" } })).id;
+  });
+  const record = (text: string): StoredAnnotation => ({ title: text, caption: text, description: "", tags: [], place: null, activity: null, objects: [], visibleText: null, season: "summer", mood: null, searchSummary: "" });
+
+  /** [their name, the helper's words, whether the words are a place, a date or a saying rather than them] */
+  const ROWS: [string, string, boolean][] = [
+    ["Louise Smith", "Lake Louise at dawn", true],
+    ["Louise Smith", "LAKE LOUISE AT DAWN", true],
+    ["Paris Jones", "The Eiffel Tower, Paris", true],
+    ["Brooklyn Jones", "Walking the Brooklyn Bridge", true],
+    ["Jordan Lee", "Crossing the Jordan River", true],
+    ["Madison Kemp", "Madison Square Garden", true],
+    ["Harbor Lee", "Mount Harbor from the ferry", true],
+    ["May Smith", "Lake day in May.", true],
+    ["May Smith", "May 2019 at the lake", true],
+    ["Will Turner", "Will you look at that!", true],
+    ["Ruth Baker", "The Baker Street bakery", true],
+    ["Louise Smith", "Louise at the lake", false],
+    ["Paris Jones", "Paris blows out the candles", false],
+    ["Louise Park", "Louise Park at the lake", false],
+    ["Jordan Lee", "Grandpa Jordan River walk", false],
+  ];
+
+  it.each(ROWS)("%s: %s", async (name, text, notThem) => {
+    const person = await db.person.create({ data: { name, optedOutAt: new Date(), createdById: admin } });
+    const refused = await namesSomebodyRestricted([text]);
+    await db.person.update({ where: { id: person.id }, data: { optedOutAt: null, namingWithdrawnAt: new Date() } });
+    const p = await db.photo.create({ data: { uploaderId: admin, originalName: "x.jpg", mimeType: "image/jpeg", storageKey: "k", originalPath: "k/o.jpg", sizeBytes: 1, status: "READY", title: text, titleByHelper: true, annotation: record(text), annotatedAt: new Date() } });
+    const shown = await withoutWithdrawnNames(p.id, { annotation: record(text), title: text });
+    const first = name.split(" ")[0];
+    const words = [shown.title, (shown.annotation as StoredAnnotation).title, (shown.annotation as StoredAnnotation).caption];
+    if (notThem) expect({ refused, hold: shown.hold, words }).toEqual({ refused: false, hold: false, words: [text, text, text] });
+    else expect({ refused, published: shown.hold ? [] : words.filter((w) => new RegExp(first, "i").test(w ?? "")) }).toEqual({ refused: true, published: [] });
   });
 });
