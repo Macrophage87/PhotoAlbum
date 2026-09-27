@@ -36,14 +36,6 @@ export async function takeBackTrack(tx: Prisma.TransactionClient, track: { id: s
   return true;
 }
 
-/**
- * The same for a trip being deleted, whose tracks all go with it: every position any of them gave its photos, at
- * whatever time, since the photos leave the trip and no track of it can place them again.
- */
-export async function takeBackTripTracks(tx: Prisma.TransactionClient, tripId: string): Promise<void> {
-  await clearTrackPositions(tx, { tripId, gpsSource: "TRACK" });
-}
-
 async function clearTrackPositions(tx: Prisma.TransactionClient, placed: Prisma.PhotoWhereInput): Promise<void> {
   const cleared = { lat: null, lng: null, altitude: null, gpsSource: null };
   // A guess was placed once (it has a name); the ask is recorded even where the helper declined, which has none.

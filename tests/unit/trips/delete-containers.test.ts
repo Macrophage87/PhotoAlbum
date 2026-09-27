@@ -50,6 +50,18 @@ describe("deleting trips and collections", () => {
     expect(await db.photo.findUniqueOrThrow({ where: { id: overGuess.id } })).toMatchObject({ lat: null, gpsSource: null, placeEstimatedAt: null });
     expect(await db.photo.findUniqueOrThrow({ where: { id: ownGps.id } })).toMatchObject({ lat: 44.4, gpsSource: "EXIF" });
   });
+  it("lets go of a trip of thousands of photographs, well past a transaction's default five seconds", async () => {
+    who.role = "ADMIN";
+    const trip = await db.trip.findUniqueOrThrow({ where: { slug: "gone" } });
+    const activity = await db.activity.findFirstOrThrow({ where: { tripId: trip.id } });
+    const N = 6000;
+    const rows = Array.from({ length: N }, (_, i) => ({ uploaderId: who.id, tripId: trip.id, originalName: `${i}.jpg`, mimeType: "image/jpeg", storageKey: `k${i}`, originalPath: `k${i}/o.jpg`, sizeBytes: 1, status: "READY" as const, ...(i % 3 === 0 ? { lat: 44.3, lng: -68.2, gpsSource: "TRACK" as const } : {}), ...(i % 5 === 0 ? { activityId: activity.id, activitySetById: who.id } : {}) }));
+    for (let i = 0; i < N; i += 1000) await db.photo.createMany({ data: rows.slice(i, i + 1000) });
+    await expect(deleteTrip("gone")).rejects.toThrow("REDIRECT:/photos");
+    expect(await db.trip.count()).toBe(0);
+    expect(await db.photo.count({ where: { OR: [{ tripId: { not: null } }, { activityId: { not: null } }, { activitySetById: { not: null } }, { gpsSource: "TRACK" }] } })).toBe(0);
+    expect(await db.photo.count({ where: { lat: null } })).toBe(1 + N);
+  }, 120_000);
   it("an admin deletes the collection and the photos stay on their trip", async () => {
     who.role = "ADMIN";
     await expect(deleteCollection("best")).rejects.toThrow("REDIRECT:/");
