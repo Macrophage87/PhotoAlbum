@@ -13,6 +13,7 @@ import { matcherFor, memberTextMentioning, taggedPhotoIds, withdrawalDue, withdr
 import { nameMayLeaveServer } from "@/lib/people/consent";
 import { MemberTextList } from "@/components/people/MemberTextList";
 import { PetForm } from "@/components/people/PetForm";
+import { ForgetPersonButton } from "@/components/people/ForgetPersonButton";
 import { dateColumnToDay } from "@/lib/time/local-day";
 import { namesWaitingFor, refreshNamesFor } from "@/app/annotation/actions";
 
@@ -21,7 +22,9 @@ export const metadata = { robots: { index: false, follow: false } };
 /** Members-only: one person's media over time, and their recognition settings. */
 export default async function PersonPage({ params, searchParams }: PageProps<"/people/[id]">) {
   const { id } = await params;
-  const busy = (await searchParams).busy === "1";
+  const sp = await searchParams;
+  const busy = sp.busy === "1";
+  const keptName = sp.forgot === "face";
   const user = await requireUser(`/people/${id}`);
   const viewer = await getViewer();
   const person = await db.person.findUnique({ where: { id } });
@@ -60,6 +63,7 @@ export default async function PersonPage({ params, searchParams }: PageProps<"/p
           {person.kind === "HUMAN" && person.forgetPendingAt ? <Badge tone="warning">Waiting to be forgotten — an admin needs to finish setting up the album.</Badge> : person.kind === "HUMAN" && (person.faceIndexing ? <Badge tone="success">recognized in new photos · {person.adultAttestedAt ? "attested adult" : "by birthday"}</Badge> : person.optedOutAt ? <Badge tone="warning">asked to be forgotten on {person.optedOutAt.toLocaleDateString("en-US")}</Badge> : <Badge tone="neutral">{person.pendingDecision ? "awaiting an admin's decision" : "not recognized"}</Badge>)}
         </div>
 
+        {keptName && <p className="rounded-theme border border-border bg-surface-alt p-3 text-sm" role="status" data-testid="forget-done">Done: {person.name}&apos;s face data is deleted, the album no longer recognizes them, and their name is out of everything the AI helper wrote. The name stays on the photos already confirmed.</p>}
         {busy && <p className="rounded-theme border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900" role="status">Another person is being forgotten; try again in a few minutes.</p>}
         <PhotoGrid photos={photos.map((p) => toGridPhoto(p, null, user))} emptyMessage="No photos you can see." />
 
@@ -135,7 +139,7 @@ export default async function PersonPage({ params, searchParams }: PageProps<"/p
                   {person.optedOutAt && (
                     <label className="flex items-start gap-2 rounded-theme border border-amber-300 bg-amber-50 p-2 text-amber-900">
                       <input type="checkbox" name="agreedAgain" className="mt-1" />
-                      <span>{person.name} asked to be forgotten on {person.optedOutAt.toLocaleDateString("en-US")}. Tick only if they have told you they agree to recognition again; otherwise the switch below is ignored.</span>
+                      <span>{person.name} asked to be forgotten on {person.optedOutAt.toLocaleDateString("en-US")}. Check this only if they have told you they agree to recognition again; otherwise the switch below is ignored.</span>
                     </label>
                   )}
                   <label className="flex items-start gap-2">
@@ -237,7 +241,7 @@ export default async function PersonPage({ params, searchParams }: PageProps<"/p
                 )}
                 <label className="flex items-center gap-2"><input type="radio" name="mode" value="remove-all" defaultChecked /> Also remove the record of which photos they appear in</label>
                 <label className="flex items-center gap-2"><input type="radio" name="mode" value="keep-name" /> Keep the name on the photos already confirmed (no face data)</label>
-                <ConfirmSubmitButton variant="danger" size="sm" confirmMessage={`Forget ${person.name}'s face data? This cannot be undone.`}>Forget face data</ConfirmSubmitButton>
+                <ForgetPersonButton name={person.name} />
               </form>
               ) : (
                 <div className="space-y-1 border-t border-border pt-3">

@@ -3,7 +3,7 @@ import { Client } from "pg";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { BrowserContext, Page } from "@playwright/test";
+import { expect, type BrowserContext, type Page } from "@playwright/test";
 
 const dbUrl = process.env.E2E_DATABASE_URL ?? process.env.DATABASE_URL?.replace(/\/([^/?]+)(\?.*)?$/, "/$1_e2e$2");
 
@@ -95,4 +95,18 @@ export async function createTrip(opts: { slug: string; title: string; start: str
 
 export async function setVisibility(slug: string, visibility: "PRIVATE" | "LINK" | "PUBLIC", shareToken: string | null = null) {
   await withDb((c) => c.query('UPDATE "Trip" SET visibility = $2, "shareToken" = $3 WHERE slug = $1', [slug, visibility, shareToken]));
+}
+
+/**
+ * A shared page, opened for the first time or again, carries its title and link-preview tags once: the first visit
+ * loads the page a second time once the cookie is set, and must not leave the placeholder's copy behind.
+ */
+export async function expectOneSetOfMetadata(page: Page) {
+  await expect(page.locator("title")).toHaveCount(1);
+  await expect(page.locator('meta[property="og:image"]')).toHaveCount(1);
+  await expect(page.locator('meta[property="og:title"]')).toHaveCount(1);
+  await page.reload();
+  await expect(page.getByText("Shared with you")).toBeVisible();
+  await expect(page.locator("title")).toHaveCount(1);
+  await expect(page.locator('meta[property="og:image"]')).toHaveCount(1);
 }

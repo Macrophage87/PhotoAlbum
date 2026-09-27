@@ -66,7 +66,7 @@ export function DateTroubleshooter({ photoId, dark = false, readOnly = false, on
       <div className="flex items-start justify-between gap-2">
         <p>
           This item is dated <b>{when(report.current.at, report.current.tzOffsetMin) ?? "not at all"}</b>
-          {report.current.source ? <> , from {report.current.source}</> : null}
+          {report.current.source ? <>, from {report.current.source}</> : null}
           {report.current.setBy ? ` (${report.current.setBy})` : ""}.
         </p>
         {dark ? (

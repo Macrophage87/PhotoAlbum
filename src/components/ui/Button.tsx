@@ -1,7 +1,7 @@
-import type { ButtonHTMLAttributes, AnchorHTMLAttributes, ReactNode } from "react";
+import type { ButtonHTMLAttributes, AnchorHTMLAttributes, ReactNode, Ref } from "react";
 import Link from "next/link";
 
-type Variant = "primary" | "secondary" | "ghost" | "danger";
+type Variant = "primary" | "secondary" | "ghost" | "ghostOnDark" | "danger";
 type Size = "sm" | "md" | "lg";
 
 const base =
@@ -10,6 +10,8 @@ const variants: Record<Variant, string> = {
   primary: "bg-primary text-primary-fg hover:opacity-90",
   secondary: "bg-surface text-text border border-border hover:bg-surface-alt",
   ghost: "text-text hover:bg-surface-alt",
+  // The ghost for the lightbox's black panel, where the page's dark ink would all but vanish.
+  ghostOnDark: "text-white/85 hover:text-white hover:bg-white/10",
   danger: "bg-red-600 text-white hover:bg-red-700",
 };
 const sizes: Record<Size, string> = { sm: "h-8 px-3 text-sm", md: "h-10 px-4 text-sm", lg: "h-12 px-6 text-base" };
@@ -23,7 +25,7 @@ export function Button({
   size = "md",
   className = "",
   ...props
-}: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: Variant; size?: Size }) {
+}: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: Variant; size?: Size; ref?: Ref<HTMLButtonElement> }) {
   return <button className={buttonClasses(variant, size, className)} {...props} />;
 }
 

@@ -6,7 +6,7 @@
   --th-surface: #ffffff;
   --th-surface-alt: #f1f5f9;
   --th-text: #0f172a;
-  --th-text-muted: #64748b;
+  --th-text-muted: #617085;
   --th-primary: #2563eb;
   --th-primary-fg: #ffffff;
   --th-accent: #0ea5e9;
@@ -26,6 +26,8 @@
   --color-muted: var(--th-text-muted);
   --color-primary: var(--th-primary);
   --color-primary-fg: var(--th-primary-fg);
+  /* Primary text on a primary tint (chips): a shade darker, so it clears 4.5:1 on that tint in every theme. */
+  --color-primary-strong: color-mix(in oklab, var(--th-primary), black 12%);
   --color-accent: var(--th-accent);
   --color-accent-fg: var(--th-accent-fg);
   --color-border: var(--th-border);
@@ -49,4 +51,9 @@ h1, h2, h3, .font-display {
 .tile-lazy {
   content-visibility: auto;
   contain-intrinsic-size: auto 240px;
+}
+
+/* The skip link's target takes focus so the next Tab starts inside the page, without drawing a ring round all of it. */
+main#main:focus {
+  outline: none;
 }

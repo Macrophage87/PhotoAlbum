@@ -28,7 +28,7 @@ export function FavouriteButton({ kind, id, initial, dark = false, size = "md", 
   }, [kind, id, self]);
   const tell = (next: FavouriteState) => window.dispatchEvent(new CustomEvent<Changed>(CHANGED, { detail: { kind, id, state: next, from: self } }));
   const label = state.mine ? `Remove this ${NOUN[kind]} from your favorites` : `Make this one of your favorite ${NOUN[kind]}s`;
-  const tone = dark ? "text-white/70 hover:text-white" : "text-muted hover:text-foreground";
+  const tone = dark ? "text-white/70 hover:text-white" : "text-muted hover:text-text";
 
   return (
     <button
@@ -38,7 +38,7 @@ export function FavouriteButton({ kind, id, initial, dark = false, size = "md", 
       title={state.count > 1 ? `${state.count} of us have this as a favorite` : label}
       disabled={pending}
       data-testid={`favorite-${kind}`}
-      className={`inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 ${size === "sm" ? "text-xs" : "text-sm"} ${state.mine ? "text-rose-600" : tone} disabled:opacity-60`}
+      className={`inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 ${size === "sm" ? "text-xs" : "text-sm"} ${state.mine ? (dark ? "text-rose-400" : "text-rose-600") : tone} disabled:opacity-60`}
       onClick={(e) => {
         e.preventDefault();
         e.stopPropagation();

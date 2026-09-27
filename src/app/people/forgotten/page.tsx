@@ -17,8 +17,10 @@ const day = (d: Date | null) => (d ? d.toLocaleDateString("en-US") : "no date");
  * album kept track of who wrote them — linked so they can be edited. Nothing here, stored or shown, is the name
  * itself: each place is labelled by its file name, its date and its trip, never by words that may carry the name.
  */
-export default async function ForgottenPage() {
+export default async function ForgottenPage({ searchParams }: PageProps<"/people/forgotten">) {
   const user = await requireUser("/people/forgotten");
+  // Straight after a forget: say it happened, since the person page it was done from no longer exists.
+  const justDone = (await searchParams).done === "1";
   const viewer = await getViewer();
   const isAdmin = user.role === "ADMIN";
   const lists = await db.forgetLeftover.findMany({ where: { dismissedAt: null, ...(isAdmin ? {} : { createdById: user.id }) }, orderBy: { createdAt: "desc" } });
@@ -49,7 +51,13 @@ export default async function ForgottenPage() {
           <h1 className="font-display text-3xl font-semibold">Forgotten</h1>
           <p className="text-muted mt-1">When somebody is forgotten, their face data, their tags and their person page go, and their name is taken out of everything the AI helper wrote and out of the name search. Words members wrote themselves are left as they wrote them; these still mention a forgotten name. From then on the album keeps their full names out of what goes to and comes back from the AI helper, and a one-word name only on the photos they were tagged on: a first name alone, anywhere else, is not taken out. First names that are also months, like May or June, are never looked for, even on their own photos.</p>
         </div>
-        {shown.length === 0 && <p>Nothing left to see to.</p>}
+        {justDone && (
+          <p className="rounded-theme border border-border bg-surface-alt p-3 text-sm" role="status" data-testid="forget-done">
+            Done: they are forgotten. Their person page, their tags and their face data are deleted, and their name is out of everything the AI helper wrote.
+            {shown.length > 0 ? " Anything members wrote that still mentions them is listed below." : ""}
+          </p>
+        )}
+        {shown.length === 0 && <p>Nothing to edit: nothing members wrote still mentions anyone who has been forgotten.</p>}
         {shown.map((l) => (
           <section key={l.id} className="space-y-2 rounded-theme border border-border p-4" data-testid="forget-leftover">
             <p className="text-sm text-muted">Forgotten on {day(l.createdAt)}. Written by members, or before the album kept track of who wrote them: open each to edit it, or ask whoever wrote it.</p>

@@ -350,11 +350,13 @@ export function Uploader({ tripId, activityId, collectionId, scope, onDone, maxC
       {/* What to do next. How many went up is the line at the top: a second count here, of something slightly
           different, read as a contradiction whenever any had failed. */}
       {allSettled && (
-        <div className="flex items-center gap-3 text-sm">
+        // Wrapping, with the buttons kept whole: on a phone the button moves to a line of its own rather than folding
+        // its words inside a button of fixed height.
+        <div className="flex flex-wrap items-center gap-3 text-sm">
           {doneIds.length > 0 && (
             // A long batch is a long address: past what the status check asks about in one go, send them to the
             // review page as a whole, where everything not yet reviewed — these included — is waiting.
-            <Link href={doneIds.length <= MAX_STATUS_IDS ? `/review?ids=${doneIds.join(",")}` : "/review"} className={buttonClasses("primary", "sm")}>
+            <Link href={doneIds.length <= MAX_STATUS_IDS ? `/review?ids=${doneIds.join(",")}` : "/review"} className={buttonClasses("primary", "sm", "shrink-0 whitespace-nowrap")}>
               Add notes and file {doneIds.length === 1 ? "it" : "them"}
             </Link>
           )}

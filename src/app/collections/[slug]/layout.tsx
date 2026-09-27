@@ -69,7 +69,7 @@ export default async function CollectionLayout({ params, children }: LayoutProps
         {...(owns ? { save: setCollectionDescription.bind(null, slug), share: setCollectionDescriptionShared.bind(null, slug), ...((await annotationGates()).active ? { describe: describeCollectionWithAi.bind(null, slug) } : {}) } : {})}
       />
       <TripTabs tabs={tabs} />
-      <main className="mx-auto max-w-6xl px-4 sm:px-6 py-8">{children}</main>
+      <main id="main" tabIndex={-1} className="mx-auto max-w-6xl px-4 sm:px-6 py-8">{children}</main>
     </TripTheme>
   );
 }

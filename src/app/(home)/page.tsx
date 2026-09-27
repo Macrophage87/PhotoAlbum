@@ -42,6 +42,11 @@ export default async function HomePage({ searchParams }: PageProps<"/">) {
   return (
     <AppShell viewer={viewer}>
       <Container className="py-10">
+        {sp.notice === "admins-only" && member && (
+          <p className="mb-6 rounded-theme border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900" role="status" data-testid="admins-only">
+            Only admins can open that page. Ask an admin of the album if you need something there.
+          </p>
+        )}
         <div className="flex items-end justify-between gap-4 mb-6">
           <div>
             <h1 className="font-display text-3xl font-semibold">Trips</h1>

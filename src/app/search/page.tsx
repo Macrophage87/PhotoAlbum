@@ -70,9 +70,10 @@ export default async function SearchPage({ searchParams }: PageProps<"/search">)
     <AppShell viewer={viewer}>
       <Container className="py-10 space-y-6">
         <h1 className="font-display text-3xl font-semibold">Search</h1>
-        <form action="/search" method="get" className="space-y-3">
+        {/* One form for the words and every filter, so Enter in the box and either Search button send them all. */}
+        <form action="/search" method="get" role="search" className="space-y-3">
           <div className="flex flex-wrap items-center gap-2 max-w-xl">
-            <div className="flex-1 min-w-52"><SearchBox initial={q} /></div>
+            <div className="flex-1 min-w-52"><SearchBox initial={q} asInput /></div>
             <Button type="submit" variant="secondary" size="sm">Search</Button>
           </div>
           <details open={narrowing} data-testid="advanced-filters">

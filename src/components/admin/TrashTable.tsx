@@ -87,7 +87,7 @@ export function TrashTable({ items }: { items: TrashItem[] }) {
               )}
               <div className="min-w-0 flex-1 text-sm">
                 <div className="flex flex-wrap items-center gap-2">
-                  <Link href={`/photos/${item.id}`} className="font-medium text-primary hover:underline truncate">{item.label}</Link>
+                  <Link href={`/photos/${item.id}`} className="font-medium text-primary underline underline-offset-2 truncate">{item.label}</Link>
                   {item.removalRequest && <Badge tone="primary">someone asked</Badge>}
                   {item.trip && <span className="text-muted">from {item.trip.title}</span>}
                 </div>

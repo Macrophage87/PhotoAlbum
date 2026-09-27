@@ -20,7 +20,10 @@ export function FacesAdmin({ gates, counts }: { gates: { sidecar: boolean; envEn
         <dt className="text-muted">ML sidecar</dt><dd>{gates.sidecar ? "configured" : "not configured (set ML_URL and ML_TOKEN)"}</dd>
         <dt className="text-muted">Operator flag</dt><dd>{gates.envEnabled ? "FACE_INDEXING_ENABLED is on" : "FACE_INDEXING_ENABLED is off"}</dd>
         <dt className="text-muted">Admin opt-in</dt><dd>{gates.optedInAt ? `on since ${stamp(gates.optedInAt, "date")}` : "off"}</dd>
-        <dt className="text-muted">Stored templates</dt><dd>{counts.templates} ({counts.unnamed} unnamed{counts.nextPurge ? `, oldest purged by ${stamp(counts.nextPurge, "date")}` : ""}) · {counts.people} people</dd>
+        {/* Separate lines, since neither count is part of the other: an unnamed face need not have a template. */}
+        <dt className="text-muted">Face templates</dt><dd>{counts.templates} stored</dd>
+        <dt className="text-muted">Faces not named</dt><dd>{counts.unnamed}{counts.nextPurge ? `, the oldest deleted by ${stamp(counts.nextPurge, "date")}` : ""}</dd>
+        <dt className="text-muted">People and pets</dt><dd>{counts.people}</dd>
       </dl>
       <div className="flex flex-wrap items-center gap-3">
         {gates.optedInAt ? (

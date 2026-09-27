@@ -57,7 +57,7 @@ export function WhoWasThere({ members, selected, what }: { members: Member[]; se
           <p className="text-xs text-muted">
             {named.length
               ? `Only what these ${named.length === 1 ? "member uploads" : "members upload"} will be filed here by its date. Anything anybody adds by hand stays put.`
-              : "Nobody ticked means everyone — photographs are filed here by their date, whoever uploaded them."}
+              : "Nobody checked means everyone — photographs are filed here by their date, whoever uploaded them."}
           </p>
         </div>
       )}

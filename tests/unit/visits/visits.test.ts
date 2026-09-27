@@ -246,6 +246,6 @@ describe("the chart and the words around it", () => {
     expect(plural(1, "page")).toBe("1 page");
     expect(plural(2, "page")).toBe("2 pages");
     expect(plural(1, "browser")).toBe("1 browser");
-    expect(barLabel("2026-03-09")).toBe("9 Mar");
+    expect(barLabel("2026-03-09")).toBe("Mar 9");
   });
 });

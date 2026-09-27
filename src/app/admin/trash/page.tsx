@@ -40,7 +40,7 @@ export default async function TrashPage() {
     <AppShell viewer={viewer}>
       <Container className="py-8 space-y-6">
         <div>
-          <p className="text-sm text-muted"><Link href="/admin" className="text-primary hover:underline">Admin</Link> / Trash</p>
+          <p className="text-sm text-muted"><Link href="/admin" className="text-primary underline underline-offset-2">Admin</Link> / Trash</p>
           <h1 className="font-display text-3xl font-semibold mt-1">Trash</h1>
           <p className="text-muted mt-2 max-w-2xl">
             Items family members have taken out of the album. They are already hidden everywhere — galleries, the timeline, the map, search and every share link — but the files are still here, so restoring puts an item back exactly as it was. Deleting removes the record and the file from this server for good.

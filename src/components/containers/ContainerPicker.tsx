@@ -177,7 +177,7 @@ export function ContainerPicker({ kind, value, onChange, placeholder, allowNone,
         }}
       />
       {value && !open && (
-        <button type="button" className="absolute right-1 top-1 px-1.5 text-muted hover:text-foreground text-sm" aria-label={`Clear the ${WORD[kind].one}`} onClick={() => choose(null)}>×</button>
+        <button type="button" className="absolute right-1 top-1 px-1.5 text-muted hover:text-text text-sm" aria-label={`Clear the ${WORD[kind].one}`} onClick={() => choose(null)}>×</button>
       )}
       {open && (
         <ul id={listId} role="listbox" aria-busy={loading} onMouseDown={(e) => e.preventDefault()} className="absolute z-20 mt-1 w-full max-h-64 overflow-y-auto rounded-theme border border-border bg-surface shadow-lg divide-y divide-border">
@@ -248,7 +248,7 @@ export function ContainerMultiPicker({ kind, value, onChange, name, hint }: {
               {/* A chip is also the way in: this is often the quickest route to the collection the item is in. */}
               {v.slug ? <a href={`/${kind === "trip" ? "trips" : "collections"}/${v.slug}`} className="text-primary hover:underline">{v.title}</a> : <span>{v.title}</span>}
               {visibilityNote(v.visibility) && <span className="text-xs text-muted">({visibilityNote(v.visibility)})</span>}
-              <button type="button" aria-label={`Remove ${v.title}`} className="text-muted hover:text-foreground" onClick={() => onChange(value.filter((x) => x.id !== v.id))}>×</button>
+              <button type="button" aria-label={`Remove ${v.title}`} className="text-muted hover:text-text" onClick={() => onChange(value.filter((x) => x.id !== v.id))}>×</button>
             </li>
           ))}
         </ul>

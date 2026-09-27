@@ -140,7 +140,7 @@ export function PlaceOnMap({ src, theme, initial, tripTitle }: { src: string; th
         <div>
           <h2 className="font-display text-lg font-semibold">{initial.total} to place{tripTitle ? ` on ${tripTitle}` : ""}</h2>
           <p className="text-muted text-sm mt-1">
-            Drag one onto the map, or tap it and then tap the spot. Tick several that were taken in the same place and
+            Drag one onto the map, or tap it and then tap the spot. Check several that were taken in the same place and
             they all land together. A pin already on the map can be picked up the same way and put down where it
             actually was.
           </p>

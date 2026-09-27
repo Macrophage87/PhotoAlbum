@@ -4,7 +4,7 @@ import fs from "node:fs";
 import { randomUUID } from "node:crypto";
 import sharp from "sharp";
 import { stillIsBlank } from "@/lib/images/poster";
-import { createTrip, inviteFor, magicLinkFor, pressSignIn, resetDb, setVisibility, signIn, withDb } from "./helpers";
+import { createTrip, expectOneSetOfMetadata, inviteFor, magicLinkFor, pressSignIn, resetDb, setVisibility, signIn, withDb } from "./helpers";
 
 // Must match ADMIN_EMAIL as set by scripts/e2e-server.mjs: only that address may bootstrap the admin account.
 const ADMIN = process.env.E2E_ADMIN_EMAIL ?? "e2e-admin@example.com";
@@ -197,6 +197,7 @@ test("a share link opens the trip read-only, and stops working when rotated", as
   const page = await anon.newPage();
   await page.goto("/share/e2e-share-token/photos");
   await expect(page.getByText("Shared with you")).toBeVisible();
+  await expectOneSetOfMetadata(page);
   const img = page.locator("img[src*='/api/photos/']").first();
   await expect(img).toBeVisible();
   await expect.poll(async () => img.evaluate((el: HTMLImageElement) => el.naturalWidth)).toBeGreaterThan(0);
@@ -290,6 +291,7 @@ test("one activity can be sent on its own link, which opens it and nothing else 
   const guest = await anon.newPage();
   await guest.goto(`/share/a/${token}`);
   await expect(guest.getByText("Shared with you")).toBeVisible();
+  await expectOneSetOfMetadata(guest);
   await expect(guest.getByRole("heading", { name: "Ocean Path loop" })).toBeVisible();
   const img = guest.locator("img[src*='/api/photos/']").first();
   await expect(img).toBeVisible();
@@ -318,8 +320,11 @@ test("one activity can be sent on its own link, which opens it and nothing else 
   await page.getByTestId("activity-share-rotate").click();
   await expect(page.getByTestId("activity-shared")).toBeVisible();
   const stale = await anon.newPage();
-  await stale.goto(`/share/a/${token}`);
+  // A real 404, not a "Not found" page sent as 200: nothing streams before the link is found to be dead.
+  expect((await stale.goto(`/share/a/${token}`))?.status()).toBe(404);
   await expect(stale.getByRole("heading", { name: "Ocean Path loop" })).toHaveCount(0);
+  expect((await stale.goto("/share/not-a-real-token"))?.status()).toBe(404);
+  expect((await stale.goto("/trips/no-such-trip"))?.status()).toBe(404);
 
   // And stopping sharing closes it altogether.
   const fresh = (await withDb((c) => c.query(`SELECT "shareToken" FROM "Activity" WHERE id = $1`, [activityId]))).rows[0].shareToken as string;
@@ -395,6 +400,9 @@ test("a trip can say who was on it, and stops collecting everybody else's photog
   await inviteFor(other);
   await signIn(outside, other);
   const theirs = await outside.newPage();
+  // A plain member sent away from the admin page is told why, not bounced home in silence.
+  await theirs.goto("/admin");
+  await expect(theirs.getByTestId("admins-only")).toBeVisible();
   await theirs.goto("/upload");
   await chooseFile(theirs, "photo-with-gps.jpg");
   await expect(theirs.getByTestId("upload-progress")).toHaveText("All 1 uploaded.", { timeout: 30_000 });
@@ -586,6 +594,7 @@ test("a collection gathers photos from two trips and can be shared by link", asy
   await expect(anonPage).toHaveURL(/\/auth\/signin/);
   await anonPage.goto(shareUrl);
   await expect(anonPage.getByText("Shared with you")).toBeVisible();
+  await expectOneSetOfMetadata(anonPage);
   const imgs = anonPage.locator("img[src*='/api/photos/']");
   await expect(imgs).toHaveCount(2);
   for (const img of await imgs.all()) await expect.poll(async () => img.evaluate((el: HTMLImageElement) => el.naturalWidth)).toBeGreaterThan(0);
@@ -980,11 +989,19 @@ test("faces are found once an admin opts in, named with consent recorded, shown 
 
   // Forgetting deletes the templates and the appearance record.
   await page.goto(`/people/${person.rows[0].id}`);
-  page.once("dialog", (d) => void d.accept());
-  await page.getByRole("button", { name: "Forget face data" }).click();
+  // The question says what the chosen mode takes: by default the person page and the tags as well as the face data.
+  let forgetQuestion = "";
+  // The button is named for the mode chosen, and follows the choice.
+  await page.getByLabel("Keep the name on the photos already confirmed").check();
+  await expect(page.getByRole("button", { name: "Forget face data, keep the name" })).toBeVisible();
+  await page.getByLabel("Also remove the record of which photos they appear in").check();
+  page.once("dialog", (d) => { forgetQuestion = d.message(); void d.accept(); });
+  await page.getByRole("button", { name: "Forget completely" }).click();
   await expect
     .poll(async () => (await withDb((c) => c.query('SELECT count(*)::int AS n FROM "Face" WHERE "personId" = $1', [person.rows[0].id]))).rows[0].n, { timeout: 15_000 })
     .toBe(0);
+  expect(forgetQuestion).toContain("person page");
+  await expect(page.getByTestId("forget-done")).toBeVisible();
   const clusters = await withDb((c) => c.query('SELECT count(*)::int AS n FROM "FaceCluster" WHERE "personId" = $1', [person.rows[0].id]));
   expect(clusters.rows[0].n).toBe(0);
 });
@@ -2222,7 +2239,7 @@ test("files already on their way keep the trip they were added with when the tri
 });
 
 test("a batch keeps going when the member leaves the page, and what did not make it is waiting for them", async ({ context, page }) => {
-  test.setTimeout(120_000);
+  test.setTimeout(240_000);
   await signIn(context, ADMIN);
   await page.goto("/upload");
   await page.waitForLoadState("networkidle");
@@ -2248,11 +2265,15 @@ test("a batch keeps going when the member leaves the page, and what did not make
   await expect(page.getByTestId("upload-pill")).toBeVisible();
   release();
   await expect.poll(() => answered.length, { timeout: 60_000 }).toBe(4);
-  await expect.poll(async () => (await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "Photo" WHERE "originalName" LIKE $1`, [`away-%-${tag}.jpg`]))).rows[0].n, { timeout: 60_000 }).toBe(3);
+  // The pill turns to what did not make it only once the rest are processed, and that is the worker's pace, not the
+  // page's: late in a full run it still has earlier tests' jobs in hand. So wait on the photographs themselves.
+  await expect
+    .poll(async () => (await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "Photo" WHERE "originalName" LIKE $1 AND status = 'READY'`, [`away-%-${tag}.jpg`]))).rows[0].n, { timeout: 150_000 })
+    .toBe(3);
 
   // Once the rest are done, the pill stays to say one did not make it, and leads back to the list.
   const review = page.getByTestId("upload-pill-review");
-  await expect(review).toContainText("1 file didn't make it", { timeout: 60_000 });
+  await expect(review).toContainText("1 file didn't make it", { timeout: 30_000 });
   await review.click();
   await expect(page).toHaveURL(/\/upload/);
   await expect(page.getByTestId("upload-failures")).toContainText(`refused-${tag}.jpg`);
@@ -2912,6 +2933,11 @@ test("a search can ask for a particular person or pet, and the rest of the quest
   // The same question on the album-wide search, which reaches every trip.
   await page.goto(`/search?q=&person=${personId}`);
   await expect(page.getByTestId("who-filter")).toBeVisible();
+  // The words and the filters are one form: Enter in the box keeps the person, and the box is not a form of its own.
+  await expect(page.locator("form form")).toHaveCount(0);
+  await page.locator("main").getByRole("searchbox", { name: "Search photos" }).fill("lobster");
+  await page.locator("main").getByRole("searchbox", { name: "Search photos" }).press("Enter");
+  await expect(page).toHaveURL(new RegExp(`q=lobster[^]*person=${personId}`));
 
   // A visitor who is not family can neither see the question nor ask it by hand.
   await setVisibility("acadia", "PUBLIC");
@@ -3436,6 +3462,8 @@ test("a collection arranged by hand opens in its saved order, for its owner and 
     // And so for somebody holding the link, who has no order to choose.
     const theirs = await anon.newPage();
     await theirs.goto(`/share/c/${token}`);
+    // A first visit loads the page again once the link's cookie is kept; read the grid of the album, not the placeholder.
+    await expect(theirs.getByText("Shared with you")).toBeVisible();
     await expect.poll(() => grid(theirs), { timeout: 20_000 }).toEqual(saved);
   } finally {
     await anon.close();

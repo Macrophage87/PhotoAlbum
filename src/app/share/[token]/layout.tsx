@@ -55,7 +55,7 @@ export default async function ShareLayout({ params, children }: LayoutProps<"/sh
       </div>
       <TripHeader trip={withReadableDescription(trip, false)} shareUrl={shareableTripUrl(trip, env().APP_URL)} />
       <TripTabs tabs={tabs} />
-      <main className="mx-auto max-w-6xl px-4 sm:px-6 py-8">{children}</main>
+      <main id="main" tabIndex={-1} className="mx-auto max-w-6xl px-4 sm:px-6 py-8">{children}</main>
     </TripTheme>
   );
 }

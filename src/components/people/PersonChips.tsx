@@ -24,7 +24,7 @@ export function PersonChips({ photoId, faces, people, editable }: { photoId: str
   return (
     <div className="flex flex-wrap items-center gap-1.5 text-xs">
       {named.filter((f) => !seen.has(f.person!.id) && seen.add(f.person!.id)).map((f) => (
-        <span key={f.id} className="inline-flex items-center rounded-full bg-primary/10 text-primary">
+        <span key={f.id} className="inline-flex items-center rounded-full bg-primary/10 text-primary-strong">
           <Link href={`/people/${f.person!.id}`} className={`pl-2.5 ${editable ? "" : "pr-2.5 "}py-0.5 hover:underline`}>{f.person!.name}</Link>
           {editable && <button type="button" aria-label={`Remove ${f.person!.name}`} disabled={pending} className="px-1.5 py-0.5 hover:text-red-700" onClick={() => start(async () => { await untagPerson(photoId, f.person!.id); router.refresh(); })}>×</button>}
         </span>

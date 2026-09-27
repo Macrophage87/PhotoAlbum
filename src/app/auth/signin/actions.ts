@@ -14,7 +14,8 @@ import { after } from "next/server";
 export type SignInState = { status: "idle" } | { status: "sent"; email: string } | { status: "error"; message: string };
 
 const TOO_MANY: SignInState = { status: "error", message: "Too many sign-in links were asked for just now. Please wait 10 minutes and try again." };
-const RECENTLY_SENT: SignInState = { status: "error", message: "A sign-in link was sent to this address in the last few minutes. Please use the newest one in your email." };
+// Conditional, like the first answer: a stranger's address is told the same, so it says nothing about membership.
+const RECENTLY_SENT: SignInState = { status: "error", message: "If this address belongs to a family member, sign-in links have already gone to it in the last few minutes. Please use the newest one in that inbox." };
 const BUSY: SignInState = { status: "error", message: "The album has sent a lot of sign-in email in the last hour. Please try again a little later." };
 
 const schema = z.object({ email: z.string().email(), next: z.string().optional() });

@@ -116,7 +116,7 @@ describe("forgetting somebody", () => {
     expect(h).toMatchObject({ title: "Ada Byron's 80th", caption: "Ada blowing out candles", context: "Ada's birthday" });
     expect((h.annotation as StoredAnnotation).caption).toBe("A family member wading in at the lake");
     // Listed until an admin dismisses it: ids and fields, never the name.
-    expect(redirected.to).toBe("/people/forgotten");
+    expect(redirected.to).toBe("/people/forgotten?done=1");
     const [left] = await db.forgetLeftover.findMany();
     const items = left.items as { photos: { id: string; fields: string[] }[]; trips: { slug: string }[] };
     expect(items.photos.map((x) => x.id)).toEqual([handTitled]);
@@ -133,6 +133,8 @@ describe("forgetting somebody", () => {
   it("scrubs the same way when they keep their name on the photographs, and can be run again", async () => {
     await optOutPerson(adaId, form("keep-name"));
     await optOutPerson(adaId, form("keep-name"));
+    // Back to her page, which says what was done.
+    expect(redirected.to).toBe(`/people/${adaId}?forgot=face`);
     expect((await db.photo.findUniqueOrThrow({ where: { id: photoId } })).title).toBe("A family member at the lake");
     const ada = await db.person.findUniqueOrThrow({ where: { id: adaId } });
     expect(ada.optedOutAt).not.toBeNull();

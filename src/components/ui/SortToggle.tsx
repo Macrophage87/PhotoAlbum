@@ -9,8 +9,9 @@ function remember(cookie: string, value: string) {
 }
 
 /**
- * A row of ways to order a list — "Favorites first · Oldest first · Newest first". Each is an ordinary link to the
- * same page ordered that way, keeping whatever search is in the address and starting again from the first page;
+ * A row of ways to order a list — "Favorites first · Newest first · Oldest first", in that order wherever a list
+ * offers them, so the same choice is in the same place on every page. Each is an ordinary link to the same page
+ * ordered that way, keeping whatever search is in the address and starting again from the first page;
  * choosing one also remembers it on this device under `cookie`.
  */
 export function SortToggle<V extends string>({ value, options, cookie, label, testId, param = "order" }: {

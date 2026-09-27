@@ -129,8 +129,10 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
             <span>Unassigned photo</span>
           )}
         </div>
-        <div className="grid lg:grid-cols-[1fr_22rem] gap-8">
-          <div>
+        {/* minmax(0, …) and min-w-0: a wide panorama or a long strip of look-alikes scrolls inside its own box
+            instead of stretching the column, and with it the whole page, past the screen. */}
+        <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_22rem] gap-8">
+          <div className="min-w-0">
             {isClip ? (
               photo.status === "READY" ? (
                 <video src={photoUrl(photo, "video")} poster={photoUrl(photo, "medium")} controls playsInline className="w-full rounded-theme bg-black" />
@@ -227,7 +229,7 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
             {photo.takenAt && <p className="text-sm text-muted mt-1">{formatTakenAt(photo.takenAt, photo.tzOffsetMin, photo.trip?.timezone)}</p>}
           </div>
 
-          <div className="space-y-6">
+          <div className="space-y-6 min-w-0">
             {isVideo && mine && (
               <Card className="p-4">
                 <form action={updateVideo} className="space-y-4">
