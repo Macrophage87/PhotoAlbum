@@ -24,7 +24,7 @@
 #      keeps forgotten names under one: then stop, for the original to be put back,
 #   4. `docker compose up --build -d` (the container applies migrations at
 #      start; in-flight photo processing gets 45 s to finish),
-#   5. wait for /api/health, then prune dangling images and day-old build cache.
+#   5. wait for /api/health where the port is published, then prune dangling images and day-old build cache.
 #
 # Runs as a user with sudo (the deploy login) or as root.
 # shellcheck disable=SC2016 # the single-quoted sh -c scripts expand in the container or root's shell, on purpose
@@ -169,14 +169,20 @@ fi
 # 4. build + (re)start
 as_root docker compose up --build -d
 
-# 5. health
+# 5. health, where the app's port is really published: APP_BIND may be a LAN address rather than loopback.
+ADDR=$(as_root docker compose port app 3000 2>/dev/null | head -n 1) || ADDR=
+case "$ADDR" in
+  '' | *' '*) ADDR="127.0.0.1:$APP_PORT" ;;
+  0.0.0.0:*) ADDR="127.0.0.1:${ADDR##*:}" ;;
+  '[::]:'* | ':::'*) ADDR="[::1]:${ADDR##*:}" ;;
+esac
 for ((i = 0; i < HEALTH_TIMEOUT; i += 5)); do
-  if curl -fs "http://127.0.0.1:$APP_PORT/api/health" >/dev/null 2>&1; then
+  if curl -gfs "http://$ADDR/api/health" >/dev/null 2>&1; then
     as_root docker image prune -f >/dev/null
     # Build cache is never reclaimed by `image prune`; every deploy adds a few GB, and on 2026-09-19 forty GB of
     # it filled the data disk and took Postgres down. Keep only what the last day of builds can reuse.
     as_root docker builder prune -a -f --filter until=24h >/dev/null
-    echo "== healthy on port $APP_PORT at $(date -Is) =="
+    echo "== healthy at $ADDR at $(date -Is) =="
     exit 0
   fi
   sleep 5
