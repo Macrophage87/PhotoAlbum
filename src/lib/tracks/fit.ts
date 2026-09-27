@@ -48,7 +48,7 @@ export async function parseFit(buffer: Buffer): Promise<ParsedTrack[]> {
     const order = sessions.map((_, i) => i).sort((a, b) => starts[a]! - starts[b]!);
     const legs: (Record<string, unknown> & { start_time: Date })[] = [];
     for (const i of order) {
-      const leg = { ...sessions[i], start_time: new Date(starts[i]!) };
+      const leg: Record<string, unknown> & { start_time: Date } = { ...sessions[i], start_time: new Date(starts[i]!) };
       const prev = legs.at(-1);
       // A ride saved in several sessions of the same sport back to back (a head unit that started a new one after a
       // long stop, or two files joined) is one outing, not a leg per session.
