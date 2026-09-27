@@ -43,6 +43,25 @@ describe("a timed-out Picker download", () => {
     expect(google.deleted).toEqual([]);
   });
 
+  it("leaves an item whose download it cut off waiting for the retry, not failed", async () => {
+    const userId = (await db.user.create({ data: { email: "pa@example.com", role: "MEMBER" } })).id;
+    const row = await db.photo.create({ data: { uploaderId: userId, kind: "PHOTO", sourceKind: "GOOGLE_PICKER", sourceId: "gp-1", status: "PENDING", originalName: "p1.jpg", mimeType: "image/jpeg", storageKey: "pending", originalPath: "pending", sizeBytes: 0 }, select: { id: true } });
+    const items = { [row.id]: { id: "gp-1", type: "PHOTO", baseUrl: "https://lh3.test/1", mimeType: "", filename: "", createTime: null, width: null, height: null } };
+    const cutOff = async (final: boolean) => {
+      const ac = new AbortController();
+      google.download.mockImplementation(async () => {
+        ac.abort();
+        throw new DOMException("This operation was aborted", "AbortError");
+      });
+      await googlePickerImport({ userId, sessionId: "s1", photoIds: [row.id], items }, ac.signal, { finalAttempt: final });
+      return db.photo.findUniqueOrThrow({ where: { id: row.id }, select: { status: true, error: true, originalPath: true } });
+    };
+    expect(await cutOff(false)).toEqual({ status: "PENDING", error: null, originalPath: "pending" });
+    expect(google.deleted).toEqual([]);
+    // With no retry to come, it says what happened.
+    expect(await cutOff(true)).toEqual({ status: "FAILED", error: "Download from Google Photos took too long. Pick it again in Google Photos to fetch it.", originalPath: "pending" });
+  });
+
   it("fails the items it never reached when it was the last attempt", async () => {
     const userId = (await db.user.create({ data: { email: "pa@example.com", role: "MEMBER" } })).id;
     const ids: string[] = [];
