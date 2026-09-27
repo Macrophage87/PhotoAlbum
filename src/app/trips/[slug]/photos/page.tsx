@@ -66,7 +66,7 @@ export default async function TripPhotosPage({ params, searchParams }: PageProps
       />
       <SortToggle
         value={sort}
-        options={[...(editable ? [{ value: "favorites" as const, label: "Favorites first" }] : []), { value: "oldest", label: "Oldest first" }, { value: "newest", label: "Newest first" }]}
+        options={[...(editable ? [{ value: "favorites" as const, label: "Favorites first" }] : []), { value: "newest", label: "Newest first" }, { value: "oldest", label: "Oldest first" }]}
         cookie={SORT_COOKIES.photos}
         label="How the photos are ordered"
         testId="photos-order"

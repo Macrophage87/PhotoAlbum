@@ -33,7 +33,7 @@ export default async function ActivitiesPage({ params, searchParams }: PageProps
       {activities.length > 1 && (
         <SortToggle
           value={sort}
-          options={[{ value: "oldest", label: "Oldest first" }, { value: "newest", label: "Newest first" }]}
+          options={[{ value: "newest", label: "Newest first" }, { value: "oldest", label: "Oldest first" }]}
           cookie={SORT_COOKIES.activities}
           label="Which way the activities are listed"
           testId="activities-order"

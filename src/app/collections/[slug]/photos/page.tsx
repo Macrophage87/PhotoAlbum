@@ -37,8 +37,8 @@ export default async function CollectionPhotosPage({ params, searchParams }: Pag
           // Only where somebody has arranged it; the saved order is this collection's own, not a habit for other grids.
           ...(arranged ? [{ value: "arranged" as CollectionSort, label: "Saved order", remember: false as const }] : []),
           ...(editable ? [{ value: "favorites" as CollectionSort, label: "Favorites first" }] : []),
-          { value: "oldest", label: "Oldest first" },
           { value: "newest", label: "Newest first" },
+          { value: "oldest", label: "Oldest first" },
         ]}
         cookie={SORT_COOKIES.photos}
         label="How the photos are ordered"
