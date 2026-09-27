@@ -152,15 +152,56 @@ type Cleaned = {
   buffers?: { byteLength: number }[];
   images?: { bufferView?: number; mimeType?: string; uri?: string }[];
   accessors?: { bufferView?: number; sparse?: { indices?: { bufferView?: number }; values?: { bufferView?: number } } }[];
-  meshes?: { primitives?: { extensions?: { KHR_draco_mesh_compression?: { bufferView?: number } } }[] }[];
+  meshes?: { primitives?: { attributes?: Record<string, number>; indices?: number; targets?: Record<string, number>[]; extensions?: { KHR_draco_mesh_compression?: { bufferView?: number } } }[] }[];
+  skins?: { inverseBindMatrices?: number }[];
+  animations?: { samplers?: { input?: number; output?: number }[] }[];
   extensionsUsed?: string[];
   extensionsRequired?: string[];
   [k: string]: unknown;
 };
 
+type Ref = { get: () => number | undefined; set: (i: number) => void };
+
+/**
+ * Every place a glTF names an accessor, as get/set pairs: a primitive's attributes, indices and morph targets, a
+ * skin's inverse bind matrices, an animation sampler's input and output. (Sparse data names views, not accessors, and
+ * goes with the accessor it belongs to.) Draco's own `attributes` are ids inside its compressed data, not accessors.
+ */
+function accessorRefs(g: Cleaned): Ref[] {
+  const refs: Ref[] = [];
+  const at = <T extends object>(o: T | undefined, key: keyof T & string) => {
+    const rec = o as Record<string, number | undefined> | undefined;
+    if (rec?.[key] !== undefined) refs.push({ get: () => rec[key], set: (i) => (rec[key] = i) });
+  };
+  const each = (map: Record<string, number> | undefined) => map && Object.keys(map).forEach((k) => at(map, k));
+  for (const m of g.meshes ?? []) for (const p of m.primitives ?? []) {
+    each(p.attributes);
+    at(p, "indices");
+    for (const t of p.targets ?? []) each(t);
+  }
+  for (const s of g.skins ?? []) at(s, "inverseBindMatrices");
+  for (const a of g.animations ?? []) for (const s of a.samplers ?? []) {
+    at(s, "input");
+    at(s, "output");
+  }
+  return refs;
+}
+
+/** Keep only the items `refs` name, in their order, and point the refs at their new places; null when one names nothing. */
+function keepNamed<T>(items: T[], refs: Ref[]): T[] | null {
+  const named = [...new Set(refs.map((r) => r.get()).filter((i): i is number => i !== undefined))].sort((a, b) => a - b);
+  if (named.some((i) => !items[i])) return null;
+  const renumber = new Map(named.map((old, i) => [old, i]));
+  for (const r of refs) {
+    const i = r.get();
+    if (i !== undefined) r.set(renumber.get(i)!);
+  }
+  return named.map((i) => items[i]);
+}
+
 /** Every place a glTF names a bufferView, as get/set pairs, so the views can be renumbered once unused ones are gone. */
-function viewRefs(g: Cleaned): { get: () => number | undefined; set: (i: number) => void }[] {
-  const refs: { get: () => number | undefined; set: (i: number) => void }[] = [];
+function viewRefs(g: Cleaned): Ref[] {
+  const refs: Ref[] = [];
   const at = <T extends { bufferView?: number }>(o: T | undefined) => o && refs.push({ get: () => o.bufferView, set: (i) => (o.bufferView = i) });
   for (const a of g.accessors ?? []) {
     at(a);
@@ -290,6 +331,13 @@ export async function sanitizeGlb(input: Buffer): Promise<Buffer | null> {
   }
   const views = g.bufferViews ?? [];
   if (views.some((v) => (v.buffer ?? 0) !== 0 || v.byteLength === undefined) || (views.length && !bin)) return null;
+
+  // Only accessors something draws with are kept: one that nothing names would still have its bytes copied below, and
+  // could carry anything through. That includes one named only by what the lists above drop, like an app's `_ATTRIBUTE`.
+  const accessors = keepNamed(g.accessors ?? [], accessorRefs(g));
+  if (!accessors) return null;
+  if (accessors.length) g.accessors = accessors;
+  else delete g.accessors;
 
   // Only views something still reads are copied: an accessor's, an image's, a kept extension's. Anything else in the
   // binary chunk — a view nobody points at, the bytes between views — stays behind.

@@ -56,7 +56,7 @@ function parseGlb(glb: Buffer) {
     expect(v.byteOffset % 4).toBe(0);
     expect(v.byteOffset + v.byteLength).toBeLessThanOrEqual(binLength);
   }
-  for (const a of json.accessors ?? []) expect(json.bufferViews[a.bufferView]).toBeDefined();
+  for (const a of json.accessors ?? []) if (a.bufferView !== undefined) expect(json.bufferViews[a.bufferView]).toBeDefined();
   const view = (i: number) => bin.subarray(json.bufferViews[i].byteOffset, json.bufferViews[i].byteOffset + json.bufferViews[i].byteLength);
   return { json, bin, view };
 }
@@ -85,7 +85,7 @@ async function appGlb(texture: Buffer) {
     scene: 0,
     scenes: [{ nodes: [0], extensions: { KHR_xmp_json_ld: { packet: 0 } } }],
     nodes: [{ mesh: 0, name: "SECRET-NODE-NAME", extras: { gps: [44.35, -68.2] } }],
-    meshes: [{ primitives: [{ attributes: { POSITION: 1 }, indices: 2, material: 0 }] }],
+    meshes: [{ primitives: [{ attributes: { POSITION: 0 }, indices: 1, material: 0 }] }],
     materials: [{ pbrMetallicRoughness: { baseColorTexture: { index: 0, extensions: { KHR_texture_transform: { scale: [1, 1] } } } } }],
     textures: [{ source: 0 }],
     images: [{ bufferView: 0, mimeType: "image/jpeg", name: "IMG_SECRET.jpg" }],
@@ -153,10 +153,19 @@ describe("cleaning a GLB for visitors", () => {
   });
 
   it("keeps the album's own fixture drawable", async () => {
-    const { json, view } = parseGlb((await sanitizeGlb(await readFile(fx("scan.glb"))))!);
+    const original = await readFile(fx("scan.glb"));
+    const { json, view } = parseGlb((await sanitizeGlb(original))!);
     expect(json.bufferViews).toHaveLength(4);
     expect(json.nodes[0].name).toBeUndefined();
     expect((await sharp(view(json.images[0].bufferView)).metadata()).format).toBe("png");
+    // Every accessor it draws with is kept, under the same number, reading the same bytes.
+    const before = parseGlb(original);
+    const prim = json.meshes[0].primitives[0];
+    expect(prim).toEqual(before.json.meshes[0].primitives[0]);
+    expect(json.accessors).toEqual(before.json.accessors);
+    for (const i of [...Object.values(prim.attributes as Record<string, number>), prim.indices]) {
+      expect(view(json.accessors[i].bufferView).equals(before.view(before.json.accessors[i].bufferView)), `accessor ${i}`).toBe(true);
+    }
   });
 
   it("withholds a GLB it cannot rebuild safely, rather than guess", async () => {
@@ -283,6 +292,75 @@ describe("copying only the bytes something reads", () => {
     const texture = await phoneJpeg();
     const { json, bin: withTexture } = await appGlb(texture);
     expect(await sanitizeGlb(glbOf({ ...json, accessors: [{ ...json.accessors[0], bufferView: 0 }, json.accessors[1]] }, withTexture))).toBeNull();
+  });
+});
+
+describe("which accessors a GLB keeps", () => {
+  const floats = (...xs: number[]) => {
+    const b = Buffer.alloc(xs.length * 4);
+    xs.forEach((x, i) => b.writeFloatLE(x, i * 4));
+    return b;
+  };
+  // What a skinned, animated, morphing mesh reads, each in a view of its own, and two runs of bytes only accessors
+  // that draw nothing point at: one named by nothing, one named only by an app's own attribute.
+  const parts = {
+    stray: Buffer.from("SECRET-STRAY-ACCESSR"),
+    position: floats(-1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 1, 0),
+    appOwn: Buffer.from("SECRET-APP-ATTRIBUTE-BYTES-SECRET-APP-ATTRIBUTE!"),
+    morph: floats(0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1),
+    inverseBind: floats(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1),
+    times: floats(0, 1),
+    moves: floats(0, 0, 0, 0, 1, 0),
+  };
+  const bin = Buffer.concat(Object.values(parts));
+  let at = 0;
+  const bufferViews = Object.values(parts).map((b) => ({ buffer: 0, byteOffset: (at += b.length) - b.length, byteLength: b.length }));
+  const accessors = [
+    { bufferView: 0, componentType: 5121, count: 20, type: "SCALAR" },
+    { bufferView: 1, componentType: 5126, count: 4, type: "VEC3", min: [-1, -1, 0], max: [1, 1, 0] },
+    { bufferView: 2, componentType: 5126, count: 4, type: "VEC3" },
+    { bufferView: 3, componentType: 5126, count: 4, type: "VEC3" },
+    { bufferView: 4, componentType: 5126, count: 1, type: "MAT4" },
+    { bufferView: 5, componentType: 5126, count: 2, type: "SCALAR", min: [0], max: [1] },
+    { bufferView: 6, componentType: 5126, count: 2, type: "VEC3" },
+  ];
+  const json = {
+    asset: { version: "2.0" }, scene: 0, scenes: [{ nodes: [0] }],
+    nodes: [{ mesh: 0, skin: 0 }],
+    meshes: [{ primitives: [{ attributes: { POSITION: 1, _SECRET_SCAN_POSE: 2 }, targets: [{ POSITION: 3 }] }], weights: [0] }],
+    skins: [{ inverseBindMatrices: 4, joints: [0] }],
+    animations: [{ channels: [{ sampler: 0, target: { node: 0, path: "translation" } }], samplers: [{ input: 5, output: 6 }] }],
+    accessors, bufferViews, buffers: [{ byteLength: bin.length }],
+  };
+
+  it("drops an accessor nothing draws with, and the bytes it reads, and renumbers the rest (unreferenced accessor)", async () => {
+    const out = (await sanitizeGlb(glbOf(json, bin)))!;
+    expect(out.includes(Buffer.from("SECRET"))).toBe(false);
+    const { json: g, view } = parseGlb(out);
+    expect(g.accessors).toHaveLength(5);
+    expect(g.bufferViews).toHaveLength(5);
+    const prim = g.meshes[0].primitives[0];
+    expect(prim.attributes).toEqual({ POSITION: 0 });
+    // Everything a mesh, a skin or an animation names is still there, reading the same bytes as before.
+    const reads = (i: number) => view(g.accessors[i].bufferView);
+    expect(reads(prim.attributes.POSITION).equals(parts.position)).toBe(true);
+    expect(reads(prim.targets[0].POSITION).equals(parts.morph)).toBe(true);
+    expect(reads(g.skins[0].inverseBindMatrices).equals(parts.inverseBind)).toBe(true);
+    expect(reads(g.animations[0].samplers[0].input).equals(parts.times)).toBe(true);
+    expect(reads(g.animations[0].samplers[0].output).equals(parts.moves)).toBe(true);
+    expect(g.accessors[g.animations[0].samplers[0].input]).toMatchObject({ count: 2, type: "SCALAR", min: [0], max: [1] });
+  });
+
+  it("keeps a sparse accessor's views with it, and withholds a file that names an accessor it does not have", async () => {
+    // The morph target stored sparse: two of its four vertices, by index, over zeros.
+    const sparse = { componentType: 5126, count: 4, type: "VEC3", sparse: { count: 2, indices: { bufferView: 5, componentType: 5125 }, values: { bufferView: 6 } } };
+    const withSparse = { ...json, accessors: accessors.map((a, i) => (i === 3 ? sparse : a)) };
+    const { json: g, view } = parseGlb((await sanitizeGlb(glbOf(withSparse, bin)))!);
+    const target = g.accessors[g.meshes[0].primitives[0].targets[0].POSITION];
+    expect(view(target.sparse.indices.bufferView).equals(parts.times)).toBe(true);
+    expect(view(target.sparse.values.bufferView).equals(parts.moves)).toBe(true);
+    const dangling = { ...json, meshes: [{ primitives: [{ attributes: { POSITION: 1 }, indices: 9 }] }] };
+    expect(await sanitizeGlb(glbOf(dangling, bin))).toBeNull();
   });
 });
 
