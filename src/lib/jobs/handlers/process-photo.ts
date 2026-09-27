@@ -258,7 +258,8 @@ export async function processPhoto(job: ProcessPhotoJob, signal?: AbortSignal): 
           activitySetById: filing.activitySetById,
         },
       });
-      return { tripId, takenAt: date.takenAt, positioned: hasGps || (keptGps && now.gpsSource === "SIDECAR") };
+      // A place a member pinned or cleared is not a gap for a track to fill: geotagging passes it by.
+      return { tripId, takenAt: date.takenAt, positioned: byHand || hasGps || (keptGps && now.gpsSource === "SIDECAR") };
     });
     // Deleted for good while it was being rendered: what was just written has nothing to belong to.
     if (!settled) return void (await forgetFilesIfGone(photo.id));

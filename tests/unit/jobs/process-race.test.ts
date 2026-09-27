@@ -7,7 +7,8 @@ import { resetTestDb } from "../helpers/reset";
 
 const photoRoot = mkdtempSync(path.join(tmpdir(), "process-race-"));
 process.env.PHOTO_STORAGE_ROOT = photoRoot;
-vi.mock("@/lib/jobs/boss", () => ({ enqueue: async () => {} }));
+const queued = vi.hoisted(() => [] as string[]);
+vi.mock("@/lib/jobs/boss", () => ({ enqueue: async (queue: string) => void queued.push(queue) }));
 
 /**
  * Something a member does while a job renders: after the job read the row, before it writes back. Rendering is the
@@ -37,6 +38,7 @@ describe("choices a member makes while an item is processed", () => {
   beforeEach(async () => {
     await resetTestDb();
     meanwhile.run = null;
+    queued.length = 0;
     memberId = (await db.user.create({ data: { email: "m@example.com", role: "ADMIN" } })).id;
     tripId = (await db.trip.create({ data: { slug: "t", title: "T", startDate: new Date("1985-05-30"), endDate: new Date("1985-06-03"), createdById: memberId } })).id;
     // Far from the hand-set hour, so only the member's filing can put anything on it.
@@ -135,5 +137,27 @@ describe("choices a member makes while an item is processed", () => {
       expect(p).toMatchObject({ status: "READY", takenAtSource: "MANUAL", tzOffsetMin: null, tripId: null });
       expect(p.takenAt?.toISOString()).toBe(handDate.toISOString());
     }, 120_000);
+  });
+
+  describe("a place a member pinned or cleared meanwhile", () => {
+    // Dated by hand before the job, so the photo (whose file has no position) is one a track could place.
+    const dated = () => ({ takenAt: handDate, takenAtSource: "MANUAL", tzOffsetMin: 0, dateSetById: memberId, tripId });
+
+    it("asks for no track position, which geotagging would not give it anyway", async () => {
+      const pinned = await stage("photo-no-gps.jpg", dated(), "original.jpg");
+      meanwhile.run = async () => void (await db.photo.update({ where: { id: pinned }, data: { lat: 10, lng: 20, gpsSource: "MANUAL", placeSetById: memberId } }));
+      await processPhoto({ photoId: pinned });
+      const cleared = await stage("photo-no-gps.jpg", dated(), "original.jpg");
+      meanwhile.run = () => placeCleared(cleared).then(() => undefined);
+      await processPhoto({ photoId: cleared });
+      expect(queued).not.toContain("geotag-photos");
+      expect(await db.photo.findUniqueOrThrow({ where: { id: pinned } })).toMatchObject({ status: "READY", lat: 10, lng: 20, gpsSource: "MANUAL" });
+    });
+
+    it("still asks for one when nobody set its place", async () => {
+      const id = await stage("photo-no-gps.jpg", dated(), "original.jpg");
+      await processPhoto({ photoId: id });
+      expect(queued).toContain("geotag-photos");
+    });
   });
 });
