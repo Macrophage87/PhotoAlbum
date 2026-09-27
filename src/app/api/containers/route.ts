@@ -28,7 +28,7 @@ export async function GET(request: Request) {
   // Activities belong to one trip, so the picker for them only makes sense with that trip named.
   if (kind === "activity") {
     const tripId = url.searchParams.get("trip") ?? "";
-    const trip = tripId ? await db.trip.findFirst({ where: { id: tripId, ...visibleContainersWhere(viewer) }, select: { id: true, slug: true, timezone: true } }) : null;
+    const trip = tripId ? await db.trip.findFirst({ where: { id: tripId, deletingAt: null, ...visibleContainersWhere(viewer) }, select: { id: true, slug: true, timezone: true } }) : null;
     if (!trip) return Response.json({ hits: [] }, { headers: { "Cache-Control": "private, no-store" } });
     const activities = await db.activity.findMany({
       where: { tripId: trip.id, ...where },
@@ -42,7 +42,8 @@ export async function GET(request: Request) {
 
   if (kind === "trip") {
     const trips = await db.trip.findMany({
-      where: { ...visibleContainersWhere(viewer), ...where },
+      // Never one being deleted: it is letting go of its photographs.
+      where: { ...visibleContainersWhere(viewer), ...where, deletingAt: null },
       orderBy: { startDate: "desc" },
       take: PAGE,
       select: { id: true, slug: true, title: true, visibility: true, startDate: true, _count: { select: { photos: { where: NOT_TRASHED } } } },

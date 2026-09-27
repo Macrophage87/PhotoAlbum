@@ -25,7 +25,8 @@ export async function readSessionUser() {
   const raw = (await cookies()).get(SESSION_COOKIE)?.value;
   if (!raw) return null;
   const session = await db.session.findUnique({ where: { id: hashToken(raw) }, include: { user: true } });
-  if (!session) return null;
+  // A member being removed was signed out when it began; a session made at that very moment is not honoured either.
+  if (!session || session.user.removingAt) return null;
   if (session.expiresAt.getTime() < Date.now()) {
     await db.session.delete({ where: { id: session.id } }).catch(() => {});
     return null;

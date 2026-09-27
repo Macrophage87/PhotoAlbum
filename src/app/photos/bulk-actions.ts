@@ -32,7 +32,7 @@ export async function bulkAssignActivity(photoIds: string[], activityId: string 
   const list = await editableMediaIds(user, ids.parse(photoIds));
   if (!list.length) return;
   if (activityId) {
-    const activity = await db.activity.findUnique({ where: { id: activityId }, select: { tripId: true } });
+    const activity = await db.activity.findUnique({ where: { id: activityId, trip: { deletingAt: null } }, select: { tripId: true } });
     if (!activity) return;
     await onActivity(() => db.photo.updateMany({ where: { id: { in: list }, tripId: activity.tripId }, data: { activityId, activitySetById: user.id } }));
   } else {
@@ -46,7 +46,7 @@ export async function bulkMoveToTrip(photoIds: string[], tripId: string | null):
   const user = await requireUserOrThrow();
   const list = await editableMediaIds(user, ids.parse(photoIds));
   if (!list.length) return;
-  if (tripId && !(await db.trip.findUnique({ where: { id: tripId }, select: { id: true } }))) return;
+  if (tripId && !(await db.trip.findUnique({ where: { id: tripId, deletingAt: null }, select: { id: true } }))) return;
   // A new trip is a fresh start: whatever was chosen about the old trip's activities means nothing on this one, so
   // each is filed by its time, as an upload into the trip would be. Those already on it stay exactly as they are.
   const moving = (await db.photo.findMany({ where: { id: { in: list } }, select: { id: true, tripId: true } })).filter((p) => p.tripId !== tripId).map((p) => p.id);

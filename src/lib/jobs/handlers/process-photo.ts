@@ -121,7 +121,7 @@ export async function processPhoto(job: ProcessPhotoJob, signal?: AbortSignal): 
 
     // 3. Trip candidates: the row's trip wins (the job's is only what the row said when it was queued), otherwise
     // match by the photo's wall-clock day — unless a member took it off its trip while the job waited.
-    let trip = photo.tripId ? await db.trip.findUnique({ where: { id: photo.tripId } }) : null;
+    let trip = photo.tripId ? await db.trip.findUnique({ where: { id: photo.tripId, deletingAt: null } }) : null;
     // The name is read only when the file itself says nothing: a phone's IMG_20250812_143015 is the capture time,
     // where the file's modified time is usually just when it was copied onto something.
     // In order of how much each can be trusted: when the shutter fired, then the capture time in the file's name,
@@ -148,7 +148,7 @@ export async function processPhoto(job: ProcessPhotoJob, signal?: AbortSignal): 
     let dayless: { candidates: Candidate[]; inZone: (timezone: string) => Pick<TakenAtResolution, "takenAt" | "tzOffsetMin" | "source"> | null } | null = null;
     if (!trip && resolved && !tripHeld) {
       // Only trips this member was on, where anybody said who was on them; a clock cannot tell two families apart.
-      const candidates = await db.trip.findMany({ where: whoWasThere(photo.uploaderId), select: { id: true, startDate: true, endDate: true, timezone: true } });
+      const candidates = await db.trip.findMany({ where: { deletingAt: null, ...whoWasThere(photo.uploaderId) }, select: { id: true, startDate: true, endDate: true, timezone: true } });
       const day = resolved.wallDay;
       const match = pickTripByDay(candidates, day);
       // A clock with no zone of its own is read in each trip's zone.
@@ -179,7 +179,7 @@ export async function processPhoto(job: ProcessPhotoJob, signal?: AbortSignal): 
       }
       // No camera zone to go on: interpret the instant in the trip zone when we know it, else in UTC.
       if (!trip && !tripHeld) {
-        const candidates = await db.trip.findMany({ where: whoWasThere(photo.uploaderId), select: { id: true, startDate: true, endDate: true, timezone: true } });
+        const candidates = await db.trip.findMany({ where: { deletingAt: null, ...whoWasThere(photo.uploaderId) }, select: { id: true, startDate: true, endDate: true, timezone: true } });
         // Each trip judges the instant in its own zone; still require exactly one match.
         const matches = candidates.filter((c) => pickTripByDay([c], localDayFromOffset(takenAt!, offsetMinutesInZone(takenAt!, c.timezone))));
         if (matches.length === 1) trip = await db.trip.findUnique({ where: { id: matches[0].id } });

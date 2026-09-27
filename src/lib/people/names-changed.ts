@@ -2,6 +2,7 @@ import { Client } from "pg";
 import { db } from "@/lib/db";
 import { env } from "@/lib/env";
 import type { Prisma } from "@/generated/prisma/client";
+import { withTryLock } from "@/lib/advisory-lock";
 
 /**
  * Whether what the helper may say about these items changed after a request about them was built.
@@ -108,21 +109,7 @@ const NAME_PASSES_LOCK = 0x6e706173; // "npas"
  * connection of its own, so it goes with the connection however the run ends.
  */
 export async function withNamePassesLock(fn: () => Promise<void>): Promise<boolean> {
-  const client = new Client({ connectionString: env().DATABASE_URL });
-  client.on("error", () => undefined);
-  await client.connect();
-  try {
-    const { rows } = await client.query<{ got: boolean }>("SELECT pg_try_advisory_lock($1::bigint) AS got", [NAME_PASSES_LOCK]);
-    if (!rows[0]?.got) return false;
-    try {
-      await fn();
-      return true;
-    } finally {
-      await client.query("SELECT pg_advisory_unlock($1::bigint)", [NAME_PASSES_LOCK]).catch(() => undefined);
-    }
-  } finally {
-    await client.end().catch(() => undefined);
-  }
+  return (await withTryLock({ space: NAME_PASSES_LOCK }, fn)).ran;
 }
 
 /**

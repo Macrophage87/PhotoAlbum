@@ -31,6 +31,18 @@ const IGNORED_JSON = new Set(["metadata.json", "print-subscriptions.json", "shar
  * a temp file while hashing it, skips duplicates by content hash or Google id, creates the row and files it through
  * the normal processing pipeline. Album folders become private collections. Never reads sharing state or face groups.
  */
+/**
+ * What an import says when whoever started it is being removed (see src/lib/auth/remove-member.ts): every photograph
+ * it brings in would be theirs, handed over again, and a stranger's archive by then. Asked at the start, so an import
+ * queued before the removal began never starts, and every 25 media files after that.
+ */
+export const STARTER_REMOVED = "Stopped: the member who started this import is being removed from the album. An admin can import the archive again; what came in so far stays, and is skipped next time.";
+
+async function starterStays(startedById: string): Promise<void> {
+  const starter = await db.user.findUnique({ where: { id: startedById }, select: { removingAt: true } });
+  if (!starter || starter.removingAt) throw new Error(STARTER_REMOVED);
+}
+
 export async function importTakeoutArchive(importId: string): Promise<void> {
   const run = await db.takeoutImport.findUnique({ where: { id: importId } });
   if (!run || run.status !== "RUNNING") return;
@@ -42,6 +54,7 @@ export async function importTakeoutArchive(importId: string): Promise<void> {
   const pulse = setInterval(() => void heartbeat(), HEARTBEAT_MS);
   try {
     await heartbeat();
+    await starterStays(run.startedById);
     const archive = safeArchivePath(run.archiveName);
     // Pass one: names and sidecars.
     const names: string[] = [];
@@ -97,10 +110,13 @@ export async function importTakeoutArchive(importId: string): Promise<void> {
       if (album && (await db.collectionItem.findFirst({ where: { collectionId: album.id, photoId }, select: { id: true } }))) album.items--;
     };
 
-    // Pass two: the media itself.
+    // Pass two: the media itself. The starter is asked about every 25 media files looked at, whatever became of
+    // them: a re-import that is nearly all duplicates skips most of them, and is no less theirs.
+    let looked = 0;
     await walkZip(archive, async (entry, open) => {
       if (entry.isDirectory) return;
       const file = path.basename(entry.path);
+      if ((isMediaName(file) || isUnsupportedMediaName(file)) && ++looked % 25 === 1 && looked > 1) await starterStays(run.startedById);
       if (!isMediaName(file)) {
         // A camera's raw file or an AVI is a photo or clip all the same: counted as one the album could not take.
         if (isUnsupportedMediaName(file)) { report.unsupported++; skipped++; }

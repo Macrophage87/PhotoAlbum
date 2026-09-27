@@ -7,7 +7,7 @@ import { suggest, type Candidate, type Item, type Suggestion } from "./score";
 /** Load every trip and collection as a scoring candidate. Centroids come from the stored image embeddings. */
 export async function loadCandidates(): Promise<Candidate[]> {
   const [trips, collections, centroids] = await Promise.all([
-    db.trip.findMany({ select: { id: true, title: true, startDate: true, endDate: true, timezone: true, photos: { where: { lat: { not: null }, lng: { not: null } }, select: { lat: true, lng: true }, take: 200 }, activities: { where: { track: { isNot: null } }, select: { title: true, track: { select: { minLat: true, maxLat: true, minLng: true, maxLng: true } } } } } }),
+    db.trip.findMany({ where: { deletingAt: null }, select: { id: true, title: true, startDate: true, endDate: true, timezone: true, photos: { where: { lat: { not: null }, lng: { not: null } }, select: { lat: true, lng: true }, take: 200 }, activities: { where: { track: { isNot: null } }, select: { title: true, track: { select: { minLat: true, maxLat: true, minLng: true, maxLng: true } } } } } }),
     db.collection.findMany({ select: { id: true, title: true, description: true, _count: { select: { items: true } }, items: { select: { photo: { select: { annotation: true } } }, take: 200 } } }),
     db.$queryRaw<{ collectionId: string; centroid: string | null }[]>`
       SELECT ci."collectionId", avg(p."embedding")::text AS centroid

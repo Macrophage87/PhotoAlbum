@@ -186,6 +186,12 @@ model User {
   name      String?
   role      Role     @default(MEMBER)
   createdAt DateTime @default(now())
+  /// Being removed: signed out, no longer an admin, and what they uploaded and chose passing to `removingBy` a batch
+  /// at a time (see src/lib/auth/remove-member.ts). Never cleared: the account goes once everything is handed over.
+  removingAt   DateTime?
+  removingById String?
+  removingBy   User?    @relation("RemovingBy", fields: [removingById], references: [id], onDelete: Restrict)
+  takingOver   User[]   @relation("RemovingBy")
 
   sessions Session[]
   googleAccount GoogleAccount?
@@ -271,6 +277,8 @@ model Trip {
   createdBy    User           @relation(fields: [createdById], references: [id])
   createdAt    DateTime       @default(now())
   updatedAt    DateTime       @updatedAt
+  /// Being deleted: its photographs leave it a batch at a time, then it goes (see src/lib/trips/delete.ts).
+  deletingAt   DateTime?
 
   activities Activity[]
   photos     Photo[]
@@ -500,6 +508,7 @@ model Photo {
   visits            Visit[]
 
   @@index([takenAt])
+  @@index([uploaderId])
   @@index([tripId, takenAt])
   @@index([activityId])
   @@index([lat, lng])
@@ -856,6 +865,18 @@ model GoogleAccount {
   lastUsedAt            DateTime?
   /// Set when Google refused the refresh token (testing-mode expiry, revocation): the member must reconnect.
   needsReconnect        Boolean  @default(false)
+}
+
+/// A removed member's Google grant, sealed as it was stored, waiting to be revoked at Google. Written by the same
+/// transaction that deletes the account, so a crash before Google is told cannot lose it; deleted once Google has
+/// been told (see src/lib/google/pending-revoke.ts).
+model PendingRevoke {
+  id                    String   @id @default(cuid())
+  /// The removed member's id, only to drop their cached access token; the account itself is gone.
+  userId                String
+  encryptedRefreshToken String
+  attempts              Int      @default(0)
+  createdAt             DateTime @default(now())
 }
 
 model PhotoLink {

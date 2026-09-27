@@ -172,7 +172,7 @@ export async function searchFacets(viewer: Viewer): Promise<SearchFacets> {
   const member = viewer.kind === "user";
   const zoneFixes = await tripZoneFixes();
   const [trips, collections, uploaders, people, years] = await Promise.all([
-    db.trip.findMany({ where: visibleContainersWhere(viewer), orderBy: { startDate: "desc" }, select: { id: true, title: true } }),
+    db.trip.findMany({ where: { ...visibleContainersWhere(viewer), deletingAt: null }, orderBy: { startDate: "desc" }, select: { id: true, title: true } }),
     db.collection.findMany({ where: visibleContainersWhere(viewer), orderBy: { title: "asc" }, select: { id: true, title: true } }),
     member ? db.user.findMany({ where: { photos: { some: {} } }, orderBy: { name: "asc" }, select: { id: true, name: true, email: true } }) : Promise.resolve([]),
     member ? peopleInPhotos() : Promise.resolve([]),

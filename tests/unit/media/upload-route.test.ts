@@ -47,6 +47,15 @@ describe("the upload route", () => {
     viewer.user.id = (await db.user.create({ data: { email: "u@example.com", role: "MEMBER" } })).id;
   });
 
+  it("refuses to file an upload onto a trip being deleted, or one of its activities", async () => {
+    const trip = await db.trip.create({ data: { slug: "going", title: "Going", startDate: new Date("2025-08-10"), endDate: new Date("2025-08-16"), createdById: viewer.user.id, deletingAt: new Date() } });
+    const walk = await db.activity.create({ data: { tripId: trip.id, title: "Walk", startTime: new Date("2025-08-11T10:00:00Z"), endTime: new Date("2025-08-11T12:00:00Z") } });
+    expect((await upload(bytes(10), "a.jpg", { "x-trip-id": trip.id })).status).toBe(404);
+    expect((await upload(bytes(10), "a.jpg", { "x-activity-id": walk.id })).status).toBe(404);
+    expect(await db.photo.count()).toBe(0);
+    expect(leftovers()).toEqual([]);
+  });
+
   it("ends, and leaves no row or file, when the body breaks off part-way", async () => {
     const body = new ReadableStream<Uint8Array>({
       start(c) { c.enqueue(bytes(100)); setTimeout(() => c.error(new Error("client went away")), 20); },

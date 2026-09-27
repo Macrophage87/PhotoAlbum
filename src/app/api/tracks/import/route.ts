@@ -33,7 +33,7 @@ export async function POST(request: Request) {
   });
   if (!parsed.success) return Response.json({ error: "Bad import headers" }, { status: 400 });
   const { tripId, sourceHint } = parsed.data;
-  const trip = await db.trip.findUnique({ where: { id: tripId }, select: { id: true, createdById: true } });
+  const trip = await db.trip.findUnique({ where: { id: tripId, deletingAt: null }, select: { id: true, createdById: true } });
   if (!trip) return Response.json({ error: "Trip not found" }, { status: 404 });
   // Each file becomes an activity and re-places the trip's photographs, so this is arranging the trip: its maker's
   // (and admins') to do, as the import page already says.

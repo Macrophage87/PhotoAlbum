@@ -41,7 +41,7 @@ export async function addYouTubeVideo(_prev: VideoFormState, fd: FormData): Prom
   const id = parseYouTubeUrl(url);
   if (!id) return { status: "error", message: "That does not look like a YouTube link." };
 
-  const trip = tripId ? await db.trip.findUnique({ where: { id: tripId }, select: { id: true, slug: true, timezone: true } }) : null;
+  const trip = tripId ? await db.trip.findUnique({ where: { id: tripId, deletingAt: null }, select: { id: true, slug: true, timezone: true } }) : null;
   if (tripId && !trip) return { status: "error", message: "That trip no longer exists." };
 
   let meta;

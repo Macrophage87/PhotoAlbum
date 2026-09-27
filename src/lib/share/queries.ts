@@ -6,7 +6,8 @@ import { NOT_TRASHED } from "@/lib/photos/trash";
 export async function getSharedTrip(token: string) {
   if (!token || token.length > 128) return null;
   const trip = await db.trip.findUnique({
-    where: { shareToken: token },
+    // Its token goes when it is marked for deletion; asked for here as well, as every trip loader does.
+    where: { shareToken: token, deletingAt: null },
     include: { coverPhoto: coverSelect, // Counted as the members' pages count: what is in the trash is off every link, so it is not on the card either.
     _count: { select: { photos: { where: NOT_TRASHED }, activities: true, tracks: true } } },
   });
@@ -21,7 +22,8 @@ export async function getSharedTrip(token: string) {
 export async function getSharedActivity(token: string) {
   if (!token || token.length > 128) return null;
   const activity = await db.activity.findUnique({
-    where: { shareToken: token },
+    // Its token goes when its trip is marked for deletion; asked for here as well.
+    where: { shareToken: token, trip: { deletingAt: null } },
     include: { track: { select: { id: true, simplified: true, stats: true } }, participants: { select: { id: true } }, trip: { select: { id: true, slug: true, title: true, themeKey: true, timezone: true, visibility: true } } },
   });
   if (!activity) return null;

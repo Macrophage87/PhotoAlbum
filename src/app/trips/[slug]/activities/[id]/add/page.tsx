@@ -29,7 +29,7 @@ export default async function AddToActivityPage({ params, searchParams }: PagePr
   const filter = parsePickerFilter(await searchParams);
   const [page, members, people, during] = await Promise.all([
     candidatePhotoPage({ kind: "activity", id: activity.id }, filter),
-    db.user.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true, email: true } }),
+    db.user.findMany({ where: { removingAt: null }, orderBy: { name: "asc" }, select: { id: true, name: true, email: true } }),
     peopleInPhotos(),
     activityWindow(me, activity),
   ]);

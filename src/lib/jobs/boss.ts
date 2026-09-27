@@ -30,10 +30,21 @@ export const HEAVY_JOB_EXPIRE_SECONDS = (2 * FFMPEG_TIMEOUT_MS) / 1000 + 20 * 60
 export const HEAVY_HEARTBEAT_SECONDS = 180;
 export const HEAVY_HEARTBEAT_REFRESH_SECONDS = 30;
 export const HEAVY_QUEUES: readonly QueueName[] = [QUEUES.transcodeVideo, QUEUES.embedPhoto, QUEUES.detectFaces, QUEUES.detectAnimals];
+/**
+ * Passes over the whole album, whose length grows with it: the members-only judging reads every photograph (about
+ * 1.7 ms each, so past a quarter of an hour at around half a million), and finishing an interrupted removal hands
+ * over a member's every upload. Timing one out would start its retry beside it, so they get hours rather than
+ * minutes, and the heartbeat instead notices a worker that died. Each also refuses to run twice at once by itself
+ * (see rejudgeSweep and finishRemoval), and stops at the next photograph once pg-boss does give up on it.
+ */
+export const LONG_JOB_EXPIRE_SECONDS = 6 * 3600;
+export const LONG_QUEUES: readonly QueueName[] = [QUEUES.rejudgeText, QUEUES.finishRemovals];
 const QUEUE_OPTIONS = { retryLimit: 2, retryDelay: 30, retryBackoff: true, expireInSeconds: JOB_EXPIRE_SECONDS };
 
 export function queueOptions(name: QueueName): typeof QUEUE_OPTIONS & { heartbeatSeconds?: number } {
-  return HEAVY_QUEUES.includes(name) ? { ...QUEUE_OPTIONS, expireInSeconds: HEAVY_JOB_EXPIRE_SECONDS, heartbeatSeconds: HEAVY_HEARTBEAT_SECONDS } : QUEUE_OPTIONS;
+  if (HEAVY_QUEUES.includes(name)) return { ...QUEUE_OPTIONS, expireInSeconds: HEAVY_JOB_EXPIRE_SECONDS, heartbeatSeconds: HEAVY_HEARTBEAT_SECONDS };
+  if (LONG_QUEUES.includes(name)) return { ...QUEUE_OPTIONS, expireInSeconds: LONG_JOB_EXPIRE_SECONDS, heartbeatSeconds: HEAVY_HEARTBEAT_SECONDS };
+  return QUEUE_OPTIONS;
 }
 
 async function create(): Promise<PgBoss> {

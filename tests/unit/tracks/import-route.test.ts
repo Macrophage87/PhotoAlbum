@@ -100,6 +100,22 @@ describe("importing tracks is arranging the trip", () => {
     // And the file it was sent with is not kept.
     expect(await storage().exists(importKey)).toBe(false);
   });
+
+  it("the job refuses the trip's own maker, even an admin, once their removal has begun", async () => {
+    await db.user.update({ where: { id: maker }, data: { role: "ADMIN", removingAt: new Date() } });
+    const importKey = "imports/test-walk.gpx";
+    await storage().putBuffer(importKey, Buffer.from(GPX));
+    await expect(importTrackFile({ importKey, tripId, userId: maker, sourceHint: "auto", originalName: "walk.gpx" })).rejects.toThrow(/made this/);
+    expect(await db.track.count()).toBe(0);
+  });
+
+  it("the job imports nothing into a trip being deleted", async () => {
+    await db.trip.update({ where: { id: tripId }, data: { deletingAt: new Date() } });
+    const importKey = "imports/test-walk.gpx";
+    await storage().putBuffer(importKey, Buffer.from(GPX));
+    await expect(importTrackFile({ importKey, tripId, userId: maker, sourceHint: "auto", originalName: "walk.gpx" })).rejects.toThrow(/Trip not found/);
+    expect(await db.track.count()).toBe(0);
+  });
 });
 
 describe("an import's progress is its importer's", () => {

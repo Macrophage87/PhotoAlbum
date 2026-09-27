@@ -89,12 +89,12 @@ export async function transcodeVideo(job: TranscodeVideoJob, signal?: AbortSigna
       }
       // The row's trip wins: the job's is only what the row said when it was queued, and a member may have moved the
       // clip, or taken it off its trip, while it waited (one taken off is not filed again by its day).
-      let trip = photo.tripId ? await db.trip.findUnique({ where: { id: photo.tripId } }) : null;
+      let trip = photo.tripId ? await db.trip.findUnique({ where: { id: photo.tripId, deletingAt: null } }) : null;
       // On none of the uploader's trips' days (a ride on the last evening that runs past midnight): the trip out on an
       // activity or a track at that moment is chosen once the row is locked, from what is there then.
       let dayless: { id: string; startDate: Date; endDate: Date; timezone: string }[] | null = null;
       if (!trip && !tripChangedSinceQueued(job, photo)) {
-        const candidates = await db.trip.findMany({ where: whoWasThere(photo.uploaderId), select: { id: true, startDate: true, endDate: true, timezone: true } });
+        const candidates = await db.trip.findMany({ where: { deletingAt: null, ...whoWasThere(photo.uploaderId) }, select: { id: true, startDate: true, endDate: true, timezone: true } });
         const matches = candidates.filter((c) => pickTripByDay([c], localDayFromOffset(instant, offsetMinutesInZone(instant, c.timezone))));
         if (matches.length === 1) trip = await db.trip.findUnique({ where: { id: matches[0].id } });
         if (matches.length === 0) dayless = candidates;

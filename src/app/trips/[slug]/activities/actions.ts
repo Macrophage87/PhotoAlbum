@@ -31,7 +31,7 @@ import { NAME_NOT_TO_BE_SHOWN, namesSomebodyRestricted } from "@/lib/people/forg
 /** An activity is part of the shape of a trip, so it is the trip's maker (and admins) who arrange them. */
 async function loadTrip(slug: string) {
   const user = await requireUserOrThrow();
-  const trip = await db.trip.findUnique({ where: { slug }, select: { id: true, slug: true, timezone: true, createdById: true } });
+  const trip = await db.trip.findUnique({ where: { slug, deletingAt: null }, select: { id: true, slug: true, timezone: true, createdById: true } });
   if (!trip) throw new Error("Trip not found");
   if (!canEditContainer(user, trip)) throw new Error(NOT_YOUR_CONTAINER);
   return trip;
@@ -128,7 +128,10 @@ export async function setActivityShare(slug: string, id: string, on: boolean): P
   const trip = await loadTrip(slug);
   const activity = await db.activity.findFirst({ where: { id, tripId: trip.id }, select: { id: true } });
   if (!activity) throw new Error("Activity not found");
-  await db.activity.update({ where: { id }, data: { shareToken: on ? generateToken() : null } });
+  // Only while its trip is not being deleted: a link made by a save that read the trip just before the mark would
+  // otherwise open an afternoon of a trip that is already gone.
+  const shared = await db.activity.updateMany({ where: { id, trip: { deletingAt: null } }, data: { shareToken: on ? generateToken() : null } });
+  if (!shared.count) throw new Error("Trip not found");
   await db.photo.updateMany({ where: { activityId: id }, data: { updatedAt: new Date() } });
   revalidatePath(`/trips/${slug}/activities/${id}`);
 }

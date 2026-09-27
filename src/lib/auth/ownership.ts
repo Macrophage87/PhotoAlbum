@@ -24,14 +24,21 @@ export function isAdmin(user: Pick<ViewerUser, "role">): boolean {
   return user.role === "ADMIN";
 }
 
+/**
+ * Who is asking, as the rules below need them. `removingAt`: a member being removed may change nothing, whatever
+ * their role said when a job was queued for them (see src/lib/auth/remove-member.ts); a caller that loads the member
+ * itself, as a job does, selects it.
+ */
+export type Editor = Pick<ViewerUser, "id" | "role"> & { removingAt?: Date | null };
+
 /** The person who uploaded an item, and admins. */
-export function canEditMedia(user: Pick<ViewerUser, "id" | "role"> | null, media: Owned): boolean {
-  return Boolean(user) && (isAdmin(user!) || media.uploaderId === user!.id);
+export function canEditMedia(user: Editor | null, media: Owned): boolean {
+  return Boolean(user) && !user!.removingAt && (isAdmin(user!) || media.uploaderId === user!.id);
 }
 
 /** The person who made a trip, a collection or an activity's trip, and admins. */
-export function canEditContainer(user: Pick<ViewerUser, "id" | "role"> | null, container: Made): boolean {
-  return Boolean(user) && (isAdmin(user!) || (container.createdById !== null && container.createdById === user!.id));
+export function canEditContainer(user: Editor | null, container: Made): boolean {
+  return Boolean(user) && !user!.removingAt && (isAdmin(user!) || (container.createdById !== null && container.createdById === user!.id));
 }
 
 /**
@@ -40,7 +47,7 @@ export function canEditContainer(user: Pick<ViewerUser, "id" | "role"> | null, c
  * so neither is a thing any relative can do to any record. Consent itself (recognition, naming in descriptions)
  * stays with admins alone.
  */
-export function canChangePerson(user: Pick<ViewerUser, "id" | "role"> | null, person: Made): boolean {
+export function canChangePerson(user: Editor | null, person: Made): boolean {
   return canEditContainer(user, person);
 }
 
@@ -73,7 +80,7 @@ export function editableMediaWhere(user: Pick<ViewerUser, "id" | "role">): { upl
 /** Load a trip for editing by slug, or throw. */
 export async function requireTripEditor(slug: string): Promise<{ user: ViewerUser; trip: { id: string; slug: string; timezone: string; createdById: string | null } }> {
   const user = await requireUserOrThrow();
-  const trip = await db.trip.findUnique({ where: { slug }, select: { id: true, slug: true, timezone: true, createdById: true } });
+  const trip = await db.trip.findUnique({ where: { slug, deletingAt: null }, select: { id: true, slug: true, timezone: true, createdById: true } });
   if (!trip) throw new Error("Trip not found");
   if (!canEditContainer(user, trip)) throw new Error(NOT_YOUR_CONTAINER);
   return { user, trip };

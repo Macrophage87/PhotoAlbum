@@ -10,6 +10,9 @@ export type MagicLinkDeps = {
   now?: () => Date;
 };
 
+/** An invitation counts only while whoever sent it is not being removed (see src/lib/auth/remove-member.ts). */
+const FROM_A_MEMBER_STAYING = { invitedBy: { removingAt: null } } as const;
+
 /** How many unused, unexpired links an address may hold before asking again sends nothing new. */
 export const MAX_OUTSTANDING_LINKS = 3;
 
@@ -62,10 +65,11 @@ export async function requestMagicLink(rawEmail: string, deps: MagicLinkDeps & {
 
     const [user, invite, counts] = await Promise.all([
       tx.user.findUnique({ where: { email } }),
-      tx.invite.findFirst({ where: { email, acceptedAt: null, expiresAt: { gt: now } } }),
+      tx.invite.findFirst({ where: { email, acceptedAt: null, expiresAt: { gt: now }, ...FROM_A_MEMBER_STAYING } }),
       accountCounts(tx),
     ]);
-    const allowed = Boolean(user) || Boolean(invite) || canBootstrapAdmin(email, counts, deps.adminEmail);
+    // A member being removed is treated as a stranger: charged a placeholder, sent nothing.
+    const allowed = user ? !user.removingAt : Boolean(invite) || canBootstrapAdmin(email, counts, deps.adminEmail);
     const token = generateToken();
     await tx.magicLinkToken.create({
       // A stranger's placeholder is hashed from a token nobody is sent, so it can never be used.
@@ -156,9 +160,11 @@ export async function verifyMagicLink(token: string, deps: MagicLinkDeps): Promi
 
   const email = record.email;
   const existing = await db.user.findUnique({ where: { email } });
+  // Being removed: the address has no account to sign in to any more.
+  if (existing?.removingAt) return { ok: false, reason: "invalid" };
   if (existing) return { ok: true, userId: existing.id, email, isNewUser: false };
 
-  const invite = await db.invite.findFirst({ where: { email, acceptedAt: null, expiresAt: { gt: now } } });
+  const invite = await db.invite.findFirst({ where: { email, acceptedAt: null, expiresAt: { gt: now }, ...FROM_A_MEMBER_STAYING } });
   const bootstrap = canBootstrapAdmin(email, await accountCounts(db), deps.adminEmail);
   if (!invite && !bootstrap) return accountMadeMeanwhile(db, email);
   const role = bootstrap ? "ADMIN" : invite?.role ?? "MEMBER";
@@ -168,7 +174,11 @@ export async function verifyMagicLink(token: string, deps: MagicLinkDeps): Promi
   const user = await db
     .$transaction(async (tx) => {
       if (invite) {
-        const accepted = await tx.invite.updateMany({ where: { id: invite.id, acceptedAt: null }, data: { acceptedAt: now } });
+        // Whoever sent it is held still while it is claimed: an admin whose removal begins at this moment either has
+        // it begin after this account exists, or has it begun, and then their invitation counts for nothing — one
+        // sent in the very instant their removal began included, which beginRemoval's own clear-out cannot see.
+        const [inviter] = await tx.$queryRaw<{ removingAt: Date | null }[]>`SELECT "removingAt" FROM "User" WHERE id = ${invite.invitedById} FOR SHARE`;
+        const accepted = inviter && !inviter.removingAt ? await tx.invite.updateMany({ where: { id: invite.id, acceptedAt: null }, data: { acceptedAt: now } }) : { count: 0 };
         if (accepted.count === 0 && !bootstrap) return null;
       }
       return tx.user.create({ data: { email, role } });
@@ -189,7 +199,7 @@ export async function verifyMagicLink(token: string, deps: MagicLinkDeps): Promi
  */
 async function accountMadeMeanwhile(db: Db, email: string): Promise<VerifyResult> {
   const created = await db.user.findUnique({ where: { email } });
-  if (created) return { ok: true, userId: created.id, email, isNewUser: false };
+  if (created && !created.removingAt) return { ok: true, userId: created.id, email, isNewUser: false };
   return { ok: false, reason: "invalid" };
 }
 

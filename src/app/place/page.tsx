@@ -20,7 +20,7 @@ export default async function PlacePhotosPage({ searchParams }: PageProps<"/plac
   const viewer = await getViewer();
   const sp = await searchParams;
   const slug = typeof sp.trip === "string" && sp.trip ? sp.trip : null;
-  if (slug && (await db.trip.findUnique({ where: { slug }, select: { id: true } }))) redirect(`/trips/${slug}/place`);
+  if (slug && (await db.trip.findUnique({ where: { slug, deletingAt: null }, select: { id: true } }))) redirect(`/trips/${slug}/place`);
   const tray = await unplacedForTray(me, { tripId: null });
 
   return (

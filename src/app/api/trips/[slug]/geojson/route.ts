@@ -9,7 +9,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ slug: st
   const { slug } = await params;
   const sp = new URL(req.url).searchParams;
   const viewer = await getViewer();
-  const trip = await db.trip.findUnique({ where: { slug }, select: { id: true, visibility: true, shareToken: true } });
+  const trip = await db.trip.findUnique({ where: { slug, deletingAt: null }, select: { id: true, visibility: true, shareToken: true } });
   if (!trip || !canViewTrip(viewer, trip)) return Response.json({ error: "Not found" }, { status: 404 });
   // A shared link's map is drawn as anybody holding the link sees it, a member looking at it included.
   const answer = viewerFor(viewer, sp.get("view"));

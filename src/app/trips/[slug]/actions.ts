@@ -17,18 +17,24 @@ import { writeContainerDescription } from "@/lib/annotation/container";
 import { handWrittenDescription } from "@/lib/annotation/members-only";
 import { rejudgeFromAction } from "@/lib/annotation/rejudge-notice";
 import { descriptionStaysHelpers } from "@/lib/annotation/helper-text";
-import { forgetTrackFiles } from "@/lib/tracks/files";
+import { deleteTripById } from "@/lib/trips/delete";
 import { uniqueSlug } from "@/lib/trips/slug";
 import { NAME_NOT_TO_BE_SHOWN, namesSomebodyRestricted } from "@/lib/people/forget";
 import { isCoverable } from "@/lib/photos/cover";
 
-/** The trip, where this member may change it: whoever made it, and admins. */
+/** The trip, where this member may change it: whoever made it, and admins. One being deleted is gone already. */
 async function loadEditableTrip(slug: string) {
   const user = await requireUserOrThrow();
-  const trip = await db.trip.findUnique({ where: { slug } });
+  const trip = await db.trip.findUnique({ where: { slug, deletingAt: null } });
   if (!trip) throw new Error("Trip not found");
   if (!canEditContainer(user, trip)) throw new Error(NOT_YOUR_CONTAINER);
   return trip;
+}
+
+/** A write that found no live trip: it was deleted, or marked for deletion, since it was read. */
+function tripGone(err: unknown): never {
+  if ((err as { code?: string }).code === "P2025") throw new Error("Trip not found");
+  throw err;
 }
 
 /** A description saved by hand, as stored; see `handWrittenDescription`. */
@@ -50,8 +56,9 @@ export async function updateTrip(slug: string, _prev: TripFormState, fd: FormDat
   const visibility = chosen?.data;
   const changed = visibility !== undefined && visibility !== trip.visibility;
   const there = participantsFromForm(fd);
+  // Written only while it is not being deleted: a save that read the trip just before the mark must not share it again.
   await db.trip.update({
-    where: { id: trip.id },
+    where: { id: trip.id, deletingAt: null },
     data: {
       title: v.title,
       description: v.description,
@@ -66,7 +73,7 @@ export async function updateTrip(slug: string, _prev: TripFormState, fd: FormDat
       // `set` reconciles to exactly what was ticked; a form that never carried the control leaves the list alone.
       ...(there ? { participants: { set: there.map((id) => ({ id })) } } : {}),
     },
-  });
+  }).catch(tripGone);
   // Whether a word of its title gives anything away depends on who may open it: judged again in the background.
   if (changed || v.title !== trip.title) await rejudgeFromAction({ tripId: trip.id });
   if (changed) {
@@ -81,7 +88,8 @@ export async function updateTrip(slug: string, _prev: TripFormState, fd: FormDat
 export async function rotateShareToken(slug: string): Promise<void> {
   const trip = await loadEditableTrip(slug);
   if (trip.visibility !== "LINK") return;
-  await db.trip.update({ where: { id: trip.id }, data: { shareToken: generateToken() } });
+  // Not a trip marked for deletion since it was read: its link was withdrawn with the mark.
+  await db.trip.update({ where: { id: trip.id, deletingAt: null }, data: { shareToken: generateToken() } }).catch(tripGone);
   // New token, new rendition URLs: private caches keyed on the old ?v= stop matching.
   await db.photo.updateMany({ where: { tripId: trip.id }, data: { updatedAt: new Date() } });
   revalidatePath(`/trips/${slug}/settings`);
@@ -115,43 +123,19 @@ export async function setCoverPhoto(slug: string, photoId: string | null): Promi
   revalidatePath("/");
 }
 
-/** A trip of many thousand photographs takes seconds to let go of them: well past the five a transaction gets by default. */
-const TRIP_DELETE_TX = { timeout: 120_000, maxWait: 10_000 };
-
 /**
  * Admins only. The trip, its activities and tracks go; every photo stays in the album and becomes a photo without a
- * trip (the schema sets tripId to null), so nothing anyone uploaded is ever lost by deleting a container.
+ * trip, so nothing anyone uploaded is ever lost by deleting a container. A big trip lets go of its photographs a
+ * batch at a time; see lib/trips/delete for the steps, and for how a deletion interrupted half-way is finished.
  */
 export async function deleteTrip(slug: string): Promise<void> {
   const trip = await loadEditableTrip(slug);
   const me = await requireUserOrThrow();
   if (me.role !== "ADMIN") throw new Error("Only an admin can delete a trip");
-  const files = await db.$transaction(async (tx) => {
-    // Locked first, so a photo filed onto one of its activities meanwhile is either cleared here or refused because
-    // the trip is gone — never left behind with a setter.
-    await tx.$queryRaw`SELECT id FROM "Trip" WHERE id = ${trip.id} FOR UPDATE`;
-    const files = await tx.track.findMany({ where: { tripId: trip.id }, select: { originalFile: true } });
-    // Every photograph leaves the trip in one pass over its rows (a big trip has thousands; the foreign key would
-    // otherwise make a second pass). Its activities go with it, and a choice about them goes too, or a photo left on
-    // no trip would carry a setter that reads as "kept off by hand" wherever it is filed next. Its tracks go as well,
-    // and with them the positions they gave (as deleting a track does, see takeBackTrack): a photo off the trip is
-    // not left pinned to a route the album no longer has.
-    await tx.$executeRaw`
-      UPDATE "Photo" SET "tripId" = NULL, "activityId" = NULL, "activitySetById" = NULL,
-        lat = CASE WHEN "gpsSource" = 'TRACK' THEN NULL ELSE lat END,
-        lng = CASE WHEN "gpsSource" = 'TRACK' THEN NULL ELSE lng END,
-        altitude = CASE WHEN "gpsSource" = 'TRACK' THEN NULL ELSE altitude END,
-        "placeEstimatedAt" = CASE WHEN "gpsSource" = 'TRACK' AND "placeEstimateName" IS NOT NULL THEN NULL ELSE "placeEstimatedAt" END,
-        "gpsSource" = CASE WHEN "gpsSource" = 'TRACK' THEN NULL ELSE "gpsSource" END,
-        "updatedAt" = now()
-      WHERE "tripId" = ${trip.id}`;
-    await tx.trip.deleteMany({ where: { id: trip.id } });
-    return files;
-  }, TRIP_DELETE_TX);
-  // Its tracks went with it, so the files they were read from have nothing left to belong to.
-  await forgetTrackFiles(files.map((f) => f.originalFile));
+  const done = await deleteTripById(trip.id);
   revalidatePath("/", "layout");
-  redirect("/photos");
+  // A big one is finished by the worker; the Admin page says it is being deleted until then.
+  redirect(done === "done" ? "/photos" : "/admin#being-deleted");
 }
 
 /** Clear track-derived positions and recompute them from the trip's current tracks. */
