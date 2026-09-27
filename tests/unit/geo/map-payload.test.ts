@@ -3,7 +3,7 @@ import { db } from "@/lib/db";
 import { buildCollectionMapPayload, buildCollectionMapView, buildMapPayload, buildMapView, type MapPhotos } from "@/lib/map/geojson";
 import { gridCells, inViewport, MAX_CELLS, mercator, parseViewport, POINT_LIMIT } from "@/lib/map/view";
 import { NO_FILTER } from "@/lib/photos/filters";
-import { forgetMapStates } from "@/lib/map/cache";
+import { BUILD_GIVE_UP_MS, forgetMapStates, MAP_STATE_TTL_MS, REBUILD_EVERY_MS } from "@/lib/map/cache";
 import { JITTER_STEP_M, spreadOverlapping } from "@/lib/map/jitter";
 import { haversine } from "@/lib/geo/haversine";
 import type { Viewer } from "@/lib/auth/viewer";
@@ -247,22 +247,151 @@ describe("a map kept from one view to the next", () => {
     expect(idsOf(await buildMapView(member, undefined, NO_FILTER, near(44.35, -68.2)))).not.toContain(photoId);
   });
 
-  it("answers from the kept map while a photograph's new place is worked in, once, unless asked for it fresh", async () => {
+  /** A photograph on the trip with no place yet: a first place is only something more to see. */
+  const unplacedPhoto = async (originalName = "u.jpg") =>
+    (await db.photo.create({ data: { uploaderId, tripId, mimeType: "image/jpeg", storageKey: "k", originalPath: "k/o.jpg", sizeBytes: 1, status: "READY", gpsSource: "EXIF", originalName, takenAt: new Date("2025-08-14T12:00:00Z") } })).id;
+
+  it("answers anybody from the kept map while a first place is worked in, once, unless asked for it fresh", async () => {
+    const unplaced = await unplacedPhoto();
     const before = await buildMapView(member, undefined, NO_FILTER, everywhere);
-    await db.photo.update({ where: { id: photoId }, data: { lat: 10, lng: 10, takenAt: new Date("2025-08-14T12:00:00Z") } });
-    // Nothing was taken off the map for anybody, so the map kept from before answers at once; however many ask, the
-    // new one is worked out only once.
+    await buildMapView(stranger, undefined, NO_FILTER, everywhere);
+    await db.photo.update({ where: { id: unplaced }, data: { lat: 10, lng: 10 } });
     const read = vi.spyOn(db.photo, "findMany");
-    const stale = await Promise.all([1, 2, 3].map(() => buildMapView(member, undefined, NO_FILTER, near(10, 10))));
+    const stale = await Promise.all([member, member, stranger, stranger].map((viewer) => buildMapView(viewer, undefined, NO_FILTER, near(10, 10))));
     for (const answer of stale) expect(idsOf(answer)).toEqual([]);
-    expect(read.mock.calls.length).toBeLessThanOrEqual(1);
+    // However many ask, each map is worked out again once.
+    expect(read.mock.calls.length).toBeLessThanOrEqual(2);
     // The placing screen asks for it fresh, and sees the photograph where it was put.
     const fresh = await buildMapView(member, undefined, NO_FILTER, near(10, 10), { fresh: true });
-    expect(fresh.points.find((p) => p[0] === photoId)!.slice(1, 4)).toEqual([10, 10, "2025-08-14"]);
+    expect(fresh.points.find((p) => p[0] === unplaced)!.slice(1, 4)).toEqual([10, 10, "2025-08-14"]);
     // A new day in the legend: the map is told its legends are not the ones these slots are numbered by.
     expect(fresh.version).not.toBe(before.version);
     expect((await buildMapPayload(member)).version).toBe(fresh.version);
-    expect(idsOf(await buildMapView(member, undefined, NO_FILTER, near(10, 10)))).toEqual([photoId]);
+  });
+
+  it("answers from a kept map only while it is young, to a member or a visitor", async () => {
+    const [unplaced, later] = [await unplacedPhoto("u.jpg"), await unplacedPhoto("v.jpg")];
+    const start = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(start);
+    for (const viewer of [member, stranger]) await buildMapView(viewer, undefined, NO_FILTER, everywhere);
+    await db.photo.update({ where: { id: unplaced }, data: { lat: 10, lng: 10 } });
+    clock.mockReturnValue(start + MAP_STATE_TTL_MS - 1);
+    for (const viewer of [member, stranger]) expect(idsOf(await buildMapView(viewer, undefined, NO_FILTER, near(10, 10)))).toEqual([]);
+    // Worked out again while that was answered; forget it, so only the age of the first decides.
+    forgetMapStates();
+    clock.mockReturnValue(start);
+    for (const viewer of [member, stranger]) await buildMapView(viewer, undefined, NO_FILTER, everywhere);
+    await db.photo.update({ where: { id: later }, data: { lat: 11, lng: 11 } });
+    clock.mockReturnValue(start + MAP_STATE_TTL_MS + 1);
+    for (const viewer of [member, stranger]) expect(idsOf(await buildMapView(viewer, undefined, NO_FILTER, near(11, 11)))).toEqual([later]);
+  });
+
+  it("works a map out again at most every few seconds while only additions wait for it", async () => {
+    const [first, second] = [await unplacedPhoto("u.jpg"), await unplacedPhoto("v.jpg")];
+    const start = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(start);
+    await buildMapView(stranger, undefined, NO_FILTER, everywhere);
+    await db.photo.update({ where: { id: first }, data: { lat: 10, lng: 10 } });
+    const read = vi.spyOn(db.photo, "findMany");
+    clock.mockReturnValue(start + 1000);
+    await buildMapView(stranger, undefined, NO_FILTER, everywhere);
+    // Long enough for a working-out, had one been started, to have asked for the photographs.
+    await new Promise((r) => setTimeout(r, 200));
+    expect(read).not.toHaveBeenCalled();
+    clock.mockReturnValue(start + REBUILD_EVERY_MS + 1);
+    await buildMapView(stranger, undefined, NO_FILTER, everywhere);
+    await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(1));
+    // Let that one finish, then add again at once: answered from it, and not worked out again yet.
+    await vi.waitFor(async () => expect(idsOf(await buildMapView(stranger, undefined, NO_FILTER, near(10, 10)))).toEqual([first]));
+    await db.photo.update({ where: { id: second }, data: { lat: 11, lng: 11 } });
+    clock.mockReturnValue(start + REBUILD_EVERY_MS + 2000);
+    expect(idsOf(await buildMapView(stranger, undefined, NO_FILTER, near(11, 11)))).toEqual([]);
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
+  it("shares a working-out begun since the last thing taken off, and never one begun before it", async () => {
+    forgetMapStates();
+    const original = db.photo.findMany.bind(db.photo);
+    const read = vi.spyOn(db.photo, "findMany");
+    // Nothing kept: two asking, with only an addition between them, share one working-out.
+    const first = buildMapView(stranger, undefined, NO_FILTER, everywhere);
+    await db.photo.update({ where: { id: await unplacedPhoto() }, data: { lat: 10, lng: 10 } });
+    const second = buildMapView(stranger, undefined, NO_FILTER, everywhere);
+    await Promise.all([first, second]);
+    expect(read).toHaveBeenCalledTimes(1);
+    // A working-out that has read the photographs, and is still going when the trip is made private…
+    forgetMapStates();
+    let fetched!: () => void, release!: () => void;
+    const hasRead = new Promise<void>((r) => (fetched = r));
+    const gate = new Promise<void>((r) => (release = r));
+    read.mockImplementationOnce((async (...args: Parameters<typeof original>) => {
+      const rows = await original(...args);
+      fetched();
+      await gate;
+      return rows;
+    }) as never);
+    const before = buildMapView(stranger, undefined, NO_FILTER, everywhere);
+    await hasRead;
+    await db.trip.update({ where: { id: tripId }, data: { visibility: "PRIVATE" } });
+    // …is not what the next visitor waits for: they get a map worked out after it.
+    const after = buildMapView(stranger, undefined, NO_FILTER, everywhere);
+    release();
+    // (The photograph placed above makes one more.)
+    expect(countOf(await before)).toBe(MANY + 1);
+    expect(countOf(await after)).toBe(0);
+  });
+
+  it("does not wait on a working-out that has hung", async () => {
+    forgetMapStates();
+    const start = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(start);
+    vi.spyOn(db.photo, "findMany").mockImplementationOnce((() => new Promise(() => {})) as never);
+    void buildMapView(stranger, undefined, NO_FILTER, everywhere);
+    await new Promise((r) => setTimeout(r, 50));
+    clock.mockReturnValue(start + BUILD_GIVE_UP_MS + 1);
+    expect(countOf(await buildMapView(stranger, undefined, NO_FILTER, everywhere))).toBe(MANY);
+  });
+
+  it("says when working a map out again in the background fails, and goes on answering from the kept one", async () => {
+    const start = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(start);
+    await buildMapView(stranger, undefined, NO_FILTER, everywhere);
+    await db.photo.update({ where: { id: await unplacedPhoto() }, data: { lat: 10, lng: 10 } });
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(db.photo, "findMany").mockRejectedValueOnce(new Error("database gone away"));
+    clock.mockReturnValue(start + REBUILD_EVERY_MS + 1);
+    expect(countOf(await buildMapView(stranger, undefined, NO_FILTER, everywhere))).toBe(MANY);
+    await vi.waitFor(() => expect(logged).toHaveBeenCalledWith(expect.stringContaining("failed"), expect.any(Error)));
+  });
+
+  it("takes a cleared place off the map at once, for a visitor and a member", async () => {
+    for (const viewer of [stranger, member]) await buildMapView(viewer, undefined, NO_FILTER, everywhere);
+    // What clearing a photograph's place does (clearPhotoPlace): the home address on a public trip, taken back.
+    await db.photo.update({ where: { id: photoId }, data: { lat: null, lng: null, gpsSource: null, placeName: null } });
+    for (const viewer of [stranger, member]) {
+      expect(idsOf(await buildMapView(viewer, undefined, NO_FILTER, near(44.35, -68.2)))).not.toContain(photoId);
+      expect(countOf(await buildMapView(viewer, undefined, NO_FILTER, everywhere))).toBe(MANY - 1);
+    }
+  });
+
+  it("takes a deleted track's name and bounds off a visitor's map at once", async () => {
+    const track = await db.track.create({ data: { tripId, uploaderId, source: "GPX", name: "Home to the beach.gpx", startTime: new Date("2025-08-12T09:00:00Z"), endTime: new Date("2025-08-12T10:00:00Z"), pointCount: 2, minLat: 60, maxLat: 61, minLng: 60, maxLng: 61, simplified: [[60, 60], [61, 61]], pointsBlob: new Uint8Array() } });
+    const before = await buildMapPayload(stranger);
+    expect(JSON.stringify(before)).toContain("Home to the beach");
+    expect(before.bounds![1]).toEqual([61, 61]);
+    await db.track.delete({ where: { id: track.id } });
+    const after = await buildMapPayload(stranger);
+    expect(JSON.stringify(after)).not.toContain("Home to the beach");
+    expect(after.bounds![1][1]).toBeLessThan(60);
+  });
+
+  it("shows a visitor a trip's new name at once", async () => {
+    await buildMapPayload(stranger);
+    await db.trip.update({ where: { id: tripId }, data: { title: "Grandma's street" } });
+    await db.trip.update({ where: { id: tripId }, data: { title: "Down East" } });
+    const after = await buildMapPayload(stranger);
+    expect(after.trips.map((t) => t.title)).toEqual(["Down East"]);
+    expect(JSON.stringify(after)).not.toContain("Grandma");
   });
 });
 

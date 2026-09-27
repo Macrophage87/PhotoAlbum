@@ -1,7 +1,12 @@
 -- The map's version: one row, bumped whenever something any map shows changes (src/lib/map/cache.ts keeps worked-out
--- maps for as long as it stands). `version` counts every such change; `access` only those that can take something
--- off a map for somebody (a trip or collection made less visible, a photograph trashed, moved or deleted), for which
--- a kept map is never served while its replacement is being worked out.
+-- maps and answers from them). `version` counts every such change. `access` counts the ones after which a map kept
+-- from before must never be served to anybody: whatever takes something off a map or alters what it said (a trip or
+-- collection made less visible, a photograph that was on a map trashed, taken off its trip, made unready or deleted,
+-- a track or activity deleted or moved to another trip, a place moved or cleared, a trip, activity or track renamed).
+-- Something only added (a first place, a photograph filed on a trip, a new track) may show a little late instead.
+--
+-- Every commit that changes a watched column takes this one row as it commits, so such commits are serialized: at
+-- most about one per disk flush (about 650 a second measured here, perhaps 200 on a slow disk). Ample for an album.
 CREATE TABLE "MapVersion" (
     "id" INTEGER NOT NULL DEFAULT 1,
     "version" BIGINT NOT NULL DEFAULT 0,
@@ -30,15 +35,28 @@ BEGIN
 END
 $$;
 
--- Photographs: where, when, whether ready, whose and on what; in the trash or on another trip is less to see.
-CREATE CONSTRAINT TRIGGER "Photo_map_added" AFTER INSERT ON "Photo" DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION "map_version_bump"('content');
-CREATE CONSTRAINT TRIGGER "Photo_map_removed" AFTER DELETE ON "Photo" DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION "map_version_bump"('access');
-CREATE CONSTRAINT TRIGGER "Photo_map_changed" AFTER UPDATE OF "lat", "lng", "status", "takenAt", "tzOffsetMin", "activityId", "uploaderId" ON "Photo" DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
-  WHEN (OLD."lat" IS DISTINCT FROM NEW."lat" OR OLD."lng" IS DISTINCT FROM NEW."lng" OR OLD."status" IS DISTINCT FROM NEW."status" OR OLD."takenAt" IS DISTINCT FROM NEW."takenAt"
-    OR OLD."tzOffsetMin" IS DISTINCT FROM NEW."tzOffsetMin" OR OLD."activityId" IS DISTINCT FROM NEW."activityId" OR OLD."uploaderId" IS DISTINCT FROM NEW."uploaderId")
+-- Photographs. A photograph was on a map only if it was ready, placed and not in the trash: taking one of those off
+-- (deleted, trashed, made unready, off its trip), or moving or clearing its place, alters what somebody may have
+-- seen. Everything else is something more to see: a photograph made ready, given its first place, filed on a trip
+-- (as processing and imports file them), restored from the trash, or its date, activity or uploader changed.
+-- Deleting a duplicate still being processed, or emptying the trash, changes no map at all.
+CREATE CONSTRAINT TRIGGER "Photo_map_added" AFTER INSERT ON "Photo" DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
+  WHEN (NEW."status" = 'READY' AND NEW."lat" IS NOT NULL AND NEW."trashedAt" IS NULL)
   EXECUTE FUNCTION "map_version_bump"('content');
-CREATE CONSTRAINT TRIGGER "Photo_map_access" AFTER UPDATE OF "trashedAt", "tripId" ON "Photo" DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
-  WHEN (OLD."trashedAt" IS DISTINCT FROM NEW."trashedAt" OR OLD."tripId" IS DISTINCT FROM NEW."tripId")
+CREATE CONSTRAINT TRIGGER "Photo_map_removed" AFTER DELETE ON "Photo" DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
+  WHEN (OLD."status" = 'READY' AND OLD."lat" IS NOT NULL AND OLD."trashedAt" IS NULL)
+  EXECUTE FUNCTION "map_version_bump"('access');
+CREATE CONSTRAINT TRIGGER "Photo_map_changed" AFTER UPDATE OF "lat", "lng", "status", "takenAt", "tzOffsetMin", "activityId", "uploaderId", "tripId", "trashedAt" ON "Photo" DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
+  WHEN ((OLD."lat" IS DISTINCT FROM NEW."lat" OR OLD."lng" IS DISTINCT FROM NEW."lng" OR OLD."status" IS DISTINCT FROM NEW."status" OR OLD."takenAt" IS DISTINCT FROM NEW."takenAt"
+      OR OLD."tzOffsetMin" IS DISTINCT FROM NEW."tzOffsetMin" OR OLD."activityId" IS DISTINCT FROM NEW."activityId" OR OLD."uploaderId" IS DISTINCT FROM NEW."uploaderId"
+      OR OLD."tripId" IS DISTINCT FROM NEW."tripId" OR OLD."trashedAt" IS DISTINCT FROM NEW."trashedAt")
+    -- Only a photograph that is on a map, before or after: one still being processed changes nothing anybody sees.
+    AND ((OLD."status" = 'READY' AND OLD."lat" IS NOT NULL AND OLD."trashedAt" IS NULL) OR (NEW."status" = 'READY' AND NEW."lat" IS NOT NULL AND NEW."trashedAt" IS NULL)))
+  EXECUTE FUNCTION "map_version_bump"('content');
+CREATE CONSTRAINT TRIGGER "Photo_map_taken_off" AFTER UPDATE OF "lat", "lng", "status", "trashedAt", "tripId" ON "Photo" DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
+  WHEN (OLD."status" = 'READY' AND OLD."lat" IS NOT NULL AND OLD."trashedAt" IS NULL
+    AND (OLD."lat" IS DISTINCT FROM NEW."lat" OR OLD."lng" IS DISTINCT FROM NEW."lng" OR NEW."status" <> 'READY' OR NEW."trashedAt" IS NOT NULL
+      OR (OLD."tripId" IS NOT NULL AND OLD."tripId" IS DISTINCT FROM NEW."tripId")))
   EXECUTE FUNCTION "map_version_bump"('access');
 
 -- Trips: who may see them, and what the map calls them, where it puts them in its list, and whose clock they keep.
@@ -47,16 +65,21 @@ CREATE CONSTRAINT TRIGGER "Trip_map_removed" AFTER DELETE ON "Trip" DEFERRABLE I
 CREATE CONSTRAINT TRIGGER "Trip_map_access" AFTER UPDATE OF "visibility", "shareToken" ON "Trip" DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
   WHEN (OLD."visibility" IS DISTINCT FROM NEW."visibility" OR OLD."shareToken" IS DISTINCT FROM NEW."shareToken")
   EXECUTE FUNCTION "map_version_bump"('access');
-CREATE CONSTRAINT TRIGGER "Trip_map_changed" AFTER UPDATE OF "title", "slug", "startDate", "endDate", "timezone", "themeKey" ON "Trip" DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
-  WHEN (OLD."title" IS DISTINCT FROM NEW."title" OR OLD."slug" IS DISTINCT FROM NEW."slug" OR OLD."startDate" IS DISTINCT FROM NEW."startDate" OR OLD."endDate" IS DISTINCT FROM NEW."endDate"
-    OR OLD."timezone" IS DISTINCT FROM NEW."timezone" OR OLD."themeKey" IS DISTINCT FROM NEW."themeKey")
+CREATE CONSTRAINT TRIGGER "Trip_map_renamed" AFTER UPDATE OF "title", "slug" ON "Trip" DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
+  WHEN (OLD."title" IS DISTINCT FROM NEW."title" OR OLD."slug" IS DISTINCT FROM NEW."slug")
+  EXECUTE FUNCTION "map_version_bump"('access');
+CREATE CONSTRAINT TRIGGER "Trip_map_changed" AFTER UPDATE OF "startDate", "endDate", "timezone", "themeKey" ON "Trip" DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
+  WHEN (OLD."startDate" IS DISTINCT FROM NEW."startDate" OR OLD."endDate" IS DISTINCT FROM NEW."endDate" OR OLD."timezone" IS DISTINCT FROM NEW."timezone" OR OLD."themeKey" IS DISTINCT FROM NEW."themeKey")
   EXECUTE FUNCTION "map_version_bump"('content');
 
 -- Activities: named in the legend, and a track's colour and kind.
-CREATE CONSTRAINT TRIGGER "Activity_map_added" AFTER INSERT OR DELETE ON "Activity" DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION "map_version_bump"('content');
-CREATE CONSTRAINT TRIGGER "Activity_map_changed" AFTER UPDATE OF "title", "type", "tripId", "startTime", "trackId" ON "Activity" DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
-  WHEN (OLD."title" IS DISTINCT FROM NEW."title" OR OLD."type" IS DISTINCT FROM NEW."type" OR OLD."tripId" IS DISTINCT FROM NEW."tripId" OR OLD."startTime" IS DISTINCT FROM NEW."startTime"
-    OR OLD."trackId" IS DISTINCT FROM NEW."trackId")
+CREATE CONSTRAINT TRIGGER "Activity_map_added" AFTER INSERT ON "Activity" DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION "map_version_bump"('content');
+CREATE CONSTRAINT TRIGGER "Activity_map_removed" AFTER DELETE ON "Activity" DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION "map_version_bump"('access');
+CREATE CONSTRAINT TRIGGER "Activity_map_access" AFTER UPDATE OF "title", "tripId" ON "Activity" DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
+  WHEN (OLD."title" IS DISTINCT FROM NEW."title" OR OLD."tripId" IS DISTINCT FROM NEW."tripId")
+  EXECUTE FUNCTION "map_version_bump"('access');
+CREATE CONSTRAINT TRIGGER "Activity_map_changed" AFTER UPDATE OF "type", "startTime", "trackId" ON "Activity" DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
+  WHEN (OLD."type" IS DISTINCT FROM NEW."type" OR OLD."startTime" IS DISTINCT FROM NEW."startTime" OR OLD."trackId" IS DISTINCT FROM NEW."trackId")
   EXECUTE FUNCTION "map_version_bump"('content');
 
 -- Collections: who may see them, and what is in them.
@@ -71,11 +94,14 @@ CREATE CONSTRAINT TRIGGER "CollectionItem_map_moved" AFTER UPDATE OF "collection
   EXECUTE FUNCTION "map_version_bump"('access');
 
 -- Tracks: their place on the map, name, time, trip and uploader, and their length in the list.
-CREATE CONSTRAINT TRIGGER "Track_map_added" AFTER INSERT OR DELETE ON "Track" DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION "map_version_bump"('content');
-CREATE CONSTRAINT TRIGGER "Track_map_changed" AFTER UPDATE OF "name", "tripId", "uploaderId", "source", "startTime", "minLat", "maxLat", "minLng", "maxLng" ON "Track" DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
-  WHEN (OLD."name" IS DISTINCT FROM NEW."name" OR OLD."tripId" IS DISTINCT FROM NEW."tripId" OR OLD."uploaderId" IS DISTINCT FROM NEW."uploaderId" OR OLD."source" IS DISTINCT FROM NEW."source"
-    OR OLD."startTime" IS DISTINCT FROM NEW."startTime" OR OLD."minLat" IS DISTINCT FROM NEW."minLat" OR OLD."maxLat" IS DISTINCT FROM NEW."maxLat"
-    OR OLD."minLng" IS DISTINCT FROM NEW."minLng" OR OLD."maxLng" IS DISTINCT FROM NEW."maxLng")
+CREATE CONSTRAINT TRIGGER "Track_map_added" AFTER INSERT ON "Track" DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION "map_version_bump"('content');
+CREATE CONSTRAINT TRIGGER "Track_map_removed" AFTER DELETE ON "Track" DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION "map_version_bump"('access');
+CREATE CONSTRAINT TRIGGER "Track_map_access" AFTER UPDATE OF "name", "tripId" ON "Track" DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
+  WHEN (OLD."name" IS DISTINCT FROM NEW."name" OR OLD."tripId" IS DISTINCT FROM NEW."tripId")
+  EXECUTE FUNCTION "map_version_bump"('access');
+CREATE CONSTRAINT TRIGGER "Track_map_changed" AFTER UPDATE OF "uploaderId", "source", "startTime", "minLat", "maxLat", "minLng", "maxLng" ON "Track" DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
+  WHEN (OLD."uploaderId" IS DISTINCT FROM NEW."uploaderId" OR OLD."source" IS DISTINCT FROM NEW."source" OR OLD."startTime" IS DISTINCT FROM NEW."startTime"
+    OR OLD."minLat" IS DISTINCT FROM NEW."minLat" OR OLD."maxLat" IS DISTINCT FROM NEW."maxLat" OR OLD."minLng" IS DISTINCT FROM NEW."minLng" OR OLD."maxLng" IS DISTINCT FROM NEW."maxLng")
   EXECUTE FUNCTION "map_version_bump"('content');
 CREATE CONSTRAINT TRIGGER "TrackStats_map_changed" AFTER INSERT OR DELETE OR UPDATE OF "distanceM" ON "TrackStats" DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION "map_version_bump"('content');
 
