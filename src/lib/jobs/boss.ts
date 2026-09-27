@@ -29,7 +29,7 @@ export const HEAVY_JOB_EXPIRE_SECONDS = (2 * FFMPEG_TIMEOUT_MS) / 1000 + 20 * 60
 // once but never concurrently.
 export const HEAVY_HEARTBEAT_SECONDS = 180;
 export const HEAVY_HEARTBEAT_REFRESH_SECONDS = 30;
-export const HEAVY_QUEUES: readonly QueueName[] = [QUEUES.transcodeVideo, QUEUES.embedPhoto, QUEUES.detectFaces, QUEUES.detectAnimals];
+export const HEAVY_QUEUES: readonly QueueName[] = [QUEUES.transcodeVideo, QUEUES.embedPhoto, QUEUES.detectFaces, QUEUES.detectAnimals, QUEUES.visitorCopy];
 /**
  * Passes over the whole album, whose length grows with it: the members-only judging reads every photograph (about
  * 1.7 ms each, so past a quarter of an hour at around half a million), and finishing an interrupted removal hands

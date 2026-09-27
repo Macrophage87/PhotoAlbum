@@ -17,16 +17,12 @@ export const EDITOR_SIZE = 1200;
 export const PANORAMA_SIZE = 4096;
 /** The longest side a WebP may have. A stitched panorama is often longer, and the edited copy is held to this. */
 export const WEBP_MAX_SIDE = 16383;
-/** The full-size copies' quality: the edited one here, and the one a visitor is given (see `lib/images/clean-copy`). */
-export const FULL_QUALITY = 90;
 export type RenditionKey = keyof typeof RENDITION_SIZES;
 export type Rendition = { key: string; w: number; h: number };
 /**
- * `full` and `source` are written here only for an edited item: `full` is the whole picture with the edits on it, for
- * the full-size view, and `source` is a smaller copy without them, which is what the editor shows so that opening it
- * again starts from the picture as it was rather than from one the edits have already been applied to. Any other
- * photo is given a `full` the first time somebody outside the family opens it full size (see `lib/images/clean-copy`);
- * rendering again drops it with the rest.
+ * `full` and `source` are written only for an edited item: `full` is the whole picture with the edits on it, for the
+ * full-size view, and `source` is a smaller copy without them, which is what the editor shows so that opening it
+ * again starts from the picture as it was rather than from one the edits have already been applied to.
  */
 export type Renditions = Record<RenditionKey, Rendition> & { full?: Rendition; source?: Rendition; /** Panoramas only: the long copy the panorama viewer pans across. */ pano?: Rendition };
 
@@ -68,7 +64,7 @@ export async function makeRenditions(
     // whole item would fail for the sake of one copy.
     const full = await edited()
       .resize({ width: WEBP_MAX_SIDE, height: WEBP_MAX_SIDE, fit: "inside", withoutEnlargement: true })
-      .webp({ quality: FULL_QUALITY })
+      .webp({ quality: 90 })
       .toBuffer({ resolveWithObject: true });
     const fullKey = `${storageKeyPrefix}/edited.webp`;
     await put(fullKey, full.data);

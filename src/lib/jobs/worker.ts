@@ -49,6 +49,7 @@ export async function startWorker(): Promise<void> {
   const { deletePhoto } = await import("./handlers/delete-photo");
   const { checkExternalVideos } = await import("./handlers/check-external-videos");
   const { transcodeVideo } = await import("./handlers/transcode-video");
+  const { makeVisitorCopy } = await import("./handlers/visitor-copy");
   const { annotatePhoto } = await import("./handlers/annotate-photo");
   const { annotationSweep, purgeAnnotationRaw } = await import("./handlers/annotation-sweep");
   const { annotationBackfill, annotationBatchPoll } = await import("./handlers/annotation-batch");
@@ -78,6 +79,8 @@ export async function startWorker(): Promise<void> {
   );
   // One clip at a time; the handler also takes the heavy-work lock so it never overlaps other heavy jobs.
   await boss.work(QUEUES.transcodeVideo, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 2, heartbeatRefreshSeconds: HEAVY_HEARTBEAT_REFRESH_SECONDS }, async ([job]) => transcodeVideo(job.data as never, job.signal));
+  // A visitor's full-size copy: one picture at a time, and under the same lock, so the largest is all that is in memory.
+  await boss.work(QUEUES.visitorCopy, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 2, heartbeatRefreshSeconds: HEAVY_HEARTBEAT_REFRESH_SECONDS }, async ([job]) => makeVisitorCopy(job.data as never, job.signal));
   await boss.work(QUEUES.checkExternalVideos, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 30 }, async () => checkExternalVideos());
   await boss.work(QUEUES.annotatePhoto, { batchSize: 1, localConcurrency: 2, pollingIntervalSeconds: 3 }, async ([job]) => annotatePhoto(job.data as never));
   await boss.work(QUEUES.annotationSweep, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 30 }, async () => void (await annotationSweep()));

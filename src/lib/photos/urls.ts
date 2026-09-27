@@ -28,9 +28,12 @@ export function largestRendition(r: Renditions | null | undefined): { size: "edi
 /**
  * Where "open the full-size photo" goes. A member gets the picture as it is now, which for an item nobody has edited
  * is its own file; anybody else gets the same picture at the same size, as a copy with none of the file's metadata
- * that the album makes for them (see `lib/images/clean-copy`). Nothing until the item has been processed.
+ * that the album makes for them (see `lib/images/visitor-copy`). Nothing until the item has been processed.
+ *
+ * `view=share` is on the address so it is answered as anybody's would be even for a member previewing a share page,
+ * whose cookie would otherwise fetch the file as uploaded from the very link visitors are given.
  */
 export function fullSizeUrl(photo: { id: string; imageVersion: number; edits: unknown; renditions: unknown }, member: boolean): string | null {
   if (member) return photoUrl(photo, photo.edits ? "edited" : "original");
-  return photo.renditions ? photoUrl(photo, "edited") : null;
+  return photo.renditions ? `${photoUrl(photo, "edited")}&view=share` : null;
 }

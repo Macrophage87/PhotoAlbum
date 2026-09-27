@@ -7,8 +7,7 @@ import { resolveFilenameTakenAt } from "@/lib/images/filename-date";
 import { timezoneForCoords } from "@/lib/geo/tz";
 import { sha256File } from "@/lib/media/hash";
 import { heicSource, heicToJpegBuffer, isHeic } from "@/lib/images/heic";
-import { makeRenditions, type Renditions } from "@/lib/images/renditions";
-import { forgetCleanCopies } from "@/lib/images/clean-copy";
+import { makeRenditions } from "@/lib/images/renditions";
 import { applyPhotoInstant } from "@/lib/photos/apply-date";
 import { readGPano } from "@/lib/images/panorama-read";
 import { editsOf } from "@/lib/images/edits";
@@ -89,7 +88,6 @@ export async function processPhoto(job: ProcessPhotoJob, signal?: AbortSignal): 
       const { width, height, renditions, panorama } = await makeRenditions(from, photo.storageKey, (key, buf) => store.putBuffer(key, buf), editsOf(photo.edits), gpano);
       signal?.throwIfAborted();
       await db.photo.update({ where: { id: photo.id }, data: { status: "READY", width, height, renditions, panorama, panoProjection: gpano?.projection ?? null, imageVersion: { increment: 1 } } });
-      await forgetCleanCopies(photo.storageKey, (photo.renditions as Renditions | null)?.full).catch(() => undefined);
       await enqueueEmbedding(photo.id);
       await enqueueFaceDetection(photo.id);
       await enqueueAnimalDetection(photo.id);
@@ -267,8 +265,6 @@ export async function processPhoto(job: ProcessPhotoJob, signal?: AbortSignal): 
     });
     // Deleted for good while it was being rendered: what was just written has nothing to belong to.
     if (!settled) return void (await forgetFilesIfGone(photo.id));
-    // A visitor's full-size copy was of the picture as it was; the next visitor to ask is given one of it as it is.
-    await forgetCleanCopies(photo.storageKey, (photo.renditions as Renditions | null)?.full).catch(() => undefined);
 
     await enqueueEmbedding(photo.id);
     await enqueueFaceDetection(photo.id);

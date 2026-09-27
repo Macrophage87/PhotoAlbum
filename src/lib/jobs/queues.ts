@@ -31,6 +31,7 @@ export const QUEUES = {
   sweepOrphanFiles: "sweep-orphan-files",
   revokeGoogle: "revoke-google",
   finishRemovals: "finish-removals",
+  visitorCopy: "visitor-copy",
 } as const;
 
 export type QueueName = (typeof QUEUES)[keyof typeof QUEUES];
@@ -38,6 +39,8 @@ export type QueueName = (typeof QUEUES)[keyof typeof QUEUES];
 /** `renditions` only makes thumbnails (posters of external videos); `full` also reads EXIF, resolves dates and assigns a trip. */
 export type ProcessPhotoJob = { photoId: string; tripId?: string | null; mode?: "full" | "renditions" };
 export type TranscodeVideoJob = { photoId: string; tripId?: string | null };
+/** The picture as it was at `imageVersion`: a job for an older one finds nothing to do. */
+export type VisitorCopyJob = { photoId: string; imageVersion: number };
 export type CheckExternalVideosJob = Record<string, never>;
 export type ImportTrackJob = {
   importKey: string;
