@@ -98,7 +98,7 @@ describe("re-processing keeps what a member chose", () => {
     expect(p.takenAt?.toISOString()).toBe("2026-01-01T07:30:00.000Z");
   });
 
-  it("keeps a hand-set date with no offset as set on a photograph, and gives a scan's its trip's offset (#144)", async () => {
+  it("keeps a hand-set date with no offset, and records its trip's offset for it, on a photograph and a scan (#144, #146)", async () => {
     const trip = await db.trip.create({ data: { slug: "la", title: "LA", timezone: "America/Los_Angeles", startDate: new Date("2025-12-29"), endDate: new Date("2026-01-02"), createdById: userId } });
     // 11:30 PM on New Year's Eve in Los Angeles, set by hand with no offset of its own.
     const nye = new Date("2026-01-01T07:30:00Z");
@@ -106,8 +106,8 @@ describe("re-processing keeps what a member chose", () => {
     const scan = await stage("scan.glb", { kind: "SCAN", tripId: trip.id, takenAt: nye, takenAtSource: "MANUAL", tzOffsetMin: null, dateSetById: userId }, "original.glb");
     await processPhoto({ photoId: photo, tripId: trip.id });
     await processPhoto({ photoId: scan, tripId: trip.id });
-    // A photograph's hand-set date is not written at all, so it keeps no offset and is read on its trip's clock.
-    expect(await db.photo.findUniqueOrThrow({ where: { id: photo } })).toMatchObject({ status: "READY", takenAt: nye, takenAtSource: "MANUAL", tzOffsetMin: null, tripId: trip.id });
+    // The date stays as the member set it; the offset it was read on (its trip's clock) is recorded with it.
+    expect(await db.photo.findUniqueOrThrow({ where: { id: photo } })).toMatchObject({ status: "READY", takenAt: nye, takenAtSource: "MANUAL", tzOffsetMin: -480, tripId: trip.id });
     // A scan's is written again, on its trip's clock rather than as UTC.
     expect(await db.photo.findUniqueOrThrow({ where: { id: scan } })).toMatchObject({ status: "READY", takenAt: nye, takenAtSource: "MANUAL", tzOffsetMin: -480, tripId: trip.id });
   });
