@@ -347,11 +347,10 @@ export function Uploader({ tripId, activityId, collectionId, scope, onDone, maxC
         </ul>
       )}
 
+      {/* What to do next. How many went up is the line at the top: a second count here, of something slightly
+          different, read as a contradiction whenever any had failed. */}
       {allSettled && (
         <div className="flex items-center gap-3 text-sm">
-          <span className="text-muted">
-            {doneIds.length} of {items.length} uploaded.
-          </span>
           {doneIds.length > 0 && (
             // A long batch is a long address: past what the status check asks about in one go, send them to the
             // review page as a whole, where everything not yet reviewed — these included — is waiting.

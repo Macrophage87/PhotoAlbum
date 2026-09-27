@@ -98,7 +98,7 @@ test("uploading a photo processes it and assigns it to the trip by date", async 
   await page.goto("/upload");
   await chooseFile(page, "photo-with-gps.jpg");
   await expect(page.locator("img[src*='/api/photos/']")).toBeVisible({ timeout: 30_000 });
-  await expect(page.getByText("1 of 1 uploaded.")).toBeVisible();
+  await expect(page.getByTestId("upload-progress")).toHaveText("All 1 uploaded.");
   await page.goto("/trips/acadia/photos");
   await expect(page.getByRole("heading", { name: /1 photo/ })).toBeVisible();
   const row = await withDb((c) => c.query('SELECT id, status, "takenAtSource", lat FROM "Photo" LIMIT 1'));
@@ -394,7 +394,7 @@ test("a trip can say who was on it, and stops collecting everybody else's photog
   const theirs = await outside.newPage();
   await theirs.goto("/upload");
   await chooseFile(theirs, "photo-with-gps.jpg");
-  await expect(theirs.getByText("1 of 1 uploaded.")).toBeVisible({ timeout: 30_000 });
+  await expect(theirs.getByTestId("upload-progress")).toHaveText("All 1 uploaded.", { timeout: 30_000 });
   const swept = await withDb((c) => c.query(`SELECT p.id, t.slug FROM "Photo" p LEFT JOIN "Trip" t ON t.id = p."tripId" JOIN "User" u ON u.id = p."uploaderId" WHERE u.email = $1 ORDER BY p."createdAt" DESC LIMIT 1`, [other]));
   expect(swept.rows[0].slug).toBe("acadia");
   await withDb((c) => c.query(`UPDATE "Photo" SET "trashedAt" = now() WHERE id = $1`, [swept.rows[0].id]));
@@ -411,7 +411,7 @@ test("a trip can say who was on it, and stops collecting everybody else's photog
   // The same photograph, uploaded again by the same outsider, is no longer swept onto the trip.
   await theirs.goto("/upload");
   await chooseFile(theirs, "photo-with-gps.jpg");
-  await expect(theirs.getByText("1 of 1 uploaded.")).toBeVisible({ timeout: 30_000 });
+  await expect(theirs.getByTestId("upload-progress")).toHaveText("All 1 uploaded.", { timeout: 30_000 });
   await expect
     .poll(async () => (await withDb((c) => c.query(`SELECT p.status, p."tripId" FROM "Photo" p JOIN "User" u ON u.id = p."uploaderId" WHERE u.email = $1 AND p."trashedAt" IS NULL ORDER BY p."createdAt" DESC LIMIT 1`, [other]))).rows[0], { timeout: 30_000 })
     .toMatchObject({ status: "READY", tripId: null });
@@ -419,7 +419,7 @@ test("a trip can say who was on it, and stops collecting everybody else's photog
   // And the admin's own photographs still land on it, because they are named.
   await page.goto("/upload");
   await chooseFile(page, "photo-with-gps.jpg");
-  await expect(page.getByText("1 of 1 uploaded.")).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("upload-progress")).toHaveText("All 1 uploaded.", { timeout: 30_000 });
   const minePicked = await withDb((c) => c.query(`SELECT p.id FROM "Photo" p JOIN "User" u ON u.id = p."uploaderId" WHERE u.email = $1 ORDER BY p."createdAt" DESC LIMIT 1`, [ADMIN]));
   await expect
     .poll(async () => (await withDb((c) => c.query(`SELECT t.slug FROM "Photo" p LEFT JOIN "Trip" t ON t.id = p."tripId" WHERE p.id = $1`, [minePicked.rows[0].id]))).rows[0].slug, { timeout: 30_000 })
@@ -523,7 +523,7 @@ test("a collection gathers photos from two trips and can be shared by link", asy
   await page.goto("/upload?trip=yosemite");
   await chooseFile(page, "photo-no-gps.jpg");
   await expect(page.locator("img[src*='/api/photos/']")).toBeVisible({ timeout: 30_000 });
-  await expect(page.getByText("1 of 1 uploaded.")).toBeVisible();
+  await expect(page.getByTestId("upload-progress")).toHaveText("All 1 uploaded.");
 
   await page.goto("/collections/new");
   await page.getByLabel("Title").fill("Best of 2025");
@@ -1268,7 +1268,7 @@ test("the uploader crops and color-corrects a photo, and the original stays unto
   await signIn(context, ADMIN);
   await page.goto("/upload");
   await chooseFile(page, "photo-with-gps.jpg");
-  await expect(page.getByText("1 of 1 uploaded.")).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("upload-progress")).toHaveText("All 1 uploaded.", { timeout: 30_000 });
   const row = await withDb((c) => c.query(`SELECT id, renditions FROM "Photo" WHERE "originalName" = 'photo-with-gps.jpg' ORDER BY "createdAt" DESC LIMIT 1`));
   const id = row.rows[0].id as string;
   const before = row.rows[0].renditions as { medium: { w: number; h: number } };
@@ -1542,7 +1542,7 @@ test("a family member moves an item to the trash with a reason, and an admin res
   // Two items on a public trip: one to trash, one to prove the rest of the album is untouched.
   await memberPage.goto("/upload");
   await chooseFile(memberPage, "photo-no-gps.jpg");
-  await expect(memberPage.getByText("1 of 1 uploaded.")).toBeVisible({ timeout: 30_000 });
+  await expect(memberPage.getByTestId("upload-progress")).toHaveText("All 1 uploaded.", { timeout: 30_000 });
   const fresh = await withDb((c) => c.query(`SELECT id FROM "Photo" WHERE "originalName" = 'photo-no-gps.jpg' ORDER BY "createdAt" DESC LIMIT 1`));
   const victim = fresh.rows[0].id as string;
   await withDb((c) => c.query(`UPDATE "Photo" SET caption = 'trashcandidate lobster', "searchVector" = to_tsvector('english', 'trashcandidate lobster'), "searchVectorMembers" = to_tsvector('english', 'trashcandidate lobster') WHERE id = $1`, [victim]));
@@ -1841,7 +1841,7 @@ test("a member edits their own photos and reads everyone else's, and a trip is a
   // One of the member's own, uploaded here so the test does not depend on what earlier tests left behind.
   await memberPage.goto("/upload");
   await chooseFile(memberPage, "photo-no-gps.jpg");
-  await expect(memberPage.getByText("1 of 1 uploaded.")).toBeVisible({ timeout: 30_000 });
+  await expect(memberPage.getByTestId("upload-progress")).toHaveText("All 1 uploaded.", { timeout: 30_000 });
   const mine = await withDb((c) => c.query(`SELECT p.id FROM "Photo" p JOIN "User" u ON u.id = p."uploaderId" WHERE u.email = $1 AND p.kind = 'PHOTO' AND p."trashedAt" IS NULL ORDER BY p."createdAt" DESC LIMIT 1`, [memberEmail]));
   const theirs = await withDb((c) => c.query(`SELECT p.id FROM "Photo" p JOIN "User" u ON u.id = p."uploaderId" WHERE u.email = $1 AND p.kind = 'PHOTO' AND p."trashedAt" IS NULL ORDER BY p."createdAt" LIMIT 1`, [ADMIN]));
 
@@ -1889,7 +1889,7 @@ test("a member's review queue is their own uploads, and somebody else's batch is
     await withDb((c) => c.query(`UPDATE "Photo" SET "reviewedAt" = NULL WHERE id = $1`, [adminPhoto]));
     await memberPage.goto("/upload");
     await chooseFile(memberPage, "photo-no-gps.jpg");
-    await expect(memberPage.getByText("1 of 1 uploaded.")).toBeVisible({ timeout: 30_000 });
+    await expect(memberPage.getByTestId("upload-progress")).toHaveText("All 1 uploaded.", { timeout: 30_000 });
     mine = (await withDb((c) => c.query(`SELECT p.id FROM "Photo" p JOIN "User" u ON u.id = p."uploaderId" WHERE u.email = $1 ORDER BY p."createdAt" DESC LIMIT 1`, [reviewer]))).rows[0].id as string;
 
     await memberPage.goto("/review");
@@ -2031,7 +2031,7 @@ test("a 3D scan is uploaded, kept whole, and shown in a viewer that can be turne
   await signIn(context, ADMIN);
   await page.goto("/upload");
   await chooseFile(page, "scan.glb");
-  await expect(page.getByText("1 of 1 uploaded.")).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("upload-progress")).toHaveText("All 1 uploaded.", { timeout: 30_000 });
 
   const scan = async () => (await withDb((c) => c.query('SELECT id, kind, "scanFormat", status, renditions, "sizeBytes" FROM "Photo" WHERE "originalName" = $1 ORDER BY "createdAt" DESC LIMIT 1', ["scan.glb"]))).rows[0];
   await expect.poll(async () => (await scan())?.status, { timeout: 30_000, intervals: [1000] }).toBe("READY");
