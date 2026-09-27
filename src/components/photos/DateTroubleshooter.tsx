@@ -6,15 +6,16 @@ import { Button } from "@/components/ui";
 import { loadDateReport, applyReportedDate } from "@/app/photos/[id]/actions";
 import type { DateReport } from "@/lib/photos/date-report";
 
-const when = (iso: string | null, tzOffsetMin: number | null) => {
+/** A reading on the offset the report says to show it on (`shownOffsetMin`, worked out on the server). */
+export function readingTime(iso: string | null, shownOffsetMin: number | null): string | null {
   if (!iso) return null;
   const at = new Date(iso);
   if (Number.isNaN(at.getTime())) return null;
-  return new Intl.DateTimeFormat("en-US", { month: "long", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit", timeZone: "UTC" }).format(new Date(at.getTime() + (tzOffsetMin ?? 0) * 60_000));
-};
+  return new Intl.DateTimeFormat("en-US", { month: "long", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit", timeZone: "UTC" }).format(new Date(at.getTime() + (shownOffsetMin ?? 0) * 60_000));
+}
 
 type Wire = Omit<DateReport, "current" | "witnesses"> & {
-  current: { at: string | null; source: string | null; tzOffsetMin: number | null; setBy: string | null };
+  current: Omit<DateReport["current"], "at"> & { at: string | null };
   witnesses: (Omit<DateReport["witnesses"][number], "at"> & { at: string | null })[];
 };
 
@@ -65,7 +66,7 @@ export function DateTroubleshooter({ photoId, dark = false, readOnly = false, on
     <div className={`rounded-theme border p-3 space-y-3 text-sm ${dark ? "border-white/20 bg-black/40 text-white/90" : "border-border bg-surface-alt"}`} data-testid="date-report">
       <div className="flex items-start justify-between gap-2">
         <p>
-          This item is dated <b>{when(report.current.at, report.current.tzOffsetMin) ?? "not at all"}</b>
+          This item is dated <b>{readingTime(report.current.at, report.current.shownOffsetMin) ?? "not at all"}</b>
           {report.current.source ? <>, from {report.current.source}</> : null}
           {report.current.setBy ? ` (${report.current.setBy})` : ""}.
         </p>
@@ -86,7 +87,7 @@ export function DateTroubleshooter({ photoId, dark = false, readOnly = false, on
             <span className="font-medium">{w.label}</span>
             {w.current && <span className={`text-xs rounded-full px-2 py-0.5 ${dark ? "bg-white/15" : "bg-surface-alt"}`}>this is the one in use</span>}
             <span className={`w-full text-xs ${dark ? "text-white/60" : "text-muted"}`}>{w.note}</span>
-            <span className="flex-1">{when(w.at, w.tzOffsetMin ?? report.current.tzOffsetMin) ?? <span className={dark ? "text-white/60" : "text-muted"}>nothing</span>}</span>
+            <span className="flex-1">{readingTime(w.at, w.shownOffsetMin) ?? <span className={dark ? "text-white/60" : "text-muted"}>nothing</span>}</span>
             {!readOnly && w.usable && w.at && !w.current && (
               dark ? (
                 <button type="button" disabled={pending} onClick={() => use(w.key)} className="px-2 py-1 rounded bg-white text-black text-xs font-medium disabled:opacity-60">Use this</button>

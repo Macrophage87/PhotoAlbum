@@ -2,7 +2,7 @@ import Link from "next/link";
 import { loadViewableCollection } from "@/lib/collections/access";
 import { defaultCollectionOrder, listCollectionItems } from "@/lib/collections/queries";
 import { PhotoGrid } from "@/components/photos/PhotoGrid";
-import { toGridPhoto } from "@/components/photos/toGrid";
+import { takenYearSpan, toGridPhoto } from "@/components/photos/toGrid";
 import { ButtonLink, Card } from "@/components/ui";
 import { CollectionUploader } from "@/components/collections/CollectionUploader";
 import { env } from "@/lib/env";
@@ -15,11 +15,10 @@ export default async function CollectionOverviewPage({ params }: PageProps<"/col
   const [items, gates] = await Promise.all([listCollectionItems(collection.id, { viewerId: viewer.kind === "user" ? viewer.user.id : null, order: defaultCollectionOrder(collection, editable) }), editable ? annotationGates() : Promise.resolve(null)]);
   const upload = editable ? <CollectionUploader collectionId={collection.id} slug={slug} maxClipSeconds={env().MAX_CLIP_SECONDS} maxBytes={uploadByteLimits()} annotationActive={Boolean(gates?.active)} /> : null;
   const ready = items.filter((i) => i.status === "READY");
-  const dated = ready.filter((i) => i.takenAt).map((i) => i.takenAt!.getTime());
-  const span = dated.length ? `${new Date(Math.min(...dated)).getFullYear()}–${new Date(Math.max(...dated)).getFullYear()}` : null;
+  const span = takenYearSpan(ready);
   const stats: [string, string][] = [
     ["Photos", String(ready.length)],
-    ...(span ? ([["Years", span.split("–")[0] === span.split("–")[1] ? span.split("–")[0] : span]] as [string, string][]) : []),
+    ...(span ? ([["Years", span]] as [string, string][]) : []),
   ];
   return (
     <div className="space-y-8">

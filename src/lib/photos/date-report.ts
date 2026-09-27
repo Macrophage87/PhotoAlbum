@@ -4,6 +4,7 @@ import { resolveFilenameTakenAt } from "@/lib/images/filename-date";
 import { storage } from "@/lib/storage";
 import { isWeakDate } from "./date-from-neighbours";
 import { guessDateFromTrip } from "./date-guess-query";
+import { photoOffsetMin } from "@/lib/time/local-day";
 
 /**
  * Where a photo's date came from, and what else the album knows that disagrees.
@@ -22,6 +23,11 @@ export type DateWitness = {
    * as processing reads it). Null for an instant that says no zone of its own, which is shown on the item's clock.
    */
   tzOffsetMin: number | null;
+  /**
+   * The offset the reading is shown on: its own when it has one, else the item's clock (its offset, else the trip's
+   * zone at that instant, else UTC), which is also the one it would be recorded with if taken.
+   */
+  shownOffsetMin: number | null;
   /** Why it is worth what it is worth. */
   note: string;
   /** Whether this is where the item's current date came from. */
@@ -32,7 +38,7 @@ export type DateWitness = {
 
 export type DateReport = {
   photoId: string;
-  current: { at: Date | null; source: string | null; tzOffsetMin: number | null; setBy: string | null };
+  current: { at: Date | null; source: string | null; tzOffsetMin: number | null; /** See DateWitness. */ shownOffsetMin: number | null; setBy: string | null };
   weak: boolean;
   witnesses: DateWitness[];
   /** Said plainly when the evidence points at a scan rather than a photograph taken that day. */
@@ -80,7 +86,7 @@ export async function dateReport(photoId: string): Promise<DateReport | null> {
   const guess = await guessDateFromTrip(photoId);
   const source = photo.takenAtSource;
 
-  const witnesses: DateWitness[] = [
+  const witnesses: Omit<DateWitness, "shownOffsetMin">[] = [
     {
       key: "exif",
       label: "The camera (EXIF DateTimeOriginal)",
@@ -146,16 +152,20 @@ export async function dateReport(photoId: string): Promise<DateReport | null> {
     },
   ];
 
+  // Shown on the one rule for a photograph's clock, so an item with no offset of its own on a trip reads in the
+  // trip's zone here as it does everywhere else, rather than in UTC.
+  const shown = (at: Date | null, own: number | null) => (at ? own ?? photoOffsetMin(at, photo.tzOffsetMin, zone) : null);
   return {
     photoId: photo.id,
     current: {
       at: photo.takenAt,
       source: source ? LABEL[source] ?? source : null,
       tzOffsetMin: photo.tzOffsetMin,
+      shownOffsetMin: shown(photo.takenAt, null),
       setBy: photo.dateSetBy ? photo.dateSetBy.name ?? photo.dateSetBy.email.split("@")[0] : null,
     },
     weak: isWeakDate(source, photo.takenAt),
-    witnesses,
+    witnesses: witnesses.map((w) => ({ ...w, shownOffsetMin: shown(w.at, w.tzOffsetMin) })),
     looksScanned: scanShaped(exif?.dateTimeOriginal ?? null, fromName, source),
   };
 }

@@ -36,7 +36,7 @@ export async function guessDateFromTrip(photoId: string): Promise<DateGuess | nu
   const midpoint = new Date((photo.trip.startDate.getTime() + photo.trip.endDate.getTime()) / 2);
   return guessDate({ id: photo.id, originalName: photo.originalName }, neighbours, {
     similarIds,
-    trip: { startDate: photo.trip.startDate, endDate: photo.trip.endDate, tzOffsetMin: offsetMinutesInZone(midpoint, photo.trip.timezone) },
+    trip: { startDate: photo.trip.startDate, endDate: photo.trip.endDate, tzOffsetMin: offsetMinutesInZone(midpoint, photo.trip.timezone), timezone: photo.trip.timezone },
   });
 }
 

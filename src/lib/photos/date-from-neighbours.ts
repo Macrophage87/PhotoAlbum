@@ -1,4 +1,5 @@
 import type { TakenAtSource } from "@/generated/prisma/enums";
+import { photoOffsetMin } from "@/lib/time/local-day";
 
 /**
  * Working out when an undated photo was taken from the photos around it on the same trip.
@@ -50,8 +51,8 @@ const ONE_SIDED_FRAMES = 8;
 const SHORT = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: "UTC" });
 
 /** The neighbour's own wall-clock reading, so the evidence line says the time the family would recognise. */
-function wallLabel(at: Date, tzOffsetMin: number | null): string {
-  return SHORT.format(new Date(at.getTime() + (tzOffsetMin ?? 0) * 60_000));
+function wallLabel(at: Date, tzOffsetMin: number): string {
+  return SHORT.format(new Date(at.getTime() + tzOffsetMin * 60_000));
 }
 
 /**
@@ -62,8 +63,11 @@ function wallLabel(at: Date, tzOffsetMin: number | null): string {
 export function guessDate(
   target: Target,
   dated: Neighbour[],
-  opts: { similarIds?: string[]; trip?: { startDate: Date; endDate: Date; tzOffsetMin: number } } = {},
+  opts: { similarIds?: string[]; trip?: { startDate: Date; endDate: Date; tzOffsetMin: number; /** Its zone, for a neighbour with no offset of its own. */ timezone?: string } } = {},
 ): DateGuess | null {
+  // A neighbour's clock is read by the one rule (see `photoOffsetMin`): its own offset, else the trip's zone at that
+  // moment, else UTC. The guess keeps that offset, so a photo dated from it lands on the day its neighbours are on.
+  const clock = (at: Date, tzOffsetMin: number | null) => photoOffsetMin(at, tzOffsetMin, opts.trip?.timezone);
   const frame = frameNumber(target.originalName);
   if (frame) {
     const sameRoll = dated
@@ -79,10 +83,10 @@ export function guessDate(
       const gapMinutes = (after.n.takenAt.getTime() - before.n.takenAt.getTime()) / 60_000;
       return {
         takenAt: at,
-        tzOffsetMin: before.n.tzOffsetMin ?? after.n.tzOffsetMin ?? 0,
+        tzOffsetMin: before.n.tzOffsetMin ?? after.n.tzOffsetMin ?? clock(at, null),
         // Frames minutes apart pin it down; frames hours apart only say which part of the day.
         confidence: gapMinutes <= 60 ? 0.85 : gapMinutes <= 12 * 60 ? 0.6 : 0.45,
-        evidence: `between ${before.n.originalName} (${wallLabel(before.n.takenAt, before.n.tzOffsetMin)}) and ${after.n.originalName} (${wallLabel(after.n.takenAt, after.n.tzOffsetMin)})`,
+        evidence: `between ${before.n.originalName} (${wallLabel(before.n.takenAt, clock(before.n.takenAt, before.n.tzOffsetMin))}) and ${after.n.originalName} (${wallLabel(after.n.takenAt, clock(after.n.takenAt, after.n.tzOffsetMin))})`,
         basis: "sequence",
       };
     }
@@ -91,9 +95,9 @@ export function guessDate(
       const isBefore = one === before;
       return {
         takenAt: one.n.takenAt,
-        tzOffsetMin: one.n.tzOffsetMin ?? 0,
+        tzOffsetMin: clock(one.n.takenAt, one.n.tzOffsetMin),
         confidence: 0.55,
-        evidence: `${isBefore ? "just after" : "just before"} ${one.n.originalName} (${wallLabel(one.n.takenAt, one.n.tzOffsetMin)})`,
+        evidence: `${isBefore ? "just after" : "just before"} ${one.n.originalName} (${wallLabel(one.n.takenAt, clock(one.n.takenAt, one.n.tzOffsetMin))})`,
         basis: "sequence",
       };
     }
@@ -107,9 +111,9 @@ export function guessDate(
     const spreadHours = (times[times.length - 1] - times[0]) / 3_600_000;
     return {
       takenAt: new Date(middle),
-      tzOffsetMin: similar[0].tzOffsetMin ?? 0,
+      tzOffsetMin: clock(new Date(middle), similar[0].tzOffsetMin),
       confidence: spreadHours <= 2 ? 0.5 : 0.35,
-      evidence: `about when ${similar.length === 1 ? "the photo it looks most like was taken" : `the ${similar.length} photos it looks most like were taken`} (${wallLabel(new Date(middle), similar[0].tzOffsetMin)})`,
+      evidence: `about when ${similar.length === 1 ? "the photo it looks most like was taken" : `the ${similar.length} photos it looks most like were taken`} (${wallLabel(new Date(middle), clock(new Date(middle), similar[0].tzOffsetMin))})`,
       basis: "similar",
     };
   }

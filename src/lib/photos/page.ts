@@ -8,6 +8,7 @@ import { boundingBox, MILE_IN_METRES, NO_PICKER_FILTER, type PickerFilter } from
 import { idsWithPerson } from "@/lib/people/in-photos";
 import { publicMediaSql } from "@/lib/search/query";
 import { cursorWhere, encodeCursor, type KeyColumn } from "./keyset";
+import { inLocalYearSql } from "@/lib/time/local-day-sql";
 
 /** Gallery pages load this many items at a time; the client asks for the next page by cursor. */
 export const GALLERY_PAGE = 240;
@@ -64,16 +65,16 @@ export async function idsMatching(q: string, opts: { member: boolean; scope?: Ma
 
 /**
  * Which items fall in a given year *where they were taken*. A photograph taken on New Year's Eve in Maine is a
- * photograph from that year, not from the next one because UTC had already turned over — so the offset recorded
- * with it is added before the year is read off. Answered as ids so that both ways of ordering a gallery, and the
- * count beside it, agree exactly on what is in it.
+ * photograph from that year, not from the next one because UTC had already turned over — so it is read on its own
+ * offset, else in its trip's zone (see `inLocalYearSql`). Answered as ids so that both ways of ordering a gallery,
+ * and the count beside it, agree exactly on what is in it.
  */
 export async function idsInLocalYear(tripId: string | null, year: number): Promise<string[]> {
   const rows = await db.$queryRaw<{ id: string }[]>`
-    SELECT p.id FROM "Photo" p
+    SELECT p.id FROM "Photo" p LEFT JOIN "Trip" t ON t.id = p."tripId"
     WHERE p."trashedAt" IS NULL
       AND ${tripId ? Prisma.sql`p."tripId" = ${tripId}` : Prisma.sql`TRUE`}
-      AND EXTRACT(YEAR FROM (p."takenAt" + make_interval(mins => COALESCE(p."tzOffsetMin", 0)))) = ${year}`;
+      AND ${inLocalYearSql(year)}`;
   return rows.map((r) => r.id);
 }
 

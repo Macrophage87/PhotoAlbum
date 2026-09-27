@@ -8,6 +8,7 @@ import { fullSizeUrl, photoUrl } from "@/lib/photos/urls";
 import { uploaderLabel } from "@/components/photos/toGrid";
 import type { PlaceEstimate } from "@/components/photos/PlaceEditor";
 import { favouritesFor, type FavouriteState } from "@/lib/favourites/queries";
+import { photoOffsetMin } from "@/lib/time/local-day";
 
 export const dynamic = "force-dynamic";
 
@@ -74,7 +75,10 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     caption: photo.caption,
     description: readableDescription(photo, member),
     takenAt: photo.takenAt?.toISOString() ?? null,
-    tzOffsetMin: photo.tzOffsetMin,
+    // Where the trip's zone is not this viewer's to know, the offset it gives that moment stands in for it (what the
+    // camera would have written), so the panel reads the day it was taken rather than UTC's. Nobody who is sent the
+    // offset this way may change the date.
+    tzOffsetMin: photo.trip && !tripOpen && photo.takenAt ? photoOffsetMin(photo.takenAt, photo.tzOffsetMin, photo.trip.timezone) : photo.tzOffsetMin,
     takenAtSource: photo.takenAtSource,
     // The trip's zone and look are the trip's, like its name.
     timezone: tripOpen ? photo.trip!.timezone : null,

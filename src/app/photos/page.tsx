@@ -10,6 +10,7 @@ import { ButtonLink } from "@/components/ui";
 import { db } from "@/lib/db";
 import { NOT_TRASHED } from "@/lib/photos/trash";
 import { peopleInPhotos } from "@/lib/people/in-photos";
+import { localYearSql } from "@/lib/time/local-day-sql";
 
 export const metadata = { title: "Photos without a trip" };
 
@@ -25,8 +26,8 @@ export default async function UnassignedPhotosPage({ searchParams }: PageProps<"
     peopleInPhotos(),
     // The years these actually cover, so the list offers nothing that would come back empty.
     db.$queryRaw<{ year: number }[]>`
-      SELECT DISTINCT EXTRACT(YEAR FROM (p."takenAt" + make_interval(mins => COALESCE(p."tzOffsetMin", 0))))::int AS year
-      FROM "Photo" p WHERE p."tripId" IS NULL AND p."trashedAt" IS NULL AND p."takenAt" IS NOT NULL ORDER BY year DESC`,
+      SELECT DISTINCT ${localYearSql()} AS year
+      FROM "Photo" p LEFT JOIN "Trip" t ON t.id = p."tripId" WHERE p."tripId" IS NULL AND p."trashedAt" IS NULL AND p."takenAt" IS NOT NULL ORDER BY year DESC`,
   ]);
   const active = filterIsActive(filter);
   // Further pages keep the narrowing, so the next page of a search is the next page of that same search.

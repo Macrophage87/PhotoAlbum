@@ -16,7 +16,7 @@ import { pickTripByDay, whoWasThere } from "@/lib/photos/assign";
 import { pickTripByCoverage } from "@/lib/photos/trip-by-coverage";
 import { activityFor } from "@/lib/activities/reassign";
 import { dateByHand, dateMovedSince, lockedPhoto, placeByHand } from "@/lib/photos/member-owned";
-import { localDayFromOffset, offsetMinutesInZone } from "@/lib/time/local-day";
+import { localDayFromOffset, offsetMinutesInZone, photoOffsetMin } from "@/lib/time/local-day";
 import { enqueue } from "../boss";
 import { QUEUES, type ProcessPhotoJob } from "../queues";
 import { enqueueEmbedding } from "./embed-photo";
@@ -66,18 +66,22 @@ export async function processPhoto(job: ProcessPhotoJob, signal?: AbortSignal): 
     if (photo.kind === "SCAN") {
       // The copy visitors are given, without what the app wrote into the file; made again on first request if this fails.
       await publicScanCopy(photo).catch(() => null);
+      // With no offset of its own, an instant is read on its trip's clock (see `photoOffsetMin`), never as UTC.
+      const scanTripId = job.tripId ?? photo.tripId;
+      const zone = scanTripId ? (await db.trip.findUnique({ where: { id: scanTripId }, select: { timezone: true } }))?.timezone : null;
       // A date somebody gave it (by hand, or Google's own record) is kept: the file's modified time is only a guess.
       if (vouchedDate(photo)) {
         await db.photo.update({ where: { id: photo.id }, data: { status: "READY" } });
-        await applyPhotoInstant(photo, photo.takenAt!, photo.tzOffsetMin ?? 0, photo.takenAtSource!, photo.dateSetById, { geotag: false });
+        await applyPhotoInstant(photo, photo.takenAt!, photoOffsetMin(photo.takenAt!, photo.tzOffsetMin, zone), photo.takenAtSource!, photo.dateSetById, { geotag: false });
         return;
       }
       const mtimeHeader = (photo.exif as { fileLastModified?: number } | null)?.fileLastModified;
       const s = mtimeHeader && Number.isFinite(mtimeHeader) ? null : await stat(localPath).catch(() => null);
       const takenAt = mtimeHeader && Number.isFinite(mtimeHeader) ? new Date(mtimeHeader) : s ? s.mtime : photo.createdAt;
       const takenAtSource = mtimeHeader && Number.isFinite(mtimeHeader) ? "FILE_MTIME" : s ? "FILE_MTIME" : "UPLOAD_TIME";
-      await db.photo.update({ where: { id: photo.id }, data: { status: "READY", takenAt, takenAtSource, tzOffsetMin: photo.tzOffsetMin ?? 0 } });
-      await applyPhotoInstant(photo, takenAt, photo.tzOffsetMin ?? 0, takenAtSource, null, { geotag: false });
+      const tzOffsetMin = photoOffsetMin(takenAt, photo.tzOffsetMin, zone);
+      await db.photo.update({ where: { id: photo.id }, data: { status: "READY", takenAt, takenAtSource, tzOffsetMin } });
+      await applyPhotoInstant(photo, takenAt, tzOffsetMin, takenAtSource, null, { geotag: false });
       return;
     }
 
@@ -123,7 +127,10 @@ export async function processPhoto(job: ProcessPhotoJob, signal?: AbortSignal): 
       // A Takeout sidecar's date is authoritative (Google's own record of the capture time); EXIF supplies the zone.
       if (photo.takenAtSource === "SIDECAR" && photo.takenAt) r = sidecarResolution(photo.takenAt, r, exif, timezone, photo.gpsSource === "SIDECAR" ? { lat: photo.lat, lng: photo.lng } : null);
       // A date a member set by hand is their answer to "the camera was wrong": re-reading the camera does not undo it.
-      if (photo.takenAtSource === "MANUAL" && photo.takenAt) r = { takenAt: photo.takenAt, tzOffsetMin: photo.tzOffsetMin ?? 0, source: "MANUAL", wallDay: localDayFromOffset(photo.takenAt, photo.tzOffsetMin ?? 0) };
+      if (photo.takenAtSource === "MANUAL" && photo.takenAt) {
+        const tzOffsetMin = photoOffsetMin(photo.takenAt, photo.tzOffsetMin, timezone);
+        r = { takenAt: photo.takenAt, tzOffsetMin, source: "MANUAL", wallDay: localDayFromOffset(photo.takenAt, tzOffsetMin) };
+      }
       return r;
     };
     let resolved = resolveIn(trip?.timezone ?? null);

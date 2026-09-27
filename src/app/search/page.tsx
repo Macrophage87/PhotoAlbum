@@ -2,8 +2,8 @@ import type { MediaKind } from "@/generated/prisma/enums";
 import { getViewer } from "@/lib/auth/viewer";
 import { normalizeQuery, searchFacets, searchMedia } from "@/lib/search/query";
 import { photoUrl } from "@/lib/photos/urls";
-import { formatLocalTime } from "@/lib/time/format";
-import { outsiderAlt, uploaderLabel } from "@/components/photos/toGrid";
+import { formatDay } from "@/lib/time/format";
+import { outsiderAlt, takenDay, uploaderLabel } from "@/components/photos/toGrid";
 import { AppShell, Container } from "@/components/layout/AppShell";
 import { SearchBox } from "@/components/search/SearchBox";
 import { CollectionFacetField, TripFacetField } from "@/components/containers/FacetFields";
@@ -39,25 +39,30 @@ export default async function SearchPage({ searchParams }: PageProps<"/search">)
   // Only the ones the query already names: the boxes search for the rest.
   const currentTrip = facets.trips.find((t) => t.id === params.tripId) ?? null;
   const currentCollection = facets.collections.find((c) => c.id === params.collectionId) ?? null;
-  const results: SearchResult[] = hits.map((h) => ({
-    id: h.id,
-    thumbUrl: photoUrl(h, "thumb"),
-    mediumUrl: photoUrl(h, "medium"),
-    width: h.width,
-    height: h.height,
-    caption: h.caption,
-    title: h.title,
-    // A file's own name is the family's; anybody else hears what the item is and when (see `outsiderAlt`).
-    alt: h.caption ?? h.title ?? (member ? h.originalName : outsiderAlt(h)),
-    snippet: h.snippet,
-    tripSlug: h.tripSlug,
-    tripTitle: h.tripTitle,
-    when: h.takenAt ? formatLocalTime(h.takenAt, { offsetMin: h.tzOffsetMin }, "MMM d, yyyy") : null,
-    uploadedBy: member ? uploaderLabel(h.uploaderName) : null,
-    youtubeId: h.kind === "EXTERNAL_VIDEO" ? h.externalId : null,
-    videoUrl: h.kind === "VIDEO" ? photoUrl(h, "video") : null,
-    durationS: h.durationS,
-  }));
+  const results: SearchResult[] = hits.map((hit) => {
+    // Read on its trip's clock when it has no offset of its own (see `takenDay`).
+    const h = { ...hit, trip: hit.tripTimezone ? { timezone: hit.tripTimezone } : null };
+    const day = takenDay(h);
+    return {
+      id: h.id,
+      thumbUrl: photoUrl(h, "thumb"),
+      mediumUrl: photoUrl(h, "medium"),
+      width: h.width,
+      height: h.height,
+      caption: h.caption,
+      title: h.title,
+      // A file's own name is the family's; anybody else hears what the item is and when (see `outsiderAlt`).
+      alt: h.caption ?? h.title ?? (member ? h.originalName : outsiderAlt(h)),
+      snippet: h.snippet,
+      tripSlug: h.tripSlug,
+      tripTitle: h.tripTitle,
+      when: day ? formatDay(day, "shortYear") : null,
+      uploadedBy: member ? uploaderLabel(h.uploaderName) : null,
+      youtubeId: h.kind === "EXTERNAL_VIDEO" ? h.externalId : null,
+      videoUrl: h.kind === "VIDEO" ? photoUrl(h, "video") : null,
+      durationS: h.durationS,
+    };
+  });
   const select = "h-9 rounded-theme border border-border bg-surface px-2 text-sm";
   const field = "flex flex-col gap-1";
   const fieldLabel = "text-xs text-muted";

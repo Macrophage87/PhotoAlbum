@@ -17,6 +17,8 @@ export const photoCardSelect = {
   panoProjection: true,
   takenAt: true,
   tzOffsetMin: true,
+  /** Only to read the day it was taken on its trip's clock when it has no offset of its own; never rendered. */
+  trip: { select: { timezone: true } },
   lat: true,
   lng: true,
   gpsSource: true,
