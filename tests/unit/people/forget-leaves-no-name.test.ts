@@ -83,10 +83,22 @@ describe("forgetting somebody leaves their name nowhere", () => {
     const elsewhere = (await db.photo.create({ data: { uploaderId: real.admin, originalName: "y.jpg", mimeType: "image/jpeg", storageKey: "k2", originalPath: "k2/o.jpg", sizeBytes: 1, status: "READY", annotation: { title: "", caption: "A pier", description: "", tags: [], searchSummary: "" } } })).id;
     await db.mediaAnnotationRaw.create({ data: { photoId: elsewhere, model: "m", response: { content: [{ type: "text", text: JSON.stringify({ title: "Pier", caption: `${NAME} on the pier`, tags: ["zebulon quince"] }) }] } } });
 
+    // The queue's copies of file names: a Google Photos import still waiting, a track import waiting, and one that
+    // finished (its output repeats the name).
+    const item = { id: "g1", type: "PHOTO", createTime: null, baseUrl: "https://example.test/g1", mimeType: "image/jpeg", filename: "Zebulon Quince 80th.JPG", width: null, height: null };
+    await real.boss.send(QUEUES.googlePickerImport, { userId: real.admin, sessionId: "s", photoIds: ["ph1"], items: { ph1: item } });
+    await real.boss.send(QUEUES.importTrack, { importKey: "k", tripId: "t", userId: real.admin, sourceHint: "auto", originalName: "zebulon_quince_walk.gpx" });
+    const [running] = await real.boss.fetch(QUEUES.importTrack);
+    await real.boss.complete(QUEUES.importTrack, running.id, { message: "Imported zebulon_quince_walk.gpx" });
+    await real.boss.send(QUEUES.importTrack, { importKey: "k2", tripId: "t", userId: real.admin, sourceHint: "auto", originalName: "Zebulon-Quince-ride.FIT" });
+
     await forgetPerson(person.id, { keepName: false, byUserId: real.admin });
     expect(await tablesMentioning("Zebulon")).toEqual([]);
     expect(await tablesMentioning("Quince")).toEqual([]);
     expect(await real.boss.findJobs(QUEUES.rejudgeText)).toEqual([]);
+    // Still queued, and still able to run: nothing they read but the extension was the name.
+    expect((await real.boss.findJobs(QUEUES.googlePickerImport)).map((j) => (j.data as { items: Record<string, { filename: string; baseUrl: string }> }).items.ph1)).toEqual([{ ...item, filename: "ph1.jpg" }]);
+    expect((await real.boss.findJobs(QUEUES.importTrack)).map((j) => [j.state, (j.data as { originalName: string }).originalName])).toEqual([["created", "track.fit"]]);
 
     // An answer that comes back afterwards naming them, about another photograph: stored without the name, the raw
     // answer included, whose title still says what went on the item.

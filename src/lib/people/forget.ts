@@ -3,6 +3,8 @@ import { db } from "@/lib/db";
 import type { StoredAnnotation } from "@/lib/annotation/schema";
 import { helperTitle } from "@/lib/annotation/helper-text";
 import { enqueueEmbedding } from "@/lib/jobs/handlers/embed-photo";
+import { QUEUES } from "@/lib/jobs/queues";
+import { bossJobs } from "@/lib/jobs/schema";
 import { isMinor, knownAdult } from "./consent";
 import { annotationMentions, nameMatcher, scrubAnnotation, type NameMatcher, type Where } from "./scrub";
 
@@ -135,6 +137,53 @@ export async function forgetRawAnswers(m: NameMatcher): Promise<number> {
   const ids = rows.filter((r) => m.mentions(r.text, { tagged: true }) || m.scrubKeywords(r.text, { tagged: true }) !== r.text).map((r) => r.id);
   if (ids.length) await db.mediaAnnotationRaw.deleteMany({ where: { id: { in: ids } } });
   return ids.length;
+}
+
+/** A file name's extension, kept when the rest goes: the track importer tells a file's kind by it. */
+const extensionOf = (name: string) => (name.split(".").length > 1 ? (name.split(".").pop() ?? "").toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 8) : "");
+
+/**
+ * The file names the queue keeps: a Google Photos import job carries each picked item's file name, and a track
+ * import job the uploaded file's, for up to three weeks. Queued ones are rewritten to a name that says nothing (the
+ * Picker job never reads it; the track importer only reads the extension, which stays), and finished ones, whose
+ * output may repeat the name, are deleted. Never fails the forget: an unreadable queue is logged.
+ */
+export async function forgetQueuedFileNames(m: NameMatcher): Promise<number> {
+  const words = probes([...m.albumForms, ...m.tombstoneForms.filter((f) => !f.derived && !f.capitalizedOnly).map((f) => f.form)]);
+  if (!words.length) return 0;
+  const loose = looseMatcher(m);
+  let changed = 0;
+  try {
+    const jobs = await db.$queryRaw<{ id: string; name: string; state: string; data: Record<string, unknown> | null; output: unknown }[]>`
+      SELECT id::text AS id, name, state::text AS state, data, output FROM ${bossJobs()}
+      WHERE name = ANY(${[QUEUES.googlePickerImport, QUEUES.importTrack]}::text[])
+        AND (${likeAny(Prisma.sql`data::text`, words)} OR ${likeAny(Prisma.sql`COALESCE(output::text, '')`, words)})`;
+    for (const j of jobs) {
+      if (!loose(JSON.stringify(j.data)) && !loose(JSON.stringify(j.output ?? null))) continue;
+      if (["completed", "failed", "cancelled"].includes(j.state)) {
+        changed += await db.$executeRaw`DELETE FROM ${bossJobs()} WHERE id = ${j.id}::uuid AND name = ${j.name}`;
+        continue;
+      }
+      const data = { ...(j.data ?? {}) };
+      if (j.name === QUEUES.importTrack && typeof data.originalName === "string" && loose(data.originalName)) {
+        const ext = extensionOf(data.originalName);
+        data.originalName = ext ? `track.${ext}` : "track";
+      }
+      if (j.name === QUEUES.googlePickerImport && data.items && typeof data.items === "object") {
+        data.items = Object.fromEntries(
+          Object.entries(data.items as Record<string, { filename?: unknown }>).map(([key, item]) => {
+            if (!item || typeof item.filename !== "string" || !loose(item.filename)) return [key, item];
+            const ext = extensionOf(item.filename);
+            return [key, { ...item, filename: ext ? `${key}.${ext}` : key }];
+          }),
+        );
+      }
+      changed += await db.$executeRaw`UPDATE ${bossJobs()} SET data = ${JSON.stringify(data)}::jsonb WHERE id = ${j.id}::uuid AND name = ${j.name}`;
+    }
+  } catch (err) {
+    console.error("[forget] could not clear file names from the queue", err instanceof Error ? err.message : err);
+  }
+  return changed;
 }
 
 /** Trips, activities and collections holding any of these photographs. */
