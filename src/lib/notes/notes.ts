@@ -118,7 +118,7 @@ export async function submitNote(fd: FormData, ctx: SubmitContext): Promise<Note
   const limits = sender.network ? PER_CLIENT : UNKNOWN_CLIENTS;
   const since = (ms: number) => ({ gt: new Date(now.getTime() - ms) });
   // Counted and kept under one lock, so notes sent all at once are counted one after another rather than all
-  // against the same empty count.
+  // against the same empty count. A flood waits its turn for the lock rather than failing to start.
   const outcome = await db.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('visitor-note'))`;
     const [lately, today, networkLately, networkToday, mailedToday] = await Promise.all([
@@ -128,17 +128,16 @@ export async function submitNote(fd: FormData, ctx: SubmitContext): Promise<Note
       sender.network ? tx.visitorNote.count({ where: { networkHash: sender.network, createdAt: since(DAY) } }) : 0,
       tx.visitorNote.count({ where: { unmailed: false, createdAt: since(DAY) } }),
     ]);
-    if (lately >= limits.tenMinutes || networkLately >= PER_NETWORK.tenMinutes) return { refused: TOO_MANY_NOW } as const;
-    if (today >= limits.day || networkToday >= PER_NETWORK.day) return { refused: TOO_MANY_TODAY } as const;
+    if (lately >= limits.tenMinutes || networkLately >= PER_NETWORK.tenMinutes) return { kept: false, refused: TOO_MANY_NOW } as const;
+    if (today >= limits.day || networkToday >= PER_NETWORK.day) return { kept: false, refused: TOO_MANY_TODAY } as const;
     const unmailed = mailedToday >= MAILED_PER_DAY;
     const note = await tx.visitorNote.create({
       data: { ...checked.note, photoId, pageUrl: notePagePath(values.page, ctx.appUrl), clientHash: sender.hash, networkHash: sender.network, unmailed, createdAt: now },
       select: { id: true },
     });
-    return { id: note.id, unmailed } as const;
-    // A flood waits its turn for the lock rather than failing to start.
+    return { kept: true, id: note.id, unmailed } as const;
   }, { maxWait: 15_000, timeout: 15_000 });
-  if ("refused" in outcome) return again(outcome.refused);
+  if (!outcome.kept) return again(outcome.refused);
   // Only once the note is surely kept: the worker must find it.
   if (!outcome.unmailed) {
     await enqueue(QUEUES.mailVisitorNote, { noteId: outcome.id }).catch((err) => {
