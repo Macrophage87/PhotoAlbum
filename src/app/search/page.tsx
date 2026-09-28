@@ -1,15 +1,15 @@
 import type { MediaKind } from "@/generated/prisma/enums";
 import { getViewer } from "@/lib/auth/viewer";
-import { normalizeQuery, searchFacets, searchMedia } from "@/lib/search/query";
+import { hitWhen, normalizeQuery, searchFacets, searchMedia } from "@/lib/search/query";
 import { photoUrl } from "@/lib/photos/urls";
-import { formatLocalTime } from "@/lib/time/format";
-import { uploaderLabel } from "@/components/photos/toGrid";
+import { outsiderAlt, uploaderLabel } from "@/components/photos/toGrid";
 import { AppShell, Container } from "@/components/layout/AppShell";
 import { SearchBox } from "@/components/search/SearchBox";
 import { CollectionFacetField, TripFacetField } from "@/components/containers/FacetFields";
 import { SearchResults, type SearchResult } from "@/components/search/SearchResults";
 import { Button } from "@/components/ui";
 import { SelectionProvider } from "@/components/photos/selection";
+import { isPhotoYear } from "@/lib/photos/filters";
 
 export const metadata = { title: "Search" };
 
@@ -31,7 +31,7 @@ export default async function SearchPage({ searchParams }: PageProps<"/search">)
   const kindRaw = str(sp.kind);
   const kind: MediaKind | undefined = kindRaw === "PHOTO" || kindRaw === "VIDEO" || kindRaw === "EXTERNAL_VIDEO" ? (kindRaw as MediaKind) : undefined;
   const year = Number(str(sp.year));
-  const params = { q, tripId: str(sp.trip), collectionId: str(sp.collection), uploaderId: member ? str(sp.uploader) : undefined, personIds: member ? list(sp.person) : [], year: Number.isInteger(year) && year > 0 ? year : undefined, kind };
+  const params = { q, tripId: str(sp.trip), collectionId: str(sp.collection), uploaderId: member ? str(sp.uploader) : undefined, personIds: member ? list(sp.person) : [], year: isPhotoYear(year) ? year : undefined, kind };
   const [facets, hits] = await Promise.all([
     searchFacets(viewer),
     q ? searchMedia(viewer, params) : Promise.resolve([]),
@@ -47,11 +47,12 @@ export default async function SearchPage({ searchParams }: PageProps<"/search">)
     height: h.height,
     caption: h.caption,
     title: h.title,
-    alt: h.caption ?? h.title ?? h.originalName,
+    // A file's own name is the family's; anybody else hears what the item is and when (see `outsiderAlt`).
+    alt: h.caption ?? h.title ?? (member ? h.originalName : outsiderAlt({ ...h, trip: h.tripTimezone ? { timezone: h.tripTimezone } : null })),
     snippet: h.snippet,
     tripSlug: h.tripSlug,
     tripTitle: h.tripTitle,
-    when: h.takenAt ? formatLocalTime(h.takenAt, { offsetMin: h.tzOffsetMin }, "MMM d, yyyy") : null,
+    when: hitWhen(h),
     uploadedBy: member ? uploaderLabel(h.uploaderName) : null,
     youtubeId: h.kind === "EXTERNAL_VIDEO" ? h.externalId : null,
     videoUrl: h.kind === "VIDEO" ? photoUrl(h, "video") : null,
@@ -69,9 +70,10 @@ export default async function SearchPage({ searchParams }: PageProps<"/search">)
     <AppShell viewer={viewer}>
       <Container className="py-10 space-y-6">
         <h1 className="font-display text-3xl font-semibold">Search</h1>
-        <form action="/search" method="get" className="space-y-3">
+        {/* One form for the words and every filter, so Enter in the box and either Search button send them all. */}
+        <form action="/search" method="get" role="search" className="space-y-3">
           <div className="flex flex-wrap items-center gap-2 max-w-xl">
-            <div className="flex-1 min-w-52"><SearchBox initial={q} /></div>
+            <div className="flex-1 min-w-52"><SearchBox initial={q} asInput /></div>
             <Button type="submit" variant="secondary" size="sm">Search</Button>
           </div>
           <details open={narrowing} data-testid="advanced-filters">
@@ -116,7 +118,7 @@ export default async function SearchPage({ searchParams }: PageProps<"/search">)
                       </optgroup>
                     )}
                   </select>
-                  <span className={fieldLabel}>Choose several for the ones they are all in</span>
+                  <span className={fieldLabel}>Choose several for the ones they are all in. On a computer, hold Ctrl (Command on a Mac) as you click each name.</span>
                 </div>
               )}
               <div className={field}>

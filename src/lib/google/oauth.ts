@@ -62,6 +62,15 @@ export async function refreshAccessToken(refreshToken: string): Promise<{ access
 }
 
 /** Best effort: Google forgets the grant; failures are ignored because the local copy is deleted regardless. */
+/**
+ * The same, saying whether it took: Google refusing a token it does not know (400) counts, since the grant is gone
+ * either way; no answer, or any other refusal, throws.
+ */
+export async function revokeTokenOrThrow(token: string): Promise<void> {
+  const res = await fetch(`${env().GOOGLE_OAUTH_BASE_URL.replace(/\/$/, "")}/revoke?token=${encodeURIComponent(token)}`, { method: "POST", signal: AbortSignal.timeout(10_000) });
+  if (!res.ok && res.status !== 400) throw new Error(`Google answered ${res.status} to the revocation`);
+}
+
 export async function revokeToken(token: string): Promise<void> {
   await fetch(`${env().GOOGLE_OAUTH_BASE_URL.replace(/\/$/, "")}/revoke?token=${encodeURIComponent(token)}`, { method: "POST", signal: AbortSignal.timeout(10_000) }).catch(() => undefined);
 }

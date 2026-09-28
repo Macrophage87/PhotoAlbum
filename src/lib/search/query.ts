@@ -5,6 +5,9 @@ import type { Viewer } from "@/lib/auth/viewer";
 import { visibleContainersWhere } from "@/lib/auth/access";
 import { embedText, mlConfigured, vectorLiteral } from "@/lib/ml/client";
 import { peopleInPhotos, type FilterPerson } from "@/lib/people/in-photos";
+import { inLocalYearSql, localYearSql, tripZoneFixes } from "@/lib/time/local-day-sql";
+import { photoDay } from "@/lib/time/local-day";
+import { formatDay } from "@/lib/time/format";
 
 export type SearchParams = { q: string; tripId?: string; collectionId?: string; uploaderId?: string; personIds?: string[]; year?: number; kind?: MediaKind };
 
@@ -23,15 +26,23 @@ export type SearchHit = {
   takenAt: Date | null;
   tzOffsetMin: number | null;
   updatedAt: Date;
+  imageVersion: number;
   gpsSource: string | null;
   tripSlug: string | null;
   tripTitle: string | null;
+  /** Its trip's zone, only to read the day it was taken on when it has no offset of its own; never shown. */
+  tripTimezone: string | null;
   /** Members only; null for anonymous viewers. */
   uploaderName: string | null;
   rank: number;
   /** Plain text with [[ ]] around matches; never HTML from the database. */
   snippet: string;
 };
+
+/** The date beside a hit: the day it was taken where it was taken (see `photoDay`), as "Dec 31, 2025". */
+export function hitWhen(h: Pick<SearchHit, "takenAt" | "tzOffsetMin" | "tripTimezone">): string | null {
+  return h.takenAt ? formatDay(photoDay(h.takenAt, h.tzOffsetMin, h.tripTimezone ?? "UTC"), "shortYear") : null;
+}
 
 export const MAX_QUERY_LENGTH = 200;
 
@@ -56,18 +67,40 @@ export function normalizeQuery(q: string): string {
  * nothing in the trash is searchable by anyone. */
 export function visibilitySql(viewer: Viewer): Prisma.Sql {
   if (viewer.kind === "user") return Prisma.sql`p."trashedAt" IS NULL`;
-  return Prisma.sql`p."trashedAt" IS NULL AND (t.visibility = 'PUBLIC' OR EXISTS (SELECT 1 FROM "CollectionItem" ci JOIN "Collection" c ON c.id = ci."collectionId" WHERE ci."photoId" = p.id AND c.visibility = 'PUBLIC'))`;
+  return Prisma.sql`p."trashedAt" IS NULL AND ${publicMediaSql()}`;
 }
 
 /**
- * Keyword search. Members query the column that also carries names; anonymous visitors query the base column, so a
- * name never enters their ranking. The uploader filter is a members-only control and is ignored otherwise.
+ * Items in a PUBLIC trip or a PUBLIC collection, as `p`. Written as two IN lists rather than correlated EXISTS
+ * clauses joined by OR, which the planner runs once per photograph (and hands to the JIT on a large album).
+ */
+export function publicMediaSql(): Prisma.Sql {
+  return Prisma.sql`(p."tripId" IN (SELECT pt.id FROM "Trip" pt WHERE pt.visibility = 'PUBLIC') OR p.id IN (SELECT pci."photoId" FROM "CollectionItem" pci JOIN "Collection" pc ON pc.id = pci."collectionId" WHERE pc.visibility = 'PUBLIC'))`;
+}
+
+/**
+ * The words a hit is shown with, and the title it goes by, for this viewer. Members read the notes and the helper's
+ * members-only title; anybody else reads the family's caption and title, and the helper's caption only where it was
+ * written from nothing members-only. The same split as the two search columns, so a snippet never shows a stranger
+ * what their search could not have matched.
+ */
+export function hitTextSql(member: boolean): { title: Prisma.Sql; snippetSource: Prisma.Sql } {
+  if (member) return { title: Prisma.sql`COALESCE(NULLIF(btrim(p.title), ''), p."membersTitle")`, snippetSource: Prisma.sql`concat_ws(' · ', p.caption, COALESCE(NULLIF(btrim(p.title), ''), p."membersTitle"), p.context, p.annotation->>'caption')` };
+  return { title: Prisma.sql`p.title`, snippetSource: Prisma.sql`concat_ws(' · ', p.caption, p.title, CASE WHEN NOT p."annotationMembersOnly" THEN p.annotation->>'caption' END)` };
+}
+
+/**
+ * Keyword search. Members query the column that also carries names and notes; anonymous visitors query the base
+ * column, so neither enters their ranking. The uploader filter is a members-only control and is ignored otherwise.
+ *
+ * The semantic half is members-only too: an item's text embedding is built from everything members may read about
+ * it, notes and names included, so a stranger's query compared against it would be ranked by what they may not see.
  */
 export async function searchMedia(viewer: Viewer, params: SearchParams, limit = 120, embed: ((q: string) => Promise<number[] | null>) | null = defaultEmbed): Promise<SearchHit[]> {
   const q = normalizeQuery(params.q);
   if (!q) return [];
-  const queryVec = embed ? await embed(q) : null;
   const member = viewer.kind === "user";
+  const queryVec = member && embed ? await embed(q) : null;
   const column = member ? Prisma.sql`p."searchVectorMembers"` : Prisma.sql`p."searchVector"`;
   const filters: Prisma.Sql[] = [];
   if (params.tripId) filters.push(Prisma.sql`p."tripId" = ${params.tripId}`);
@@ -80,9 +113,11 @@ export async function searchMedia(viewer: Viewer, params: SearchParams, limit = 
     for (const personId of params.personIds ?? [])
       filters.push(Prisma.sql`(EXISTS (SELECT 1 FROM "Face" f2 WHERE f2."photoId" = p.id AND f2."personId" = ${personId} AND f2.status = 'CONFIRMED')
         OR EXISTS (SELECT 1 FROM "AnimalDetection" a2 WHERE a2."photoId" = p.id AND a2."personId" = ${personId} AND a2.status = 'CONFIRMED'))`);
-  if (params.year) filters.push(Prisma.sql`EXTRACT(YEAR FROM (p."takenAt" + make_interval(mins => COALESCE(p."tzOffsetMin", 0)))) = ${params.year}`);
+  // The year where it was taken, on the one rule for a photograph's clock (`t` is its trip, joined below).
+  if (params.year) filters.push(inLocalYearSql(params.year, await tripZoneFixes()));
   if (params.kind) filters.push(Prisma.sql`p.kind = ${params.kind}::"MediaKind"`);
   const where = filters.length ? Prisma.join(filters, " AND ") : Prisma.sql`TRUE`;
+  const text = hitTextSql(member);
   const uploader = member ? Prisma.sql`COALESCE(NULLIF(u.name, ''), split_part(u.email, '@', 1))` : Prisma.sql`NULL`;
   // A private trip's title is members-only metadata: anonymous visitors see the trip of a hit only when they may open that trip.
   // Same rule as canViewTrip: a held share cookie counts only while the trip is LINK and the token still matches.
@@ -92,12 +127,12 @@ export async function searchMedia(viewer: Viewer, params: SearchParams, limit = 
   const similarity = queryVec ? Prisma.sql`CASE WHEN p."textEmbedding" IS NULL THEN NULL ELSE 1 - (p."textEmbedding" <=> ${vectorLiteral(queryVec)}::vector) END` : Prisma.sql`NULL::float`;
   const match = queryVec ? Prisma.sql`(${column} @@ query OR (p."textEmbedding" IS NOT NULL AND 1 - (p."textEmbedding" <=> ${vectorLiteral(queryVec)}::vector) >= ${SEMANTIC_FLOOR}))` : Prisma.sql`${column} @@ query`;
   const rows = await db.$queryRaw<(SearchHit & { similarity: number | null })[]>`
-    SELECT p.id, p.kind, p.status, p.caption, p.title, p."originalName", p."externalId", p."externalStatus", p."durationS", p.width, p.height,
-           p."takenAt", p."tzOffsetMin", p."updatedAt", p."gpsSource",
-           CASE WHEN ${tripVisible} THEN t.slug END AS "tripSlug", CASE WHEN ${tripVisible} THEN t.title END AS "tripTitle", ${uploader} AS "uploaderName",
+    SELECT p.id, p.kind, p.status, p.caption, ${text.title} AS title, p."originalName", p."externalId", p."externalStatus", p."durationS", p.width, p.height,
+           p."takenAt", p."tzOffsetMin", p."updatedAt", p."imageVersion", p."gpsSource",
+           CASE WHEN ${tripVisible} THEN t.slug END AS "tripSlug", CASE WHEN ${tripVisible} THEN t.title END AS "tripTitle", t.timezone AS "tripTimezone", ${uploader} AS "uploaderName",
            ts_rank_cd(${column}, query) AS rank,
            ${similarity} AS similarity,
-           ts_headline('english', concat_ws(' · ', p.caption, p.title, p.context, p.annotation->>'caption'), query, 'MaxWords=18, MinWords=6, StartSel=[[, StopSel=]], MaxFragments=1') AS snippet
+           ts_headline('english', ${text.snippetSource}, query, 'MaxWords=18, MinWords=6, StartSel=[[, StopSel=]], MaxFragments=1') AS snippet
     FROM "Photo" p
     LEFT JOIN "Trip" t ON t.id = p."tripId"
     LEFT JOIN "User" u ON u.id = p."uploaderId",
@@ -136,13 +171,14 @@ export type SearchFacets = {
 /** Filter options built from the viewer's visible set only. */
 export async function searchFacets(viewer: Viewer): Promise<SearchFacets> {
   const member = viewer.kind === "user";
+  const zoneFixes = await tripZoneFixes();
   const [trips, collections, uploaders, people, years] = await Promise.all([
-    db.trip.findMany({ where: visibleContainersWhere(viewer), orderBy: { startDate: "desc" }, select: { id: true, title: true } }),
+    db.trip.findMany({ where: { ...visibleContainersWhere(viewer), deletingAt: null }, orderBy: { startDate: "desc" }, select: { id: true, title: true } }),
     db.collection.findMany({ where: visibleContainersWhere(viewer), orderBy: { title: "asc" }, select: { id: true, title: true } }),
     member ? db.user.findMany({ where: { photos: { some: {} } }, orderBy: { name: "asc" }, select: { id: true, name: true, email: true } }) : Promise.resolve([]),
     member ? peopleInPhotos() : Promise.resolve([]),
     db.$queryRaw<{ year: number }[]>`
-      SELECT DISTINCT EXTRACT(YEAR FROM (p."takenAt" + make_interval(mins => COALESCE(p."tzOffsetMin", 0))))::int AS year
+      SELECT DISTINCT ${localYearSql(zoneFixes)} AS year
       FROM "Photo" p LEFT JOIN "Trip" t ON t.id = p."tripId"
       WHERE p."takenAt" IS NOT NULL AND p.status = 'READY' AND ${visibilitySql(viewer)}
       ORDER BY year DESC`,

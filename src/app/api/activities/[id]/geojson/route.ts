@@ -1,0 +1,21 @@
+import { db } from "@/lib/db";
+import { getViewer } from "@/lib/auth/viewer";
+import { canViewActivity, canViewTrip, viewerFor } from "@/lib/auth/access";
+import { buildActivityMapPayload } from "@/lib/map/geojson";
+
+/**
+ * One activity's route and its own photographs, for its page on the trip and for whoever holds the activity's link.
+ * The link opens this and nothing else: no other activity, none of the trip's other photographs, and the trip itself
+ * is named only to a viewer who may open it.
+ */
+export async function GET(req: Request, { params }: RouteContext<"/api/activities/[id]/geojson">) {
+  const { id } = await params;
+  const viewer = await getViewer();
+  const activity = await db.activity.findUnique({ where: { id, trip: { deletingAt: null } }, select: { id: true, shareToken: true, trip: { select: { id: true, visibility: true, shareToken: true } } } });
+  if (!activity) return Response.json({ error: "Not found" }, { status: 404 });
+  if (!canViewTrip(viewer, activity.trip) && !canViewActivity(viewer, activity)) return Response.json({ error: "Not found" }, { status: 404 });
+  // A shared link's map is drawn as anybody holding the link sees it, a member looking at it included: whether the
+  // trip is named is asked of that visitor too, so a private trip's slug and title stay off the link's map.
+  const shown = viewerFor(viewer, new URL(req.url).searchParams.get("view"));
+  return Response.json(await buildActivityMapPayload(shown, activity.id, canViewTrip(shown, activity.trip)), { headers: { "Cache-Control": "private, no-store" } });
+}

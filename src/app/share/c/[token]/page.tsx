@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import { getSharedCollection } from "@/lib/share/queries";
-import { listCollectionItems } from "@/lib/collections/queries";
+import { defaultCollectionOrder, listCollectionItems } from "@/lib/collections/queries";
 import { PhotoGrid } from "@/components/photos/PhotoGrid";
 import { toGridPhoto } from "@/components/photos/toGrid";
 
@@ -8,6 +8,7 @@ export default async function SharedCollectionPage({ params }: PageProps<"/share
   const { token } = await params;
   const collection = await getSharedCollection(token);
   if (!collection) notFound();
-  const items = await listCollectionItems(collection.id);
+  // In the order its owner arranged it, where they have; a shared link has no order of its own to offer.
+  const items = await listCollectionItems(collection.id, { order: defaultCollectionOrder(collection, false) });
   return <PhotoGrid photos={items.filter((p) => p.status === "READY").map((p) => toGridPhoto(p))} emptyMessage="Nothing here yet." />;
 }

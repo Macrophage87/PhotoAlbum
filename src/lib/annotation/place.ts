@@ -2,7 +2,11 @@ import { z } from "zod";
 import type Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { db } from "@/lib/db";
+import { forgetState, unchangedSince } from "@/lib/people/names-changed";
+import { forgottenScope, loadTombstone, type Tombstone } from "@/lib/people/tombstone";
 import { thinkingParams } from "./client";
+import { placeFromMembersOnly } from "./members-only";
+import { noteRelaxedRelease } from "./relaxed-release";
 
 /**
  * What the helper may guess at, and what it must leave alone. Shared word for word by the full description request
@@ -127,8 +131,9 @@ export function placeRequestParams(model: string, images: Anthropic.ImageBlockPa
 }
 
 /** Whether an item still wants a guess: nothing in it says where it was, and nobody has asked yet. */
-export function needsPlaceEstimate(item: { lat: number | null; placeEstimatedAt: Date | null }): boolean {
-  return item.lat === null && item.placeEstimatedAt === null;
+export function needsPlaceEstimate(item: { lat: number | null; placeSetById: string | null; placeEstimatedAt: Date | null }): boolean {
+  // A place a member took away is not a gap to fill: they cleared it on purpose.
+  return item.lat === null && item.placeSetById === null && item.placeEstimatedAt === null;
 }
 
 /**
@@ -142,33 +147,78 @@ export async function recordPlaceFailure(photoId: string, opts: { terminal?: boo
 }
 
 /**
+ * What `applyPlaceEstimate` reads as free for a guess, as a filter its write carries: no position, nobody's choice
+ * (a place a member took away keeps who took it), and nothing but an earlier guess as its source.
+ */
+const FREE_FOR_A_GUESS = { lat: null, placeSetById: null, OR: [{ gpsSource: null }, { gpsSource: "ESTIMATE" as const }] };
+
+/**
  * Record a guess. It is only ever written where the album has no position of its own, so a place a member set, one
  * from the camera, from a track or from a Google sidecar always wins; a track imported afterwards replaces it in
  * turn (see geotag-photos). placeEstimatedAt is stamped either way, so a declined item is not asked about again.
  */
-export async function applyPlaceEstimate(photoId: string, estimate: PlaceEstimate): Promise<"placed" | "declined" | "skipped"> {
-  const current = await db.photo.findUnique({ where: { id: photoId }, select: { lat: true, gpsSource: true } });
+export async function applyPlaceEstimate(photoId: string, estimate: PlaceEstimate, opts: { sent?: boolean | null; requestedAt?: Date; tombstone?: Tombstone } = {}): Promise<"placed" | "declined" | "skipped" | "stale"> {
+  const requestedAt = opts.requestedAt;
+  const current = await db.photo.findUnique({ where: { id: photoId }, select: { lat: true, gpsSource: true, placeSetById: true, context: true } });
   if (!current) return "skipped";
-  // A town-level answer is held to the town before anything is written, name and evidence alike.
-  const place = estimate && estimate.confidence >= MIN_PLACE_CONFIDENCE ? scrubCoarsePlace(estimate) : null;
-  const free = current.lat === null && (current.gpsSource === null || current.gpsSource === "ESTIMATE");
-  if (!place || !free) {
-    await db.photo.update({ where: { id: photoId }, data: { placeEstimatedAt: new Date() } });
-    return place ? "skipped" : "declined";
-  }
-  await db.photo.update({
-    where: { id: photoId },
-    data: {
-      lat: place.lat,
-      lng: place.lng,
-      gpsSource: "ESTIMATE",
-      placeEstimateName: place.name,
-      placeEstimateConfidence: place.confidence,
-      placeEstimateRadiusM: place.radiusM,
-      placeEstimatePrecision: place.precision === "city" ? "CITY" : place.precision === "region" ? "REGION" : "EXACT",
-      placeEstimateNote: place.evidence,
-      placeEstimatedAt: new Date(),
-    },
+  // A town-level answer is held to the town before anything is written, name and evidence alike; and nobody
+  // forgotten comes back by way of its name or evidence.
+  const tombstone = opts.tombstone ?? (await loadTombstone());
+  const coarse = estimate && estimate.confidence >= MIN_PLACE_CONFIDENCE ? scrubCoarsePlace(estimate) : null;
+  const scope = tombstone.empty ? undefined : await forgottenScope({ photoIds: [photoId] }, tombstone);
+  let place = coarse ? { ...coarse, name: tombstone.scrub(coarse.name, scope), evidence: tombstone.scrub(coarse.evidence, scope) } : null;
+  // A place a member took away stays away: see `clearPhotoPlace`.
+  const free = current.lat === null && current.placeSetById === null && (current.gpsSource === null || current.gpsSource === "ESTIMATE");
+  const membersOnly = place && free ? await placeFromMembersOnly(photoId, { name: place.name, evidence: place.evidence }, current.context, opts.sent) : false;
+  // Asked before a forgotten name was taken out of this item, before anybody was forgotten, or before anybody on it
+  // changed how they may be named: its evidence may quote them, so nothing is written and it is asked again. Checked
+  // in the write itself.
+  const stale = Symbol("stale");
+  const outcome = await db.$transaction(async (tx) => {
+    const forget = await forgetState(tx, tombstone.loadedAt, requestedAt);
+    if (forget.underWay || forget.since) throw stale;
+    // Somebody forgotten since the forgotten names were read: read them again.
+    if (forget.reload && place) {
+      const fresh = await loadTombstone();
+      const now = await forgottenScope({ photoIds: [photoId] }, fresh);
+      place = { ...place, name: fresh.scrub(place.name, now), evidence: fresh.scrub(place.evidence, now) };
+    }
+    const guard = { id: photoId, ...(requestedAt ? unchangedSince(requestedAt) : {}) };
+    if (!place || !free) {
+      const n = await tx.photo.updateMany({ where: guard, data: { placeEstimatedAt: new Date() } });
+      if (n.count === 0) throw stale;
+      return place ? ("skipped" as const) : ("declined" as const);
+    }
+    // The state `free` was read from goes into the write as well: a place a member cleared (or set) by hand after the
+    // read must not be covered by the guess. Nothing matching means exactly that, so it is recorded as asked and
+    // skipped, as a place that was never free is; the stamp alone still honors the staleness guard.
+    const n = await tx.photo.updateMany({
+      where: { AND: [guard, FREE_FOR_A_GUESS] },
+      data: {
+        lat: place.lat,
+        lng: place.lng,
+        gpsSource: "ESTIMATE",
+        placeEstimateName: place.name,
+        placeEstimateConfidence: place.confidence,
+        placeEstimateRadiusM: place.radiusM,
+        placeEstimatePrecision: place.precision === "city" ? "CITY" : place.precision === "region" ? "REGION" : "EXACT",
+        placeEstimateNote: place.evidence,
+        // Its name and evidence are shown beside the pin, and may have come from the notes; see `placeFromMembersOnly`.
+        placeEstimateMembersOnly: membersOnly,
+        placeEstimatedAt: new Date(),
+      },
+    });
+    if (n.count === 0) {
+      const asked = await tx.photo.updateMany({ where: guard, data: { placeEstimatedAt: new Date() } });
+      if (asked.count === 0) throw stale;
+      return "skipped" as const;
+    }
+    return "placed" as const;
+  }).catch((err: unknown) => {
+    if (err === stale) return "stale" as const;
+    throw err;
   });
-  return "placed";
+  // Shown only because a relaxed excuse let it be: marked (relaxed-release.ts).
+  if (outcome === "placed") await noteRelaxedRelease(photoId);
+  return outcome;
 }

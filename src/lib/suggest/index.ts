@@ -1,13 +1,13 @@
 import { db } from "@/lib/db";
 import type { StoredAnnotation } from "@/lib/annotation/schema";
-import { localDayFromOffset } from "@/lib/time/local-day";
+import { photoDay } from "@/lib/time/local-day";
 import { dateColumnToDay } from "@/lib/time/local-day";
 import { suggest, type Candidate, type Item, type Suggestion } from "./score";
 
 /** Load every trip and collection as a scoring candidate. Centroids come from the stored image embeddings. */
 export async function loadCandidates(): Promise<Candidate[]> {
   const [trips, collections, centroids] = await Promise.all([
-    db.trip.findMany({ select: { id: true, title: true, startDate: true, endDate: true, timezone: true, photos: { where: { lat: { not: null }, lng: { not: null } }, select: { lat: true, lng: true }, take: 200 }, activities: { where: { track: { isNot: null } }, select: { title: true, track: { select: { minLat: true, maxLat: true, minLng: true, maxLng: true } } } } } }),
+    db.trip.findMany({ where: { deletingAt: null }, select: { id: true, title: true, startDate: true, endDate: true, timezone: true, photos: { where: { lat: { not: null }, lng: { not: null } }, select: { lat: true, lng: true }, take: 200 }, activities: { where: { track: { isNot: null } }, select: { title: true, track: { select: { minLat: true, maxLat: true, minLng: true, maxLng: true } } } } } }),
     db.collection.findMany({ select: { id: true, title: true, description: true, _count: { select: { items: true } }, items: { select: { photo: { select: { annotation: true } } }, take: 200 } } }),
     db.$queryRaw<{ collectionId: string; centroid: string | null }[]>`
       SELECT ci."collectionId", avg(p."embedding")::text AS centroid
@@ -41,18 +41,18 @@ export async function loadCandidates(): Promise<Candidate[]> {
 
 export async function loadItem(photoId: string): Promise<Item | null> {
   const [p, vec] = await Promise.all([
-    db.photo.findUnique({ where: { id: photoId }, select: { id: true, takenAt: true, tzOffsetMin: true, lat: true, lng: true, caption: true, context: true, title: true, annotation: true, tripId: true, collections: { select: { collectionId: true } } } }),
+    db.photo.findUnique({ where: { id: photoId }, select: { id: true, takenAt: true, tzOffsetMin: true, trip: { select: { timezone: true } }, lat: true, lng: true, caption: true, context: true, title: true, membersTitle: true, annotation: true, tripId: true, collections: { select: { collectionId: true } } } }),
     db.$queryRaw<{ embedding: string | null }[]>`SELECT "embedding"::text AS embedding FROM "Photo" WHERE id = ${photoId}`.catch(() => [] as { embedding: string | null }[]),
   ]);
   if (!p) return null;
   const a = p.annotation as StoredAnnotation | null;
   return {
     id: p.id,
-    day: p.takenAt ? localDayFromOffset(p.takenAt, p.tzOffsetMin ?? 0) : null,
+    day: p.takenAt ? photoDay(p.takenAt, p.tzOffsetMin, p.trip?.timezone) : null,
     lat: p.lat,
     lng: p.lng,
     tags: new Set(a?.tags ?? []),
-    text: [p.title, p.caption, p.context, a?.caption, a?.searchSummary].filter(Boolean).join(" "),
+    text: [p.title, p.membersTitle, p.caption, p.context, a?.caption, a?.searchSummary].filter(Boolean).join(" "),
     peopleIds: new Set<string>(),
     embedding: vec[0]?.embedding ? (JSON.parse(vec[0].embedding) as number[]) : null,
     tripId: p.tripId,

@@ -6,8 +6,15 @@ import type { Renditions } from "@/lib/images/renditions";
 import type { VideoRenditions } from "@/lib/jobs/handlers/transcode-video";
 import { mediaAccessInclude, mediaBytesAllowed, mediaCacheControl, toMediaAccess } from "@/lib/photos/access";
 import { jpegPreview } from "@/lib/images/preview";
+import { MEDIA_CSP } from "@/lib/security/csp";
+import { viewerFor } from "@/lib/auth/access";
+import { largestRendition } from "@/lib/photos/urls";
+import { visitorFullSize } from "@/lib/images/visitor-copy";
+import { publicScanCopy } from "@/lib/scans/public-copy";
 
 const MIME: Record<string, string> = { webp: "image/webp", jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", heic: "image/heic", heif: "image/heif", tif: "image/tiff", avif: "image/avif", gif: "image/gif", mp4: "video/mp4" };
+
+const mimeOf = (key: string) => MIME[key.split(".").pop() ?? ""] ?? "image/webp";
 
 /** Parse a single-range `Range` header against a known size; null when absent, an error response when unsatisfiable. */
 export function parseRange(header: string | null, size: number): { start: number; end: number } | null | "invalid" {
@@ -31,6 +38,14 @@ export function parseRange(header: string | null, size: number): { start: number
  * Access follows the item's containers: members see everything, anonymous visitors see items in PUBLIC containers,
  * share-link holders see items in the LINK container their cookie (or `?share=&kind=`) names. Every range request
  * repeats the check.
+ *
+ * The file as uploaded (and the editor's uncropped copy) is the family's: it carries the camera's EXIF, GPS included,
+ * and whatever a crop or "remove place" took out. Anybody else — a visitor, a share link, a member reading a share
+ * page (`?view=share`) — asking for it, or for the edited full size, gets the same picture at the same size as a
+ * copy the worker makes for them: upright, edited, and with no metadata (see `lib/images/visitor-copy`), and the
+ * largest rendition until it is made. Only a member on the album's own pages is ever given the file. A 3D scan has
+ * no picture to stand in for it: they get its model only, as a copy with its metadata taken out (see
+ * `lib/scans/sanitize`), or nothing for a format that cannot be cleaned.
  */
 export async function GET(request: Request, { params }: { params: Promise<{ id: string; size: string }> }) {
   const { id, size } = await params;
@@ -38,7 +53,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
 
   const photo = await db.photo.findUnique({
     where: { id },
-    select: { id: true, status: true, originalPath: true, originalName: true, renditions: true, videoRenditions: true, storageKey: true, mimeType: true, kind: true, ...mediaAccessInclude },
+    select: { id: true, status: true, originalPath: true, originalName: true, renditions: true, videoRenditions: true, storageKey: true, mimeType: true, kind: true, scanFormat: true, edits: true, imageVersion: true, ...mediaAccessInclude },
   });
   if (!photo) return new Response("Not found", { status: 404 });
 
@@ -50,6 +65,34 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   }
 
   const video = photo.videoRenditions as VideoRenditions | null;
+  const outsider = viewerFor(viewer, url.searchParams.get("view")).kind !== "user" || url.searchParams.has("share");
+  if (outsider && photo.kind === "SCAN" && size !== "thumb" && size !== "medium" && size !== "pano" && size !== "preview") {
+    // Never the uploaded file, nor its name: the cleaned model, where there is one, and that is all.
+    const key = size === "model" ? await publicScanCopy(photo).catch(() => null) : null;
+    if (!key) return new Response("Not available", { status: 404 });
+    return serve(request, key, photo.mimeType, byViewer(url));
+  }
+  const withheld = outsider && (size === "original" || size === "edited" || size === "source");
+  if (withheld) {
+    if (photo.kind === "PHOTO" && size !== "source") {
+      const answer = await visitorFullSize(photo);
+      if (!answer) return new Response("Not ready", { status: 404 });
+      // What stands in until the copy is made is kept by nobody, so the next look asks for the copy again.
+      const noStore = { "Cache-Control": "private, no-store", Vary: "Cookie" };
+      const res = await serve(request, answer.key, mimeOf(answer.key), answer.standIn ? noStore : byViewer(url));
+      // A newer copy took its place between finding it and reading it.
+      if (res.status !== 404 || !answer.otherwise) return res;
+      return serve(request, answer.otherwise, mimeOf(answer.otherwise), noStore);
+    }
+    let key: string | undefined;
+    if (photo.kind === "VIDEO") key = video?.mp4?.key;
+    // The editor's copy is the picture before its crop, so the medium, which has it, answers instead.
+    else if (size === "source") key = (photo.renditions as Renditions | null)?.medium?.key;
+    else key = largestRendition(photo.renditions as Renditions | null)?.rendition.key;
+    if (!key) return new Response("Not ready", { status: 404 });
+    return serve(request, key, MIME[key.split(".").pop() ?? ""] ?? "image/webp", byViewer(url));
+  }
+
   if (size === "preview") {
     // The picture on a link's card, as JPEG. Nothing on the site asks for this: it exists because the things that
     // draw link previews will not draw WebP, and a card with no picture is the thing nobody clicks.
@@ -113,15 +156,32 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     contentType = MIME[key.split(".").pop() ?? ""] ?? "application/octet-stream";
   }
 
+  const extra: Record<string, string> = size === "original" || size === "edited" || size === "source" || size === "model" ? byViewer(url) : { "Cache-Control": mediaCacheControl(media, url.searchParams.has("v")) };
+  if (size === "original") extra["Content-Disposition"] = `inline; filename="${encodeURIComponent(photo.originalName)}"`;
+  return serve(request, key, contentType, extra);
+}
+
+/**
+ * Cache headers for an address whose answer depends on who asks (the original for a member, a rendition for anybody
+ * else): never a shared cache, and a browser keeps it only for the cookie it was fetched with.
+ */
+function byViewer(url: URL): Record<string, string> {
+  return { "Cache-Control": url.searchParams.has("v") ? "private, max-age=86400" : "private, max-age=0, must-revalidate", Vary: "Cookie" };
+}
+
+/** Stream one stored file, whole or by the single range asked for. */
+async function serve(request: Request, key: string, contentType: string, extra: Record<string, string>): Promise<Response> {
   const store = storage();
   const whole = await store.getStream(key).catch(() => null);
   if (!whole) return new Response("Not found", { status: 404 });
   const headers: Record<string, string> = {
     "Content-Type": contentType,
-    "Cache-Control": mediaCacheControl(media, url.searchParams.has("v")),
     "Accept-Ranges": "bytes",
+    // The real guard is next.config.ts's entry for /api/photos/*: when it has set this header, Next keeps it and
+    // this copy is dropped. It only takes effect should that entry ever stop matching; a unit test keeps them equal.
+    "Content-Security-Policy": MEDIA_CSP,
+    ...extra,
   };
-  if (size === "original") headers["Content-Disposition"] = `inline; filename="${encodeURIComponent(photo.originalName)}"`;
 
   const range = parseRange(request.headers.get("range"), whole.size);
   if (range === "invalid") {

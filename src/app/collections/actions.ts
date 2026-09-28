@@ -12,11 +12,19 @@ import { levelOf } from "@/lib/visibility/exposure";
 import { requireUserOrThrow } from "@/lib/auth/viewer";
 import { generateToken } from "@/lib/auth/tokens";
 import { uniqueSlug } from "@/lib/trips/slug";
+import { NAME_NOT_TO_BE_SHOWN, namesSomebodyRestricted } from "@/lib/people/forget";
+import { nameCheckForContainer } from "@/lib/people/name-check";
+import { noteRelaxedDescription } from "@/lib/annotation/relaxed-release";
 import { fieldErrors } from "@/lib/trips/validation";
 import { collectionInputFromForm } from "@/lib/collections/validation";
 import { canEditContainer, editableMediaIds, NOT_YOUR_CONTAINER } from "@/lib/auth/ownership";
 import { writeContainerDescription } from "@/lib/annotation/container";
+import { isCoverable } from "@/lib/photos/cover";
 import type { TripFormState } from "@/app/trips/new/actions";
+import { handWrittenDescription } from "@/lib/annotation/members-only";
+import { rejudgeFromAction } from "@/lib/annotation/rejudge-notice";
+import { descriptionStaysHelpers } from "@/lib/annotation/helper-text";
+import { searchParamsObject } from "@/lib/search-params";
 
 export type CollectionFormState = TripFormState;
 
@@ -29,9 +37,22 @@ async function loadEditableCollection(slug: string) {
   return collection;
 }
 
+/**
+ * A new web address for the collection: made from its first title and never following a rename, it can still say
+ * what the title no longer does. Links to the old address stop working; nothing keeps it to redirect from.
+ */
+export async function changeCollectionSlug(slug: string, fd: FormData): Promise<void> {
+  const collection = await loadEditableCollection(slug);
+  const wanted = z.string().trim().min(1).max(80).parse(fd.get("slug"));
+  const next = await uniqueSlug(wanted, async (s) => Boolean(await db.collection.findFirst({ where: { slug: s, id: { not: collection.id } }, select: { id: true } })));
+  if (next !== collection.slug) await db.collection.update({ where: { id: collection.id }, data: { slug: next } });
+  revalidatePath("/", "layout");
+  redirect(`/collections/${next}/settings?saved=1`);
+}
+
 /** Bump the versioned URLs of a collection's items so shared caches stop matching after a change in exposure. */
 async function bumpItemVersions(collectionId: string) {
-  await db.photo.updateMany({ where: { collections: { some: { collectionId } } }, data: { updatedAt: new Date() } });
+  await db.photo.updateMany({ where: { collections: { some: { collectionId } } }, data: { updatedAt: new Date(), imageVersion: { increment: 1 } } });
 }
 
 export async function createCollection(_prev: CollectionFormState, fd: FormData): Promise<CollectionFormState> {
@@ -40,9 +61,15 @@ export async function createCollection(_prev: CollectionFormState, fd: FormData)
   if (!parsed.success) return { status: "error", fieldErrors: fieldErrors(parsed.error) };
   const v = parsed.data;
   const slug = await uniqueSlug(v.title, async (s) => Boolean(await db.collection.findUnique({ where: { slug: s }, select: { id: true } })));
-  await db.collection.create({ data: { slug, title: v.title, description: v.description, themeKey: v.themeKey, createdById: user.id } });
+  await db.collection.create({ data: { slug, title: v.title, description: v.description, ...(await handWrittenStored(null, v.description)), themeKey: v.themeKey, createdById: user.id } });
   revalidatePath("/");
   redirect(`/collections/${slug}`);
+}
+
+/** A description saved by hand, as stored; see `handWrittenDescription`. */
+async function handWrittenStored(before: Parameters<typeof handWrittenDescription>[0], text: string | null | undefined) {
+  const { descriptionMembersOnly, descriptionSharedAt } = await handWrittenDescription(before, text);
+  return { descriptionMembersOnly, descriptionSharedAt };
 }
 
 const visibilitySchema = z.enum(["PRIVATE", "LINK", "PUBLIC"]);
@@ -62,12 +89,16 @@ export async function updateCollection(slug: string, _prev: CollectionFormState,
     data: {
       title: v.title,
       description: v.description,
+      ...(await handWrittenStored(collection, v.description)),
+      descriptionByHelper: descriptionStaysHelpers(collection, v.description),
       themeKey: v.themeKey,
       // A link is minted the first time this collection is shared that way, and dropped whenever it stops being.
       ...(changed ? { visibility, shareToken: visibility === "LINK" ? (collection.shareToken ?? generateToken()) : null } : {}),
     },
   });
   if (changed) await bumpItemVersions(collection.id);
+  // Whether a word of its title gives anything away depends on who may open it: judged again in the background.
+  if (changed || v.title !== collection.title) await rejudgeFromAction({ collectionId: collection.id });
   revalidatePath(`/collections/${slug}`, "layout");
   revalidatePath("/");
   redirect(`/collections/${slug}/settings?saved=1`);
@@ -81,11 +112,17 @@ export async function rotateCollectionShareToken(slug: string): Promise<void> {
   revalidatePath(`/collections/${slug}/settings`);
 }
 
+/**
+ * Choose (or forget) the picture the collection is known by: one of its own finished photographs. The same
+ * photograph may front other collections too, as it may sit in them.
+ */
 export async function setCollectionCover(slug: string, photoId: string | null): Promise<void> {
   const collection = await loadEditableCollection(slug);
   if (photoId) {
-    const item = await db.collectionItem.findFirst({ where: { collectionId: collection.id, photoId }, select: { id: true } });
+    const item = await db.collectionItem.findFirst({ where: { collectionId: collection.id, photoId }, select: { photo: { select: { status: true, trashedAt: true, width: true } } } });
     if (!item) throw new Error("Photo is not in this collection");
+    // Still processing, failed, or in the trash: there is no picture to lead with.
+    if (!isCoverable(item.photo)) throw new Error("Only a finished photo can be the cover");
   }
   await db.collection.update({ where: { id: collection.id }, data: { coverPhotoId: photoId } });
   revalidatePath(`/collections/${slug}`, "layout");
@@ -97,7 +134,12 @@ export async function deleteCollection(slug: string): Promise<void> {
   const collection = await loadEditableCollection(slug);
   const me = await requireUserOrThrow();
   if (me.role !== "ADMIN") throw new Error("Only an admin can delete a collection");
-  await db.collection.delete({ where: { id: collection.id } });
+  // Who may fetch its photographs changes with it (a share link or public collection gone): their addresses move,
+  // in the same transaction, so a cached copy under the old address is not served past it.
+  await db.$transaction([
+    db.photo.updateMany({ where: { collections: { some: { collectionId: collection.id } } }, data: { updatedAt: new Date(), imageVersion: { increment: 1 } } }),
+    db.collection.delete({ where: { id: collection.id } }),
+  ]);
   revalidatePath("/", "layout");
   redirect("/");
 }
@@ -129,6 +171,7 @@ export async function addToCollection(collectionId: string, photoIds: string[]):
     await db.collectionItem.createMany({ data: fresh.map((photoId) => ({ collectionId, photoId, addedById: user.id, position: position++ })) });
     await db.collection.update({ where: { id: collectionId }, data: { updatedAt: new Date() } });
     await bumpItemVersions(collectionId);
+    await rejudgeFromAction({ collectionId });
   }
   revalidatePath(`/collections/${collection.slug}`, "layout");
   revalidatePath("/", "layout");
@@ -147,7 +190,7 @@ export async function removeFromCollection(collectionId: string, photoIds: strin
   if (!collection) return { removed: 0, notYours };
   await db.collectionItem.deleteMany({ where: { collectionId, photoId: { in: list } } });
   if (collection.coverPhotoId && list.includes(collection.coverPhotoId)) await db.collection.update({ where: { id: collectionId }, data: { coverPhotoId: null } });
-  await db.photo.updateMany({ where: { id: { in: list } }, data: { updatedAt: new Date() } });
+  await db.photo.updateMany({ where: { id: { in: list } }, data: { updatedAt: new Date(), imageVersion: { increment: 1 } } });
   revalidatePath(`/collections/${collection.slug}`, "layout");
   revalidatePath("/", "layout");
   return { removed: list.length, notYours };
@@ -166,7 +209,11 @@ const orderSchema = z.array(z.string().min(1)).max(5000);
 export async function reorderCollection(slug: string, itemIds: string[]): Promise<void> {
   const collection = await loadEditableCollection(slug);
   const order = orderSchema.parse(itemIds);
-  await db.$transaction(order.map((id, position) => db.collectionItem.updateMany({ where: { id, collectionId: collection.id }, data: { position } })));
+  await db.$transaction([
+    ...order.map((id, position) => db.collectionItem.updateMany({ where: { id, collectionId: collection.id }, data: { position } })),
+    // From now on the collection opens in this order rather than favourites first.
+    db.collection.update({ where: { id: collection.id }, data: { arrangedAt: new Date() } }),
+  ]);
   revalidatePath(`/collections/${slug}`, "layout");
 }
 
@@ -175,7 +222,10 @@ export async function sortCollectionByDate(slug: string): Promise<void> {
   const collection = await loadEditableCollection(slug);
   const items = await db.collectionItem.findMany({ where: { collectionId: collection.id }, select: { id: true, photo: { select: { takenAt: true, createdAt: true } } } });
   items.sort((a, b) => (a.photo.takenAt?.getTime() ?? Infinity) - (b.photo.takenAt?.getTime() ?? Infinity) || a.photo.createdAt.getTime() - b.photo.createdAt.getTime());
-  await db.$transaction(items.map((it, position) => db.collectionItem.update({ where: { id: it.id }, data: { position } })));
+  await db.$transaction([
+    ...items.map((it, position) => db.collectionItem.update({ where: { id: it.id }, data: { position } })),
+    db.collection.update({ where: { id: collection.id }, data: { arrangedAt: new Date() } }),
+  ]);
   revalidatePath(`/collections/${slug}`, "layout");
 }
 
@@ -192,7 +242,7 @@ export async function detachExposedFromOtherCollections(slug: string): Promise<v
   if (doomed.length) {
     await db.collectionItem.deleteMany({ where: { id: { in: doomed.map((d) => d.id) } } });
     for (const c of doomed.filter((d) => d.collection.coverPhotoId === d.photoId)) await db.collection.update({ where: { id: c.collection.id }, data: { coverPhotoId: null } });
-    await db.photo.updateMany({ where: { id: { in: doomed.map((d) => d.photoId) } }, data: { updatedAt: new Date() } });
+    await db.photo.updateMany({ where: { id: { in: doomed.map((d) => d.photoId) } }, data: { updatedAt: new Date(), imageVersion: { increment: 1 } } });
   }
   revalidatePath(`/collections/${slug}`, "layout");
   revalidatePath("/", "layout");
@@ -204,12 +254,12 @@ export async function detachExposedFromOtherCollections(slug: string): Promise<v
  * itself is showing, so it is read back the same way the page read it and cannot mean something different here.
  */
 export async function moreCandidates(slug: string, query: string, cursor: string): Promise<{ photos: GridPhoto[]; nextCursor: string | null }> {
-  await requireUserOrThrow();
+  const me = await requireUserOrThrow();
   const collection = await db.collection.findUnique({ where: { slug }, select: { id: true } });
   if (!collection) throw new Error("Collection not found");
-  const filter = parsePickerFilter(Object.fromEntries(new URLSearchParams(query).entries()));
+  const filter = parsePickerFilter(searchParamsObject(new URLSearchParams(query)));
   const page = await candidatePhotoPage({ kind: "collection", id: collection.id }, filter, { cursor });
-  return { photos: page.photos.map((p) => toGridPhoto(p, null, true)), nextCursor: page.nextCursor };
+  return { photos: page.photos.map((p) => toGridPhoto(p, null, me)), nextCursor: page.nextCursor };
 }
 
 /** Long enough to be either: a description somebody writes out, or a note for the helper to build one around. */
@@ -219,7 +269,18 @@ const DESCRIPTION_TEXT = z.string().max(4000);
 export async function setCollectionDescription(slug: string, text: string): Promise<void> {
   const collection = await loadEditableCollection(slug);
   const description = DESCRIPTION_TEXT.parse(text).trim();
-  await db.collection.update({ where: { id: collection.id }, data: { description: description || null } });
+  await db.collection.update({ where: { id: collection.id }, data: { description: description || null, ...(await handWrittenStored(collection, description)), descriptionByHelper: descriptionStaysHelpers(collection, description) } });
+  revalidatePath(`/collections/${slug}`, "layout");
+}
+
+/** Show the collection's description to everyone who may open it, or keep it for the family; see setTripDescriptionShared. */
+export async function setCollectionDescriptionShared(slug: string, everyone: boolean): Promise<void> {
+  const collection = await loadEditableCollection(slug);
+  // Never the helper's description while it names somebody who may not be named there (see namesSomebodyRestricted),
+  // checked at the album's level, which is a collection's (name-check.ts); a member's own words are theirs to show.
+  if (everyone && collection.descriptionByHelper && (await namesSomebodyRestricted([collection.description], [], await nameCheckForContainer("collection", collection.id)))) throw new Error(NAME_NOT_TO_BE_SHOWN);
+  await db.collection.update({ where: { id: collection.id }, data: { descriptionMembersOnly: !everyone, descriptionSharedAt: everyone ? new Date() : null } });
+  await noteRelaxedDescription("collection", collection.id);
   revalidatePath(`/collections/${slug}`, "layout");
 }
 

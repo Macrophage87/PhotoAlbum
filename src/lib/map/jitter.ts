@@ -48,3 +48,22 @@ export function spreadOverlapping<T extends Placed>(points: T[]): T[] {
     return m ? { ...p, lat: m.lat, lng: m.lng } : p;
   });
 }
+
+/**
+ * The same spread over map features, for a map that builds its pins in the browser (the placing screens, where the
+ * whole point is to put many photographs on exactly one spot). Features that do not move come back as they were.
+ */
+export function spreadFeatures<P extends { id: string }>(features: GeoJSON.Feature<GeoJSON.Point, P>[]): GeoJSON.Feature<GeoJSON.Point, P>[] {
+  const spread = spreadOverlapping(features.map((f) => ({ id: f.properties.id, lng: f.geometry.coordinates[0], lat: f.geometry.coordinates[1], f })));
+  return spread.map(({ f, lat, lng }) => (lat === f.geometry.coordinates[1] && lng === f.geometry.coordinates[0] ? f : { ...f, geometry: { type: "Point", coordinates: [lng, lat] } }));
+}
+
+/**
+ * The map's photographs with the ones just placed on this screen put where they now are: a pin that was moved leaves
+ * its old spot rather than showing in both, and one that had no pin gains one. The album's own copy is only fetched
+ * once, so without this a moved pin would sit where it was until the page was reloaded.
+ */
+export function withMoved<P extends { id: string }>(base: GeoJSON.Feature<GeoJSON.Point, P>[], moved: ReadonlyMap<string, GeoJSON.Feature<GeoJSON.Point, P>>): GeoJSON.Feature<GeoJSON.Point, P>[] {
+  if (!moved.size) return base;
+  return [...base.filter((f) => !moved.has(f.properties.id)), ...moved.values()];
+}

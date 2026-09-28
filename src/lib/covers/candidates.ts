@@ -1,5 +1,5 @@
 import { db } from "@/lib/db";
-import { NOT_TRASHED } from "@/lib/photos/trash";
+import { COVERABLE } from "@/lib/photos/cover";
 
 /**
  * The photographs a trip or a collection can be fronted by.
@@ -13,12 +13,12 @@ import { NOT_TRASHED } from "@/lib/photos/trash";
 /** A page of candidates. Kept small on purpose: this is a page of choices, not a gallery. */
 export const COVER_PAGE = 60;
 
-export type CoverCandidate = { id: string; updatedAt: Date; caption: string | null; title: string | null; originalName: string };
+export type CoverCandidate = { id: string; imageVersion: number; caption: string | null; title: string | null; membersTitle: string | null; originalName: string };
 
-const select = { id: true, updatedAt: true, caption: true, title: true, originalName: true } as const;
+const select = { id: true, updatedAt: true, imageVersion: true, caption: true, title: true, membersTitle: true, originalName: true } as const;
 
 export async function tripCoverCandidates(tripId: string, cursor?: string | null, take = COVER_PAGE): Promise<{ photos: CoverCandidate[]; nextCursor: string | null; total: number }> {
-  const where = { tripId, status: "READY" as const, ...NOT_TRASHED };
+  const where = { tripId, ...COVERABLE };
   const [rows, total] = await Promise.all([
     db.photo.findMany({
       where,
@@ -35,7 +35,7 @@ export async function tripCoverCandidates(tripId: string, cursor?: string | null
 }
 
 export async function collectionCoverCandidates(collectionId: string, cursor?: string | null, take = COVER_PAGE): Promise<{ photos: CoverCandidate[]; nextCursor: string | null; total: number }> {
-  const where = { collectionId, photo: { status: "READY" as const, ...NOT_TRASHED } };
+  const where = { collectionId, photo: COVERABLE };
   const [rows, total] = await Promise.all([
     db.collectionItem.findMany({
       where,

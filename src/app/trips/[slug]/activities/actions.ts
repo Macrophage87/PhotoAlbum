@@ -11,16 +11,29 @@ import { annotationGates } from "@/lib/annotation/eligibility";
 import { buildActivityRequest, loadActivityForDescription, parseActivityDescription } from "@/lib/annotation/activity";
 import { permittedNames } from "@/lib/people/gates";
 import { canEditContainer, NOT_YOUR_CONTAINER } from "@/lib/auth/ownership";
-import { activityInputFromForm, localInputToInstant } from "@/lib/activities/validation";
-import { reassignPhotosForActivity } from "@/lib/activities/reassign";
+import { activityInputFromForm, formTimeToInstant, localInputToInstant } from "@/lib/activities/validation";
+import { deleteActivityAndRefile, reassignPhotosForActivity } from "@/lib/activities/reassign";
+import { deleteTrackAndItsPositions, placeAgain } from "@/lib/tracks/remove";
 import { fieldErrors, participantsFromForm } from "@/lib/trips/validation";
 import type { ActivityType } from "@/generated/prisma/enums";
 import type { ActivityFormState } from "@/components/activities/ActivityForm";
+import { handWrittenDescription, handWrittenMembersOnly, judgeDescription } from "@/lib/annotation/members-only";
+import { descriptionStaysHelpers } from "@/lib/annotation/helper-text";
+import { dbNow, namesChangedSince } from "@/lib/people/names-changed";
+import { NAMES_CHANGED, withoutUnpermittedNames } from "@/lib/annotation/container";
+import { forgetState } from "@/lib/people/names-changed";
+import { forgottenScope, loadTombstone } from "@/lib/people/tombstone";
+import { unpermittedNameScrub } from "@/lib/people/unpermitted";
+import { forgetTrackFiles } from "@/lib/tracks/files";
+import { isCoverable } from "@/lib/photos/cover";
+import { NAME_NOT_TO_BE_SHOWN, namesSomebodyRestricted } from "@/lib/people/forget";
+import { nameCheckForContainer, nameCheckForTrip } from "@/lib/people/name-check";
+import { noteRelaxedDescription } from "@/lib/annotation/relaxed-release";
 
 /** An activity is part of the shape of a trip, so it is the trip's maker (and admins) who arrange them. */
 async function loadTrip(slug: string) {
   const user = await requireUserOrThrow();
-  const trip = await db.trip.findUnique({ where: { slug }, select: { id: true, slug: true, timezone: true, createdById: true } });
+  const trip = await db.trip.findUnique({ where: { slug, deletingAt: null }, select: { id: true, slug: true, timezone: true, createdById: true } });
   if (!trip) throw new Error("Trip not found");
   if (!canEditContainer(user, trip)) throw new Error(NOT_YOUR_CONTAINER);
   return trip;
@@ -40,6 +53,7 @@ export async function createActivity(slug: string, _prev: ActivityFormState, fd:
       startTime: localInputToInstant(v.start, trip.timezone),
       endTime: localInputToInstant(v.end, trip.timezone),
       description: v.description,
+      descriptionMembersOnly: await handWrittenMembersOnly(null, v.description),
       // Nobody named means everybody, which is what an empty list already says.
       ...(there?.length ? { participants: { connect: there.map((id) => ({ id })) } } : {}),
     },
@@ -54,7 +68,7 @@ export async function updateActivity(slug: string, id: string, _prev: ActivityFo
   const parsed = activityInputFromForm(fd);
   if (!parsed.success) return { status: "error", fieldErrors: fieldErrors(parsed.error) };
   const v = parsed.data;
-  const existing = await db.activity.findFirst({ where: { id, tripId: trip.id }, select: { id: true } });
+  const existing = await db.activity.findFirst({ where: { id, tripId: trip.id }, select: { id: true, trackId: true, participants: { select: { id: true } }, startTime: true, endTime: true, description: true, descriptionMembersOnly: true, descriptionTitleOnly: true, descriptionSharedAt: true, descriptionByHelper: true } });
   if (!existing) return { status: "error", message: "Activity not found" };
   // `set` reconciles to exactly what was ticked, so unticking somebody removes them; a form that never carried the
   // control at all leaves the list as it was.
@@ -64,24 +78,38 @@ export async function updateActivity(slug: string, id: string, _prev: ActivityFo
     data: {
       title: v.title,
       type: v.type as ActivityType,
-      startTime: localInputToInstant(v.start, trip.timezone),
-      endTime: localInputToInstant(v.end, trip.timezone),
+      // The form shows whole minutes of a wall clock: a time it sends back as it was shown stays exactly as stored, its
+      // seconds (an imported track's) and its side of a DST change (the autumn night's second 01:30) included.
+      startTime: formTimeToInstant(v.start, existing.startTime, trip.timezone),
+      endTime: formTimeToInstant(v.end, existing.endTime, trip.timezone),
       description: v.description,
+      ...(await activityHandWritten(existing, v.description)),
+      descriptionByHelper: descriptionStaysHelpers(existing, v.description),
       ...(there ? { participants: { set: there.map((pid) => ({ id: pid })) } } : {}),
     },
   });
   await reassignPhotosForActivity(id);
+  // Who was on it decides whose photographs its track may place (see geotag-photos): naming people takes back the
+  // places it gave everybody else's, and un-naming them lets it place theirs.
+  const before = new Set(existing.participants.map((p) => p.id));
+  if (existing.trackId && there && (there.length !== before.size || there.some((pid) => !before.has(pid)))) await placeAgain(trip.id);
   revalidatePath(`/trips/${slug}`, "layout");
   redirect(`/trips/${slug}/activities/${id}`);
 }
 
 export async function deleteActivity(slug: string, id: string, fd: FormData): Promise<void> {
   const trip = await loadTrip(slug);
-  const activity = await db.activity.findFirst({ where: { id, tripId: trip.id }, select: { id: true, trackId: true } });
+  const activity = await db.activity.findFirst({ where: { id, tripId: trip.id }, select: { id: true, trackId: true, track: { select: { originalFile: true } } } });
   if (!activity) return;
   const deleteTrack = fd.get("deleteTrack") === "on";
-  await db.activity.delete({ where: { id } });
-  if (deleteTrack && activity.trackId) await db.track.delete({ where: { id: activity.trackId } }).catch(() => {});
+  // What was on it goes to whatever else covers its time, rather than being left loose.
+  await deleteActivityAndRefile(id);
+  if (deleteTrack && activity.trackId) {
+    // Takes back the positions the track gave and places those photos again from the trip's other tracks.
+    await deleteTrackAndItsPositions(activity.trackId);
+    // The uploaded file goes only once no track refers to it: a multisport file's other legs still do.
+    await forgetTrackFiles([activity.track?.originalFile]);
+  }
   revalidatePath(`/trips/${slug}`, "layout");
   redirect(`/trips/${slug}/activities`);
 }
@@ -102,8 +130,11 @@ export async function setActivityShare(slug: string, id: string, on: boolean): P
   const trip = await loadTrip(slug);
   const activity = await db.activity.findFirst({ where: { id, tripId: trip.id }, select: { id: true } });
   if (!activity) throw new Error("Activity not found");
-  await db.activity.update({ where: { id }, data: { shareToken: on ? generateToken() : null } });
-  await db.photo.updateMany({ where: { activityId: id }, data: { updatedAt: new Date() } });
+  // Only while its trip is not being deleted: a link made by a save that read the trip just before the mark would
+  // otherwise open an afternoon of a trip that is already gone.
+  const shared = await db.activity.updateMany({ where: { id, trip: { deletingAt: null } }, data: { shareToken: on ? generateToken() : null } });
+  if (!shared.count) throw new Error("Trip not found");
+  await db.photo.updateMany({ where: { activityId: id }, data: { updatedAt: new Date(), imageVersion: { increment: 1 } } });
   revalidatePath(`/trips/${slug}/activities/${id}`);
 }
 
@@ -116,18 +147,23 @@ export async function setActivityCover(slug: string, id: string, photoId: string
   const activity = await db.activity.findFirst({ where: { id, tripId: trip.id }, select: { id: true } });
   if (!activity) throw new Error("Activity not found");
   if (photoId) {
-    const photo = await db.photo.findFirst({ where: { id: photoId, activityId: id }, select: { id: true } });
+    const photo = await db.photo.findFirst({ where: { id: photoId, activityId: id }, select: { status: true, trashedAt: true, width: true } });
     if (!photo) throw new Error("Photo is not on this activity");
+    // Still processing, failed, or in the trash: there is no picture to lead with.
+    if (!isCoverable(photo)) throw new Error("Only a finished photo can be the cover");
   }
-  // A photograph fronts one activity at most. One moved here from an activity it was the cover of is released there
-  // first; that activity goes back to leading with its own first photograph.
-  await db.$transaction([
-    ...(photoId ? [db.activity.updateMany({ where: { coverPhotoId: photoId, id: { not: id } }, data: { coverPhotoId: null } })] : []),
-    db.activity.update({ where: { id }, data: { coverPhotoId: photoId } }),
-  ]);
+  // An activity it was moved from may still name it; that choice no longer stands there (activityCover checks), so it
+  // is left alone rather than reached into, as with trips.
+  await db.activity.update({ where: { id }, data: { coverPhotoId: photoId } });
   revalidatePath(`/trips/${slug}/activities/${id}`);
 }
 
+
+/** A description saved by hand, as stored; one held only for its trip's title keeps that reason while unchanged. */
+async function activityHandWritten(before: { description: string | null; descriptionMembersOnly: boolean; descriptionTitleOnly: boolean; descriptionSharedAt: Date | null } | null, text: string | null | undefined) {
+  const { descriptionMembersOnly, descriptionSharedAt, unchanged } = await handWrittenDescription(before, text);
+  return { descriptionMembersOnly, descriptionSharedAt, descriptionTitleOnly: Boolean(unchanged && before?.descriptionTitleOnly && descriptionMembersOnly) };
+}
 /** What somebody may type into the box: a note for the helper, or the description itself. Long enough for either. */
 const DESCRIPTION_TEXT = z.string().max(4000);
 
@@ -141,9 +177,22 @@ const DESCRIPTION_TEXT = z.string().max(4000);
 export async function setActivityDescription(slug: string, id: string, text: string): Promise<void> {
   const trip = await loadTrip(slug);
   const description = DESCRIPTION_TEXT.parse(text).trim();
-  const activity = await db.activity.findFirst({ where: { id, tripId: trip.id }, select: { id: true } });
+  const activity = await db.activity.findFirst({ where: { id, tripId: trip.id }, select: { id: true, description: true, descriptionMembersOnly: true, descriptionTitleOnly: true, descriptionSharedAt: true, descriptionByHelper: true } });
   if (!activity) throw new Error("Activity not found");
-  await db.activity.update({ where: { id }, data: { description: description || null } });
+  await db.activity.update({ where: { id }, data: { description: description || null, ...(await activityHandWritten(activity, description)), descriptionByHelper: descriptionStaysHelpers(activity, description) } });
+  revalidatePath(`/trips/${slug}/activities/${id}`);
+}
+
+/** Show the activity's description to everyone who may open it (its link included), or keep it for the family. */
+export async function setActivityDescriptionShared(slug: string, id: string, everyone: boolean): Promise<void> {
+  const trip = await loadTrip(slug);
+  const activity = await db.activity.findFirst({ where: { id, tripId: trip.id }, select: { id: true, description: true, descriptionByHelper: true } });
+  if (!activity) throw new Error("Activity not found");
+  // Never the helper's description while it names somebody who may not be named there (see namesSomebodyRestricted),
+  // checked at its trip's level (name-check.ts); a member's own words are theirs to show, as their captions are.
+  if (everyone && activity.descriptionByHelper && (await namesSomebodyRestricted([activity.description], [], await nameCheckForTrip(trip.id)))) throw new Error(NAME_NOT_TO_BE_SHOWN);
+  await db.activity.update({ where: { id }, data: { descriptionMembersOnly: !everyone, descriptionTitleOnly: false, descriptionSharedAt: everyone ? new Date() : null } });
+  await noteRelaxedDescription("activity", id);
   revalidatePath(`/trips/${slug}/activities/${id}`);
 }
 
@@ -169,14 +218,42 @@ export async function describeActivityWithAi(slug: string, id: string, note?: st
   if (activity.trip.annotationOptOut) throw new Error(`The trip ${activity.trip.title} is opted out of the AI helper`);
   if (!activity.photos.length) throw new Error("There are no photographs on this activity to describe it from");
 
+  // By the database's clock, as forgets are stamped.
+  const requestedAt = await dbNow();
   const names = [...new Set((await Promise.all(activity.photos.map((p) => permittedNames(p.id)))).flat())];
-  const request = await buildActivityRequest(activity, gates.model, names, DESCRIPTION_TEXT.parse(note ?? "").trim() || undefined);
+  // The family's words go without the names the helper may not be told, the note beside the button included.
+  // One-word forgotten names count by every photograph in it, not only the few it is shown.
+  const scrub = await unpermittedNameScrub(activity.photos.map((p) => p.id), undefined, [{ kind: "activity", id }]);
+  const scope = await forgottenScope({ containers: [{ kind: "activity", id }] });
+  const request = await buildActivityRequest(await withoutUnpermittedNames(activity, scrub), gates.model, names, scrub(DESCRIPTION_TEXT.parse(note ?? "").trim() || null) || undefined);
+  const notes = activity.photos.some((p) => p.context?.trim());
   const response = await anthropic().messages.create(request);
   console.log(`[annotate-activity] ${activity.id} model=${response.model} stop=${response.stop_reason} in=${response.usage.input_tokens} out=${response.usage.output_tokens}`);
   if (response.stop_reason === "refusal") throw new Error("The helper declined to describe this one");
   const parsed = parseActivityDescription(response.content as { type: string; text?: string }[]);
   if (!parsed) throw new Error("The helper's answer could not be read; try again");
-  await db.activity.update({ where: { id }, data: { description: parsed.description } });
+  // Nobody forgotten comes back by way of the answer.
+  const tombstone = await loadTombstone();
+  parsed.description = tombstone.scrub(parsed.description, scope);
+  // Written from names or notes, it is read by members only; see `descriptionFromMembersOnly`.
+  const judged = await judgeDescription(parsed.description, {
+    names,
+    notes,
+    // The description it replaces goes with the request, and so does the trip's title, which a link to the activity
+    // alone does not open.
+    previous: Boolean(activity.description && !activity.descriptionByHelper && activity.descriptionMembersOnly),
+    privateTitles: activity.trip.visibility === "PUBLIC" ? [] : [activity.trip.title],
+    level: await nameCheckForContainer("activity", id),
+  });
+  // Somebody on these photographs forgotten, renamed or no longer to be named while it was being written, or anybody
+  // forgotten at all: its answer may name them, so it is not kept.
+  await db.$transaction(async (tx) => {
+    // Anybody forgotten since the request (and so since the forgotten names were read, after it): not kept.
+    const forget = await forgetState(tx, tombstone.loadedAt, requestedAt);
+    if (forget.underWay || forget.since || forget.reload || (await namesChangedSince(activity.photos.map((p) => p.id), requestedAt))) throw new Error(NAMES_CHANGED);
+    await tx.activity.update({ where: { id }, data: { description: parsed.description, descriptionMembersOnly: judged.membersOnly, descriptionTitleOnly: judged.titleOnly, descriptionTitleWords: judged.titleOnly ? (judged.titleWords ?? []) : [], descriptionSharedAt: null, descriptionByHelper: true } });
+  });
+  await noteRelaxedDescription("activity", id);
   revalidatePath(`/trips/${slug}/activities/${id}`);
   return parsed.description;
 }

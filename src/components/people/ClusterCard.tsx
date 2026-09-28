@@ -7,11 +7,13 @@ import { FaceThumb } from "./FaceThumb";
 import { NameClusterForm, type Known } from "./NameClusterForm";
 import { markNotAFace, nameClusterAs, splitFaceFromCluster } from "@/app/people/actions";
 
-export type ClusterFaceView = { faceId: string; photoId: string; updatedAt: string; width: number | null; height: number | null; box: [number, number, number, number] };
+export type ClusterFaceView = { faceId: string; photoId: string; imageVersion: number; width: number | null; height: number | null; box: [number, number, number, number]; /** On this member's own upload (any, for an admin). */ editable: boolean };
 export type ClusterView = {
   id: string;
   faceCount: number;
   faces: ClusterFaceView[];
+  /** How many of the group's faces this member may name. */
+  editableCount: number;
   looksLike: { id: string; name: string; kind: "HUMAN" | "PET" } | null;
 };
 
@@ -25,6 +27,9 @@ export type ClusterView = {
  * waits on its own. And one face may be no face at all — a statue, a portrait on the wall — which is said once and
  * never found again.
  */
+/** "one" for 1, as a sentence says it; digits otherwise. */
+const count = (n: number) => (n === 1 ? "one" : String(n));
+
 export function ClusterCard({ cluster, isAdmin, people, pets }: { cluster: ClusterView; isAdmin: boolean; people: Known[]; pets: Known[] }) {
   const [busy, start] = useTransition();
   const [acted, setActed] = useState<string | null>(null);
@@ -39,6 +44,10 @@ export function ClusterCard({ cluster, isAdmin, people, pets }: { cluster: Clust
     });
 
   const shown = cluster.faces.length;
+  // Saying who is in a photograph is its uploader's (or an admin's), so a member names the faces on their own
+  // uploads; in a group spread over several members' photographs the rest stay here, together, for their uploaders.
+  const others = Math.max(0, cluster.faceCount - cluster.editableCount);
+  const canName = cluster.editableCount > 0;
   return (
     <Card className="p-4 space-y-3" data-testid="face-cluster" data-cluster={cluster.id}>
       <div className="flex flex-wrap items-baseline gap-x-2">
@@ -50,26 +59,28 @@ export function ClusterCard({ cluster, isAdmin, people, pets }: { cluster: Clust
         {cluster.faces.map((f) => (
           <li key={f.faceId} className="w-[72px] text-center">
             <a href={`/photos/${f.photoId}`} title="Open this photograph">
-              <FaceThumb photo={{ id: f.photoId, updatedAt: new Date(f.updatedAt), width: f.width, height: f.height }} box={f.box} />
+              <FaceThumb photo={{ id: f.photoId, imageVersion: f.imageVersion, width: f.width, height: f.height }} box={f.box} />
             </a>
-            <div className="mt-1 flex flex-col gap-0.5">
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => act(f.faceId, "split")}
-                className="text-[11px] leading-tight text-muted hover:text-primary hover:underline disabled:opacity-50"
-              >
-                not them
-              </button>
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => act(f.faceId, "notface")}
-                className="text-[11px] leading-tight text-muted hover:text-red-700 hover:underline disabled:opacity-50"
-              >
-                not a face
-              </button>
-            </div>
+            {f.editable && (
+              <div className="mt-1 flex flex-col gap-0.5">
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => act(f.faceId, "split")}
+                  className="text-[11px] leading-tight text-muted hover:text-primary hover:underline disabled:opacity-50"
+                >
+                  not them
+                </button>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => act(f.faceId, "notface")}
+                  className="text-[11px] leading-tight text-muted hover:text-red-700 hover:underline disabled:opacity-50"
+                >
+                  not a face
+                </button>
+              </div>
+            )}
           </li>
         ))}
       </ul>
@@ -81,18 +92,29 @@ export function ClusterCard({ cluster, isAdmin, people, pets }: { cluster: Clust
             Looks like <span className="font-medium">{cluster.looksLike.name}</span>
             {cluster.looksLike.kind === "PET" ? " (a pet)" : ""}.
           </span>
-          <button
+          {canName && <button
             type="button"
             disabled={busy}
             onClick={() => start(async () => { await nameClusterAs(cluster.id, cluster.looksLike!.id); router.refresh(); })}
             className="rounded-theme border border-primary text-primary px-2 py-0.5 text-xs hover:bg-primary hover:text-primary-fg disabled:opacity-50"
           >
-            Yes, these are {cluster.looksLike.name}
-          </button>
+            {others > 0 ? `Yes, the ones on my photos are ${cluster.looksLike.name}` : `Yes, these are ${cluster.looksLike.name}`}
+          </button>}
         </div>
       )}
 
-      <NameClusterForm clusterId={cluster.id} isAdmin={isAdmin} people={people} pets={pets} />
+      {!canName ? (
+        <p className="text-sm text-muted" data-testid="cluster-not-yours">Only whoever uploaded these, or an admin, can name them.</p>
+      ) : (
+        <>
+          {others > 0 && (
+            <p className="text-sm text-muted" data-testid="cluster-some-not-yours">
+              Naming this group names only the {count(cluster.editableCount)} on your photos; the other {count(others)} {others === 1 ? "stays" : "stay"} here for whoever uploaded {others === 1 ? "it" : "them"}, or an admin.
+            </p>
+          )}
+          <NameClusterForm clusterId={cluster.id} isAdmin={isAdmin} people={people} pets={pets} />
+        </>
+      )}
     </Card>
   );
 }

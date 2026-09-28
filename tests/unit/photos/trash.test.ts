@@ -49,7 +49,7 @@ describe("an item in the trash", () => {
     const { groups: days } = await tripTimeline(tripId, "UTC");
     expect(days.flatMap((g) => g.items.flatMap((i) => i.photos ?? [])).map((p) => p.id)).toEqual([keptId]);
     const map = await buildMapPayload(member, tripId);
-    expect(map.photos.features.map((f) => f.properties.id)).toEqual([keptId]);
+    expect(map.photos.points.map((p) => p[0])).toEqual([keptId]);
   });
 
   it("stops being counted on the trip card", async () => {

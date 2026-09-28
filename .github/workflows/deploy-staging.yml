@@ -1,5 +1,5 @@
-# Push to `staging` → GitHub logs into the server and updates the staging
-# instance: one job, one SSH step, one shared script (deploy/update.sh),
+# Push to `staging` → once CI passes for that commit, GitHub logs into the
+# server and updates the staging instance to it: one job, one SSH step, one shared script (deploy/update.sh),
 # which dumps the database, resets the checkout to the branch, rebuilds the
 # image with `docker compose up --build -d` and waits for /api/health.
 # Details in docs/DEPLOY.md → "Continuous deployment".
@@ -9,23 +9,29 @@
 #                   follows DNS if the server ever moves)
 #   DEPLOY_USER     the deploy login on the server (a user with sudo)
 #   DEPLOY_SSH_KEY  the private half of a keypair made just for deploys
-# Until they exist the job prints a note and exits green.
+# Until they exist the job prints a note and exits green. A fourth,
+#   DEPLOY_HOST_FINGERPRINT  the server's SSH host key fingerprint (SHA256:…),
+# is optional but strongly advised: without it the host key is not checked.
 name: Deploy staging
 on:
-  push:
-    branches: [staging]
-  workflow_dispatch:
+  # Called only by ci.yml, after its test and docker jobs pass for the pushed
+  # commit, so nothing reaches the server that CI has not passed. To redeploy
+  # without a commit, re-run this job from the CI run, or run CI by hand on
+  # `staging` (Actions → CI → Run workflow).
+  workflow_call:
 
-# One group for BOTH deploy workflows: staging and live share one server and
-# one small root disk, and two image builds at once ran it out of space.
-concurrency:
-  group: deploy-photoalbum
-  cancel-in-progress: false # deploys queue, never overlap
+# The job only logs into the server; it needs no GitHub token permissions at all.
+permissions: {}
 
 jobs:
   deploy:
     name: Update the staging instance
     runs-on: ubuntu-latest
+    # One group for BOTH deploys: staging and live share one server and one
+    # small root disk, and two image builds at once ran it out of space.
+    concurrency:
+      group: deploy-photoalbum
+      cancel-in-progress: false # deploys queue, never overlap
     env:
       ARMED: ${{ secrets.DEPLOY_SSH_KEY != '' && secrets.DEPLOY_HOST != '' && secrets.DEPLOY_USER != '' }}
     steps:
@@ -34,17 +40,24 @@ jobs:
         run: echo "DEPLOY_HOST / DEPLOY_USER / DEPLOY_SSH_KEY secrets are not set — skipping the deploy (see docs/DEPLOY.md)."
       - name: SSH in and run deploy/update.sh
         if: env.ARMED == 'true'
-        uses: appleboy/ssh-action@v1
+        # Pinned to the commit v1 (v1.2.5) pointed at, since this step is handed the deploy key: a moved tag cannot
+        # change what runs with it. Bump by looking up the new tag's commit.
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
         env:
           APP_DIR: /cieply/sites/cieply.com/PhotoAlbum
           BRANCH: staging
+          # github.sha is the caller's commit: exactly the one CI just tested.
+          DEPLOY_SHA: ${{ github.sha }}
           APP_PORT: "3005"
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
+          # The server's host key fingerprint (SHA256:…), so the runner refuses a machine pretending to be the server.
+          # Unset, the action does not check the host key at all.
+          fingerprint: ${{ secrets.DEPLOY_HOST_FINGERPRINT }}
           command_timeout: 30m # the image rebuild takes a few minutes
-          envs: APP_DIR,BRANCH,APP_PORT
+          envs: APP_DIR,BRANCH,APP_PORT,DEPLOY_SHA
           script: |
             set -e
             if [ ! -d "$APP_DIR/.git" ]; then

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { isThemeKey } from "@/themes";
-import { isValidTimezone } from "@/lib/time/local-day";
+import { canonicalTimezone, isValidTimezone } from "@/lib/time/local-day";
 
 export const tripInputSchema = z
   .object({
@@ -8,7 +8,9 @@ export const tripInputSchema = z
     description: z.string().trim().max(2000).optional().transform((v) => v || null),
     startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Pick a start date"),
     endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Pick an end date"),
-    timezone: z.string().refine(isValidTimezone, "Unknown time zone"),
+    // Saved under the tz database's own name (a link followed, a renamed zone under its new name): the album's SQL
+    // reads it in Postgres, which may not know an old name, and must read it the way the pages do.
+    timezone: z.string().refine(isValidTimezone, "Unknown time zone").transform((tz) => canonicalTimezone(tz)!),
     themeKey: z.string().refine(isThemeKey, "Unknown theme"),
   })
   .refine((v) => v.endDate >= v.startDate, { message: "End date must be on or after the start date", path: ["endDate"] });

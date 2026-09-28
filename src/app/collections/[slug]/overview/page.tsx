@@ -1,24 +1,24 @@
 import Link from "next/link";
 import { loadViewableCollection } from "@/lib/collections/access";
-import { listCollectionItems } from "@/lib/collections/queries";
+import { defaultCollectionOrder, listCollectionItems } from "@/lib/collections/queries";
 import { PhotoGrid } from "@/components/photos/PhotoGrid";
-import { toGridPhoto } from "@/components/photos/toGrid";
+import { takenYearSpan, toGridPhoto } from "@/components/photos/toGrid";
 import { ButtonLink, Card } from "@/components/ui";
 import { CollectionUploader } from "@/components/collections/CollectionUploader";
 import { env } from "@/lib/env";
 import { annotationGates } from "@/lib/annotation/eligibility";
+import { uploadByteLimits } from "@/lib/media/upload-limits";
 
 export default async function CollectionOverviewPage({ params }: PageProps<"/collections/[slug]/overview">) {
   const { slug } = await params;
-  const { collection, editable } = await loadViewableCollection(slug);
-  const [items, gates] = await Promise.all([listCollectionItems(collection.id), editable ? annotationGates() : Promise.resolve(null)]);
-  const upload = editable ? <CollectionUploader collectionId={collection.id} slug={slug} maxClipSeconds={env().MAX_CLIP_SECONDS} annotationActive={Boolean(gates?.active)} /> : null;
+  const { viewer, collection, editable } = await loadViewableCollection(slug);
+  const [items, gates] = await Promise.all([listCollectionItems(collection.id, { viewerId: viewer.kind === "user" ? viewer.user.id : null, order: defaultCollectionOrder(collection, editable) }), editable ? annotationGates() : Promise.resolve(null)]);
+  const upload = editable ? <CollectionUploader collectionId={collection.id} slug={slug} maxClipSeconds={env().MAX_CLIP_SECONDS} maxBytes={uploadByteLimits()} annotationActive={Boolean(gates?.active)} /> : null;
   const ready = items.filter((i) => i.status === "READY");
-  const dated = ready.filter((i) => i.takenAt).map((i) => i.takenAt!.getTime());
-  const span = dated.length ? `${new Date(Math.min(...dated)).getFullYear()}–${new Date(Math.max(...dated)).getFullYear()}` : null;
+  const span = takenYearSpan(ready);
   const stats: [string, string][] = [
     ["Photos", String(ready.length)],
-    ...(span ? ([["Years", span.split("–")[0] === span.split("–")[1] ? span.split("–")[0] : span]] as [string, string][]) : []),
+    ...(span ? ([["Years", span]] as [string, string][]) : []),
   ];
   return (
     <div className="space-y-8">
@@ -43,11 +43,11 @@ export default async function CollectionOverviewPage({ params }: PageProps<"/col
         {editable && ready.length === 0 ? (
           <Card className="p-5 space-y-2">
             <p className="font-medium">Nothing here yet.</p>
-            <p className="text-sm text-muted">Pick photos that are already in the album, upload new ones, or open any photo and tick this collection.</p>
+            <p className="text-sm text-muted">Pick photos that are already in the album, upload new ones, or open any photo and check this collection.</p>
             <div className="flex flex-wrap gap-2 pt-1"><ButtonLink href={`/collections/${slug}/add`} size="sm">Add existing photos</ButtonLink>{upload}</div>
           </Card>
         ) : (
-          <PhotoGrid photos={ready.slice(0, 12).map((p) => toGridPhoto(p, null, editable))} emptyMessage="Nothing here yet." />
+          <PhotoGrid photos={ready.slice(0, 12).map((p) => toGridPhoto(p, null, viewer.user))} emptyMessage="Nothing here yet." />
         )}
       </section>
     </div>

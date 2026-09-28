@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ageOn, isMinor, minorsCheckPasses, nameMayLeaveServer, namingOutcome } from "@/lib/people/consent";
+import { ageOn, isMinor, knownAdult, minorsCheckPasses, nameMayLeaveServer, namingOutcome } from "@/lib/people/consent";
 
 const now = new Date("2026-09-11T00:00:00Z");
 const adult = new Date("1990-05-01T00:00:00Z");
@@ -48,5 +48,14 @@ describe("names to the helper", () => {
     expect(nameMayLeaveServer({ birthday: adult, adultAttestedAt: null, faceIndexing: true }, now)).toBe(true);
     expect(nameMayLeaveServer({ birthday: adult, adultAttestedAt: null, faceIndexing: false }, now)).toBe(false);
     expect(nameMayLeaveServer({ birthday: child, adultAttestedAt: null, faceIndexing: true }, now)).toBe(false);
+  });
+  it("never for somebody with no birthday, unless an admin attested they are an adult", () => {
+    // Tagging a six-year-old by hand records no birthday; "not known to be a minor" is not "an adult".
+    expect(nameMayLeaveServer({ birthday: null, adultAttestedAt: null, faceIndexing: false, nameInDescriptions: true }, now)).toBe(false);
+    expect(nameMayLeaveServer({ birthday: null, adultAttestedAt: null, faceIndexing: true }, now)).toBe(false);
+    expect(nameMayLeaveServer({ birthday: null, adultAttestedAt: now, faceIndexing: false, nameInDescriptions: true }, now)).toBe(true);
+    // A birthday recorded later showing a child outranks an attestation made when nobody knew it.
+    expect(nameMayLeaveServer({ birthday: child, adultAttestedAt: now, faceIndexing: true, nameInDescriptions: true }, now)).toBe(false);
+    expect(knownAdult({ birthday: child, adultAttestedAt: now }, now)).toBe(false);
   });
 });

@@ -1,9 +1,10 @@
 import { z } from "zod";
+import { envFlag } from "./env-flag";
 
 const boolish = z
   .string()
   .optional()
-  .transform((v) => v === undefined || v === "" ? undefined : ["1", "true", "yes", "on"].includes(v.toLowerCase()));
+  .transform((v) => v === undefined || v === "" ? undefined : envFlag(v));
 
 /** A URL that may be left blank: .env.example ships the optional endpoints
  *  as `NAME=`, and an empty value means "unset" (zod's url() check would
@@ -15,8 +16,12 @@ const urlWithDefault = (fallback: string) => z.string().optional().transform((v)
 const schema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   APP_URL: urlWithDefault("http://localhost:3000"),
+  // Read by src/proxy.ts on each request: HSTS (sent when APP_URL is https) also covers every subdomain.
+  HSTS_INCLUDE_SUBDOMAINS: boolish.transform((v) => v ?? false),
   DATABASE_URL: z.string().min(1),
   ADMIN_EMAIL: z.string().email().optional().or(z.literal("").transform(() => undefined)),
+  // All sign-in emails together, per hour: past this nobody is sent a new link until the hour moves on.
+  SIGN_IN_MAIL_PER_HOUR: z.coerce.number().int().positive().default(200),
   SMTP_HOST: z.string().optional().transform((v) => (v ? v : undefined)),
   SMTP_PORT: z.coerce.number().int().positive().default(587),
   SMTP_USER: z.string().optional().transform((v) => (v ? v : undefined)),
@@ -30,6 +35,8 @@ const schema = z.object({
   // Short clips only: longer videos go to YouTube. Phone video runs 65 to 400 MB per minute, hence the separate byte cap.
   MAX_CLIP_SECONDS: z.coerce.number().int().positive().default(90),
   MAX_VIDEO_UPLOAD_BYTES: z.coerce.number().int().positive().default(1024 * 1024 * 1024),
+  // 3D scans: a gaussian-splat .ply from a phone scanner is often several hundred MB, so scans get their own cap.
+  MAX_SCAN_UPLOAD_BYTES: z.coerce.number().int().positive().default(1024 * 1024 * 1024),
   RUN_WORKER: boolish.transform((v) => v ?? true),
   // External services are reached only through these base URLs so tests can point them at a mock server.
   YOUTUBE_OEMBED_URL: urlWithDefault("https://www.youtube.com/oembed"),
@@ -57,12 +64,14 @@ const schema = z.object({
   GOOGLE_OAUTH_CLIENT_ID: z.string().optional().transform((v) => (v ? v : undefined)),
   GOOGLE_OAUTH_CLIENT_SECRET: z.string().optional().transform((v) => (v ? v : undefined)),
   TOKEN_ENCRYPTION_KEY: z.string().optional().transform((v) => (v ? v : undefined)),
+  // The secret forgotten names are hashed under (32 random bytes, base64). Back it up with the environment, not the database.
+  FORGET_KEY: z.string().optional().transform((v) => (v ? v : undefined)),
   GOOGLE_ACCOUNTS_URL: urlWithDefault("https://accounts.google.com"),
   GOOGLE_OAUTH_BASE_URL: urlWithDefault("https://oauth2.googleapis.com"),
   GOOGLE_PHOTOS_API_URL: urlWithDefault("https://photospicker.googleapis.com/v1"),
   // Automatic pet matching through the sidecar's animal detector (needs ML_URL); on by default when the sidecar is set.
   PET_MATCHING_ENABLED: boolish.transform((v) => v ?? true),
-  // Address lookup for "Set a place": a Nominatim-compatible search endpoint, called server-side only when a member searches. Blank turns lookup off.
+  // Address lookup for "Set a place": a Nominatim-compatible search endpoint, called server-side only when a member searches. Blank means the public OpenStreetMap server; set GEOCODER_ENABLED=false to turn lookup off.
   GEOCODER_URL: urlWithDefault("https://nominatim.openstreetmap.org/search"),
   GEOCODER_ENABLED: boolish.transform((v) => v ?? true),
   // Visitor statistics: counted on this server, never sent anywhere, and shown only on the Admin page.

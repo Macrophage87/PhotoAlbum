@@ -21,9 +21,15 @@ export type GalleryFilter = {
   kind: MediaKind | null;
   year: number | null;
   activityId: string | null;
+  /**
+   * Read for a signed-in member. The words are then matched against what members may read — names, notes, the
+   * helper's members-only text — and otherwise only against what anybody may (see `idsMatching`). Off unless the
+   * filter was parsed for a member, so a filter made up anywhere else asks the question a stranger may ask.
+   */
+  member: boolean;
 };
 
-export const NO_FILTER: GalleryFilter = { q: null, uploaderId: null, personIds: [], kind: null, year: null, activityId: null };
+export const NO_FILTER: GalleryFilter = { q: null, uploaderId: null, personIds: [], kind: null, year: null, activityId: null, member: false };
 
 const KINDS: MediaKind[] = ["PHOTO", "VIDEO", "EXTERNAL_VIDEO", "SCAN"];
 
@@ -38,6 +44,11 @@ export const KIND_LABELS: Record<MediaKind, string> = {
 /** The longest search worth sending; matches the search page. */
 export const MAX_GALLERY_QUERY = 200;
 const FIRST_PHOTOGRAPH = 1826;
+
+/** A year a filter may ask about: from the first photograph to well past any camera's clock. Anything else is no year. */
+export function isPhotoYear(year: number): boolean {
+  return Number.isInteger(year) && year >= FIRST_PHOTOGRAPH && year <= 2200;
+}
 
 type Params = Record<string, string | string[] | undefined>;
 
@@ -60,9 +71,10 @@ const many = (v: string | string[] | undefined): string[] => {
  * Read a filter off the address bar. `member` is false for anonymous visitors, who see neither who uploaded what
  * nor who is in the picture, and must not be able to narrow by either: a stranger who could ask a public trip for
  * "photographs with Ada in them" would be told which of them she is on, which is the whole of what the album keeps
- * from them.
+ * from them. The same goes for the words: theirs are matched only against what they may read. `inTrip` is for a
+ * trip's own pages, where its activities may be asked about by whoever may open the trip.
  */
-export function parseGalleryFilter(sp: Params, opts: { member: boolean }): GalleryFilter {
+export function parseGalleryFilter(sp: Params, opts: { member: boolean; inTrip?: boolean }): GalleryFilter {
   const rawQ = one(sp.q);
   const kind = one(sp.kind);
   const year = Number(one(sp.year));
@@ -71,8 +83,11 @@ export function parseGalleryFilter(sp: Params, opts: { member: boolean }): Galle
     uploaderId: opts.member ? one(sp.uploader) : null,
     personIds: opts.member ? many(sp.person) : [],
     kind: kind && (KINDS as string[]).includes(kind) ? (kind as MediaKind) : null,
-    year: Number.isInteger(year) && year >= FIRST_PHOTOGRAPH && year <= 2200 ? year : null,
-    activityId: one(sp.activity),
+    year: isPhotoYear(year) ? year : null,
+    // An activity is asked about inside its trip. Anywhere else a stranger could use one to learn which public
+    // photographs came from an outing on a trip they may not open.
+    activityId: opts.member || opts.inTrip ? one(sp.activity) : null,
+    member: opts.member,
   };
 }
 

@@ -29,7 +29,7 @@ export default async function AddToActivityPage({ params, searchParams }: PagePr
   const filter = parsePickerFilter(await searchParams);
   const [page, members, people, during] = await Promise.all([
     candidatePhotoPage({ kind: "activity", id: activity.id }, filter),
-    db.user.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true, email: true } }),
+    db.user.findMany({ where: { removingAt: null }, orderBy: { name: "asc" }, select: { id: true, name: true, email: true } }),
     peopleInPhotos(),
     activityWindow(me, activity),
   ]);
@@ -42,9 +42,10 @@ export default async function AddToActivityPage({ params, searchParams }: PagePr
       filter={filter}
       members={members.map((m) => ({ id: m.id, label: uploaderLabel(m.name, m.email) }))}
       people={people}
-      initial={{ photos: page.photos.map((p) => toGridPhoto(p, null, true)), nextCursor: page.nextCursor, total: page.total }}
+      initial={{ photos: page.photos.map((p) => toGridPhoto(p, null, me)), nextCursor: page.nextCursor, total: page.total }}
       extra={
         <TakeWindow
+          kind="activity"
           count={n}
           elsewhere={during.elsewhere}
           label={`Add all ${n} photo${n === 1 ? "" : "s"} taken during it (${when})`}

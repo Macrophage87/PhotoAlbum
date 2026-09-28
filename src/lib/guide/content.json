@@ -26,7 +26,8 @@
             "Go to the album's web address. Somebody in the family will have sent it to you.",
             "Type your email address and press the button.",
             "Look in your email. There will be a message with a link in it.",
-            "Press that link. You are in."
+            "Press that link. The album opens with one big **Sign in** button.",
+            "Press **Sign in**. You are in."
           ]
         },
         {
@@ -35,11 +36,11 @@
         },
         {
           "kind": "note",
-          "text": "**No email arrived?** Only people the family has invited can get in, so the album will not send a link to an address it does not know. Ask whoever runs the album to invite you. Also look in your junk folder."
+          "text": "**No email arrived?** Only people the family has invited can get in, so the album will not send a link to an address it does not know. Ask whoever runs the album to invite you. Also look in your junk folder. If the album says a link was sent in the last few minutes, use the newest email from the album. If it says too many links were asked for, wait ten minutes and try again."
         },
         {
           "kind": "p",
-          "text": "Once you are in, it remembers you on that phone or computer for a few months. You will not have to do this often."
+          "text": "Once you are in, it remembers you on that phone or computer. As long as you look in at least every few months, you will not have to do this again."
         }
       ]
     },
@@ -49,7 +50,7 @@
       "blocks": [
         {
           "kind": "p",
-          "text": "Open a trip and you land on its **timeline**: the days it happened, in order, top to bottom. That is how people remember a holiday — the day we got there, the day of the boat, the last morning — so that is what the album shows first."
+          "text": "Open a trip and you land on its **timeline**: the days it happened, in order, top to bottom. That is how people remember a vacation — the day we got there, the day of the boat, the last morning — so that is what the album shows first."
         },
         {
           "kind": "h3",
@@ -112,7 +113,7 @@
             ],
             [
               "Photos",
-              "All of them in a plain grid, newest first."
+              "All of them in a plain grid, **Favorites first**. You can also put them in date order, oldest or newest first."
             ],
             [
               "Overview",
@@ -168,7 +169,7 @@
             ],
             [
               "Who is in it",
-              "A person or a pet. Choose two names and you get the ones they are _both_ in."
+              "A person or a pet. Choose two names and you get the ones they are _both_ in. On a computer, hold **Ctrl** (**Command** on a Mac) as you click each name; without it, each click replaces the name before. On a phone or tablet, just tap each name."
             ],
             [
               "Part of the trip",
@@ -242,7 +243,7 @@
           "kind": "bullets",
           "items": [
             "**New photos from this device** — choose them from your phone or computer, as with any upload.",
-            "**Choose from photos already in the album** — search the whole album with the usual questions (words, dates, a place and a distance, who took it, who is in it) and tick the ones that belong.",
+            "**Choose from photos already in the album** — search the whole album with the usual questions (words, dates, a place and a distance, who took it, who is in it) and check the ones that belong.",
             "**Add all … taken during it** — on an outing, every one of your photos taken between its start and end times, in one press. A trip's **Add existing photos** page has the same for the trip's days."
           ]
         },
@@ -275,7 +276,7 @@
             [
               "Trip",
               "A stretch of days in one place. A photograph is on one trip, or none.",
-              "A holiday"
+              "A vacation"
             ],
             [
               "Collection",
@@ -299,7 +300,7 @@
         },
         {
           "kind": "p",
-          "text": "Sometimes the album gets that wrong — two people did two different things that afternoon, and a clock cannot tell which. To fix it, open the outing, press **Select photos**, tick the ones that do not belong, and press **Take off this activity**. They stay on the trip, back under their own day. Nothing is deleted."
+          "text": "Sometimes the album gets that wrong — two people did two different things that afternoon, and a clock cannot tell which. To fix it, open the outing, press **Select photos**, check the ones that do not belong, and press **Take off this activity**. They stay on the trip, back under their own day. Nothing is deleted."
         },
         {
           "kind": "h3",
@@ -307,7 +308,7 @@
         },
         {
           "kind": "p",
-          "text": "The album files a photograph by the date the camera wrote, and a date cannot tell two families apart: if a cousin uploads their own holiday from the same fortnight, it lands on your trip. Open the trip's **Settings**, or an outing's **Edit**, and tick who was there. From then on only their uploads are filed there by date. Ticking nobody means everyone, which is how every trip starts."
+          "text": "The album files a photograph by the date the camera wrote, and a date cannot tell two families apart: if a cousin uploads their own vacation from the same two weeks, it lands on your trip. Open the trip's **Settings**, or an outing's **Edit**, and check who was there. From then on only their uploads are filed there by date. Checking nobody means everyone, which is how every trip starts."
         },
         {
           "kind": "note",
@@ -444,7 +445,7 @@
         {
           "kind": "steps",
           "items": [
-            "Tap every photograph taken in one spot. A tick appears on each. **Choose the day** ticks a whole day at once.",
+            "Tap every photograph taken in one spot. A check mark appears on each. **Choose the day** checks a whole day at once.",
             "Get the map to the spot. Drag it with a finger and pinch to zoom, or type a town into **Find a town or landmark**. If you are standing there, press **Where I am** and the phone finds the spot for you.",
             "Tap the spot. A pin appears. If it is not quite right, tap again.",
             "Press **Put them here**. That's it. If you got it wrong, press **Undo** straight away."
@@ -497,7 +498,11 @@
             ],
             [
               "On the wrong outing",
-              "Open the outing, **Select photos**, **Take off this activity**. It stays on the trip."
+              "Open the outing, **Select photos**, **Take off this activity**. It stays on the trip, and the outing's hours will not put it back. To let the album go by the time it was taken again, open the photograph and choose **Automatic (by the time it was taken)** under Activity."
+            ],
+            [
+              "A place that should not be shown",
+              "Open the photograph and press **Clear** under Place. Once you have removed a place yourself it stays removed: nothing the album does by itself puts one back — not the file, a track, a Google Takeout import or the AI helper. Set one again by hand if you change your mind."
             ],
             [
               "On the wrong trip, or no trip",
@@ -533,7 +538,7 @@
             "It writes a title, a caption, a description and a list of search words.",
             "It is told the names of people the family has agreed to name. It is never told a child's name.",
             "It never sees faces as faces: no face data of any kind is sent to it.",
-            "Anything you write yourself is left alone. It only replaces its own words.",
+            "Anything you write yourself is left alone. It only replaces its own words — unless you press **Describe again** on a description your family edited, and agree to replace it.",
             "A trip, a collection or a single photograph can be kept out of it entirely."
           ]
         },

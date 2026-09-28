@@ -1,7 +1,7 @@
 import { photoUrl } from "@/lib/photos/urls";
 import { faceCrop } from "@/lib/people/crop";
 
-export type ThumbPhoto = { id: string; updatedAt: Date; width?: number | null; height?: number | null };
+export type ThumbPhoto = { id: string; imageVersion: number; width?: number | null; height?: number | null };
 
 /**
  * A face crop drawn from the medium rendition with CSS, so no crop file ever exists.

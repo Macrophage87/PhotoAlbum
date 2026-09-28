@@ -139,14 +139,19 @@ S += [P("3. Quick start with Docker", H1),
 git clone https://github.com/Macrophage87/PhotoAlbum.git
 cd PhotoAlbum
 cp .env.example .env
-nano .env                 # set ADMIN_EMAIL, SMTP_* for real email, a new POSTGRES_PASSWORD
+nano .env                 # set ADMIN_EMAIL, SMTP_* for real email, a new POSTGRES_PASSWORD, FORGET_KEY
 docker compose up --build -d
 """),
       P("The stack has two services by default. <b>db</b> is PostgreSQL 16 with pgvector, its data in the <b>pgdata</b> volume. <b>app</b> is the web server, "
         "with photos in the <b>photos</b> volume mounted at /data/photos. On every start the app applies pending database migrations "
         "before serving, so upgrades need no manual database step. Three optional services live behind compose profiles: <b>worker</b> (background jobs "
         "in their own container), <b>ml</b> (the local ML sidecar) and <b>ml-init</b> (a one-off download of the model weights into the <b>ml-models</b> volume)."),
-      P("Browse to <b>http://&lt;server&gt;:3000</b>. Change the host port with APP_PORT in .env if 3000 is taken."),
+      P("Browse to <b>http://localhost:3000</b> on the server itself. The port is published on the loopback address only "
+        "(APP_BIND=127.0.0.1), so from other machines the album is reached through an https reverse proxy (section 7), even on a home network. "
+        "Plain http://&lt;server&gt;:&lt;port&gt; from another device does not work, and APP_BIND=0.0.0.0 does not make it: the app runs in production "
+        "mode, where the sign-in cookie is marked Secure and browsers keep it only over https (or on localhost), and without a proxy in front anyone "
+        "can forge the X-Forwarded-For header the sign-in rate limits go by. "
+        "Change the host port with APP_PORT in .env if 3000 is taken."),
       P("Reading the sign-in link without email", H2),
       P("If SMTP_HOST is left empty, sign-in and invite links are printed to the container log instead of being sent. "
         "This is fine for first setup and for a purely local install."),
@@ -173,7 +178,9 @@ S += [P("4. Configuration reference (.env)", H1),
       table([
         ["Variable", "Default", "Purpose"],
         ["APP_URL", "http://localhost:3000", "Public URL of the site. Used in every emailed link and in redirects. Set it to your real address (with https) when behind a proxy."],
-        ["ADMIN_EMAIL", "you@example.com", "The first person to sign in with this address becomes an admin. Also allowed to sign in before any invites exist."],
+        ["HSTS_INCLUDE_SUBDOMAINS", "false", "With an https APP_URL, browsers are told to keep to https for a year. true extends that to every subdomain of the album's hostname; only set it if they all serve https."],
+        ["ADMIN_EMAIL", "you@example.com", "The first person to sign in with this address becomes an admin. Allowed to sign in without an invite only while the album has no admin."],
+        ["SIGN_IN_MAIL_PER_HOUR", "200", "Protects the mail provider's quota. Each address holds at most three unused links at a time (asking again says to use the newest one); its first always goes out, and only the second and third count against this hourly total."],
         ["SMTP_HOST", "(empty)", "Mail server hostname. Leave empty to log links instead of sending mail."],
         ["SMTP_PORT", "587", "587 for STARTTLS, 465 for implicit TLS."],
         ["SMTP_USER / SMTP_PASS", "(empty)", "Mail server credentials."],
@@ -181,6 +188,7 @@ S += [P("4. Configuration reference (.env)", H1),
         ["SMTP_FROM", "Family Album<br/>&lt;album@example.com&gt;", "Sender shown in emails. Many providers require it to match the account."],
         ["POSTGRES_USER / _PASSWORD / _DB", "photoalbum", "Database credentials used by both containers. Change the password on an internet-facing host."],
         ["APP_PORT", "3000", "Host port published by Docker."],
+        ["APP_BIND", "127.0.0.1", "Address the port is published on. Keep 127.0.0.1 with a reverse proxy on the same host. A proxy on another machine needs an address it can reach, a firewall that really covers the port (Docker's published ports bypass ufw), and to set X-Forwarded-For itself. Never 0.0.0.0 for plain http from other devices: sign-in needs https, and without a proxy the X-Forwarded-For behind the sign-in rate limits can be forged."],
         ["STORAGE_DRIVER", "local", "Storage backend. Only local is implemented; the code has an interface for adding S3 later."],
         ["PHOTO_STORAGE_ROOT", "/data/photos", "Where originals and renditions are written (inside the container)."],
         ["MAX_UPLOAD_BYTES", "104857600 (100 MB)", "Largest single photo accepted."],
@@ -191,6 +199,7 @@ S += [P("4. Configuration reference (.env)", H1),
         ["NEXT_PUBLIC_MAP_GLYPHS_URL", "(empty)", "Font glyph URL template for map labels. All NEXT_PUBLIC values are compiled into the browser bundle: rebuild with docker compose up --build after changing them."],
         ["MAX_CLIP_SECONDS", "90", "Longest clip accepted for upload. Longer videos go on YouTube as unlisted and are linked in."],
         ["MAX_VIDEO_UPLOAD_BYTES", "1073741824 (1 GB)", "Largest clip file accepted."],
+        ["MAX_SCAN_UPLOAD_BYTES", "1073741824 (1 GB)", "Largest 3D scan (GLB, USDZ, PLY, SPZ) accepted."],
         ["YOUTUBE_API_KEY", "(empty)", "Optional. With a Google Data API key, embedded videos also show their length."],
         ["ANNOTATION_ENABLED", "false", "Operator half of the AI-description switch. The other half is an admin's opt-in on the Admin page."],
         ["ANTHROPIC_API_KEY", "(empty)", "Key for the AI helper. Nothing is sent without it and both switches."],
@@ -206,6 +215,7 @@ S += [P("4. Configuration reference (.env)", H1),
         ["IMPORT_INBOX_DIR", "/data/imports", "Folder the Google Takeout importer reads zip files from (the imports volume). Empty hides the section on the Admin page."],
         ["GOOGLE_OAUTH_CLIENT_ID / _SECRET", "(empty)", "OAuth client for the Google Photos picker button. See the deployment guide for the Google Cloud steps."],
         ["TOKEN_ENCRYPTION_KEY", "(empty)", "32 random bytes in base64 (openssl rand -base64 32). Encrypts members' Google tokens; required with the client id."],
+        ["FORGET_KEY", "(empty)", "32 random bytes in base64 (openssl rand -base64 32), a different one for each instance. Forgotten people's names are kept only as hashes under a key made from it and a salt in the database. Required in production for forgetting anybody for good. It is not in the database dumps: back it up separately, and never change it, since once somebody has been forgotten, running without it or with another pauses forgetting and the AI helper until it is put back. deploy/update.sh makes one if .env has none."],
         ["ANTHROPIC_BASE_URL, YOUTUBE_*_URL", "(empty)", "Endpoints for test doubles; leave empty."],
         ["VISITOR_STATS_ENABLED", "true", "Count how many pages are opened and by how many browsers, for the Admin page. Counted here, sent nowhere."],
         ["VISITOR_STATS_RETENTION_DAYS", "90", "Days those counts are kept; a nightly job deletes older ones and the salt that hashed them."],
@@ -219,10 +229,12 @@ S += [P("4. Configuration reference (.env)", H1),
 # ---------- 5 ----------
 S += [P("5. Signing in and inviting family", H1),
       P("There are no passwords. A person types their email on the sign-in page and receives a link that is valid for 15 minutes "
-        "and can be used once. The resulting session lasts 90 days on that browser."),
+        "and can be used once: opening it shows a Sign in button, and pressing that is what signs them in (so a mail "
+        "scanner that opens links first does not use it up). They then stay signed in on that browser as long as they "
+        "visit at least once every 12 weeks."),
       P("Who can sign in", H2),
       bullets([
-        "The address in ADMIN_EMAIL, always. The first sign-in with it creates the admin account.",
+        "The address in ADMIN_EMAIL, while the album has no admin yet. The first sign-in with it creates the admin account; once an admin exists it is an ordinary address, so removing that account sticks.",
         "Anyone who already has an account.",
         "Anyone with a pending invite for their address.",
         "Everyone else sees the same 'check your email' message but no email is sent and no account is created, so the site never reveals who is a member.",
@@ -239,6 +251,12 @@ S += [P("5. Signing in and inviting family", H1),
         "The relative opens the invite link, which sends them a sign-in link for that address. From then on they simply sign in with their email.",
         "The Admin page lists members and pending invites. From there you can change roles, revoke an invite, or remove a member.",
       ]),
+      P("If the only admin can no longer read their email", H2),
+      P("ADMIN_EMAIL creates an admin only while the album has none, so changing it later does nothing. Fix it in the database "
+        "instead, from the server: move the admin account to a new address (first command), or make another member an admin "
+        "(second). Addresses are stored in lower case; <b>UPDATE 1</b> means it worked."),
+      code("""docker compose exec -T db sh -c 'psql -U "$POSTGRES_USER" "$POSTGRES_DB" -c "UPDATE \\"User\\" SET email = '"'"'new@example.com'"'"' WHERE email = '"'"'old@example.com'"'"';"'
+docker compose exec -T db sh -c 'psql -U "$POSTGRES_USER" "$POSTGRES_DB" -c "UPDATE \\"User\\" SET role = '"'"'ADMIN'"'"' WHERE email = '"'"'cousin@example.com'"'"';"'"""),
       P("Members can create trips, upload photos, edit anything, and share trips. Admins can additionally manage members. "
         "Every signed-in member sees every trip; the album is a shared family space, not per-user galleries."),
       P("Who has been looking", H2),
@@ -355,6 +373,7 @@ S += [P("7. Running behind a reverse proxy", H1),
       bullets([
         "Set <b>APP_URL</b> in .env to the public address, for example https://album.example.com, so emailed links and redirects use it.",
         "Raise the proxy's request body limit. Photos are up to 100 MB by default and Google exports can be far larger. The app-side caps are MAX_UPLOAD_BYTES and MAX_IMPORT_BYTES.",
+        "The app's port is published on 127.0.0.1 only (APP_BIND), which suits a proxy on the same host. A proxy elsewhere needs APP_BIND set to an address it can reach, and then a firewall that really covers that port: Docker's published ports bypass ufw.",
       ]),
       P("Caddy example (automatic HTTPS):"),
       code("""
@@ -389,7 +408,12 @@ S += [P("8. Backups and upgrades", H1),
         "Back up both. The photos volume is the irreplaceable one."),
       code("""
 # database dump
-docker compose exec db pg_dump -U photoalbum photoalbum | gzip > album-db-$(date +%F).sql.gz
+# pipefail so a failed pg_dump is an error rather than a tiny .gz; the db container supplies its own user and database
+set -o pipefail
+# umask in a subshell: the dump is readable by you only, and later commands are not affected
+(umask 077 && docker compose exec -T db sh -c 'exec pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' | gzip > album-db-$(date +%F).sql.gz)
+# prints 1 when the dump is complete (pg_dump writes this line last); 0 means it stopped partway
+gzip -cd album-db-$(date +%F).sql.gz | tail -n 20 | grep -c 'PostgreSQL database dump complete'
 
 # photos (copy the volume contents)
 docker run --rm -v photoalbum_photos:/data -v $(pwd):/backup alpine \\
@@ -406,14 +430,30 @@ docker compose run --rm ml-init       # only after an upgrade that changes the s
 """),
       P("Database migrations run automatically at container start. Take a database dump before upgrading, as a precaution. "
         "An AI-description backfill still in progress is cut short by an upgrade; the Admin page says so under that run within about an hour. Wait until none of its rows reads in progress, then start the backfill again for what is left (the app refuses a new run while one is open). "
-        "The first upgrade to the media-hub release replaces the database container with the pgvector image; the data in the pgdata volume is kept as it is.")]
+        "The first upgrade to the media-hub release replaces the database container with the pgvector image; the data in the pgdata volume is kept as it is."),
+      P("<b>Upgrading from a release without FORGET_KEY.</b> Before the first upgrade to the release that brought it, add "
+        "<font face='Courier'>FORGET_KEY=</font> with the output of <font face='Courier'>openssl rand -base64 32</font> to .env where it has none (<b>never replace a key that already exists</b>), a different key for each "
+        "instance (staging and live never share one), and back it up separately from the database dumps. deploy/update.sh makes one when .env has none, "
+        "but an older checkout's first deploy runs the older script, which does not; until there is a key nobody can be forgotten for good. "
+        "If the album has already forgotten somebody and the key is lost, never make a new one: put the original back (the deployment guide, step 10)."),
+      P("The app's port is now published on 127.0.0.1 only (APP_BIND). If other devices used to open the album as http://&lt;server&gt;:&lt;port&gt;, "
+        "put an https reverse proxy in front instead (section 7); APP_BIND=0.0.0.0 does not bring plain http back. Signing in needs https, since the "
+        "session cookie is marked Secure, and without a proxy anyone can forge the X-Forwarded-For header the sign-in rate limits go by.")]
 
 # ---------- 9 ----------
 S += [P("9. Development setup and tests", H1),
-      P("For working on the code, run the app on your machine with Node 22 and pnpm, and use Docker only for Postgres and a local mail catcher."),
+      P("For working on the code, run the app on your machine with Node 22 and pnpm, and use Docker only for Postgres and a local mail catcher. "
+        "The database must have the pgvector extension, which the compose image includes and a stock PostgreSQL package does not; "
+        "with your own server, install pgvector as well. Only a superuser may create the extension (it is not marked trusted), so either "
+        "make the app's role a superuser, or have a superuser run CREATE EXTENSION vector once in template1, so every database created "
+        "afterwards has it, including the _test and _e2e ones the test scripts create. A database that already exists needs the same "
+        "command run in it."),
+      P("The storage paths in .env.example (/data/photos, /data/imports) are container paths a normal user cannot write to. "
+        "Point PHOTO_STORAGE_ROOT and IMPORT_INBOX_DIR at folders of your own, such as ./.data/photos and ./.data/imports, "
+        "or leave IMPORT_INBOX_DIR empty."),
       code("""
 pnpm install
-cp .env.example .env            # DATABASE_URL should point at localhost:5432
+cp .env.example .env            # DATABASE_URL at localhost:5432; storage paths to your own folders
 docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d db mailpit
 pnpm prisma migrate dev         # create the schema
 pnpm db:seed                    # optional demo data
@@ -457,7 +497,7 @@ S += [P("10. Troubleshooting", H1),
       table([
         ["Symptom", "Likely cause and fix"],
         ["Sign-in says 'check your email' but nothing arrives for a new person", "Only ADMIN_EMAIL, existing members and invited addresses receive a link; everyone else gets the same message and no email. Invite them from the Admin page, and check .env spelling (restart the app after edits)."],
-        ["No sign-in email arrives", "SMTP_HOST empty (links are in the log: docker compose logs app | grep auth/verify), wrong port/SECURE combination, or the provider rejects SMTP_FROM. Test with Mailpit first."],
+        ["No sign-in email arrives", "SMTP_HOST empty (links are in the log: docker compose logs app | grep auth/verify), wrong port/SECURE combination, or the provider rejects SMTP_FROM. SMTP errors are logged: check docker compose logs app. Test with Mailpit first."],
         ["Links in emails point to localhost", "APP_URL is still the default. Set it to the public URL and restart."],
         ["Uploads fail around 1 MB or 100 MB", "Reverse proxy body limit (raise client_max_body_size / max_size) or MAX_UPLOAD_BYTES."],
         ["Photo stays on the spinner", "Processing job failed; see the app log. A failed photo shows its error on the detail page. HEIC files take several seconds each."],
@@ -465,6 +505,7 @@ S += [P("10. Troubleshooting", H1),
         ["Photo has no location on the map", "Photos uploaded from an Android phone arrive without one: the phone removes the position from any copy it hands to another app, which is why the phone's own gallery still shows it on a map. Import that library from Google Takeout (the position is in its sidecar files) and the photos already in the album are filled in. Otherwise: import a GPX/FIT/Google trace for that day, or open the photo and use Set a place, which also works for a whole gallery selection at once."],
         ["Google import created nothing", "No points inside the trip's dates. Check the trip dates and that the file is a Timeline export (Timeline.json, Records.json or Semantic Location History)."],
         ["Takeout import skipped everything", "The photos are already in the album (same bytes or the same Google item). The import report on the Admin page shows the count."],
+        ["Deleting a Takeout archive says the inbox is not writable", "The imports volume was made by an older image and belongs to root. Run once: docker compose run --rm --user root --entrypoint chown app -R node:node /data/imports"],
         ["\"Google Photos needs to be connected again\"", "Google revoked the member's grant (a password change, or six months unused on a test-mode consent screen). Press Connect again on the Upload page."],
         ["No \"Probably Biscuit?\" for a pet", "Spotting needs the sidecar, PET_MATCHING_ENABLED, and one hand tag of that pet on a photo where an animal was found; the Admin page shows the sighting counts."],
         ["Map is blank", "Tile server unreachable or NEXT_PUBLIC_TILE_URL / NEXT_PUBLIC_MAP_STYLE_URL wrong. Clear them to fall back to OpenStreetMap. NEXT_PUBLIC values are baked in at build time, so rebuild after changing them."],

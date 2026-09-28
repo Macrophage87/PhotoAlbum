@@ -12,14 +12,15 @@ describe("trip access", () => {
       expect(canViewTrip(member, trip(v))).toBe(true);
     }
     expect(canContribute(member)).toBe(true);
-    expect(visibleTripsWhere(member)).toEqual({});
+    // A trip being deleted is gone for everybody (see lib/trips/delete).
+    expect(visibleTripsWhere(member)).toEqual({ deletingAt: null });
   });
   it("anonymous visitors see public trips only, and never edit", () => {
     expect(canViewTrip(anon(), trip("PUBLIC"))).toBe(true);
     expect(canViewTrip(anon(), trip("PRIVATE"))).toBe(false);
     expect(canViewTrip(anon(), trip("LINK", "secret"))).toBe(false);
     expect(canContribute(anon())).toBe(false);
-    expect(visibleTripsWhere(anon())).toEqual({ visibility: "PUBLIC" });
+    expect(visibleTripsWhere(anon())).toEqual({ visibility: "PUBLIC", deletingAt: null });
   });
   it("a matching share cookie unlocks a LINK trip, a stale one does not", () => {
     expect(canViewTrip(anon([["trip_t1", "secret"]]), trip("LINK", "secret"))).toBe(true);
@@ -91,6 +92,6 @@ describe("media access is the union of its containers", () => {
   });
   it("the global media filter admits only public containers for anonymous visitors, and nothing in the trash for anyone", () => {
     expect(visibleMediaWhere(member)).toEqual({ trashedAt: null });
-    expect(visibleMediaWhere(anon([["collection_c2", "tok"]]))).toEqual({ trashedAt: null, OR: [{ trip: { visibility: "PUBLIC" } }, { collections: { some: { collection: { visibility: "PUBLIC" } } } }] });
+    expect(visibleMediaWhere(anon([["collection_c2", "tok"]]))).toEqual({ trashedAt: null, OR: [{ trip: { visibility: "PUBLIC", deletingAt: null } }, { collections: { some: { collection: { visibility: "PUBLIC" } } } }] });
   });
 });

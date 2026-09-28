@@ -9,8 +9,8 @@ import { photoUrl } from "@/lib/photos/urls";
 import { AppShell, Container } from "@/components/layout/AppShell";
 import { ExifPanel } from "@/components/photos/ExifPanel";
 import { Button, Card, Label, Select, Textarea } from "@/components/ui";
-import { formatBytes, formatDateTime } from "@/lib/time/format";
-import { reprocessPhoto, resetPhotoDateToCamera, setAsCover, setPhotoDate, shiftPhotoTimezone, trashPhoto, updatePhoto } from "./actions";
+import { formatBytes, formatDateTime, formatTakenAt } from "@/lib/time/format";
+import { reprocessPhoto, setAsCover, shiftPhotoTimezone, trashPhoto, updatePhoto } from "./actions";
 
 const SOURCE_LABEL: Record<string, string> = { EXIF_OFFSET: "from the camera", EXIF_TZLOOKUP: "from the camera", TRIP_TZ: "from the camera, in the trip's zone", SIDECAR: "from Google Photos", FILE_NAME: "from the file name", EXIF_CREATED: "from the file\u2019s created-date tag, which may be when it was edited", FILE_MTIME: "from the file's modified time", UPLOAD_TIME: "the upload time" };
 import { TimezoneShift } from "@/components/photos/TimezoneShift";
@@ -19,12 +19,13 @@ import { LinkedPhotos } from "@/components/photos/LinkedPhotos";
 import { PlaceEditor } from "@/components/photos/PlaceEditor";
 import { TrashButton } from "@/components/photos/TrashButton";
 import { PhotoEditorPanel } from "@/components/photos/PhotoEditorPanel";
-import { editsOf } from "@/lib/jobs/handlers/process-photo";
+import { editsOf } from "@/lib/images/edits";
 import { trashReasonLabel } from "@/lib/photos/trash";
 import { isWeakDate } from "@/lib/photos/date-from-neighbours";
 import { guessDateFromTrip } from "@/lib/photos/date-guess-query";
 import { NeighbourDate } from "@/components/photos/NeighbourDate";
 import { DateTroubleshooter } from "@/components/photos/DateTroubleshooter";
+import { DateTakenForm } from "@/components/photos/DateTakenForm";
 import { canEditContainer, canEditMedia, NOT_YOURS } from "@/lib/auth/ownership";
 import { PanoramaView, PanoramaHint } from "@/components/photos/PanoramaView";
 import { ScanViewer } from "@/components/scans/ScanViewer";
@@ -40,7 +41,7 @@ import { uploaderLabel } from "@/components/photos/toGrid";
 import { YouTubeEmbed } from "@/components/videos/YouTubeEmbed";
 import { updateExternalVideo } from "@/app/videos/actions";
 import { Input } from "@/components/ui";
-import { localDayFromOffset } from "@/lib/time/local-day";
+import { localDayFromOffset, photoOffsetMin } from "@/lib/time/local-day";
 import { AnnotationCard } from "@/components/annotation/AnnotationCard";
 import { EstimatedDate } from "@/components/annotation/EstimatedDate";
 import { annotationGates, optOutReason } from "@/lib/annotation/eligibility";
@@ -52,15 +53,18 @@ import { SimilarStrip } from "@/components/graph/SimilarStrip";
 import { PersonChips } from "@/components/people/PersonChips";
 import { PhotoTagger } from "@/components/people/PhotoTagger";
 import { NOT_TRASHED } from "@/lib/photos/trash";
+import { readableTitle } from "@/lib/photos/readable-text";
+import { isCoverable } from "@/lib/photos/cover";
 
 /** The tab and link-preview title: the item's title, else its caption, else the file name. Members only, like the page. */
 export async function generateMetadata({ params }: PageProps<"/photos/[id]">): Promise<Metadata> {
   const { id } = await params;
   const viewer = await getViewer();
   if (viewer.kind !== "user") return { title: "Photo" };
-  const photo = await db.photo.findUnique({ where: { id }, select: { title: true, caption: true, originalName: true } });
+  const photo = await db.photo.findUnique({ where: { id }, select: { title: true, membersTitle: true, caption: true, originalName: true } });
   if (!photo) return { title: "Photo" };
-  return { title: photo.title ?? photo.caption ?? photo.originalName, description: photo.title ? (photo.caption ?? undefined) : undefined, robots: { index: false, follow: false } };
+  const title = readableTitle(photo, true);
+  return { title: title ?? photo.caption ?? photo.originalName, description: title ? (photo.caption ?? undefined) : undefined, robots: { index: false, follow: false } };
 }
 
 export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
@@ -74,14 +78,14 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
   if (!photo) notFound();
 
   const tripTheme = photo.trip ? (await db.trip.findUnique({ where: { id: photo.trip.id }, select: { themeKey: true } }))?.themeKey ?? null : null;
-  const [gates, optOutWhy, faces, proposals, similar, people] = await Promise.all([annotationGates(), optOutReason(photo.id), peopleOnPhoto(photo.id), proposalsFor([photo.id]), similarTo(viewer, photo.id), db.person.findMany({ where: { kind: "HUMAN", optedOutAt: null }, orderBy: { name: "asc" }, select: { id: true, name: true } })]);
+  const [gates, optOutWhy, faces, proposals, similar, people] = await Promise.all([annotationGates(), optOutReason(photo.id), peopleOnPhoto(photo.id), proposalsFor([photo.id], me), similarTo(viewer, photo.id), db.person.findMany({ where: { kind: "HUMAN", optedOutAt: null }, orderBy: { name: "asc" }, select: { id: true, name: true } })]);
   // No list of every trip and every collection any more: the pickers search for them, so this page loads the same
   // whether the album holds five of each or five hundred.
   const [activities, links, candidates, collections] = await Promise.all([
     photo.tripId ? db.activity.findMany({ where: { tripId: photo.tripId }, orderBy: { startTime: "asc" }, select: { id: true, title: true, startTime: true } }) : Promise.resolve([]),
     linkedPhotos(photo.id),
     photo.tripId
-      ? db.photo.findMany({ where: { tripId: photo.tripId, ...NOT_TRASHED, status: "READY", id: { not: photo.id } }, orderBy: [{ takenAt: "asc" }], select: { id: true, caption: true, originalName: true, takenAt: true, updatedAt: true } })
+      ? db.photo.findMany({ where: { tripId: photo.tripId, ...NOT_TRASHED, status: "READY", id: { not: photo.id } }, orderBy: [{ takenAt: "asc" }], select: { id: true, caption: true, originalName: true, takenAt: true, updatedAt: true, imageVersion: true } })
       : Promise.resolve([]),
     collectionsForPhoto(photo.id),
   ]);
@@ -102,7 +106,9 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
   const isVideo = photo.kind === "EXTERNAL_VIDEO";
   const isClip = photo.kind === "VIDEO";
   const updateVideo = updateExternalVideo.bind(null, id);
-  const filmedDay = photo.takenAt ? localDayFromOffset(photo.takenAt, photo.tzOffsetMin ?? 0) : "";
+  // Its clock as the page shows it, and as setPhotoDate reads a typed time back: own offset, else the trip's zone.
+  const wallOffset = photo.takenAt ? photoOffsetMin(photo.takenAt, photo.tzOffsetMin, photo.trip?.timezone) : 0;
+  const filmedDay = photo.takenAt ? localDayFromOffset(photo.takenAt, wallOffset) : "";
 
   return (
     <AppShell viewer={viewer}>
@@ -123,8 +129,10 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
             <span>Unassigned photo</span>
           )}
         </div>
-        <div className="grid lg:grid-cols-[1fr_22rem] gap-8">
-          <div>
+        {/* minmax(0, …) and min-w-0: a wide panorama or a long strip of look-alikes scrolls inside its own box
+            instead of stretching the column, and with it the whole page, past the screen. */}
+        <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_22rem] gap-8">
+          <div className="min-w-0">
             {isClip ? (
               photo.status === "READY" ? (
                 <video src={photoUrl(photo, "video")} poster={photoUrl(photo, "medium")} controls playsInline className="w-full rounded-theme bg-black" />
@@ -213,15 +221,15 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
             <div className="mt-3">
               <FavouriteButton kind="photo" id={photo.id} initial={(await favouritesFor("photo", [photo.id], viewer)).get(photo.id) ?? { mine: false, count: 0 }} withLabel />
             </div>
-            {photo.title && <h1 className="mt-3 text-xl font-semibold font-display">{photo.title}</h1>}
+            {readableTitle(photo, true) && <h1 className="mt-3 text-xl font-semibold font-display" data-testid="photo-title">{readableTitle(photo, true)}</h1>}
             {isClip && photo.durationS && <p className="mt-2 text-sm text-muted">{Math.round(photo.durationS)} second clip{photo.status === "READY" ? " · original kept" : ""}</p>}
             {isVideo && photo.externalStatus === "UNAVAILABLE" && <p className="mt-1 text-sm text-amber-800">This video is no longer available on YouTube (deleted or made private). Replace the link below or delete the item.</p>}
             {photo.caption && <p className="mt-3 text-lg">{photo.caption}</p>}
-            <div className="mt-2 space-y-2"><PersonChips photoId={photo.id} faces={faces} people={people} /><ProposalList proposals={proposals} /></div>
-            {photo.takenAt && <p className="text-sm text-muted mt-1">{formatDateTime(photo.takenAt, photo.trip?.timezone ?? "UTC")}</p>}
+            <div className="mt-2 space-y-2"><PersonChips photoId={photo.id} faces={faces} people={people} editable={mine} /><ProposalList proposals={proposals} /></div>
+            {photo.takenAt && <p className="text-sm text-muted mt-1">{formatTakenAt(photo.takenAt, photo.tzOffsetMin, photo.trip?.timezone)}</p>}
           </div>
 
-          <div className="space-y-6">
+          <div className="space-y-6 min-w-0">
             {isVideo && mine && (
               <Card className="p-4">
                 <form action={updateVideo} className="space-y-4">
@@ -254,8 +262,14 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
                 {!isVideo && (
                   <div>
                     <Label htmlFor="photo-title">Title</Label>
-                    <Input id="photo-title" name="title" defaultValue={photo.title ?? ""} placeholder="Mail boat lunch" />
-                    <p className="text-xs text-muted mt-1">Shown when the item is listed or shared. Left empty, the AI helper writes one when it describes the item.</p>
+                    <Input id="photo-title" name="title" defaultValue={photo.title ?? ""} placeholder={photo.membersTitle?.trim() || "Mail boat lunch"} />
+                    {photo.membersTitle?.trim() && !photo.title?.trim() ? (
+                      <p className="text-xs text-muted mt-1" data-testid="photo-members-title">
+                        This title (shown to the family only): {photo.membersTitle}. It names somebody, or came from notes, so anyone else sees no title until you write one here.
+                      </p>
+                    ) : (
+                      <p className="text-xs text-muted mt-1">Shown when the item is listed or shared. Left empty, the AI helper writes one when it describes the item — shown to the family only when it names somebody or comes from notes.</p>
+                    )}
                   </div>
                 )}
                 <div>
@@ -282,16 +296,20 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
                 {photo.tripId && (
                   <div>
                     <Label htmlFor="activityId">Activity</Label>
-                    <Select id="activityId" name="activityId" defaultValue={photo.activityId ?? ""}>
-                      <option value="">None</option>
+                    {/* "auto" hands the question back to the clock; "" is a member saying it was on no activity at all. */}
+                    <Select id="activityId" name="activityId" defaultValue={photo.activitySetById ? photo.activityId ?? "" : "auto"}>
+                      <option value="auto">Automatic (by the time it was taken){!photo.activitySetById && photo.activity ? ` — now ${photo.activity.title}` : ""}</option>
+                      <option value="">None — keep it off every activity</option>
                       {activities.map((a) => (
                         <option key={a.id} value={a.id}>{a.title}</option>
                       ))}
                     </Select>
                     <p className="text-xs text-muted mt-1">
-                      {photo.activitySetBy
-                        ? `Put here by ${uploaderLabel(photo.activitySetBy.name, photo.activitySetBy.email)}, so the activity's hours leave it alone.`
-                        : "Left alone, this follows the time it was taken. Choosing one keeps it there whatever its date says."}
+                      {photo.activitySetBy && photo.activityId
+                        ? `Put here by ${uploaderLabel(photo.activitySetBy.name, photo.activitySetBy.email)}, so the activity's hours leave it alone. Choose Automatic to let its time decide again.`
+                        : photo.activitySetBy
+                        ? `Kept off every activity by ${uploaderLabel(photo.activitySetBy.name, photo.activitySetBy.email)}, so no activity's hours put it back. Choose Automatic, or type in the date it was taken, to let its time decide again.`
+                        : "Automatic follows the time it was taken. Choosing an activity, or None, keeps it that way whatever its date says."}
                     </p>
                   </div>
                 )}
@@ -300,7 +318,7 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
             </Card>
             )}
 
-            <AnnotationCard photoId={photo.id} annotation={photo.annotation as StoredAnnotation | null} source={photo.annotationSource} model={photo.annotationModel} error={photo.annotationError} optOut={photo.annotationOptOut} optOutReason={optOutWhy} active={gates.active} editable={mine} />
+            <AnnotationCard photoId={photo.id} annotation={photo.annotation as StoredAnnotation | null} membersOnly={photo.annotationMembersOnly} titleOnly={photo.annotationTitleOnly} revision={photo.annotationRevision} source={photo.annotationSource} model={photo.annotationModel} error={photo.annotationError} optOut={photo.annotationOptOut} optOutReason={optOutWhy} active={gates.active} editable={mine} />
             {/* Where a date came from is worth reading whoever you are; taking one of the readings is not. */}
             <div className="mb-2"><DateTroubleshooter photoId={photo.id} readOnly={!mine} /></div>
             {mine && neighbourGuess && <div className="mb-3"><NeighbourDate photoId={photo.id} guess={{ ...neighbourGuess, takenAt: neighbourGuess.takenAt.toISOString() }} /></div>}
@@ -317,15 +335,11 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
               <ExifPanel photo={photo} tripTimezone={photo.trip?.timezone} />
               <p className="text-xs text-muted mt-2">Uploaded by {uploaderLabel(photo.uploader.name, photo.uploader.email)}</p>
               {!isVideo && mine && (
-                <form action={async (fd) => { "use server"; await setPhotoDate(photo.id, fd); }} className="mt-3 pt-3 border-t border-border space-y-2">
-                  <div className="text-xs font-medium">Date taken</div>
-                  <p className="text-xs text-muted">Defaults to what the camera wrote in the file{photo.takenAtSource ? ` (currently ${photo.takenAtSource === "MANUAL" ? `set by ${photo.dateSetBy ? uploaderLabel(photo.dateSetBy.name, photo.dateSetBy.email) : "a family member"}` : SOURCE_LABEL[photo.takenAtSource] ?? photo.takenAtSource})` : ""}. Change it here when the camera was wrong or a scan has no date.</p>
-                  <div className="flex flex-wrap gap-2">
-                    <input type="datetime-local" name="takenAt" aria-label="Date taken" defaultValue={photo.takenAt ? new Date(photo.takenAt.getTime() + (photo.tzOffsetMin ?? 0) * 60_000).toISOString().slice(0, 16) : ""} required className="h-8 rounded-theme border border-border bg-surface text-text [color-scheme:light] px-2 text-sm" />
-                    <Button type="submit" variant="secondary" size="sm">Save date</Button>
-                    <Button type="submit" variant="secondary" size="sm" formAction={async () => { "use server"; await resetPhotoDateToCamera(photo.id); }}>Use camera date</Button>
-                  </div>
-                </form>
+                <DateTakenForm
+                  photoId={photo.id}
+                  initial={photo.takenAt ? new Date(photo.takenAt.getTime() + wallOffset * 60_000).toISOString().slice(0, 16) : ""}
+                  hint={`Defaults to what the camera wrote in the file${photo.takenAtSource ? ` (currently ${photo.takenAtSource === "MANUAL" ? `set by ${photo.dateSetBy ? uploaderLabel(photo.dateSetBy.name, photo.dateSetBy.email) : "a family member"}` : SOURCE_LABEL[photo.takenAtSource] ?? photo.takenAtSource})` : ""}. Change it here when the camera was wrong or a scan has no date.`}
+                />
               )}
               {mine && photo.takenAt && <TimezoneShift action={shift} currentOffsetMin={photo.tzOffsetMin} hasTrip={Boolean(photo.trip)} tripTimezone={photo.trip?.timezone} />}
             </Card>
@@ -344,8 +358,11 @@ export default async function PhotoPage({ params }: PageProps<"/photos/[id]">) {
 
             <div className="flex flex-wrap gap-2">
               {ownsTrip && photo.tripId && (
-                <form action={cover}>
-                  <Button type="submit" variant="secondary" size="sm" disabled={isCover}>{isCover ? "Trip cover" : "Set as trip cover"}</Button>
+                <form action={cover} className="flex items-center gap-2">
+                  {/* Only a finished photograph out of the trash has a picture to lead the trip with. */}
+                  <Button type="submit" variant="secondary" size="sm" disabled={isCover || !isCoverable(photo)}>{isCover ? "Trip cover" : "Set as trip cover"}</Button>
+                  {!isCover && !photo.trashedAt && photo.status !== "READY" && <span className="text-xs text-muted">Available once the photo has finished processing.</span>}
+                  {!isCover && !photo.trashedAt && photo.status === "READY" && photo.width === null && <span className="text-xs text-muted">This item has no picture to lead with yet.</span>}
                 </form>
               )}
               {mine && (

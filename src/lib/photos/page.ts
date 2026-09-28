@@ -6,6 +6,9 @@ import { NOT_TRASHED } from "@/lib/photos/trash";
 import { NO_FILTER, type GalleryFilter } from "./filters";
 import { boundingBox, MILE_IN_METRES, NO_PICKER_FILTER, type PickerFilter } from "./picker-filter";
 import { idsWithPerson } from "@/lib/people/in-photos";
+import { publicMediaSql } from "@/lib/search/query";
+import { cursorWhere, encodeCursor, type KeyColumn } from "./keyset";
+import { inLocalYearSql, tripZoneFixes } from "@/lib/time/local-day-sql";
 
 /** Gallery pages load this many items at a time; the client asks for the next page by cursor. */
 export const GALLERY_PAGE = 240;
@@ -17,32 +20,62 @@ export type PhotoPage = { photos: PhotoCard[]; nextCursor: string | null; total:
 export type PhotoOrder = "favorites" | "taken" | "newest";
 
 /**
+ * Where a word search is asked: one trip, the photographs on no trip (`tripId: null`), one collection, or — with
+ * none of those — the whole album, which for anybody but a member is only what sits somewhere public.
+ */
+export type MatchScope = { tripId?: string | null; collectionId?: string; publicOnly?: boolean; /** Only items with a position: a map's words are asked of what it can show. */ placed?: boolean };
+
+/** More matches than this for one set of words is a word that means nothing; the best-ranked are kept. */
+export const MATCH_LIMIT = 5000;
+
+/**
  * Which items a search matches, as a list of ids.
  *
- * The same index the search page uses — captions, titles, notes, the AI's description and tags, and for members the
- * names of the people in the picture — plus the file's own name, because "DSC_0421" is sometimes all anyone
- * remembers. A separate query rather than a join so both ways of ordering a gallery can use it unchanged.
+ * The same index the search page uses — captions, titles, the helper's description and tags, and for members the
+ * notes and the names of the people in the picture — plus the file's own name, because "DSC_0421" is sometimes all
+ * anyone remembers. A separate query rather than a join so both ways of ordering a gallery can use it unchanged.
+ *
+ * Asked inside its scope, so a common word cannot crowd a trip's own matches out of the list: the limit applies
+ * to what is in the trip, and what it keeps is the best-ranked rather than whatever the database reached first.
  */
-export async function idsMatching(q: string): Promise<string[]> {
+export async function idsMatching(q: string, opts: { member: boolean; scope?: MatchScope; limit?: number }): Promise<string[]> {
+  const scope = opts.scope ?? {};
+  const limit = opts.limit ?? MATCH_LIMIT;
+  // The words are looked for as typed: a % or an _ in them is a character, not a pattern.
+  const like = `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+  // Members match what members read; anybody else only what anybody may, so a name or a note never picks out a photograph.
+  const column = opts.member ? Prisma.sql`p."searchVectorMembers"` : Prisma.sql`p."searchVector"`;
+  const titled = opts.member ? Prisma.sql`(p.title ILIKE ${like} OR p."membersTitle" ILIKE ${like})` : Prisma.sql`p.title ILIKE ${like}`;
+  const within: Prisma.Sql[] = [];
+  if (scope.tripId !== undefined) within.push(scope.tripId === null ? Prisma.sql`p."tripId" IS NULL` : Prisma.sql`p."tripId" = ${scope.tripId}`);
+  if (scope.collectionId) within.push(Prisma.sql`EXISTS (SELECT 1 FROM "CollectionItem" ci WHERE ci."photoId" = p.id AND ci."collectionId" = ${scope.collectionId})`);
+  if (scope.publicOnly) within.push(publicMediaSql());
+  if (scope.placed) within.push(Prisma.sql`p.lat IS NOT NULL AND p.lng IS NOT NULL`);
   const rows = await db.$queryRaw<{ id: string }[]>`
     SELECT p.id FROM "Photo" p, LATERAL (SELECT websearch_to_tsquery('english', ${q}) || websearch_to_tsquery('simple', ${q}) AS query) qq
-    WHERE p."trashedAt" IS NULL AND (p."searchVectorMembers" @@ qq.query OR p."originalName" ILIKE ${"%" + q + "%"} OR p.caption ILIKE ${"%" + q + "%"} OR p.title ILIKE ${"%" + q + "%"})
-    LIMIT 5000`;
-  return rows.map((r) => r.id);
+    WHERE p."trashedAt" IS NULL AND ${within.length ? Prisma.join(within, " AND ") : Prisma.sql`TRUE`}
+      AND (${column} @@ qq.query OR p."originalName" ILIKE ${like} OR p.caption ILIKE ${like} OR ${titled})
+    ORDER BY ts_rank_cd(${column}, qq.query) DESC, p.id
+    LIMIT ${limit + 1}`;
+  // Kept quiet from the viewer, who sees the best-ranked matches; said here, without the words (somebody's search is
+  // theirs), so a limit that is too low is noticed.
+  if (rows.length > limit) console.warn(`[search] a word search matched more than ${limit} items in its scope; the best-ranked ${limit} are used`);
+  return rows.slice(0, limit).map((r) => r.id);
 }
 
 /**
  * Which items fall in a given year *where they were taken*. A photograph taken on New Year's Eve in Maine is a
- * photograph from that year, not from the next one because UTC had already turned over — so the offset recorded
- * with it is added before the year is read off. Answered as ids so that both ways of ordering a gallery, and the
- * count beside it, agree exactly on what is in it.
+ * photograph from that year, not from the next one because UTC had already turned over — so it is read on its own
+ * offset, else in its trip's zone (see `inLocalYearSql`). Answered as ids so that both ways of ordering a gallery,
+ * and the count beside it, agree exactly on what is in it.
  */
 export async function idsInLocalYear(tripId: string | null, year: number): Promise<string[]> {
+  const zoneFixes = await tripZoneFixes();
   const rows = await db.$queryRaw<{ id: string }[]>`
-    SELECT p.id FROM "Photo" p
+    SELECT p.id FROM "Photo" p LEFT JOIN "Trip" t ON t.id = p."tripId"
     WHERE p."trashedAt" IS NULL
       AND ${tripId ? Prisma.sql`p."tripId" = ${tripId}` : Prisma.sql`TRUE`}
-      AND EXTRACT(YEAR FROM (p."takenAt" + make_interval(mins => COALESCE(p."tzOffsetMin", 0)))) = ${year}`;
+      AND ${inLocalYearSql(year, zoneFixes)}`;
   return rows.map((r) => r.id);
 }
 
@@ -55,13 +88,27 @@ export function intersectIds(lists: string[][]): string[] {
   });
 }
 
+/**
+ * How far down a favourites-first list a cursor says we are: a whole number of rows, never less than none. Anything
+ * else in the address — a negative, a fraction, a word, a number too big to be a row — is the first page, not an
+ * error from the database.
+ */
+export function offsetCursor(cursor: string | null | undefined): number {
+  const n = Math.floor(Number(cursor ?? 0));
+  return Number.isSafeInteger(n) ? Math.min(Math.max(0, n), 2 ** 31 - 1) : 0;
+}
+
+/** By when they were taken, the undated last, then when they arrived: the order the date-ordered grids page in. */
+const takenOrder = (dir: "asc" | "desc"): KeyColumn[] => [{ field: "takenAt", dir, nullsLast: true }, { field: "createdAt", dir }];
+
 /** One page of a trip's gallery in capture order, with a cursor (the last item's id) for the next page. */
-export async function tripPhotoPage(tripId: string, opts: { uploaderId?: string; cursor?: string | null; take?: number; viewerId?: string | null; order?: PhotoOrder; filter?: GalleryFilter } = {}): Promise<PhotoPage> {
+export async function tripPhotoPage(tripId: string, opts: { uploaderId?: string; cursor?: string | null; take?: number; viewerId?: string | null; order?: PhotoOrder; filter?: GalleryFilter; /** Finished items only, as a visitor is shown them: nothing still processing or failed. */ readyOnly?: boolean; /** Only these, for re-reading photos a gallery already holds; any that no longer belong here are left out. */ ids?: string[] } = {}): Promise<PhotoPage> {
   const take = opts.take ?? GALLERY_PAGE;
   // `uploaderId` predates the filter and still works on its own, so a link somebody kept goes on working.
   const filter: GalleryFilter = { ...NO_FILTER, ...opts.filter, uploaderId: opts.filter?.uploaderId ?? opts.uploaderId ?? null };
   const lists: string[][] = [];
-  if (filter.q) lists.push(await idsMatching(filter.q));
+  if (opts.ids) lists.push(opts.ids);
+  if (filter.q) lists.push(await idsMatching(filter.q, { member: filter.member, scope: { tripId } }));
   if (filter.year) lists.push(await idsInLocalYear(tripId, filter.year));
   // One list per name, so two names means the photographs they are both on rather than either.
   for (const id of filter.personIds) lists.push(await idsWithPerson(id));
@@ -76,18 +123,20 @@ export async function tripPhotoPage(tripId: string, opts: { uploaderId?: string;
     ...(filter.kind ? { kind: filter.kind } : {}),
     ...(filter.activityId ? { activityId: filter.activityId } : {}),
     ...(restrict ? { id: { in: restrict } } : {}),
-    status: { in: ["READY", "PENDING", "PROCESSING", "FAILED"] },
+    status: { in: opts.readyOnly ? ["READY"] : ["READY", "PENDING", "PROCESSING", "FAILED"] },
   };
-  const order = opts.order ?? "favorites";
+  // Favourites first is a member's order, and a member's is the only one that names who is looking (`viewerId`).
+  // Anybody else would learn from it what the family hearted, so they get the order the day happened in.
+  const order = (opts.order ?? "favorites") === "favorites" && !opts.viewerId ? "taken" : (opts.order ?? "favorites");
   if (order === "favorites") {
     // Favourites lead, then the family's, then the order the day happened in. The cursor is how far down the list
     // we are: the sort key is computed, so there is nothing stable to key from, and a page is 240 rows.
-    const skip = Number(opts.cursor ?? 0) || 0;
+    const skip = offsetCursor(opts.cursor);
     const [ids, total] = await Promise.all([
       db.$queryRaw<{ id: string }[]>`
         SELECT p.id FROM "Photo" p
         WHERE p."tripId" = ${tripId} AND p."trashedAt" IS NULL
-          AND p.status IN ('READY', 'PENDING', 'PROCESSING', 'FAILED')
+          AND ${opts.readyOnly ? Prisma.sql`p.status = 'READY'` : Prisma.sql`p.status IN ('READY', 'PENDING', 'PROCESSING', 'FAILED')`}
           AND ${filter.uploaderId ? Prisma.sql`p."uploaderId" = ${filter.uploaderId}` : Prisma.sql`TRUE`}
           AND ${filter.kind ? Prisma.sql`p.kind = ${filter.kind}::"MediaKind"` : Prisma.sql`TRUE`}
           AND ${filter.activityId ? Prisma.sql`p."activityId" = ${filter.activityId}` : Prisma.sql`TRUE`}
@@ -105,19 +154,19 @@ export async function tripPhotoPage(tripId: string, opts: { uploaderId?: string;
   }
   // Latest first still leaves the undated at the end: "no date" is neither early nor late.
   const dir = order === "newest" ? "desc" : "asc";
+  const columns = takenOrder(dir);
   const [photos, total] = await Promise.all([
     db.photo.findMany({
-      where,
+      where: { AND: [where, await cursorWhere(opts.cursor, columns, where)] },
       orderBy: [{ takenAt: { sort: dir, nulls: "last" } }, { createdAt: dir }, { id: dir }],
-      select: photoCardSelect,
+      select: { ...photoCardSelect, createdAt: true },
       take: take + 1,
-      ...(opts.cursor ? { cursor: { id: opts.cursor }, skip: 1 } : {}),
     }),
     db.photo.count({ where }),
   ]);
   const more = photos.length > take;
   const page = more ? photos.slice(0, take) : photos;
-  return { photos: page, nextCursor: more ? page[page.length - 1].id : null, total };
+  return { photos: page, nextCursor: more ? encodeCursor(page[page.length - 1], columns) : null, total };
 }
 
 /** Where the picked photographs are going, so the picker never offers what is already there. */
@@ -155,7 +204,8 @@ export async function idsNear(near: { lat: number; lng: number; miles: number })
 export async function candidatePhotoPage(target: PickerTarget, filter: PickerFilter = NO_PICKER_FILTER, opts: { cursor?: string | null; take?: number } = {}): Promise<PhotoPage> {
   const take = opts.take ?? GALLERY_PAGE;
   const lists: string[][] = [];
-  if (filter.q) lists.push(await idsMatching(filter.q));
+  // The picker is a member's, choosing from the whole album.
+  if (filter.q) lists.push(await idsMatching(filter.q, { member: true }));
   if (filter.near) lists.push(await idsNear(filter.near));
   // One list per name, so two names means the photographs they are both on rather than either.
   for (const id of filter.personIds) lists.push(await idsWithPerson(id));
@@ -185,19 +235,19 @@ export async function candidatePhotoPage(target: PickerTarget, filter: PickerFil
   if (restrict) and.push({ id: { in: restrict } });
 
   const where: Prisma.PhotoWhereInput = { status: "READY", ...NOT_TRASHED, AND: and };
+  const columns = takenOrder("desc");
   const [photos, total] = await Promise.all([
     db.photo.findMany({
-      where,
+      where: { AND: [where, await cursorWhere(opts.cursor, columns, where)] },
       orderBy: [{ takenAt: { sort: "desc", nulls: "last" } }, { createdAt: "desc" }, { id: "desc" }],
-      select: photoCardSelect,
+      select: { ...photoCardSelect, createdAt: true },
       take: take + 1,
-      ...(opts.cursor ? { cursor: { id: opts.cursor }, skip: 1 } : {}),
     }),
     db.photo.count({ where }),
   ]);
   const more = photos.length > take;
   const page = more ? photos.slice(0, take) : photos;
-  return { photos: page, nextCursor: more ? page[page.length - 1].id : null, total };
+  return { photos: page, nextCursor: more ? encodeCursor(page[page.length - 1], columns) : null, total };
 }
 
 /** How many the overview page shows. */

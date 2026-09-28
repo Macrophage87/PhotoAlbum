@@ -44,7 +44,9 @@ COPY --from=build /app/src ./src
 COPY --from=build /app/tsconfig.json ./tsconfig.json
 COPY --from=build /app/tests/fixtures ./tests/fixtures
 COPY --from=build /app/scripts ./scripts
-RUN chmod +x ./scripts/entrypoint.sh && mkdir -p /data/photos && chown -R node:node /data /app
+# /data/imports is made here, owned by node, so the empty named volume compose mounts on it starts out node's too;
+# otherwise Docker makes it root's and the app cannot delete a Takeout archive from it.
+RUN chmod +x ./scripts/entrypoint.sh && mkdir -p /data/photos /data/imports && chown -R node:node /data /app
 USER node
 VOLUME ["/data/photos"]
 EXPOSE 3000

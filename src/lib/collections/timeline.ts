@@ -7,9 +7,10 @@ import { NOT_TRASHED } from "@/lib/photos/trash";
 import { filterIsActive, NO_FILTER, type GalleryFilter } from "@/lib/photos/filters";
 import { idsMatching, idsInLocalYear, intersectIds } from "@/lib/photos/page";
 import { idsWithPerson } from "@/lib/people/in-photos";
+import { photoOffsetMin } from "@/lib/time/local-day";
 
 /**
- * A collection's items grouped by the day each was taken (each photo carries its own offset; UTC otherwise),
+ * A collection's items grouped by the day each was taken (on its own offset, else its trip's zone, else UTC),
  * narrowed to whatever is being looked for — the same question the trip timeline answers, asked of a gathering.
  */
 export async function collectionTimeline(collectionId: string, filter: GalleryFilter = NO_FILTER): Promise<TimelineResult> {
@@ -18,7 +19,7 @@ export async function collectionTimeline(collectionId: string, filter: GalleryFi
   const total = await db.photo.count({ where: mine });
 
   const lists: string[][] = [];
-  if (filter.q) lists.push(await idsMatching(filter.q));
+  if (filter.q) lists.push(await idsMatching(filter.q, { member: filter.member, scope: { collectionId } }));
   // A collection gathers photographs from any number of trips, so the year is asked of the whole album.
   if (filter.year) lists.push(await idsInLocalYear(null, filter.year));
   // One list per name, so two names means the photographs they are both on rather than either.
@@ -35,6 +36,9 @@ export async function collectionTimeline(collectionId: string, filter: GalleryFi
     },
     select: photoCardSelect,
   });
-  // Activities belong to trips; a collection timeline shows photos only, so no activity ever matches.
-  return { groups: buildTimeline(photos.map((p) => ({ ...p, activityId: null })), [], "UTC"), matched: photos.length, total, active };
+  // Activities belong to trips; a collection timeline shows photos only, so no activity ever matches. Its photos
+  // come from any number of trips, so each is given the offset its own trip's zone reads it on (see
+  // `photoOffsetMin`) and the timeline's zone is never needed: its days and its times of day are each photo's own.
+  const onOwnClock = photos.map((p) => ({ ...p, activityId: null, tzOffsetMin: p.takenAt ? photoOffsetMin(p.takenAt, p.tzOffsetMin, p.trip?.timezone) : p.tzOffsetMin }));
+  return { groups: buildTimeline(onOwnClock, [], "UTC"), matched: photos.length, total, active };
 }

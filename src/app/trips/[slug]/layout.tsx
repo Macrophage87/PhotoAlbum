@@ -16,12 +16,15 @@ import { TripHeader } from "@/components/trips/TripHeader";
 import { TripTabs } from "@/components/trips/TripTabs";
 import { previewCard } from "@/lib/share/preview";
 import { annotationGates } from "@/lib/annotation/eligibility";
-import { describeTripWithAi, setTripDescription } from "./actions";
+import { describeTripWithAi, setTripDescription, setTripDescriptionShared } from "./actions";
+import { readableContainerDescription, withReadableDescription } from "@/lib/photos/readable-text";
 
 export async function generateMetadata({ params }: LayoutProps<"/trips/[slug]">): Promise<Metadata> {
   const { slug } = await params;
-  const trip = await getTripBySlug(slug);
+  const [viewer, trip] = await Promise.all([getViewer(), getTripBySlug(slug)]);
   if (!trip) return { title: "Trip" };
+  // The body sends a stranger to sign in, but the tab title is written first: it names a private trip to nobody.
+  if (!canViewTrip(viewer, trip)) return { title: "Trip", robots: { index: false, follow: false } };
   const isPublic = trip.visibility === "PUBLIC";
   // Only public trips get a preview card: a private URL would leak the cover photo to link scrapers.
   const card = isPublic ? await tripCard(trip, new URL(`/trips/${slug}`, env().APP_URL).toString()) : null;
@@ -36,7 +39,8 @@ export async function generateMetadata({ params }: LayoutProps<"/trips/[slug]">)
 /** The card a link to this trip carries: its title, its dates or description, and its cover photo. */
 export async function tripCard(trip: TripWithCounts, pageUrl: string, shareToken?: string) {
   const cover = await coverFor(trip);
-  const description = trip.description?.trim() || formatDayRange(dateColumnToDay(trip.startDate), dateColumnToDay(trip.endDate));
+  // A link's card is read by whoever it is posted to, so it carries only what a stranger may read.
+  const description = readableContainerDescription(trip, false)?.trim() || formatDayRange(dateColumnToDay(trip.startDate), dateColumnToDay(trip.endDate));
   return previewCard({ title: trip.title, description, pageUrl, cover, appUrl: env().APP_URL, shareToken, shareKind: "trip" });
 }
 
@@ -68,12 +72,12 @@ export default async function TripLayout({ params, children }: LayoutProps<"/tri
     <TripTheme themeKey={trip.themeKey}>
       <Nav viewer={viewer} />
       <TripHeader
-        trip={trip}
+        trip={withReadableDescription(trip, viewer.kind === "user")}
         shareUrl={shareableTripUrl(trip, env().APP_URL)}
-        {...(owns ? { save: setTripDescription.bind(null, slug), ...((await annotationGates()).active ? { describe: describeTripWithAi.bind(null, slug) } : {}) } : {})}
+        {...(owns ? { save: setTripDescription.bind(null, slug), share: setTripDescriptionShared.bind(null, slug), ...((await annotationGates()).active ? { describe: describeTripWithAi.bind(null, slug) } : {}) } : {})}
       />
       <TripTabs tabs={tabs} />
-      <main className="mx-auto max-w-6xl px-4 sm:px-6 py-8">{children}</main>
+      <main id="main" tabIndex={-1} className="mx-auto max-w-6xl px-4 sm:px-6 py-8">{children}</main>
     </TripTheme>
   );
 }

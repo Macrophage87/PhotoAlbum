@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useTransition } from "react";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { StaticMapTile } from "@/components/map/StaticMapTile";
 import { PlaceEditor, PlaceProvenance } from "./PlaceEditor";
 import { mapThemeOf } from "@/lib/map/theme";
@@ -10,6 +11,7 @@ import { resetPhotoDateToCamera, setPhotoDate } from "@/app/photos/[id]/actions"
 import { DateTroubleshooter } from "./DateTroubleshooter";
 import type { PhotoInfo } from "@/app/api/photos/[id]/info/route";
 import { FavouriteButton } from "@/components/favourites/FavouriteButton";
+import { offsetMinutesInZone } from "@/lib/time/local-day";
 
 const SOURCE_LABEL: Record<string, string> = { EXIF_OFFSET: "from the camera", EXIF_TZLOOKUP: "from the camera", TRIP_TZ: "from the camera, in the trip's zone", SIDECAR: "from Google Photos", FILE_NAME: "from the file name", EXIF_CREATED: "from the file\u2019s created-date tag, which may be when it was edited", FILE_MTIME: "from the file's modified time", UPLOAD_TIME: "the upload time" };
 
@@ -25,6 +27,11 @@ export function formatTaken(takenAt: string, tzOffsetMin: number | null): string
   return d.toLocaleString("en-US", { timeZone: "UTC", weekday: "short", month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
+/** The offset its clock is read on: its own when known, else the trip's zone at that moment (as the details page and setPhotoDate do), else UTC. */
+function clockOffset(takenAt: string, tzOffsetMin: number | null, timezone: string | null): number {
+  return tzOffsetMin ?? offsetMinutesInZone(new Date(takenAt), timezone ?? "UTC");
+}
+
 /** The value a datetime-local input wants: the wall-clock time in the item's zone. */
 export function wallInputValue(takenAt: string, tzOffsetMin: number | null): string {
   return new Date(new Date(takenAt).getTime() + (tzOffsetMin ?? 0) * 60_000).toISOString().slice(0, 16);
@@ -37,17 +44,21 @@ export function LightboxInfo({ photoId, share }: { photoId: string; share?: { to
   const [editingDate, setEditingDate] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [pending, start] = useTransition();
+  // On a share page the panel shows what anybody holding the link sees, even to a member previewing it.
+  const onSharePage = usePathname()?.startsWith("/share/") ?? false;
 
   // The lightbox mounts this panel afresh per photo (keyed by id), so there is no state to reset here.
   useEffect(() => {
     let live = true;
-    const q = share ? `?share=${encodeURIComponent(share.token)}&kind=${encodeURIComponent(share.kind)}` : "";
-    fetch(`/api/photos/${photoId}/info${q}`, { credentials: "same-origin" })
+    const q = new URLSearchParams(share ? { share: share.token, kind: share.kind } : {});
+    if (onSharePage) q.set("view", "share");
+    const qs = q.toString();
+    fetch(`/api/photos/${photoId}/info${qs ? `?${qs}` : ""}`, { credentials: "same-origin" })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((j: PhotoInfo) => { if (live) setInfo(j); })
       .catch(() => { if (live) setFailed(true); });
     return () => { live = false; };
-  }, [photoId, share]);
+  }, [photoId, share, onSharePage]);
 
   if (failed) return null;
   if (!info) return <div className="text-white/50 text-sm p-4" aria-busy="true">Loading…</div>;
@@ -75,7 +86,7 @@ export function LightboxInfo({ photoId, share }: { photoId: string; share?: { to
         <div className="text-white/60 text-xs uppercase tracking-wide">Date</div>
         {info.takenAt ? (
           <p>
-            <time dateTime={info.takenAt}>{formatTaken(info.takenAt, info.tzOffsetMin)}</time>
+            <time dateTime={info.takenAt}>{formatTaken(info.takenAt, clockOffset(info.takenAt, info.tzOffsetMin, info.timezone))}</time>
             {info.takenAtSource && <span className="block text-white/50 text-xs">{dateSourceLabel(info.takenAtSource, info.dateSetBy)}</span>}
           </p>
         ) : (
@@ -90,7 +101,7 @@ export function LightboxInfo({ photoId, share }: { photoId: string; share?: { to
         )}
         {info.editable && editingDate && (
           <form className="mt-2 space-y-2" onSubmit={(e) => { e.preventDefault(); const fd = new FormData(e.currentTarget); apply(() => setPhotoDate(info.id, fd)); }}>
-            <input type="datetime-local" name="takenAt" aria-label="Date taken" defaultValue={info.takenAt ? wallInputValue(info.takenAt, info.tzOffsetMin) : ""} required className="h-8 rounded px-2 bg-white text-black [color-scheme:light] text-sm w-full" />
+            <input type="datetime-local" name="takenAt" aria-label="Date taken" defaultValue={info.takenAt ? wallInputValue(info.takenAt, clockOffset(info.takenAt, info.tzOffsetMin, info.timezone)) : ""} required className="h-8 rounded px-2 bg-white text-black [color-scheme:light] text-sm w-full" />
             <div className="flex flex-wrap gap-2">
               <button type="submit" disabled={pending} className="px-2 py-1 rounded bg-white text-black text-xs font-medium disabled:opacity-60">Save date</button>
               <button type="button" disabled={pending} onClick={() => apply(() => resetPhotoDateToCamera(info.id))} className="px-2 py-1 rounded border border-white/40 text-xs hover:bg-white/10 disabled:opacity-60">Use camera date</button>
@@ -115,9 +126,10 @@ export function LightboxInfo({ photoId, share }: { photoId: string; share?: { to
               <PlaceProvenance estimate={info.placeEstimate} muted="text-white/50" />
             </div>
           )}
+          {/* The name is printed once, above: the editor adds only the coordinates and where they came from. */}
           {info.editable && (
             <div className="mt-2">
-              <PlaceEditor photoId={info.id} initial={info.lat !== null && info.lng !== null ? { lat: info.lat, lng: info.lng } : null} gpsSource={info.gpsSource} setBy={info.placeSetBy} placeName={info.placeName} estimate={info.placeEstimate} theme={mapThemeOf(getTheme(info.themeKey))} dark onSaved={(v) => setInfo((prev) => (prev ? { ...prev, lat: v.lat, lng: v.lng, gpsSource: v.gpsSource, placeSetBy: v.setBy, placeName: v.placeName } : prev))} />
+              <PlaceEditor photoId={info.id} initial={info.lat !== null && info.lng !== null ? { lat: info.lat, lng: info.lng } : null} gpsSource={info.gpsSource} setBy={info.placeSetBy} placeName={info.placeName} showName={false} estimate={info.placeEstimate} theme={mapThemeOf(getTheme(info.themeKey))} dark onSaved={(v) => setInfo((prev) => (prev ? { ...prev, lat: v.lat, lng: v.lng, gpsSource: v.gpsSource, placeSetBy: v.setBy, placeName: v.placeName } : prev))} />
             </div>
           )}
         </div>

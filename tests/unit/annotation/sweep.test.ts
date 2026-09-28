@@ -10,6 +10,9 @@ vi.hoisted(() => {
 
 import { db } from "@/lib/db";
 import { annotationSweep } from "@/lib/jobs/handlers/annotation-sweep";
+import { applyAnnotation } from "@/lib/annotation/apply";
+import { annotationSchema } from "@/lib/annotation/schema";
+import { forgetPerson } from "@/lib/people/forget-person";
 import { resetTestDb } from "../helpers/reset";
 
 describe("the annotation sweep", () => {
@@ -48,5 +51,24 @@ describe("the annotation sweep", () => {
     await annotationSweep();
     expect(enqueued).toContain(edited.id);
     expect(enqueued).not.toContain(waiting.id);
+  });
+
+  it("leaves a backfill's item whose answer a forget since threw away for the next backfill (the forget review's A)", async () => {
+    const admin = await db.user.findFirstOrThrow();
+    const base = { uploaderId: admin.id, originalName: "x.jpg", mimeType: "image/jpeg", storageKey: "k", originalPath: "k/o.jpg", sizeBytes: 1, status: "READY" as const };
+    const asked = new Date(Date.now() - 60_000);
+    const batched = await db.photo.create({ data: base });
+    const single = await db.photo.create({ data: base });
+    const ada = await db.person.create({ data: { name: "Ada Byron", createdById: admin.id } });
+    await forgetPerson(ada.id, { keepName: false, byUserId: admin.id });
+    const answer = annotationSchema.parse({ title: "", caption: "A lake", description: "", tags: [], place: null, activity: null, objects: [], visibleText: null, season: "summer", mood: null, searchSummary: "", estimatedYear: null, estimatedPlace: null });
+    await applyAnnotation(batched.id, "m", answer, { content: [], batched: true }, { requestedAt: asked });
+    expect((await db.photo.findUniqueOrThrow({ where: { id: batched.id } })).annotationError).toBe("batch:names_changed");
+    // The sweep's own filter: the backfill's item waits for the next backfill; one asked for alone is asked again.
+    enqueued.length = 0;
+    await db.$executeRaw`UPDATE "Photo" SET "updatedAt" = ${new Date(Date.now() - 2 * 60 * 60_000)}`;
+    await annotationSweep();
+    expect(enqueued).toContain(single.id);
+    expect(enqueued).not.toContain(batched.id);
   });
 });

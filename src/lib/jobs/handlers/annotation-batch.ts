@@ -2,11 +2,15 @@ import { db } from "@/lib/db";
 import { anthropic } from "@/lib/annotation/client";
 import { annotationGates, notOptedOutWhere } from "@/lib/annotation/eligibility";
 import { buildPlaceRequest, buildRequest, loadItem } from "@/lib/annotation/request";
+import { nameScrubber } from "@/lib/people/unpermitted";
+import { loadTombstone, tombstoneStale } from "@/lib/people/tombstone";
+import { dbNow, forgetRunning } from "@/lib/people/names-changed";
 import { applyAnnotation, parseMessageContent, recordFailure } from "@/lib/annotation/apply";
 import { applyPlaceEstimate, parsePlaceContent, recordPlaceFailure } from "@/lib/annotation/place";
 import { enqueue } from "../boss";
 import { QUEUES, type AnnotationBackfillJob } from "../queues";
 import { permittedNames } from "@/lib/people/gates";
+import { annotationCustomId, parseAnnotationCustomId, requestCarriesMembersOnly } from "@/lib/annotation/members-only";
 import { NOT_TRASHED } from "@/lib/photos/trash";
 import { Prisma } from "@/generated/prisma/client";
 
@@ -34,7 +38,8 @@ export function promptFor(task: BackfillTask): "describe" | "place" {
  * between two tables and so cannot be said here.
  */
 export function pendingWhere(task: BackfillTask) {
-  if (task === "place") return { lat: null, placeEstimatedAt: null };
+  // A member who cleared a place (placeSetById with no position) meant it; the helper does not guess it back.
+  if (task === "place") return { lat: null, placeSetById: null, placeEstimatedAt: null };
   if (task === "names") return { annotatedAt: { not: null } };
   return { annotatedAt: null };
 }
@@ -47,7 +52,8 @@ export function pendingWhere(task: BackfillTask) {
  * confirmed in it and either the tag or their permission to be named is newer than the description — which makes
  * the run self-clearing, since describing it again moves the description past both.
  *
- * A minor is never named and so never brings an item into this run; a pet always may be.
+ * A minor is never named and so never brings an item into this run, nor does anybody with no birthday or
+ * attestation; a pet always may be.
  */
 export async function describedBeforeTheirNames(personId?: string): Promise<string[]> {
   const only = personId ? Prisma.sql`AND pe.id = ${personId}` : Prisma.empty;
@@ -60,10 +66,13 @@ export async function describedBeforeTheirNames(personId?: string): Promise<stri
         ${only}
         AND (
           pe.kind = 'PET'
-          OR ((pe."faceIndexing" OR pe."nameInDescriptions") AND (pe.birthday IS NULL OR pe.birthday <= (now() - interval '18 years')))
+          -- The same rule as nameMayLeaveServer: an adult by birthday or by attestation, never a birthday nobody knows.
+          OR ((pe."faceIndexing" OR pe."nameInDescriptions") AND (pe.birthday <= (now() - interval '18 years') OR (pe.birthday IS NULL AND (pe."adultAttestedAt" IS NOT NULL OR pe."adultConfirmedAt" IS NOT NULL))))
         )
         AND (
-          f."createdAt" > p."annotatedAt"
+          -- When the face became theirs, not when the detector found it: that is usually before the description,
+          -- and the member's "yes, that is Ada" days after it.
+          COALESCE(f."confirmedAt", f."createdAt") > p."annotatedAt"
           OR pe."nameInDescriptionsSetAt" > p."annotatedAt"
           OR pe."faceIndexingSetAt" > p."annotatedAt"
         )
@@ -72,7 +81,7 @@ export async function describedBeforeTheirNames(personId?: string): Promise<stri
       SELECT 1 FROM "AnimalDetection" a JOIN "Person" ape ON ape.id = a."personId"
       WHERE a."photoId" = p.id AND a.status = 'CONFIRMED' AND ape."optedOutAt" IS NULL AND ape.kind = 'PET'
         ${onlyAnimal}
-        AND a."createdAt" > p."annotatedAt"
+        AND COALESCE(a."confirmedAt", a."createdAt") > p."annotatedAt"
     ))`;
   return rows.map((r) => r.id);
 }
@@ -203,6 +212,8 @@ export async function annotationBackfill(job: AnnotationBackfillJob): Promise<vo
   await heartbeat();
   const task = taskOf(batch.scope as BackfillScope);
   const candidates = await backfillCandidates(batch.scope as BackfillScope);
+  // Everybody's names, and which may not go to the helper, read once for the whole run rather than per item.
+  const scrubber = await nameScrubber();
   let rowId = batch.id;
   let rowLive = false; // whether rowId already carries a real batch id (its results must never be lost)
   let unclaimed: string | null = null; // a batch created at Anthropic whose row claim has not landed yet
@@ -223,8 +234,11 @@ export async function annotationBackfill(job: AnnotationBackfillJob): Promise<vo
         const item = await loadItem(c.id);
         if (!item) { skip("missing"); continue; }
         try {
-          const params = promptFor(task) === "place" ? await buildPlaceRequest(item, gates.model) : await buildRequest(item, gates.model, await permittedNames(item.id));
-          built.push({ custom_id: c.id, params, bytes: imageBytes(params) });
+          // The place pass is sent the notes but never names.
+          const names = promptFor(task) === "place" ? [] : await permittedNames(item.id);
+          const params = promptFor(task) === "place" ? await buildPlaceRequest(item, gates.model, scrubber) : await buildRequest(item, gates.model, names, scrubber);
+          // What the request carries rides on its id, so the answer is judged by what was sent, not by what is true when it lands.
+          built.push({ custom_id: annotationCustomId(c.id, requestCarriesMembersOnly(item, names)), params, bytes: imageBytes(params) });
         } catch {
           skip("noRendition");
         }
@@ -236,7 +250,7 @@ export async function annotationBackfill(job: AnnotationBackfillJob): Promise<vo
         // Skips belong to the part, so only its first row carries them.
         const skipData = gi === 0 ? { skipped, skippedReasons: reasons } : {};
         if (chunkNo > 0) {
-          rowId = (await db.annotationBatch.create({ data: { anthropicBatchId: `pending-${batch.id}-${chunkNo}`, parentId: batch.id, scope: batch.scope as object, requested: 0, createdById: batch.createdById }, select: { id: true } })).id;
+          rowId = (await db.annotationBatch.create({ data: { anthropicBatchId: `pending-${batch.id}-${chunkNo}`, parentId: batch.id, scope: batch.scope as object, requested: 0, createdById: batch.createdById, createdAt: await dbNow() }, select: { id: true } })).id;
           rowLive = false;
         }
         chunkNo += 1;
@@ -324,56 +338,106 @@ export async function annotationBatchPoll(): Promise<void> {
   await closeDeadRuns(hourAgo);
   // Cancelled rows with a live batch id still get their (already billed) results applied once the batch ends.
   const open = (await db.annotationBatch.findMany({ where: { OR: [{ status: "SUBMITTED" }, { status: "CANCELLED", endedAt: null }] } })).filter((b) => !b.anthropicBatchId.startsWith("pending-") && !b.anthropicBatchId.startsWith("empty-"));
+  // One batch that cannot be read (a reset stream, expired results) must not hold up the batches after it.
   for (const b of open) {
-    // A place-pass row has nothing to say about descriptions, so its results are read the other way round.
-    const task = taskOf(b.scope as BackfillScope);
-    const remote = await anthropic().messages.batches.retrieve(b.anthropicBatchId).catch(() => null);
-    if (!remote) continue;
-    if (remote.processing_status !== "ended") continue;
-    let succeeded = 0, errored = 0, canceled = 0;
-    for await (const result of await anthropic().messages.batches.results(b.anthropicBatchId)) {
-      const photoId = result.custom_id;
-      // A place run never writes annotation state: an item it could not place keeps whatever description it has.
-      const fail = (reason: string, opts?: { terminal?: boolean }) => (promptFor(task) === "place" ? recordPlaceFailure(photoId, opts ?? {}) : recordFailure(photoId, reason, opts ?? {}));
-      if (result.result.type !== "succeeded") {
-        // Errored, expired or cancelled: the helper never saw the item, so leave it eligible for a later backfill.
-        if (result.result.type === "canceled") canceled++;
-        else errored++;
-        await fail(`batch:${result.result.type}`, { terminal: false });
-        continue;
+    try {
+      await applyBatch(b);
+    } catch (err) {
+      const message = err instanceof Error ? err.message.slice(0, 200) : String(err);
+      console.error(`[annotation-backfill] batch ${b.anthropicBatchId} could not be applied, will try again: ${message}`);
+      // Past Anthropic's retention nothing will ever come back; close it rather than retry it forever.
+      if (Date.now() - b.createdAt.getTime() > RESULTS_RETENTION_MS) {
+        await db.annotationBatch.update({ where: { id: b.id }, data: { status: "FAILED", endedAt: new Date() } }).catch(() => undefined);
       }
-      const message = result.result.message;
-      if (message.stop_reason === "refusal") {
-        errored++;
-        await fail(`refusal:${message.stop_details?.category ?? "unspecified"}`);
-        continue;
-      }
-      if (message.stop_reason === "max_tokens") {
-        errored++;
-        await fail("max_tokens");
-        continue;
-      }
-      if (promptFor(task) === "place") {
-        const place = parsePlaceContent(message.content as { type: string; text?: string }[]);
-        if (place === undefined) {
-          errored++;
-          await fail("invalid_output");
-          continue;
-        }
-        await applyPlaceEstimate(photoId, place);
-        succeeded++;
-        continue;
-      }
-      const parsed = parseMessageContent(message.content as { type: string; text?: string }[]);
-      if (!parsed) {
+    }
+  }
+}
+
+/** Anthropic keeps a batch's results for 29 days after it was created. */
+export const RESULTS_RETENTION_MS = 29 * 86_400_000;
+
+type OpenBatch = Awaited<ReturnType<typeof db.annotationBatch.findMany>>[number];
+
+/** Read one ended batch's results and apply them; a batch still running is left for the next poll. */
+async function applyBatch(b: OpenBatch): Promise<void> {
+  // A place-pass row has nothing to say about descriptions, so its results are read the other way round.
+  const task = taskOf(b.scope as BackfillScope);
+  // While somebody is being forgotten no answer can be stored: the batch waits for the next poll rather than
+  // having every answer in it thrown away and asked again one at a time, at the full price. Checked before anything
+  // else, so a forget only ever defers a batch: nothing about it is judged (closed for expired results included)
+  // until the forget is over.
+  if (await forgetRunning()) return;
+  const remote = await anthropic().messages.batches.retrieve(b.anthropicBatchId).catch(() => null);
+  if (!remote) return;
+  if (remote.processing_status !== "ended") return;
+  if (!remote.results_url) {
+    // Ended but its results are gone (expired or archived): the items stay eligible for a later backfill.
+    console.error(`[annotation-backfill] batch ${b.anthropicBatchId} ended but its results are no longer available`);
+    await db.annotationBatch.update({ where: { id: b.id }, data: { status: "FAILED", endedAt: new Date() } });
+    return;
+  }
+  // Read everything before writing anything, so a stream that breaks halfway applies nothing twice.
+  const results = [];
+  for await (const result of await anthropic().messages.batches.results(b.anthropicBatchId)) results.push(result);
+  // An item written after the batch ended was applied by an earlier poll that then failed (or has a newer answer
+  // since): its outcome still counts, but it is not written again.
+  const endedAt = remote.ended_at ? new Date(remote.ended_at) : null;
+  const newer = endedAt
+    ? new Set((await db.photo.findMany({ where: { id: { in: results.map((r) => parseAnnotationCustomId(r.custom_id).photoId) }, ...(promptFor(task) === "place" ? { placeEstimatedAt: { gt: endedAt } } : { annotatedAt: { gt: endedAt } }) }, select: { id: true } })).map((p) => p.id))
+    : new Set<string>();
+  let succeeded = 0, errored = 0, canceled = 0;
+  // The forgotten names, read once for the batch rather than for every answer in it, and again only if somebody
+  // is forgotten meanwhile.
+  let tombstone = await loadTombstone();
+  // Every request in the run was built after its first row was created, so that is the time to judge answers by.
+  const requestedAt = b.parentId ? ((await db.annotationBatch.findUnique({ where: { id: b.parentId }, select: { createdAt: true } }))?.createdAt ?? b.createdAt) : b.createdAt;
+  for (const result of results) {
+    const { photoId, sent } = parseAnnotationCustomId(result.custom_id);
+    const write = async <T>(fn: () => Promise<T>): Promise<T | undefined> => (newer.has(photoId) ? undefined : fn());
+    // A place run never writes annotation state: an item it could not place keeps whatever description it has.
+    const fail = (reason: string, opts?: { terminal?: boolean }) => write(() => (promptFor(task) === "place" ? recordPlaceFailure(photoId, opts ?? {}) : recordFailure(photoId, reason, opts ?? {})));
+    if (result.result.type !== "succeeded") {
+      // Errored, expired or cancelled: the helper never saw the item, so leave it eligible for a later backfill.
+      if (result.result.type === "canceled") canceled++;
+      else errored++;
+      await fail(`batch:${result.result.type}`, { terminal: false });
+      continue;
+    }
+    const message = result.result.message;
+    if (message.stop_reason === "refusal") {
+      errored++;
+      await fail(`refusal:${message.stop_details?.category ?? "unspecified"}`);
+      continue;
+    }
+    if (message.stop_reason === "max_tokens") {
+      errored++;
+      await fail("max_tokens");
+      continue;
+    }
+    if (await tombstoneStale(tombstone)) tombstone = await loadTombstone();
+    if (promptFor(task) === "place") {
+      const place = parsePlaceContent(message.content as { type: string; text?: string }[]);
+      if (place === undefined) {
         errored++;
         await fail("invalid_output");
         continue;
       }
-      await applyAnnotation(photoId, message.model, parsed, { content: message.content, usage: message.usage, stop_reason: message.stop_reason, batched: true });
+      if ((await write(() => applyPlaceEstimate(photoId, place, { sent, requestedAt, tombstone }))) === "stale") {
+        errored++;
+        continue;
+      }
       succeeded++;
+      continue;
     }
-    console.log(`[annotation-backfill] batch ${b.anthropicBatchId} ended: ${succeeded} ok, ${errored} failed, ${canceled} cancelled`);
-    await db.annotationBatch.update({ where: { id: b.id }, data: { status: b.status === "CANCELLED" || remote.request_counts.canceled ? "CANCELLED" : "ENDED", succeeded, errored, canceled, endedAt: new Date() } });
+    const parsed = parseMessageContent(message.content as { type: string; text?: string }[]);
+    if (!parsed) {
+      errored++;
+      await fail("invalid_output");
+      continue;
+    }
+    await write(() => applyAnnotation(photoId, message.model, parsed, { content: message.content, usage: message.usage, stop_reason: message.stop_reason, batched: true }, { sent, requestedAt, tombstone }));
+    succeeded++;
   }
+  console.log(`[annotation-backfill] batch ${b.anthropicBatchId} ended: ${succeeded} ok, ${errored} failed, ${canceled} cancelled`);
+  await db.annotationBatch.update({ where: { id: b.id }, data: { status: b.status === "CANCELLED" || remote.request_counts.canceled ? "CANCELLED" : "ENDED", succeeded, errored, canceled, endedAt: new Date() } });
 }

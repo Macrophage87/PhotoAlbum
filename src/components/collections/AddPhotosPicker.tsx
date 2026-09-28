@@ -88,7 +88,7 @@ export function AddPhotosPicker({ destination, initialTrip, filter, members, peo
             {destination.kind === "collection" ? `Add existing photos to ${destination.title}` : `Put existing photos on ${destination.title}`}
           </h2>
           <p className="text-sm text-muted mt-1">
-            Tick the ones that belong here. {initial.total} item{initial.total === 1 ? "" : "s"} to choose from
+            Check the ones that belong here. {initial.total} item{initial.total === 1 ? "" : "s"} to choose from
             {pickerFilterIsActive(filter) ? ` — ${describePickerFilter(filter).join("; ") || "with this filter"}` : ""}; anything already
             {` ${where[destination.kind]}`} is not shown.
           </p>

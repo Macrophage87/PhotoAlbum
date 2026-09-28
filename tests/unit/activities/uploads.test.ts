@@ -48,12 +48,12 @@ describe("photos put on an activity by a member", () => {
     const other = await db.activity.create({ data: { tripId, title: "Evening sail", type: "BOAT", startTime: hour(18), endTime: hour(20) } });
     const scan = await photo("scan.jpg", null, me);
     // The date turns out to be during the evening sail; the walk is still where it was filed.
-    await applyPhotoInstant({ id: scan.id, tripId, gpsSource: null, activityId: walkId, activitySetById: me }, hour(19), 0, "MANUAL", me, { geotag: false });
+    await applyPhotoInstant({ id: scan.id, tripId, gpsSource: null, uploaderId: me, activityId: walkId, activitySetById: me }, hour(19), 0, "MANUAL", me, { geotag: false });
     expect((await db.photo.findUniqueOrThrow({ where: { id: scan.id } })).activityId).toBe(walkId);
 
     // Where nobody chose, the corrected date decides.
     const auto = await photo("auto.jpg", hour(10), null);
-    await applyPhotoInstant({ id: auto.id, tripId, gpsSource: null, activityId: walkId, activitySetById: null }, hour(19), 0, "MANUAL", me, { geotag: false });
+    await applyPhotoInstant({ id: auto.id, tripId, gpsSource: null, uploaderId: me, activityId: walkId, activitySetById: null }, hour(19), 0, "MANUAL", me, { geotag: false });
     expect((await db.photo.findUniqueOrThrow({ where: { id: auto.id } })).activityId).toBe(other.id);
   });
 });

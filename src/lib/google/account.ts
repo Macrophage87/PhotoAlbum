@@ -1,6 +1,6 @@
 import { db } from "@/lib/db";
 import { decryptSecret, encryptSecret } from "./crypto";
-import { GoogleAuthError, refreshAccessToken, revokeToken } from "./oauth";
+import { GoogleAuthError, refreshAccessToken, revokeToken, revokeTokenOrThrow } from "./oauth";
 
 export type GoogleStatus = { connected: boolean; needsReconnect: boolean; connectedAt: string | null };
 
@@ -16,14 +16,19 @@ export async function storeRefreshToken(userId: string, refreshToken: string): P
 
 // Access tokens live about an hour; keep them in memory per member so a picking session refreshes once.
 const cache = new Map<string, { token: string; expiresAt: number }>();
+/** A token with less than this left is refreshed rather than handed out: a download can take minutes. */
+const TOKEN_MARGIN_MS = 5 * 60_000;
 
 /** A live access token for the member, refreshing from the stored refresh token; marks the account when Google says it is gone. */
 export async function accessTokenFor(userId: string): Promise<string> {
-  const hit = cache.get(userId);
-  if (hit && hit.expiresAt > Date.now() + 60_000) return hit.token;
+  // The row is asked every time, cached token or not: a member being removed has theirs parked by another process
+  // (see beginRemoval), and a download still queued for them must stop at once, not when the cached token expires.
   const account = await db.googleAccount.findUnique({ where: { userId } });
+  if (!account || account.needsReconnect) cache.delete(userId);
   if (!account) throw new GoogleAuthError("Google Photos is not connected", true);
   if (account.needsReconnect) throw new GoogleAuthError("Google Photos needs to be connected again", true);
+  const hit = cache.get(userId);
+  if (hit && hit.expiresAt > Date.now() + TOKEN_MARGIN_MS) return hit.token;
   try {
     const t = await refreshAccessToken(decryptSecret(account.encryptedRefreshToken));
     cache.set(userId, { token: t.accessToken, expiresAt: Date.now() + t.expiresIn * 1000 });
@@ -47,6 +52,15 @@ export async function noteAuthFailure(userId: string, err: unknown): Promise<boo
   return true;
 }
 
+/**
+ * Stop handing out the cached access token, so the next accessTokenFor refreshes. For a token Google refused (a 401)
+ * although the grant itself may be fine: an access token that expired is not a revoked grant, and only a refresh
+ * that fails says the member has to connect again.
+ */
+export function forgetAccessToken(userId: string): void {
+  cache.delete(userId);
+}
+
 /** Forget the grant here and, best effort, at Google. */
 export async function disconnectGoogleAccount(userId: string): Promise<void> {
   const account = await db.googleAccount.findUnique({ where: { userId } });
@@ -58,6 +72,41 @@ export async function disconnectGoogleAccount(userId: string): Promise<void> {
   } catch {
     /* an undecryptable token (rotated key) cannot be revoked; the local copy is gone */
   }
+}
+
+/**
+ * Revoke at Google a connection whose row is already gone (a removed member's goes with their account), and stop
+ * handing out its cached access token. "failed" when Google could not be told: the caller queues it to be tried
+ * again (`revokeQueuedConnection`), since the grant would otherwise outlive the member.
+ */
+export async function revokeRemovedConnection(userId: string, encryptedRefreshToken: string | null): Promise<"revoked" | "failed" | "none"> {
+  cache.delete(userId);
+  if (!encryptedRefreshToken) return "none";
+  let token: string;
+  try {
+    token = decryptSecret(encryptedRefreshToken);
+  } catch {
+    // An undecryptable token (rotated key) cannot be revoked; the local copy is gone.
+    return "none";
+  }
+  try {
+    await revokeTokenOrThrow(token);
+    return "revoked";
+  } catch (err) {
+    console.error("[google] could not revoke a removed member's Google connection; queued to try again", err instanceof Error ? err.message : err);
+    return "failed";
+  }
+}
+
+/** The retry: throws while Google cannot be told, so the queue tries again later. */
+export async function revokeQueuedConnection(job: { encryptedRefreshToken: string }): Promise<void> {
+  let token: string;
+  try {
+    token = decryptSecret(job.encryptedRefreshToken);
+  } catch {
+    return;
+  }
+  await revokeTokenOrThrow(token);
 }
 
 export const _cacheForTests = cache;

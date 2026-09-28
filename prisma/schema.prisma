@@ -18,6 +18,14 @@ enum TripVisibility {
   PUBLIC
 }
 
+/// How names are checked before words are shown to everyone (src/lib/people/name-check.ts). STRICT: any mention of
+/// somebody who may not be named holds the words (strict-names.ts). RELAXED: the strict matcher and a closed list of
+/// excuses for a child's name read as an everyday word, a month or season, or a place (relaxed-names.ts).
+enum NameCheck {
+  STRICT
+  RELAXED
+}
+
 /// Who was looking, as far as the album can tell: a signed-in family member, somebody holding a secret link, or
 /// anyone at all looking at something marked public.
 enum VisitorKind {
@@ -186,6 +194,12 @@ model User {
   name      String?
   role      Role     @default(MEMBER)
   createdAt DateTime @default(now())
+  /// Being removed: signed out, no longer an admin, and what they uploaded and chose passing to `removingBy` a batch
+  /// at a time (see src/lib/auth/remove-member.ts). Never cleared: the account goes once everything is handed over.
+  removingAt   DateTime?
+  removingById String?
+  removingBy   User?    @relation("RemovingBy", fields: [removingById], references: [id], onDelete: Restrict)
+  takingOver   User[]   @relation("RemovingBy")
 
   sessions Session[]
   googleAccount GoogleAccount?
@@ -231,6 +245,7 @@ model MagicLinkToken {
   createdAt DateTime  @default(now())
 
   @@index([email])
+  @@index([expiresAt])
 }
 
 model Session {
@@ -248,19 +263,38 @@ model Trip {
   slug         String         @unique
   title        String
   description  String?
+  /// The helper wrote the description from names or notes, or it names somebody the album knows: members only.
+  /// Kept while the text is; a member writing it afresh by hand makes the words theirs to publish.
+  descriptionMembersOnly Boolean @default(false)
+  /// The helper wrote the description as it stands. Saving different words by hand makes it the member's, and
+  /// forgetting somebody then leaves it as they wrote it (the person page lists it for its author to edit).
+  descriptionByHelper    Boolean @default(false)
+  /// When whoever arranges it chose to show the description to everyone; nothing re-flags it until it is rewritten.
+  descriptionSharedAt    DateTime?
   startDate    DateTime       @db.Date
   endDate      DateTime       @db.Date
   timezone     String         @default("UTC")
   themeKey     String         @default("default")
-  coverPhotoId String?        @unique
+  /// Chosen by hand, and honoured only while it is still a finished photograph on this trip and out of the trash.
+  coverPhotoId String?
   coverPhoto   Photo?         @relation("TripCover", fields: [coverPhotoId], references: [id], onDelete: SetNull)
   visibility   TripVisibility @default(PRIVATE)
   shareToken   String?        @unique
   annotationOptOut Boolean    @default(false)
+  /// How names are checked before this trip's words are shown to everyone; null follows the album's
+  /// (AppSetting.nameCheck). Changed by whoever arranges the trip, recorded with who and when.
+  nameCheck      NameCheck?
+  nameCheckSetAt DateTime?
+  nameCheckSetById String?
+  /// When the helper's description was shown to everyone only because the relaxed name check excused it (see
+  /// Photo.relaxedReleaseAt).
+  relaxedReleaseAt DateTime?
   createdById  String
   createdBy    User           @relation(fields: [createdById], references: [id])
   createdAt    DateTime       @default(now())
   updatedAt    DateTime       @updatedAt
+  /// Being deleted: its photographs leave it a batch at a time, then it goes (see src/lib/trips/delete.ts).
+  deletingAt   DateTime?
 
   activities Activity[]
   photos     Photo[]
@@ -274,6 +308,7 @@ model Trip {
 
   @@index([startDate])
   @@index([visibility])
+  @@index([coverPhotoId])
 }
 
 model Activity {
@@ -285,6 +320,21 @@ model Activity {
   startTime   DateTime
   endTime     DateTime
   description String?
+  /// The helper wrote the description from names or notes, or it names somebody the album knows: members only.
+  /// Kept while the text is; a member writing it afresh by hand makes the words theirs to publish.
+  descriptionMembersOnly Boolean @default(false)
+  /// The helper wrote the description as it stands. Saving different words by hand makes it the member's, and
+  /// forgetting somebody then leaves it as they wrote it (the person page lists it for its author to edit).
+  descriptionByHelper    Boolean @default(false)
+  /// Members-only only because it repeats a word of its trip's title while the trip is not public.
+  descriptionTitleOnly   Boolean @default(false)
+  /// The words of the trip's title that caused it: lifted only while the trip's own, public title still carries them.
+  descriptionTitleWords  String[] @default([])
+  /// When whoever arranges it chose to show the description to everyone; nothing re-flags it until it is rewritten.
+  descriptionSharedAt    DateTime?
+  /// When the helper's description was shown to everyone only because the relaxed name check excused it (see
+  /// Photo.relaxedReleaseAt).
+  relaxedReleaseAt       DateTime?
   trackId     String?      @unique
   track       Track?       @relation("ActivityTrack", fields: [trackId], references: [id], onDelete: SetNull)
   photos      Photo[]
@@ -295,12 +345,13 @@ model Activity {
   participants User[]      @relation("ActivityParticipants")
   /// The photograph the activity is known by, chosen by hand: the picture a shared link unfurls with. Honoured only
   /// while it is still one of the activity's own; otherwise the activity is fronted by its first photograph.
-  coverPhotoId String?     @unique
+  coverPhotoId String?
   coverPhoto   Photo?      @relation("ActivityCover", fields: [coverPhotoId], references: [id], onDelete: SetNull)
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
 
   @@index([tripId, startTime])
+  @@index([coverPhotoId])
 }
 
 model Photo {
@@ -378,6 +429,46 @@ model Photo {
   annotationCacheWriteTokens Int?
   annotationOutputTokens    Int?
   annotationBatched         Boolean?
+  /// The helper's text was written from something members-only — the names the family confirmed, the uploader's
+  /// notes — or names somebody the album knows. It is then read and searched by members only, like what it came from.
+  annotationMembersOnly     Boolean  @default(false)
+  /// The helper's title when it is members-only: shown to members where the item has no title of its own, never to
+  /// anybody else. `title` itself only ever holds what anybody who may see the item may read.
+  membersTitle              String?
+  /// When somebody's name was last taken out of this item's machine-written text because they were untagged from it
+  /// or their naming was withdrawn. An answer from the helper to a request built before then is thrown away rather
+  /// than stored, since it may name them again. A forget stamps nothing here (the stamps would say which photographs
+  /// it covered): an answer asked for before any forget is thrown away instead (AppSetting.lastForgetAt).
+  namesScrubbedAt           DateTime?
+  /// What the photo's image addresses are versioned by (`?v=`): moved by a trigger when its files, edits, state,
+  /// trip or activity change, and by hand when who may see it changes. Never by text, so a rewrite of its words
+  /// (a forget's) changes no address strangers can see.
+  imageVersion              Int      @default(0)
+  /// Members-only only because the text repeats a word from the title of a trip or collection strangers cannot
+  /// open: making that trip or collection public lifts it (see src/lib/annotation/rejudge.ts).
+  annotationTitleOnly       Boolean  @default(false)
+  /// For a title-word flag: the words that caused it and the trips/collections they came from (`trip:<id>`,
+  /// `collection:<id>`). It is lifted only when those are public and their titles still carry the words.
+  annotationTitleWords      String[] @default([])
+  annotationTitleFrom       String[] @default([])
+  /// Goes up with every change to `annotation` (a database trigger), so "show it to everyone" and the background
+  /// judging act only on the words that were read.
+  annotationRevision        Int      @default(0)
+  /// When the item last joined a trip or a collection (database triggers), so the nightly sweep judges it again.
+  containersChangedAt       DateTime?
+  /// When its words (the helper's text and title, or a member's shown words) were shown to everyone only because the
+  /// relaxed name check excused them: the strict check would have held them then (src/lib/people/name-check.ts). Only
+  /// such words are checked again when a level, a place or who may be named changes (src/lib/annotation/rejudge.ts,
+  /// rejudgeNameCheck); cleared once they are held, or no longer need the excuse.
+  relaxedReleaseAt          DateTime?
+  /// The same for its place guess's name and evidence.
+  placeRelaxedReleaseAt     DateTime?
+  /// When the uploader or an admin chose to show the helper's text to everyone. Nothing re-flags it until it is
+  /// written again.
+  annotationSharedAt        DateTime?
+  /// Who wrote `title`: true when the helper's title was put on the item, false when a member typed it, null for a
+  /// title from before the album kept track. A members-only item loses the helper's title, never a typed one.
+  titleByHelper             Boolean?
   /// Darkroom edits, kept as instructions rather than applied to the file: crop, straighten, brightness, contrast,
   /// colour. The original is never touched, the renditions are re-rendered from it whenever this changes, and
   /// clearing it puts the item back exactly as it arrived. Only the uploader or an admin may set it.
@@ -405,15 +496,20 @@ model Photo {
   /// private sits in (never the building or the street), REGION for a wider area.
   placeEstimatePrecision  PlacePrecision?
   placeEstimateNote       String?
+  /// The guess's name and evidence were written from something members-only, or name somebody: members only.
+  /// The position itself is the item's, shown to whoever may see it.
+  placeEstimateMembersOnly Boolean @default(false)
   placeEstimatedAt        DateTime?
   /// For undated items: the helper's estimated year range, kept until a member sets a real date.
   estimatedDate           DateTime?
   estimatedDateConfidence Float?
   estimatedDateSource     EstimatedDateSource?
   estimatedDateNote       String?
-  /// Full-text index over caption, context, title, place and container titles: the only column anonymous search queries.
+  /// Full-text index over caption, title, place, the helper's text when it is not members-only, and the titles of
+  /// public trips and collections: the only column anonymous search queries.
   searchVector        Unsupported("tsvector")?
-  /// Adds people's, pets' and the uploader's names; queried for members only.
+  /// Adds people's, pets' and the uploader's names, the notes, members-only helper text and private container
+  /// titles; queried for members only.
   searchVectorMembers Unsupported("tsvector")?
   /// OpenCLIP ViT-B/32 image embedding (cosine), for similarity, suggestions and the graph.
   embedding     Unsupported("vector(512)")?
@@ -429,12 +525,12 @@ model Photo {
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
 
-  coverOf     Trip?            @relation("TripCover")
+  coverOf     Trip[]           @relation("TripCover")
   linksA      PhotoLink[]      @relation("LinkA")
   linksB      PhotoLink[]      @relation("LinkB")
   collections CollectionItem[]
-  coverOfCollection Collection? @relation("CollectionCover")
-  coverOfActivity   Activity?   @relation("ActivityCover")
+  coverOfCollection Collection[] @relation("CollectionCover")
+  coverOfActivity   Activity[]   @relation("ActivityCover")
   annotationRaw     MediaAnnotationRaw[]
   faces             Face[]
   animals           AnimalDetection[]
@@ -444,6 +540,7 @@ model Photo {
   visits            Visit[]
 
   @@index([takenAt])
+  @@index([uploaderId])
   @@index([tripId, takenAt])
   @@index([activityId])
   @@index([lat, lng])
@@ -462,11 +559,26 @@ model Collection {
   slug         String         @unique
   title        String
   description  String?
+  /// The helper wrote the description from names or notes, or it names somebody the album knows: members only.
+  /// Kept while the text is; a member writing it afresh by hand makes the words theirs to publish.
+  descriptionMembersOnly Boolean @default(false)
+  /// The helper wrote the description as it stands. Saving different words by hand makes it the member's, and
+  /// forgetting somebody then leaves it as they wrote it (the person page lists it for its author to edit).
+  descriptionByHelper    Boolean @default(false)
+  /// When whoever arranges it chose to show the description to everyone; nothing re-flags it until it is rewritten.
+  descriptionSharedAt    DateTime?
+  /// When the helper's description was shown to everyone only because the relaxed name check excused it (see
+  /// Photo.relaxedReleaseAt).
+  relaxedReleaseAt       DateTime?
   themeKey     String         @default("default")
   visibility   TripVisibility @default(PRIVATE)
   shareToken   String?        @unique
-  coverPhotoId String?        @unique
+  /// One photograph may lead any number of collections, as it may sit in any number of them.
+  coverPhotoId String?
   coverPhoto   Photo?         @relation("CollectionCover", fields: [coverPhotoId], references: [id], onDelete: SetNull)
+  /// When somebody last put the items in an order of their own (by hand, or by date). Null means nobody has, and
+  /// the items sit in the order they were added; once set, the collection opens in its saved order.
+  arrangedAt   DateTime?
   annotationOptOut Boolean    @default(false)
   createdById  String
   createdBy    User           @relation(fields: [createdById], references: [id])
@@ -478,6 +590,7 @@ model Collection {
   visits Visit[]
 
   @@index([visibility])
+  @@index([coverPhotoId])
 }
 
 /// A member marking something as one of theirs. Kept per person and per thing rather than as a count on the row, so
@@ -539,6 +652,38 @@ model AppSetting {
   faceDetectionOptInAt   DateTime?
   faceDetectionOptInById String?
   faceDataDeletedAt      DateTime?
+  /// When anybody was last forgotten: forgotten names read before then are read again before an answer is stored.
+  /// (While a forget runs it holds an advisory lock and no answer is stored: src/lib/people/names-changed.ts.)
+  lastForgetAt           DateTime?
+  /// This install's random salt for the key forgotten names are hashed under (with FORGET_KEY from the
+  /// environment, so neither a database copy nor the secret alone is enough); outside production, with FORGET_KEY
+  /// unset, it stands in for the key, with a warning on the Admin page.
+  forgetKey              String?
+  /// A fingerprint (never the key) of the FORGET_KEY-based key, recorded when a name is first hashed under it: a
+  /// missing or different one then pauses forgetting and the helper until it is put back.
+  forgetKeyFingerprint   String?
+  /// What the last whole-album members-only judging used: the matcher's version and the names it knew, so the
+  /// daily sweep and a restart judge again only what changed (src/lib/annotation/rejudge.ts).
+  membersOnlyMatcher     String?
+  membersOnlyNames       String[]  @default([])
+  membersOnlyJudgedAt    DateTime?
+  /// This install's identity. The same id is written to .album-install-id at the storage root, and nothing under the
+  /// root is swept unless the two match: a database that is not this media's never decides what in it is orphaned
+  /// (src/lib/storage/identity.ts).
+  installId              String?
+  /// The database the id was given to: `<pg_control_system().system_identifier>:<current_database()>`. A copy of
+  /// this database carries the same installId, but not this; the marker records both.
+  installBinding         String?
+  /// What the hourly check last found: photos/<id> folders with no row here. Only ever moved to the quarantine, by an
+  /// admin, from the Admin page.
+  orphanFolderCount      Int?
+  orphanFolderSample     String[]  @default([])
+  orphanFoldersCheckedAt DateTime?
+  /// How names are checked before words are shown to everyone, album-wide (a trip may say otherwise): an admin's
+  /// decision, recorded with who and when.
+  nameCheck              NameCheck @default(STRICT)
+  nameCheckSetAt         DateTime?
+  nameCheckSetById       String?
   updatedAt              DateTime  @updatedAt
 }
 
@@ -614,6 +759,31 @@ model Person {
   descriptors         String?
   /// Asked to be forgotten by the recogniser: excluded from the members' name index and from every proposal.
   optedOutAt          DateTime?
+  /// Names this person went by before a rename: forgetting them takes every one of them out of the helper's text.
+  formerNames         String[]   @default([])
+  /// When naming them was switched off without anybody saying so: they had been named with no evidence they are an
+  /// adult, or their naming was turned off before turning it off took the name back out. Admins are told; unless an
+  /// admin records a birthday or adult confirmation first, the nightly people job takes the name out of the helper's
+  /// text two weeks later (or at once, when an admin asks) and clears this. Nothing is sent meanwhile.
+  namingWithdrawnAt   DateTime?
+  /// When anything that decides whether or how they may be named last changed: name, former names, opting out, the
+  /// naming and recognition switches, birthday, adult confirmation. Set by a trigger; an answer from the helper to
+  /// a request built before it is not stored.
+  namesChangedAt      DateTime?
+  /// When what strangers can read last lost this person's name after the album withdrew their naming by itself;
+  /// the nightly pass only looks at what the helper wrote since.
+  namingPublicScrubbedAt DateTime?
+  /// Asked to be forgotten while forgetting was paused for want of FORGET_KEY: switched off at once, and forgotten
+  /// as soon as the key is set (at start-up or overnight).
+  forgetPendingAt        DateTime?
+  forgetPendingById      String?
+  /// When forgetting them made its leftover list (or found nothing to list): a forget cut short before that makes it
+  /// when it is finished, and one that did never makes a second.
+  forgetListedAt         DateTime?
+  /// An admin's word that this person is an adult, recorded to name them in descriptions. Evidence for naming only:
+  /// recognition still needs its own attestation (adultAttestedAt), which also says they agreed to it.
+  adultConfirmedAt    DateTime?
+  adultConfirmedById  String?
   createdById         String
   createdAt           DateTime   @default(now())
   updatedAt           DateTime   @updatedAt
@@ -663,6 +833,9 @@ model Face {
   ageAtCaptureYears Float?
   status            FaceStatus @default(DETECTED)
   createdAt         DateTime   @default(now())
+  /// When it became a named person's: set by a database trigger whenever status becomes CONFIRMED or the person
+  /// changes, which is what "described before their names" compares with, since detection comes long before.
+  confirmedAt       DateTime?
 
   @@index([photoId])
   @@index([clusterId])
@@ -698,6 +871,8 @@ model AnimalDetection {
   proposedPerson   Person?      @relation("AnimalProposed", fields: [proposedPersonId], references: [id], onDelete: SetNull)
   status           AnimalStatus @default(DETECTED)
   createdAt        DateTime     @default(now())
+  /// When somebody agreed it is this pet: set by a database trigger, like Face.confirmedAt.
+  confirmedAt      DateTime?
 
   @@index([photoId])
   @@index([personId])
@@ -732,6 +907,18 @@ model GoogleAccount {
   needsReconnect        Boolean  @default(false)
 }
 
+/// A removed member's Google grant, sealed as it was stored, waiting to be revoked at Google. Written by the same
+/// transaction that deletes the account, so a crash before Google is told cannot lose it; deleted once Google has
+/// been told (see src/lib/google/pending-revoke.ts).
+model PendingRevoke {
+  id                    String   @id @default(cuid())
+  /// The removed member's id, only to drop their cached access token; the account itself is gone.
+  userId                String
+  encryptedRefreshToken String
+  attempts              Int      @default(0)
+  createdAt             DateTime @default(now())
+}
+
 model PhotoLink {
   id        String        @id @default(cuid())
   photoAId  String
@@ -764,6 +951,8 @@ model Track {
   minLng       Float
   maxLng       Float
   simplified   Json
+  /// At most a few hundred points of the line, for the map of every trip at once. Null until worked out.
+  overview     Json?
   pointsBlob   Bytes
   hasElevation Boolean     @default(false)
   hasHeartRate Boolean     @default(false)
@@ -840,4 +1029,57 @@ model VisitSalt {
   day       String   @id
   salt      String
   createdAt DateTime @default(now())
+}
+
+/// Keyed hashes of a forgotten person's names, never the names: an answer from the helper, or a member's words about
+/// to be sent to it, is checked against them after the person's own record is gone (see src/lib/people/tombstone.ts).
+model ForgottenName {
+  hash            String   @id
+  /// Which key it was hashed under: 1 from FORGET_KEY with this install's salt, 0 the development stand-in.
+  keyVersion      Int
+  /// Matched only as a name is written (capitalized, or in capitals): a one-word name, or one of everyday words.
+  capitalizedOnly Boolean  @default(false)
+  /// For a one-word name, the photographs the forget went through, and the trips, collections and activities that
+  /// named them ("trip:<id>"), each hashed under the row's key like the name: without the key they say nothing of
+  /// which photographs it covers. It is looked for nowhere else. (Rows kept before they were hashed hold plain ids
+  /// until the start-up pass hashes them: see hashPlainScopes.) ForgetLeftover.items keeps plain ids by design: it
+  /// is the list of what members wrote, for them to edit, until it is dismissed.
+  photoIds        String[] @default([])
+  containerIds    String[] @default([])
+  /// Of photoIds, the ones its owner was tagged on: there a place-like name is them unless a place is plainly meant.
+  taggedPhotoIds  String[] @default([])
+  /// The first name of a full one ("Sam" of Sam Kent), not all of somebody's name.
+  derived         Boolean  @default(false)
+  /// For each forgotten person it was taken from, the kinship titles of their name ("grandma" of Grandma Ruth), hashed
+  /// like the names (some are names: "Tia", "Nan"), with the photographs they were tagged on, hashed too: [{ photos,
+  /// kin }]. On
+  /// those photographs another title before it is somebody else ("Aunt Ruth").
+  kinshipGroups   Json     @default("[]")
+  createdAt       DateTime @default(now())
+
+  @@index([photoIds], type: Gin)
+  @@index([containerIds], type: Gin)
+}
+
+/// After somebody was forgotten, the places whose words (a member's, or written before the album kept track) still
+/// mention them: ids and fields only, never the name. Shown until an admin dismisses it.
+model ForgetLeftover {
+  id            String    @id @default(cuid())
+  /// Who forgot them: the list is for them and admins (none for a forget finished by the album itself).
+  createdById   String?
+  items         Json
+  createdAt     DateTime  @default(now())
+  dismissedAt   DateTime?
+  dismissedById String?
+
+  @@index([dismissedAt])
+}
+
+/// One row: bumped by triggers whenever something a map shows changes, so a map worked out once can be answered from
+/// until then (src/lib/map/cache.ts, and the map_version migration for what counts). `access` counts only the changes
+/// that can take something off a map for somebody.
+model MapVersion {
+  id      Int    @id @default(1)
+  version BigInt @default(0)
+  access  BigInt @default(0)
 }

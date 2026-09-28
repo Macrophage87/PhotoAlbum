@@ -21,6 +21,8 @@ import { GooglePickerButton } from "@/components/google/GooglePickerButton";
 import { googleStatus } from "@/lib/google/account";
 import { googleConfigured } from "@/lib/google/oauth";
 import { NOT_TRASHED } from "@/lib/photos/trash";
+import { editableMediaWhere, isAdmin } from "@/lib/auth/ownership";
+import { readableTitle } from "@/lib/photos/readable-text";
 
 export const metadata = { title: "Review uploads" };
 
@@ -37,12 +39,17 @@ export default async function ReviewPage({ searchParams }: PageProps<"/review">)
   const ids = typeof sp.ids === "string" ? sp.ids.split(",").filter(Boolean).slice(0, 500) : [];
   const batch = ids.length > 0;
   const gates = await annotationGates();
+  // Notes and review are the uploader's (and an admin's), so the queue a member works through is their own uploads.
+  const admin = isAdmin(me);
+  const mine = editableMediaWhere(me);
   const [photos, unreviewedCount] = await Promise.all([
-    db.photo.findMany({ where: batch ? { id: { in: ids }, ...NOT_TRASHED } : { reviewedAt: null, ...NOT_TRASHED }, orderBy: { createdAt: "desc" }, select: { ...photoCardSelect, context: true, reviewedAt: true, annotation: true, annotationOptOut: true, annotatedAt: true, estimatedDate: true, estimatedDateConfidence: true, estimatedDateNote: true, takenAtSource: true, trip: { select: { annotationOptOut: true } }, collections: { select: { collection: { select: { slug: true, title: true, annotationOptOut: true } } } } } }),
-    db.photo.count({ where: { reviewedAt: null, ...NOT_TRASHED } }),
+    db.photo.findMany({ where: batch ? { id: { in: ids }, ...NOT_TRASHED } : { reviewedAt: null, ...NOT_TRASHED, ...mine }, orderBy: { createdAt: "desc" }, select: { ...photoCardSelect, uploaderId: true, context: true, reviewedAt: true, annotation: true, annotationOptOut: true, annotatedAt: true, estimatedDate: true, estimatedDateConfidence: true, estimatedDateNote: true, takenAtSource: true, trip: { select: { annotationOptOut: true, timezone: true } }, collections: { select: { collection: { select: { slug: true, title: true, annotationOptOut: true } } } } } }),
+    db.photo.count({ where: { reviewedAt: null, ...NOT_TRASHED, ...mine } }),
   ]);
+  // A batch named in the address can hold somebody else's items: they are shown, but the panel acts on these alone.
+  const ownIds = photos.filter((p) => admin || p.uploaderId === me.id).map((p) => p.id);
   const allIds = photos.map((p) => p.id);
-  const [suggestions, proposals, unnamedFaces] = await Promise.all([suggestionsFor(allIds), proposalsFor(allIds), db.face.count({ where: { photoId: { in: allIds }, personId: null, clusterId: { not: null }, status: { in: ["DETECTED", "REJECTED"] } } })]);
+  const [suggestions, proposals, unnamedFaces] = await Promise.all([suggestionsFor(allIds), proposalsFor(allIds, me), db.face.count({ where: { photoId: { in: allIds }, personId: null, clusterId: { not: null }, status: { in: ["DETECTED", "REJECTED"] } } })]);
   const optedOut = (p: (typeof photos)[number]) => p.annotationOptOut || Boolean(p.trip?.annotationOptOut) || p.collections.some((c) => c.collection.annotationOptOut);
   return (
     <AppShell viewer={viewer}>
@@ -52,11 +59,12 @@ export default async function ReviewPage({ searchParams }: PageProps<"/review">)
             <h1 className="font-display text-3xl font-semibold">{batch ? (sp.google === "1" ? "Review what you picked" : "Review this upload") : "Unreviewed"}</h1>
             {sp.google === "1" && <p className="text-sm rounded-theme bg-amber-50 border border-amber-200 text-amber-900 p-3 mt-2">Google leaves the location out of what it hands over. Add places here, or file these to a trip so they can be placed from its tracks.</p>}
             <p className="text-muted mt-1">
-              {batch ? `${photos.length} item${photos.length === 1 ? "" : "s"} just uploaded. Add a note, file them, then mark them reviewed.` : `${unreviewedCount} item${unreviewedCount === 1 ? "" : "s"} nobody has reviewed yet.`}
-              {batch && unreviewedCount > photos.length && (
+              {batch ? `${photos.length} item${photos.length === 1 ? "" : "s"} just uploaded. Add a note, file them, then mark them reviewed.` : `${unreviewedCount} item${unreviewedCount === 1 ? "" : "s"} ${admin ? "nobody has reviewed yet" : "of yours not reviewed yet"}.`}
+              {/* The count is of this member's own (everyone's, for an admin), so it is set against their own here. */}
+              {batch && unreviewedCount > ownIds.length && (
                 <>
                   {" "}
-                  <Link href="/review" className="text-primary hover:underline">{unreviewedCount} unreviewed in all.</Link>
+                  <Link href="/review" className="text-primary hover:underline">{unreviewedCount} {admin ? "unreviewed in all" : "of yours unreviewed in all"}.</Link>
                 </>
               )}
             </p>
@@ -69,17 +77,28 @@ export default async function ReviewPage({ searchParams }: PageProps<"/review">)
           </div>
         ) : (
           <SelectionProvider>
-            <ReviewPanel allIds={allIds} annotation={gates.active ? { quietMinutes: env().ANNOTATION_QUIET_MINUTES, pending: photos.filter((p) => !p.annotatedAt && !optedOut(p)).length } : null} />
-            {editable && <YouTubeAddForm defaultDate={new Date().toISOString().slice(0, 10)} />}
+            {ownIds.length > 0 ? (
+              <>
+                {ownIds.length < photos.length && (
+                  <p className="text-sm text-muted" data-testid="review-some-not-yours">
+                    {photos.length - ownIds.length} of these {photos.length - ownIds.length === 1 ? "was" : "were"} uploaded by somebody else, and {photos.length - ownIds.length === 1 ? "is" : "are"} left for them.
+                  </p>
+                )}
+                <ReviewPanel allIds={ownIds} annotation={gates.active ? { quietMinutes: env().ANNOTATION_QUIET_MINUTES, pending: photos.filter((p) => ownIds.includes(p.id) && !p.annotatedAt && !optedOut(p)).length } : null} />
+              </>
+            ) : (
+              <p className="text-sm text-muted" data-testid="review-not-yours">These were uploaded by somebody else. Only they, or an admin, can add notes to them or mark them reviewed.</p>
+            )}
+            {editable && <YouTubeAddForm />}
             {google && <GooglePickerButton status={google} configured next="/review" />}
-            <PhotoGrid photos={photos.map((p) => toGridPhoto(p, p.reviewedAt ? null : "unreviewed", true))} />
+            <PhotoGrid photos={photos.map((p) => toGridPhoto(p, p.reviewedAt ? null : "unreviewed", me))} />
             {(proposals.length > 0 || unnamedFaces > 0) && (
               <section className="space-y-2">
                 <h2 className="font-display text-lg font-semibold">Who might be in these</h2>
                 <ProposalList proposals={proposals} />
                 {unnamedFaces > 0 && (
                   <p className="text-sm text-muted">
-                    {unnamedFaces} face{unnamedFaces === 1 ? " in this batch is" : "s in this batch are"} not named yet. <Link href="/people" className="text-primary hover:underline">Name them on the People page</Link>, or open an item&apos;s details.
+                    {unnamedFaces} face{unnamedFaces === 1 ? " in this batch is" : "s in this batch are"} not named yet. <Link href="/people" className="text-primary underline underline-offset-2">Name them on the People page</Link>, or open an item&apos;s details.
                   </p>
                 )}
               </section>
@@ -88,7 +107,7 @@ export default async function ReviewPage({ searchParams }: PageProps<"/review">)
               <section className="space-y-3">
                 <h2 className="font-display text-lg font-semibold">Where these might belong</h2>
                 {photos.filter((p) => suggestions[p.id]?.length).map((p) => (
-                  <SuggestionList key={p.id} photoId={p.id} label={p.caption ?? p.title ?? p.originalName} suggestions={suggestions[p.id]} />
+                  <SuggestionList key={p.id} photoId={p.id} label={p.caption ?? readableTitle(p, true) ?? p.originalName} suggestions={suggestions[p.id]} />
                 ))}
               </section>
             )}
@@ -97,7 +116,7 @@ export default async function ReviewPage({ searchParams }: PageProps<"/review">)
                 const a = p.annotation as StoredAnnotation | null;
                 return (
                   <li key={p.id} className="rounded-theme border border-border p-3 space-y-1">
-                    <Link href={`/photos/${p.id}`} className="text-primary hover:underline font-medium">{a?.caption ?? p.caption ?? p.title ?? p.originalName}</Link>
+                    <Link href={`/photos/${p.id}`} className="text-primary hover:underline font-medium">{a?.caption ?? p.caption ?? readableTitle(p, true) ?? p.originalName}</Link>
                     {p.context && <p className="text-muted">Note: {p.context}</p>}
                     {a && <p>{a.description}{a.tags.length > 0 && <span className="text-muted"> · {a.tags.slice(0, 8).join(", ")}</span>}</p>}
                     {optedOut(p) && <p className="text-xs text-muted">Not sent to the AI helper.</p>}
@@ -110,7 +129,7 @@ export default async function ReviewPage({ searchParams }: PageProps<"/review">)
                 <h2 className="font-display text-lg font-semibold">Dates to confirm</h2>
                 {photos.filter((p) => p.estimatedDate && p.estimatedDateNote).map((p) => (
                   <div key={p.id} className="rounded-theme border border-amber-200 bg-amber-50 p-3 text-amber-900">
-                    <Link href={`/photos/${p.id}`} className="text-sm font-medium hover:underline">{p.caption ?? p.title ?? p.originalName}</Link>
+                    <Link href={`/photos/${p.id}`} className="text-sm font-medium hover:underline">{p.caption ?? readableTitle(p, true) ?? p.originalName}</Link>
                     <EstimatedDate photoId={p.id} estimatedDate={p.estimatedDate} confidence={p.estimatedDateConfidence} note={p.estimatedDateNote} compact />
                     {/* Before agreeing with the helper, a member can see what the file itself claims and why. */}
                     <DateTroubleshooter photoId={p.id} />

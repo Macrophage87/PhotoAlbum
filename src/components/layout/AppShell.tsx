@@ -6,7 +6,7 @@ export function AppShell({ viewer, children }: { viewer: Viewer; children: React
   return (
     <div className="min-h-screen flex flex-col">
       <Nav viewer={viewer} />
-      <main className="flex-1">{children}</main>
+      <main id="main" tabIndex={-1} className="flex-1">{children}</main>
     </div>
   );
 }

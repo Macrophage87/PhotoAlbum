@@ -5,11 +5,13 @@ import { TripForm } from "@/components/trips/TripForm";
 import { ShareButtons } from "@/components/trips/ShareButtons";
 import { CopyLink } from "@/components/share/CopyLink";
 import { shareableTripUrl } from "@/lib/share/social";
-import { Button, ButtonLink, Card, ConfirmSubmitButton } from "@/components/ui";
+import { Button, ButtonLink, Card, ConfirmSubmitButton, Input, Label } from "@/components/ui";
 import { photoUrl } from "@/lib/photos/urls";
-import { coverFor } from "@/lib/trips/queries";
+import { chosenTripCover, coverFor } from "@/lib/trips/queries";
 import { familyMembers } from "@/lib/people/members";
-import { deleteTrip, detachExposedFromCollections, regeotagPhotos, rotateShareToken, updateTrip } from "../actions";
+import { changeTripSlug, deleteTrip, detachExposedFromCollections, regeotagPhotos, rotateShareToken, setTripNameCheck, updateTrip } from "../actions";
+import { NameCheckChoice } from "@/components/people/NameCheckChoice";
+import { albumNameCheck } from "@/lib/people/name-check";
 import { OptOutToggle } from "@/components/annotation/OptOutToggle";
 import { visibilityWarnings } from "@/lib/visibility/settings";
 import Link from "next/link";
@@ -30,6 +32,7 @@ export default async function TripSettingsPage({ params, searchParams }: PagePro
   const { user: me, trip } = await requireTripOwnerPage(slug, `/trips/${slug}/settings`);
   const update = updateTrip.bind(null, slug);
   const rotate = rotateShareToken.bind(null, slug);
+  const changeSlug = changeTripSlug.bind(null, slug);
   const remove = deleteTrip.bind(null, slug);
   const regeotag = regeotagPhotos.bind(null, slug);
   const shareUrl = shareableTripUrl(trip, env().APP_URL);
@@ -40,6 +43,8 @@ export default async function TripSettingsPage({ params, searchParams }: PagePro
   const detach = detachExposedFromCollections.bind(null, slug);
   // What the trip's own photos say about the ones that arrived without a date.
   const undated = await guessDatesForTrip(trip.id);
+  const nameCheck = await db.trip.findUnique({ where: { id: trip.id }, select: { nameCheck: true, nameCheckSetAt: true, nameCheckSetById: true } });
+  const nameCheckBy = nameCheck?.nameCheckSetById ? await db.user.findUnique({ where: { id: nameCheck.nameCheckSetById }, select: { name: true, email: true } }) : null;
 
   return (
     <div className="max-w-2xl space-y-10">
@@ -108,6 +113,18 @@ export default async function TripSettingsPage({ params, searchParams }: PagePro
       </section>
 
       <section>
+        <h2 className="font-display text-xl font-semibold mb-2">Web address</h2>
+        <p className="text-sm text-muted mb-3">Made from the first title, and not changed when the title is. Links to the old address stop working.</p>
+        <form action={changeSlug} className="flex flex-wrap items-end gap-2">
+          <div>
+            <Label htmlFor="slug">Address</Label>
+            <Input id="slug" name="slug" defaultValue={slug} required maxLength={80} />
+          </div>
+          <Button type="submit" variant="secondary">Change address</Button>
+        </form>
+      </section>
+
+      <section>
         <h2 className="font-display text-xl font-semibold mb-2">Cover photo</h2>
         <Card className="p-4 flex flex-wrap items-center gap-4">
           <div className="w-20 h-20 rounded-theme overflow-hidden bg-surface-alt border border-border shrink-0">
@@ -117,7 +134,7 @@ export default async function TripSettingsPage({ params, searchParams }: PagePro
             )}
           </div>
           <div className="text-sm space-y-2">
-            <p className="text-muted">{trip.coverPhoto ? "Chosen by hand." : cover ? "Nobody has chosen one, so the album leads with the earliest photograph on the trip." : "Nothing to lead with yet."}</p>
+            <p className="text-muted">{chosenTripCover(trip) ? "Chosen by hand." : cover ? "Nobody has chosen one, so the album leads with the earliest photograph on the trip." : "Nothing to lead with yet."}</p>
             <ButtonLink href={`/trips/${slug}/cover`} size="sm" variant="secondary">Choose a cover</ButtonLink>
           </div>
         </Card>
@@ -126,6 +143,17 @@ export default async function TripSettingsPage({ params, searchParams }: PagePro
       <section>
         <h2 className="font-display text-xl font-semibold mb-2">AI descriptions</h2>
         <OptOutToggle target={{ kind: "trip", id: trip.id }} initial={trip.annotationOptOut} />
+      </section>
+
+      <section>
+        <h2 className="font-display text-xl font-semibold mb-2">Names in shared words</h2>
+        <NameCheckChoice
+          action={setTripNameCheck.bind(null, slug)}
+          current={nameCheck?.nameCheck ?? "INHERIT"}
+          inherit={await albumNameCheck()}
+          changed={nameCheck?.nameCheckSetAt ? { by: nameCheckBy ? (nameCheckBy.name ?? nameCheckBy.email) : "a former member", at: nameCheck.nameCheckSetAt } : null}
+          testId="trip-name-check"
+        />
       </section>
 
       <section>

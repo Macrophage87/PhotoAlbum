@@ -24,6 +24,14 @@ export const QUEUES = {
   matchAnimals: "match-animals",
   googlePickerImport: "google-picker-import",
   purgeVisits: "purge-visits",
+  purgeMagicLinks: "purge-magic-links",
+  rejudgeText: "rejudge-text",
+  sweepStrandedUploads: "sweep-stranded-uploads",
+  reconcilePhotos: "reconcile-photos",
+  sweepOrphanFiles: "sweep-orphan-files",
+  revokeGoogle: "revoke-google",
+  finishRemovals: "finish-removals",
+  visitorCopy: "visitor-copy",
 } as const;
 
 export type QueueName = (typeof QUEUES)[keyof typeof QUEUES];
@@ -31,6 +39,8 @@ export type QueueName = (typeof QUEUES)[keyof typeof QUEUES];
 /** `renditions` only makes thumbnails (posters of external videos); `full` also reads EXIF, resolves dates and assigns a trip. */
 export type ProcessPhotoJob = { photoId: string; tripId?: string | null; mode?: "full" | "renditions" };
 export type TranscodeVideoJob = { photoId: string; tripId?: string | null };
+/** The picture as it was at `imageVersion`: a job for an older one finds nothing to do. */
+export type VisitorCopyJob = { photoId: string; imageVersion: number };
 export type CheckExternalVideosJob = Record<string, never>;
 export type ImportTrackJob = {
   importKey: string;
@@ -38,10 +48,13 @@ export type ImportTrackJob = {
   userId: string;
   sourceHint: "auto" | "gpx" | "fit" | "google";
   originalName: string;
+  /** Google exports: replace the importing member's earlier traces for the same days rather than keep both. */
+  replaceGoogle?: boolean;
 };
 export type GeotagPhotosJob = { tripId: string; trackIds?: string[] };
 export type DeletePhotoJob = { storageKey: string };
-export type AnnotatePhotoJob = { photoId: string };
+/** `replace`: a member asked for a new description over the family's own edited one, and confirmed it. */
+export type AnnotatePhotoJob = { photoId: string; replace?: boolean };
 export type AnnotationBackfillJob = { batchId: string };
 export type EmbedPhotoJob = { photoId: string; textOnly?: boolean };
 export type DetectFacesJob = { photoId: string };

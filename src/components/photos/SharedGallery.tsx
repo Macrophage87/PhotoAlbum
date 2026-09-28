@@ -9,7 +9,7 @@ export function SharedGallery({ photos: initial, more }: { photos: GridPhoto[]; 
   return (
     <>
       <PhotoGrid photos={paged.photos} />
-      <LoadMoreSentinel hasMore={paged.hasMore} loading={paged.loading} error={paged.error} onLoad={paged.loadMore} shown={paged.photos.length} total={more.total} />
+      <LoadMoreSentinel hasMore={paged.hasMore} loading={paged.loading} error={paged.error} onLoad={paged.loadMore} pages={paged.pages} shown={paged.photos.length} total={more.total} />
     </>
   );
 }

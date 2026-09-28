@@ -11,6 +11,7 @@ import { QUEUES } from "@/lib/jobs/queues";
 import { canonicalUrl, fetchDuration, fetchThumbnail, oembed, parseYouTubeUrl, YouTubeError } from "@/lib/video/youtube";
 import { offsetMinutesInZone } from "@/lib/time/local-day";
 import { addToCollection } from "@/app/collections/actions";
+import { refreshTextEmbedding } from "@/lib/jobs/handlers/embed-photo";
 
 export type VideoFormState = { status: "idle" } | { status: "error"; message: string } | { status: "done"; photoId: string; title: string };
 
@@ -40,7 +41,7 @@ export async function addYouTubeVideo(_prev: VideoFormState, fd: FormData): Prom
   const id = parseYouTubeUrl(url);
   if (!id) return { status: "error", message: "That does not look like a YouTube link." };
 
-  const trip = tripId ? await db.trip.findUnique({ where: { id: tripId }, select: { id: true, slug: true, timezone: true } }) : null;
+  const trip = tripId ? await db.trip.findUnique({ where: { id: tripId, deletingAt: null }, select: { id: true, slug: true, timezone: true } }) : null;
   if (tripId && !trip) return { status: "error", message: "That trip no longer exists." };
 
   let meta;
@@ -79,10 +80,23 @@ export async function addYouTubeVideo(_prev: VideoFormState, fd: FormData): Prom
   });
   const storageKey = `photos/${photo.id}`;
   const originalPath = `${storageKey}/original.jpg`;
-  await storage().putBuffer(originalPath, poster);
-  const durationS = await fetchDuration(id);
-  await db.photo.update({ where: { id: photo.id }, data: { storageKey, originalPath, durationS } });
-  await enqueue(QUEUES.processPhoto, { photoId: photo.id, tripId: trip?.id ?? null, mode: "renditions" });
+  try {
+    await storage().putBuffer(originalPath, poster);
+    const durationS = await fetchDuration(id);
+    await db.photo.update({ where: { id: photo.id }, data: { storageKey, originalPath, durationS } });
+  } catch (err) {
+    // As the upload route does: nothing is left that would sit "processing" for ever, nor a poster with no row.
+    await storage().deletePrefix(storageKey).catch(() => undefined);
+    await db.photo.delete({ where: { id: photo.id } }).catch(() => undefined);
+    console.error("[videos] could not store the poster", err);
+    return { status: "error", message: "Could not add the video just now; try again." };
+  }
+  try {
+    await enqueue(QUEUES.processPhoto, { photoId: photo.id, tripId: trip?.id ?? null, mode: "renditions" });
+  } catch (err) {
+    console.error("[videos] could not queue processing", err);
+    await db.photo.update({ where: { id: photo.id }, data: { status: "FAILED", error: "Could not queue processing; use Re-process on the photo page." } }).catch(() => undefined);
+  }
   if (collectionId) await addToCollection(collectionId, [photo.id]);
 
   revalidatePath("/", "layout");
@@ -105,7 +119,7 @@ export async function updateExternalVideo(photoId: string, fd: FormData): Promis
   const id = parseYouTubeUrl(v.url);
   if (!id) throw new Error("That does not look like a YouTube link.");
   const { takenAt, tzOffsetMin } = instantFor(v.date, photo.trip?.timezone ?? null);
-  const data: Parameters<typeof db.photo.update>[0]["data"] = { title: v.title, takenAt, tzOffsetMin, takenAtSource: "MANUAL" };
+  const data: Parameters<typeof db.photo.update>[0]["data"] = { title: v.title, titleByHelper: false, takenAt, tzOffsetMin, takenAtSource: "MANUAL" };
   if (id !== photo.externalId) {
     const meta = await oembed(id);
     const poster = await fetchThumbnail(id);
@@ -116,6 +130,7 @@ export async function updateExternalVideo(photoId: string, fd: FormData): Promis
   } else {
     await db.photo.update({ where: { id: photoId }, data });
   }
+  if (v.title !== photo.title) await refreshTextEmbedding(photoId);
   revalidatePath(`/photos/${photoId}`);
   revalidatePath("/", "layout");
 }

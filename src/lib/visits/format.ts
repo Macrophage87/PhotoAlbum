@@ -21,9 +21,9 @@ export function plural(n: number, one: string, many = `${one}s`): string {
   return `${n} ${n === 1 ? one : many}`;
 }
 
-/** The short day label under a bar on the chart: "9 Sep" for the ends of the run, nothing for the days between. */
+/** The short day label under a bar on the chart: "Sep 9" for the ends of the run, nothing for the days between. */
 export function barLabel(day: string): string {
   const [, month, date] = day.split("-");
   const names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-  return `${Number(date)} ${names[Number(month) - 1] ?? ""}`.trim();
+  return `${names[Number(month) - 1] ?? ""} ${Number(date)}`.trim();
 }

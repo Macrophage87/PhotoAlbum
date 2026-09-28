@@ -167,6 +167,23 @@ describe("joining a group to somebody already named", () => {
     expect((await db.person.findUniqueOrThrow({ where: { id: biscuit.id } })).pendingDecision).toBe(false);
   });
 
+  it("drops the templates in the naming's own commit when recognition is off, so a failure after it leaves none", async () => {
+    const jo = await db.person.create({ data: { name: "Jo", faceIndexing: false, createdById: me } });
+    await db.$executeRaw`UPDATE "Face" SET embedding = ${vectorLiteral(Array(512).fill(0.1))}::vector WHERE id = ${faceId}`;
+    await db.$executeRaw`UPDATE "FaceCluster" SET centroid = ${vectorLiteral(Array(512).fill(0.1))}::vector WHERE id = ${clusterId}`;
+    // The sweep after the commit fails, as a lost connection would.
+    const client = (globalThis as unknown as { prisma: { $executeRaw: (...a: unknown[]) => Promise<number> } }).prisma;
+    const original = client.$executeRaw;
+    const spy = vi.spyOn(client, "$executeRaw").mockImplementation(function (this: unknown, ...a: unknown[]) {
+      return (a[0] as string[])[0] === 'UPDATE "Face" SET embedding = NULL WHERE "personId" = ' ? Promise.reject(new Error("connection lost")) : original.apply(this, a);
+    });
+    await expect(nameClusterAs(clusterId, jo.id)).rejects.toThrow(/connection lost/);
+    spy.mockRestore();
+    expect((await db.face.findUniqueOrThrow({ where: { id: faceId } })).personId).toBe(jo.id);
+    expect((await db.$queryRaw<{ n: number }[]>`SELECT count(*)::int AS n FROM "Face" WHERE "personId" = ${jo.id} AND embedding IS NOT NULL`)[0].n).toBe(0);
+    expect((await db.$queryRaw<{ n: number }[]>`SELECT count(*)::int AS n FROM "FaceCluster" WHERE "personId" = ${jo.id} AND centroid IS NOT NULL`)[0].n).toBe(0);
+  });
+
   it("will not hand faces to somebody who asked to be forgotten", async () => {
     const gone = await db.person.create({ data: { name: "Gone", optedOutAt: new Date(), createdById: me } });
     await expect(nameClusterAs(clusterId, gone.id)).rejects.toThrow(/forgotten/);
@@ -186,5 +203,26 @@ describe("joining a group to somebody already named", () => {
     const unlike = Array.from({ length: 512 }, (_, i) => (i === 300 ? 1 : 0));
     await db.$executeRaw`UPDATE "FaceCluster" SET centroid = ${vectorLiteral(unlike)}::vector WHERE id = ${clusterId}`;
     expect((await listUnnamedClusters())[0].looksLike).toBeNull();
+  });
+
+  it("never offers somebody whose recognition is not on", async () => {
+    // A member named a group "Lily": her templates wait for an admin's decision, and are not to be matched meanwhile.
+    const lily = await db.person.create({ data: { name: "Lily", faceIndexing: false, pendingDecision: true, createdById: me } });
+    const hers = await db.faceCluster.create({ data: { personId: lily.id, label: "Lily", faceCount: 1 } });
+    const like = Array.from({ length: 512 }, (_, i) => (i === 0 ? 1 : 0));
+    await db.$executeRaw`UPDATE "FaceCluster" SET centroid = ${vectorLiteral(like)}::vector WHERE id = ${hers.id}`;
+    await db.$executeRaw`UPDATE "FaceCluster" SET centroid = ${vectorLiteral(like)}::vector WHERE id = ${clusterId}`;
+    expect((await listUnnamedClusters())[0].looksLike).toBeNull();
+
+    // A consented person further away is still offered: the nearest eligible one, not the nearest of anyone.
+    const jo = await db.person.create({ data: { name: "Grandma Jo", faceIndexing: true, adultAttestedAt: new Date(), adultAttestedById: me, createdById: me } });
+    const joCluster = await db.faceCluster.create({ data: { personId: jo.id, label: "Grandma Jo", faceCount: 1 } });
+    const near = Array.from({ length: 512 }, (_, i) => (i === 0 ? 0.95 : i === 1 ? 0.31 : 0));
+    await db.$executeRaw`UPDATE "FaceCluster" SET centroid = ${vectorLiteral(near)}::vector WHERE id = ${joCluster.id}`;
+    expect((await listUnnamedClusters())[0].looksLike).toMatchObject({ id: jo.id });
+
+    // Once an admin turns Lily's recognition on, she is the one offered.
+    await db.person.update({ where: { id: lily.id }, data: { faceIndexing: true, pendingDecision: false } });
+    expect((await listUnnamedClusters())[0].looksLike).toMatchObject({ id: lily.id });
   });
 });

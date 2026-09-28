@@ -8,5 +8,5 @@ export default async function SharedCollectionMapPage({ params }: PageProps<"/sh
   const { token } = await params;
   const collection = await getSharedCollection(token);
   if (!collection) notFound();
-  return <TripMap src={`/api/collections/${collection.slug}/geojson`} theme={mapThemeOf(getTheme(collection.themeKey))} />;
+  return <TripMap src={`/api/collections/${collection.slug}/geojson?view=share`} theme={mapThemeOf(getTheme(collection.themeKey))} />;
 }

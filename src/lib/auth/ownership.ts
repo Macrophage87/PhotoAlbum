@@ -24,19 +24,37 @@ export function isAdmin(user: Pick<ViewerUser, "role">): boolean {
   return user.role === "ADMIN";
 }
 
+/**
+ * Who is asking, as the rules below need them. `removingAt`: a member being removed may change nothing, whatever
+ * their role said when a job was queued for them (see src/lib/auth/remove-member.ts); a caller that loads the member
+ * itself, as a job does, selects it.
+ */
+export type Editor = Pick<ViewerUser, "id" | "role"> & { removingAt?: Date | null };
+
 /** The person who uploaded an item, and admins. */
-export function canEditMedia(user: Pick<ViewerUser, "id" | "role"> | null, media: Owned): boolean {
-  return Boolean(user) && (isAdmin(user!) || media.uploaderId === user!.id);
+export function canEditMedia(user: Editor | null, media: Owned): boolean {
+  return Boolean(user) && !user!.removingAt && (isAdmin(user!) || media.uploaderId === user!.id);
 }
 
 /** The person who made a trip, a collection or an activity's trip, and admins. */
-export function canEditContainer(user: Pick<ViewerUser, "id" | "role"> | null, container: Made): boolean {
-  return Boolean(user) && (isAdmin(user!) || (container.createdById !== null && container.createdById === user!.id));
+export function canEditContainer(user: Editor | null, container: Made): boolean {
+  return Boolean(user) && !user!.removingAt && (isAdmin(user!) || (container.createdById !== null && container.createdById === user!.id));
+}
+
+/**
+ * The person who added somebody (or a pet) to the album, and admins. Renaming them changes what every photograph of
+ * them says and what the helper is told, and forgetting them takes their tags off everybody's photographs for good,
+ * so neither is a thing any relative can do to any record. Consent itself (recognition, naming in descriptions)
+ * stays with admins alone.
+ */
+export function canChangePerson(user: Editor | null, person: Made): boolean {
+  return canEditContainer(user, person);
 }
 
 /** What to say when someone is turned away, in the words of the rule rather than of the code. */
 export const NOT_YOURS = "Only the family member who uploaded this, or an admin, can change it.";
 export const NOT_YOUR_CONTAINER = "Only the family member who made this, or an admin, can change it.";
+export const NOT_YOUR_PERSON = "Only the family member who added them, or an admin, can change this.";
 
 /** Load an item for editing, or throw. Returns the member making the change alongside it. */
 export async function requireMediaEditor<T extends Owned>(id: string, select?: unknown): Promise<{ user: ViewerUser; media: T }> {
@@ -54,10 +72,15 @@ export async function editableMediaIds(user: Pick<ViewerUser, "id" | "role">, id
   return mine.map((p) => p.id);
 }
 
+/** The same rule as a query clause, for listing what this member may change: their own uploads, or anything for an admin. */
+export function editableMediaWhere(user: Pick<ViewerUser, "id" | "role">): { uploaderId?: string } {
+  return isAdmin(user) ? {} : { uploaderId: user.id };
+}
+
 /** Load a trip for editing by slug, or throw. */
 export async function requireTripEditor(slug: string): Promise<{ user: ViewerUser; trip: { id: string; slug: string; timezone: string; createdById: string | null } }> {
   const user = await requireUserOrThrow();
-  const trip = await db.trip.findUnique({ where: { slug }, select: { id: true, slug: true, timezone: true, createdById: true } });
+  const trip = await db.trip.findUnique({ where: { slug, deletingAt: null }, select: { id: true, slug: true, timezone: true, createdById: true } });
   if (!trip) throw new Error("Trip not found");
   if (!canEditContainer(user, trip)) throw new Error(NOT_YOUR_CONTAINER);
   return { user, trip };

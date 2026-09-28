@@ -5,7 +5,7 @@ export const metadata = { title: "Offline" };
 /** Shown by the service worker when a page cannot be fetched. */
 export default function OfflinePage() {
   return (
-    <main className="min-h-screen flex items-center justify-center p-6 text-center">
+    <main id="main" tabIndex={-1} className="min-h-screen flex items-center justify-center p-6 text-center">
       <div className="max-w-sm space-y-3">
         <h1 className="font-display text-2xl font-semibold">You are offline</h1>
         <p className="text-muted">Family Album needs a connection to load photos and trips. Reconnect and try again.</p>

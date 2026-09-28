@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { previewCard } from "@/lib/share/preview";
 
-const cover = { id: "photo1", updatedAt: new Date("2025-08-12T12:00:00Z"), width: 4000, height: 3000 };
+const cover = { id: "photo1", imageVersion: 3, width: 4000, height: 3000 };
 const base = { title: "Acadia, Maine", description: "Aug 10 – 16, 2025", pageUrl: "https://album.example/trips/acadia", appUrl: "https://album.example" };
 
 describe("the card a shared link carries", () => {
@@ -34,7 +34,7 @@ describe("the card a shared link carries", () => {
     expect(tall.height).toBe(1600);
 
     // A cover whose shape the album never learned still gets a size, which beats leaving it out.
-    const unknown = previewCard({ ...base, cover: { id: "x", updatedAt: new Date(), width: null, height: null } });
+    const unknown = previewCard({ ...base, cover: { id: "x", imageVersion: 0, width: null, height: null } });
     expect((unknown.openGraph as { images: { width: number }[] }).images[0].width).toBe(1600);
   });
 

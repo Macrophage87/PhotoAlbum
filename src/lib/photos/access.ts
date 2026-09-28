@@ -1,5 +1,5 @@
 import type { Viewer } from "@/lib/auth/viewer";
-import { canViewMedia, isPubliclyViewable, type ContainerKind, type MediaAccessFields } from "@/lib/auth/access";
+import { canViewMedia, canViewTrip, isPubliclyViewable, type ContainerAccessFields, type ContainerKind, type MediaAccessFields } from "@/lib/auth/access";
 
 /** The fields a media route selects to decide whether it may answer at all: where the item lives, and whether it is
  * in the trash. Spread into a `select`, never an `include`: `trashedAt` is a column, not a relation. */
@@ -23,6 +23,8 @@ export function toMediaAccess(photo: Loaded): MediaAccessFields {
  */
 export function mediaBytesAllowed(viewer: Viewer, media: MediaAccessFields, share?: { token: string | null; kind: string | null }): boolean {
   if (canViewMedia(viewer, media)) return true;
+  // The trash takes an item off every link at once, so a token in the address is refused like a cookie would be.
+  if (media.trashedAt) return false;
   if (!share?.token) return false;
   // A link preview fetches the cover with no cookie at all, so the token stands in for one — for an activity too,
   // whose link is the only thing that makes its photographs fetchable.
@@ -30,6 +32,18 @@ export function mediaBytesAllowed(viewer: Viewer, media: MediaAccessFields, shar
   const kind: ContainerKind = share.kind === "collection" ? "collection" : "trip";
   const candidates = kind === "trip" ? (media.trip ? [media.trip] : []) : media.collections;
   return candidates.some((c) => c.visibility === "LINK" && c.shareToken === share.token);
+}
+
+/**
+ * Whether the trip an item sits in may be named to this viewer beside it. Seeing a photograph is not seeing its
+ * trip: one reached through a public collection or an activity's link may come from a private trip, whose name is
+ * the family's. The trip's own token in the address counts as its cookie would, as it does for the bytes.
+ */
+export function mediaTripNameable(viewer: Viewer, trip: ContainerAccessFields | null, share?: { token: string | null; kind: string | null }): boolean {
+  if (!trip) return false;
+  if (canViewTrip(viewer, trip)) return true;
+  const tripToken = share?.token && share.kind !== "collection" && share.kind !== "activity";
+  return Boolean(tripToken) && trip.visibility === "LINK" && Boolean(trip.shareToken) && trip.shareToken === share!.token;
 }
 
 /** Cache directive for a media response: shared caches only for items anyone on the internet could fetch anyway. */

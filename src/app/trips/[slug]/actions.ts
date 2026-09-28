@@ -14,14 +14,35 @@ import type { TripFormState } from "@/app/trips/new/actions";
 import { levelOf } from "@/lib/visibility/exposure";
 import { canEditContainer, editableMediaIds, NOT_YOUR_CONTAINER } from "@/lib/auth/ownership";
 import { writeContainerDescription } from "@/lib/annotation/container";
+import { handWrittenDescription } from "@/lib/annotation/members-only";
+import { rejudgeFromAction } from "@/lib/annotation/rejudge-notice";
+import { descriptionStaysHelpers } from "@/lib/annotation/helper-text";
+import { deleteTripById } from "@/lib/trips/delete";
+import { uniqueSlug } from "@/lib/trips/slug";
+import { NAME_NOT_TO_BE_SHOWN, namesSomebodyRestricted } from "@/lib/people/forget";
+import { albumNameCheck, NAME_CHECKS, nameCheckForTrip, tripNameCheck } from "@/lib/people/name-check";
+import { anyRelaxedRelease, noteRelaxedDescription } from "@/lib/annotation/relaxed-release";
+import { isCoverable } from "@/lib/photos/cover";
 
-/** The trip, where this member may change it: whoever made it, and admins. */
+/** The trip, where this member may change it: whoever made it, and admins. One being deleted is gone already. */
 async function loadEditableTrip(slug: string) {
   const user = await requireUserOrThrow();
-  const trip = await db.trip.findUnique({ where: { slug } });
+  const trip = await db.trip.findUnique({ where: { slug, deletingAt: null } });
   if (!trip) throw new Error("Trip not found");
   if (!canEditContainer(user, trip)) throw new Error(NOT_YOUR_CONTAINER);
   return trip;
+}
+
+/** A write that found no live trip: it was deleted, or marked for deletion, since it was read. */
+function tripGone(err: unknown): never {
+  if ((err as { code?: string }).code === "P2025") throw new Error("Trip not found");
+  throw err;
+}
+
+/** A description saved by hand, as stored; see `handWrittenDescription`. */
+async function handWrittenStored(before: Parameters<typeof handWrittenDescription>[0], text: string | null | undefined) {
+  const { descriptionMembersOnly, descriptionSharedAt } = await handWrittenDescription(before, text);
+  return { descriptionMembersOnly, descriptionSharedAt };
 }
 
 const visibilitySchema = z.enum(["PRIVATE", "LINK", "PUBLIC"]);
@@ -37,11 +58,14 @@ export async function updateTrip(slug: string, _prev: TripFormState, fd: FormDat
   const visibility = chosen?.data;
   const changed = visibility !== undefined && visibility !== trip.visibility;
   const there = participantsFromForm(fd);
+  // Written only while it is not being deleted: a save that read the trip just before the mark must not share it again.
   await db.trip.update({
-    where: { id: trip.id },
+    where: { id: trip.id, deletingAt: null },
     data: {
       title: v.title,
       description: v.description,
+      ...(await handWrittenStored(trip, v.description)),
+      descriptionByHelper: descriptionStaysHelpers(trip, v.description),
       startDate: dayToDateColumn(v.startDate),
       endDate: dayToDateColumn(v.endDate),
       timezone: v.timezone,
@@ -51,10 +75,12 @@ export async function updateTrip(slug: string, _prev: TripFormState, fd: FormDat
       // `set` reconciles to exactly what was ticked; a form that never carried the control leaves the list alone.
       ...(there ? { participants: { set: there.map((id) => ({ id })) } } : {}),
     },
-  });
+  }).catch(tripGone);
+  // Whether a word of its title gives anything away depends on who may open it: judged again in the background.
+  if (changed || v.title !== trip.title) await rejudgeFromAction({ tripId: trip.id });
   if (changed) {
     // Bump photo versions so public caches stop matching after a change in exposure.
-    await db.photo.updateMany({ where: { tripId: trip.id }, data: { updatedAt: new Date() } });
+    await db.photo.updateMany({ where: { tripId: trip.id }, data: { updatedAt: new Date(), imageVersion: { increment: 1 } } });
     revalidatePath("/");
   }
   revalidatePath(`/trips/${slug}`, "layout");
@@ -64,18 +90,35 @@ export async function updateTrip(slug: string, _prev: TripFormState, fd: FormDat
 export async function rotateShareToken(slug: string): Promise<void> {
   const trip = await loadEditableTrip(slug);
   if (trip.visibility !== "LINK") return;
-  await db.trip.update({ where: { id: trip.id }, data: { shareToken: generateToken() } });
+  // Not a trip marked for deletion since it was read: its link was withdrawn with the mark.
+  await db.trip.update({ where: { id: trip.id, deletingAt: null }, data: { shareToken: generateToken() } }).catch(tripGone);
   // New token, new rendition URLs: private caches keyed on the old ?v= stop matching.
-  await db.photo.updateMany({ where: { tripId: trip.id }, data: { updatedAt: new Date() } });
+  await db.photo.updateMany({ where: { tripId: trip.id }, data: { updatedAt: new Date(), imageVersion: { increment: 1 } } });
   revalidatePath(`/trips/${slug}/settings`);
+}
+
+/**
+ * A new web address for the trip. It is made from the first title and never follows a rename, so it can still say
+ * what the title no longer does — a forgotten person's name, say. Links to the old address stop working; there is
+ * no redirect, since keeping the old address anywhere would keep what it said.
+ */
+export async function changeTripSlug(slug: string, fd: FormData): Promise<void> {
+  const trip = await loadEditableTrip(slug);
+  const wanted = z.string().trim().min(1).max(80).parse(fd.get("slug"));
+  const next = await uniqueSlug(wanted, async (s) => Boolean(await db.trip.findFirst({ where: { slug: s, id: { not: trip.id } }, select: { id: true } })));
+  if (next !== trip.slug) await db.trip.update({ where: { id: trip.id }, data: { slug: next } });
+  revalidatePath("/", "layout");
+  redirect(`/trips/${next}/settings?saved=1`);
 }
 
 /** Choose (or forget) the picture the trip is known by. The cover belongs to the trip, so it is the trip's to set. */
 export async function setCoverPhoto(slug: string, photoId: string | null): Promise<void> {
   const trip = await loadEditableTrip(slug);
   if (photoId) {
-    const photo = await db.photo.findFirst({ where: { id: photoId, tripId: trip.id }, select: { id: true } });
+    const photo = await db.photo.findFirst({ where: { id: photoId, tripId: trip.id }, select: { status: true, trashedAt: true, width: true } });
     if (!photo) throw new Error("Photo is not on this trip");
+    // Still processing, failed, or in the trash: there is no picture to lead with.
+    if (!isCoverable(photo)) throw new Error("Only a finished photo can be the cover");
   }
   await db.trip.update({ where: { id: trip.id }, data: { coverPhotoId: photoId } });
   revalidatePath(`/trips/${slug}`, "layout");
@@ -84,15 +127,17 @@ export async function setCoverPhoto(slug: string, photoId: string | null): Promi
 
 /**
  * Admins only. The trip, its activities and tracks go; every photo stays in the album and becomes a photo without a
- * trip (the schema sets tripId to null), so nothing anyone uploaded is ever lost by deleting a container.
+ * trip, so nothing anyone uploaded is ever lost by deleting a container. A big trip lets go of its photographs a
+ * batch at a time; see lib/trips/delete for the steps, and for how a deletion interrupted half-way is finished.
  */
 export async function deleteTrip(slug: string): Promise<void> {
   const trip = await loadEditableTrip(slug);
   const me = await requireUserOrThrow();
   if (me.role !== "ADMIN") throw new Error("Only an admin can delete a trip");
-  await db.trip.delete({ where: { id: trip.id } });
+  const done = await deleteTripById(trip.id);
   revalidatePath("/", "layout");
-  redirect("/photos");
+  // A big one is finished by the worker; the Admin page says it is being deleted until then.
+  redirect(done === "done" ? "/photos" : "/admin#being-deleted");
 }
 
 /** Clear track-derived positions and recompute them from the trip's current tracks. */
@@ -114,7 +159,7 @@ export async function detachExposedFromCollections(slug: string): Promise<void> 
     await db.collectionItem.deleteMany({ where: { id: { in: doomed.map((d) => d.id) } } });
     const covers = doomed.filter((d) => d.collection.coverPhotoId === d.photoId);
     for (const c of covers) await db.collection.update({ where: { id: c.collection.id }, data: { coverPhotoId: null } });
-    await db.photo.updateMany({ where: { id: { in: doomed.map((d) => d.photoId) } }, data: { updatedAt: new Date() } });
+    await db.photo.updateMany({ where: { id: { in: doomed.map((d) => d.photoId) } }, data: { updatedAt: new Date(), imageVersion: { increment: 1 } } });
   }
   revalidatePath(`/trips/${slug}`, "layout");
   revalidatePath("/", "layout");
@@ -137,6 +182,8 @@ export async function removeFromTrip(slug: string, photoIds: string[]): Promise<
   const list = canEditContainer(user, trip) ? asked : await editableMediaIds(user, asked);
   if (!list.length) return { removed: 0, notYours: asked.length };
   const r = await db.photo.updateMany({ where: { id: { in: list }, tripId: trip.id }, data: { tripId: null, activityId: null, activitySetById: null } });
+  // On no trip, its words are shown at the album's level: what the trip let out under a relaxed check is checked again.
+  if (r.count && (await anyRelaxedRelease())) await rejudgeFromAction({ recheck: {} });
   // A cover that is no longer on the trip is no cover at all; the album picks one for itself again.
   if (trip.coverPhotoId && list.includes(trip.coverPhotoId)) await db.trip.update({ where: { id: trip.id }, data: { coverPhotoId: null } });
   revalidatePath(`/trips/${slug}`, "layout");
@@ -156,7 +203,41 @@ const DESCRIPTION_TEXT = z.string().max(4000);
 export async function setTripDescription(slug: string, text: string): Promise<void> {
   const trip = await loadEditableTrip(slug);
   const description = DESCRIPTION_TEXT.parse(text).trim();
-  await db.trip.update({ where: { id: trip.id }, data: { description: description || null } });
+  await db.trip.update({ where: { id: trip.id }, data: { description: description || null, ...(await handWrittenStored(trip, description)), descriptionByHelper: descriptionStaysHelpers(trip, description) } });
+  revalidatePath(`/trips/${slug}`, "layout");
+}
+
+/**
+ * Show the trip's description to everyone who may open the trip, or keep it for the family. The one way a
+ * members-only description becomes public: saving it, however it was edited, never does.
+ */
+export async function setTripDescriptionShared(slug: string, everyone: boolean): Promise<void> {
+  const trip = await loadEditableTrip(slug);
+  // Never the helper's description while it names somebody who may not be named there (see namesSomebodyRestricted),
+  // checked at the trip's level (name-check.ts); a member's own words are theirs to show, as their captions are.
+  if (everyone && trip.descriptionByHelper && (await namesSomebodyRestricted([trip.description], [], await nameCheckForTrip(trip.id)))) throw new Error(NAME_NOT_TO_BE_SHOWN);
+  await db.trip.update({ where: { id: trip.id }, data: { descriptionMembersOnly: !everyone, descriptionSharedAt: everyone ? new Date() : null } });
+  await noteRelaxedDescription("trip", trip.id);
+  revalidatePath(`/trips/${slug}`, "layout");
+}
+
+/**
+ * How names are checked before this trip's words are shown to everyone: the album's ("INHERIT"), or its own (see
+ * lib/people/name-check). Whoever arranges the trip decides, recorded with who and when. Made stricter than it was,
+ * what the trip already shows is checked again in the background at once (and by the nightly sweep, should that not
+ * run); made relaxed, nothing kept for the family is let out by it.
+ */
+export async function setTripNameCheck(slug: string, fd: FormData): Promise<void> {
+  const user = await requireUserOrThrow();
+  const trip = await loadEditableTrip(slug);
+  const chosen = z.enum(["INHERIT", ...NAME_CHECKS]).parse(fd.get("nameCheck"));
+  const level = chosen === "INHERIT" ? null : chosen;
+  const album = await albumNameCheck();
+  const stricter = tripNameCheck(trip, album) === "RELAXED" && tripNameCheck({ nameCheck: level }, album) === "STRICT";
+  const now = new Date();
+  await db.trip.update({ where: { id: trip.id, deletingAt: null }, data: { nameCheck: level, nameCheckSetAt: now, nameCheckSetById: user.id } }).catch(tripGone);
+  // What it shows that was judged relaxed is checked again now; the nightly sweep does it too, should this not run.
+  if (stricter) await rejudgeFromAction({ recheck: { tripId: trip.id } });
   revalidatePath(`/trips/${slug}`, "layout");
 }
 

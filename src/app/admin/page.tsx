@@ -7,8 +7,9 @@ import { env } from "@/lib/env";
 import { getViewer, requireAdmin } from "@/lib/auth/viewer";
 import { AppShell, Container } from "@/components/layout/AppShell";
 import { InviteForm } from "@/components/admin/InviteForm";
-import { Badge, Button, Card } from "@/components/ui";
-import { removeMember, revokeInvite, setRole } from "./actions";
+import { Badge, Button, Card, ConfirmSubmitButton } from "@/components/ui";
+import { finishDeletingTrip, removeMember, revokeInvite, setAlbumNameCheck, setRole } from "./actions";
+import { NameCheckChoice } from "@/components/people/NameCheckChoice";
 import { setMemberName } from "@/app/account/actions";
 import { AnnotationAdmin } from "@/components/annotation/AnnotationAdmin";
 import { annotationGates } from "@/lib/annotation/eligibility";
@@ -16,14 +17,20 @@ import { actualSpend } from "@/lib/annotation/pricing";
 import { faceGates } from "@/lib/people/gates";
 import { petGates } from "@/lib/pets/gates";
 import { faceCounts, needsDecision } from "@/lib/people/queries";
+import { withdrawalDue, withdrawalNotice, withdrawalReason } from "@/lib/people/forget";
 import { FacesAdmin } from "@/components/people/FacesAdmin";
-import { decideIndexing } from "@/app/people/actions";
+import { allowForgottenName, allowForgottenNameTyped, decideIndexing } from "@/app/people/actions";
+import { forgetKeyState, forgottenNameLabel, forgottenNames } from "@/lib/people/tombstone";
 import { isMinor } from "@/lib/people/consent";
 import { TakeoutAdmin } from "@/components/admin/TakeoutAdmin";
 import { inboxDir, listArchives } from "@/lib/takeout/inbox";
 import { closeDeadImports } from "@/lib/takeout/import";
 import { visitorStats } from "@/lib/visits/stats";
 import { VisitorStats } from "@/components/admin/VisitorStats";
+import { OrphanFoldersAdmin } from "@/components/admin/OrphanFoldersAdmin";
+import { StorageIdentityNotice } from "@/components/admin/StorageIdentityNotice";
+import { HEARTBEAT_STALE_MS, installIdentity, rebindBlockedUntil, utcStamp } from "@/lib/storage/identity";
+import { QUARANTINE_KEEP_MS, quarantineContents } from "@/lib/storage/sweep";
 
 export const metadata = { title: "Admin" };
 
@@ -34,15 +41,23 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
   const visits = await visitorStats([7, 30, 90].includes(askedDays) ? askedDays : 30);
   const viewer = await getViewer();
   const trashed = await db.photo.count({ where: { trashedAt: { not: null } } });
-  const [members, invites] = await Promise.all([
+  const [members, invites, deleting] = await Promise.all([
     db.user.findMany({ orderBy: { createdAt: "asc" }, include: { _count: { select: { photos: true, trips: true } } } }),
     db.invite.findMany({ where: { acceptedAt: null, expiresAt: { gt: new Date() } }, orderBy: { createdAt: "desc" }, include: { invitedBy: { select: { email: true, name: true } } } }),
+    // Trips too big to delete inside the request, and any a restart interrupted: the worker is letting go of them.
+    db.trip.findMany({ where: { deletingAt: { not: null } }, orderBy: { deletingAt: "asc" }, select: { id: true, title: true, _count: { select: { photos: true } } } }),
   ]);
   const smtp = Boolean(env().SMTP_HOST);
   const fg = await faceGates();
   const pg = petGates();
   const animalCounts = { sightings: await db.animalDetection.count(), confirmed: await db.animalDetection.count({ where: { status: "CONFIRMED" } }) };
-  const [counts, decisions] = await Promise.all([faceCounts(fg.retentionDays), needsDecision()]);
+  const [counts, decisions, withdrawn] = await Promise.all([
+    faceCounts(fg.retentionDays),
+    needsDecision(),
+    // Whose naming the album switched off by itself, for want of evidence they are adults: admins decide what next.
+    db.person.findMany({ where: { namingWithdrawnAt: { not: null } }, orderBy: { name: "asc" }, select: { id: true, name: true, namingWithdrawnAt: true, birthday: true, adultAttestedAt: true, adultConfirmedAt: true } }),
+  ]);
+  const [forgetKey, forgotten, pendingForgets] = await Promise.all([forgetKeyState(), forgottenNames(), db.person.count({ where: { forgetPendingAt: { not: null } } })]);
   const [gates, batches] = await Promise.all([
     annotationGates(),
     db.annotationBatch.findMany({ where: { parentId: null }, orderBy: { createdAt: "desc" }, take: 8 }),
@@ -69,12 +84,21 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
   const [archives, takeoutImports] = await Promise.all([listArchives(), db.takeoutImport.findMany({ orderBy: { startedAt: "desc" }, take: 10 })]);
   // The same file in the album more than once, with one tile each to recognise them by.
   const dupeGroups = await duplicateGroups(60);
-  const dupeLeaders = await db.photo.findMany({ where: { id: { in: dupeGroups.map((g) => g.ids[0]) } }, select: { id: true, originalName: true, status: true, updatedAt: true, renditions: true } });
+  const dupeLeaders = await db.photo.findMany({ where: { id: { in: dupeGroups.map((g) => g.ids[0]) } }, select: { id: true, originalName: true, status: true, updatedAt: true, imageVersion: true, renditions: true } });
   const byId = new Map(dupeLeaders.map((p) => [p.id, p]));
   const duplicateRows = dupeGroups.slice(0, 24).map((g) => {
     const lead = byId.get(g.ids[0]);
     return { contentHash: g.contentHash, ids: g.ids, name: lead?.originalName ?? "", thumbUrl: lead && lead.renditions ? photoUrl(lead, "thumb") : null };
   });
+  // Whether this database and the storage folder are the same album's, and what the hourly check found in it.
+  const [identity, rebindBlock, storageFindings, quarantine] = await Promise.all([
+    installIdentity(),
+    rebindBlockedUntil(),
+    db.appSetting.findUnique({ where: { id: "app" }, select: { orphanFolderCount: true, orphanFolderSample: true, orphanFoldersCheckedAt: true } }),
+    quarantineContents(),
+  ]);
+  const nameCheck = await db.appSetting.findUnique({ where: { id: "app" }, select: { nameCheck: true, nameCheckSetAt: true, nameCheckSetById: true } });
+  const nameCheckBy = nameCheck?.nameCheckSetById ? members.find((m) => m.id === nameCheck.nameCheckSetById) : null;
   const unavailable = await db.photo.findMany({ where: { kind: "EXTERNAL_VIDEO", externalStatus: "UNAVAILABLE" }, orderBy: { externalCheckedAt: "desc" }, select: { id: true, title: true, externalUrl: true, externalCheckedAt: true } });
 
   return (
@@ -126,11 +150,68 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
           />
         </section>
 
+        <section id="name-check" className="scroll-mt-4">
+          <h2 className="font-display text-xl font-semibold mb-1">Names in shared words</h2>
+          <p className="text-sm text-muted mb-3">For the whole album; a trip&apos;s creator can choose differently for that trip on its settings page. Collections follow this setting, and a photo shown in several places is checked by the strictest one.</p>
+          <NameCheckChoice
+            action={setAlbumNameCheck}
+            current={nameCheck?.nameCheck ?? "STRICT"}
+            changed={nameCheck?.nameCheckSetAt ? { by: nameCheckBy ? (nameCheckBy.name ?? nameCheckBy.email) : "a former member", at: nameCheck.nameCheckSetAt } : null}
+            testId="album-name-check"
+          />
+        </section>
+
         <section>
           <h2 className="font-display text-xl font-semibold mb-1">Faces</h2>
           <p className="text-sm text-muted mb-3">Face detection runs on this server through the ML sidecar. It is off until both the operator flag and your opt-in here are set.</p>
           <FacesAdmin gates={{ sidecar: fg.sidecar, envEnabled: fg.envEnabled, optedInAt: fg.optedInAt?.toISOString() ?? null, active: fg.active, retentionDays: fg.retentionDays }} counts={{ ...counts, nextPurge: counts.nextPurge?.toISOString() ?? null }} />
           <p className="text-sm text-muted mt-3" data-testid="pet-gates">Pet spotting (animals, not faces; no opt-in needed): {pg.active ? `on, ${animalCounts.sightings} sighting${animalCounts.sightings === 1 ? "" : "s"} kept, ${animalCounts.confirmed} confirmed` : pg.sidecar ? "off (PET_MATCHING_ENABLED is false)" : "off (needs the ML sidecar)"}.</p>
+          {forgetKey.problem && (
+            <div className="mt-4 rounded-theme border border-red-300 bg-red-50 p-3 text-sm text-red-900" data-testid="forget-key-problem">
+              <p className="font-medium">{forgetKey.paused ? "Forgetting and the AI helper are paused" : "Forgotten names are not protected properly"}</p>
+              <p>{forgetKey.problem} {forgetKey.paused ? "Nobody can be forgotten, and nothing is sent to the AI helper, until it is put right." : ""} See FORGET_KEY in the deployment guide.</p>
+            </div>
+          )}
+          {pendingForgets > 0 && (
+            <div className="mt-4 rounded-theme border border-red-300 bg-red-50 p-3 text-sm text-red-900" data-testid="forgets-waiting">
+              <p className="font-medium">{pendingForgets === 1 ? "1 person is" : `${pendingForgets} people are`} waiting to be forgotten</p>
+              <p>They were switched off at once, but their names can only be forgotten for good once {forgetKey.invalid ? "FORGET_KEY, which is set but not valid, is put right (32 random bytes of base64: openssl rand -base64 32)" : "FORGET_KEY is set"}. It happens by itself when the worker next starts, or overnight.</p>
+            </div>
+          )}
+          {forgotten.length > 0 && (
+            <div className="mt-4 space-y-2 text-sm" data-testid="forgotten-names">
+              <h3 className="font-medium">Forgotten names</h3>
+              <p className="text-muted">The album keeps each forgotten name only as a code, and takes it out of anything sent to or written by the AI helper. If one turns out to be somebody else&apos;s too, or an everyday word, allow it again.</p>
+              <ul className="space-y-1">
+                {forgotten.map((f, i) => (
+                  <li key={f.hash} className="flex flex-wrap items-center gap-2">
+                    <span>{forgottenNameLabel(f, i, forgotten.length)}</span>
+                    <form action={allowForgottenName.bind(null, f.hash)}>
+                      <ConfirmSubmitButton size="sm" variant="secondary" confirmMessage="Allow this forgotten name again? The AI helper may then be told it and write it.">Allow this name again</ConfirmSubmitButton>
+                    </form>
+                  </li>
+                ))}
+              </ul>
+              <form action={allowForgottenNameTyped} className="flex flex-wrap items-center gap-2">
+                <label className="flex items-center gap-1">Or type the name <input name="name" className="h-8 rounded-theme border border-border bg-surface text-text [color-scheme:light] px-2" autoComplete="off" /></label>
+                <ConfirmSubmitButton size="sm" variant="secondary" confirmMessage="Allow this name again if it is a forgotten one? The AI helper may then be told it and write it.">Allow it again if it is forgotten</ConfirmSubmitButton>
+              </form>
+            </div>
+          )}
+          {withdrawn.length > 0 && (
+            <div className="mt-4 space-y-2 rounded-theme border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900" data-testid="naming-withdrawn">
+              <h3 className="font-medium">Names no longer used</h3>
+              <p>Nothing more is sent to the AI helper with these names, and what anybody outside the family can read has already lost them.</p>
+              <ul className="space-y-1">
+                {withdrawn.map((p) => (
+                  <li key={p.id}>
+                    <Link href={`/people/${p.id}`} className="font-medium underline">{p.name}</Link>{" "}
+                    <span className="text-amber-800">— {withdrawalNotice(p.name, withdrawalReason(p), withdrawalDue(p.namingWithdrawnAt!))}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
           {decisions.length > 0 && (
             <div className="mt-4 space-y-3">
               <h3 className="font-medium">Needs a decision</h3>
@@ -166,6 +247,14 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
           <Link href="/admin/trash" className="text-primary hover:underline text-sm">Open the trash</Link>
         </section>
 
+        {(!identity.ok || storageFindings?.orphanFolderCount || quarantine.length > 0) && (
+          <section className="space-y-3">
+            <h2 className="font-display text-xl font-semibold mb-1">Storage</h2>
+            {!identity.ok && <StorageIdentityNotice kind={identity.kind} problem={identity.problem} block={!rebindBlock ? null : "unreadable" in rebindBlock ? "unreadable" : { minutesAgo: rebindBlock.minutesAgo, until: utcStamp(rebindBlock.until) }} waitHours={HEARTBEAT_STALE_MS / 3600_000} />}
+            <OrphanFoldersAdmin count={identity.ok ? (storageFindings?.orphanFolderCount ?? 0) : 0} sample={storageFindings?.orphanFolderSample ?? []} checkedAt={storageFindings?.orphanFoldersCheckedAt?.toISOString() ?? null} quarantine={quarantine} keepDays={QUARANTINE_KEEP_MS / 86_400_000} />
+          </section>
+        )}
+
         <section>
           <DuplicatesPanel rows={duplicateRows} total={dupeGroups.length} />
         </section>
@@ -189,6 +278,27 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
           )}
         </section>
 
+        {deleting.length > 0 && (
+          <section id="being-deleted">
+            <h2 className="font-display text-xl font-semibold mb-3">Trips being deleted</h2>
+            <Card className="divide-y divide-border">
+              {deleting.map((t) => (
+                <div key={t.id} className="flex flex-wrap items-center justify-between gap-3 p-3 text-sm">
+                  <div className="min-w-0">
+                    <div className="font-medium">{t.title}</div>
+                    <div className="text-muted">
+                      {t._count.photos} photo{t._count.photos === 1 ? "" : "s"} still to let go of. It is no longer shown to anyone, and the album finishes it in the background.
+                    </div>
+                  </div>
+                  <form action={finishDeletingTrip.bind(null, t.id)}>
+                    <Button type="submit" variant="secondary" size="sm">Finish now</Button>
+                  </form>
+                </div>
+              ))}
+            </Card>
+          </section>
+        )}
+
         <section>
           <h2 className="font-display text-xl font-semibold mb-3">Members</h2>
           <Card className="divide-y divide-border">
@@ -199,6 +309,7 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
                     {m.name ?? m.email}
                     <Badge tone={m.role === "ADMIN" ? "primary" : "neutral"}>{m.role === "ADMIN" ? "Admin" : "Member"}</Badge>
                     {m.id === me.id && <Badge tone="accent">You</Badge>}
+                    {m.removingAt && <Badge tone="neutral">Being removed</Badge>}
                   </div>
                   <div className="text-muted truncate">
                     {m.email} · {m._count.photos} photo{m._count.photos === 1 ? "" : "s"} · {m._count.trips} trip{m._count.trips === 1 ? "" : "s"}
@@ -210,11 +321,14 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
                 </form>
                 {m.id !== me.id && (
                   <div className="flex gap-2">
-                    <form action={setRole.bind(null, m.id, m.role === "ADMIN" ? "MEMBER" : "ADMIN")}>
-                      <Button type="submit" variant="secondary" size="sm">{m.role === "ADMIN" ? "Make member" : "Make admin"}</Button>
-                    </form>
+                    {!m.removingAt && (
+                      <form action={setRole.bind(null, m.id, m.role === "ADMIN" ? "MEMBER" : "ADMIN")}>
+                        <Button type="submit" variant="secondary" size="sm">{m.role === "ADMIN" ? "Make member" : "Make admin"}</Button>
+                      </form>
+                    )}
+                    {/* A removal interrupted half-way carries on from where it stopped; the worker also finishes it. */}
                     <form action={removeMember.bind(null, m.id)}>
-                      <Button type="submit" variant="danger" size="sm">Remove</Button>
+                      <Button type="submit" variant="danger" size="sm">{m.removingAt ? "Finish removing" : "Remove"}</Button>
                     </form>
                   </div>
                 )}

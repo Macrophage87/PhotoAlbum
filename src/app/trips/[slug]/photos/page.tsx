@@ -12,19 +12,19 @@ import { describeCount, filterIsActive, filterQuery, parseGalleryFilter } from "
 import { YouTubeAddForm } from "@/components/videos/YouTubeAddForm";
 import { dateColumnToDay } from "@/lib/time/local-day";
 import { peopleInPhotos } from "@/lib/people/in-photos";
-import { PHOTO_SORTS, SORT_COOKIES, sortChoice } from "@/lib/sort-choice";
+import { photoSortChoice, SORT_COOKIES } from "@/lib/sort-choice";
 import { SortToggle } from "@/components/ui/SortToggle";
 
 export default async function TripPhotosPage({ params, searchParams }: PageProps<"/trips/[slug]/photos">) {
   const { slug } = await params;
   const sp = await searchParams;
-  const { trip, editable, owns } = await loadViewableTrip(slug, `/trips/${slug}/photos`);
+  const { viewer, trip, editable, owns } = await loadViewableTrip(slug, `/trips/${slug}/photos`);
   // Who uploaded what is members-only, so an anonymous visitor never sees the member list nor filters by it.
-  const filter = parseGalleryFilter(sp, { member: editable });
-  // Favourites first unless this person has asked for the grid by date, either way round.
-  const sort = await sortChoice(sp, SORT_COOKIES.photos, PHOTO_SORTS, "favorites");
+  const filter = parseGalleryFilter(sp, { member: editable, inTrip: true });
+  // Favourites first for a member unless they have asked for the grid by date; a visitor gets the dates only.
+  const sort = await photoSortChoice(sp, editable);
   const [page, activities, members, people] = await Promise.all([
-    tripPhotoPage(trip.id, { filter, order: sort === "oldest" ? "taken" : sort, viewerId: editable ? (await getViewer()).user?.id ?? null : null }),
+    tripPhotoPage(trip.id, { filter, readyOnly: !editable, order: sort === "oldest" ? "taken" : sort, viewerId: editable ? (await getViewer()).user?.id ?? null : null }),
     db.activity.findMany({ where: { tripId: trip.id }, orderBy: { startTime: "asc" }, select: { id: true, title: true } }),
     editable ? db.user.findMany({ where: { photos: { some: { tripId: trip.id } } }, orderBy: { name: "asc" }, select: { id: true, name: true, email: true } }) : Promise.resolve([]),
     editable ? peopleInPhotos({ tripId: trip.id }) : Promise.resolve([]),
@@ -66,7 +66,7 @@ export default async function TripPhotosPage({ params, searchParams }: PageProps
       />
       <SortToggle
         value={sort}
-        options={[{ value: "favorites", label: "Favorites first" }, { value: "oldest", label: "Oldest first" }, { value: "newest", label: "Newest first" }]}
+        options={[...(editable ? [{ value: "favorites" as const, label: "Favorites first" }] : []), { value: "newest", label: "Newest first" }, { value: "oldest", label: "Oldest first" }]}
         cookie={SORT_COOKIES.photos}
         label="How the photos are ordered"
         testId="photos-order"
@@ -75,7 +75,7 @@ export default async function TripPhotosPage({ params, searchParams }: PageProps
         <p className="text-muted text-sm" data-testid="no-matches">Nothing here matches that. Try fewer words, or clear the filters.</p>
       )}
       {editable && <YouTubeAddForm tripId={trip.id} defaultDate={dateColumnToDay(trip.startDate)} />}
-      <TripGallery tripSlug={slug} key={`${moreUrl}:${page.total}:${photos[0]?.id ?? ""}:${photos[photos.length - 1]?.id ?? ""}`} photos={photos.map((p) => toGridPhoto(p, null, editable, favourites.get(p.id)))} more={{ url: moreUrl, nextCursor: page.nextCursor, total: page.total }} activities={activities} editable={editable} emptyMessage={editable ? "No photos yet. Upload some to get started." : "No photos yet."} />
+      <TripGallery tripSlug={slug} key={`${moreUrl}:${page.total}:${photos[0]?.id ?? ""}:${photos[photos.length - 1]?.id ?? ""}`} photos={photos.map((p) => toGridPhoto(p, null, viewer.user, favourites.get(p.id)))} more={{ url: moreUrl, nextCursor: page.nextCursor, total: page.total }} activities={activities} editable={editable} emptyMessage={editable ? "No photos yet. Upload some to get started." : "No photos yet."} />
     </div>
   );
 }

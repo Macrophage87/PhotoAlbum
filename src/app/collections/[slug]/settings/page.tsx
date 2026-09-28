@@ -4,10 +4,10 @@ import { shareableCollectionUrl } from "@/lib/share/social";
 import { CollectionForm } from "@/components/collections/CollectionForm";
 import { ShareButtons } from "@/components/trips/ShareButtons";
 import { CopyLink } from "@/components/share/CopyLink";
-import { Button, ButtonLink, Card, ConfirmSubmitButton } from "@/components/ui";
+import { Button, ButtonLink, Card, ConfirmSubmitButton, Input, Label } from "@/components/ui";
 import { photoUrl } from "@/lib/photos/urls";
-import { collectionCoverFor } from "@/lib/collections/queries";
-import { deleteCollection, detachExposedFromOtherCollections, rotateCollectionShareToken, updateCollection } from "../../actions";
+import { chosenCollectionCover, collectionCoverFor } from "@/lib/collections/queries";
+import { changeCollectionSlug, deleteCollection, detachExposedFromOtherCollections, rotateCollectionShareToken, updateCollection } from "../../actions";
 import { OptOutToggle } from "@/components/annotation/OptOutToggle";
 import { visibilityWarnings } from "@/lib/visibility/settings";
 import Link from "next/link";
@@ -24,8 +24,9 @@ export default async function CollectionSettingsPage({ params, searchParams }: P
   const { user: me, collection } = await requireCollectionOwnerPage(slug, `/collections/${slug}/settings`);
   const update = updateCollection.bind(null, slug);
   const rotate = rotateCollectionShareToken.bind(null, slug);
+  const changeSlug = changeCollectionSlug.bind(null, slug);
   const remove = deleteCollection.bind(null, slug);
-  const cover = await collectionCoverFor(collection);
+  const [cover, chosen] = await Promise.all([collectionCoverFor(collection), chosenCollectionCover(collection)]);
   const shareUrl = shareableCollectionUrl(collection, env().APP_URL);
   const warnings = await visibilityWarnings("collection", collection.id, collection.visibility, "this collection");
 
@@ -100,6 +101,18 @@ export default async function CollectionSettingsPage({ params, searchParams }: P
       </section>
 
       <section>
+        <h2 className="font-display text-xl font-semibold mb-2">Web address</h2>
+        <p className="text-sm text-muted mb-3">Made from the first title, and not changed when the title is. Links to the old address stop working.</p>
+        <form action={changeSlug} className="flex flex-wrap items-end gap-2">
+          <div>
+            <Label htmlFor="slug">Address</Label>
+            <Input id="slug" name="slug" defaultValue={slug} required maxLength={80} />
+          </div>
+          <Button type="submit" variant="secondary">Change address</Button>
+        </form>
+      </section>
+
+      <section>
         <h2 className="font-display text-xl font-semibold mb-2">Cover photo</h2>
         <Card className="p-4 flex flex-wrap items-center gap-4">
           <div className="w-20 h-20 rounded-theme overflow-hidden bg-surface-alt border border-border shrink-0">
@@ -109,7 +122,7 @@ export default async function CollectionSettingsPage({ params, searchParams }: P
             )}
           </div>
           <div className="text-sm space-y-2">
-            <p className="text-muted">{collection.coverPhoto ? "Chosen by hand." : cover ? "Nobody has chosen one, so the album leads with the first photograph in the collection." : "Nothing to lead with yet."}</p>
+            <p className="text-muted">{chosen ? "Chosen by hand." : cover ? "Nobody has chosen one, so the album leads with the first photograph in the collection." : "Nothing to lead with yet."}</p>
             <ButtonLink href={`/collections/${slug}/cover`} size="sm" variant="secondary">Choose a cover</ButtonLink>
           </div>
         </Card>

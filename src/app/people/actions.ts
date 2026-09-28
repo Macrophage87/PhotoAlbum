@@ -4,15 +4,21 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { z } from "zod";
 import { db } from "@/lib/db";
+import type { Prisma } from "@/generated/prisma/client";
 import { claimAnimalsForPet, confirmAnimalAs, rejectAnimal, releaseAnimalsForPet } from "@/lib/pets/proposals";
 import { enqueueAnimalMatchAllOpen } from "@/lib/jobs/handlers/detect-animals";
 import { requireUserOrThrow } from "@/lib/auth/viewer";
-import { canEditMedia, NOT_YOURS } from "@/lib/auth/ownership";
-import { namingOutcome } from "@/lib/people/consent";
-import { enqueueEmbedding } from "@/lib/jobs/handlers/embed-photo";
-import { enqueueFaceDetection } from "@/lib/jobs/handlers/detect-faces";
+import { canChangePerson, canEditMedia, NOT_YOUR_PERSON, NOT_YOURS } from "@/lib/auth/ownership";
+import { knownAdult, nameMayLeaveServer, namingOutcome } from "@/lib/people/consent";
+import { forgetNameEverywhere, forgetOnPhoto } from "@/lib/people/forget";
+import { forgetKeyState, forgottenHashesOf } from "@/lib/people/tombstone";
+import { forgetPerson } from "@/lib/people/forget-person";
+import { ForgetBusyError, stampScrubbed } from "@/lib/people/names-changed";
+import { enqueueFaceDetection, rebuildUnnamedCentroids } from "@/lib/jobs/handlers/detect-faces";
 import { confirmFaceAs, rejectProposal } from "@/lib/people/matching";
-import type { StoredAnnotation } from "@/lib/annotation/schema";
+import { rejudgeFromAction } from "@/lib/annotation/rejudge-notice";
+import { anyRelaxedRelease } from "@/lib/annotation/relaxed-release";
+import { forgetJudgedNames } from "@/lib/annotation/rejudge";
 
 async function requireAdmin() {
   const user = await requireUserOrThrow();
@@ -23,9 +29,12 @@ async function requireAdmin() {
 const day = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().transform((v) => (v ? new Date(`${v}T00:00:00Z`) : null));
 
 /** Set the templates of a person's faces and clusters to NULL, keeping rows, boxes and confirmations. */
-async function nullTemplatesFor(personId: string) {
-  await db.$executeRaw`UPDATE "Face" SET embedding = NULL WHERE "personId" = ${personId}`;
-  await db.$executeRaw`UPDATE "FaceCluster" SET centroid = NULL WHERE "personId" = ${personId}`;
+async function nullTemplatesFor(personId: string, client: Prisma.TransactionClient = db) {
+  // Groups (in id order) before faces, as leaveCluster and naming take them. Confirming a face and detection's
+  // restore take a face before its era group, but only after the person's row FOR SHARE, which decideIndexing holds
+  // FOR UPDATE before it gets here: they wait for it rather than cross it.
+  await client.$executeRaw`UPDATE "FaceCluster" SET centroid = NULL WHERE id IN (SELECT id FROM "FaceCluster" WHERE "personId" = ${personId} ORDER BY id FOR UPDATE)`;
+  await client.$executeRaw`UPDATE "Face" SET embedding = NULL WHERE "personId" = ${personId}`;
 }
 
 const nameSchema = z
@@ -42,31 +51,19 @@ const nameSchema = z
 /**
  * Name an unnamed cluster. Admins record the birthday and the indexing decision in the same step; members create the
  * person with indexing off and the cluster waits for an admin, unless they flag a child, which nulls it at once.
+ *
+ * Naming a face says who is in somebody's photograph, so it follows the photograph, as a hand tag does: a group
+ * spread over several members' uploads is named only on this member's own, which leave it as a group of their own,
+ * and the rest wait together for whoever uploaded them (or an admin). The group is locked while that is decided and
+ * done, so a member carving their faces out, an admin naming the whole group and detection adding a face to it take
+ * turns rather than each acting on what the group held before the others changed it.
  */
 export async function nameCluster(clusterId: string, fd: FormData): Promise<void> {
   const user = await requireUserOrThrow();
   const byAdmin = user.role === "ADMIN";
   const v = nameSchema.parse({ name: fd.get("name") ?? undefined, relationship: fd.get("relationship") ?? undefined, birthday: fd.get("birthday") || undefined, personId: fd.get("personId") ?? undefined });
-  const cluster = await db.faceCluster.findUnique({ where: { id: clusterId }, select: { id: true, personId: true } });
-  if (!cluster || cluster.personId) throw new Error("Cluster not found or already named");
   const existing = v.personId ? await db.person.findUniqueOrThrow({ where: { id: v.personId } }) : null;
   if (existing?.optedOutAt) throw new Error("This person asked to be forgotten");
-
-  /**
-   * A group of dogs is a group the detector was wrong about in a gentler way: those are faces, and they are the
-   * family's dog, so the family should be able to say so. A pet has no consent to record and is never recognised by
-   * face template (spotting works from the animal detector), so the templates go and the boxes stay — which is what
-   * makes the chips on those photographs point at the pet.
-   */
-  if (existing?.kind === "PET") {
-    await db.faceCluster.update({ where: { id: clusterId }, data: { personId: existing.id, label: existing.name } });
-    await db.face.updateMany({ where: { clusterId }, data: { personId: existing.id, status: "CONFIRMED" } });
-    await nullTemplatesFor(existing.id);
-    revalidatePath("/people", "layout");
-    revalidatePath("/admin");
-    return;
-  }
-
   const outcome = namingOutcome({
     byAdmin,
     wantIndexing: byAdmin && fd.get("faceIndexing") === "on",
@@ -76,29 +73,135 @@ export async function nameCluster(clusterId: string, fd: FormData): Promise<void
     isChildFlag: !byAdmin && fd.get("isChild") === "on",
   });
   const now = new Date();
-  const person =
-    existing ??
-    (await db.person.create({
-      data: {
-        name: v.name!,
-        relationship: v.relationship,
-        birthday: v.birthday,
-        faceIndexing: outcome.faceIndexing,
-        faceIndexingSetById: byAdmin ? user.id : null,
-        faceIndexingSetAt: byAdmin ? now : null,
-        adultAttestedById: outcome.attested ? user.id : null,
-        adultAttestedAt: outcome.attested ? now : null,
-        pendingDecision: outcome.pendingDecision,
-        createdById: user.id,
-      },
-    }));
+
+  const person = await retryOnDeadlock(() => db.$transaction(async (tx) => {
+    // Somebody already named is read again, held until this commits: an admin switching their recognition off
+    // meanwhile either comes first and is seen here, or waits and nulls what this attaches.
+    const [known] = existing ? await tx.$queryRaw<{ faceIndexing: boolean; kind: string; forgetting: boolean }[]>`SELECT "faceIndexing", kind::text AS kind, ("optedOutAt" IS NOT NULL OR "forgetPendingAt" IS NOT NULL) AS forgetting FROM "Person" WHERE id = ${existing.id} FOR SHARE` : [];
+    if (existing && !known) throw new Error("That person is no longer in the album");
+    // Asked to be forgotten since the page was drawn: their faces are being taken away, not added to.
+    if (known?.forgetting) throw new Error("This person asked to be forgotten");
+    const cluster = await lockCluster(tx, clusterId);
+    if (!cluster || cluster.personId) throw new Error("Cluster not found or already named");
+    // Read under the lock: exactly the faces the group holds now, none of them named.
+    const faces = await tx.face.findMany({ where: { clusterId, personId: null }, select: { id: true, photo: { select: { uploaderId: true } } } });
+    const own = faces.filter((f) => canEditMedia(user, f.photo)).map((f) => f.id);
+    if (!own.length) throw new Error(NOT_YOURS);
+    // Locks are taken group, then faces, then photographs, the order every other writer of faces takes them in
+    // (their writes reach the photograph through face_search_trigger); the faces in id order, so two namings of
+    // groups that share none still never hold one each of a pair.
+    await tx.$queryRaw`SELECT id FROM "Face" WHERE id = ANY(${own}) ORDER BY id FOR UPDATE`;
+    const named = own.length === faces.length ? clusterId : await carveOut(tx, clusterId, own);
+    const who =
+      existing ??
+      (await tx.person.create({
+        data: {
+          name: v.name!,
+          relationship: v.relationship,
+          birthday: v.birthday,
+          faceIndexing: outcome.faceIndexing,
+          faceIndexingSetById: byAdmin ? user.id : null,
+          faceIndexingSetAt: byAdmin ? now : null,
+          adultAttestedById: outcome.attested ? user.id : null,
+          adultAttestedAt: outcome.attested ? now : null,
+          pendingDecision: outcome.pendingDecision,
+          createdById: user.id,
+        },
+      }));
+    await tx.faceCluster.update({ where: { id: named }, data: { personId: who.id, label: who.name } });
+    // Naming a face refreshes its photograph's search text (face_search_trigger), one photo at a time in whatever
+    // order the faces come. Two groups named at once whose faces share photographs would each hold one the other
+    // wants; taking the photographs first, in one order, makes the second wait instead.
+    await tx.$queryRaw`SELECT p.id FROM "Photo" p WHERE p.id IN (SELECT "photoId" FROM "Face" WHERE id = ANY(${own})) ORDER BY p.id FOR NO KEY UPDATE`;
+    // A face the album had proposed as somebody is now this person, and no longer proposed as anybody.
+    await tx.face.updateMany({ where: { id: { in: own }, clusterId: named, personId: null }, data: { personId: who.id, status: "CONFIRMED", proposedPersonId: null } });
+    // Templates nobody may match against go in the same commit as the name (a pet's always: it is spotted by the
+    // animal detector), so a failure after it can never leave them: only the faces and the group just named, which
+    // are locked already. The rest of somebody already named lost theirs when their recognition went off.
+    const nullTemplates = known ? known.kind === "PET" || !known.faceIndexing : outcome.nullTemplates;
+    if (nullTemplates) {
+      await tx.$executeRaw`UPDATE "Face" SET embedding = NULL WHERE id = ANY(${own}) AND "personId" = ${who.id}`;
+      await tx.$executeRaw`UPDATE "FaceCluster" SET centroid = NULL WHERE id = ${named}`;
+    }
+    return { ...who, nullTemplates };
+  }));
+
+  /**
+   * A group of dogs is a group the detector was wrong about in a gentler way: those are faces, and they are the
+   * family's dog, so the family should be able to say so. A pet has no consent to record and is never recognised by
+   * face template (spotting works from the animal detector), so the templates go and the boxes stay — which is what
+   * makes the chips on those photographs point at the pet.
+   */
+  if (existing?.kind === "PET") {
+    // And, as before, anything of theirs a failed naming left behind.
+    await nullTemplatesFor(existing.id);
+    revalidatePath("/people", "layout");
+    revalidatePath("/admin");
+    return;
+  }
+
   // Merging a group into somebody already named (another decade of the same face) follows that person's setting.
-  const effective = existing ? { faceIndexing: existing.faceIndexing, nullTemplates: !existing.faceIndexing, pendingDecision: existing.pendingDecision } : outcome;
-  await db.faceCluster.update({ where: { id: clusterId }, data: { personId: person.id, label: person.name } });
-  await db.face.updateMany({ where: { clusterId }, data: { personId: person.id, status: "CONFIRMED" } });
-  if (effective.nullTemplates) await nullTemplatesFor(person.id);
+  // What the naming attached was nulled with it (by their setting as it stood then); this sweeps up anything of
+  // theirs an earlier failure left.
+  if (person.nullTemplates) await nullTemplatesFor(person.id);
+  // A new name: what was written before it was known is judged again, in the background.
+  if (!existing) await rejudgeFromAction({ people: [person.id] });
   revalidatePath("/people", "layout");
   revalidatePath("/admin");
+}
+
+/**
+ * Run a transaction again, once, when the database chose it to break a deadlock: the other party has finished by
+ * then. Should it happen twice, the member is told plainly rather than shown a database error.
+ */
+async function retryOnDeadlock<T>(run: () => Promise<T>): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await run();
+    } catch (err) {
+      if (!isDeadlock(err)) throw err;
+      if (attempt >= 2) throw new Error("Somebody else was naming faces on the same photos just then. Try again in a moment.");
+    }
+  }
+}
+
+function isDeadlock(err: unknown): boolean {
+  const e = err as { code?: string; meta?: { code?: string }; message?: string } | null;
+  return e?.code === "P2034" || e?.meta?.code === "40P01" || /\b40P01\b|deadlock detected/i.test(e?.message ?? "");
+}
+
+/**
+ * Hold a group still for the rest of the transaction: naming it, taking faces out of it and detection adding to it
+ * (see detectFacesJob) each wait for the others. Null when it is gone.
+ */
+async function lockCluster(tx: Prisma.TransactionClient, clusterId: string): Promise<{ personId: string | null } | null> {
+  const [row] = await tx.$queryRaw<{ personId: string | null }[]>`SELECT "personId" FROM "FaceCluster" WHERE id = ${clusterId} FOR UPDATE`;
+  return row ?? null;
+}
+
+/**
+ * Move some of a locked group's faces into a group of their own and return it. Both centres are made again from the
+ * faces each now holds, as the matcher's are: a copy of the old centre would carry the faces left behind, and the
+ * first of them to be looked at would be proposed as whoever this group is named, as a perfect match.
+ */
+async function carveOut(tx: Prisma.TransactionClient, clusterId: string, faceIds: string[]): Promise<string> {
+  const part = await tx.faceCluster.create({ data: { faceCount: faceIds.length }, select: { id: true } });
+  await tx.face.updateMany({ where: { id: { in: faceIds }, clusterId }, data: { clusterId: part.id } });
+  await rebuildUnnamedCentroids([part.id, clusterId], tx);
+  return part.id;
+}
+
+/**
+ * Whether this member may say who (or what) a face is: the photograph's uploader, and admins, as for a hand tag.
+ * Throws otherwise.
+ */
+async function requireFaceEditor(faceId: string) {
+  const user = await requireUserOrThrow();
+  const face = await db.face.findUnique({ where: { id: faceId }, select: { id: true, clusterId: true, personId: true, proposedPersonId: true, photoId: true, photo: { select: { uploaderId: true } } } });
+  // A re-scan of the photograph can remove a face between the page drawing it and the press.
+  if (!face) throw new Error("That face has changed since the page was drawn");
+  if (!canEditMedia(user, face.photo)) throw new Error(NOT_YOURS);
+  return face;
 }
 
 /** The one-press version of naming: these faces are somebody already named, with nothing to fill in. */
@@ -116,16 +219,20 @@ export async function nameClusterAs(clusterId: string, personId: string): Promis
  * press beside the face rather than a page of its own.
  */
 export async function splitFaceFromCluster(faceId: string): Promise<void> {
-  await requireUserOrThrow();
-  const face = await db.face.findUniqueOrThrow({ where: { id: faceId }, select: { id: true, clusterId: true, personId: true, photoId: true } });
+  const face = await requireFaceEditor(faceId);
   if (face.personId) throw new Error("That face is already named");
   if (!face.clusterId) return;
-  const alone = await db.faceCluster.create({ data: { faceCount: 1 }, select: { id: true } });
-  // The new group keeps this face's own template as its centre, so the matcher can still recognise it later.
-  await db.$executeRaw`UPDATE "FaceCluster" SET centroid = (SELECT embedding FROM "Face" WHERE id = ${faceId}) WHERE id = ${alone.id}`;
   const from = face.clusterId;
-  await db.face.update({ where: { id: faceId }, data: { clusterId: alone.id } });
-  await recountCluster(from);
+  await db.$transaction(async (tx) => {
+    // Named in the meantime, the face went with its group: it is taken off the person's page instead.
+    if ((await lockCluster(tx, from))?.personId !== null) throw new Error("That face is already named");
+    const alone = await tx.faceCluster.create({ data: { faceCount: 1 }, select: { id: true } });
+    // The new group keeps this face's own template as its centre, so the matcher can still recognise it later.
+    await tx.$executeRaw`UPDATE "FaceCluster" SET centroid = (SELECT embedding FROM "Face" WHERE id = ${faceId}) WHERE id = ${alone.id}`;
+    const moved = await tx.face.updateMany({ where: { id: faceId, clusterId: from, personId: null }, data: { clusterId: alone.id } });
+    if (!moved.count) throw new Error("That face has changed since the page was drawn; reload and try again");
+    await settleCluster(tx, from);
+  });
   revalidatePath("/people", "layout");
   revalidatePath(`/photos/${face.photoId}`);
 }
@@ -138,21 +245,27 @@ export async function splitFaceFromCluster(faceId: string): Promise<void> {
  * it alone — delete it and the statue is found again on the next pass, forever.
  */
 export async function markNotAFace(faceId: string): Promise<void> {
-  await requireUserOrThrow();
-  const face = await db.face.findUniqueOrThrow({ where: { id: faceId }, select: { id: true, clusterId: true, personId: true, photoId: true } });
+  const face = await requireFaceEditor(faceId);
   if (face.personId) throw new Error("That face is named; remove the name first");
-  await db.face.update({ where: { id: faceId }, data: { status: "NOT_A_FACE", clusterId: null, proposedPersonId: null } });
-  await db.$executeRaw`UPDATE "Face" SET embedding = NULL WHERE id = ${faceId}`;
-  if (face.clusterId) await recountCluster(face.clusterId);
+  await db.$transaction(async (tx) => {
+    if (face.clusterId && (await lockCluster(tx, face.clusterId))?.personId) throw new Error("That face is named; remove the name first");
+    const marked = await tx.face.updateMany({ where: { id: faceId, personId: null, clusterId: face.clusterId }, data: { status: "NOT_A_FACE", clusterId: null, proposedPersonId: null } });
+    if (!marked.count) throw new Error("That face has changed since the page was drawn");
+    await tx.$executeRaw`UPDATE "Face" SET embedding = NULL WHERE id = ${faceId}`;
+    if (face.clusterId) await settleCluster(tx, face.clusterId);
+  });
   revalidatePath("/people", "layout");
   revalidatePath(`/photos/${face.photoId}`);
 }
 
-/** Keep a group's count honest after a face leaves it, and clear away a group with nothing left in it. */
-async function recountCluster(clusterId: string): Promise<void> {
-  const left = await db.face.count({ where: { clusterId } });
-  if (left === 0) await db.faceCluster.deleteMany({ where: { id: clusterId, personId: null } });
-  else await db.faceCluster.update({ where: { id: clusterId }, data: { faceCount: left } });
+/**
+ * After a face has left a locked unnamed group: clear the group away when nothing is left in it, or make its count
+ * and centre again from what is.
+ */
+async function settleCluster(tx: Prisma.TransactionClient, clusterId: string): Promise<void> {
+  const left = await tx.face.count({ where: { clusterId } });
+  if (left === 0) await tx.faceCluster.deleteMany({ where: { id: clusterId, personId: null } });
+  else await rebuildUnnamedCentroids([clusterId], tx);
 }
 
 /** An admin's decision on a member-named cluster, or a change of a person's indexing switch. */
@@ -163,27 +276,43 @@ export async function decideIndexing(personId: string, fd: FormData): Promise<vo
   const attest = fd.get("attest") === "on";
   // Someone who asked to be forgotten stays off unless the admin records that they have agreed again.
   const agreedAgain = fd.get("agreedAgain") === "on";
-  const wantIndexing = fd.get("faceIndexing") === "on" && (!person.optedOutAt || agreedAgain);
-  const outcome = namingOutcome({ byAdmin: true, wantIndexing, parentInstruction: fd.get("parentInstruction") === "on", birthday, attest, isChildFlag: false });
   const now = new Date();
-  await db.person.update({
-    where: { id: personId },
-    data: {
-      birthday,
-      faceIndexing: outcome.faceIndexing,
-      faceIndexingSetById: admin.id,
-      faceIndexingSetAt: now,
-      adultAttestedById: outcome.attested ? admin.id : person.adultAttestedById,
-      adultAttestedAt: outcome.attested ? now : person.adultAttestedAt,
-      pendingDecision: false,
-    },
+  const named = nameMayLeaveServer(person);
+  // Recognition off and the templates gone in one commit: never a person switched off who keeps them. Whether they
+  // asked to be forgotten is read under the lock, so a switch-on racing a forget never turns them back on.
+  const { after, outcome } = await db.$transaction(async (tx) => {
+    const [locked] = await tx.$queryRaw<{ optedOut: boolean; forgetting: boolean }[]>`SELECT "optedOutAt" IS NOT NULL AS "optedOut", "forgetPendingAt" IS NOT NULL AS forgetting FROM "Person" WHERE id = ${personId} FOR UPDATE`;
+    if (!locked) throw new Error("That person is no longer in the album");
+    const wantIndexing = fd.get("faceIndexing") === "on" && !locked.forgetting && (!locked.optedOut || agreedAgain);
+    const outcome = namingOutcome({ byAdmin: true, wantIndexing, parentInstruction: fd.get("parentInstruction") === "on", birthday, attest, isChildFlag: false });
+    const updated = await tx.person.update({
+      where: { id: personId },
+      data: {
+        birthday,
+        faceIndexing: outcome.faceIndexing,
+        faceIndexingSetById: admin.id,
+        faceIndexingSetAt: now,
+        adultAttestedById: outcome.attested ? admin.id : person.adultAttestedById,
+        adultAttestedAt: outcome.attested ? now : person.adultAttestedAt,
+        pendingDecision: false,
+        // Agreed again, and so no longer opted out: in the same commit as turning them on.
+        ...(!outcome.nullTemplates && agreedAgain ? { optedOutAt: null } : {}),
+      },
+    });
+    if (outcome.nullTemplates) await nullTemplatesFor(personId, tx);
+    return { after: updated, outcome };
   });
-  if (outcome.nullTemplates) await nullTemplatesFor(personId);
-  else {
+  // No longer to be named (recognition off, or a birthday showing a child): what the helper wrote with the name goes.
+  if (named && !nameMayLeaveServer(after)) await forgetNameEverywhere(after);
+  // Evidence they are an adult, however it was recorded: a withdrawal the album made by itself for want of it no
+  // longer needs to scrub anything. Naming stays off until an admin turns it back on.
+  // Only evidence that was missing counts: a Recognition save for somebody whose naming was turned off before, with
+  // evidence already on record, is no decision about naming, which only turning it back on is.
+  if (!knownAdult(person) && knownAdult(after) && after.namingWithdrawnAt) await db.person.update({ where: { id: personId }, data: { namingWithdrawnAt: null } });
+  if (!outcome.nullTemplates) {
     // Enabling later: templates of confirmed faces are recomputed by re-scanning their photos, then open faces are re-matched.
     const photos = await db.face.findMany({ where: { personId, status: "CONFIRMED" }, select: { photoId: true }, distinct: ["photoId"] });
     await db.photo.updateMany({ where: { id: { in: photos.map((p) => p.photoId) } }, data: { facesDetectedAt: null } });
-    if (agreedAgain) await db.person.update({ where: { id: personId }, data: { optedOutAt: null } });
     // The re-scan restores the templates and rebuilds this person's centroids, then proposes for open faces (detect-faces.ts).
     await enqueueFaceDetection(...photos.map((p) => p.photoId));
   }
@@ -192,62 +321,86 @@ export async function decideIndexing(personId: string, fd: FormData): Promise<vo
 }
 
 /**
- * Opt a person out of recognition. Deletes their templates, clusters, proposals and negative examples, removes their
- * name from descriptions and the search index, and stops names reaching the helper. By default their confirmed
- * appearances go too; "keep my name on photos" keeps the non-biometric record only.
+ * Opt a person out of recognition. Deletes their templates, clusters, proposals and negative examples, takes their
+ * name out of everything the helper wrote and out of the members' name index, and stops names reaching the helper.
+ * By default their confirmed appearances go too; "keep my name on photos" keeps the non-biometric record only.
+ * What members wrote by hand is left as they wrote it, and listed for them.
+ *
+ * Whoever added the person, or an admin: either way it rewrites text on other members' photographs, and the default
+ * takes every tag of them off the album for good.
+ *
+ * In an order that is safe to repeat: they are marked opted out first (so nothing proposes, names or indexes them
+ * from that moment), then the text is scrubbed, and only then does anything get deleted — so a run cut short leaves
+ * the faces that say where to scrub, and running it again finds the same photographs.
  */
 export async function optOutPerson(personId: string, fd: FormData): Promise<void> {
-  await requireUserOrThrow();
+  const user = await requireUserOrThrow();
   const keepName = fd.get("mode") === "keep-name";
   const person = await db.person.findUniqueOrThrow({ where: { id: personId } });
-  const photos = await db.face.findMany({ where: { OR: [{ personId }, { proposedPersonId: personId }] }, select: { photoId: true }, distinct: ["photoId"] });
-  await db.faceCluster.deleteMany({ where: { personId } });
-  await db.face.deleteMany({ where: { proposedPersonId: personId } });
-  if (keepName) {
-    await db.$executeRaw`UPDATE "Face" SET embedding = NULL, "clusterId" = NULL WHERE "personId" = ${personId}`;
-    await db.person.update({ where: { id: personId }, data: { faceIndexing: false, pendingDecision: false, keepNameOnPhotos: true, optedOutAt: new Date(), faceIndexingSetAt: new Date() } });
-  } else {
-    await db.face.deleteMany({ where: { personId } });
+  if (!canChangePerson(user, person)) throw new Error(NOT_YOUR_PERSON);
+  // A pet has no face data to forget; it is removed with deletePerson, which gives its detections back.
+  if (person.kind === "PET") throw new Error("A pet is removed, not forgotten");
+  // Without a key to remember their names under, forgetting them would let the names come straight back: they are
+  // switched off at once, and forgotten as soon as the key is set.
+  const later = !keepName && !(await forgetKeyState()).write;
+  try {
+    await forgetPerson(personId, { keepName, byUserId: user.id, later });
+  } catch (err) {
+    // Another forget held the lock for too long: said plainly on the page, not as an error.
+    if (err instanceof ForgetBusyError) redirect(`/people/${personId}?busy=1`);
+    throw err;
   }
-  // Scrub the name from the helper's text on affected items so neither the keyword nor the semantic index carries it.
-  // Two regexes: a global one for replacing, and a non-global one for testing (a global regex's lastIndex would skip tags).
-  const escaped = person.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const replaceAll = new RegExp(escaped, "gi");
-  const mentions = new RegExp(escaped, "i");
-  const scrub = (v: string | null | undefined) => (v ? v.replace(replaceAll, "a family member") : v ?? null);
-  for (const { photoId } of photos) {
-    const p = await db.photo.findUnique({ where: { id: photoId }, select: { annotation: true } });
-    const a = p?.annotation as StoredAnnotation | null;
-    if (a) {
-      const next: StoredAnnotation = {
-        ...a,
-        caption: scrub(a.caption) ?? "",
-        description: scrub(a.description) ?? "",
-        searchSummary: scrub(a.searchSummary) ?? "",
-        place: scrub(a.place),
-        activity: scrub(a.activity),
-        visibleText: scrub(a.visibleText),
-        mood: scrub(a.mood),
-        tags: a.tags.filter((t) => !mentions.test(t)),
-        objects: a.objects.filter((t) => !mentions.test(t)),
-      };
-      await db.photo.update({ where: { id: photoId }, data: { annotation: next } });
-    } else {
-      await db.photo.update({ where: { id: photoId }, data: { updatedAt: new Date() } });
-    }
-    await enqueueEmbedding(photoId, true);
-  }
-  // Forgetting entirely also removes the person page; the record of who is in which photo went with the faces.
-  if (!keepName) await db.person.delete({ where: { id: personId } });
   revalidatePath("/people", "layout");
   revalidatePath("/admin");
-  if (!keepName) redirect("/people");
+  // Either way the page after it says what was done: the person page is gone after a full forget, so that goes to
+  // the list of what is left to edit by hand.
+  if (!keepName && !later) redirect("/people/forgotten?done=1");
+  if (keepName) redirect(`/people/${personId}?forgot=face`);
+}
+
+/**
+ * Allow a forgotten name again: one entry by its place in the list (nothing shown says what it is), or whichever
+ * entry a name an admin types would be. For a name that turned out to be somebody else's too, or an everyday word.
+ */
+export async function allowForgottenName(hash: string): Promise<void> {
+  await requireAdmin();
+  await db.forgottenName.deleteMany({ where: { hash } });
+  revalidatePath("/admin");
+}
+
+export async function allowForgottenNameTyped(fd: FormData): Promise<void> {
+  await requireAdmin();
+  const name = String(fd.get("name") ?? "").trim();
+  const hashes = name ? await forgottenHashesOf(name) : [];
+  if (hashes.length) await db.forgottenName.deleteMany({ where: { hash: { in: hashes } } });
+  revalidatePath("/admin");
+}
+
+/** An admin has seen to a forget's leftovers list. */
+export async function dismissForgetLeftover(id: string): Promise<void> {
+  const user = await requireUserOrThrow();
+  // Admins, or the member who forgot them: the list is theirs.
+  const mine = user.role === "ADMIN" ? {} : { createdById: user.id };
+  // What it listed goes with it: ids and fields only, but nothing is kept about a forgotten person that is not needed.
+  await db.forgetLeftover.updateMany({ where: { id, dismissedAt: null, ...mine }, data: { dismissedAt: new Date(), dismissedById: user.id, items: {} } });
+  revalidatePath("/people/forgotten");
+  revalidatePath("/admin");
+}
+
+/** A rename keeps the old name on record: text the helper wrote under it still names them, and forgetting finds it. */
+function withFormerName(person: { name: string; formerNames: string[] }, next: string): string[] {
+  if (person.name === next) return person.formerNames;
+  return [...new Set([...person.formerNames, person.name])].filter((n) => n !== next);
 }
 
 export async function updatePerson(personId: string, fd: FormData): Promise<void> {
-  await requireUserOrThrow();
+  const user = await requireUserOrThrow();
+  const person = await db.person.findUniqueOrThrow({ where: { id: personId }, select: { createdById: true, name: true, formerNames: true } });
+  if (!canChangePerson(user, person)) throw new Error(NOT_YOUR_PERSON);
   const v = z.object({ name: z.string().trim().min(1).max(80), relationship: z.string().trim().max(80).transform((x) => x || null) }).parse({ name: fd.get("name"), relationship: fd.get("relationship") ?? "" });
-  await db.person.update({ where: { id: personId }, data: { name: v.name, relationship: v.relationship } });
+  await db.person.update({ where: { id: personId }, data: { name: v.name, relationship: v.relationship, formerNames: withFormerName(person, v.name) } });
+  // The old name as well: text written with it is still about them.
+  if (person.name !== v.name) await rejudgeFromAction({ people: [personId] });
   revalidatePath("/people", "layout");
 }
 
@@ -276,10 +429,12 @@ export async function deleteAllFaceData(): Promise<void> {
 
 /** A member confirms a proposal ("Probably Grandma Jo?"). */
 export async function confirmProposal(faceId: string): Promise<void> {
-  await requireUserOrThrow();
+  const user = await requireUserOrThrow();
   // Animal proposals share the list with face proposals under an `animal:` id.
   if (faceId.startsWith("animal:")) {
-    const a = await db.animalDetection.findUniqueOrThrow({ where: { id: faceId.slice(7) }, select: { proposedPersonId: true, photoId: true } });
+    const a = await db.animalDetection.findUniqueOrThrow({ where: { id: faceId.slice(7) }, select: { proposedPersonId: true, photoId: true, photo: { select: { uploaderId: true } } } });
+    // Saying yes tags the pet on the photograph, which is its uploader's (or an admin's) to do, as tagPet is.
+    if (!canEditMedia(user, a.photo)) throw new Error(NOT_YOURS);
     if (!a.proposedPersonId) throw new Error("Nothing proposed for this animal");
     await confirmAnimalAs(faceId.slice(7), a.proposedPersonId);
     await enqueueAnimalMatchAllOpen();
@@ -288,7 +443,7 @@ export async function confirmProposal(faceId: string): Promise<void> {
     revalidatePath("/people", "layout");
     return;
   }
-  const face = await db.face.findUniqueOrThrow({ where: { id: faceId }, select: { proposedPersonId: true, photoId: true } });
+  const face = await requireFaceEditor(faceId);
   if (!face.proposedPersonId) throw new Error("Nothing proposed for this face");
   await confirmFaceAs(faceId, face.proposedPersonId);
   // Saying yes to a pet named in the notes also claims that photo's detected animals of its kind.
@@ -301,15 +456,17 @@ export async function confirmProposal(faceId: string): Promise<void> {
 
 /** A member rejects a proposal; the face stays unnamed and counts against that person from now on. */
 export async function rejectProposalAction(faceId: string): Promise<void> {
-  await requireUserOrThrow();
+  const user = await requireUserOrThrow();
+  // "No" is as much an answer about who is in the photograph as "yes", so it is the same people's to give.
   if (faceId.startsWith("animal:")) {
-    const a = await db.animalDetection.findUniqueOrThrow({ where: { id: faceId.slice(7) }, select: { photoId: true } });
+    const a = await db.animalDetection.findUniqueOrThrow({ where: { id: faceId.slice(7) }, select: { photoId: true, photo: { select: { uploaderId: true } } } });
+    if (!canEditMedia(user, a.photo)) throw new Error(NOT_YOURS);
     await rejectAnimal(faceId.slice(7));
     revalidatePath(`/photos/${a.photoId}`);
     revalidatePath("/review");
     return;
   }
-  const face = await db.face.findUniqueOrThrow({ where: { id: faceId }, select: { photoId: true } });
+  const face = await requireFaceEditor(faceId);
   await rejectProposal(faceId);
   revalidatePath(`/photos/${face.photoId}`);
   revalidatePath("/review");
@@ -317,8 +474,8 @@ export async function rejectProposalAction(faceId: string): Promise<void> {
 
 /** Name one unnamed face by hand (a person with no era cluster near enough, or a face the matcher missed). */
 export async function nameFace(faceId: string, personId: string): Promise<void> {
-  await requireUserOrThrow();
-  const face = await db.face.findUniqueOrThrow({ where: { id: faceId }, select: { photoId: true, personId: true } });
+  // Tagging by hand and naming a found face say the same thing about the photograph, so the same people may.
+  const face = await requireFaceEditor(faceId);
   if (face.personId) throw new Error("Already named");
   const target = await db.person.findUniqueOrThrow({ where: { id: personId }, select: { optedOutAt: true } });
   if (target.optedOutAt) throw new Error("This person asked to be forgotten");
@@ -354,11 +511,18 @@ export async function tagPersonAt(photoId: string, fd: FormData): Promise<void> 
   const person = v.personId
     ? await db.person.findUniqueOrThrow({ where: { id: v.personId } })
     : await db.person.create({ data: { name: v.name!, kind: "HUMAN", createdById: user.id } });
-  if (person.optedOutAt) throw new Error("This person asked to be forgotten");
-  // One tag per person per photograph: tagging somebody twice moves their box rather than stacking another.
-  const already = await db.face.findFirst({ where: { photoId, personId: person.id, confidence: 0 }, select: { id: true } });
-  if (already) await db.face.update({ where: { id: already.id }, data: { box } });
-  else await db.face.create({ data: { photoId, personId: person.id, status: "CONFIRMED", box, confidence: 0 } });
+  if (!v.personId) await rejudgeFromAction({ people: [person.id] });
+  // Whether they asked to be forgotten is read under a lock until the tag is written, as confirming a face reads it:
+  // a forget that has begun is not tagged onto a photograph it never looked at.
+  await db.$transaction(async (tx) => {
+    const [locked] = await tx.$queryRaw<{ forgetting: boolean }[]>`SELECT ("optedOutAt" IS NOT NULL OR "forgetPendingAt" IS NOT NULL) AS forgetting FROM "Person" WHERE id = ${person.id} FOR SHARE`;
+    if (!locked) throw new Error("That person is no longer in the album");
+    if (locked.forgetting) throw new Error("This person asked to be forgotten");
+    // One tag per person per photograph: tagging somebody twice moves their box rather than stacking another.
+    const already = await tx.face.findFirst({ where: { photoId, personId: person.id, confidence: 0 }, select: { id: true } });
+    if (already) await tx.face.update({ where: { id: already.id }, data: { box } });
+    else await tx.face.create({ data: { photoId, personId: person.id, status: "CONFIRMED", box, confidence: 0 } });
+  });
   if (person.kind === "PET" && (await claimAnimalsForPet(photoId, person.id)) > 0) await enqueueAnimalMatchAllOpen();
   revalidatePath(`/photos/${photoId}`);
   revalidatePath("/people", "layout");
@@ -367,22 +531,85 @@ export async function tagPersonAt(photoId: string, fd: FormData): Promise<void> 
 /** Take a hand tag off a photograph, leaving anything the detector found alone. */
 export async function untagPersonAt(faceId: string): Promise<void> {
   const user = await requireUserOrThrow();
-  const face = await db.face.findUniqueOrThrow({ where: { id: faceId }, select: { photoId: true, confidence: true, photo: { select: { uploaderId: true } } } });
+  const face = await db.face.findUniqueOrThrow({ where: { id: faceId }, select: { photoId: true, personId: true, confidence: true, photo: { select: { uploaderId: true } } } });
   if (!canEditMedia(user, face.photo)) throw new Error(NOT_YOURS);
   if (face.confidence !== 0) throw new Error("That one was found by the album; remove the name from the chip instead");
   await db.face.delete({ where: { id: faceId } });
+  if (face.personId) await forgetIfNoLongerOn(face.photoId, face.personId);
   revalidatePath(`/photos/${face.photoId}`);
   revalidatePath("/people", "layout");
 }
 
-/** An admin records that this person is happy to be named in the descriptions the helper writes. */
+/**
+ * An admin records that this person is happy to be named in the descriptions the helper writes.
+ *
+ * Only for somebody the album knows to be an adult — a birthday showing 18 or older, or the adult attestation —
+ * because a child is never named, and a person with no birthday on record may well be one: tagging a six-year-old
+ * by hand records no birthday at all.
+ */
 export async function setNameInDescriptions(personId: string, on: boolean): Promise<void> {
   const admin = await requireAdmin();
-  const person = await db.person.findUniqueOrThrow({ where: { id: personId }, select: { optedOutAt: true } });
+  const person = await db.person.findUniqueOrThrow({ where: { id: personId } });
   if (on && person.optedOutAt) throw new Error("This person asked to be forgotten");
-  await db.person.update({ where: { id: personId }, data: { nameInDescriptions: on, nameInDescriptionsSetById: admin.id, nameInDescriptionsSetAt: new Date() } });
+  if (on && !knownAdult(person)) throw new Error("Record a birthday showing an adult, or the adult attestation, before naming them");
+  const after = await db.person.update({ where: { id: personId }, data: { nameInDescriptions: on, nameInDescriptionsSetById: admin.id, nameInDescriptionsSetAt: new Date(), ...(on ? { namingWithdrawnAt: null } : {}) } });
+  // Withdrawn: what the helper already wrote with the name goes too, not only what it will write.
+  if (nameMayLeaveServer(person) && !nameMayLeaveServer(after)) await forgetNameEverywhere(after);
+  // Naming decided against: no longer a child the relaxed name check is for, so what it let out is judged again.
+  if (!on && (await anyRelaxedRelease())) await rejudgeFromAction({ recheck: {} });
   revalidatePath("/people", "layout");
   revalidatePath("/privacy");
+}
+
+/**
+ * The evidence naming needs, recorded where naming is decided: a birthday, or an admin's word that this person is
+ * an adult. Separate from recognition, whose own switch is still an admin's separate decision; this only says how
+ * old they are. With it in place, naming is turned on in the same step.
+ */
+export async function recordAdultAndName(personId: string, fd: FormData): Promise<void> {
+  const admin = await requireAdmin();
+  const person = await db.person.findUniqueOrThrow({ where: { id: personId } });
+  if (person.optedOutAt) throw new Error("This person asked to be forgotten");
+  const birthday = day.parse(fd.get("birthday") || undefined) ?? person.birthday;
+  const attest = !birthday && fd.get("attestAdult") === "on";
+  const now = new Date();
+  const evidence = { birthday, adultAttestedAt: person.adultAttestedAt, adultConfirmedAt: attest ? now : person.adultConfirmedAt };
+  if (!knownAdult(evidence)) throw new Error("A birthday showing 18 or older, or the confirmation that they are an adult, is needed to name them");
+  await db.person.update({
+    where: { id: personId },
+    data: { birthday, ...(attest ? { adultConfirmedAt: now, adultConfirmedById: admin.id } : {}), nameInDescriptions: true, nameInDescriptionsSetById: admin.id, nameInDescriptionsSetAt: now, namingWithdrawnAt: null },
+  });
+  revalidatePath("/people", "layout");
+  revalidatePath("/privacy");
+}
+
+/**
+ * An admin's answer to a naming the album switched off by itself: take the names out of the helper's text now
+ * rather than at the end of the fortnight. (The other answer is to record a birthday or an adult confirmation.)
+ */
+export async function scrubWithdrawnNow(personId: string): Promise<void> {
+  await requireAdmin();
+  const person = await db.person.findUniqueOrThrow({ where: { id: personId }, select: { id: true, name: true, formerNames: true, namingWithdrawnAt: true } });
+  if (!person.namingWithdrawnAt) return;
+  await forgetNameEverywhere(person);
+  await db.person.update({ where: { id: personId }, data: { namingWithdrawnAt: null } });
+  revalidatePath("/people", "layout");
+  revalidatePath("/admin");
+}
+
+/**
+ * Somebody taken off a photograph was named in what the helper wrote about it because they were on it; the name
+ * goes from that one item's machine-written text, unless they are still on it some other way.
+ */
+async function forgetIfNoLongerOn(photoId: string, personId: string): Promise<void> {
+  const [face, animal] = await Promise.all([
+    db.face.findFirst({ where: { photoId, personId, status: "CONFIRMED" }, select: { id: true } }),
+    db.animalDetection.findFirst({ where: { photoId, personId, status: "CONFIRMED" }, select: { id: true } }),
+  ]);
+  if (face || animal) return;
+  const person = await db.person.findUnique({ where: { id: personId }, select: { id: true, name: true, formerNames: true } });
+  if (person) await forgetOnPhoto(photoId, person);
+  else await stampScrubbed([photoId]);
 }
 
 const petSchema = z.object({
@@ -398,14 +625,19 @@ const petSchema = z.object({
 export async function createPet(fd: FormData): Promise<void> {
   const user = await requireUserOrThrow();
   const v = petSchema.parse({ name: fd.get("name"), species: fd.get("species"), livedFrom: fd.get("livedFrom") || undefined, livedTo: fd.get("livedTo") || undefined, isFlock: fd.get("isFlock") === "on", descriptors: fd.get("descriptors") ?? undefined });
-  await db.person.create({ data: { kind: "PET", name: v.name, species: v.species, livedFrom: v.livedFrom, livedTo: v.livedTo, isFlock: v.isFlock, descriptors: v.descriptors, createdById: user.id } });
+  const pet = await db.person.create({ data: { kind: "PET", name: v.name, species: v.species, livedFrom: v.livedFrom, livedTo: v.livedTo, isFlock: v.isFlock, descriptors: v.descriptors, createdById: user.id } });
+  await rejudgeFromAction({ people: [pet.id] });
   revalidatePath("/people", "layout");
 }
 
 export async function updatePet(personId: string, fd: FormData): Promise<void> {
-  await requireUserOrThrow();
+  const user = await requireUserOrThrow();
+  const pet = await db.person.findUniqueOrThrow({ where: { id: personId }, select: { createdById: true, name: true, formerNames: true } });
+  if (!canChangePerson(user, pet)) throw new Error(NOT_YOUR_PERSON);
   const v = petSchema.parse({ name: fd.get("name"), species: fd.get("species"), livedFrom: fd.get("livedFrom") || undefined, livedTo: fd.get("livedTo") || undefined, isFlock: fd.get("isFlock") === "on", descriptors: fd.get("descriptors") ?? undefined });
-  await db.person.update({ where: { id: personId, kind: "PET" }, data: { name: v.name, species: v.species, livedFrom: v.livedFrom, livedTo: v.livedTo, isFlock: v.isFlock, descriptors: v.descriptors } });
+  await db.person.update({ where: { id: personId, kind: "PET" }, data: { name: v.name, formerNames: withFormerName(pet, v.name), species: v.species, livedFrom: v.livedFrom, livedTo: v.livedTo, isFlock: v.isFlock, descriptors: v.descriptors } });
+  // The old name as well: text written with it is still about them.
+  if (pet.name !== v.name) await rejudgeFromAction({ people: [personId] });
   revalidatePath("/people", "layout");
 }
 
@@ -438,6 +670,7 @@ export async function untagPerson(photoId: string, personId: string): Promise<vo
   await db.face.deleteMany({ where: { photoId, personId, confidence: 0 } });
   await db.face.updateMany({ where: { photoId, personId, confidence: { gt: 0 } }, data: { personId: null, status: "REJECTED", proposedPersonId: personId, clusterId: null } });
   await releaseAnimalsForPet(photoId, personId);
+  await forgetIfNoLongerOn(photoId, personId);
   revalidatePath(`/photos/${photoId}`);
   revalidatePath("/people", "layout");
 }
@@ -447,7 +680,12 @@ export async function deletePerson(personId: string): Promise<void> {
   await requireAdmin();
   // Its detections go back to being unclaimed animals rather than confirmed rows pointing at nobody.
   await db.animalDetection.updateMany({ where: { OR: [{ personId }, { proposedPersonId: personId }] }, data: { personId: null, proposedPersonId: null, status: "DETECTED" } });
-  await db.person.delete({ where: { id: personId, kind: "PET" } });
+  // Its judged names go with the record. Judging jobs queued for it carry only its id, which finds nothing once it
+  // is gone; one queued before jobs carried ids holds the name until the next sweep clears it (dropLegacyRejudgeJobs).
+  await db.$transaction(async (tx) => {
+    await forgetJudgedNames(tx, `person:${personId}`);
+    await tx.person.delete({ where: { id: personId, kind: "PET" } });
+  });
   revalidatePath("/people", "layout");
   redirect("/people");
 }

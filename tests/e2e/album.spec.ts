@@ -4,10 +4,12 @@ import fs from "node:fs";
 import { randomUUID } from "node:crypto";
 import sharp from "sharp";
 import { stillIsBlank } from "@/lib/images/poster";
-import { createTrip, resetDb, setVisibility, signIn, withDb } from "./helpers";
+import { createTrip, expectOneSetOfMetadata, inviteFor, magicLinkFor, pressSignIn, resetDb, setVisibility, signIn, withDb } from "./helpers";
 
 // Must match ADMIN_EMAIL as set by scripts/e2e-server.mjs: only that address may bootstrap the admin account.
 const ADMIN = process.env.E2E_ADMIN_EMAIL ?? "e2e-admin@example.com";
+// What the album calls the admin, who has no display name here: the part of the address before the @ (uploaderLabel).
+const ADMIN_LABEL = ADMIN.split("@")[0];
 const fixture = (n: string) => path.join(__dirname, "../fixtures", n);
 
 /**
@@ -76,13 +78,27 @@ test("a used or bad sign-in link is rejected", async ({ page }) => {
   await expect(page.getByText("isn't valid")).toBeVisible();
 });
 
+test("opening a sign-in link does not use it up; only its Sign in button does", async ({ page }) => {
+  // A mail scanner fetching the link first must leave it working for the person.
+  const link = await magicLinkFor(ADMIN);
+  await page.goto(link);
+  await page.goto(link);
+  await expect(page.getByText("Signing in as e•••@example.com")).toBeVisible();
+  await pressSignIn(page);
+  await page.waitForURL("**/");
+  // Signed out again, since the sign-in page sends a member straight on.
+  await page.context().clearCookies();
+  await page.goto(link);
+  await expect(page).toHaveURL(/\/auth\/signin\?error=used/);
+});
+
 test("uploading a photo processes it and assigns it to the trip by date", async ({ context, page }) => {
   await signIn(context, ADMIN);
   await createTrip({ slug: "acadia", title: "Acadia", start: "2025-08-10", end: "2025-08-16", ownerEmail: ADMIN });
   await page.goto("/upload");
   await chooseFile(page, "photo-with-gps.jpg");
   await expect(page.locator("img[src*='/api/photos/']")).toBeVisible({ timeout: 30_000 });
-  await expect(page.getByText("1 of 1 uploaded.")).toBeVisible();
+  await expect(page.getByTestId("upload-progress")).toHaveText("All 1 uploaded.");
   await page.goto("/trips/acadia/photos");
   await expect(page.getByRole("heading", { name: /1 photo/ })).toBeVisible();
   const row = await withDb((c) => c.query('SELECT id, status, "takenAtSource", lat FROM "Photo" LIMIT 1'));
@@ -97,7 +113,7 @@ test("uploading a photo processes it and assigns it to the trip by date", async 
   await place.getByRole("button", { name: /Jordan Pond, Mount Desert Island/ }).click();
   await place.getByRole("button", { name: "Save place" }).click();
   // The label names whoever pinned it, falling back to the part of their address before the @.
-  await expect(place.getByText("set by e2e-admin")).toBeVisible();
+  await expect(place.getByText(`set by ${ADMIN_LABEL}`)).toBeVisible();
   // What was looked up is what the place is called: the coordinates are shown under the name, not instead of it.
   await expect(place.getByTestId("place-name")).toHaveText(/Jordan Pond/);
   await expect(place.getByText("44.32600, -68.25300")).toBeVisible();
@@ -147,7 +163,10 @@ test("the map across everything shows a photo that is on no trip", async ({ cont
   const payload = await page.request.get("/api/map/geojson");
   expect(payload.ok()).toBe(true);
   const body = await payload.json();
-  expect(body.photos.features.map((f: { properties: { id: string } }) => f.properties.id)).toContain("e2eloosephoto");
+  // A pin is sent as [id, lng, lat, day, …ring slots]; what it is comes when it is clicked.
+  expect(body.photos.points.map((p: [string]) => p[0])).toContain("e2eloosephoto");
+  const clicked = await (await page.request.get("/api/map/photos?ids=e2eloosephoto")).json();
+  expect(clicked.photos).toEqual([expect.objectContaining({ id: "e2eloosephoto", trip: null, uploadedBy: expect.any(String) })]);
   await withDb((c) => c.query(`DELETE FROM "Photo" WHERE id = 'e2eloosephoto'`));
 });
 
@@ -156,7 +175,13 @@ test("importing a GPX file creates an activity with stats and a track on the map
   await page.goto("/trips/acadia/import");
   await chooseFile(page, "sample-hr.gpx");
   await expect(page.getByRole("link", { name: "Ocean Path loop" })).toBeVisible({ timeout: 60_000 });
-  await page.getByRole("link", { name: "Ocean Path loop" }).click();
+  // The same file again says so rather than adding the ride twice.
+  await page.goto("/trips/acadia/import");
+  await chooseFile(page, "sample-hr.gpx");
+  await expect(page.getByText(/Ocean Path loop: already on this trip/)).toBeVisible({ timeout: 60_000 });
+  const act = await withDb((c) => c.query(`SELECT a.id FROM "Activity" a JOIN "Trip" t ON t.id = a."tripId" WHERE t.slug = 'acadia' AND a.title = 'Ocean Path loop'`));
+  expect(act.rows).toHaveLength(1);
+  await page.goto(`/trips/acadia/activities/${act.rows[0].id}`);
   await expect(page.getByText("Distance")).toBeVisible();
   await expect(page.getByText("Avg heart rate")).toBeVisible();
   await expect(page.getByText(/136 bpm/)).toBeVisible();
@@ -178,6 +203,7 @@ test("a share link opens the trip read-only, and stops working when rotated", as
   const page = await anon.newPage();
   await page.goto("/share/e2e-share-token/photos");
   await expect(page.getByText("Shared with you")).toBeVisible();
+  await expectOneSetOfMetadata(page);
   const img = page.locator("img[src*='/api/photos/']").first();
   await expect(img).toBeVisible();
   await expect.poll(async () => img.evaluate((el: HTMLImageElement) => el.naturalWidth)).toBeGreaterThan(0);
@@ -238,6 +264,20 @@ test("public trips are browsable anonymously without edit controls", async ({ br
   await expect(page.locator('meta[property="og:description"]')).toHaveAttribute("content", /\w/);
   await expect(page.locator('meta[name="twitter:card"]')).toHaveAttribute("content", "summary_large_image");
   await expect(page.getByRole("link", { name: "Settings" })).toHaveCount(0);
+  // A second click opens the photograph full size, as it does for the family: a copy made for visitors, with none
+  // of the file's EXIF (its GPS included) or its name on it.
+  const still = await withDb((c) => c.query(`SELECT p.id FROM "Photo" p JOIN "Trip" t ON t.id = p."tripId" WHERE t.slug = 'acadia' AND p."originalName" = 'photo-with-gps.jpg' AND p.status = 'READY' AND p."trashedAt" IS NULL LIMIT 1`));
+  await page.goto("/trips/acadia/photos");
+  await page.locator(`button:has(img[src*='/api/photos/${still.rows[0].id}/'])`).first().click();
+  const full = page.getByRole("dialog", { name: "Photo viewer" }).locator(`a[href*='/api/photos/${still.rows[0].id}/edited']`);
+  await expect(full).toBeVisible();
+  const copy = await page.request.get((await full.getAttribute("href"))!);
+  expect(copy.ok()).toBe(true);
+  expect(copy.headers()["content-type"]).toMatch(/^image\/(webp|jpeg)/);
+  expect(copy.headers()["content-disposition"]).toBeUndefined();
+  const copied = await copy.body();
+  for (const marker of ["Exif", "EXIF", "photo-with-gps"]) expect(copied.includes(marker)).toBe(false);
+  await page.keyboard.press("Escape");
   await page.goto("/trips/acadia/settings");
   await expect(page).toHaveURL(/\/auth\/signin/);
   await setVisibility("acadia", "PRIVATE");
@@ -271,10 +311,21 @@ test("one activity can be sent on its own link, which opens it and nothing else 
   const guest = await anon.newPage();
   await guest.goto(`/share/a/${token}`);
   await expect(guest.getByText("Shared with you")).toBeVisible();
+  await expectOneSetOfMetadata(guest);
   await expect(guest.getByRole("heading", { name: "Ocean Path loop" })).toBeVisible();
   const img = guest.locator("img[src*='/api/photos/']").first();
   await expect(img).toBeVisible();
   await expect.poll(async () => img.evaluate((el: HTMLImageElement) => el.naturalWidth)).toBeGreaterThan(0);
+
+  // Its map and charts load from the activity alone, though the trip is private; the trip's own map stays shut.
+  const trackId = (await withDb((c) => c.query(`SELECT "trackId" FROM "Activity" WHERE id = $1`, [activityId]))).rows[0].trackId as string;
+  const map = await guest.request.get(`/api/activities/${activityId}/geojson`);
+  expect(map.status()).toBe(200);
+  const payload = await map.json();
+  expect(payload.tracks.features.map((f: { properties: { trackId: string } }) => f.properties.trackId)).toEqual([trackId]);
+  for (const f of [...payload.tracks.features, ...payload.photos.features]) expect(f.properties).toMatchObject({ activityId, tripSlug: "", tripTitle: "", uploaderName: null });
+  expect((await guest.request.get(`/api/tracks/${trackId}/points`)).status()).toBe(200);
+  expect((await guest.request.get("/api/trips/acadia/geojson")).status()).toBe(404);
 
   await withDb((c) => c.query(`UPDATE "Photo" SET "activityId" = NULL WHERE id = $1`, [photoId]));
 
@@ -289,8 +340,11 @@ test("one activity can be sent on its own link, which opens it and nothing else 
   await page.getByTestId("activity-share-rotate").click();
   await expect(page.getByTestId("activity-shared")).toBeVisible();
   const stale = await anon.newPage();
-  await stale.goto(`/share/a/${token}`);
+  // A real 404, not a "Not found" page sent as 200: nothing streams before the link is found to be dead.
+  expect((await stale.goto(`/share/a/${token}`))?.status()).toBe(404);
   await expect(stale.getByRole("heading", { name: "Ocean Path loop" })).toHaveCount(0);
+  expect((await stale.goto("/share/not-a-real-token"))?.status()).toBe(404);
+  expect((await stale.goto("/trips/no-such-trip"))?.status()).toBe(404);
 
   // And stopping sharing closes it altogether.
   const fresh = (await withDb((c) => c.query(`SELECT "shareToken" FROM "Activity" WHERE id = $1`, [activityId]))).rows[0].shareToken as string;
@@ -362,11 +416,16 @@ test("a trip can say who was on it, and stops collecting everybody else's photog
 
   // Nobody named yet: the album files by date alone, so somebody who was never in Maine collects the trip anyway.
   const outside = await browser.newContext();
+  // Only an invited address may turn a sign-in link into an account.
+  await inviteFor(other);
   await signIn(outside, other);
   const theirs = await outside.newPage();
+  // A plain member sent away from the admin page is told why, not bounced home in silence.
+  await theirs.goto("/admin");
+  await expect(theirs.getByTestId("admins-only")).toBeVisible();
   await theirs.goto("/upload");
   await chooseFile(theirs, "photo-with-gps.jpg");
-  await expect(theirs.getByText("1 of 1 uploaded.")).toBeVisible({ timeout: 30_000 });
+  await expect(theirs.getByTestId("upload-progress")).toHaveText("All 1 uploaded.", { timeout: 30_000 });
   const swept = await withDb((c) => c.query(`SELECT p.id, t.slug FROM "Photo" p LEFT JOIN "Trip" t ON t.id = p."tripId" JOIN "User" u ON u.id = p."uploaderId" WHERE u.email = $1 ORDER BY p."createdAt" DESC LIMIT 1`, [other]));
   expect(swept.rows[0].slug).toBe("acadia");
   await withDb((c) => c.query(`UPDATE "Photo" SET "trashedAt" = now() WHERE id = $1`, [swept.rows[0].id]));
@@ -374,7 +433,7 @@ test("a trip can say who was on it, and stops collecting everybody else's photog
   // Say who was on the trip: the admin, and not them.
   await page.goto("/trips/acadia/settings");
   await page.getByTestId("trip-who-open").click();
-  await page.getByTestId("trip-who").getByLabel("e2e-admin@example.com").check();
+  await page.getByTestId("trip-who").getByLabel(ADMIN, { exact: true }).check();
   await page.getByRole("button", { name: "Save changes" }).click();
   await expect(page).toHaveURL(/saved=1/);
   const named = await withDb((c) => c.query(`SELECT u.email FROM "_TripParticipants" tp JOIN "User" u ON u.id = tp."B" JOIN "Trip" t ON t.id = tp."A" WHERE t.slug = 'acadia'`));
@@ -383,7 +442,7 @@ test("a trip can say who was on it, and stops collecting everybody else's photog
   // The same photograph, uploaded again by the same outsider, is no longer swept onto the trip.
   await theirs.goto("/upload");
   await chooseFile(theirs, "photo-with-gps.jpg");
-  await expect(theirs.getByText("1 of 1 uploaded.")).toBeVisible({ timeout: 30_000 });
+  await expect(theirs.getByTestId("upload-progress")).toHaveText("All 1 uploaded.", { timeout: 30_000 });
   await expect
     .poll(async () => (await withDb((c) => c.query(`SELECT p.status, p."tripId" FROM "Photo" p JOIN "User" u ON u.id = p."uploaderId" WHERE u.email = $1 AND p."trashedAt" IS NULL ORDER BY p."createdAt" DESC LIMIT 1`, [other]))).rows[0], { timeout: 30_000 })
     .toMatchObject({ status: "READY", tripId: null });
@@ -391,7 +450,7 @@ test("a trip can say who was on it, and stops collecting everybody else's photog
   // And the admin's own photographs still land on it, because they are named.
   await page.goto("/upload");
   await chooseFile(page, "photo-with-gps.jpg");
-  await expect(page.getByText("1 of 1 uploaded.")).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("upload-progress")).toHaveText("All 1 uploaded.", { timeout: 30_000 });
   const minePicked = await withDb((c) => c.query(`SELECT p.id FROM "Photo" p JOIN "User" u ON u.id = p."uploaderId" WHERE u.email = $1 ORDER BY p."createdAt" DESC LIMIT 1`, [ADMIN]));
   await expect
     .poll(async () => (await withDb((c) => c.query(`SELECT t.slug FROM "Photo" p LEFT JOIN "Trip" t ON t.id = p."tripId" WHERE p.id = $1`, [minePicked.rows[0].id]))).rows[0].slug, { timeout: 30_000 })
@@ -399,7 +458,7 @@ test("a trip can say who was on it, and stops collecting everybody else's photog
 
   // Put it back to everybody, so the rest of the file sees the trip it expects.
   await page.goto("/trips/acadia/settings");
-  await page.getByTestId("trip-who").getByLabel("e2e-admin@example.com").uncheck();
+  await page.getByTestId("trip-who").getByLabel(ADMIN, { exact: true }).uncheck();
   await page.getByRole("button", { name: "Save changes" }).click();
   await expect(page).toHaveURL(/saved=1/);
   const cleared = await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "_TripParticipants"`));
@@ -452,11 +511,23 @@ test("a photograph can be taken off an activity and stays on the trip", async ({
   await expect(page.getByRole("status")).toContainText("still on the trip");
   await expect(page.locator(`li.tile-lazy:has(img[src*='/api/photos/${onIt}/'])`)).toHaveCount(0);
 
-  // Off the outing, still in the album: the trip keeps it, under its own day.
-  const after = await withDb((c) => c.query(`SELECT "activityId", "tripId", "trashedAt" FROM "Photo" WHERE id = $1`, [onIt]));
-  expect(after.rows[0].activityId).toBeNull();
-  expect(after.rows[0].trashedAt).toBeNull();
-  expect(after.rows[0].tripId).not.toBeNull();
+  const takenAt = (await withDb((c) => c.query(`SELECT "takenAt" FROM "Photo" WHERE id = $1`, [onIt]))).rows[0].takenAt;
+  try {
+    // Off the outing, still in the album: the trip keeps it, under its own day.
+    const after = await withDb((c) => c.query(`SELECT "activityId", "tripId", "trashedAt", "activitySetById" FROM "Photo" WHERE id = $1`, [onIt]));
+    expect(after.rows[0].activityId).toBeNull();
+    expect(after.rows[0].trashedAt).toBeNull();
+    expect(after.rows[0].tripId).not.toBeNull();
+    // Recorded as somebody's choice, so saving the outing again does not put it straight back.
+    expect(after.rows[0].activitySetById).not.toBeNull();
+    await withDb((c) => c.query(`UPDATE "Photo" SET "takenAt" = a."startTime" FROM "Activity" a WHERE a.id = $2 AND "Photo".id = $1`, [onIt, activityId]));
+    await page.goto(`/trips/acadia/activities/${activityId}?edit=1`);
+    await page.getByRole("button", { name: "Save" }).click();
+    await page.waitForURL(`**/activities/${activityId}`);
+    expect((await withDb((c) => c.query(`SELECT "activityId" FROM "Photo" WHERE id = $1`, [onIt]))).rows[0].activityId).toBeNull();
+  } finally {
+    await withDb((c) => c.query(`UPDATE "Photo" SET "activityId" = NULL, "activitySetById" = NULL, "takenAt" = $2 WHERE id = $1`, [onIt, takenAt]));
+  }
 });
 
 test("the guide is a page anyone can read, with the same words available as a PDF", async ({ page }) => {
@@ -483,7 +554,7 @@ test("a collection gathers photos from two trips and can be shared by link", asy
   await page.goto("/upload?trip=yosemite");
   await chooseFile(page, "photo-no-gps.jpg");
   await expect(page.locator("img[src*='/api/photos/']")).toBeVisible({ timeout: 30_000 });
-  await expect(page.getByText("1 of 1 uploaded.")).toBeVisible();
+  await expect(page.getByTestId("upload-progress")).toHaveText("All 1 uploaded.");
 
   await page.goto("/collections/new");
   await page.getByLabel("Title").fill("Best of 2025");
@@ -543,6 +614,7 @@ test("a collection gathers photos from two trips and can be shared by link", asy
   await expect(anonPage).toHaveURL(/\/auth\/signin/);
   await anonPage.goto(shareUrl);
   await expect(anonPage.getByText("Shared with you")).toBeVisible();
+  await expectOneSetOfMetadata(anonPage);
   const imgs = anonPage.locator("img[src*='/api/photos/']");
   await expect(imgs).toHaveCount(2);
   for (const img of await imgs.all()) await expect.poll(async () => img.evaluate((el: HTMLImageElement) => el.naturalWidth)).toBeGreaterThan(0);
@@ -593,6 +665,12 @@ test("exposure warnings fire when widening and when lowering, and bulk actions a
   await expect(page.getByRole("heading", { name: "Photos without a trip" })).toBeVisible();
   await page.getByRole("button", { name: "Select photos" }).click();
   await page.locator("li button").first().click();
+  // Tabbing past the picker closes its list rather than leaving it over the buttons that follow (#129).
+  const collectionPicker = page.getByLabel("Add to collection…");
+  await collectionPicker.focus();
+  await expect(collectionPicker).toHaveAttribute("aria-expanded", "true");
+  await page.keyboard.press("Tab");
+  await expect(collectionPicker).toHaveAttribute("aria-expanded", "false");
   // The picker searches instead of listing everything; typing a couple of letters is enough.
   await page.getByLabel("Add to collection…").fill("Best of");
   await page.getByRole("option", { name: /Best of 2025/ }).click();
@@ -613,7 +691,7 @@ test("exposure warnings fire when widening and when lowering, and bulk actions a
   // Uploader names are a members-only layer.
   await page.goto("/collections/best-of-2025/photos");
   await page.locator("li button").first().click();
-  await expect(page.getByText("Uploaded by e2e-admin").first()).toBeVisible();
+  await expect(page.getByText(`Uploaded by ${ADMIN_LABEL}`).first()).toBeVisible();
   const anon = await browser.newContext();
   const anonPage = await anon.newPage();
   await anonPage.goto("/collections/best-of-2025/photos");
@@ -736,15 +814,16 @@ test("notes from the review screen and the item page are searchable, within what
 
   await page.goto("/search?q=lobster");
   await expect(page.getByRole("status")).toContainText("1 result");
-  await expect(page.getByText("Uploaded by e2e-admin").first()).toBeVisible();
+  await expect(page.getByText(`Uploaded by ${ADMIN_LABEL}`).first()).toBeVisible();
   await page.goto("/search?q=Mock+video");
   await expect(page.getByRole("status")).toContainText("1 result");
 
-  // Anonymous: the Acadia photo is public through the collection; the YouTube video sits on a private trip.
+  // Anonymous: the Acadia photo is public through the collection, but "lobster" is only in its notes, which are the
+  // family's; the YouTube video sits on a private trip.
   const anon = await browser.newContext();
   const anonPage = await anon.newPage();
   await anonPage.goto("/search?q=lobster");
-  await expect(anonPage.getByRole("status")).toContainText("1 result");
+  await expect(anonPage.getByRole("status")).toContainText("Nothing matches");
   await expect(anonPage.getByText(/Uploaded by/)).toHaveCount(0);
   await expect(anonPage.getByLabel("Uploaded by")).toHaveCount(0);
   await anonPage.goto("/search?q=Mock+video");
@@ -760,6 +839,8 @@ test("the AI helper describes reviewed items once an admin opts in, and opted-ou
   await page.goto("/admin");
   // Exactly the badge on the annotation panel: the Admin page is long, and a loose match finds other prose.
   await expect(page.getByText("nothing is sent", { exact: true })).toBeVisible();
+  // The test album's storage belongs to its database: the reset keeps the install marker in step.
+  await expect(page.getByTestId("install-identity-problem")).toHaveCount(0);
   await page.getByRole("button", { name: "Turn on annotation" }).click();
   await expect(page.getByText("sending new items after review")).toBeVisible();
 
@@ -783,8 +864,12 @@ test("the AI helper describes reviewed items once an admin opts in, and opted-ou
     }, { timeout: 30_000, intervals: [1000] })
     .toBe(1);
   await expect(page.getByLabel("Caption", { exact: true }).nth(1)).toHaveValue("Lobster rolls on the mail boat");
-  // The helper's title lands on the item because the member left it empty; it heads the page and its tab.
-  await expect(page.getByLabel("Title", { exact: true })).toHaveValue("Mail boat lunch");
+  // The item has notes, so the helper's title is the family's: it heads the page and its tab for a member, and is
+  // offered beside the empty title box rather than put in it, where anybody who may see the item would read it.
+  await expect(page.getByTestId("photo-title")).toHaveText("Mail boat lunch");
+  await expect(page.getByLabel("Title", { exact: true })).toHaveValue("");
+  await expect(page.getByLabel("Title", { exact: true })).toHaveAttribute("placeholder", "Mail boat lunch");
+  await expect(page.getByTestId("photo-members-title")).toContainText("Mail boat lunch");
   await expect(page).toHaveTitle(/Mail boat lunch/);
   await page.goto("/search?q=seafood");
   await expect(page.getByRole("status")).toContainText("1 result");
@@ -826,15 +911,20 @@ test("the AI helper describes reviewed items once an admin opts in, and opted-ou
   await expect(guessedPlace.getByText("the Domino Sugar sign across the water")).toBeVisible();
   // Accepting it keeps the position but stops it being a guess, and records who agreed.
   await guessedPlace.getByRole("button", { name: "Use this place" }).click();
-  await expect(guessedPlace.getByText("set by e2e-admin")).toBeVisible();
+  await expect(guessedPlace.getByText(`set by ${ADMIN_LABEL}`)).toBeVisible();
   const accepted = await withDb((c) => c.query('SELECT lat, "gpsSource" FROM "Photo" WHERE id = $1', [guessed.rows[0].id]));
   expect(accepted.rows[0]).toMatchObject({ gpsSource: "MANUAL", lat: guessed.rows[0].lat });
 
-  // A library described before places were ever estimated: the place-only pass asks about it without touching its
+  // A library described before places were ever estimated (nobody has set this one's place by hand either, which
+  // the pass would respect): the place-only pass asks about it without touching its
   // description, and its answer (a different landmark in the stand-in) is what lands.
-  await withDb((c) => c.query(`UPDATE "Photo" SET lat = NULL, lng = NULL, "gpsSource" = NULL, "placeEstimatedAt" = NULL, "placeEstimateName" = NULL WHERE id = $1`, [guessed.rows[0].id]));
+  await withDb((c) => c.query(`UPDATE "Photo" SET lat = NULL, lng = NULL, "gpsSource" = NULL, "placeSetById" = NULL, "placeEstimatedAt" = NULL, "placeEstimateName" = NULL WHERE id = $1`, [guessed.rows[0].id]));
   await page.goto("/admin");
+  // Chosen only once the page has hydrated: React sets a controlled select back to its own state as it hydrates, so
+  // a choice made before that is quietly undone and the estimate is for describing instead.
+  await page.waitForLoadState("networkidle");
   await page.getByLabel("What to ask for").selectOption("place");
+  await expect(page.getByLabel("What to ask for")).toHaveValue("place");
   await page.getByRole("button", { name: "Estimate" }).click();
   await expect(status).toContainText("would be sent");
   const places = Number((await status.textContent())!.match(/(\d+) items? would be sent/)![1]);
@@ -921,11 +1011,19 @@ test("faces are found once an admin opts in, named with consent recorded, shown 
 
   // Forgetting deletes the templates and the appearance record.
   await page.goto(`/people/${person.rows[0].id}`);
-  page.once("dialog", (d) => void d.accept());
-  await page.getByRole("button", { name: "Forget face data" }).click();
+  // The question says what the chosen mode takes: by default the person page and the tags as well as the face data.
+  let forgetQuestion = "";
+  // The button is named for the mode chosen, and follows the choice.
+  await page.getByLabel("Keep the name on the photos already confirmed").check();
+  await expect(page.getByRole("button", { name: "Forget face data, keep the name" })).toBeVisible();
+  await page.getByLabel("Also remove the record of which photos they appear in").check();
+  page.once("dialog", (d) => { forgetQuestion = d.message(); void d.accept(); });
+  await page.getByRole("button", { name: "Forget completely" }).click();
   await expect
     .poll(async () => (await withDb((c) => c.query('SELECT count(*)::int AS n FROM "Face" WHERE "personId" = $1', [person.rows[0].id]))).rows[0].n, { timeout: 15_000 })
     .toBe(0);
+  expect(forgetQuestion).toContain("person page");
+  await expect(page.getByTestId("forget-done")).toBeVisible();
   const clusters = await withDb((c) => c.query('SELECT count(*)::int AS n FROM "FaceCluster" WHERE "personId" = $1', [person.rows[0].id]));
   expect(clusters.rows[0].n).toBe(0);
 });
@@ -1181,12 +1279,12 @@ test("a pet tagged on a spotted animal is proposed on the next look-alike and co
   // The viewer's side panel: date, an Edit link for members, and a date that can be changed and put back.
   const info = dialog.getByTestId("lightbox-info");
   await expect(info.getByTestId("lightbox-edit")).toHaveAttribute("href", `/photos/${first.rows[0].id}`);
-  await expect(info.getByText("Uploaded by e2e-admin")).toBeVisible();
+  await expect(info.getByText(`Uploaded by ${ADMIN_LABEL}`)).toBeVisible();
   await expect(dialog.locator(`a[href*='/api/photos/${first.rows[0].id}/original']`)).toBeVisible();
   await info.getByRole("button", { name: "Change date" }).click();
   await info.getByLabel("Date taken").fill("2019-07-04T10:30");
   await info.getByRole("button", { name: "Save date" }).click();
-  await expect(info.getByText("set by e2e-admin")).toBeVisible();
+  await expect(info.getByText(`set by ${ADMIN_LABEL}`)).toBeVisible();
   const manual = await withDb((c) => c.query('SELECT "takenAtSource", "takenAt" FROM "Photo" WHERE id = $1', [first.rows[0].id]));
   expect(manual.rows[0].takenAtSource).toBe("MANUAL");
   expect(new Date(manual.rows[0].takenAt).getUTCFullYear()).toBe(2019);
@@ -1212,7 +1310,7 @@ test("the uploader crops and color-corrects a photo, and the original stays unto
   await signIn(context, ADMIN);
   await page.goto("/upload");
   await chooseFile(page, "photo-with-gps.jpg");
-  await expect(page.getByText("1 of 1 uploaded.")).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("upload-progress")).toHaveText("All 1 uploaded.", { timeout: 30_000 });
   const row = await withDb((c) => c.query(`SELECT id, renditions FROM "Photo" WHERE "originalName" = 'photo-with-gps.jpg' ORDER BY "createdAt" DESC LIMIT 1`));
   const id = row.rows[0].id as string;
   const before = row.rows[0].renditions as { medium: { w: number; h: number } };
@@ -1260,6 +1358,10 @@ test("the uploader crops and color-corrects a photo, and the original stays unto
   const original = await page.request.get(`/api/photos/${id}/original`);
   expect(original.ok()).toBe(true);
   expect(original.headers()["content-type"]).toContain("image/jpeg");
+  // Uploaded bytes opened on their own run nothing, and are never sniffed as anything but what they say.
+  expect(original.headers()["content-security-policy"]).toContain("sandbox");
+  expect(original.headers()["content-security-policy"]).not.toContain("youtube");
+  expect(original.headers()["x-content-type-options"]).toBe("nosniff");
   const edited = await page.request.get(`/api/photos/${id}/edited`);
   expect(edited.ok()).toBe(true);
   expect(edited.headers()["content-type"]).toContain("image/webp");
@@ -1345,6 +1447,8 @@ test("a photograph is favorited while looking at it, and turns up under Favorite
     .poll(async () => (await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "PhotoFavorite" f JOIN "User" u ON u.id = f."userId" WHERE f."photoId" = $1 AND u.email = $2`, [id, ADMIN]))).rows[0].n)
     .toBe(1);
   await page.keyboard.press("Escape");
+  // The grid's own heart for it follows the one pressed in the lightbox (#111).
+  await expect(tileOf(page).getByTestId("favorite-photo")).toHaveAttribute("aria-pressed", "true");
 
   // The trip's own Favourites tab, mine and everyone's.
   await page.goto("/trips/acadia");
@@ -1480,7 +1584,7 @@ test("a family member moves an item to the trash with a reason, and an admin res
   // Two items on a public trip: one to trash, one to prove the rest of the album is untouched.
   await memberPage.goto("/upload");
   await chooseFile(memberPage, "photo-no-gps.jpg");
-  await expect(memberPage.getByText("1 of 1 uploaded.")).toBeVisible({ timeout: 30_000 });
+  await expect(memberPage.getByTestId("upload-progress")).toHaveText("All 1 uploaded.", { timeout: 30_000 });
   const fresh = await withDb((c) => c.query(`SELECT id FROM "Photo" WHERE "originalName" = 'photo-no-gps.jpg' ORDER BY "createdAt" DESC LIMIT 1`));
   const victim = fresh.rows[0].id as string;
   await withDb((c) => c.query(`UPDATE "Photo" SET caption = 'trashcandidate lobster', "searchVector" = to_tsvector('english', 'trashcandidate lobster'), "searchVectorMembers" = to_tsvector('english', 'trashcandidate lobster') WHERE id = $1`, [victim]));
@@ -1628,7 +1732,8 @@ test("an activity takes photos already in the album: everything from its hours i
     await expect(page).toHaveURL(new RegExp(`/activities/${act.id}\\?added=1`));
     expect(await row(picked.id)).toEqual({ tripId: act.tripId, activityId: act.id });
   } finally {
-    for (const p of two) await withDb((c) => c.query(`UPDATE "Photo" SET "tripId" = $2, "activityId" = $3, "takenAt" = $4, caption = $5 WHERE id = $1`, [p.id, p.tripId, p.activityId, p.takenAt, p.caption]));
+    // "Add all" and the picker file them by hand; put back exactly as it was, with nobody's choice left on them.
+    for (const p of two) await withDb((c) => c.query(`UPDATE "Photo" SET "tripId" = $2, "activityId" = $3, "takenAt" = $4, caption = $5, "activitySetById" = NULL WHERE id = $1`, [p.id, p.tripId, p.activityId, p.takenAt, p.caption]));
   }
 });
 
@@ -1682,7 +1787,7 @@ test("photos can be uploaded straight into an activity, and stay there when its 
     .toBe(activityId);
 });
 
-test("a panorama is recognized, kept long, and shown as a panorama rather than a sliver", async ({ context, page }) => {
+test("a panorama is recognized, kept long, and shown as a panorama rather than a sliver", async ({ browser, context, page }) => {
   await signIn(context, ADMIN);
   await page.goto("/upload");
   await chooseFile(page, "panorama.jpg");
@@ -1709,11 +1814,70 @@ test("a panorama is recognized, kept long, and shown as a panorama rather than a
   const tile = page.locator("li.tile-lazy").filter({ has: page.locator(`img[src*='/api/photos/${row.id}/']`) });
   await expect(tile).toHaveClass(/col-span-2/);
   await expect(tile.getByText("360°")).toBeVisible();
+
+  // Opened big, a tap on it or a drag across it looks around instead of closing the viewer (#73), and with the
+  // panorama focused the arrow keys pan it rather than changing photos (#74).
+  await tile.locator("img").first().click();
+  const dialog = page.getByRole("dialog", { name: "Photo viewer" });
+  const view = dialog.getByTestId("panorama-view");
+  await expect(view).toBeVisible();
+  // What is panned across is a smaller copy: the whole panorama is a link away, as on its own page.
+  await expect(dialog.getByTestId("lightbox-full-size")).toHaveAttribute("href", new RegExp(`/api/photos/${row.id}/original\\?`));
+  await view.click();
+  await expect(dialog).toBeVisible();
+  // Wait for the picture, so the drag has something to scroll.
+  await expect.poll(() => view.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true);
+  const scrolledFrom = await view.evaluate((el) => el.scrollLeft);
+  const at = (await view.boundingBox())!;
+  await page.mouse.move(at.x + at.width / 2, at.y + at.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(at.x + at.width / 2 - 120, at.y + at.height / 2, { steps: 6 });
+  await page.mouse.up();
+  await expect(dialog).toBeVisible();
+  // The drag really did look around, rather than being swallowed.
+  expect(await view.evaluate((el) => el.scrollLeft)).not.toBe(scrolledFrom);
+  const counter = dialog.getByText(/^\d+ \/ \d+$/);
+  const before = await counter.textContent();
+  await view.focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(counter).toHaveText(before ?? "");
+  await expect(dialog.getByTestId("panorama-view")).toBeVisible();
+
+  // Tab and Shift+Tab go round inside the viewer and never out to the page behind it.
+  const inDialog = () => page.evaluate(() => Boolean(document.activeElement?.closest("[role=dialog]")));
+  const close = dialog.getByRole("button", { name: "Close" });
+  await close.focus();
+  await page.keyboard.press("Shift+Tab");
+  expect(await inDialog()).toBe(true);
+  await expect(close).not.toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(close).toBeFocused();
+  for (let i = 0; i < 25; i++) {
+    await page.keyboard.press("Tab");
+    expect(await inDialog()).toBe(true);
+  }
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+
+  // On a touch screen a tap on the panorama keeps the viewer open too.
+  const phone = await browser.newContext({ hasTouch: true, isMobile: true, viewport: { width: 390, height: 780 } });
+  try {
+    await signIn(phone, ADMIN);
+    const touch = await phone.newPage();
+    await touch.goto("/photos");
+    await touch.locator("li.tile-lazy").filter({ has: touch.locator(`img[src*='/api/photos/${row.id}/']`) }).locator("img").first().tap();
+    const touchDialog = touch.getByRole("dialog", { name: "Photo viewer" });
+    await touchDialog.getByTestId("panorama-view").tap();
+    await expect(touchDialog).toBeVisible();
+  } finally {
+    await phone.close();
+  }
 });
 
 test("a member edits their own photos and reads everyone else's, and a trip is arranged by whoever made it", async ({ browser, context, page }) => {
   await signIn(context, ADMIN);
   const memberEmail = "e2e-member@example.com";
+  await inviteFor(memberEmail);
   const memberContext = await browser.newContext();
   await signIn(memberContext, memberEmail);
   const memberPage = await memberContext.newPage();
@@ -1721,7 +1885,7 @@ test("a member edits their own photos and reads everyone else's, and a trip is a
   // One of the member's own, uploaded here so the test does not depend on what earlier tests left behind.
   await memberPage.goto("/upload");
   await chooseFile(memberPage, "photo-no-gps.jpg");
-  await expect(memberPage.getByText("1 of 1 uploaded.")).toBeVisible({ timeout: 30_000 });
+  await expect(memberPage.getByTestId("upload-progress")).toHaveText("All 1 uploaded.", { timeout: 30_000 });
   const mine = await withDb((c) => c.query(`SELECT p.id FROM "Photo" p JOIN "User" u ON u.id = p."uploaderId" WHERE u.email = $1 AND p.kind = 'PHOTO' AND p."trashedAt" IS NULL ORDER BY p."createdAt" DESC LIMIT 1`, [memberEmail]));
   const theirs = await withDb((c) => c.query(`SELECT p.id FROM "Photo" p JOIN "User" u ON u.id = p."uploaderId" WHERE u.email = $1 AND p.kind = 'PHOTO' AND p."trashedAt" IS NULL ORDER BY p."createdAt" LIMIT 1`, [ADMIN]));
 
@@ -1753,13 +1917,88 @@ test("a member edits their own photos and reads everyone else's, and a trip is a
   await expect(page.getByRole("link", { name: "Settings" })).toBeVisible();
 });
 
+test("an admin chooses how names are checked before words are shown to everyone, and a trip's maker may choose its own", async ({ context, page }) => {
+  await signIn(context, ADMIN);
+  const albumLevel = async () => (await withDb((c) => c.query(`SELECT "nameCheck"::text AS level FROM "AppSetting" WHERE id = 'app'`))).rows[0]?.level ?? "STRICT";
+  const tripLevel = async () => (await withDb((c) => c.query(`SELECT "nameCheck"::text AS level FROM "Trip" WHERE slug = 'acadia'`))).rows[0]?.level ?? null;
+
+  try {
+    // The album's: Strict until an admin says otherwise, and each level says what it means.
+    await page.goto("/admin");
+    const albumForm = page.getByTestId("album-name-check");
+    await expect(albumForm.getByRole("radio", { name: /^Strict \(recommended\)/ })).toBeChecked();
+    await expect(albumForm).toContainText("an occasional sentence could name a child to strangers");
+    await page.waitForLoadState("networkidle");
+    await albumForm.getByRole("radio", { name: /^Relaxed/ }).check();
+    await albumForm.getByRole("button", { name: "Save name check" }).click();
+    await expect.poll(albumLevel).toBe("RELAXED");
+    await page.reload();
+    await expect(page.getByTestId("album-name-check")).toContainText("Last changed by");
+
+    // A trip follows the album until whoever arranges it says otherwise.
+    await page.goto("/trips/acadia/settings");
+    const tripForm = page.getByTestId("trip-name-check");
+    await expect(tripForm.getByRole("radio", { name: /^Same as the album \(Relaxed\)/ })).toBeChecked();
+    await page.waitForLoadState("networkidle");
+    await tripForm.getByRole("radio", { name: /^Strict/ }).check();
+    await tripForm.getByRole("button", { name: "Save name check" }).click();
+    await expect.poll(tripLevel).toBe("STRICT");
+  } finally {
+    // Back as it was, for the tests after this one, whatever happened above.
+    await withDb((c) => c.query(`UPDATE "Trip" SET "nameCheck" = NULL, "nameCheckSetAt" = NULL, "nameCheckSetById" = NULL WHERE slug = 'acadia'`));
+    await withDb((c) => c.query(`UPDATE "AppSetting" SET "nameCheck" = 'STRICT', "nameCheckSetAt" = NULL, "nameCheckSetById" = NULL WHERE id = 'app'`));
+  }
+});
+
+test("a member's review queue is their own uploads, and somebody else's batch is theirs to read, not to mark", async ({ browser }) => {
+  // A member of their own, so nothing earlier tests uploaded as a member is in their queue.
+  const reviewer = "e2e-reviewer@example.com";
+  // Only an invited address may make an account by signing in.
+  await inviteFor(reviewer);
+  const memberContext = await browser.newContext();
+  await signIn(memberContext, reviewer);
+  const memberPage = await memberContext.newPage();
+  // One of the admin's, unreviewed for the length of this test, which the member must not be offered.
+  const admins = await withDb((c) => c.query(`SELECT p.id, p."reviewedAt" FROM "Photo" p JOIN "User" u ON u.id = p."uploaderId" WHERE u.email = $1 AND p.kind = 'PHOTO' AND p."trashedAt" IS NULL ORDER BY p."createdAt" LIMIT 1`, [ADMIN]));
+  const adminPhoto = admins.rows[0].id as string;
+  let mine: string | null = null;
+  try {
+    await withDb((c) => c.query(`UPDATE "Photo" SET "reviewedAt" = NULL WHERE id = $1`, [adminPhoto]));
+    await memberPage.goto("/upload");
+    await chooseFile(memberPage, "photo-no-gps.jpg");
+    await expect(memberPage.getByTestId("upload-progress")).toHaveText("All 1 uploaded.", { timeout: 30_000 });
+    mine = (await withDb((c) => c.query(`SELECT p.id FROM "Photo" p JOIN "User" u ON u.id = p."uploaderId" WHERE u.email = $1 ORDER BY p."createdAt" DESC LIMIT 1`, [reviewer]))).rows[0].id as string;
+
+    await memberPage.goto("/review");
+    await expect(memberPage.getByText("1 item of yours not reviewed yet.")).toBeVisible();
+    // The queue's own tiles, found by the item they are for: a picture of the same photo can also turn up under
+    // "Who might be in these" (a face crop) once face indexing has run, which says nothing about the queue.
+    await expect(memberPage.locator(`li[data-photo-id='${mine}']`)).toHaveCount(1);
+    await expect(memberPage.locator(`li[data-photo-id='${adminPhoto}']`)).toHaveCount(0);
+    // Nor is the admin's photo anywhere else on the page, a face crop included.
+    await expect(memberPage.locator(`img[src*='/api/photos/${adminPhoto}/']`)).toHaveCount(0);
+    await expect(memberPage.getByRole("button", { name: /Mark all 1 reviewed/ })).toBeVisible();
+
+    // A batch of the admin's: shown, but with the rule said plainly and nothing to press.
+    await memberPage.goto(`/review?ids=${adminPhoto}`);
+    await expect(memberPage.getByTestId("review-not-yours")).toBeVisible();
+    await expect(memberPage.getByRole("button", { name: /Mark all/ })).toHaveCount(0);
+  } finally {
+    await withDb((c) => c.query(`UPDATE "Photo" SET "reviewedAt" = $2 WHERE id = $1`, [adminPhoto, admins.rows[0].reviewedAt]));
+    // The member's upload goes to the trash, so no later count of the album or of a trip finds it.
+    if (mine) await withDb((c) => c.query(`UPDATE "Photo" SET "trashedAt" = now(), "trashReason" = 'ACCIDENT' WHERE id = $1`, [mine]));
+    await memberContext.close();
+  }
+});
+
 test("a photo is dragged onto an activity on the timeline, and a selection can be put there without dragging", async ({ context, page }) => {
   await signIn(context, ADMIN);
   const act = await withDb((c) => c.query(`SELECT id, title FROM "Activity" WHERE title = 'Ocean Path loop' LIMIT 1`));
   const activityId = act.rows[0].id as string;
   // A photo of the admin's on the trip but on no activity: the one the timeline shows loose under its day.
   const loose = await withDb((c) => c.query(`SELECT p.id FROM "Photo" p JOIN "User" u ON u.id = p."uploaderId" WHERE p."tripId" = (SELECT id FROM "Trip" WHERE slug = 'acadia') AND p."activityId" IS NULL AND p.status = 'READY' AND p."trashedAt" IS NULL AND u.email = $1 ORDER BY p."createdAt" LIMIT 1`, [ADMIN]));
-  test.skip(loose.rows.length === 0, "no loose photo on the trip to drag");
+  // Fail, not skip, when an earlier test has filed every one: a skipped check reads as green in CI.
+  expect(loose.rows.length, "a photo of the admin's on Acadia with no activity, left by the upload tests").toBeGreaterThan(0);
   const photoId = loose.rows[0].id as string;
 
   await page.goto("/trips/acadia");
@@ -1824,6 +2063,7 @@ test("a cover is chosen from the photographs themselves, by whoever made the tri
 
   // A member who did not make the trip is not offered it, and the page turns them away.
   const memberContext = await context.browser()!.newContext();
+  await inviteFor("e2e-member@example.com");
   await signIn(memberContext, "e2e-member@example.com");
   const memberPage = await memberContext.newPage();
   await memberPage.goto("/trips/acadia/photos");
@@ -1837,7 +2077,7 @@ test("photographs with no place are dropped onto the map, several at a time", as
   // Something of the admin's with no position at all: the map cannot know where a file with no GPS was taken.
   await withDb((c) => c.query(`UPDATE "Photo" SET lat = NULL, lng = NULL, "gpsSource" = NULL WHERE "originalName" = 'photo-no-exif.jpg'`));
   const waiting = await withDb((c) => c.query(`SELECT p.id FROM "Photo" p JOIN "User" u ON u.id = p."uploaderId" WHERE u.email = $1 AND p.lat IS NULL AND p.status = 'READY' AND p."trashedAt" IS NULL ORDER BY p."createdAt" LIMIT 2`, [ADMIN]));
-  test.skip(waiting.rows.length < 1, "nothing is waiting for a place");
+  expect(waiting.rows.length, "photo-no-exif.jpg, uploaded by the admin earlier in this file").toBeGreaterThan(0);
 
   await page.goto("/place");
   const tray = page.getByTestId("place-tray");
@@ -1849,8 +2089,9 @@ test("photographs with no place are dropped onto the map, several at a time", as
 
   // Tap one, then tap the map: the path that works on a phone and from a keyboard.
   await tray.locator(`button:has(img[src*='/api/photos/${waiting.rows[0].id}/'])`).click();
+  // Near the edge, not the middle: the map opens fitted to the album, so its middle may well be somebody's pin.
   const box = (await map.boundingBox())!;
-  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.click(box.x + 12, box.y + box.height / 2);
   await expect(page.getByTestId("place-notice")).toContainText("placed");
   await expect
     .poll(async () => (await withDb((c) => c.query('SELECT lat, "gpsSource" FROM "Photo" WHERE id = $1', [waiting.rows[0].id]))).rows[0].gpsSource, { timeout: 20_000, intervals: [1000] })
@@ -1867,7 +2108,7 @@ test("a 3D scan is uploaded, kept whole, and shown in a viewer that can be turne
   await signIn(context, ADMIN);
   await page.goto("/upload");
   await chooseFile(page, "scan.glb");
-  await expect(page.getByText("1 of 1 uploaded.")).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("upload-progress")).toHaveText("All 1 uploaded.", { timeout: 30_000 });
 
   const scan = async () => (await withDb((c) => c.query('SELECT id, kind, "scanFormat", status, renditions, "sizeBytes" FROM "Photo" WHERE "originalName" = $1 ORDER BY "createdAt" DESC LIMIT 1', ["scan.glb"]))).rows[0];
   await expect.poll(async () => (await scan())?.status, { timeout: 30_000, intervals: [1000] }).toBe("READY");
@@ -1926,7 +2167,7 @@ test("a whole selection is auto-colored in one go, and handed back in one press"
   // Photographs of the admin's with nothing on them yet, so what the batch does to them is unambiguous.
   const plain = await withDb((c) => c.query(`SELECT p.id FROM "Photo" p JOIN "User" u ON u.id = p."uploaderId" WHERE p."tripId" = (SELECT id FROM "Trip" WHERE slug = 'acadia') AND p.kind = 'PHOTO' AND p.status = 'READY' AND p."trashedAt" IS NULL AND p.edits IS NULL AND u.email = $1 ORDER BY p."createdAt" LIMIT 3`, [ADMIN]));
   const picked = plain.rows.map((r: { id: string }) => r.id);
-  test.skip(picked.length === 0, "no untouched photographs on the trip");
+  expect(picked.length, "an unedited photo of the admin's on Acadia; an earlier test has edited them all").toBeGreaterThan(0);
 
   await page.goto("/trips/acadia/photos");
   await page.getByRole("button", { name: "Select photos" }).click();
@@ -2013,6 +2254,107 @@ test("a file the album will not take is named in the summary, with a way to try 
   await page.unroute("**/api/upload");
   await page.getByTestId("retry-failed").click();
   await expect(page.getByTestId("upload-progress")).toContainText("All 1 uploaded.", { timeout: 60_000 });
+});
+
+test("files already on their way keep the trip they were added with when the trip is changed", async ({ context, page }) => {
+  await signIn(context, ADMIN);
+  const trips = (await withDb((c) => c.query(`SELECT id, slug, title FROM "Trip" WHERE slug IN ('yosemite', 'acadia') ORDER BY slug`))).rows as { id: string; slug: string; title: string }[];
+  const [acadia, yosemite] = trips;
+  expect(trips).toHaveLength(2);
+  await page.goto(`/upload?trip=${yosemite.slug}`);
+  await page.waitForLoadState("networkidle");
+
+  // Every request is held until the trip has been changed, and then turned away, so nothing is kept: only which trip
+  // each one was sent to matters here.
+  const seen: { name: string; trip: string | null }[] = [];
+  let release!: () => void;
+  const held = new Promise<void>((r) => { release = r; });
+  await page.route("**/api/upload", async (route) => {
+    const h = route.request().headers();
+    seen.push({ name: decodeURIComponent(h["x-file-name"] ?? ""), trip: h["x-trip-id"] ?? null });
+    await held;
+    await route.fulfill({ status: 415, contentType: "application/json", body: JSON.stringify({ error: "Held for the test" }) });
+  });
+  const jpeg = fs.readFileSync(fixture("photo-no-exif.jpg"));
+  const file = (name: string) => ({ name, mimeType: "image/jpeg", buffer: jpeg });
+  await page.locator("#photo-file-input").first().setInputFiles(["first-1.jpg", "first-2.jpg", "first-3.jpg", "first-4.jpg"].map(file));
+  // Three go at once; the fourth waits its turn.
+  await expect.poll(() => seen.length).toBe(3);
+
+  const picker = page.getByTestId("trip-picker").getByRole("combobox");
+  await picker.click();
+  await picker.fill(acadia.title);
+  await page.getByRole("option", { name: acadia.title }).first().click();
+  await page.locator("#photo-file-input").first().setInputFiles(["then-1.jpg", "then-2.jpg"].map(file));
+  release();
+
+  await expect.poll(() => seen.length, { timeout: 30_000 }).toBe(6);
+  expect(seen.filter((s) => s.name.startsWith("first-")).map((s) => s.trip)).toEqual([yosemite.id, yosemite.id, yosemite.id, yosemite.id]);
+  expect(seen.filter((s) => s.name.startsWith("then-")).map((s) => s.trip)).toEqual([acadia.id, acadia.id]);
+  // And the batch stayed on the page through the change, all six of it.
+  await expect(page.getByTestId("upload-failures")).toContainText("6 files did not go up", { timeout: 30_000 });
+});
+
+test("a batch keeps going when the member leaves the page, and what did not make it is waiting for them", async ({ context, page }) => {
+  test.setTimeout(240_000);
+  await signIn(context, ADMIN);
+  await page.goto("/upload");
+  await page.waitForLoadState("networkidle");
+  const tag = randomUUID().slice(0, 8);
+  let release!: () => void;
+  const held = new Promise<void>((r) => { release = r; });
+  const answered: string[] = [];
+  await page.route("**/api/upload", async (route) => {
+    const name = decodeURIComponent(route.request().headers()["x-file-name"] ?? "");
+    await held;
+    // One of the four the album turns down, so there is something to come back to.
+    if (name.startsWith("refused-")) await route.fulfill({ status: 415, contentType: "application/json", body: JSON.stringify({ error: "Turned down for the test" }) });
+    else await route.fallback();
+    answered.push(name);
+  });
+  const jpeg = fs.readFileSync(fixture("photo-no-exif.jpg"));
+  const file = (name: string) => ({ name, mimeType: "image/jpeg", buffer: Buffer.concat([jpeg, Buffer.from(`\n<!-- ${name} ${tag} -->`)]) });
+  await page.locator("#photo-file-input").first().setInputFiles([`away-1-${tag}.jpg`, `away-2-${tag}.jpg`, `away-3-${tag}.jpg`, `refused-${tag}.jpg`].map(file));
+
+  // Off to the home page while they are still on their way.
+  await page.locator('header a[href="/"]').first().click();
+  await expect(page).toHaveURL(/\/$/);
+  await expect(page.getByTestId("upload-pill")).toBeVisible();
+  release();
+  await expect.poll(() => answered.length, { timeout: 60_000 }).toBe(4);
+  // The pill turns to what did not make it only once the rest are processed, and that is the worker's pace, not the
+  // page's: late in a full run it still has earlier tests' jobs in hand. So wait on the photographs themselves.
+  await expect
+    .poll(async () => (await withDb((c) => c.query(`SELECT count(*)::int AS n FROM "Photo" WHERE "originalName" LIKE $1 AND status = 'READY'`, [`away-%-${tag}.jpg`]))).rows[0].n, { timeout: 150_000 })
+    .toBe(3);
+
+  // Once the rest are done, the pill stays to say one did not make it, and leads back to the list.
+  const review = page.getByTestId("upload-pill-review");
+  await expect(review).toContainText("1 file didn't make it", { timeout: 30_000 });
+  await review.click();
+  await expect(page).toHaveURL(/\/upload/);
+  await expect(page.getByTestId("upload-failures")).toContainText(`refused-${tag}.jpg`);
+  // Seen there, so the pill has nothing more to say.
+  await expect(page.getByTestId("upload-pill")).toHaveCount(0);
+});
+
+test("a file over the size limit is refused by name before any of it is sent", async ({ context, page }) => {
+  await signIn(context, ADMIN);
+  await page.goto("/upload");
+  await page.waitForLoadState("networkidle");
+  const sent: string[] = [];
+  await page.route("**/api/upload", (route) => {
+    sent.push(decodeURIComponent(route.request().headers()["x-file-name"] ?? ""));
+    return route.fulfill({ status: 415, contentType: "application/json", body: JSON.stringify({ error: "Not kept in this test" }) });
+  });
+  // The e2e server holds scans to 2 MB (MAX_SCAN_UPLOAD_BYTES), well under the photo limit a scan used to get.
+  await page.locator('input[type="file"]').first().setInputFiles({ name: "splat.ply", mimeType: "application/octet-stream", buffer: Buffer.alloc(3 * 1024 * 1024, 1) });
+  const refused = page.locator('ul[role="alert"]');
+  await expect(refused).toContainText("splat.ply");
+  await expect(refused).toContainText("up to 2 MB");
+  // A small one after it does go: once its request is seen, the big one plainly never was.
+  await page.locator('input[type="file"]').first().setInputFiles({ name: "small.ply", mimeType: "application/octet-stream", buffer: Buffer.alloc(1024, 1) });
+  await expect.poll(() => sent).toEqual(["small.ply"]);
 });
 
 test("the overview shows a handful of the trip at random, and picks again when asked", async ({ context, page }) => {
@@ -2119,7 +2461,7 @@ test("existing photographs are put on a trip by searching for them, by place and
     WHERE p."tripId" IS NULL AND p.status = 'READY' AND p."trashedAt" IS NULL
       AND NOT EXISTS (SELECT 1 FROM "CollectionItem" ci WHERE ci."photoId" = p.id)
     ORDER BY p."createdAt" LIMIT 1`))).rows[0];
-  test.skip(!loose, "nothing unclaimed to gather up");
+  expect(loose, "a photo on no trip and in no collection, left by an earlier test").toBeTruthy();
   await withDb((c) => c.query(`UPDATE "Photo" SET "placeName" = $1, lat = 44.2223, lng = -68.3372 WHERE id = $2`, ["Bass Harbor Head Light", loose.id]));
 
   // The trip's gallery now offers a way in; trips had none before, uploads reached them only by date.
@@ -2648,6 +2990,11 @@ test("a search can ask for a particular person or pet, and the rest of the quest
   // The same question on the album-wide search, which reaches every trip.
   await page.goto(`/search?q=&person=${personId}`);
   await expect(page.getByTestId("who-filter")).toBeVisible();
+  // The words and the filters are one form: Enter in the box keeps the person, and the box is not a form of its own.
+  await expect(page.locator("form form")).toHaveCount(0);
+  await page.locator("main").getByRole("searchbox", { name: "Search photos" }).fill("lobster");
+  await page.locator("main").getByRole("searchbox", { name: "Search photos" }).press("Enter");
+  await expect(page).toHaveURL(new RegExp(`q=lobster[^]*person=${personId}`));
 
   // A visitor who is not family can neither see the question nor ask it by hand.
   await setVisibility("acadia", "PUBLIC");
@@ -2767,12 +3114,36 @@ test("on a phone the day heading itself opens the whole timeline to choose from"
   const days = page.locator("section[id^='day-']");
   expect(await sheet.locator("[data-day-jump]").count()).toBe(await days.count());
   await expect(sheet.locator('[data-day-jump][aria-current="true"]')).toHaveCount(1);
+  // It is a modal sheet for the keyboard too (#128): focus starts on the day being read, Tab stays inside, and
+  // Escape hands focus back to the heading that opened it.
+  await expect(sheet.locator('[data-day-jump][aria-current="true"]')).toBeFocused();
+  const inSheet = () => page.evaluate(() => Boolean(document.activeElement?.closest("[data-testid=day-jump-sheet]")));
+  const buttons = await sheet.locator("button").count();
+  for (let i = 0; i < buttons + 2; i++) {
+    await page.keyboard.press("Tab");
+    expect(await inSheet()).toBe(true);
+  }
+  // Round the ends explicitly: Shift+Tab from Close (the first stop) lands on the last entry, and Tab brings it back.
+  const closeButton = sheet.locator("[data-day-jump-close]");
+  await closeButton.focus();
+  await page.keyboard.press("Shift+Tab");
+  await expect(sheet.locator("button").last()).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(closeButton).toBeFocused();
+  // Closing hands focus back to the heading that opened it.
+  await page.keyboard.press("Escape");
+  await expect(sheet).toBeHidden();
+  await expect(page.getByTestId("day-jump").first()).toBeFocused();
+  await page.getByTestId("day-jump").first().click();
+  await expect(sheet).toBeVisible();
 
+  // Choosing a day takes focus there, not back to where the sheet was opened.
   const last = sheet.locator("[data-day-jump]").last();
   const target = (await last.getAttribute("data-day-jump"))!;
   await last.click();
   await expect(sheet).toBeHidden();
   await expect(page.locator(`#${target}`)).toBeInViewport({ timeout: 10_000 });
+  expect(await page.evaluate((id) => Boolean(document.activeElement?.closest(`#${id}`)), target)).toBe(true);
 });
 
 test("a day's count includes the photographs on its activities, and its activities are listed under it", async ({ context, page }) => {
@@ -2814,6 +3185,46 @@ test("a day's count includes the photographs on its activities, and its activiti
     const sheet = page.getByTestId("day-jump-sheet");
     await expect(sheet.locator(`[data-activity-jump="day-2031-03-14-${activityId}"]`)).toContainText("Ocean Path walk");
   } finally {
+    await withDb((c) => c.query(`UPDATE "Photo" SET "activityId" = NULL WHERE "activityId" = $1`, [activityId]));
+    await withDb((c) => c.query(`DELETE FROM "Activity" WHERE id = $1`, [activityId]));
+  }
+});
+
+test("a ride past midnight stays under the day it began, and the next day points back to it", async ({ context, page }) => {
+  await signIn(context, ADMIN);
+  const trip = await withDb((c) => c.query(`SELECT id FROM "Trip" WHERE slug = 'acadia'`));
+  const tripId = trip.rows[0].id as string;
+  const ids = await withDb((c) => c.query(`SELECT id FROM "Photo" WHERE "tripId" = $1 AND status = 'READY' AND "trashedAt" IS NULL ORDER BY "createdAt" LIMIT 2`, [tripId]));
+  expect(ids.rows.length).toBe(2);
+  // Two days of their own, far from the rest (New York, UTC-4): a ride from 22:30 on 20 March to 01:15 the next
+  // morning with a photograph at 00:40, and one loose at 09:00 on the 21st.
+  const activityId = `act-${randomUUID()}`;
+  const before = await withDb((c) => c.query(`SELECT id, "takenAt", "tzOffsetMin", "takenAtSource", "activityId" FROM "Photo" WHERE id = ANY($1)`, [ids.rows.map((r) => r.id)]));
+  await withDb((c) => c.query(`INSERT INTO "Activity" (id, "tripId", title, type, "startTime", "endTime", "updatedAt") VALUES ($1, $2, 'Night ride', 'BIKE', $3, $4, now())`, [activityId, tripId, new Date("2031-03-21T02:30:00Z"), new Date("2031-03-21T05:15:00Z")]));
+  await withDb((c) => c.query(`UPDATE "Photo" SET "takenAt" = $2, "tzOffsetMin" = -240, "takenAtSource" = 'EXIF_OFFSET', "activityId" = $3 WHERE id = $1`, [ids.rows[0].id, new Date("2031-03-21T04:40:00Z"), activityId]));
+  await withDb((c) => c.query(`UPDATE "Photo" SET "takenAt" = $2, "tzOffsetMin" = -240, "takenAtSource" = 'EXIF_OFFSET', "activityId" = NULL WHERE id = $1`, [ids.rows[1].id, new Date("2031-03-21T13:00:00Z")]));
+
+  try {
+    await page.goto("/trips/acadia");
+    await page.waitForLoadState("networkidle");
+    // One card, under the day the ride began, holding the photograph from after midnight.
+    await expect(page.locator(`[id$="-${activityId}"]`)).toHaveCount(1);
+    await expect(page.locator(`#day-2031-03-20-${activityId} li.tile-lazy`)).toHaveCount(1);
+    // The next day opens with a pointer to it rather than a copy, and holds only its own photograph.
+    const pointer = page.locator("#day-2031-03-21").getByTestId("activity-continued");
+    await expect(pointer).toHaveText("Continued from Thu, Mar 20: Night ride");
+    await expect(page.locator("#day-2031-03-21 li.tile-lazy")).toHaveCount(1);
+    // Each day counts its photographs once.
+    const nav = page.getByTestId("timeline-nav");
+    await expect(nav.locator('a[data-day="day-2031-03-20"] span.text-xs')).toHaveText("1");
+    await expect(nav.locator('a[data-day="day-2031-03-21"] span.text-xs')).toHaveText("1");
+    // And the pointer takes you to the card.
+    await pointer.getByRole("link", { name: "Night ride" }).click();
+    await expect(page.locator(`#day-2031-03-20-${activityId}`)).toBeInViewport({ timeout: 10_000 });
+  } finally {
+    for (const r of before.rows) {
+      await withDb((c) => c.query(`UPDATE "Photo" SET "takenAt" = $2, "tzOffsetMin" = $3, "takenAtSource" = $4, "activityId" = $5 WHERE id = $1`, [r.id, r.takenAt, r.tzOffsetMin, r.takenAtSource, r.activityId]));
+    }
     await withDb((c) => c.query(`UPDATE "Photo" SET "activityId" = NULL WHERE "activityId" = $1`, [activityId]));
     await withDb((c) => c.query(`DELETE FROM "Activity" WHERE id = $1`, [activityId]));
   }
@@ -2896,8 +3307,13 @@ test("the map's rings can be colored by day, by activity, or by who uploaded, an
     const anonPage = await anon.newPage();
     const res = await anonPage.request.get("/api/trips/acadia/geojson");
     const body = await res.json();
-    expect(body.photos.features.length).toBeGreaterThan(0);
-    expect(body.photos.features.every((f: { properties: { uploaderId: unknown; uploaderName: unknown } }) => f.properties.uploaderId === null && f.properties.uploaderName === null)).toBe(true);
+    expect(body.photos.points.length).toBeGreaterThan(0);
+    // Not a name, and not even a key to tell one uploader's photographs from another's.
+    expect(body.rings.uploader).toBeNull();
+    expect(body.photos.points.every((p: unknown[]) => p[6] === null)).toBe(true);
+    const clicked = await (await anonPage.request.get(`/api/map/photos?ids=${body.photos.points[0][0]}`)).json();
+    expect(clicked.photos).toHaveLength(1);
+    expect(clicked.photos[0].uploadedBy).toBeNull();
     await anonPage.goto("/trips/acadia/map");
     const theirs = anonPage.getByTestId("map-colour-by").getByRole("combobox");
     await expect(theirs).toBeVisible();
@@ -3069,5 +3485,113 @@ test("the activities list, the photos grids and the trips list can each be put i
     await expect(page.locator("a[href^='/trips/'] h3").first()).toHaveText(earliest);
   } finally {
     await withDb((c) => c.query(`DELETE FROM "Activity" WHERE id = $1`, [extra]));
+  }
+});
+
+test("a collection arranged by hand opens in its saved order, for its owner and on its shared link", async ({ browser, context, page }) => {
+  await signIn(context, ADMIN);
+  const slug = `arranged-${randomUUID().slice(0, 8)}`;
+  const token = `arranged-${randomUUID()}`;
+  const photos = (await withDb((c) => c.query(`SELECT p.id FROM "Photo" p JOIN "Trip" t ON t.id = p."tripId" WHERE t.slug = 'acadia' AND p.status = 'READY' AND p."trashedAt" IS NULL AND p.kind = 'PHOTO' ORDER BY p."takenAt" ASC NULLS LAST, p.id LIMIT 3`))).rows.map((r) => r.id as string);
+  expect(photos).toHaveLength(3);
+  const col = (await withDb((c) => c.query(`INSERT INTO "Collection" (id, slug, title, "createdById", visibility, "shareToken", "updatedAt") VALUES (md5(random()::text), $1, 'Arranged by hand', (SELECT id FROM "User" WHERE email = $2), 'LINK', $3, now()) RETURNING id`, [slug, ADMIN, token]))).rows[0].id as string;
+  const ids = (loc: Locator) => loc.evaluateAll((els) => els.map((e) => (e.getAttribute("src") ?? "").split("/api/photos/")[1]?.split("/")[0]).filter(Boolean));
+  const grid = (p: Page) => ids(p.locator("li.tile-lazy img[src*='/api/photos/']"));
+  const anon = await browser.newContext();
+  try {
+    for (const [position, id] of photos.entries()) {
+      await withDb((c) => c.query(`INSERT INTO "CollectionItem" (id, "collectionId", "photoId", position, "addedById", "createdAt") VALUES (md5(random()::text), $1, $2, $3, (SELECT id FROM "User" WHERE email = $4), now())`, [col, id, position, ADMIN]));
+    }
+    // Viewed newest first, Arrange still starts from the order the collection is kept in.
+    await page.goto(`/collections/${slug}/photos?order=newest`);
+    await page.getByRole("button", { name: "Arrange" }).click();
+    const arrange = page.getByRole("list", { name: "Arrange photos" });
+    await expect.poll(() => ids(arrange.locator("img"))).toEqual(photos);
+    await arrange.getByRole("listitem").first().getByRole("button", { name: /later$/ }).click();
+    await page.getByRole("button", { name: "Save order" }).click();
+    const saved = [photos[1], photos[0], photos[2]];
+    await expect(page).toHaveURL(/order=arranged/);
+    await expect(page.getByTestId("photos-order-arranged")).toHaveAttribute("aria-current", "true");
+    await expect.poll(() => grid(page)).toEqual(saved);
+
+    // Opened again with no order asked for, it is the saved order, even with this device set on "Newest first" from
+    // other grids.
+    await context.addCookies([{ name: "photos-order", value: "newest", url: new URL(page.url()).origin }]);
+    await page.goto(`/collections/${slug}/photos`);
+    await expect(page.getByTestId("photos-order-arranged")).toHaveAttribute("aria-current", "true");
+    await expect.poll(() => grid(page)).toEqual(saved);
+
+    // And so for somebody holding the link, who has no order to choose.
+    const theirs = await anon.newPage();
+    await theirs.goto(`/share/c/${token}`);
+    // A first visit loads the page again once the link's cookie is kept; read the grid of the album, not the placeholder.
+    await expect(theirs.getByText("Shared with you")).toBeVisible();
+    await expect.poll(() => grid(theirs), { timeout: 20_000 }).toEqual(saved);
+  } finally {
+    await anon.close();
+    await withDb((c) => c.query(`DELETE FROM "Collection" WHERE id = $1`, [col]));
+  }
+});
+
+test("the phone menu reaches the account page, and scrolls to Sign out on a short screen", async ({ context, page }) => {
+  await signIn(context, ADMIN);
+  // A phone on its side: far shorter than an admin's list of places to go.
+  await page.setViewportSize({ width: 740, height: 340 });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Open menu" }).click();
+  const panel = page.locator("#mobile-nav-panel");
+  // The panel scrolls itself (#110), since the sticky header stays put however the page is scrolled.
+  const signOut = panel.getByRole("button", { name: "Sign out" });
+  await expect(signOut).not.toBeInViewport();
+  await panel.hover();
+  await page.mouse.wheel(0, 2000);
+  await expect.poll(() => panel.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+  await expect(signOut).toBeInViewport();
+  // Escape closes it, as it does the laptop's More menu.
+  await page.keyboard.press("Escape");
+  await expect(panel).toHaveCount(0);
+  await page.getByRole("button", { name: "Open menu" }).click();
+  // And the account page is a press away on a phone too (#109).
+  await panel.getByTestId("mobile-account").click();
+  await expect(page).toHaveURL(/\/account$/);
+  await expect(panel).toHaveCount(0);
+  await page.setViewportSize({ width: 1280, height: 720 });
+});
+
+test("a selection added to a collection shows its chip at once, and Enter waits for the search it was pressed on", async ({ context, page }) => {
+  await signIn(context, ADMIN);
+  const tag = randomUUID().slice(0, 8);
+  const title = `Chip check ${tag}`;
+  const admin = (await withDb((c) => c.query(`SELECT id FROM "User" WHERE email = $1`, [ADMIN]))).rows[0].id as string;
+  const collectionId = `col-${tag}`;
+  await withDb((c) => c.query(`INSERT INTO "Collection" (id, slug, title, "createdById", "updatedAt") VALUES ($1, $2, $3, $4, now())`, [collectionId, `chip-check-${tag}`, title, admin]));
+  try {
+    await page.goto("/trips/acadia/photos");
+    const tile = page.locator("li.tile-lazy").first();
+    await expect(tile).toBeVisible();
+    await page.getByRole("button", { name: "Select photos" }).click();
+    await tile.locator("button").first().click();
+
+    // The search answers slowly. Enter pressed straight after typing must not pick from the list that was there
+    // before (the recent ones), and once the answer to what was typed arrives, that Enter is carried out on it (#129).
+    await page.route("**/api/containers?*", async (route) => {
+      await new Promise((r) => setTimeout(r, 1500));
+      await route.continue();
+    });
+    const picker = page.getByLabel("Add to collection…");
+    await picker.fill(title);
+    await picker.press("Enter");
+    await expect(picker).toHaveAttribute("aria-expanded", "true");
+    await expect(picker).not.toHaveAttribute("aria-activedescendant", /.+/);
+    await expect(picker).toHaveAttribute("aria-expanded", "false", { timeout: 10_000 });
+    await expect(picker).toHaveValue(title);
+    await page.unroute("**/api/containers?*");
+
+    // No reload: the tile carries the new collection's chip as soon as the action is done (#111).
+    page.once("dialog", (d) => void d.accept());
+    await page.getByRole("button", { name: "Add", exact: true }).click();
+    await expect(tile.locator(`[aria-label*="${title}"]`)).toBeVisible();
+  } finally {
+    await withDb((c) => c.query(`DELETE FROM "Collection" WHERE id = $1`, [collectionId]));
   }
 });

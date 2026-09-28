@@ -1,12 +1,13 @@
 import { Badge, Button, Card, Input, Label, Textarea } from "@/components/ui";
 import type { StoredAnnotation } from "@/lib/annotation/schema";
-import { reannotate, updateAnnotation } from "@/app/annotation/actions";
+import { setAnnotationShared, updateAnnotation } from "@/app/annotation/actions";
+import { ShareHelperText } from "./ShareHelperText";
+import { DescribeAgain } from "./DescribeAgain";
 import { OptOutToggle } from "./OptOutToggle";
 
 /** The helper's description on the item page: read for everyone who may see the item, editable for members. */
-export function AnnotationCard({ photoId, annotation, source, model, error, optOut, optOutReason, active, editable }: { photoId: string; annotation: StoredAnnotation | null; source: string | null; model: string | null; error: string | null; optOut: boolean; /** Why the item will not be sent (its own flag, or an opted-out trip or collection), or null. */ optOutReason: string | null; active: boolean; editable: boolean }) {
+export function AnnotationCard({ photoId, annotation, membersOnly = false, titleOnly = false, revision = 0, source, model, error, optOut, optOutReason, active, editable }: { photoId: string; annotation: StoredAnnotation | null; /** Read by the family only (see `judgeHelperText`). */ membersOnly?: boolean; /** Only because it repeats a word of a private trip's or collection's title. */ titleOnly?: boolean; /** The text's revision as the page read it: showing it to everyone is refused if it has changed since. */ revision?: number; source: string | null; model: string | null; error: string | null; optOut: boolean; /** Why the item will not be sent (its own flag, or an opted-out trip or collection), or null. */ optOutReason: string | null; active: boolean; editable: boolean }) {
   const update = updateAnnotation.bind(null, photoId);
-  const again = reannotate.bind(null, photoId);
   return (
     <Card className="p-4 space-y-3">
       <div className="flex items-center justify-between gap-2">
@@ -15,7 +16,7 @@ export function AnnotationCard({ photoId, annotation, source, model, error, optO
       </div>
       {!annotation && (
         <p className="text-sm text-muted">
-          {error?.startsWith("batch:") ? (error === "batch:canceled" ? "Not described yet: an admin stopped the run before this item was processed. It will be included in the next backfill." : "Not described yet: the batch it was in did not complete. It will be included in the next backfill.") : error ? `The helper could not describe this item (${error.replace(":", ": ")}).` : optOutReason ? `Not sent to the AI helper. ${optOutReason === "this item is opted out" ? "" : `(${optOutReason[0].toUpperCase()}${optOutReason.slice(1)}.)`}` : active ? "No description yet; it is written a little while after the upload is reviewed." : "No description. The AI helper is off; an admin can turn it on."}
+          {error?.startsWith("batch:") ? (error === "batch:canceled" ? "Not described yet: an admin stopped the run before this item was processed. It will be included in the next backfill." : error === "batch:names_changed" ? "Not described yet: names in the album changed while its batch ran. It will be included in the next backfill." : "Not described yet: the batch it was in did not complete. It will be included in the next backfill.") : error ? `The helper could not describe this item (${error.replace(":", ": ")}).` : optOutReason ? `Not sent to the AI helper. ${optOutReason === "this item is opted out" ? "" : `(${optOutReason[0].toUpperCase()}${optOutReason.slice(1)}.)`}` : active ? "No description yet; it is written a little while after the upload is reviewed." : "No description. The AI helper is off; an admin can turn it on."}
         </p>
       )}
       {annotation && editable ? (
@@ -68,12 +69,11 @@ export function AnnotationCard({ photoId, annotation, source, model, error, optO
           {annotation.place && <p className="text-muted">Place: {annotation.place}</p>}
         </div>
       ) : null}
+      {annotation && <ShareHelperText membersOnly={membersOnly} titleOnly={titleOnly} share={editable ? setAnnotationShared.bind(null, photoId, revision) : undefined} />}
       {editable && (
         <div className="space-y-2 pt-2 border-t border-border">
           {active && !optOutReason && (
-            <form action={again}>
-              <Button type="submit" variant="secondary" size="sm">{annotation ? "Describe again" : "Describe now"}</Button>
-            </form>
+            <DescribeAgain photoId={photoId} hasDescription={Boolean(annotation)} edited={source === "EDITED"} />
           )}
           <OptOutToggle target={{ kind: "photo", id: photoId }} initial={optOut} />
         </div>

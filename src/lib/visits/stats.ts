@@ -1,6 +1,7 @@
 import { db } from "@/lib/db";
 import { photoUrl } from "@/lib/photos/urls";
 import { dayKey, serverTimeZone } from "./record";
+import { databaseZone } from "@/lib/time/local-day-sql";
 
 export type KindCount = { kind: "MEMBER" | "SHARE" | "PUBLIC"; visits: number; visitors: number };
 export type DayCount = { day: string; visits: number; visitors: number };
@@ -30,7 +31,8 @@ export type VisitorStats = {
  * one. The panel says so rather than pretending otherwise.
  */
 export async function visitorStats(days = 30): Promise<VisitorStats> {
-  const tz = serverTimeZone();
+  // The server's zone as Postgres knows it: a TZ under a legacy name, or none Postgres knows, would fail the page.
+  const tz = await databaseZone(serverTimeZone());
   const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
 
   const [totals, byKind, daily, trips, collections, items, referrers, members, earliest] = await Promise.all([
@@ -56,9 +58,9 @@ export async function visitorStats(days = 30): Promise<VisitorStats> {
              count(*) FILTER (WHERE v.kind = 'SHARE')::int AS "shareVisits", max(v."at") AS last
       FROM "Visit" v JOIN "Collection" c ON c.id = v."collectionId"
       WHERE v."at" >= ${since} GROUP BY c.id ORDER BY visitors DESC, visits DESC LIMIT 8`,
-    db.$queryRaw<(ThingCount & { updatedAt: Date; renditions: unknown })[]>`
-      SELECT p.id, coalesce(nullif(p.title, ''), nullif(p.caption, ''), p."originalName") AS title,
-             '/photos/' || p.id AS href, p."updatedAt", p.renditions,
+    db.$queryRaw<(ThingCount & { imageVersion: number; renditions: unknown })[]>`
+      SELECT p.id, coalesce(nullif(btrim(p.title), ''), nullif(btrim(p."membersTitle"), ''), nullif(p.caption, ''), p."originalName") AS title,
+             '/photos/' || p.id AS href, p."imageVersion", p.renditions,
              count(*)::int AS visits, count(DISTINCT v."visitorHash")::int AS visitors,
              count(*) FILTER (WHERE v.kind = 'SHARE')::int AS "shareVisits", max(v."at") AS last
       FROM "Visit" v JOIN "Photo" p ON p.id = v."photoId"

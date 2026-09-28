@@ -7,8 +7,26 @@ import { ScanViewer } from "@/components/scans/ScanViewer";
 import { panoramaLabel } from "@/lib/images/panorama";
 import { PetTagger } from "@/components/people/PetTagger";
 import { LightboxInfo } from "./LightboxInfo";
+import { trapTab } from "@/components/ui/focus-trap";
 
-export type LightboxPhoto = { id: string; mediumUrl: string; width: number | null; height: number | null; caption: string | null; alt: string; /** Shown to members only; never set for anonymous viewers. */ uploadedBy?: string | null; /** Set for embedded videos: the lightbox shows the click-to-play facade instead of the image. */ youtubeId?: string | null; title?: string | null; /** Set for uploaded clips: plays inline with controls. */ videoUrl?: string | null; durationS?: number | null; /** Members can tag a pet from here. */ canTag?: boolean; /** Full-size file, opened by a second click on the picture. */ originalUrl?: string | null; /** A panorama, shown filling the height and panned sideways rather than shrunk to fit. */ panorama?: { projection: string | null; panoUrl: string } | null; /** A 3D scan, turned in place. */ scan?: { format: string | null; modelUrl: string; hasPoster: boolean } | null };
+export type LightboxPhoto = { id: string; mediumUrl: string; width: number | null; height: number | null; caption: string | null; alt: string; /** Shown to members only; never set for anonymous viewers. */ uploadedBy?: string | null; /** Set for embedded videos: the lightbox shows the click-to-play facade instead of the image. */ youtubeId?: string | null; title?: string | null; /** Set for uploaded clips: plays inline with controls. */ videoUrl?: string | null; durationS?: number | null; /** Its uploader and admins can tag a pet from here (and take a scan's first still). */ canTag?: boolean; /** Full-size file, opened by a second click on the picture. */ originalUrl?: string | null; /** A panorama, shown filling the height and panned sideways rather than shrunk to fit. */ panorama?: { projection: string | null; panoUrl: string } | null; /** A 3D scan, turned in place; `withheld` when this viewer may not have its file at all. */ scan?: { format: string | null; modelUrl: string; hasPoster: boolean; withheld?: boolean } | null };
+
+/**
+ * Where the arrow keys already mean something — the caret in a field, panning a panorama or a map, turning a scan,
+ * seeking a clip — they are left to it rather than taken to change photos, which would also throw away whatever was
+ * being typed in the info panel.
+ */
+const OWNS_ARROWS = "input, textarea, select, [contenteditable]:not([contenteditable=false]), [data-testid=panorama-view], .maplibregl-map, model-viewer, video, [role=slider], [role=listbox], [role=combobox]";
+
+/** What a key pressed while the lightbox is open should do to it, if anything. */
+export function lightboxKeyAction(e: { key: string; defaultPrevented: boolean; target: EventTarget | null }): "close" | "prev" | "next" | null {
+  if (e.defaultPrevented) return null;
+  if (e.key === "Escape") return "close";
+  if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return null;
+  const el = e.target as { isContentEditable?: boolean; closest?: (selector: string) => unknown } | null;
+  if (el?.isContentEditable || (typeof el?.closest === "function" && el.closest(OWNS_ARROWS))) return null;
+  return e.key === "ArrowLeft" ? "prev" : "next";
+}
 
 export function Lightbox({ photos, index, onClose, onNavigate, share = null }: { photos: LightboxPhoto[]; index: number; onClose: () => void; onNavigate: (i: number) => void; /** On a share page: the token that lets the info request through without a cookie. */ share?: { token: string; kind: string } | null }) {
   const photo = photos[index];
@@ -22,14 +40,8 @@ export function Lightbox({ photos, index, onClose, onNavigate, share = null }: {
     const opener = document.activeElement as HTMLElement | null;
     closeRef.current?.focus();
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Tab" && dialogRef.current) {
-        // Keep keyboard focus inside the dialog.
-        const focusable = Array.from(dialogRef.current.querySelectorAll<HTMLElement>("a[href], button:not([disabled]), input, select, textarea"));
-        if (!focusable.length) return;
-        const first = focusable[0], last = focusable[focusable.length - 1];
-        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
-        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
-      }
+      // Keep keyboard focus inside the dialog.
+      if (dialogRef.current) trapTab(e, dialogRef.current);
     };
     window.addEventListener("keydown", onKey);
     document.body.style.overflow = "hidden";
@@ -43,9 +55,10 @@ export function Lightbox({ photos, index, onClose, onNavigate, share = null }: {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-      if (e.key === "ArrowLeft") prev();
-      if (e.key === "ArrowRight") next();
+      const action = lightboxKeyAction(e);
+      if (action === "close") onClose();
+      if (action === "prev") prev();
+      if (action === "next") next();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -53,7 +66,8 @@ export function Lightbox({ photos, index, onClose, onNavigate, share = null }: {
 
   if (!photo) return null;
   return (
-    <div ref={dialogRef} className="fixed inset-0 z-50 bg-black/90 flex flex-col" onClick={onClose} role="dialog" aria-modal="true" aria-label="Photo viewer">
+    // Opaque on a phone, where the details panel fills the lower half and the page behind showed through its text.
+    <div ref={dialogRef} className="fixed inset-0 z-50 bg-black lg:bg-black/95 flex flex-col" onClick={onClose} role="dialog" aria-modal="true" aria-label="Photo viewer">
       <div className="flex items-center justify-between p-3 text-white/80 text-sm" onClick={(e) => e.stopPropagation()}>
         <span>
           {index + 1} / {photos.length}
@@ -70,7 +84,10 @@ export function Lightbox({ photos, index, onClose, onNavigate, share = null }: {
         anyone having to guess that the page scrolls. On a wide screen the details are a column beside the picture.
       */}
       <div className="flex-1 min-h-0 flex flex-col lg:flex-row lg:overflow-hidden">
-        <div className="relative shrink-0 lg:shrink lg:flex-1 flex flex-col items-center justify-center lg:min-h-0 px-12 py-2 gap-2 lg:gap-3">
+        {/* min-w-0: beside the details, the picture's column is as wide as the screen leaves it, not as wide as what is in
+            it. A panorama drawn at full height is thousands of pixels across, and without this it pushed the column (and
+            its scroller) out to that width, so there was nothing to drag across and the details were cut off. */}
+        <div className="relative shrink-0 lg:shrink lg:flex-1 flex flex-col items-center justify-center min-w-0 lg:min-h-0 px-12 py-2 gap-2 lg:gap-3">
           {photos.length > 1 && (
             <button onClick={(e) => { e.stopPropagation(); prev(); }} className="absolute left-2 top-1/2 -translate-y-1/2 text-white/80 hover:text-white text-3xl p-3" aria-label="Previous">
               ‹
@@ -84,20 +101,28 @@ export function Lightbox({ photos, index, onClose, onNavigate, share = null }: {
             </div>
           ) : photo.scan ? (
             <div className="w-full max-w-3xl" onClick={(e) => e.stopPropagation()}>
-              <ScanViewer photoId={photo.id} modelUrl={photo.scan.modelUrl} format={photo.scan.format} posterUrl={photo.scan.hasPoster ? photo.mediumUrl : null} canPoster={Boolean(photo.canTag)} alt={photo.alt} className="h-[46vh] lg:h-[62vh]" />
+              <ScanViewer photoId={photo.id} modelUrl={photo.scan.modelUrl} format={photo.scan.format} withheld={photo.scan.withheld} posterUrl={photo.scan.hasPoster ? photo.mediumUrl : null} canPoster={Boolean(photo.canTag)} alt={photo.alt} className="h-[46vh] lg:h-[62vh]" />
             </div>
           ) : photo.panorama ? (
             // A panorama fills the height and is dragged: fitting a 10:1 sweep to the width of a phone leaves a
-            // strip an inch tall, which is the one way of showing it that throws away why it was taken.
-            <PanoramaView
-              src={photo.panorama.panoUrl}
-              alt={photo.alt}
-              wrap={photo.panorama.projection === "EQUIRECTANGULAR_360"}
-              axis={(photo.width ?? 0) >= (photo.height ?? 0) ? "horizontal" : "vertical"}
-              className="h-[46vh] lg:h-[72vh] w-full max-w-full bg-black/40"
-            >
-              <PanoramaHint label={panoramaLabel(photo.panorama.projection)} />
-            </PanoramaView>
+            // strip an inch tall, which is the one way of showing it that throws away why it was taken. Like every
+            // other kind of picture here, a click or tap on it stays with it rather than closing the viewer.
+            <div className="w-full" data-testid="lightbox-panorama" onClick={(e) => e.stopPropagation()}>
+              <PanoramaView
+                src={photo.panorama.panoUrl}
+                alt={photo.alt}
+                wrap={photo.panorama.projection === "EQUIRECTANGULAR_360"}
+                axis={(photo.width ?? 0) >= (photo.height ?? 0) ? "horizontal" : "vertical"}
+                className="h-[46vh] lg:h-[72vh] w-full max-w-full bg-black/40"
+              >
+                <PanoramaHint label={panoramaLabel(photo.panorama.projection)} />
+                {/* What is panned across is a smaller copy; the whole of it is a click away, as on its own page. Laid
+                    over the corner rather than under it, so a short screen gives none of its height to the link. */}
+                {photo.originalUrl ? (
+                  <a href={photo.originalUrl} target="_blank" rel="noreferrer" title="Open the full-size photo" className="absolute right-2 top-2 rounded-full bg-black/60 px-3 py-1 text-xs text-white/90 hover:text-white" data-testid="lightbox-full-size">Full size</a>
+                ) : null}
+              </PanoramaView>
+            </div>
           ) : photo.originalUrl ? (
             // A second click on the picture opens the full-size file in its own tab.
             <a href={photo.originalUrl} target="_blank" rel="noreferrer" title="Open the full-size photo" className="max-h-full max-w-full" onClick={(e) => e.stopPropagation()}>
@@ -117,7 +142,7 @@ export function Lightbox({ photos, index, onClose, onNavigate, share = null }: {
             <p className="max-w-3xl text-center text-white text-base sm:text-xl font-medium leading-snug drop-shadow" data-testid="lightbox-caption" onClick={(e) => e.stopPropagation()}>{photo.caption}</p>
           )}
         </div>
-        <aside className="flex-1 min-h-0 overflow-y-auto lg:flex-none lg:w-80 xl:w-96 bg-black/40 border-t lg:border-t-0 lg:border-l border-white/10" onClick={(e) => e.stopPropagation()}>
+        <aside className="flex-1 min-h-0 overflow-y-auto lg:flex-none lg:w-80 xl:w-96 bg-neutral-950 lg:bg-black/40 border-t lg:border-t-0 lg:border-l border-white/10" onClick={(e) => e.stopPropagation()}>
           <LightboxInfo key={photo.id} photoId={photo.id} share={share} />
           {photo.canTag && <div className="px-4 pb-4 text-sm text-white/90"><PetTagger photoId={photo.id} dark /></div>}
         </aside>

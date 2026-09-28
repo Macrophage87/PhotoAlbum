@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { localDayFromOffset, localDayInZone, offsetMinutesInZone, parseOffsetString, wallTimeToInstant } from "@/lib/time/local-day";
+import { localDayFromOffset, localDayInZone, offsetMinutesInZone, parseOffsetString, localToday, photoDay, photoOffsetMin, photoWallTimeToInstant, wallTimeToInstant } from "@/lib/time/local-day";
 import { formatDayRange } from "@/lib/time/format";
 
 describe("local day helpers", () => {
@@ -26,10 +26,69 @@ describe("local day helpers", () => {
     expect(parseOffsetString("-0430")).toBe(-270);
     expect(parseOffsetString("Z")).toBeNull();
   });
+  it("takes an offset no clock could read as no offset (#144)", () => {
+    expect(parseOffsetString("+14:00")).toBe(840);
+    expect(parseOffsetString("-12:00")).toBe(-720);
+    expect(parseOffsetString("+14:01")).toBeNull();
+    expect(parseOffsetString("-15:00")).toBeNull();
+    expect(parseOffsetString("+99:99")).toBeNull();
+    expect(parseOffsetString("+05:60")).toBeNull();
+  });
   it("formats day ranges", () => {
     expect(formatDayRange("2025-08-10", "2025-08-16")).toBe("Aug 10 – 16, 2025");
     expect(formatDayRange("2025-08-30", "2025-09-02")).toBe("Aug 30 – Sep 2, 2025");
     expect(formatDayRange("2025-12-28", "2026-01-03")).toBe("Dec 28, 2025 – Jan 3, 2026");
     expect(formatDayRange("2025-08-10", "2025-08-10")).toBe("Aug 10, 2025");
+  });
+});
+
+describe("the day a photograph is shown under", () => {
+  it("uses its own offset, else the trip's zone, else UTC", () => {
+    const at = new Date("2025-08-12T04:45:00Z");
+    expect(photoDay(at, -300, "America/New_York")).toBe("2025-08-11");
+    expect(photoDay(at, null, "America/New_York")).toBe("2025-08-12");
+    expect(photoDay(at, null)).toBe("2025-08-12");
+    expect(photoDay(new Date("2025-08-12T02:00:00Z"), null, "America/New_York")).toBe("2025-08-11");
+  });
+});
+
+describe("today, for a form's default date (#127)", () => {
+  it("is the day on the local clock, not the UTC day", () => {
+    const prev = process.env.TZ;
+    process.env.TZ = "America/New_York";
+    try {
+      // 8 PM on Sep 26 in New York is already Sep 27 in UTC.
+      expect(localToday(new Date("2026-09-27T00:00:00Z"))).toBe("2026-09-26");
+    } finally {
+      if (prev === undefined) delete process.env.TZ;
+      else process.env.TZ = prev;
+    }
+  });
+});
+
+describe("the clock a photograph is read and set on", () => {
+  const at = new Date("2025-08-12T16:00:00Z");
+
+  it("reads its own offset first, then the trip's zone, then UTC (applyReportedDate, shiftPhotoTimezone)", () => {
+    expect(photoOffsetMin(at, -420, "America/New_York")).toBe(-420);
+    expect(photoOffsetMin(at, null, "America/New_York")).toBe(-240);
+    expect(photoOffsetMin(at, null, null)).toBe(0);
+  });
+
+  it("resolves a typed time in the trip's zone on that day's side of a DST change (setPhotoDate)", () => {
+    // 3 AM on Nov 2, 2025 in New York is EST (the clocks went back at 2 AM). Reading the zone's offset at 03:00Z,
+    // as the old code did, lands on the evening before, still EDT, and put the photograph an hour early.
+    const wall = { year: 2025, month: 11, day: 2, hour: 3, minute: 0, second: 0 };
+    const r = photoWallTimeToInstant(wall, null, "America/New_York");
+    expect(r.tzOffsetMin).toBe(-300);
+    expect(r.takenAt.toISOString()).toBe("2025-11-02T08:00:00.000Z");
+    const spring = photoWallTimeToInstant({ year: 2025, month: 3, day: 9, hour: 12, minute: 0, second: 0 }, null, "America/New_York");
+    expect(spring.tzOffsetMin).toBe(-240);
+    expect(spring.takenAt.toISOString()).toBe("2025-03-09T16:00:00.000Z");
+  });
+
+  it("keeps the photograph's own offset when it has one", () => {
+    const r = photoWallTimeToInstant({ year: 2025, month: 8, day: 12, hour: 12, minute: 0, second: 0 }, -420, "America/New_York");
+    expect(r).toEqual({ takenAt: new Date("2025-08-12T19:00:00Z"), tzOffsetMin: -420 });
   });
 });

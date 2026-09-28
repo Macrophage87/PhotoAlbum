@@ -10,6 +10,7 @@ import { ALLOWED_MIMES, EXT_MIME, VIDEO_MIMES } from "@/lib/media/mime";
 import { enqueue } from "@/lib/jobs/boss";
 import { QUEUES } from "@/lib/jobs/queues";
 import { fileExisting } from "@/lib/photos/file-existing";
+import { DOWNLOAD_ABANDONED_MS, takeableDownload } from "@/lib/google/download-claim";
 
 export type PickerStart = { ok: true; sessionId: string; pickerUri: string; pollIntervalMs: number; deadline: number } | { ok: false; reconnect: boolean; message: string };
 export type PickerPoll = { state: "picking" } | { state: "queued"; photoIds: string[]; skipped: number; unsupported: number } | { state: "error"; reconnect: boolean; message: string };
@@ -44,33 +45,58 @@ export async function pollPickerSession(sessionId: string, tripId: string | null
     const s = await getPickerSession(token, sessionId);
     if (!s.mediaItemsSet) return s.deadline <= Date.now() ? { state: "error", reconnect: false, message: "That picking session has ended; start again." } : { state: "picking" };
     const items = await listPickedItems(token, sessionId);
-    if (tripId && !(await db.trip.findUnique({ where: { id: tripId }, select: { id: true } }))) tripId = null;
-    const existing = new Map((await db.photo.findMany({ where: { sourceKind: "GOOGLE_PICKER", sourceId: { in: items.map((i) => i.id) } }, select: { id: true, sourceId: true } })).map((r) => [r.sourceId, r.id]));
+    if (tripId && !(await db.trip.findUnique({ where: { id: tripId, deletingAt: null }, select: { id: true } }))) tripId = null;
+    // Nothing in the trash counts as already in the album: picking it again is how a member gets it back. Nor does
+    // another member's row whose file never arrived: it is not in the album, and it is not this member's to fetch.
+    const existing = new Map((await db.photo.findMany({ where: { sourceKind: "GOOGLE_PICKER", sourceId: { in: items.map((i) => i.id) }, trashedAt: null, OR: [{ originalPath: { not: "pending" } }, { uploaderId: user.id }] }, select: { id: true, sourceId: true, uploaderId: true, status: true, originalPath: true, updatedAt: true } })).map((r) => [r.sourceId, r]));
     const photoIds: string[] = [];
     const jobItems: Record<string, unknown> = {};
+    /** The rows this poll made, as against ones it picked up again. */
+    const made: string[] = [];
     let skipped = 0, unsupported = 0;
-    for (const item of items) {
-      const had = existing.get(item.id);
-      if (had) {
-        // Picked again for a particular trip: the one the album has goes on it, rather than a second copy.
-        if (tripId) await fileExisting(user, had, { tripId });
-        skipped++;
-        continue;
+    try {
+      for (const item of items) {
+        const had = existing.get(item.id);
+        // One of theirs whose file never arrived — its download failed, or the poll that made it failed before the
+        // download was queued — is picked again to be fetched, not skipped as though it were in the album.
+        // A download that died holding it counts too, once it has plainly been abandoned.
+        if (had && had.uploaderId === user.id && had.originalPath === "pending" && (had.status === "PENDING" || had.status === "FAILED" || (had.status === "PROCESSING" && had.updatedAt.getTime() < Date.now() - DOWNLOAD_ABANDONED_MS))) {
+          // Conditional: a download job may be taking it this moment, and then it is on its way already.
+          const abandoned = takeableDownload().OR[1];
+          const again = await db.photo.updateMany({ where: { id: had.id, originalPath: "pending", OR: [{ status: { in: ["PENDING", "FAILED"] } }, abandoned] }, data: { status: "PENDING", error: null, ...(tripId ? { tripId, activityId: null, activitySetById: null } : {}) } });
+          if (again.count === 1) {
+            photoIds.push(had.id);
+            jobItems[had.id] = item;
+          }
+          continue;
+        }
+        if (had) {
+          // Picked again for a particular trip: the one the album has goes on it, rather than a second copy.
+          if (tripId) await fileExisting(user, had.id, { tripId });
+          skipped++;
+          continue;
+        }
+        const ext = item.filename.toLowerCase().split(".").pop() ?? "";
+        let mime = item.mimeType.split(";")[0].trim();
+        if (!ALLOWED_MIMES.has(mime)) mime = EXT_MIME[ext] ?? "";
+        if (!ALLOWED_MIMES.has(mime)) { unsupported++; continue; }
+        const created = await db.photo.create({
+          data: { uploaderId: user.id, tripId, kind: VIDEO_MIMES.has(mime) ? "VIDEO" : "PHOTO", sourceKind: "GOOGLE_PICKER", sourceId: item.id, status: "PENDING", originalName: item.filename, mimeType: mime, storageKey: "pending", originalPath: "pending", sizeBytes: 0 },
+          select: { id: true },
+        });
+        // A second poll for the same session must not create the rows twice: the unique (sourceKind, sourceId) pair is
+        // not a constraint, so the check above plus a single queued job per session keeps it to one row per item.
+        photoIds.push(created.id);
+        made.push(created.id);
+        jobItems[created.id] = item;
       }
-      const ext = item.filename.toLowerCase().split(".").pop() ?? "";
-      let mime = item.mimeType.split(";")[0].trim();
-      if (!ALLOWED_MIMES.has(mime)) mime = EXT_MIME[ext] ?? "";
-      if (!ALLOWED_MIMES.has(mime)) { unsupported++; continue; }
-      const created = await db.photo.create({
-        data: { uploaderId: user.id, tripId, kind: VIDEO_MIMES.has(mime) ? "VIDEO" : "PHOTO", sourceKind: "GOOGLE_PICKER", sourceId: item.id, status: "PENDING", originalName: item.filename, mimeType: mime, storageKey: "pending", originalPath: "pending", sizeBytes: 0 },
-        select: { id: true },
-      });
-      // A second poll for the same session must not create the rows twice: the unique (sourceKind, sourceId) pair is
-      // not a constraint, so the check above plus a single queued job per session keeps it to one row per item.
-      photoIds.push(created.id);
-      jobItems[created.id] = item;
+      if (photoIds.length > 0) await enqueue(QUEUES.googlePickerImport, { userId: user.id, sessionId, photoIds, items: jobItems }, { expireInSeconds: 2 * 3600, retryLimit: 1, retryDelay: 60, singletonKey: `picker:${sessionId}` });
+    } catch (err) {
+      // Rows made here with no download queued for them would wait for ever; take them away again. (Ones picked
+      // again above are still waiting for a file, and are picked up the next time.)
+      if (made.length) await db.photo.deleteMany({ where: { id: { in: made }, originalPath: "pending" } }).catch(() => undefined);
+      throw err;
     }
-    if (photoIds.length > 0) await enqueue(QUEUES.googlePickerImport, { userId: user.id, sessionId, photoIds, items: jobItems }, { expireInSeconds: 2 * 3600, retryLimit: 1, retryDelay: 60, singletonKey: `picker:${sessionId}` });
     return { state: "queued", photoIds, skipped, unsupported };
   } catch (err) {
     const f = await fail(user.id, err);

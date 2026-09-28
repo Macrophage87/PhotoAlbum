@@ -25,7 +25,10 @@ The deployment layout this ends at is the one `DEPLOY.md` already describes:
 
 - [ ] **Back up.** On the server, in the current checkout:
       ```bash
-      docker compose exec -T db pg_dump -U photoalbum photoalbum | gzip > ~/album-before-move.sql.gz
+      set -o pipefail   # so a failed pg_dump is an error, not a tiny .gz
+      # umask in a subshell: the dump is readable by you only, and later commands are not affected
+      (umask 077 && docker compose exec -T db sh -c 'exec pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' | gzip > ~/album-before-move.sql.gz)
+      gzip -cd ~/album-before-move.sql.gz | tail -n 20 | grep -c 'PostgreSQL database dump complete'   # 1, or the dump is incomplete
       docker run --rm -v photoalbum_photos:/data:ro -v ~:/backup alpine \
         tar czf /backup/album-photos-before-move.tgz -C /data .
       ```
@@ -50,7 +53,7 @@ Skip only if cieply.com is meant to start empty.
 cd /cieply/sites/cieply.com
 git clone -b main <repo-url> PhotoAlbum-live
 cd PhotoAlbum-live
-cp ../PhotoAlbum/.env .env          # then edit it — see step 2
+cp ../PhotoAlbum/.env .env          # then edit it — see step 2; keep its FORGET_KEY
 cp ../PhotoAlbum/docker-compose.override.yml . 2>/dev/null || true
 ```
 
@@ -62,7 +65,7 @@ you just took:
 ```bash
 cd /cieply/sites/cieply.com/PhotoAlbum && docker compose stop app      # no writes during the copy
 cd ../PhotoAlbum-live && docker compose up -d db && sleep 10
-gunzip -c ~/album-before-move.sql.gz | docker compose exec -T db psql -U photoalbum photoalbum
+gunzip -c ~/album-before-move.sql.gz | docker compose exec -T db sh -c 'exec psql -U "$POSTGRES_USER" "$POSTGRES_DB"'
 docker run --rm -v photoalbum-live_photos:/data \
   -v ~:/backup alpine tar xzf /backup/album-photos-before-move.tgz -C /data
 ```
@@ -93,6 +96,40 @@ APP_PORT=3005
 caches it, so the container must be recreated (`docker compose up -d`), not just
 reloaded. `NEXT_PUBLIC_*` values are different: they are compiled into the
 browser bundle and need `docker compose up --build -d`.
+
+**`FORGET_KEY` goes with the data.** Forgotten people's names are kept in the
+database as hashes under a key made from `FORGET_KEY` and a salt in that same
+database, so the live instance must keep the key the old instance had: the
+copied `.env` already carries it, so leave that line as it is. Under any other
+key, or none, the live album pauses forgetting and the AI helper as soon as
+anybody has been forgotten, until the old key is back. If the old `.env` has no
+`FORGET_KEY` line yet, see "Upgrading from before the forget key" in
+[DEPLOY.md](DEPLOY.md#upgrading-from-before-the-forget-key) first.
+
+The new dev instance starts with an empty database, so it gets a key of its
+own (the two instances never share one). **This is the one time a key is
+replaced, and only because live now holds it:** the block below changes the dev
+`.env` only when `PhotoAlbum-live/.env` has the very same, non-empty key line, so it never
+throws away the only copy, and pasting it twice does nothing the second time:
+
+```bash
+cd /cieply/sites/cieply.com/PhotoAlbum
+KEY_LINE='^[[:space:]]*(export[[:space:]]+)?FORGET_KEY='
+DEV=$(sudo grep -E "${KEY_LINE}[^[:space:]]" .env)
+LIVE=$(sudo grep -E "${KEY_LINE}[^[:space:]]" ../PhotoAlbum-live/.env)
+if [ -n "$DEV" ] && [ "$DEV" = "$LIVE" ]; then
+  sudo sed -i -E "/$KEY_LINE/d" .env
+  sudo sed -i -e '$a\' .env        # end the last line, so the key starts a line of its own
+  echo "FORGET_KEY=$(openssl rand -base64 32)" | sudo tee -a .env >/dev/null
+else
+  echo "Not changed: live's .env does not hold this very key (or neither has one). Check before changing anything."
+fi
+unset DEV LIVE
+```
+
+Only do that once its old volumes are out of the way: on the old database, a
+new key pauses forgetting just the same. Back up both keys, each labeled with
+its instance, apart from the database dumps (which do not contain them).
 
 **What `APP_URL` decides**, all of which break quietly if it is left at the old
 host:
@@ -267,11 +304,14 @@ Do this:
 2. Take a database dump and a photo-volume archive from the existing instance,
    verify both are non-empty, and tell me their sizes and where they are.
 3. Create the PhotoAlbum-live checkout on `main`, give it its own .env with
-   APP_URL=https://cieply.com and APP_PORT=3004, and restore the dump and the
+   APP_URL=https://cieply.com and APP_PORT=3004 and the existing instance's
+   FORGET_KEY unchanged (never print it), and restore the dump and the
    photos into its volumes. Verify by counting rows in "Photo" and files under
    the photo volume and comparing with the source.
 4. Reset the existing checkout to a clean `staging` instance for dev.cieply.com
-   with APP_URL=https://dev.cieply.com and APP_PORT=3005. Ask me before deleting
+   with APP_URL=https://dev.cieply.com and APP_PORT=3005, and a new FORGET_KEY
+   (openssl rand -base64 32) once its database is the new, empty one; tell me
+   to back up both keys rather than showing them. Ask me before deleting
    or reusing any volume that still holds the only copy of anything.
 5. Update the reverse proxy for both hostnames, confirm X-Forwarded-For and
    X-Forwarded-Proto are passed through, and confirm the proxy adds no

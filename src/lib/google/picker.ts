@@ -68,8 +68,10 @@ export function downloadUrl(item: PickedItem): string {
   return `${item.baseUrl}${item.type === "VIDEO" ? "=dv" : "=d"}`;
 }
 
-export async function openDownload(accessToken: string, item: PickedItem): Promise<Response> {
-  const res = await fetch(downloadUrl(item), { headers: { authorization: `Bearer ${accessToken}` }, signal: AbortSignal.timeout(10 * 60_000) });
+/** `signal` is the job's own, so a job that pg-boss gives up on stops downloading as well. */
+export async function openDownload(accessToken: string, item: PickedItem, signal?: AbortSignal): Promise<Response> {
+  const timeout = AbortSignal.timeout(10 * 60_000);
+  const res = await fetch(downloadUrl(item), { headers: { authorization: `Bearer ${accessToken}` }, signal: signal ? AbortSignal.any([timeout, signal]) : timeout });
   if (res.status === 401 || res.status === 403) throw new GoogleAuthError(`Google Photos refused the download (${res.status})`, res.status === 401);
   if (!res.ok || !res.body) throw new Error(`Download failed (${res.status})`);
   return res;

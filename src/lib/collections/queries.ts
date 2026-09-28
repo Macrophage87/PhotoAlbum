@@ -5,17 +5,18 @@ import type { Viewer } from "@/lib/auth/viewer";
 import { visibleContainersWhere } from "@/lib/auth/access";
 import { photoCardSelect, type PhotoCard } from "@/lib/photos/queries";
 import { NOT_TRASHED } from "@/lib/photos/trash";
-import { coverUnlessTrashed } from "@/lib/photos/cover";
+import { COVERABLE, coverPhotoSelect, standingCover } from "@/lib/photos/cover";
 
 export const collectionCardSelect = {
   id: true,
   slug: true,
   title: true,
   description: true,
+  descriptionMembersOnly: true,
   themeKey: true,
   visibility: true,
   shareToken: true,
-  coverPhoto: { select: { id: true, updatedAt: true, width: true, height: true, trashedAt: true } },
+  coverPhoto: coverPhotoSelect,
   _count: { select: { items: { where: { photo: NOT_TRASHED } } } },
 } satisfies Prisma.CollectionSelect;
 
@@ -25,12 +26,13 @@ export type CollectionCardData = Prisma.CollectionGetPayload<{ select: typeof co
 /** Collections for the front page, most recently touched first, optionally narrowed by name, and paged. */
 export async function listVisibleCollections(viewer: Viewer, opts: { q?: string | null; take?: number; skip?: number } = {}): Promise<CollectionCardData[]> {
   const where = { ...visibleContainersWhere(viewer), ...(opts.q ? { title: { contains: opts.q, mode: "insensitive" as const } } : {}) };
-  // Same order as the trips: mine, then the family's, then most recently touched.
+  // Same order as the trips: mine, then the family's, then most recently touched. A visitor gets only the last: the
+  // family's hearts, read off the order, are theirs.
   const ids = await db.$queryRaw<{ id: string }[]>`
     SELECT c.id FROM "Collection" c
     WHERE ${viewer.kind === "user" ? Prisma.sql`TRUE` : Prisma.sql`c.visibility = 'PUBLIC'`}
       AND ${opts.q ? Prisma.sql`c.title ILIKE ${"%" + opts.q + "%"}` : Prisma.sql`TRUE`}
-    ${favouriteOrderSql("collection", "c", viewer.kind === "user" ? viewer.user.id : null, Prisma.sql`c."updatedAt" DESC, c.id DESC`)}
+    ${viewer.kind === "user" ? favouriteOrderSql("collection", "c", viewer.user.id, Prisma.sql`c."updatedAt" DESC, c.id DESC`) : Prisma.sql`ORDER BY c."updatedAt" DESC, c.id DESC`}
     LIMIT ${opts.take ?? 1000} OFFSET ${opts.skip ?? 0}`;
   const rows = await db.collection.findMany({ where: { ...where, id: { in: ids.map((i) => i.id) } }, select: collectionCardSelect });
   const byId = new Map(rows.map((r) => [r.id, r]));
@@ -44,25 +46,48 @@ export async function countVisibleCollections(viewer: Viewer, q?: string | null)
 export async function getCollectionBySlug(slug: string) {
   return db.collection.findUnique({
     where: { slug },
-    include: { coverPhoto: { select: { id: true, updatedAt: true, width: true, height: true, trashedAt: true } }, _count: { select: { items: { where: { photo: NOT_TRASHED } } } } },
+    include: { coverPhoto: coverPhotoSelect, _count: { select: { items: { where: { photo: NOT_TRASHED } } } } },
   });
 }
 
 export type CollectionWithCounts = NonNullable<Awaited<ReturnType<typeof getCollectionBySlug>>>;
 
-/** Cover photo, or the first ready item when no cover is set. */
-export async function collectionCoverFor(collection: { id: string; coverPhoto: { id: string; updatedAt: Date; width?: number | null; height?: number | null; trashedAt?: Date | null } | null }) {
-  const chosen = coverUnlessTrashed(collection.coverPhoto);
+type ChosenCover = { id: string; imageVersion: number; width: number | null; height?: number | null; trashedAt?: Date | null };
+
+/**
+ * The cover chosen by hand, while it still stands: with pictures to draw, out of the trash, and still one of the
+ * collection's items, which is the same rule a trip's cover and an activity's follow.
+ */
+export async function chosenCollectionCover<T extends ChosenCover>(collection: { id: string; coverPhoto: T | null }): Promise<T | null> {
+  const chosen = standingCover(collection.coverPhoto);
+  if (!chosen) return null;
+  const held = await db.collectionItem.findUnique({ where: { collectionId_photoId: { collectionId: collection.id, photoId: chosen.id } }, select: { id: true } });
+  return held ? chosen : null;
+}
+
+/** The cover chosen by hand where it still stands, or else the first ready item in the collection's saved order. */
+export async function collectionCoverFor(collection: { id: string; coverPhoto: ChosenCover | null }) {
+  const chosen = await chosenCollectionCover(collection);
   if (chosen) return chosen;
   const item = await db.collectionItem.findFirst({
-    where: { collectionId: collection.id, photo: { status: "READY", ...NOT_TRASHED } },
+    where: { collectionId: collection.id, photo: COVERABLE },
     orderBy: [{ position: "asc" }, { createdAt: "asc" }],
-    select: { photo: { select: { id: true, updatedAt: true, width: true, height: true } } },
+    select: { photo: { select: { id: true, updatedAt: true, imageVersion: true, width: true, height: true } } },
   });
   return item?.photo ?? null;
 }
 
-export type CollectionItemCard = PhotoCard & { itemId: string; position: number };
+/** Where an item stands in the saved order, counting from 0, whichever order the list is shown in. */
+export type CollectionItemCard = PhotoCard & { itemId: string; position: number; arranged: number };
+
+/**
+ * The order a collection is shown in when nobody asks for another: the saved one, once somebody has arranged it, and
+ * otherwise favourites first. Pages without an order of their own (the overview, a shared link) use this.
+ */
+export function defaultCollectionOrder(collection: { arrangedAt: Date | null }, member: boolean): "arranged" | "favorites" | "oldest" {
+  // Favourites first only for a member: see VISITOR_PHOTO_SORTS.
+  return collection.arrangedAt ? "arranged" : member ? "favorites" : "oldest";
+}
 
 /** Items in display order. Every status is included so members see processing tiles. */
 export async function listCollectionItems(collectionId: string, opts: { viewerId?: string | null; order?: "favorites" | "arranged" | "oldest" | "newest" } = {}): Promise<CollectionItemCard[]> {
@@ -71,7 +96,7 @@ export async function listCollectionItems(collectionId: string, opts: { viewerId
     orderBy: [{ position: "asc" }, { createdAt: "asc" }],
     select: { id: true, position: true, photo: { select: photoCardSelect } },
   });
-  const cards = items.map((i) => ({ ...i.photo, itemId: i.id, position: i.position }));
+  const cards = items.map((i, arranged) => ({ ...i.photo, itemId: i.id, position: i.position, arranged }));
   // By when they were taken, either way round; the undated keep their arranged places at the end, and the
   // arrangement settles ties.
   if (opts.order === "oldest" || opts.order === "newest") {
@@ -83,6 +108,8 @@ export async function listCollectionItems(collectionId: string, opts: { viewerId
   }
   // An empty collection has nothing to order, and asking Postgres about an empty list is an error, not a no-op.
   if (!cards.length || (opts.order ?? "favorites") !== "favorites") return cards;
+  // Favourites first is a member's order (`viewerId` says who); anybody else would read the family's hearts from it.
+  if (!opts.viewerId) return listCollectionItems(collectionId, { order: "oldest" });
   // Favourites lead; the collection's own arrangement is the tie-break, so everything else stays where it was put.
   const state = await db.$queryRaw<{ id: string; n: bigint; mine: boolean }[]>`
     SELECT p.id,

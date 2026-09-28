@@ -18,7 +18,7 @@ import { RENDITION_SIZES } from "@/lib/images/renditions";
  * photograph in it.
  */
 
-export type PreviewCover = { id: string; updatedAt: Date | string; width?: number | null; height?: number | null } | null;
+export type PreviewCover = { id: string; imageVersion: number; width?: number | null; height?: number | null } | null;
 
 /** What the album puts on a card, in the shape Next wants for `openGraph` and `twitter`. */
 export function previewCard(opts: {
@@ -41,7 +41,7 @@ export function previewCard(opts: {
 
 function coverImage(cover: NonNullable<PreviewCover>, alt: string, appUrl: string, shareToken?: string, shareKind?: "trip" | "collection" | "activity") {
   const share = shareToken ? `&share=${encodeURIComponent(shareToken)}&kind=${shareKind ?? "trip"}` : "";
-  const url = new URL(`${photoUrl({ id: cover.id, updatedAt: cover.updatedAt }, "preview")}${share}`, appUrl).toString();
+  const url = new URL(`${photoUrl({ id: cover.id, imageVersion: cover.imageVersion }, "preview")}${share}`, appUrl).toString();
   // The rendition is scaled to fit a square of this side, so the long edge is known and the short one follows the
   // original's shape. Where the album never learned the shape, the long edge alone is still better than nothing.
   const long = RENDITION_SIZES.medium;

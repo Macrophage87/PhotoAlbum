@@ -40,7 +40,8 @@ export async function requireUser(nextPath?: string): Promise<ViewerUser> {
 
 export async function requireAdmin(nextPath?: string): Promise<ViewerUser> {
   const user = await requireUser(nextPath);
-  if (user.role !== "ADMIN") redirect("/");
+  // Home, saying why, rather than a silent bounce that looks like a broken link.
+  if (user.role !== "ADMIN") redirect("/?notice=admins-only");
   return user;
 }
 

@@ -42,8 +42,8 @@ export function parseProbe(json: FfprobeJson): Probe {
   };
 }
 
-export async function probe(file: string): Promise<Probe> {
-  const { stdout } = await run("ffprobe", ["-v", "error", "-print_format", "json", "-show_format", "-show_streams", file], { maxBuffer: 4 * 1024 * 1024 });
+export async function probe(file: string, signal?: AbortSignal): Promise<Probe> {
+  const { stdout } = await run("ffprobe", ["-v", "error", "-print_format", "json", "-show_format", "-show_streams", file], { maxBuffer: 4 * 1024 * 1024, signal });
   return parseProbe(JSON.parse(stdout) as FfprobeJson);
 }
 
@@ -54,8 +54,11 @@ export function videoFilter(p: Pick<Probe, "hdr">): string {
   return `zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p,${fit}`;
 }
 
-/** Arguments for the web-playable H.264 MP4. `-preset veryfast` keeps a 90-second clip to minutes on a small VPS. */
-export function transcodeArgs(input: string, output: string, p: Pick<Probe, "hdr">): string[] {
+/**
+ * Arguments for the web-playable H.264 MP4. `-preset veryfast` keeps a 90-second clip to minutes on a small VPS.
+ * `maxSeconds` stops it there, so a clip too long to keep is never transcoded in full to find that out.
+ */
+export function transcodeArgs(input: string, output: string, p: Pick<Probe, "hdr">, maxSeconds?: number): string[] {
   return [
     "-y", "-hide_banner", "-loglevel", "error",
     "-i", input,
@@ -64,6 +67,7 @@ export function transcodeArgs(input: string, output: string, p: Pick<Probe, "hdr
     "-c:a", "aac", "-b:a", "128k", "-ac", "2",
     "-movflags", "+faststart",
     "-map_metadata", "-1",
+    ...(maxSeconds ? ["-t", String(maxSeconds)] : []),
     output,
   ];
 }
@@ -77,6 +81,7 @@ export function posterArgs(input: string, output: string, durationS: number | nu
 /** No single ffmpeg call may hang a worker: a poster or frame takes seconds, a 90-second transcode a few minutes. */
 export const FFMPEG_TIMEOUT_MS = 10 * 60_000;
 
-export async function ffmpeg(args: string[]): Promise<void> {
-  await run("ffmpeg", args, { maxBuffer: 4 * 1024 * 1024, timeout: FFMPEG_TIMEOUT_MS, killSignal: "SIGKILL" });
+/** `signal` kills the process as well: a job pg-boss has timed out must not keep transcoding beside its retry. */
+export async function ffmpeg(args: string[], signal?: AbortSignal): Promise<void> {
+  await run("ffmpeg", args, { maxBuffer: 4 * 1024 * 1024, timeout: FFMPEG_TIMEOUT_MS, killSignal: "SIGKILL", signal });
 }

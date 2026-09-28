@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useMemo, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import type { MapPayload, TrackFeatureProps } from "@/lib/map/geojson";
+import type { MapPayload, MapTrackProps, TrackFeatureProps } from "@/lib/map/geojson";
 import type { MapTheme } from "@/lib/map/theme";
 import { MapViewDynamic } from "./MapViewDynamic";
 import { Lightbox, type LightboxPhoto } from "@/components/photos/Lightbox";
@@ -11,16 +11,32 @@ import { ACTIVITY_LABEL } from "@/lib/activities/types";
 import type { ActivityType } from "@/generated/prisma/enums";
 import { ActivityTypeIcon } from "@/components/activities/ActivityTypeIcon";
 import { formatDistance } from "@/lib/time/format";
-import { ringsFor, type ColourBy } from "@/lib/map/colour-by";
+import { NONE_SLOT, type ColourBy } from "@/lib/map/colour-by";
+import { cellFeatures, pointFeatures, useDescribe, useMapData } from "./map-data";
+import { lightboxNav } from "./lightbox-nav";
+
+/** What the lightbox draws while a photograph's picture is still being looked up: nothing, rather than a broken image. */
+const LOADING = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
 
 const COLOUR_BY_KEY = "map-colour-by";
 const COLOUR_BY_LABEL: Record<ColourBy, string> = { none: "Nothing", day: "Day", activity: "Activity", uploader: "Who uploaded" };
 
+/** A track's ring slot for one way of colouring. */
+function trackSlot(t: MapTrackProps, by: Exclude<ColourBy, "none">): number {
+  return by === "day" ? t.daySlot : by === "activity" ? t.activitySlot : (t.uploaderSlot ?? NONE_SLOT);
+}
+
 export function TripMap({ src, theme, showTripList = false, activityHrefBase, narrowed = false, below }: { src: string; theme: MapTheme; showTripList?: boolean; /** Override the activity link root, e.g. for share pages. */ activityHrefBase?: string; /** Something is being looked for, so an empty map means "no match" rather than "nothing placed yet". */ narrowed?: boolean; /** Shown directly under the map, such as the way to place photos on it. */ below?: ReactNode }) {
   const activityHref = (tripSlug: string, activityId: string) => `${activityHrefBase ?? `/trips/${tripSlug}/activities`}/${activityId}`;
-  const [data, setData] = useState<MapPayload | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [lightbox, setLightbox] = useState<number | null>(null);
+  const { data, error, photos: sent, onViewChange } = useMapData(src);
+  const { describe, known } = useDescribe(src);
+  // The photographs the lightbox steps through are the ones on the map when it opened, whatever is fetched meanwhile.
+  const [lightbox, setLightbox] = useState<{ ids: string[]; index: number } | null>(null);
+  const nav = useRef<ReturnType<typeof lightboxNav> | null>(null);
+  /** Photographs asked about and not described: no longer there for this viewer. */
+  const gone = useRef(new Set<string>());
+  /** Photographs whose details could not be fetched, twice: said so in the lightbox rather than left loading. */
+  const [unloaded, setUnloaded] = useState<ReadonlySet<string>>(new Set());
   const [hover, setHover] = useState<string | null>(null);
   const [focus, setFocus] = useState<MapPayload["bounds"]>(null);
   // The choice is remembered on this device, so somebody who likes seeing the days keeps seeing them. Read as the
@@ -44,46 +60,70 @@ export function TripMap({ src, theme, showTripList = false, activityHrefBase, na
     }
   };
 
-  useEffect(() => {
-    let alive = true;
-    fetch(src)
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`Map data failed (${r.status})`))))
-      .then((d: MapPayload) => alive && setData(d))
-      .catch((e: Error) => alive && setError(e.message));
-    return () => {
-      alive = false;
-    };
-  }, [src]);
-
-  const photos: LightboxPhoto[] = useMemo(
-    () => (data?.photos.features ?? []).map((f) => ({ id: f.properties.id, mediumUrl: f.properties.mediumUrl, width: null, height: null, caption: f.properties.caption, alt: f.properties.caption ?? "Photo" })),
-    [data],
-  );
   // Who uploaded what is for members only; the server leaves it out for anybody else, and then so does the choice.
-  const canByUploader = useMemo(() => (data?.photos.features ?? []).some((f) => f.properties.uploaderId), [data]);
+  const canByUploader = Boolean(data?.rings.uploader);
   const by: ColourBy = colourBy === "uploader" && !canByUploader ? "none" : colourBy;
-  const coloured = useMemo(() => {
-    if (!data || by === "none") return null;
-    const rings = ringsFor(by, data.photos.features.map((f) => f.properties), data.tracks.features.map((f) => f.properties));
-    return {
-      groups: rings.groups,
-      colours: rings.colours,
-      photos: { ...data.photos, features: data.photos.features.map((f) => ({ ...f, properties: { ...f.properties, slot: rings.photoSlot(f.properties) } })) },
-      // A track takes the colour of what it belongs to, so a walk and the photographs along it match.
-      tracks: { ...data.tracks, features: data.tracks.features.map((f) => ({ ...f, properties: { ...f.properties, color: rings.colours[rings.trackSlot(f.properties)] } })) },
-    };
-  }, [data, by]);
-  const tracks = (coloured?.tracks ?? data?.tracks)?.features ?? [];
+  // The legend and colours are the whole map's, sent once; each photograph and group carries its slot in them.
+  const legend = data && by !== "none" ? data.rings[by] : null;
+  const pins = useMemo(() => pointFeatures(sent?.points ?? [], legend ? by : "none"), [sent, by, legend]);
+  const cells = useMemo(() => cellFeatures(sent?.cells ?? [], legend ? by : "none"), [sent, by, legend]);
+  const colouredTracks = useMemo((): MapPayload["tracks"] | null => {
+    if (!data || !legend || by === "none") return null;
+    // A track takes the colour of what it belongs to, so a walk and the photographs along it match.
+    return { ...data.tracks, features: data.tracks.features.map((f) => ({ ...f, properties: { ...f.properties, color: legend.colours[trackSlot(f.properties, by)] } })) };
+  }, [data, legend, by]);
+  const tracks = (colouredTracks ?? data?.tracks)?.features ?? [];
+  const order = useMemo(() => (sent?.points ?? []).map((p) => p[0]), [sent]);
+  const photos: LightboxPhoto[] = useMemo(
+    () =>
+      (lightbox?.ids ?? []).map((id) => {
+        const d = known.get(id);
+        if (!d && unloaded.has(id)) return { id, mediumUrl: LOADING, width: null, height: null, caption: "Couldn't load this photo.", alt: "Couldn't load this photo" };
+        return { id, mediumUrl: d?.mediumUrl ?? LOADING, width: null, height: null, caption: d?.caption ?? null, alt: d ? (d.caption ?? "Photo") : "Loading" };
+      }),
+    [lightbox, known, unloaded],
+  );
+
+  /** Open the lightbox on one of these at once; its picture, and its neighbours', are looked up as it opens. */
+  const open = (ids: string[], index: number) => {
+    const mine = lightboxNav({
+      ids,
+      start: index,
+      isGone: (id) => gone.current.has(id),
+      onShow: (i) => {
+        if (nav.current === mine) setLightbox(i < 0 ? null : { ids, index: i });
+      },
+      prefetch: (few) =>
+        void describe(few)
+          // Asked twice before giving up, as the map's own previews are.
+          .catch(() => describe(few))
+          .then((found) => {
+            const missing = few.filter((id) => !found.has(id));
+            for (const id of missing) gone.current.add(id);
+            setUnloaded((was) => (few.some((id) => was.has(id)) ? new Set([...was].filter((id) => !few.includes(id))) : was));
+            if (missing.length && nav.current === mine) mine.recheck();
+          })
+          // Not answered is not gone: the photograph stays, says it could not be loaded, and is asked about again
+          // when it is stepped onto.
+          .catch(() => setUnloaded((was) => new Set([...was, ...few]))),
+    });
+    nav.current = mine;
+    mine.open();
+  };
+  const close = () => {
+    nav.current = null;
+    setLightbox(null);
+  };
 
   if (error) return <p className="text-sm text-red-600">{error}</p>;
   if (!data) return <div className="h-[70vh] bg-surface-alt animate-pulse rounded-theme" />;
-  const empty = data.photos.features.length === 0 && data.tracks.features.length === 0;
+  const empty = data.total === 0 && data.tracks.features.length === 0;
 
   return (
     <div className="space-y-2">
       {/* How the photographs are coloured sits right on top of the map, with its key beside it, so the colours are
           explained where they are seen. */}
-      {data.photos.features.length > 0 && (
+      {data.total > 0 && (
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2" data-testid="map-colour-by">
           <label className="flex items-center gap-2 text-sm">
             <span className="text-muted">Color by</span>
@@ -93,11 +133,11 @@ export function TripMap({ src, theme, showTripList = false, activityHrefBase, na
               ))}
             </select>
           </label>
-          {coloured && (
+          {legend && (
             <ul className="flex flex-wrap items-center gap-x-3 gap-y-1" data-testid="map-legend">
-              {coloured.groups.map((g) => (
+              {legend.groups.map((g) => (
                 <li key={g.slot} className="inline-flex items-center gap-1.5 text-sm" data-slot={g.slot}>
-                  <span aria-hidden className="w-3.5 h-3.5 shrink-0 rounded-full border-[3px]" style={{ borderColor: coloured.colours[g.slot] }} />
+                  <span aria-hidden className="w-3.5 h-3.5 shrink-0 rounded-full border-[3px]" style={{ borderColor: legend.colours[g.slot] }} />
                   <span>{g.label}</span>
                   <span className="text-xs text-muted">{g.count}</span>
                 </li>
@@ -110,23 +150,33 @@ export function TripMap({ src, theme, showTripList = false, activityHrefBase, na
         <div className="space-y-2">
           <div className="h-[70vh] rounded-theme overflow-hidden border border-border relative">
             <MapViewDynamic
-              photos={coloured?.photos ?? data.photos}
-              tracks={coloured?.tracks ?? data.tracks}
-              rings={Boolean(coloured)}
-              slotColours={coloured?.colours}
+              photos={pins}
+              cells={cells}
+              describe={describe}
+              onViewChange={onViewChange}
+              tracks={colouredTracks ?? data.tracks}
+              rings={Boolean(legend)}
+              slotColours={legend?.colours}
               bounds={data.bounds}
               theme={theme}
               highlightTrackId={hover}
               focusBounds={focus}
               onPhotoClick={(id) => {
-                const i = photos.findIndex((p) => p.id === id);
-                if (i >= 0) setLightbox(i);
+                // Among groups the lone pins between them are no sequence to step through: the photograph opens alone.
+                if (sent?.cells.length) open([id], 0);
+                else if (order.includes(id)) open(order, order.indexOf(id));
               }}
               onTrackHover={setHover}
               onTrackClick={(p: TrackFeatureProps) => {
                 if (p.activityId) router.push(activityHref(p.tripSlug, p.activityId));
               }}
             />
+            {!empty && !sent && (
+              // A map sent a view at a time has nothing on it until the first view is answered.
+              <div className="absolute inset-x-0 top-3 text-center pointer-events-none" data-testid="map-loading">
+                <span className="inline-block bg-surface/90 text-muted text-sm px-3 py-1.5 rounded-theme border border-border animate-pulse">Loading photos…</span>
+              </div>
+            )}
             {empty && (
               <div className="absolute inset-x-0 top-3 px-3 text-center pointer-events-none">
                 <span className="inline-block max-w-md bg-surface/90 text-muted text-sm px-3 py-1.5 rounded-theme border border-border" data-testid={narrowed ? "map-no-matches" : "map-empty"}>
@@ -155,7 +205,7 @@ export function TripMap({ src, theme, showTripList = false, activityHrefBase, na
           )}
           <div>
             <h3 className="text-sm font-medium text-muted mb-2" data-testid="map-count">
-              {tracks.length} track{tracks.length === 1 ? "" : "s"} · {photos.length} photo{photos.length === 1 ? "" : "s"}
+              {tracks.length} track{tracks.length === 1 ? "" : "s"} · {data.total} photo{data.total === 1 ? "" : "s"}
             </h3>
             <ul className="space-y-1">
               {tracks.map((f) => {
@@ -178,7 +228,8 @@ export function TripMap({ src, theme, showTripList = false, activityHrefBase, na
           </div>
         </aside>
       </div>
-      {lightbox !== null && <Lightbox photos={photos} index={lightbox} onClose={() => setLightbox(null)} onNavigate={setLightbox} />}
+      {/* A press is a step from wherever the lightbox has got to, not from the photograph last drawn, so quick presses add up. */}
+      {lightbox !== null && <Lightbox photos={photos} index={lightbox.index} onClose={close} onNavigate={(i) => nav.current?.step(i === (lightbox.index + 1) % lightbox.ids.length ? 1 : -1)} />}
     </div>
   );
 }

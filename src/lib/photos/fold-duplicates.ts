@@ -17,16 +17,26 @@ export type FoldablePhoto = {
   id: string;
   caption: string | null;
   title: string | null;
+  /** Whose the title is (see `titleIsHelpers`); it goes with the title. */
+  titleByHelper?: boolean | null;
   context: string | null;
   takenAt: Date | null;
   takenAtSource: string | null;
+  /** The zone the date was read in, and who set it by hand; both go with the date. */
+  tzOffsetMin?: number | null;
+  dateSetById?: string | null;
   lat: number | null;
   lng: number | null;
   placeName: string | null;
   gpsSource: string | null;
+  /** Who pinned the place, or — with no position — who removed it. */
+  placeSetById: string | null;
   tripId: string | null;
   activityId: string | null;
+  activitySetById: string | null;
   createdAt: Date;
+  /** Processing state, where it is known; a finished copy is kept before one that is not. */
+  status?: string;
 };
 
 /** A date the album guessed rather than read off the photograph; a copy that knows better is worth taking. */
@@ -34,7 +44,8 @@ const WEAK_DATE = ["FILE_MTIME", "UPLOAD_TIME", "FILE_NAME", "EXIF_CREATED"];
 /** Likewise a place the album worked out for itself. */
 const WEAK_PLACE = ["TRACK", "ESTIMATE", "SIDECAR"];
 
-export type FoldPlan = { data: Record<string, unknown>; filled: string[] };
+/** `conflict`: the copy's place was removed by hand while the keeper's was pinned by hand; the pin stays. */
+export type FoldPlan = { data: Record<string, unknown>; filled: string[]; conflict?: "place" };
 
 /**
  * What the keeper should take from one of its copies. Only what the keeper is missing, or holds on weaker grounds
@@ -50,6 +61,7 @@ export function planFold(keeper: FoldablePhoto, copy: FoldablePhoto): FoldPlan {
   }
   if (!keeper.title?.trim() && copy.title?.trim()) {
     data.title = copy.title;
+    data.titleByHelper = copy.titleByHelper ?? null;
     filled.push("title");
   }
   if (!keeper.context?.trim() && copy.context?.trim()) {
@@ -63,6 +75,9 @@ export function planFold(keeper: FoldablePhoto, copy: FoldablePhoto): FoldPlan {
   if (keeperDateIsWeak && copyDateIsBetter) {
     data.takenAt = copy.takenAt;
     data.takenAtSource = copy.takenAtSource;
+    // The instant alone is not the date: the clock it was read on, and a member who set it, come with it.
+    data.tzOffsetMin = copy.tzOffsetMin ?? null;
+    data.dateSetById = copy.dateSetById ?? null;
     filled.push("date");
   }
 
@@ -70,11 +85,26 @@ export function planFold(keeper: FoldablePhoto, copy: FoldablePhoto): FoldPlan {
   const keeperPlaceIsWeak = !keeperHasPlace || keeper.gpsSource === null || WEAK_PLACE.includes(keeper.gpsSource);
   const copyHasPlace = copy.lat !== null && copy.lng !== null;
   const copyPlaceIsBetter = copyHasPlace && copy.gpsSource !== null && !WEAK_PLACE.includes(copy.gpsSource);
-  if (keeperPlaceIsWeak && copyPlaceIsBetter) {
+  // A place somebody removed by hand is never filled on the keeper, and a copy that had its place removed takes the
+  // keeper's away too, with who removed it — it is the same photograph. Unless the keeper's place was pinned by
+  // hand as well: two members disagree, the pin stays, and the report says so for somebody to look at.
+  const keeperCleared = !keeperHasPlace && keeper.placeSetById !== null;
+  const copyCleared = !copyHasPlace && copy.placeSetById !== null;
+  let conflict: FoldPlan["conflict"];
+  if (keeperCleared) {
+    // Nothing to take.
+  } else if (copyCleared && keeper.gpsSource === "MANUAL") {
+    conflict = "place";
+  } else if (copyCleared) {
+    Object.assign(data, { lat: null, lng: null, altitude: null, gpsSource: null, placeName: null, placeSetById: copy.placeSetById });
+    filled.push("place removed");
+  } else if (keeperPlaceIsWeak && copyPlaceIsBetter) {
     data.lat = copy.lat;
     data.lng = copy.lng;
     data.gpsSource = copy.gpsSource;
     data.placeName = copy.placeName;
+    // A pin a member put on the copy is still theirs on the keeper.
+    data.placeSetById = copy.gpsSource === "MANUAL" ? copy.placeSetById : null;
     filled.push("place");
   } else if (!keeper.placeName?.trim() && copy.placeName?.trim() && keeperHasPlace === copyHasPlace) {
     data.placeName = copy.placeName;
@@ -85,18 +115,27 @@ export function planFold(keeper: FoldablePhoto, copy: FoldablePhoto): FoldPlan {
   if (!keeper.tripId && copy.tripId) {
     data.tripId = copy.tripId;
     data.activityId = copy.activityId;
+    // Whoever chose the copy's activity (or kept it off them all) chose it for this photograph.
+    data.activitySetById = copy.activitySetById;
     filled.push("trip");
   }
 
-  return { data, filled };
+  return { data, filled, ...(conflict ? { conflict } : {}) };
 }
 
-/** Which of a group of identical files to keep: the one that has been in the album longest. */
-export function keeperOf<T extends { createdAt: Date; id: string }>(group: T[]): T {
-  return [...group].sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.id.localeCompare(b.id))[0];
+/**
+ * Which of a group of identical files to keep: a finished one before any whose processing failed or has not run
+ * (the bytes are the same, but only a finished one has pictures to show, and it takes over the copies' covers),
+ * and among those the one that has been in the album longest.
+ */
+export function keeperOf<T extends { createdAt: Date; id: string; status?: string }>(group: T[]): T {
+  const finished = (p: T) => (p.status === undefined || p.status === "READY" ? 0 : 1);
+  return [...group].sort((a, b) => finished(a) - finished(b) || a.createdAt.getTime() - b.createdAt.getTime() || a.id.localeCompare(b.id))[0];
 }
 
 export function describeFold(count: number, filled: string[]): string {
-  const what = filled.length ? `, keeping the ${filled.join(", ")} from ${filled.length === 1 ? "it" : "them"}` : "";
-  return `${count} identical ${count === 1 ? "copy" : "copies"} folded in${what}.`;
+  const kept = filled.filter((f) => f !== "place removed");
+  const what = kept.length ? `, keeping the ${kept.join(", ")} from ${count === 1 ? "it" : "them"}` : "";
+  const removed = filled.includes("place removed") ? `${kept.length ? " and" : ","} with the place removed` : "";
+  return `${count} identical ${count === 1 ? "copy" : "copies"} folded in${what}${removed}.`;
 }

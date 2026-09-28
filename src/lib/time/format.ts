@@ -45,8 +45,29 @@ export function formatLocalTime(instant: Date, tz: { offsetMin?: number | null; 
   return format(new TZDate(instant, tz.timezone ?? "UTC"), fmt);
 }
 
+/**
+ * When a photograph was taken, read the way the album reads it everywhere (see photoDay): on its own clock when its
+ * offset is known, else in the trip's zone, else UTC.
+ */
+export function formatTakenAt(takenAt: Date, tzOffsetMin: number | null, timezone?: string | null, fmt = "EEE, MMM d, yyyy · h:mm a"): string {
+  return formatLocalTime(takenAt, { offsetMin: tzOffsetMin, timezone: timezone ?? "UTC" }, fmt);
+}
+
 export function formatDateTime(instant: Date, timezone: string, fmt = "EEE, MMM d, yyyy · h:mm a"): string {
   return format(new TZDate(instant, timezone), fmt);
+}
+
+export type InstantStyle = "date" | "dateTime";
+
+/**
+ * A timestamp (when something was trashed, imported, run) in `timeZone`, or the runtime's own zone when none is
+ * given. Written with "UTC" after it when that is the zone asked for, so a server-rendered time is not mistaken
+ * for local. Components should reach this through useLocalTime, which picks the zone safely for hydration.
+ */
+export function formatInstant(instant: string | Date, style: InstantStyle = "dateTime", timeZone?: string): string {
+  const d = new Date(instant);
+  const s = style === "date" ? d.toLocaleDateString("en-US", { timeZone }) : d.toLocaleString("en-US", { timeZone, month: "numeric", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" });
+  return timeZone === "UTC" ? `${s} UTC` : s;
 }
 
 export function formatDuration(seconds: number): string {
@@ -65,7 +86,7 @@ export function formatDistance(meters: number, unit: "km" | "mi" = "mi"): string
 }
 
 export function formatElevation(meters: number, unit: "m" | "ft" = "ft"): string {
-  return unit === "m" ? `${Math.round(meters)} m` : `${Math.round(meters * 3.28084).toLocaleString()} ft`;
+  return unit === "m" ? `${Math.round(meters)} m` : `${Math.round(meters * 3.28084).toLocaleString("en-US")} ft`;
 }
 
 export function formatSpeed(ms: number, unit: "kmh" | "mph" = "mph"): string {
@@ -75,9 +96,10 @@ export function formatSpeed(ms: number, unit: "kmh" | "mph" = "mph"): string {
 /** min/mi pace from m/s */
 export function formatPace(ms: number, unit: "km" | "mi" = "mi"): string {
   if (ms <= 0) return "–";
-  const secPer = (unit === "km" ? 1000 : 1609.344) / ms;
+  // Round the whole first, or 7:59.6 would read 7:60.
+  const secPer = Math.round((unit === "km" ? 1000 : 1609.344) / ms);
   const m = Math.floor(secPer / 60);
-  const s = Math.round(secPer % 60);
+  const s = secPer % 60;
   return `${m}:${String(s).padStart(2, "0")} /${unit}`;
 }
 

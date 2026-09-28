@@ -1,5 +1,4 @@
 import { formatDay } from "@/lib/time/format";
-import type { PhotoFeatureProps, TrackFeatureProps } from "./geojson";
 
 /** What the rings round the photographs on a map say: nothing (the trip's own markers), or which day, activity or person. */
 export type ColourBy = "none" | "day" | "activity" | "uploader";
@@ -54,7 +53,15 @@ const GREYS = ["#6b6a66", "#bdbcb6"];
 export const SLOT_COLOURS: readonly string[] = [...RING_HUES, ...Array<string>(MAX_DAY_SLOTS - RING_HUES.length).fill(GREYS[0]), ...GREYS];
 
 export type RingGroup = { slot: number; label: string; count: number };
-export type Rings = { groups: RingGroup[]; photoSlot: (p: PhotoFeatureProps) => number; trackSlot: (t: TrackFeatureProps) => number; /** Each slot's colour for this way of colouring, by slot number. */ colours: string[] };
+/**
+ * What a photograph or a track is coloured by: its local day, its activity, and who uploaded it, with the names the
+ * legend shows. Who uploaded it is part of the members-only layer, so it is null for anybody who is not signed in.
+ * `at` is when it was taken or began (milliseconds), which is the order activities are listed in.
+ */
+export type Colourable = { day: string | null; activityId: string | null; activityTitle: string | null; uploaderId: string | null; uploaderName: string | null; at: number | null };
+export type Rings = { groups: RingGroup[]; photoSlot: (p: Colourable) => number; trackSlot: (t: Colourable) => number; /** Each slot's colour for this way of colouring, by slot number. */ colours: string[] };
+/** One way of colouring as the map is sent it: the legend, and each slot's colour. */
+export type RingKey = { groups: RingGroup[]; colours: string[] };
 
 type Entry = { key: string; label: string; count: number; first: number };
 
@@ -69,25 +76,25 @@ const OTHER_LABEL: Record<Exclude<ColourBy, "none">, string> = { day: "Other day
  * people are in alphabetical order, and past eight the ones with the most photographs keep their colours and the rest
  * are folded into "Other". A track is coloured the same way as the photographs taken along it.
  */
-export function ringsFor(by: Exclude<ColourBy, "none">, photos: PhotoFeatureProps[], tracks: TrackFeatureProps[]): Rings {
-  const keyOf = (f: PhotoFeatureProps | TrackFeatureProps): string | null => (by === "day" ? f.day : by === "activity" ? f.activityId : f.uploaderId);
-  const labelOf = (f: PhotoFeatureProps | TrackFeatureProps): string => (by === "day" ? f.day! : by === "activity" ? (f.activityTitle ?? "An activity") : (f.uploaderName ?? "Someone"));
+export function ringsFor(by: Exclude<ColourBy, "none">, photos: Colourable[], tracks: Colourable[]): Rings {
+  const keyOf = (f: Colourable): string | null => (by === "day" ? f.day : by === "activity" ? f.activityId : f.uploaderId);
+  const labelOf = (f: Colourable): string => (by === "day" ? f.day! : by === "activity" ? (f.activityTitle ?? "An activity") : (f.uploaderName ?? "Someone"));
   const entries = new Map<string, Entry>();
   let none = 0;
-  const see = (f: PhotoFeatureProps | TrackFeatureProps, time: string | null, photo: boolean) => {
+  const see = (f: Colourable, photo: boolean) => {
     const key = keyOf(f);
     if (key === null) {
       if (photo) none++;
       return;
     }
-    const at = time ? Date.parse(time) : Number.POSITIVE_INFINITY;
+    const at = f.at ?? Number.POSITIVE_INFINITY;
     const e = entries.get(key) ?? { key, label: labelOf(f), count: 0, first: at };
     if (photo) e.count++;
     e.first = Math.min(e.first, at);
     entries.set(key, e);
   };
-  for (const p of photos) see(p, p.takenAt, true);
-  for (const t of tracks) see(t, t.startTime, false);
+  for (const p of photos) see(p, true);
+  for (const t of tracks) see(t, false);
 
   const order = [...entries.values()].sort(
     by === "day" ? (a, b) => a.key.localeCompare(b.key) : by === "activity" ? (a, b) => a.first - b.first || a.label.localeCompare(b.label) : (a, b) => a.label.localeCompare(b.label),
@@ -131,7 +138,7 @@ export function ringsFor(by: Exclude<ColourBy, "none">, photos: PhotoFeatureProp
   }
   if (none > 0) groups.push({ slot: NONE_SLOT, label: NONE_LABEL[by], count: none });
 
-  const slot = (f: PhotoFeatureProps | TrackFeatureProps) => {
+  const slot = (f: Colourable) => {
     const key = keyOf(f);
     return key === null ? NONE_SLOT : (slotOfKey.get(key) ?? OTHER_SLOT);
   };

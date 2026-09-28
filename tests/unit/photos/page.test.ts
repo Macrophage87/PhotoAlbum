@@ -29,6 +29,18 @@ describe("cursor pagination", () => {
     expect(seen).toEqual(Array.from({ length: 25 }, (_, i) => `${i}.jpg`));
   });
 
+  it("re-reads just the photos a gallery names, in either order, leaving out the trashed and those on another trip (#111)", async () => {
+    const all = await db.photo.findMany({ where: { tripId }, orderBy: { originalName: "asc" }, select: { id: true } });
+    const [a, b, c] = all.map((p) => p.id);
+    await db.photo.update({ where: { id: b }, data: { trashedAt: new Date() } });
+    const elsewhere = await db.trip.create({ data: { slug: "q", title: "Q", startDate: new Date("2025-08-10"), endDate: new Date("2025-08-16"), createdById: (await db.user.findFirstOrThrow()).id } });
+    await db.photo.update({ where: { id: c }, data: { tripId: elsewhere.id } });
+    for (const order of ["favorites", "taken"] as const) {
+      const page = await tripPhotoPage(tripId, { ids: [a, b, c], take: 3, order });
+      expect(page.photos.map((p) => p.id)).toEqual([a]);
+    }
+  });
+
   it("gives back the whole timeline in order, however many days it runs to, with the undated at the end", async () => {
     const user = await db.user.findFirstOrThrow();
     await db.photo.createMany({ data: Array.from({ length: 3 }, (_, i) => ({ tripId, uploaderId: user.id, originalName: `undated-${i}.jpg`, mimeType: "image/jpeg", storageKey: "k", originalPath: "k/o.jpg", sizeBytes: 1, status: "READY" as const })) });
@@ -75,7 +87,8 @@ describe("candidate photos for a collection", () => {
     expect((await candidatePhotoPage({ kind: "collection", id: collection.id }, { ...NO_PICKER_FILTER, from: "2025-08-13", to: "2025-08-13" })).photos.map((p) => p.id)).toEqual([loose.id]);
     expect((await candidatePhotoPage({ kind: "collection", id: collection.id }, { ...NO_PICKER_FILTER, to: "2025-08-12" })).photos.map((p) => p.id)).toEqual([inTrip.id]);
     const first = await candidatePhotoPage({ kind: "collection", id: collection.id }, NO_PICKER_FILTER, { take: 1 });
-    expect(first.nextCursor).toBe(loose.id);
+    // The cursor is where the page ended, written out, so it ends with the last photo's id.
+    expect(first.nextCursor?.endsWith(`.${loose.id}`)).toBe(true);
     expect((await candidatePhotoPage({ kind: "collection", id: collection.id }, NO_PICKER_FILTER, { take: 1, cursor: first.nextCursor })).photos.map((p) => p.id)).toEqual([inTrip.id]);
   });
 });

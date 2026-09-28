@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { useLocalTime } from "@/components/time/useLocalTime";
 import Link from "next/link";
 import { Badge, Button, Card } from "@/components/ui";
 import { deleteFromTrash, restoreFromTrash } from "@/app/admin/trash/actions";
@@ -19,6 +20,7 @@ export type TrashItem = {
 };
 
 export function TrashTable({ items }: { items: TrashItem[] }) {
+  const stamp = useLocalTime();
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [pending, start] = useTransition();
   const [message, setMessage] = useState<string | null>(null);
@@ -85,13 +87,13 @@ export function TrashTable({ items }: { items: TrashItem[] }) {
               )}
               <div className="min-w-0 flex-1 text-sm">
                 <div className="flex flex-wrap items-center gap-2">
-                  <Link href={`/photos/${item.id}`} className="font-medium text-primary hover:underline truncate">{item.label}</Link>
+                  <Link href={`/photos/${item.id}`} className="font-medium text-primary underline underline-offset-2 truncate">{item.label}</Link>
                   {item.removalRequest && <Badge tone="primary">someone asked</Badge>}
                   {item.trip && <span className="text-muted">from {item.trip.title}</span>}
                 </div>
                 <p className="text-muted">{item.reason}</p>
                 <p className="text-muted text-xs">
-                  Trashed {item.trashedBy ? `by ${item.trashedBy} ` : ""}on {new Date(item.trashedAt).toLocaleString("en-US")}
+                  Trashed {item.trashedBy ? `by ${item.trashedBy} ` : ""}on {stamp(item.trashedAt)}
                   {item.uploadedBy ? ` · uploaded by ${item.uploadedBy}` : ""}
                 </p>
               </div>

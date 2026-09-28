@@ -21,7 +21,7 @@ export function DateUndated({ tripId, undated, examples }: { tripId: string; und
       </p>
       <ul className="space-y-1 text-xs text-muted">
         {examples.map((e) => (
-          <li key={e.originalName}><b className="text-foreground">{e.originalName}</b> → {e.reading} <span className="opacity-80">({e.evidence})</span></li>
+          <li key={e.originalName}><b className="text-text">{e.originalName}</b> → {e.reading} <span>({e.evidence})</span></li>
         ))}
         {undated > examples.length && <li>…and {undated - examples.length} more.</li>}
       </ul>

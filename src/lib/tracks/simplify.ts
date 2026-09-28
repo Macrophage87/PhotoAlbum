@@ -57,3 +57,14 @@ export function simplifyLine(points: { lat: number; lng: number }[], toleranceM:
   indices.push(n - 1);
   return { line: indices.map((i) => [points[i].lat, points[i].lng]), indices };
 }
+
+/**
+ * A stored line cut down to at most `max` points for drawing far smaller than it was stored for — a thumbnail, or
+ * every trip on one map — where thousands of vertices would land on the same few pixels and only make the page
+ * heavier. The same simplification the line was stored with, run again with a cap, so the points that make its shape
+ * are the ones kept: a straight spur out and back is one stored vertex, and taking every nth point would lose it.
+ */
+export function shortenLine(line: [number, number][], max: number, toleranceM = 5): [number, number][] {
+  if (line.length <= max) return line;
+  return simplifyLine(line.map(([lat, lng]) => ({ lat, lng })), toleranceM, max).line;
+}

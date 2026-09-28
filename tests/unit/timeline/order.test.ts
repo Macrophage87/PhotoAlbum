@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildTimeline } from "@/lib/timeline/build";
-import { orderTimeline, parseTimelineOrder } from "@/lib/timeline/order";
+import { orderTimeline, parseTimelineOrder, timeSpan } from "@/lib/timeline/order";
 
 const p = (id: string, iso: string | null, activityId: string | null = null) => ({ id, takenAt: iso ? new Date(iso) : null, tzOffsetMin: 0, activityId });
 const a = (id: string, s: string, e: string) => ({ id, startTime: new Date(s), endTime: new Date(e) });
@@ -40,5 +40,22 @@ describe("running a timeline newest first", () => {
     expect(parseTimelineOrder("oldest")).toBe("oldest");
     expect(parseTimelineOrder("sideways")).toBeNull();
     expect(parseTimelineOrder(undefined)).toBeNull();
+  });
+});
+
+describe("the time span printed above a run of photographs", () => {
+  it("reads earliest to latest whichever way the run is ordered", () => {
+    const run = [p("a", "2025-08-12T09:00:00Z"), p("b", "2025-08-12T12:00:00Z"), p("c", "2025-08-12T15:30:00Z")];
+    const [newest] = orderTimeline(buildTimeline(run, [], "UTC"), "newest");
+    const span = timeSpan(newest.items[0].photos)!;
+    expect(newest.items[0].photos[0].id).toBe("c");
+    expect([span.first.id, span.last.id]).toEqual(["a", "c"]);
+    expect(timeSpan([...run])).toMatchObject({ first: { id: "a" }, last: { id: "c" } });
+  });
+
+  it("is one moment for a single photograph and nothing for none with a date", () => {
+    const one = timeSpan([p("a", "2025-08-12T09:00:00Z")])!;
+    expect(one.first).toBe(one.last);
+    expect(timeSpan([p("u", null)])).toBeNull();
   });
 });

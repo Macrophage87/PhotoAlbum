@@ -31,7 +31,7 @@ export default async function AddToTripPage({ params, searchParams }: PageProps<
   const filter = parsePickerFilter(await searchParams);
   const [page, members, people, during] = await Promise.all([
     candidatePhotoPage({ kind: "trip", id: trip.id }, filter),
-    db.user.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true, email: true } }),
+    db.user.findMany({ where: { removingAt: null }, orderBy: { name: "asc" }, select: { id: true, name: true, email: true } }),
     peopleInPhotos(),
     tripWindow(me, trip),
   ]);
@@ -44,9 +44,10 @@ export default async function AddToTripPage({ params, searchParams }: PageProps<
       filter={filter}
       members={members.map((m) => ({ id: m.id, label: uploaderLabel(m.name, m.email) }))}
       people={people}
-      initial={{ photos: page.photos.map((p) => toGridPhoto(p, null, true)), nextCursor: page.nextCursor, total: page.total }}
+      initial={{ photos: page.photos.map((p) => toGridPhoto(p, null, me)), nextCursor: page.nextCursor, total: page.total }}
       extra={
         <TakeWindow
+          kind="trip"
           count={n}
           elsewhere={during.elsewhere}
           label={`Add all ${n} photo${n === 1 ? "" : "s"} taken during the trip (${days}) that ${n === 1 ? "is" : "are"} on no trip`}

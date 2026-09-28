@@ -6,6 +6,7 @@ import { ClipTile } from "./ClipTile";
 import { FavouriteButton } from "@/components/favourites/FavouriteButton";
 import type { FavouriteState } from "@/lib/favourites/queries";
 import { PHOTO_DRAG_TYPE, photoPickedUp } from "@/components/timeline/TimelineDrop";
+import { formatDay } from "@/lib/time/format";
 
 export type GridPhoto = LightboxPhoto & {
   thumbUrl: string;
@@ -14,29 +15,28 @@ export type GridPhoto = LightboxPhoto & {
   unavailable?: boolean;
   /** Members only: the collections holding this item, shown as chips. */
   collections?: { slug: string; title: string }[];
-  /** What the tile says on hover: the caption, then when and where, which is what anyone is actually looking for. */
-  takenAt?: string | null;
-  tzOffsetMin?: number | null;
+  /**
+   * What the tile says on hover: the caption, then when and where, which is what anyone is actually looking for. The
+   * when is the day it was taken where it was taken (YYYY-MM-DD; see `takenDay`).
+   */
+  takenDay?: string | null;
   placeName?: string | null;
   /** Members only: whether this is one of theirs, and how many of the family have marked it. */
   favourite?: FavouriteState | null;
   /** A panorama: given a tile of its own shape rather than a square crop of its middle. */
   panorama?: { projection: string | null; panoUrl: string } | null;
   /** A 3D scan, which has no picture of its own until a member has opened it once. */
-  scan?: { format: string | null; modelUrl: string; hasPoster: boolean } | null;
+  scan?: { format: string | null; modelUrl: string; hasPoster: boolean; withheld?: boolean } | null;
 };
 
-/** The date a tile shows on hover, in the photo's own zone rather than the reader's. */
 /** A panorama gets the wide tile only once it is ready and there is a long copy to fill it. */
 function wideTile(p: GridPhoto): boolean {
   return Boolean(p.panorama && p.status === "READY" && !p.videoUrl && !p.youtubeId);
 }
 
-export function tileDate(takenAt?: string | null, tzOffsetMin?: number | null): string | null {
-  if (!takenAt) return null;
-  const at = new Date(takenAt);
-  if (Number.isNaN(at.getTime())) return null;
-  return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" }).format(new Date(at.getTime() + (tzOffsetMin ?? 0) * 60_000));
+/** The date a tile shows on hover: the day it was taken where it was taken, never the reader's or UTC's. */
+export function tileDate(takenDay?: string | null): string | null {
+  return takenDay ? formatDay(takenDay, "shortYear") : null;
 }
 
 export function PhotoGrid({ photos, emptyMessage = "No photos yet.", selectable: selectableProp, selected: selectedProp, onToggle: onToggleProp, draggable = false }: { photos: GridPhoto[]; emptyMessage?: string; selectable?: boolean; selected?: Set<string>; onToggle?: (id: string) => void; /** On the timeline: a tile can be picked up and dropped on an activity or another day. */ draggable?: boolean }) {
@@ -94,17 +94,18 @@ export function PhotoGrid({ photos, emptyMessage = "No photos yet.", selectable:
                 </div>
               )}
               {/* What it is, when and where: legible on hover without covering the picture the rest of the time. */}
-              {(p.caption || p.title || tileDate(p.takenAt, p.tzOffsetMin) || p.placeName) && (
+              {(p.caption || p.title || tileDate(p.takenDay) || p.placeName) && (
                 <span className="pointer-events-none absolute inset-x-0 bottom-0 p-1.5 pt-6 bg-gradient-to-t from-black/80 via-black/45 to-transparent opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity" data-testid="tile-hover">
                   {(p.caption || p.title) && <span className="block text-[11px] leading-snug text-white line-clamp-2">{p.caption ?? p.title}</span>}
-                  {(tileDate(p.takenAt, p.tzOffsetMin) || p.placeName) && (
-                    <span className="block text-[10px] text-white/75 truncate">{[tileDate(p.takenAt, p.tzOffsetMin), p.placeName].filter(Boolean).join(" · ")}</span>
+                  {(tileDate(p.takenDay) || p.placeName) && (
+                    <span className="block text-[10px] text-white/75 truncate">{[tileDate(p.takenDay), p.placeName].filter(Boolean).join(" · ")}</span>
                   )}
                 </span>
               )}
               {p.favourite && (
                 <span className="absolute top-1 right-1 rounded-full bg-black/45 backdrop-blur-sm">
-                  <FavouriteButton kind="photo" id={p.id} initial={p.favourite} dark size="sm" />
+                  {/* Keyed on what the server says, so a refreshed page re-seeds a heart that holds its own state. */}
+                  <FavouriteButton key={`${p.favourite.mine}:${p.favourite.count}`} kind="photo" id={p.id} initial={p.favourite} dark size="sm" />
                 </span>
               )}
               {p.badge && <span className="absolute top-1 left-1 text-[10px] bg-black/60 text-white rounded px-1.5 py-0.5">{p.badge}</span>}

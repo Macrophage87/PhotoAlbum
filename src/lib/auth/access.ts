@@ -87,8 +87,9 @@ export function visibleContainersWhere(viewer: Viewer): { visibility?: TripVisib
   return viewer.kind === "user" ? {} : { visibility: "PUBLIC" };
 }
 
-export function visibleTripsWhere(viewer: Viewer): { visibility?: TripVisibility } {
-  return visibleContainersWhere(viewer);
+/** Trips being deleted are left out for everybody, members too: they are letting go of their photographs, and then go. */
+export function visibleTripsWhere(viewer: Viewer): { visibility?: TripVisibility; deletingAt: null } {
+  return { ...visibleContainersWhere(viewer), deletingAt: null };
 }
 
 /**
@@ -98,10 +99,21 @@ export function visibleTripsWhere(viewer: Viewer): { visibility?: TripVisibility
  */
 export function visibleMediaWhere(viewer: Viewer): Prisma.PhotoWhereInput {
   if (viewer.kind === "user") return { ...NOT_TRASHED };
-  return { ...NOT_TRASHED, OR: [{ trip: { visibility: "PUBLIC" } }, { collections: { some: { collection: { visibility: "PUBLIC" } } } }] };
+  // A trip being deleted was made private as it was marked; asked for here as well.
+  return { ...NOT_TRASHED, OR: [{ trip: { visibility: "PUBLIC", deletingAt: null } }, { collections: { some: { collection: { visibility: "PUBLIC" } } } }] };
 }
 
 /** Is this viewer in read-only mode? (i.e. can view but not edit) */
 export function isReadOnly(viewer: Viewer): boolean {
   return !canContribute(viewer);
+}
+
+/**
+ * Who a request is answered for, once the real viewer has been let in. A shared link's pages (`?view=share`) show
+ * what anybody holding the link sees, members included, so a member reading one is answered as a visitor: no
+ * uploader names, no members-only words, nothing the page itself would not show them. Whether they may open it at
+ * all is still asked of who they are.
+ */
+export function viewerFor(viewer: Viewer, view: string | null | undefined): Viewer {
+  return view === "share" && viewer.kind === "user" ? { kind: "anonymous", user: null, shareTokens: viewer.shareTokens } : viewer;
 }

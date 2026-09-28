@@ -35,8 +35,26 @@ export type ScanFormat = "GLB" | "USDZ" | "PLY" | "SPZ";
 
 const SCAN_FORMAT: Record<string, ScanFormat> = { "model/gltf-binary": "GLB", "model/vnd.usdz+zip": "USDZ", "application/x-ply": "PLY", "application/x-spz": "SPZ" };
 
+/**
+ * Whether a scan in this format has a copy visitors may be given, with what the app wrote into it taken out (see
+ * `lib/scans/sanitize`). A USDZ has none, and is shown to visitors as a line of text instead.
+ */
+export function scanShareable(format: string | null): boolean {
+  return format === "GLB" || format === "PLY" || format === "SPZ";
+}
+
 export function scanFormatOf(mime: string): ScanFormat | null {
   return SCAN_FORMAT[mime] ?? null;
+}
+
+/**
+ * Whether the first bytes of a .glb are a glTF binary's header: the magic "glTF", version 2, and a total length that
+ * the file actually holds. A file that is not one would be kept as a scan and then never open in the viewer.
+ */
+export function isGlbHeader(head: Buffer, size: number): boolean {
+  if (head.length < 12 || head.toString("ascii", 0, 4) !== "glTF" || head.readUInt32LE(4) !== 2) return false;
+  const length = head.readUInt32LE(8);
+  return length >= 20 && length <= size;
 }
 
 /** Only a glTF mesh can be drawn in a browser; the rest are kept and handed back as they came. */

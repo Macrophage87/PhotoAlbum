@@ -16,7 +16,9 @@ the user that owns it.
 | Takeout archives waiting to be imported | Docker volume `photoalbum_imports` | temporary |
 | ML model weights | Docker volume `photoalbum_ml-models` | ~2 GB, re-downloadable |
 
-Under the media root there is exactly one folder, `photos/`, and under it one folder per item named after its id:
+Under the media root is `photos/`, with one folder per item named after its id, beside a small `.album-install-id`
+file (see "The install marker" below), `imports/` for track files being imported, and, once an admin has used it,
+`quarantine/`:
 
 ```
 photos/cmu0adw74001i9k7dz8vadb3c/original.jpg     the file as it was uploaded, never written over
@@ -30,6 +32,13 @@ photos/cmu0adw7g001j9k7d41bidem8/video.mp4
 the `Photo` table's `storageKey`, `originalPath` and `renditions` columns. The media folder on its own is a heap of
 files named after nothing. Keep that in mind for the whole of this document — especially the staging part, where it
 is the difference between sharing data and quietly corrupting it.
+
+**The install marker.** `.album-install-id` at the media root names the album and the database it belongs to (the
+same as `AppSetting.installId` and `installBinding`). The album cleans nothing up in a media folder whose marker does
+not match its database, so copy the dot file along with everything else (`rsync -a` and `tar -C … .` both do). If it
+is left behind, the Admin page asks for the storage to be claimed (**Claim this storage**), which works as long as
+the album's own database knows what is there. Moving the media leaves the database where it is, so nothing
+else changes. See [DEPLOY.md §9](DEPLOY.md#the-install-marker) for the other cases.
 
 Check how much you are about to move:
 
@@ -165,7 +174,7 @@ Open the album and look at a trip: thumbnails, a full-size photo, a clip, a scan
 file it believes in and check each one is really there. This covers originals, renditions and clips' posters:
 
 ```bash
-docker compose exec -T db psql -U photoalbum -At photoalbum > /tmp/album-keys.txt <<'SQL'
+docker compose exec -T db sh -c 'exec psql -U "$POSTGRES_USER" -At "$POSTGRES_DB"' > /tmp/album-keys.txt <<'SQL'
 SELECT "originalPath" AS key FROM "Photo" WHERE "originalPath" <> 'pending'
 UNION
 SELECT r.value->>'key' FROM "Photo", jsonb_each("renditions") AS r
@@ -187,7 +196,10 @@ echo "$missing missing"
 yet, which is why it is skipped.
 
 The other direction — files on disk that no row mentions — is not a failure. Trashing an item leaves its files until
-an admin deletes it for good, and a failed upload can leave one behind.
+an admin deletes it for good, and a failed upload can leave one behind. Folders no row mentions are counted on the
+Admin page, and can be moved to `quarantine/` from there ([DEPLOY.md](DEPLOY.md#the-quarantine)). After a move that
+number should be what it was before. If it is suddenly large, the database the album is connected to is probably not
+this media's: stop and check before moving anything.
 
 ## Part 5 — Tidy up
 
@@ -220,7 +232,7 @@ data, that has to change on both counts.
 | | Media | Database | What it means |
 |---|---|---|---|
 | **A. One album, two windows** | shared | shared | Both sites show the same photographs, and a change on either is a change to both. This is what "the same data" means. |
-| **B. Shared folder only** | shared | separate | Don't. Each site can delete the other's files. |
+| **B. Shared folder only** | shared | separate | Don't. Each site can delete the other's files. The install marker refuses the second site's clean-ups, but not its trash. |
 | **C. Staging on a copy** | copy | copy | Staging is a safe place to try things; it drifts from live until you refresh it. |
 
 ### A. One album, two windows
@@ -251,6 +263,9 @@ APP_PORT=3100
 # Let the live stack do the background work. Two sets of workers on one database both run, and staging's would
 # process the family's real photographs with whatever code is being tried out.
 RUN_WORKER=false
+# The live stack's own key, copied from its .env. One database has one key: under any other, staging pauses
+# forgetting and the AI helper, and if staging forgot somebody first, the live site would pause instead.
+FORGET_KEY=<the value from the live .env>
 ```
 
 Then, in the staging folder, `docker compose up -d app` — start only `app`, so staging does not bring up a second
@@ -278,20 +293,41 @@ when you like. `~/refresh-staging.sh`:
 
 ```bash
 #!/bin/bash
-set -e
+set -eo pipefail
+umask 077   # the dump below is the whole album: readable by this user only
 cd ~/photoalbum-staging
 docker compose stop app
 # The database, as it is right now.
-cd ~/photoalbum && docker compose exec -T db pg_dump -U photoalbum photoalbum > /tmp/live.sql
+cd ~/photoalbum && docker compose exec -T db sh -c 'exec pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' > /tmp/live.sql
+tail -n 20 /tmp/live.sql | grep -c 'PostgreSQL database dump complete' >/dev/null   # stop if the dump is incomplete
 cd ~/photoalbum-staging
-docker compose exec -T db psql -U photoalbum -c 'DROP SCHEMA public CASCADE; CREATE SCHEMA public;' photoalbum
-docker compose exec -T db psql -U photoalbum photoalbum < /tmp/live.sql
+docker compose exec -T db sh -c 'exec psql -U "$POSTGRES_USER" -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;" "$POSTGRES_DB"'
+docker compose exec -T db sh -c 'exec psql -U "$POSTGRES_USER" "$POSTGRES_DB"' < /tmp/live.sql
 rm /tmp/live.sql
-# The media. --delete so items deleted from the live album go from the copy too.
-sudo rsync -aH --delete /mnt/album/photos/ /mnt/album-staging/photos/
+# The media. --delete so items deleted from the live album go from the copy too; the copy keeps its own install
+# marker, whose heartbeat is staging's, so staging can re-bind its copy straight away.
+sudo rsync -aH --delete --exclude=/.album-install-id /mnt/album/photos/ /mnt/album-staging/photos/
 sudo chown -R 1000:1000 /mnt/album-staging/photos
 docker compose up -d app
 ```
+
+The copy brings the live album's forgotten names with it, hashed under the live `FORGET_KEY`, and staging keeps
+its own `.env`. Once anybody has been forgotten on the live site, staging on its own key recognizes none of those
+names, so it pauses forgetting and the AI helper (the Admin page says why) until the keys match. Either:
+
+- **copy the live key into staging's `.env`** (`FORGET_KEY=` from the live `.env`, then `docker compose up -d app`),
+  if staging should behave like the live site. Staging then holds the family's data *and* the secret that guards
+  forgotten names, so a staging server or backup is worth as much to an attacker as the live one; or
+- **accept the pause** on staging, and keep its own key. Nothing is lost: the live site is not affected, and a fresh
+  staging database (or one refreshed from a live album nobody has been forgotten in) works normally on its own key.
+
+Never give staging a *new* key after a refresh to "fix" the pause: that changes nothing for the copied names.
+
+The dump brings the live album's install id and binding into staging's database, so after each refresh the staging
+Admin page says the storage is bound to another database and staging cleans nothing up. Its storage is its own copy,
+and its marker (kept out of the rsync) carries staging's own heartbeat, so re-bind it there (**Re-bind the storage to
+this database**; the first time, when the copy has no marker yet, **Claim this storage**) after each refresh. Never do that on a staging site that shares the live folder; the live album's
+heartbeat stops it there anyway.
 
 A copy costs a second full-size library. If that is what the new drive was for, option A is the reason to prefer it.
 

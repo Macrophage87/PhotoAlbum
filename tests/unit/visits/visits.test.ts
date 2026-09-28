@@ -12,6 +12,7 @@ import {
   visitorHash,
 } from "@/lib/visits/record";
 import { fillGaps, visitorStats } from "@/lib/visits/stats";
+import { databaseZone } from "@/lib/time/local-day-sql";
 import { barLabel, plural, whenAgo } from "@/lib/visits/format";
 import { resetTestDb } from "../helpers/reset";
 
@@ -47,8 +48,9 @@ describe("what counts as a visit at all", () => {
     expect(referrerHost(null, "https://album.example")).toBe(null);
   });
 
-  it("reads the visitor's address from the first hop the proxy names, never the proxies behind it", () => {
-    expect(callerAddress(new Headers({ "x-forwarded-for": "198.51.100.7, 10.0.0.1, 10.0.0.2" }))).toBe("198.51.100.7");
+  it("reads the visitor's address from the entry our proxy appended, never one the visitor wrote itself", () => {
+    expect(callerAddress(new Headers({ "x-forwarded-for": "10.9.9.9, 198.51.100.7" }))).toBe("198.51.100.7");
+    expect(callerAddress(new Headers({ "x-forwarded-for": "198.51.100.7" }))).toBe("198.51.100.7");
     expect(callerAddress(new Headers({ "x-real-ip": "203.0.113.9" }))).toBe("203.0.113.9");
     expect(callerAddress(new Headers())).toBe("unknown");
   });
@@ -209,6 +211,28 @@ describe("what the Admin page is told", () => {
     expect((await visitorStats(90)).totals.visits).toBe(1);
   });
 
+  it("counts the days in a server zone under any name, never failing the page (#144)", async () => {
+    await recordVisit(note("/trips/acadia"));
+    const was = process.env.TZ;
+    try {
+      // A legacy name (which a Postgres without the legacy links rejects), and one nothing knows.
+      for (const tz of ["America/Buenos_Aires", "Atlantis/Lost"]) {
+        process.env.TZ = tz;
+        const stats = await visitorStats(7);
+        expect(stats.totals.visits).toBe(1);
+        expect(stats.daily).toHaveLength(7);
+        expect(stats.daily.reduce((n, d) => n + d.visits, 0)).toBe(1);
+      }
+    } finally {
+      if (was === undefined) delete process.env.TZ;
+      else process.env.TZ = was;
+    }
+    const known = new Set((await db.$queryRaw<{ name: string }[]>`SELECT name FROM pg_timezone_names`).map((r) => r.name));
+    expect(known.has(await databaseZone("America/Buenos_Aires"))).toBe(true);
+    expect(await databaseZone("Atlantis/Lost")).toBe("UTC");
+    expect(await databaseZone("+05:00")).toBe("Etc/GMT-5");
+  });
+
   it("says nothing happened when nothing has", async () => {
     const stats = await visitorStats(7);
     expect(stats.totals).toEqual({ visits: 0, visitors: 0 });
@@ -245,6 +269,6 @@ describe("the chart and the words around it", () => {
     expect(plural(1, "page")).toBe("1 page");
     expect(plural(2, "page")).toBe("2 pages");
     expect(plural(1, "browser")).toBe("1 browser");
-    expect(barLabel("2026-03-09")).toBe("9 Mar");
+    expect(barLabel("2026-03-09")).toBe("Mar 9");
   });
 });

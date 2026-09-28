@@ -9,13 +9,15 @@ function remember(cookie: string, value: string) {
 }
 
 /**
- * A row of ways to order a list — "Favorites first · Oldest first · Newest first". Each is an ordinary link to the
- * same page ordered that way, keeping whatever search is in the address and starting again from the first page;
+ * A row of ways to order a list — "Favorites first · Newest first · Oldest first", in that order wherever a list
+ * offers them, so the same choice is in the same place on every page. Each is an ordinary link to the same page
+ * ordered that way, keeping whatever search is in the address and starting again from the first page;
  * choosing one also remembers it on this device under `cookie`.
  */
 export function SortToggle<V extends string>({ value, options, cookie, label, testId, param = "order" }: {
   value: V;
-  options: { value: V; label: string }[];
+  /** `remember: false` for an order only this page has, which other lists sharing the cookie could not honour. */
+  options: { value: V; label: string; remember?: false }[];
   cookie: string;
   /** What the choice is about, for screen readers: "Which way the timeline runs". */
   label: string;
@@ -39,7 +41,7 @@ export function SortToggle<V extends string>({ value, options, cookie, label, te
         <Link
           key={o.value}
           href={href(o.value)}
-          onClick={() => remember(cookie, o.value)}
+          onClick={() => o.remember !== false && remember(cookie, o.value)}
           aria-current={value === o.value ? "true" : undefined}
           data-testid={`${testId}-${o.value}`}
           className={`px-2.5 py-1 rounded-theme whitespace-nowrap ${value === o.value ? "bg-primary text-primary-fg" : "text-muted hover:text-text hover:bg-surface-alt"}`}

@@ -2,45 +2,32 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { ActivityType } from "@/generated/prisma/enums";
-import type { MapPayload } from "@/lib/map/geojson";
+import type { ActivityMapPayload } from "@/lib/map/geojson";
 import type { MapTheme } from "@/lib/map/theme";
 import { MapViewDynamic } from "@/components/map/MapViewDynamic";
 import { TrackCharts } from "@/components/charts/TrackCharts";
 import { Lightbox, type LightboxPhoto } from "@/components/photos/Lightbox";
 
-/** Map of one activity's track plus its photos, with charts whose cursor drives a marker on the map. */
-export function ActivityMapSection({ tripSlug, trackId, activityId, type, theme }: { tripSlug: string; trackId: string; activityId: string; type: ActivityType; theme: MapTheme }) {
-  const [data, setData] = useState<MapPayload | null>(null);
+/**
+ * Map of one activity's track plus its photos, with charts whose cursor drives a marker on the map. It asks for the
+ * activity alone rather than the whole trip, so the same section works for whoever holds only the activity's link.
+ */
+export function ActivityMapSection({ trackId, activityId, type, theme, member = false }: { trackId: string; activityId: string; type: ActivityType; theme: MapTheme; /** A member on a member's page; otherwise the map is asked for as the page's visitors see it (`view=share`). */ member?: boolean }) {
+  const [data, setData] = useState<ActivityMapPayload | null>(null);
   const [marker, setMarker] = useState<{ lat: number; lng: number } | null>(null);
   const [lightbox, setLightbox] = useState<number | null>(null);
 
   useEffect(() => {
     let alive = true;
-    fetch(`/api/trips/${tripSlug}/geojson`)
+    fetch(`/api/activities/${activityId}/geojson${member ? "" : "?view=share"}`)
       .then((r) => (r.ok ? r.json() : null))
-      .then((d: MapPayload | null) => {
-        if (!alive || !d) return;
-        const tracks = { ...d.tracks, features: d.tracks.features.filter((f) => f.properties.trackId === trackId) };
-        const photos = { ...d.photos, features: d.photos.features.filter((f) => f.properties.activityId === activityId) };
-        const t = tracks.features[0];
-        let bounds = d.bounds;
-        if (t) {
-          const c = t.geometry.coordinates;
-          let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-          for (const [x, y] of c) {
-            if (x < minX) minX = x;
-            if (x > maxX) maxX = x;
-            if (y < minY) minY = y;
-            if (y > maxY) maxY = y;
-          }
-          bounds = [[minX, minY], [maxX, maxY]];
-        }
-        setData({ ...d, tracks, photos, bounds });
+      .then((d: ActivityMapPayload | null) => {
+        if (alive && d) setData(d);
       });
     return () => {
       alive = false;
     };
-  }, [tripSlug, trackId, activityId]);
+  }, [activityId, member]);
 
   const photos: LightboxPhoto[] = useMemo(() => (data?.photos.features ?? []).map((f) => ({ id: f.properties.id, mediumUrl: f.properties.mediumUrl, width: null, height: null, caption: f.properties.caption, alt: f.properties.caption ?? "Photo" })), [data]);
 

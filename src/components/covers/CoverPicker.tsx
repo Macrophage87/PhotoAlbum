@@ -2,6 +2,7 @@ import Link from "next/link";
 import { photoUrl } from "@/lib/photos/urls";
 import { Button, Card } from "@/components/ui";
 import type { CoverCandidate } from "@/lib/covers/candidates";
+import { readableTitle } from "@/lib/photos/readable-text";
 
 /**
  * Choosing the picture a trip or a collection is known by.
@@ -18,9 +19,9 @@ export function CoverPicker({ title, backHref, current, automatic, photos, nextC
   title: string;
   backHref: string;
   /** The photograph chosen by hand, where one has been. */
-  current: { id: string; updatedAt: Date } | null;
+  current: { id: string; imageVersion: number } | null;
   /** What the album would lead with on its own, named for the reader. */
-  automatic: { id: string; updatedAt: Date } | null;
+  automatic: { id: string; imageVersion: number } | null;
   photos: CoverCandidate[];
   nextCursor: string | null;
   total: number;
@@ -79,7 +80,7 @@ export function CoverPicker({ title, backHref, current, automatic, photos, nextC
                   <form action={choose.bind(null, p.id)}>
                     <button
                       type="submit"
-                      aria-label={`Use “${p.caption ?? p.title ?? p.originalName}” as the cover`}
+                      aria-label={`Use “${p.caption ?? readableTitle(p, true) ?? p.originalName}” as the cover`}
                       aria-pressed={chosen}
                       className={`relative block w-full aspect-square rounded-theme overflow-hidden border bg-surface-alt focus:outline-none focus-visible:ring-2 focus-visible:ring-ring ${chosen ? "border-primary ring-2 ring-primary" : "border-border hover:border-primary"}`}
                     >

@@ -9,20 +9,24 @@ import { PetTagger } from "./PetTagger";
 
 export type ChipFace = { id: string; status: string; hand: boolean; person: { id: string; name: string; kind: string } | null; proposedPerson: { id: string; name: string } | null };
 
-/** Members-only name chips for a photo, with remove, and a picker to name an unnamed face by hand. Never rendered for anonymous or share-link viewers. */
-export function PersonChips({ photoId, faces, people }: { photoId: string; faces: ChipFace[]; people: { id: string; name: string }[] }) {
+/**
+ * Members-only name chips for a photo, with remove, and a picker to name an unnamed face by hand. Never rendered for
+ * anonymous or share-link viewers. Removing, naming and tagging are the uploader's and an admin's, as every other
+ * change to the photograph is; anybody else in the family sees the names alone.
+ */
+export function PersonChips({ photoId, faces, people, editable }: { photoId: string; faces: ChipFace[]; people: { id: string; name: string }[]; editable: boolean }) {
   const [pending, start] = useTransition();
   const [naming, setNaming] = useState<string | null>(null);
   const router = useRouter();
   const named = faces.filter((f) => f.person && f.status === "CONFIRMED");
-  const unnamed = faces.filter((f) => !f.person && f.status !== "PROPOSED" && !f.hand);
+  const unnamed = editable ? faces.filter((f) => !f.person && f.status !== "PROPOSED" && !f.hand) : [];
   const seen = new Set<string>();
   return (
     <div className="flex flex-wrap items-center gap-1.5 text-xs">
       {named.filter((f) => !seen.has(f.person!.id) && seen.add(f.person!.id)).map((f) => (
-        <span key={f.id} className="inline-flex items-center rounded-full bg-primary/10 text-primary">
-          <Link href={`/people/${f.person!.id}`} className="pl-2.5 py-0.5 hover:underline">{f.person!.name}</Link>
-          <button type="button" aria-label={`Remove ${f.person!.name}`} disabled={pending} className="px-1.5 py-0.5 hover:text-red-700" onClick={() => start(async () => { await untagPerson(photoId, f.person!.id); router.refresh(); })}>×</button>
+        <span key={f.id} className="inline-flex items-center rounded-full bg-primary/10 text-primary-strong">
+          <Link href={`/people/${f.person!.id}`} className={`pl-2.5 ${editable ? "" : "pr-2.5 "}py-0.5 hover:underline`}>{f.person!.name}</Link>
+          {editable && <button type="button" aria-label={`Remove ${f.person!.name}`} disabled={pending} className="px-1.5 py-0.5 hover:text-red-700" onClick={() => start(async () => { await untagPerson(photoId, f.person!.id); router.refresh(); })}>×</button>}
         </span>
       ))}
       {unnamed.map((f, i) =>
@@ -37,7 +41,7 @@ export function PersonChips({ photoId, faces, people }: { photoId: string; faces
           <button key={f.id} type="button" className="rounded-full bg-surface-alt text-muted px-2.5 py-0.5 hover:bg-border" onClick={() => setNaming(f.id)}>unnamed face{unnamed.length > 1 ? ` ${i + 1}` : ""}</button>
         ),
       )}
-      <PetTagger photoId={photoId} />
+      {editable && <PetTagger photoId={photoId} />}
     </div>
   );
 }

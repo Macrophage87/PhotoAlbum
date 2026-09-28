@@ -1,5 +1,5 @@
 import { photosOnDay, type DayGroup } from "@/lib/timeline/build";
-import { orderTimeline, type TimelineOrder } from "@/lib/timeline/order";
+import { orderTimeline, timeSpan, type TimelineOrder } from "@/lib/timeline/order";
 import type { PhotoCard } from "@/lib/photos/queries";
 import { formatDay, formatLocalTime } from "@/lib/time/format";
 import { toGridPhoto } from "@/components/photos/toGrid";
@@ -19,8 +19,9 @@ export async function Timeline({ groups: built, tripSlug, timezone, member, idPr
   if (groups.length === 0) return <p className="text-muted text-sm">Nothing on the timeline yet. Upload photos or add an activity.</p>;
   // The timeline is where most photographs are actually looked at, so it carries the same hearts as the grids: whose
   // favorites they are, loaded for the whole page in two small queries. Members only — a favorite is a person's.
-  const hearts = member ? await photoFavourites(groups.flatMap((g) => g.items.flatMap((i) => i.photos.map((p) => p.id))), await getViewer()) : new Map();
-  const tile = (p: PhotoCard) => toGridPhoto(p, null, member, hearts.get(p.id) ?? (member ? { mine: false, count: 0 } : null));
+  const viewer = member ? await getViewer() : null;
+  const hearts = viewer ? await photoFavourites(groups.flatMap((g) => g.items.flatMap((i) => i.photos.map((p) => p.id))), viewer) : new Map();
+  const tile = (p: PhotoCard) => toGridPhoto(p, null, viewer?.user ?? null, hearts.get(p.id) ?? (member ? { mine: false, count: 0 } : null));
   const days = groups.map((g) => {
     const id = `${idPrefix}-${g.dayKey ?? "undated"}`;
     const activities = g.items.flatMap((i) => (i.kind === "activity" ? [{ id: `${id}-${i.activity.id}`, title: i.activity.title, count: i.photos.length }] : []));
@@ -44,7 +45,13 @@ export async function Timeline({ groups: built, tripSlug, timezone, member, idPr
                 // An activity's card is an anchor too, so the panel can take the reader straight to it.
                 <li key={ii} className="relative scroll-mt-32" id={item.kind === "activity" ? `${days[gi].id}-${item.activity.id}` : undefined}>
                   <span className="absolute -left-[1.85rem] top-2 w-3 h-3 rounded-full bg-primary ring-4 ring-bg" />
-                  {item.kind === "activity" ? (
+                  {item.kind === "continued" ? (
+                    // Not a second copy: its card, and its photographs, are under the day it began.
+                    <p className="text-sm text-muted pt-0.5" data-testid="activity-continued">
+                      Continued from {formatDay(item.from, "shortDay")}:{" "}
+                      <a href={`#${idPrefix}-${item.from}-${item.activity.id}`} className="text-primary hover:underline">{item.activity.title}</a>
+                    </p>
+                  ) : item.kind === "activity" ? (
                     // A photograph dropped on an activity card is filed there by hand, whatever the clock says.
                     <TimelineDrop kind="activity" target={item.activity.id} label={item.activity.title}>
                       <ActivityCard activity={item.activity} tripSlug={tripSlug} timezone={timezone} hrefBase={activityHrefBase}>
@@ -57,13 +64,16 @@ export async function Timeline({ groups: built, tripSlug, timezone, member, idPr
                     </TimelineDrop>
                   ) : (
                     <div>
-                      {g.dayKey && (
-                        <div className="text-xs text-muted mb-2">
-                          {formatLocalTime(item.photos[0].takenAt!, { offsetMin: item.photos[0].tzOffsetMin, timezone })}
-                          {item.photos.length > 1 && <> – {formatLocalTime(item.photos[item.photos.length - 1].takenAt!, { offsetMin: item.photos[item.photos.length - 1].tzOffsetMin, timezone })}</>}
-                          <span className="ml-2">· {item.photos.length} photo{item.photos.length === 1 ? "" : "s"}</span>
-                        </div>
-                      )}
+                      {g.dayKey && (() => {
+                        const span = timeSpan(item.photos);
+                        return (
+                          <div className="text-xs text-muted mb-2">
+                            {span && formatLocalTime(span.first.takenAt!, { offsetMin: span.first.tzOffsetMin, timezone })}
+                            {span && span.last !== span.first && <> – {formatLocalTime(span.last.takenAt!, { offsetMin: span.last.tzOffsetMin, timezone })}</>}
+                            <span className="ml-2">· {item.photos.length} photo{item.photos.length === 1 ? "" : "s"}</span>
+                          </div>
+                        );
+                      })()}
                       {/* Dropped here, a photograph comes off whatever activity it was on and stays on this day. */}
                       <TimelineDrop kind="loose" target={null} label="this day">
                         <PhotoGrid photos={item.photos.map(tile)} draggable={member} />

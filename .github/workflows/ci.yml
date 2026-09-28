@@ -4,6 +4,12 @@ on:
   push:
     branches: ["**"]
   pull_request:
+  # Run by hand on staging or main to redeploy its tip once it passes again.
+  workflow_dispatch:
+
+# Read the code, nothing more; the deploy workflows it calls ask for less still.
+permissions:
+  contents: read
 
 jobs:
   test:
@@ -81,3 +87,18 @@ jobs:
           push: false
           cache-from: type=gha,scope=ml
           cache-to: type=gha,mode=max,scope=ml
+
+  # Deploys wait for both jobs above, so a commit that fails lint, tests, e2e or
+  # the image build never reaches the server; they deploy github.sha, the
+  # commit those jobs checked out. Pull requests never deploy.
+  deploy-staging:
+    needs: [test, docker]
+    if: github.ref == 'refs/heads/staging' && github.event_name != 'pull_request'
+    uses: ./.github/workflows/deploy-staging.yml
+    secrets: inherit
+
+  deploy-production:
+    needs: [test, docker]
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    uses: ./.github/workflows/deploy-production.yml
+    secrets: inherit

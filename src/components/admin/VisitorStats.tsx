@@ -88,7 +88,7 @@ export function VisitorStats({ stats, enabled, retentionDays }: { stats: Stats; 
         )}
       </Card>
 
-      <div className="grid gap-4 sm:grid-cols-2">
+      <div className="grid gap-4 grid-cols-1 sm:grid-cols-2">
         <Things title="Trips" rows={stats.trips} empty="No trip has been opened yet." />
         <Things title="Collections" rows={stats.collections} empty="No collection has been opened yet." />
       </div>
@@ -98,7 +98,7 @@ export function VisitorStats({ stats, enabled, retentionDays }: { stats: Stats; 
           <h3 className="font-medium">Photographs opened on their own page</h3>
           <ul className="grid grid-cols-2 sm:grid-cols-3 gap-3">
             {stats.items.map((i) => (
-              <li key={i.id} className="text-sm">
+              <li key={i.id} className="text-sm min-w-0">
                 <Link href={i.href} className="block group">
                   {i.thumbUrl ? (
                     // eslint-disable-next-line @next/next/no-img-element
@@ -115,8 +115,10 @@ export function VisitorStats({ stats, enabled, retentionDays }: { stats: Stats; 
         </Card>
       )}
 
-      <div className="grid gap-4 sm:grid-cols-2">
-        <Card className="p-5 space-y-2">
+      <div className="grid gap-4 grid-cols-1 sm:grid-cols-2">
+        {/* min-w-0 and wrapping rows: a long address or "92 pages, 10 minutes ago" wraps on a phone rather than
+            widening the card, and with it the page. */}
+        <Card className="p-5 space-y-2 min-w-0">
           <h3 className="font-medium">Arrived from</h3>
           {stats.referrers.length === 0 ? (
             <p className="text-sm text-muted">Nobody followed a link in from another site — people came straight here, or their browser kept it to itself.</p>
@@ -124,21 +126,21 @@ export function VisitorStats({ stats, enabled, retentionDays }: { stats: Stats; 
             <ul className="text-sm space-y-1">
               {stats.referrers.map((r) => (
                 <li key={r.host} className="flex justify-between gap-3">
-                  <span className="truncate">{r.host}</span>
-                  <span className="text-muted">{plural(r.visits, "page")}</span>
+                  <span className="truncate min-w-0">{r.host}</span>
+                  <span className="text-muted whitespace-nowrap">{plural(r.visits, "page")}</span>
                 </li>
               ))}
             </ul>
           )}
         </Card>
 
-        <Card className="p-5 space-y-2">
+        <Card className="p-5 space-y-2 min-w-0">
           <h3 className="font-medium">Family</h3>
           <ul className="text-sm space-y-1" data-testid="visitor-members">
             {stats.members.map((m) => (
-              <li key={m.id} className="flex justify-between gap-3">
-                <span className="truncate">{m.name ?? m.email}</span>
-                <span className="text-muted whitespace-nowrap">
+              <li key={m.id} className="flex flex-wrap justify-between gap-x-3">
+                <span className="truncate min-w-0 max-w-full">{m.name ?? m.email}</span>
+                <span className="text-muted">
                   {m.visits > 0 ? `${plural(m.visits, "page")}, ` : ""}
                   {m.last ? whenAgo(m.last) : "not since counting began"}
                 </span>
@@ -154,7 +156,7 @@ export function VisitorStats({ stats, enabled, retentionDays }: { stats: Stats; 
 /** Trips or collections, most looked at first, with what a secret link accounted for called out separately. */
 function Things({ title, rows, empty }: { title: string; rows: ThingCount[]; empty: string }) {
   return (
-    <Card className="p-5 space-y-2">
+    <Card className="p-5 space-y-2 min-w-0">
       <h3 className="font-medium">{title}</h3>
       {rows.length === 0 ? (
         <p className="text-sm text-muted">{empty}</p>
@@ -162,7 +164,7 @@ function Things({ title, rows, empty }: { title: string; rows: ThingCount[]; emp
         <ul className="text-sm space-y-2">
           {rows.map((t) => (
             <li key={t.id}>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 min-w-0">
                 <Link href={t.href} className="font-medium text-primary hover:underline truncate">{t.title}</Link>
                 {t.visibility && t.visibility !== "PRIVATE" && <Badge tone={t.visibility === "PUBLIC" ? "accent" : "neutral"}>{t.visibility === "PUBLIC" ? "public" : "link"}</Badge>}
               </div>

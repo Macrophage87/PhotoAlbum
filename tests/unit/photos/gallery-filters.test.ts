@@ -12,7 +12,7 @@ describe("reading a gallery filter from the address bar", () => {
 
   it("takes words, who uploaded it, who is in it, what, when and where in the trip", () => {
     const f = parseGalleryFilter({ q: "  lighthouse  at   dusk ", uploader: "u1", person: "p1", kind: "SCAN", year: "2019", activity: "a1" }, member);
-    expect(f).toEqual({ q: "lighthouse at dusk", uploaderId: "u1", personIds: ["p1"], kind: "SCAN", year: 2019, activityId: "a1" });
+    expect(f).toEqual({ q: "lighthouse at dusk", uploaderId: "u1", personIds: ["p1"], kind: "SCAN", year: 2019, activityId: "a1", member: true });
     expect(filterIsActive(f)).toBe(true);
   });
 
@@ -38,8 +38,10 @@ describe("reading a gallery filter from the address bar", () => {
   });
 
   it("is no filter at all when nothing was asked for", () => {
-    expect(parseGalleryFilter({}, member)).toEqual(NO_FILTER);
+    expect(parseGalleryFilter({}, member)).toEqual({ ...NO_FILTER, member: true });
     expect(filterIsActive(NO_FILTER)).toBe(false);
+    // A filter nobody parsed is a stranger's: its words match only what anybody may read.
+    expect(NO_FILTER.member).toBe(false);
     // Blank and whitespace-only values are the same as nothing, not as a search for "".
     expect(filterIsActive(parseGalleryFilter({ q: "   ", uploader: "" }, member))).toBe(false);
   });
@@ -50,6 +52,13 @@ describe("reading a gallery filter from the address bar", () => {
     expect(parseGalleryFilter({ uploader: "u1" }, { member: false }).uploaderId).toBeNull();
     expect(parseGalleryFilter({ person: "p1" }, { member: false }).personIds).toEqual([]);
     expect(filterIsActive(parseGalleryFilter({ person: "p1" }, { member: false }))).toBe(false);
+    // The words stay, but are marked as a stranger's, so they are matched against what a stranger may read.
+    expect(parseGalleryFilter({ q: "Ada" }, { member: false })).toMatchObject({ q: "Ada", member: false });
+    // An activity is asked about only inside its trip: elsewhere it would tell a stranger which public photographs
+    // came from an outing on a trip they may not open.
+    expect(parseGalleryFilter({ activity: "a1" }, { member: false }).activityId).toBeNull();
+    expect(parseGalleryFilter({ activity: "a1" }, { member: false, inTrip: true }).activityId).toBe("a1");
+    expect(parseGalleryFilter({ activity: "a1" }, { member: true }).activityId).toBe("a1");
   });
 
   it("throws away a kind the album does not have, and a year that could not be one", () => {

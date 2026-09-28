@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Button, buttonClasses } from "@/components/ui";
 import { disconnectGoogle, pickerProgress, pollPickerSession, startPickerSession } from "@/app/google/actions";
+import { statusRetryMs } from "@/lib/media/upload-retry";
 
 type Status = { connected: boolean; needsReconnect: boolean };
 type Phase =
@@ -15,6 +16,8 @@ type Phase =
   | { kind: "error"; message: string; reconnect: boolean };
 
 const STORAGE_KEY = "google-picker-session";
+/** Missed answers in a row before the page says it is reconnecting; one on its own is ordinary on a phone. */
+const TROUBLE_AFTER = 2;
 
 /**
  * Import from Google Photos through Google's own picker: the member chooses on photos.google.com (a new tab), this
@@ -24,12 +27,26 @@ const STORAGE_KEY = "google-picker-session";
 export function GooglePickerButton({ status, configured, tripId, next }: { status: Status; configured: boolean; tripId?: string | null; next: string }) {
   const router = useRouter();
   const [phase, setPhase] = useState<Phase>({ kind: "idle" });
+  /** The album has not answered for a moment; the page is still watching and says so quietly. */
+  const [reconnecting, setReconnecting] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const stop = () => { if (timer.current) clearTimeout(timer.current); timer.current = null; };
 
+  // A question that goes unanswered (a phone that locked its screen, a network handover, a deploy) is asked again, a
+  // little later each time, as the uploader's status check does. Stopping at the first would leave the page saying
+  // "watching" while it no longer was.
   const trackDownloads = useCallback((photoIds: string[], extra: { skipped: number; unsupported: number }) => {
+    let misses = 0;
     const tick = async () => {
-      const p = await pickerProgress(photoIds);
+      const p = await pickerProgress(photoIds).catch(() => null);
+      if (!p) {
+        misses += 1;
+        if (misses >= TROUBLE_AFTER) setReconnecting(true);
+        timer.current = setTimeout(tick, statusRetryMs(misses));
+        return;
+      }
+      misses = 0;
+      setReconnecting(false);
       setPhase({ kind: "downloading", photoIds, done: p.done, failed: p.failed, ...extra });
       if (p.done + p.failed >= p.total) {
         try { sessionStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
@@ -43,6 +60,8 @@ export function GooglePickerButton({ status, configured, tripId, next }: { statu
 
   const watchSession = useCallback((sessionId: string, pickerUri: string, pollIntervalMs: number, deadline: number) => {
     setPhase({ kind: "picking", sessionId, pickerUri, pollIntervalMs, deadline });
+    setReconnecting(false);
+    let misses = 0;
     const tick = async () => {
       // Google's session has a lifetime; past it the poll would only ever see "gone", so stop and say so.
       if (Date.now() > deadline) {
@@ -50,7 +69,15 @@ export function GooglePickerButton({ status, configured, tripId, next }: { statu
         setPhase({ kind: "error", message: "That picking session has ended; start again.", reconnect: false });
         return;
       }
-      const r = await pollPickerSession(sessionId, tripId ?? null);
+      const r = await pollPickerSession(sessionId, tripId ?? null).catch(() => null);
+      if (!r) {
+        misses += 1;
+        if (misses >= TROUBLE_AFTER) setReconnecting(true);
+        timer.current = setTimeout(tick, Math.max(pollIntervalMs, statusRetryMs(misses)));
+        return;
+      }
+      misses = 0;
+      setReconnecting(false);
       if (r.state === "picking") { timer.current = setTimeout(tick, pollIntervalMs); return; }
       try { sessionStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
       if (r.state === "error") { setPhase({ kind: "error", message: r.message, reconnect: r.reconnect }); return; }
@@ -97,12 +124,12 @@ export function GooglePickerButton({ status, configured, tripId, next }: { statu
         </div>
       ) : phase.kind === "picking" ? (
         <div className="space-y-2">
-          <p className="text-muted">Choose in the Google Photos tab, press Done there, and come back here. This page is watching for you.</p>
+          <p className="text-muted">Choose in the Google Photos tab, press Done there, and come back here. This page is watching for you.{reconnecting ? " Reconnecting…" : ""}</p>
           <a href={phase.pickerUri} target="_blank" rel="noopener" className={buttonClasses("primary", "sm")}>Open Google Photos</a>{" "}
           <button type="button" className="text-muted hover:underline" onClick={() => { stop(); try { sessionStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ } setPhase({ kind: "idle" }); }}>Cancel</button>
         </div>
       ) : phase.kind === "downloading" ? (
-        <p role="status" className="text-muted">Copying {phase.photoIds.length} item{phase.photoIds.length === 1 ? "" : "s"} from Google Photos… {phase.done} ready{phase.failed > 0 ? `, ${phase.failed} failed` : ""}{phase.skipped > 0 ? ` · ${phase.skipped} already in the album` : ""}{phase.unsupported > 0 ? ` · ${phase.unsupported} unsupported` : ""}</p>
+        <p role="status" className="text-muted">Copying {phase.photoIds.length} item{phase.photoIds.length === 1 ? "" : "s"} from Google Photos… {phase.done} ready{phase.failed > 0 ? `, ${phase.failed} failed` : ""}{phase.skipped > 0 ? ` · ${phase.skipped} already in the album` : ""}{phase.unsupported > 0 ? ` · ${phase.unsupported} unsupported` : ""}{reconnecting ? " · reconnecting…" : ""}</p>
       ) : (
         <div className="space-y-2">
           <p role="alert" className="text-red-800">{phase.message}</p>
