@@ -162,6 +162,7 @@ describe("sending a note", () => {
     expect(notePagePath("https://album.example/share/SECRETtoken/photos", APP)).toBe("/share/…/photos");
     expect(notePagePath("https://album.example/share/c/SECRETtoken", APP)).toBe("/share/c/…");
     expect(notePagePath("https://album.example/share/a/SECRETtoken", APP)).toBe("/share/a/…");
+    expect(notePagePath("https://album.example/invite/SECRETtoken", APP)).toBe("/invite/…");
     expect(notePagePath("https://elsewhere.example/trips/acadia", APP)).toBe(null);
     expect(notePagePath("https://album.example/note", APP)).toBe(null);
     expect(notePagePath("https://album.example//evil.example/x", APP)).toBe(null);
@@ -181,6 +182,25 @@ describe("limits", () => {
     // Ten minutes on, the first sender may write again.
     expect(await send({}, { now: minutes(11) })).toEqual({ status: "sent" });
     expect(await db.visitorNote.count()).toBe(8);
+  });
+
+  it("counts notes sent all at once one after another", async () => {
+    const answers = await Promise.all(Array.from({ length: 20 }, () => send()));
+    expect(answers.filter((a) => a.status === "sent")).toHaveLength(3);
+    expect(answers.filter((a) => a.status === "error" && /wait ten minutes/.test(a.message ?? ""))).toHaveLength(17);
+    expect(await db.visitorNote.count()).toBe(3);
+    expect(jobs.queued).toHaveLength(3);
+  });
+
+  it("also limits a wider IPv6 network, more loosely", async () => {
+    // Ten /64s of one /48, each well within its own limit.
+    for (let i = 0; i < 10; i++) expect(await send({}, { now: minutes(i / 2), ip: `2001:db8:5:${i}::1` })).toEqual({ status: "sent" });
+    expect(await send({}, { now: minutes(6), ip: "2001:db8:5:a::1" })).toMatchObject({ status: "error", message: expect.stringMatching(/wait ten minutes/) });
+    // Another /48 is another network.
+    expect(await send({}, { now: minutes(6), ip: "2001:db8:6:a::1" })).toEqual({ status: "sent" });
+    // Over the day, thirty from the network.
+    for (let i = 0; i < 20; i++) expect(await send({}, { now: minutes(11 + i * 3), ip: `2001:db8:5:${(i + 16).toString(16)}::1` })).toEqual({ status: "sent" });
+    expect(await send({}, { now: minutes(80), ip: "2001:db8:5:ff::1" })).toMatchObject({ status: "error", message: expect.stringMatching(/tomorrow/) });
   });
 
   it("takes ten from one sender in a day", async () => {
@@ -282,7 +302,7 @@ describe("the admins' email", () => {
     expect(m.subject).toBe("A note from Eve Bcc: all@example.com on the family album");
     expect(m.subject).not.toMatch(/[\r\n]/);
     expect(m.replyTo).toBeUndefined();
-    expect(m.text).toContain("Sent from a shared link.");
+    expect(m.text).toContain("Sent from a page opened with a private link.");
     expect(m.text).not.toContain("/share/");
   });
 
@@ -294,6 +314,18 @@ describe("the admins' email", () => {
     await expect(mailVisitorNote(note.id)).rejects.toThrow(/No admin/);
     // Either way the note is there for the admins to read.
     expect(await db.visitorNote.count()).toBe(1);
+  });
+
+  it("counts the day's cap again before sending, and marks a note past it instead", async () => {
+    const now = new Date();
+    await db.visitorNote.createMany({ data: Array.from({ length: MAILED_PER_DAY }, (_, i) => ({ name: "N", message: "m", clientHash: `c${i}`, createdAt: new Date(now.getTime() - 60_000) })) });
+    const late = await db.visitorNote.create({ data: { name: "Late", message: "m", clientHash: "h", createdAt: now } });
+    expect(await mailVisitorNote(late.id)).toEqual({ sent: 0, failed: 0 });
+    expect(mail.sent).toEqual([]);
+    expect((await db.visitorNote.findUniqueOrThrow({ where: { id: late.id } })).unmailed).toBe(true);
+    // One within the cap is still sent.
+    const early = await db.visitorNote.findFirstOrThrow({ where: { clientHash: "c0" } });
+    expect((await mailVisitorNote(early.id)).sent).toBe(2);
   });
 
   it("is not sent about a note past the day's cap, or one deleted meanwhile", async () => {

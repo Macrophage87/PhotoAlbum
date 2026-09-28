@@ -6,7 +6,7 @@ import { Badge, Button, Card, ConfirmSubmitButton } from "@/components/ui";
 import { photoUrl } from "@/lib/photos/urls";
 import { formatDateTime } from "@/lib/time/format";
 import { serverTimeZone } from "@/lib/visits/record";
-import { MAILED_PER_DAY } from "@/lib/notes/notes";
+import { isPrivateLinkPath, MAILED_PER_DAY } from "@/lib/notes/notes";
 import { deleteNote, markNoteRead } from "./actions";
 
 export const metadata = { title: "Notes from visitors" };
@@ -71,7 +71,7 @@ export default async function NotesPage() {
                 </div>
                 {n.pageUrl && (
                   <p className="text-muted">
-                    Sent from {n.pageUrl.startsWith("/share/") ? "a shared link" : <Link href={n.pageUrl} className="underline underline-offset-2">{n.pageUrl}</Link>}
+                    Sent from {isPrivateLinkPath(n.pageUrl) ? "a page opened with a private link" : <Link href={n.pageUrl} className="underline underline-offset-2">{n.pageUrl}</Link>}
                   </p>
                 )}
                 <div className="flex gap-2">

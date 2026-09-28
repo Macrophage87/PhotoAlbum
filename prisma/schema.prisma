@@ -1041,11 +1041,15 @@ model VisitorNote {
   readAt     DateTime?
   /// sha256 of the day's visitor salt (VisitSalt) and the sender's address, for rate limiting only: never the address.
   clientHash String
+  /// The same for the wider network the address is in (an IPv6 /48), for a second, looser limit; none when no proxy
+  /// named the sender.
+  networkHash String?
   /// Arrived past the day's cap, so it was kept but no email went out about it.
   unmailed   Boolean   @default(false)
 
   @@index([createdAt])
   @@index([clientHash, createdAt])
+  @@index([networkHash, createdAt])
 }
 
 /// The random salt a single day's visitor hashes are made with. Kept in the database rather than in the process so
