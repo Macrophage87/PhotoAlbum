@@ -61,6 +61,8 @@ export async function startWorker(): Promise<void> {
   const { detectAnimalsJob, animalSweep } = await import("./handlers/detect-animals");
   const { proposeAnimalsForPhoto } = await import("@/lib/pets/proposals");
   const { purgeVisits } = await import("@/lib/visits/record");
+  const { purgeVisitorNotes } = await import("@/lib/notes/notes");
+  const { mailVisitorNote } = await import("@/lib/notes/mail");
   const { purgeExpiredMagicLinks } = await import("@/lib/auth/magic-link");
   const { sweepStrandedUploads } = await import("@/lib/media/stranded");
   const { sweepOrphanFiles } = await import("@/lib/storage/sweep");
@@ -120,7 +122,12 @@ export async function startWorker(): Promise<void> {
   });
   await boss.work(QUEUES.purgeUnnamedFaces, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60 }, async () => void (await purgeUnnamedFaces()));
   await boss.work(QUEUES.purgeAnnotationRaw, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60 }, async () => void (await purgeAnnotationRaw()));
-  await boss.work(QUEUES.purgeVisits, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60 }, async () => void (await purgeVisits()));
+  // The nightly pass over what visitors leave behind: counted visits past their window, and notes past their year.
+  await boss.work(QUEUES.purgeVisits, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60 }, async () => {
+    await purgeVisits();
+    await purgeVisitorNotes();
+  });
+  await boss.work(QUEUES.mailVisitorNote, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 5 }, async ([job]) => mailVisitorNote((job.data as { noteId: string }).noteId));
   await boss.work(QUEUES.purgeMagicLinks, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60 }, async () => void (await purgeExpiredMagicLinks({ db })));
   await boss.work(QUEUES.sweepStrandedUploads, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60 }, async () => void (await sweepStrandedUploads()));
   const { revokeQueuedConnection } = await import("@/lib/google/account");

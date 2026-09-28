@@ -41,6 +41,7 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
   const visits = await visitorStats([7, 30, 90].includes(askedDays) ? askedDays : 30);
   const viewer = await getViewer();
   const trashed = await db.photo.count({ where: { trashedAt: { not: null } } });
+  const [notesUnread, notesTotal] = await Promise.all([db.visitorNote.count({ where: { readAt: null } }), db.visitorNote.count()]);
   const [members, invites, deleting] = await Promise.all([
     db.user.findMany({ orderBy: { createdAt: "asc" }, include: { _count: { select: { photos: true, trips: true } } } }),
     db.invite.findMany({ where: { acceptedAt: null, expiresAt: { gt: new Date() } }, orderBy: { createdAt: "desc" }, include: { invitedBy: { select: { email: true, name: true } } } }),
@@ -235,6 +236,18 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
         <section>
           <h2 className="font-display text-xl font-semibold mb-1">Import from Google Photos (Takeout)</h2>
           <TakeoutAdmin configured={Boolean(inboxDir())} dir={inboxDir()} archives={archives.map((a) => ({ ...a, modifiedAt: a.modifiedAt.toISOString() }))} imports={takeoutImports.map((i) => ({ id: i.id, archiveName: i.archiveName, status: i.status, imported: i.imported, skipped: i.skipped, failed: i.failed, repaired: i.repaired, collectionsCreated: i.collectionsCreated, startedAt: i.startedAt.toISOString(), endedAt: i.endedAt?.toISOString() ?? null, report: (i.report as never) ?? null }))} />
+        </section>
+
+        <section id="notes" className="scroll-mt-4">
+          <h2 className="font-display text-xl font-semibold mb-1">Notes from visitors</h2>
+          <p className="text-sm text-muted mb-3" data-testid="notes-summary">
+            {notesTotal === 0
+              ? "Nobody has sent a note yet. Anybody looking at the album can write to the family from the link at the foot of every page."
+              : notesUnread === 0
+                ? `${notesTotal} note${notesTotal === 1 ? "" : "s"}, all read.`
+                : `${notesUnread} new note${notesUnread === 1 ? "" : "s"}${notesUnread < notesTotal ? `, ${notesTotal} in all` : ""}.`}
+          </p>
+          <Link href="/admin/notes" className="text-primary hover:underline text-sm">Read the notes</Link>
         </section>
 
         <section>

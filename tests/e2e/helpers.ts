@@ -22,7 +22,7 @@ const photoRoot = process.env.E2E_PHOTO_ROOT ?? `/tmp/${dbUrl ? new URL(dbUrl).p
 
 export async function resetDb() {
   await withDb(async (c) => {
-    await c.query('TRUNCATE "_TripParticipants", "_ActivityParticipants", "Visit", "VisitSalt", "AnimalDetection", "TakeoutImport", "GoogleAccount", "MediaSimilarity", "Face", "FaceCluster", "Person", "MediaAnnotationRaw", "AnnotationBatch", "AppSetting", "CollectionItem", "Collection", "PhotoLink", "TrackStats", "Track", "Photo", "Activity", "Trip", "Session", "MagicLinkToken", "Invite", "User" CASCADE');
+    await c.query('TRUNCATE "_TripParticipants", "_ActivityParticipants", "Visit", "VisitSalt", "VisitorNote", "AnimalDetection", "TakeoutImport", "GoogleAccount", "MediaSimilarity", "Face", "FaceCluster", "Person", "MediaAnnotationRaw", "AnnotationBatch", "AppSetting", "CollectionItem", "Collection", "PhotoLink", "TrackStats", "Track", "Photo", "Activity", "Trip", "Session", "MagicLinkToken", "Invite", "User" CASCADE');
     // Jobs left by a previous run (a server killed mid-job) would otherwise sit until they expire.
     await c.query("DELETE FROM pgboss.job").catch(() => {});
     // Emptying AppSetting also took the install id and binding the worker gave the album as it started, while the

@@ -286,6 +286,58 @@ test("public trips are browsable anonymously without edit controls", async ({ br
   await anon.close();
 });
 
+test("a visitor sends the family a note about a photo, and an admin reads it on the Admin page", async ({ browser, context, page }) => {
+  await setVisibility("acadia", "PUBLIC");
+  const still = await withDb((c) => c.query(`SELECT p.id FROM "Photo" p JOIN "Trip" t ON t.id = p."tripId" WHERE t.slug = 'acadia' AND p.status = 'READY' AND p."trashedAt" IS NULL ORDER BY p."createdAt" LIMIT 1`));
+  const photoId: string = still.rows[0].id;
+  const anon = await browser.newContext();
+  const visitor = await anon.newPage();
+  await visitor.goto("/trips/acadia/photos");
+  // Every page a visitor sees ends with a way to write to the family.
+  await expect(visitor.getByTestId("footer-note")).toHaveText("Send the family a note");
+  await visitor.locator(`button:has(img[src*='/api/photos/${photoId}/'])`).first().click();
+  await visitor.getByRole("dialog", { name: "Photo viewer" }).getByRole("link", { name: "Send a note about this photo" }).click();
+  await expect(visitor).toHaveURL(new RegExp(`/note\\?photo=${photoId}$`));
+  await expect(visitor.getByRole("heading", { name: "Send the family a note" })).toBeVisible();
+  await expect(visitor.getByTestId("note-photo")).toBeVisible();
+  await expect(visitor.locator('meta[name="robots"]')).toHaveAttribute("content", /noindex/);
+  await visitor.waitForLoadState("networkidle");
+  await visitor.getByLabel("Your name").fill("Aunt Ruth");
+  await visitor.getByLabel(/Your email/).fill("ruth@example.com");
+  await visitor.getByLabel("Your message").fill("Mom's pictures of Acadia are wonderful!");
+  // A form sent within three seconds of being drawn is taken for a script's, so wait as a person would have.
+  await visitor.waitForTimeout(3_500);
+  await visitor.getByRole("button", { name: "Send note" }).click();
+  await expect(visitor.getByText("Sent — thank you!")).toBeVisible();
+  // Nothing a visitor is shown says who the admins are.
+  expect(await visitor.content()).not.toContain(ADMIN);
+  const stored = await withDb((c) => c.query('SELECT name, email, "photoId", "pageUrl", "readAt" FROM "VisitorNote"'));
+  expect(stored.rows).toEqual([{ name: "Aunt Ruth", email: "ruth@example.com", photoId, pageUrl: "/trips/acadia/photos", readAt: null }]);
+  await anon.close();
+
+  await signIn(context, ADMIN);
+  await page.goto("/admin");
+  await expect(page.getByTestId("notes-summary")).toHaveText("1 new note.");
+  await page.getByRole("link", { name: "Read the notes" }).click();
+  await expect(page).toHaveURL(/\/admin\/notes$/);
+  const note = page.getByTestId("visitor-note");
+  await expect(note).toHaveCount(1);
+  await expect(note).toContainText("Aunt Ruth");
+  await expect(note).toContainText("Mom's pictures of Acadia are wonderful!");
+  await expect(note.getByRole("link", { name: "ruth@example.com" })).toHaveAttribute("href", "mailto:ruth@example.com");
+  await expect(note.locator(`a[href="/photos/${photoId}"] img`)).toBeVisible();
+  await expect(note.getByText("New", { exact: true })).toBeVisible();
+  await page.waitForLoadState("networkidle");
+  await note.getByRole("button", { name: "Mark read" }).click();
+  await expect(note.getByText("New", { exact: true })).toHaveCount(0);
+  await expect(note.getByRole("button", { name: "Mark read" })).toHaveCount(0);
+  const read = await withDb((c) => c.query('SELECT "readAt" FROM "VisitorNote"'));
+  expect(read.rows[0].readAt).not.toBeNull();
+  await page.goto("/admin");
+  await expect(page.getByTestId("notes-summary")).toHaveText("1 note, all read.");
+  await setVisibility("acadia", "PRIVATE");
+});
+
 test("one activity can be sent on its own link, which opens it and nothing else of the trip", async ({ browser, context, page }) => {
   await setVisibility("acadia", "PRIVATE");
   await signIn(context, ADMIN);

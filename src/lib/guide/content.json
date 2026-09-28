@@ -411,6 +411,10 @@
         {
           "kind": "p",
           "text": "Changed your mind? Press **New link** and the old one stops working straight away, or **Stop sharing** to close it altogether."
+        },
+        {
+          "kind": "p",
+          "text": "Whoever you share with can write back. **Send the family a note** is at the foot of every page, and **Send a note about this photo** is beside each photograph. Their notes go to whoever runs the album, and nobody else sees them."
         }
       ]
     },

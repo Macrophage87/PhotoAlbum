@@ -32,6 +32,7 @@ export const QUEUES = {
   revokeGoogle: "revoke-google",
   finishRemovals: "finish-removals",
   visitorCopy: "visitor-copy",
+  mailVisitorNote: "mail-visitor-note",
 } as const;
 
 export type QueueName = (typeof QUEUES)[keyof typeof QUEUES];
@@ -41,6 +42,8 @@ export type ProcessPhotoJob = { photoId: string; tripId?: string | null; mode?: 
 export type TranscodeVideoJob = { photoId: string; tripId?: string | null };
 /** The picture as it was at `imageVersion`: a job for an older one finds nothing to do. */
 export type VisitorCopyJob = { photoId: string; imageVersion: number };
+/** Tell the admins about one note a visitor sent (src/lib/notes/mail.ts). */
+export type MailVisitorNoteJob = { noteId: string };
 export type CheckExternalVideosJob = Record<string, never>;
 export type ImportTrackJob = {
   importKey: string;

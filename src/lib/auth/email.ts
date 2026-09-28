@@ -1,7 +1,8 @@
 import nodemailer, { type Transporter } from "nodemailer";
 import { env } from "@/lib/env";
 
-type Mail = { to: string; subject: string; text: string; html: string };
+/** `html` may be left out for a plain-text message; `replyTo` is where a reply goes instead of SMTP_FROM. */
+export type Mail = { to: string; subject: string; text: string; html?: string; replyTo?: string };
 
 let transporter: Transporter | null | undefined;
 
@@ -25,7 +26,7 @@ function getTransporter() {
 export async function sendMail(mail: Mail): Promise<void> {
   const t = getTransporter();
   if (!t) {
-    console.log(`\n[mail] To: ${mail.to}\n[mail] Subject: ${mail.subject}\n${mail.text}\n`);
+    console.log(`\n[mail] To: ${mail.to}${mail.replyTo ? `\n[mail] Reply-To: ${mail.replyTo}` : ""}\n[mail] Subject: ${mail.subject}\n${mail.text}\n`);
     return;
   }
   await t.sendMail({ from: env().SMTP_FROM, ...mail });

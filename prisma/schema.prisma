@@ -538,6 +538,7 @@ model Photo {
   similarA          MediaSimilarity[] @relation("SimA")
   similarB          MediaSimilarity[] @relation("SimB")
   visits            Visit[]
+  visitorNotes      VisitorNote[]
 
   @@index([takenAt])
   @@index([uploaderId])
@@ -684,6 +685,8 @@ model AppSetting {
   nameCheck              NameCheck @default(STRICT)
   nameCheckSetAt         DateTime?
   nameCheckSetById       String?
+  /// This install's random key for the visitor-note form's timing token (src/lib/notes/token.ts), made on first use.
+  noteFormKey            String?
   updatedAt              DateTime  @updatedAt
 }
 
@@ -1020,6 +1023,29 @@ model Visit {
   @@index([collectionId, at])
   @@index([photoId, at])
   @@index([userId, at])
+}
+
+/// A note somebody sent the family from the "Send the family a note" page: a visitor on a public trip or a share
+/// link, or a member. Read only by admins, on /admin/notes, and deleted after a year (src/lib/notes/submit.ts).
+model VisitorNote {
+  id         String    @id @default(cuid())
+  createdAt  DateTime  @default(now())
+  name       String
+  email      String?
+  message    String
+  /// The photograph it is about, recorded only when the sender could see it.
+  photoId    String?
+  photo      Photo?    @relation(fields: [photoId], references: [id], onDelete: SetNull)
+  /// The album page it was sent from, as a path; a share link's token is never kept.
+  pageUrl    String?
+  readAt     DateTime?
+  /// sha256 of the day's visitor salt (VisitSalt) and the sender's address, for rate limiting only: never the address.
+  clientHash String
+  /// Arrived past the day's cap, so it was kept but no email went out about it.
+  unmailed   Boolean   @default(false)
+
+  @@index([createdAt])
+  @@index([clientHash, createdAt])
 }
 
 /// The random salt a single day's visitor hashes are made with. Kept in the database rather than in the process so

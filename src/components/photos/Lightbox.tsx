@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { YouTubeEmbed } from "@/components/videos/YouTubeEmbed";
 import { PanoramaView, PanoramaHint } from "./PanoramaView";
 import { ScanViewer } from "@/components/scans/ScanViewer";
@@ -145,6 +146,10 @@ export function Lightbox({ photos, index, onClose, onNavigate, share = null }: {
         <aside className="flex-1 min-h-0 overflow-y-auto lg:flex-none lg:w-80 xl:w-96 bg-neutral-950 lg:bg-black/40 border-t lg:border-t-0 lg:border-l border-white/10" onClick={(e) => e.stopPropagation()}>
           <LightboxInfo key={photo.id} photoId={photo.id} share={share} />
           {photo.canTag && <div className="px-4 pb-4 text-sm text-white/90"><PetTagger photoId={photo.id} dark /></div>}
+          {/* Anybody who can see the photograph can write to the family about it; the note page checks that again. */}
+          <div className="px-4 pb-4 text-sm">
+            <Link href={`/note?photo=${encodeURIComponent(photo.id)}`} prefetch={false} className="text-white/70 underline underline-offset-2 hover:text-white" data-testid="lightbox-note">Send a note about this photo</Link>
+          </div>
         </aside>
       </div>
     </div>

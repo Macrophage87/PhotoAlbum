@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { db } from "@/lib/db";
 import type { Viewer } from "@/lib/auth/viewer";
 import { UserMenu } from "./UserMenu";
 import { MobileNav, type NavLink } from "./MobileNav";
@@ -30,13 +31,15 @@ const occasional: NavLink[] = [
  * "More". Below a laptop's width the whole lot goes into the menu button instead, as it always has on a phone.
  * Help stays in the bar at every width: it is the page for whoever is least sure what anything else does.
  */
-export function Nav({ viewer }: { viewer: Viewer }) {
+export async function Nav({ viewer }: { viewer: Viewer }) {
   const signedIn = viewer.kind === "user";
   const admin = signedIn && viewer.user.role === "ADMIN";
+  // Visitors' notes wait for an admin: how many are new is shown beside Admin, to admins only.
+  const unreadNotes = admin ? await db.visitorNote.count({ where: { readAt: null } }) : 0;
   const help: NavLink = { href: "/guide", label: "Help" };
   // Visitors see what a public trip can show them; everything else needs a family member's sign-in.
   const inBar: NavLink[] = signedIn ? everyday : everyday.slice(0, 3);
-  const adminLink: NavLink[] = admin ? [{ href: "/admin", label: "Admin" }] : [];
+  const adminLink: NavLink[] = admin ? [{ href: "/admin", label: "Admin" }, ...(unreadNotes ? [{ href: "/admin/notes", label: `New notes (${unreadNotes})` }] : [])] : [];
   const privacy: NavLink[] = signedIn ? [{ href: "/privacy", label: "Privacy" }] : [];
   // Search is here as well as in its box, which only fits beside the links on a wide screen.
   const inMore: NavLink[] = signedIn ? [{ href: "/search", label: "Search" }, ...occasional, ...adminLink, ...privacy] : [];
