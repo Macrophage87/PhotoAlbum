@@ -19,7 +19,7 @@ import type { AutoColourResult } from "@/lib/photos/auto-colour";
 import { readableTitle } from "@/lib/photos/readable-text";
 import { rejudgeFromAction } from "@/lib/annotation/rejudge-notice";
 import { placeFromMembersOnly } from "@/lib/annotation/members-only";
-import { noteRelaxedRelease } from "@/lib/annotation/relaxed-release";
+import { anyRelaxedRelease, noteRelaxedRelease } from "@/lib/annotation/relaxed-release";
 
 const ids = z.array(z.string().min(1)).min(1).max(500);
 
@@ -56,7 +56,7 @@ export async function bulkMoveToTrip(photoIds: string[], tripId: string | null):
   if (tripId) await enqueue(QUEUES.geotagPhotos, { tripId }, { singletonKey: `geotag:${tripId}`, singletonSeconds: 10, singletonNextSlot: true });
   if (tripId) await rejudgeFromAction({ tripId });
   // Onto no trip: its words are shown at the album's level now (see rejudgeNameCheck).
-  else if (moving.length) await rejudgeFromAction({ recheck: {} });
+  else if (moving.length && (await anyRelaxedRelease())) await rejudgeFromAction({ recheck: {} });
   revalidatePath("/", "layout");
 }
 

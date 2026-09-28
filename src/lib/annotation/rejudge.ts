@@ -232,6 +232,9 @@ export async function rejudgeNames(names?: string[], signal?: AbortSignal): Prom
     // birthday cake", from notes since cleared) outlives the text that is judged. A title a member typed since the
     // album kept track, and an embedded video's own, are theirs to publish and hold nothing back.
     if (!hard && mentions(r)) return "flag" as const;
+    // Kept shown only because the relaxed look excused a name the strict one finds: marked (relaxed-release.ts), so
+    // that a stricter level later still finds it.
+    if (!r.annotationMembersOnly && relaxedAt(photoNameCheck(r, album)) && (test(textOf(r)) || test(titlesOf(r)))) await noteRelaxedRelease(r.id, "RELAXED");
     if (r.annotationMembersOnly && r.title?.trim() && r.titleByHelper !== false) return "title" as const;
     return null;
   };
@@ -250,7 +253,12 @@ export async function rejudgeNames(names?: string[], signal?: AbortSignal): Prom
       for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
         const said = g ? [g.placeEstimateName, g.placeEstimateNote].filter(Boolean).join("\n") : "";
         const look = g && relaxedAt(photoNameCheck(g, album));
-        if (!g || !(look ? look({ texts: [said] }) : test(said))) { settled = true; break; }
+        if (!g || !(look ? look({ texts: [said] }) : test(said))) {
+          // Kept shown only by the relaxed look: marked, as above.
+          if (g && look && test(said)) await noteRelaxedRelease(g.id, "RELAXED");
+          settled = true;
+          break;
+        }
         const done = await db.photo.updateMany({ where: { id: g.id, ...HELD_GUESS, placeEstimateMembersOnly: false, placeEstimateName: g.placeEstimateName, placeEstimateNote: g.placeEstimateNote }, data: { placeEstimateMembersOnly: true } });
         if (done.count) { result.places++; settled = true; break; }
         g = await db.photo.findFirst({ where: { id: g.id, ...HELD_GUESS, placeEstimateMembersOnly: false }, select: guessSelect });
@@ -268,12 +276,17 @@ export async function rejudgeNames(names?: string[], signal?: AbortSignal): Prom
     return look ? look({ texts: [description] }) : test(description);
   };
   const tripLevels = new Map((await db.trip.findMany({ where: { nameCheck: { not: null } }, select: { id: true, nameCheck: true } })).map((t) => [t.id, t.nameCheck]));
-  const judgeAll = async <T extends { id: string; description: string | null; descriptionMembersOnly: boolean }>(load: () => Promise<T[]>, reload: (id: string) => Promise<T | null>, write: (d: T) => Promise<number>, levelOf: (d: T) => NameCheck) => {
+  const judgeAll = async <T extends { id: string; description: string | null; descriptionMembersOnly: boolean }>(load: () => Promise<T[]>, reload: (id: string) => Promise<T | null>, write: (d: T) => Promise<number>, levelOf: (d: T) => NameCheck, kind: "trip" | "activity" | "collection") => {
     for (const first of await load()) {
       let d: T | null = first;
       let settled = false;
       for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
-        if (!d || !d.description || !described(levelOf(d))(d.description)) { settled = true; break; }
+        if (!d || !d.description || !described(levelOf(d))(d.description)) {
+          // Kept shown only by the relaxed look: marked, as above.
+          if (d?.description && levelOf(d) === "RELAXED" && relaxed && test(d.description)) await noteRelaxedDescription(kind, d.id, "RELAXED");
+          settled = true;
+          break;
+        }
         if ((await write(d)) > 0) { result.descriptions++; settled = true; break; }
         d = await reload(d.id);
       }
@@ -287,12 +300,14 @@ export async function rejudgeNames(names?: string[], signal?: AbortSignal): Prom
     (id) => db.trip.findFirst({ where: { id, ...unshown, descriptionMembersOnly: false }, select: { id: true, description: true, descriptionMembersOnly: true } }),
     async (t) => (await db.trip.updateMany({ where: { id: t.id, description: t.description, descriptionMembersOnly: false, descriptionSharedAt: null }, data: { descriptionMembersOnly: true } })).count,
     (t) => tripNameCheck({ nameCheck: tripLevels.get(t.id) ?? null }, album),
+    "trip",
   );
   await judgeAll(
     () => db.collection.findMany({ where: { ...unshown, descriptionMembersOnly: false }, select: { id: true, description: true, descriptionMembersOnly: true } }),
     (id) => db.collection.findFirst({ where: { id, ...unshown, descriptionMembersOnly: false }, select: { id: true, description: true, descriptionMembersOnly: true } }),
     async (c) => (await db.collection.updateMany({ where: { id: c.id, description: c.description, descriptionMembersOnly: false, descriptionSharedAt: null }, data: { descriptionMembersOnly: true } })).count,
     () => album,
+    "collection",
   );
   const openActivity = { ...unshown, OR: [{ descriptionMembersOnly: false }, { descriptionTitleOnly: true }] };
   const activitySelect = { id: true, tripId: true, description: true, descriptionMembersOnly: true, descriptionTitleOnly: true } as const;
@@ -301,6 +316,7 @@ export async function rejudgeNames(names?: string[], signal?: AbortSignal): Prom
     (id) => db.activity.findFirst({ where: { id, ...openActivity }, select: activitySelect }),
     async (a) => (await db.activity.updateMany({ where: { id: a.id, description: a.description, descriptionMembersOnly: a.descriptionMembersOnly, descriptionTitleOnly: a.descriptionTitleOnly, descriptionSharedAt: null }, data: { descriptionMembersOnly: true, descriptionTitleOnly: false, descriptionTitleWords: [] } })).count,
     (a) => tripNameCheck({ nameCheck: tripLevels.get(a.tripId) ?? null }, album),
+    "activity",
   );
   return result;
 }

@@ -21,7 +21,7 @@ import { deleteTripById } from "@/lib/trips/delete";
 import { uniqueSlug } from "@/lib/trips/slug";
 import { NAME_NOT_TO_BE_SHOWN, namesSomebodyRestricted } from "@/lib/people/forget";
 import { albumNameCheck, NAME_CHECKS, nameCheckForTrip, tripNameCheck } from "@/lib/people/name-check";
-import { noteRelaxedDescription } from "@/lib/annotation/relaxed-release";
+import { anyRelaxedRelease, noteRelaxedDescription } from "@/lib/annotation/relaxed-release";
 import { isCoverable } from "@/lib/photos/cover";
 
 /** The trip, where this member may change it: whoever made it, and admins. One being deleted is gone already. */
@@ -183,7 +183,7 @@ export async function removeFromTrip(slug: string, photoIds: string[]): Promise<
   if (!list.length) return { removed: 0, notYours: asked.length };
   const r = await db.photo.updateMany({ where: { id: { in: list }, tripId: trip.id }, data: { tripId: null, activityId: null, activitySetById: null } });
   // On no trip, its words are shown at the album's level: what the trip let out under a relaxed check is checked again.
-  if (r.count) await rejudgeFromAction({ recheck: {} });
+  if (r.count && (await anyRelaxedRelease())) await rejudgeFromAction({ recheck: {} });
   // A cover that is no longer on the trip is no cover at all; the album picks one for itself again.
   if (trip.coverPhotoId && list.includes(trip.coverPhotoId)) await db.trip.update({ where: { id: trip.id }, data: { coverPhotoId: null } });
   revalidatePath(`/trips/${slug}`, "layout");

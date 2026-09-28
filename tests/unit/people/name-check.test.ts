@@ -402,6 +402,23 @@ describe("the name check setting", () => {
       expect((await db.photo.findUniqueOrThrow({ where: { id: q.id } })).annotationMembersOnly).toBe(true);
     });
 
+    it("marks what judging a new name keeps shown only by a relaxed excuse, so a stricter level takes it back", async () => {
+      await db.person.deleteMany();
+      await album("RELAXED");
+      const p = await photo({ tripId, annotation: record(summer), placeEstimateName: "The lake", placeEstimateNote: "Summer sunshine on the dock", placeEstimateMembersOnly: false });
+      await db.trip.update({ where: { id: tripId }, data: { description: summer, descriptionByHelper: true } });
+      await noteRelaxedRelease(p.id);
+      expect((await db.photo.findUniqueOrThrow({ where: { id: p.id } })).relaxedReleaseAt).toBeNull();
+      const child = await db.person.create({ data: { name: "Summer Reyes", createdById: admin, ...CHILD } });
+      await rejudgeText({ people: [child.id] });
+      expect(await db.photo.findUniqueOrThrow({ where: { id: p.id } })).toMatchObject({ annotationMembersOnly: false, relaxedReleaseAt: expect.any(Date), placeEstimateMembersOnly: false, placeRelaxedReleaseAt: expect.any(Date) });
+      expect(await db.trip.findUniqueOrThrow({ where: { id: tripId } })).toMatchObject({ descriptionMembersOnly: false, relaxedReleaseAt: expect.any(Date) });
+      await setAlbumNameCheck(fd("STRICT"));
+      await runQueued();
+      expect(await db.photo.findUniqueOrThrow({ where: { id: p.id } })).toMatchObject({ annotationMembersOnly: true, placeEstimateMembersOnly: true });
+      expect((await db.trip.findUniqueOrThrow({ where: { id: tripId } })).descriptionMembersOnly).toBe(true);
+    });
+
     it("clears the mark from words edited so they need no excuse", async () => {
       await db.trip.update({ where: { id: tripId }, data: { nameCheck: "RELAXED" } });
       const p = await photo({ tripId, annotation: record("Pictures from our summer vacation."), annotationSharedAt: new Date() });

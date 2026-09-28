@@ -63,14 +63,18 @@ async function marked(now: Date | null, shown: boolean, level: NameCheck, strict
   return (await strictlyHeld()) ? (now ?? new Date()) : null;
 }
 
-/** Mark (or clear) an item's words and place guess after a write that may have shown them to everyone. */
-export async function noteRelaxedRelease(photoId: string): Promise<void> {
+/**
+ * Mark (or clear) an item's words and place guess after a write, or a judging, that may have shown them to everyone.
+ * `judgedAt`: the level they were judged at, when the caller knows it, so that a level made stricter meanwhile still
+ * finds them marked.
+ */
+export async function noteRelaxedRelease(photoId: string, judgedAt?: NameCheck): Promise<void> {
   const r = await db.photo.findUnique({
     where: { id: photoId },
     select: { ...PLACED_SELECT, kind: true, title: true, titleByHelper: true, membersTitle: true, annotation: true, annotationRevision: true, annotationSharedAt: true, annotationMembersOnly: true, placeEstimateName: true, placeEstimateNote: true, placeEstimateMembersOnly: true, relaxedReleaseAt: true, placeRelaxedReleaseAt: true },
   });
   if (!r) return;
-  const level = photoNameCheck(r, await albumNameCheck());
+  const level = judgedAt === "RELAXED" ? "RELAXED" : photoNameCheck(r, await albumNameCheck());
   let strict: Holds | null = null;
   const strictly = async () => (strict ??= await holdsAt(["STRICT"]));
   const text = await marked(r.relaxedReleaseAt, !r.annotationMembersOnly && r.annotation !== null, level, async () => {
@@ -90,7 +94,7 @@ type Described = { description: string | null; descriptionByHelper: boolean; des
 const describedSelect = { description: true, descriptionByHelper: true, descriptionMembersOnly: true, descriptionSharedAt: true, relaxedReleaseAt: true } as const;
 
 /** Mark (or clear) the helper's description of a trip, an activity or a collection after it was written or shown. */
-export async function noteRelaxedDescription(kind: "trip" | "activity" | "collection", id: string): Promise<void> {
+export async function noteRelaxedDescription(kind: "trip" | "activity" | "collection", id: string, judgedAt?: NameCheck): Promise<void> {
   const album = await albumNameCheck();
   const found: (Described & { level: NameCheck }) | null =
     kind === "trip"
@@ -99,7 +103,7 @@ export async function noteRelaxedDescription(kind: "trip" | "activity" | "collec
         ? await db.activity.findUnique({ where: { id }, select: { ...describedSelect, trip: { select: { nameCheck: true } } } }).then((a) => a && { ...a, level: tripNameCheck(a.trip, album) })
         : await db.collection.findUnique({ where: { id }, select: describedSelect }).then((c) => c && { ...c, level: album });
   if (!found) return;
-  const d = found;
+  const d = judgedAt === "RELAXED" ? { ...found, level: "RELAXED" as const } : found;
   const mark = await marked(d.relaxedReleaseAt, d.descriptionByHelper && !d.descriptionMembersOnly && Boolean(d.description?.trim()), d.level, async () => (await holdsAt(["STRICT"]))("STRICT", [d.description!], [], !d.descriptionSharedAt));
   if (mark?.getTime() === d.relaxedReleaseAt?.getTime()) return;
   const where = { id, description: d.description, descriptionMembersOnly: d.descriptionMembersOnly, descriptionSharedAt: d.descriptionSharedAt, descriptionByHelper: d.descriptionByHelper };

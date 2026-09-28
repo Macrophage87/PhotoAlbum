@@ -24,6 +24,7 @@ import { parseLatLng, placeNameOf } from "@/lib/geo/parse";
 import { uploaderLabel } from "@/components/photos/toGrid";
 import { addToCollection, removeFromCollection } from "@/app/collections/actions";
 import { rejudgeFromAction } from "@/lib/annotation/rejudge-notice";
+import { anyRelaxedRelease } from "@/lib/annotation/relaxed-release";
 import { refreshTextEmbedding } from "@/lib/jobs/handlers/embed-photo";
 
 /**
@@ -97,7 +98,7 @@ export async function updatePhoto(id: string, fd: FormData): Promise<void> {
   if (title !== photo.title || v.caption !== photo.caption || v.context !== photo.context) await refreshTextEmbedding(id);
   if (v.tripId && v.tripId !== photo.tripId) await rejudgeFromAction({ tripId: v.tripId });
   // Off its trip onto none: its words are shown at the album's level now (see rejudgeNameCheck).
-  else if (!v.tripId && photo.tripId) await rejudgeFromAction({ recheck: {} });
+  else if (!v.tripId && photo.tripId && (await anyRelaxedRelease())) await rejudgeFromAction({ recheck: {} });
   revalidatePath(`/photos/${id}`);
   if (photo.tripId) revalidatePath(`/trips`, "layout");
 }
