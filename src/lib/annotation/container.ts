@@ -11,6 +11,8 @@ import { NOT_TRASHED } from "@/lib/photos/trash";
 import { permittedNames } from "@/lib/people/gates";
 import { annotationGates, notOptedOutWhere } from "./eligibility";
 import { descriptionFromMembersOnly } from "./members-only";
+import { nameCheckForContainer } from "@/lib/people/name-check";
+import { noteRelaxedDescription } from "./relaxed-release";
 import { memberTitle } from "./helper-text";
 import { unpermittedNameScrub, type NameScrub } from "@/lib/people/unpermitted";
 
@@ -205,7 +207,7 @@ export async function writeContainerDescription(kind: ContainerKind, id: string,
   parsed.description = tombstone.scrub(parsed.description, scope);
   // Written from names or notes, it is read by members only; see `descriptionFromMembersOnly`.
   // The description it replaces goes with the request, so a members-only one keeps what is written from it members-only.
-  const membersOnly = await descriptionFromMembersOnly(parsed.description, { names, notes: container.photos.some((p) => p.context?.trim()), previous: Boolean(container.description && !container.descriptionByHelper && container.descriptionMembersOnly) });
+  const membersOnly = await descriptionFromMembersOnly(parsed.description, { names, notes: container.photos.some((p) => p.context?.trim()), previous: Boolean(container.description && !container.descriptionByHelper && container.descriptionMembersOnly), level: await nameCheckForContainer(kind, id) });
   const data = { description: parsed.description, descriptionMembersOnly: membersOnly, descriptionSharedAt: null, descriptionByHelper: true };
   // Somebody on these photographs forgotten, renamed or no longer to be named while it was being written, or anybody
   // forgotten at all: its answer may name them, so it is not kept.
@@ -216,5 +218,6 @@ export async function writeContainerDescription(kind: ContainerKind, id: string,
     if (kind === "trip") await tx.trip.update({ where: { id }, data });
     else await tx.collection.update({ where: { id }, data });
   });
+  await noteRelaxedDescription(kind, id);
   return data.description;
 }

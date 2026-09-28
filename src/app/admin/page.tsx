@@ -8,7 +8,8 @@ import { getViewer, requireAdmin } from "@/lib/auth/viewer";
 import { AppShell, Container } from "@/components/layout/AppShell";
 import { InviteForm } from "@/components/admin/InviteForm";
 import { Badge, Button, Card, ConfirmSubmitButton } from "@/components/ui";
-import { finishDeletingTrip, removeMember, revokeInvite, setRole } from "./actions";
+import { finishDeletingTrip, removeMember, revokeInvite, setAlbumNameCheck, setRole } from "./actions";
+import { NameCheckChoice } from "@/components/people/NameCheckChoice";
 import { setMemberName } from "@/app/account/actions";
 import { AnnotationAdmin } from "@/components/annotation/AnnotationAdmin";
 import { annotationGates } from "@/lib/annotation/eligibility";
@@ -96,6 +97,8 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
     db.appSetting.findUnique({ where: { id: "app" }, select: { orphanFolderCount: true, orphanFolderSample: true, orphanFoldersCheckedAt: true } }),
     quarantineContents(),
   ]);
+  const nameCheck = await db.appSetting.findUnique({ where: { id: "app" }, select: { nameCheck: true, nameCheckSetAt: true, nameCheckSetById: true } });
+  const nameCheckBy = nameCheck?.nameCheckSetById ? members.find((m) => m.id === nameCheck.nameCheckSetById) : null;
   const unavailable = await db.photo.findMany({ where: { kind: "EXTERNAL_VIDEO", externalStatus: "UNAVAILABLE" }, orderBy: { externalCheckedAt: "desc" }, select: { id: true, title: true, externalUrl: true, externalCheckedAt: true } });
 
   return (
@@ -144,6 +147,17 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
             gates={{ envEnabled: gates.envEnabled, hasKey: gates.hasKey, optedInAt: gates.optedInAt?.toISOString() ?? null, active: gates.active }}
             model={gates.model}
             spend={spend} rawRetentionDays={env().ANNOTATION_RAW_RETENTION_DAYS} batches={orderedBatches.map((b) => ({ id: b.id, parentId: b.parentId, running: !b.parentId && !b.runEndedAt && !b.cancelRequestedAt && b.status !== "FAILED", marker: b.parentId && (b.anthropicBatchId.startsWith("failed-") || (b.status === "FAILED" && b.requested === 0)) ? (b.anthropicBatchId.endsWith("-retry") ? "restart" : "error") : null, canceled: b.canceled, skippedReasons: (b.skippedReasons as Record<string, number> | null) ?? null, status: b.status, requested: b.requested, succeeded: b.succeeded, errored: b.errored, skipped: b.skipped, createdAt: b.createdAt.toISOString(), endedAt: b.endedAt?.toISOString() ?? null, scope: describeScope(b.scope) }))}
+          />
+        </section>
+
+        <section id="name-check" className="scroll-mt-4">
+          <h2 className="font-display text-xl font-semibold mb-1">Names in shared words</h2>
+          <p className="text-sm text-muted mb-3">For the whole album; a trip&apos;s creator can choose differently for that trip on its settings page. Collections follow this setting, and a photo shown in several places is checked by the strictest one.</p>
+          <NameCheckChoice
+            action={setAlbumNameCheck}
+            current={nameCheck?.nameCheck ?? "STRICT"}
+            changed={nameCheck?.nameCheckSetAt ? { by: nameCheckBy ? (nameCheckBy.name ?? nameCheckBy.email) : "a former member", at: nameCheck.nameCheckSetAt } : null}
+            testId="album-name-check"
           />
         </section>
 

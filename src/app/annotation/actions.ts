@@ -15,10 +15,12 @@ import { estimateCost, TOKENS_PER_PLACE, type Estimate } from "@/lib/annotation/
 import { BACKFILL_CAP, backfillCandidates, backfillExclusions, taskOf, type BackfillScope, type BackfillTask } from "@/lib/jobs/handlers/annotation-batch";
 import { annotationSchema, toStored, type StoredAnnotation } from "@/lib/annotation/schema";
 import { anthropic } from "@/lib/annotation/client";
-import { helperText, judgeHelperText, knownNames, mentionsAnyName, pastHelperTitles, sameTitle, titleIsHelpers, unknownTitleAside, warnStuckTitle } from "@/lib/annotation/members-only";
+import { helperText, judgeHelperText, knownNames, knownNamesLook, mentionsAnyName, pastHelperTitles, sameTitle, titleIsHelpers, unknownTitleAside, warnStuckTitle } from "@/lib/annotation/members-only";
 import { enqueueEmbedding, refreshTextEmbedding } from "@/lib/jobs/handlers/embed-photo";
 import { NAME_NOT_TO_BE_SHOWN, withoutWithdrawnNames } from "@/lib/people/forget";
 import { dbNow } from "@/lib/people/names-changed";
+import { nameCheckForPhoto } from "@/lib/people/name-check";
+import { noteRelaxedRelease } from "@/lib/annotation/relaxed-release";
 
 /** The admin's half of the two gates. Recorded with who and when so the decision is auditable. */
 export async function setAnnotationOptIn(on: boolean): Promise<void> {
@@ -118,7 +120,7 @@ export async function updateAnnotation(photoId: string, fd: FormData): Promise<v
   // "show it to everyone". Text somebody has shown to everyone is theirs, and is held again only if it now names
   // somebody.
   const judged = photo.annotationSharedAt
-    ? { membersOnly: mentionsAnyName(helperText(merged), await knownNames()), titleOnly: false }
+    ? { membersOnly: (await knownNamesLook(await nameCheckForPhoto(photoId)))({ texts: [merged.title, merged.caption, merged.description, merged.place], lists: [merged.searchSummary, ...merged.tags], said: helperText(merged) }), titleOnly: false }
     : await judgeHelperText(photoId, merged, photo.context);
   const membersOnly = photo.annotationMembersOnly || judged.membersOnly;
   // Held only for a private title's word before, and nothing stronger now: publishing that trip still lifts it.
@@ -129,6 +131,8 @@ export async function updateAnnotation(photoId: string, fd: FormData): Promise<v
       annotationTitleWords: membersOnly && titleOnly ? [...new Set([...photo.annotationTitleWords, ...(judged.titleWords ?? [])])] : [],
       annotationTitleFrom: membersOnly && titleOnly ? [...new Set([...photo.annotationTitleFrom, ...(judged.titleFrom ?? [])])] : [],
       ...(membersOnly ? { annotationSharedAt: null } : {}) } });
+  // Shown only because a relaxed excuse lets it be, or edited so it needs none: marked or cleared (relaxed-release.ts).
+  await noteRelaxedRelease(photoId);
   // The caption and description are part of what the item is searched by.
   await refreshTextEmbedding(photoId);
   revalidatePath(`/photos/${photoId}`);
@@ -175,6 +179,7 @@ export async function setAnnotationShared(photoId: string, seenRevision: number,
   }
   const done = await db.photo.updateMany({ where: { id: photoId, annotationRevision: seenRevision }, data });
   if (!done.count) throw new Error(DESCRIPTION_CHANGED);
+  await noteRelaxedRelease(photoId);
   if (scrubbed) {
     // The semantic index was made from the words with the name.
     await db.$executeRaw`UPDATE "Photo" SET "textEmbedding" = NULL WHERE id = ${photoId}`;

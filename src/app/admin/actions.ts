@@ -19,6 +19,8 @@ import { deleteTripById } from "@/lib/trips/delete";
 import { foldDuplicates } from "@/lib/photos/duplicates";
 import { emptyQuarantine, quarantineOrphanPhotoFolders, type QuarantineResult } from "@/lib/storage/sweep";
 import { rebindInstall } from "@/lib/storage/identity";
+import { NAME_CHECKS } from "@/lib/people/name-check";
+import { rejudgeFromAction } from "@/lib/annotation/rejudge-notice";
 
 async function requireAdminOrThrow() {
   const user = await requireUserOrThrow();
@@ -183,4 +185,27 @@ export async function rebindStorage(): Promise<{ ok: boolean; message: string }>
   const result = await rebindInstall();
   revalidatePath("/admin");
   return result;
+}
+
+/**
+ * How names are checked before words are shown to everyone, album-wide (see lib/people/name-check). An admin's
+ * decision, recorded with who and when. Made stricter, what is already shown is checked again in the background at
+ * once (and by the nightly sweep, should that not run); made relaxed, nothing kept for the family is let out by it:
+ * the relaxed check applies to what is judged or shown from then on.
+ */
+export async function setAlbumNameCheck(fd: FormData): Promise<void> {
+  const admin = await requireAdminOrThrow();
+  const level = z.enum(NAME_CHECKS).parse(fd.get("nameCheck"));
+  const tightened = await db.$transaction(async (tx) => {
+    await tx.appSetting.upsert({ where: { id: "app" }, create: { id: "app" }, update: {} });
+    // Locked, so two admins changing it at once each see the other's.
+    const [before] = await tx.$queryRaw<{ nameCheck: string }[]>`SELECT "nameCheck"::text AS "nameCheck" FROM "AppSetting" WHERE id = 'app' FOR UPDATE`;
+    const stricter = before?.nameCheck === "RELAXED" && level === "STRICT";
+    const now = new Date();
+    await tx.appSetting.update({ where: { id: "app" }, data: { nameCheck: level, nameCheckSetAt: now, nameCheckSetById: admin.id } });
+    return stricter;
+  });
+  if (tightened) await rejudgeFromAction({ recheck: {} });
+  revalidatePath("/admin");
+  revalidatePath("/", "layout");
 }

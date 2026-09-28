@@ -18,6 +18,14 @@ enum TripVisibility {
   PUBLIC
 }
 
+/// How names are checked before words are shown to everyone (src/lib/people/name-check.ts). STRICT: any mention of
+/// somebody who may not be named holds the words (strict-names.ts). RELAXED: the strict matcher and a closed list of
+/// excuses for a child's name read as an everyday word, a month or season, or a place (relaxed-names.ts).
+enum NameCheck {
+  STRICT
+  RELAXED
+}
+
 /// Who was looking, as far as the album can tell: a signed-in family member, somebody holding a secret link, or
 /// anyone at all looking at something marked public.
 enum VisitorKind {
@@ -273,6 +281,14 @@ model Trip {
   visibility   TripVisibility @default(PRIVATE)
   shareToken   String?        @unique
   annotationOptOut Boolean    @default(false)
+  /// How names are checked before this trip's words are shown to everyone; null follows the album's
+  /// (AppSetting.nameCheck). Changed by whoever arranges the trip, recorded with who and when.
+  nameCheck      NameCheck?
+  nameCheckSetAt DateTime?
+  nameCheckSetById String?
+  /// When the helper's description was shown to everyone only because the relaxed name check excused it (see
+  /// Photo.relaxedReleaseAt).
+  relaxedReleaseAt DateTime?
   createdById  String
   createdBy    User           @relation(fields: [createdById], references: [id])
   createdAt    DateTime       @default(now())
@@ -316,6 +332,9 @@ model Activity {
   descriptionTitleWords  String[] @default([])
   /// When whoever arranges it chose to show the description to everyone; nothing re-flags it until it is rewritten.
   descriptionSharedAt    DateTime?
+  /// When the helper's description was shown to everyone only because the relaxed name check excused it (see
+  /// Photo.relaxedReleaseAt).
+  relaxedReleaseAt       DateTime?
   trackId     String?      @unique
   track       Track?       @relation("ActivityTrack", fields: [trackId], references: [id], onDelete: SetNull)
   photos      Photo[]
@@ -437,6 +456,13 @@ model Photo {
   annotationRevision        Int      @default(0)
   /// When the item last joined a trip or a collection (database triggers), so the nightly sweep judges it again.
   containersChangedAt       DateTime?
+  /// When its words (the helper's text and title, or a member's shown words) were shown to everyone only because the
+  /// relaxed name check excused them: the strict check would have held them then (src/lib/people/name-check.ts). Only
+  /// such words are checked again when a level, a place or who may be named changes (src/lib/annotation/rejudge.ts,
+  /// rejudgeNameCheck); cleared once they are held, or no longer need the excuse.
+  relaxedReleaseAt          DateTime?
+  /// The same for its place guess's name and evidence.
+  placeRelaxedReleaseAt     DateTime?
   /// When the uploader or an admin chose to show the helper's text to everyone. Nothing re-flags it until it is
   /// written again.
   annotationSharedAt        DateTime?
@@ -541,6 +567,9 @@ model Collection {
   descriptionByHelper    Boolean @default(false)
   /// When whoever arranges it chose to show the description to everyone; nothing re-flags it until it is rewritten.
   descriptionSharedAt    DateTime?
+  /// When the helper's description was shown to everyone only because the relaxed name check excused it (see
+  /// Photo.relaxedReleaseAt).
+  relaxedReleaseAt       DateTime?
   themeKey     String         @default("default")
   visibility   TripVisibility @default(PRIVATE)
   shareToken   String?        @unique
@@ -650,6 +679,11 @@ model AppSetting {
   orphanFolderCount      Int?
   orphanFolderSample     String[]  @default([])
   orphanFoldersCheckedAt DateTime?
+  /// How names are checked before words are shown to everyone, album-wide (a trip may say otherwise): an admin's
+  /// decision, recorded with who and when.
+  nameCheck              NameCheck @default(STRICT)
+  nameCheckSetAt         DateTime?
+  nameCheckSetById       String?
   updatedAt              DateTime  @updatedAt
 }
 

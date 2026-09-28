@@ -20,6 +20,8 @@ import { descriptionStaysHelpers } from "@/lib/annotation/helper-text";
 import { deleteTripById } from "@/lib/trips/delete";
 import { uniqueSlug } from "@/lib/trips/slug";
 import { NAME_NOT_TO_BE_SHOWN, namesSomebodyRestricted } from "@/lib/people/forget";
+import { albumNameCheck, NAME_CHECKS, nameCheckForTrip, tripNameCheck } from "@/lib/people/name-check";
+import { anyRelaxedRelease, noteRelaxedDescription } from "@/lib/annotation/relaxed-release";
 import { isCoverable } from "@/lib/photos/cover";
 
 /** The trip, where this member may change it: whoever made it, and admins. One being deleted is gone already. */
@@ -180,6 +182,8 @@ export async function removeFromTrip(slug: string, photoIds: string[]): Promise<
   const list = canEditContainer(user, trip) ? asked : await editableMediaIds(user, asked);
   if (!list.length) return { removed: 0, notYours: asked.length };
   const r = await db.photo.updateMany({ where: { id: { in: list }, tripId: trip.id }, data: { tripId: null, activityId: null, activitySetById: null } });
+  // On no trip, its words are shown at the album's level: what the trip let out under a relaxed check is checked again.
+  if (r.count && (await anyRelaxedRelease())) await rejudgeFromAction({ recheck: {} });
   // A cover that is no longer on the trip is no cover at all; the album picks one for itself again.
   if (trip.coverPhotoId && list.includes(trip.coverPhotoId)) await db.trip.update({ where: { id: trip.id }, data: { coverPhotoId: null } });
   revalidatePath(`/trips/${slug}`, "layout");
@@ -209,10 +213,31 @@ export async function setTripDescription(slug: string, text: string): Promise<vo
  */
 export async function setTripDescriptionShared(slug: string, everyone: boolean): Promise<void> {
   const trip = await loadEditableTrip(slug);
-  // Never the helper's description while it names somebody who may not be named there (see namesSomebodyRestricted);
-  // a member's own words are theirs to show, as their captions are.
-  if (everyone && trip.descriptionByHelper && (await namesSomebodyRestricted([trip.description]))) throw new Error(NAME_NOT_TO_BE_SHOWN);
+  // Never the helper's description while it names somebody who may not be named there (see namesSomebodyRestricted),
+  // checked at the trip's level (name-check.ts); a member's own words are theirs to show, as their captions are.
+  if (everyone && trip.descriptionByHelper && (await namesSomebodyRestricted([trip.description], [], await nameCheckForTrip(trip.id)))) throw new Error(NAME_NOT_TO_BE_SHOWN);
   await db.trip.update({ where: { id: trip.id }, data: { descriptionMembersOnly: !everyone, descriptionSharedAt: everyone ? new Date() : null } });
+  await noteRelaxedDescription("trip", trip.id);
+  revalidatePath(`/trips/${slug}`, "layout");
+}
+
+/**
+ * How names are checked before this trip's words are shown to everyone: the album's ("INHERIT"), or its own (see
+ * lib/people/name-check). Whoever arranges the trip decides, recorded with who and when. Made stricter than it was,
+ * what the trip already shows is checked again in the background at once (and by the nightly sweep, should that not
+ * run); made relaxed, nothing kept for the family is let out by it.
+ */
+export async function setTripNameCheck(slug: string, fd: FormData): Promise<void> {
+  const user = await requireUserOrThrow();
+  const trip = await loadEditableTrip(slug);
+  const chosen = z.enum(["INHERIT", ...NAME_CHECKS]).parse(fd.get("nameCheck"));
+  const level = chosen === "INHERIT" ? null : chosen;
+  const album = await albumNameCheck();
+  const stricter = tripNameCheck(trip, album) === "RELAXED" && tripNameCheck({ nameCheck: level }, album) === "STRICT";
+  const now = new Date();
+  await db.trip.update({ where: { id: trip.id, deletingAt: null }, data: { nameCheck: level, nameCheckSetAt: now, nameCheckSetById: user.id } }).catch(tripGone);
+  // What it shows that was judged relaxed is checked again now; the nightly sweep does it too, should this not run.
+  if (stricter) await rejudgeFromAction({ recheck: { tripId: trip.id } });
   revalidatePath(`/trips/${slug}`, "layout");
 }
 

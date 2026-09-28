@@ -17,6 +17,7 @@ import { ForgetBusyError, stampScrubbed } from "@/lib/people/names-changed";
 import { enqueueFaceDetection, rebuildUnnamedCentroids } from "@/lib/jobs/handlers/detect-faces";
 import { confirmFaceAs, rejectProposal } from "@/lib/people/matching";
 import { rejudgeFromAction } from "@/lib/annotation/rejudge-notice";
+import { anyRelaxedRelease } from "@/lib/annotation/relaxed-release";
 import { forgetJudgedNames } from "@/lib/annotation/rejudge";
 
 async function requireAdmin() {
@@ -554,6 +555,8 @@ export async function setNameInDescriptions(personId: string, on: boolean): Prom
   const after = await db.person.update({ where: { id: personId }, data: { nameInDescriptions: on, nameInDescriptionsSetById: admin.id, nameInDescriptionsSetAt: new Date(), ...(on ? { namingWithdrawnAt: null } : {}) } });
   // Withdrawn: what the helper already wrote with the name goes too, not only what it will write.
   if (nameMayLeaveServer(person) && !nameMayLeaveServer(after)) await forgetNameEverywhere(after);
+  // Naming decided against: no longer a child the relaxed name check is for, so what it let out is judged again.
+  if (!on && (await anyRelaxedRelease())) await rejudgeFromAction({ recheck: {} });
   revalidatePath("/people", "layout");
   revalidatePath("/privacy");
 }

@@ -56,6 +56,8 @@ export async function putInActivity(photoId: string, activityId: string | null):
     if (err instanceof Error && err.message === ACTIVITY_GONE) return { ok: false, message: ACTIVITY_GONE };
     throw err;
   }
+  // Onto another trip: judged there, as moving it by hand does (a title word, a stricter name check).
+  if (photo.tripId !== activity.tripId) await rejudgeFromAction({ tripId: activity.tripId });
   revalidatePath("/trips", "layout");
   revalidatePath("/timeline");
   return { ok: true, where: activity.title };

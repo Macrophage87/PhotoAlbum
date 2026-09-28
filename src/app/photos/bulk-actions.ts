@@ -19,6 +19,7 @@ import type { AutoColourResult } from "@/lib/photos/auto-colour";
 import { readableTitle } from "@/lib/photos/readable-text";
 import { rejudgeFromAction } from "@/lib/annotation/rejudge-notice";
 import { placeFromMembersOnly } from "@/lib/annotation/members-only";
+import { anyRelaxedRelease, noteRelaxedRelease } from "@/lib/annotation/relaxed-release";
 
 const ids = z.array(z.string().min(1)).min(1).max(500);
 
@@ -54,6 +55,8 @@ export async function bulkMoveToTrip(photoIds: string[], tripId: string | null):
   if (tripId) await refileByClock(tripId, { id: { in: moving } });
   if (tripId) await enqueue(QUEUES.geotagPhotos, { tripId }, { singletonKey: `geotag:${tripId}`, singletonSeconds: 10, singletonNextSlot: true });
   if (tripId) await rejudgeFromAction({ tripId });
+  // Onto no trip: its words are shown at the album's level now (see rejudgeNameCheck).
+  else if (moving.length && (await anyRelaxedRelease())) await rejudgeFromAction({ recheck: {} });
   revalidatePath("/", "layout");
 }
 
@@ -175,6 +178,8 @@ export async function restorePlaces(entries: PlaceBefore[], undo?: string | null
   // Each write is its own check: what is still as the move left it comes back, and the rest is counted.
   const counts = await db.$transaction(writes.map((w) => db.photo.updateMany({ where: { id: w.id, ...asLeft }, data: w.data })));
   const written: PlaceRestored[] = writes.filter((_, i) => counts[i].count > 0).map((w) => ({ id: w.id, lat: w.data.lat, lng: w.data.lng, gpsSource: w.data.gpsSource }));
+  // A guess shown again only because a relaxed excuse lets it be: marked (relaxed-release.ts).
+  for (const w of written) if (w.gpsSource === "ESTIMATE") await noteRelaxedRelease(w.id);
   const changed = writes.length - written.length;
   forgetPlaces(noted ? undo : null);
   return { restored: written, changed };
