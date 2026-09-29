@@ -1,4 +1,10 @@
+import type { Metadata } from "next";
 import { notFound } from "next/navigation";
+import { getViewer } from "@/lib/auth/viewer";
+import { canViewTrip } from "@/lib/auth/access";
+import { getTripBySlug } from "@/lib/trips/queries";
+import { previewCard } from "@/lib/share/preview";
+import { formatDateTime } from "@/lib/time/format";
 import { db } from "@/lib/db";
 import { loadViewableTrip } from "@/lib/trips/access";
 import { photoCardSelect } from "@/lib/photos/queries";
@@ -15,6 +21,30 @@ import { formatLocalTime } from "@/lib/time/format";
 import { activityCover } from "@/lib/activities/cover";
 import { photoUrl } from "@/lib/photos/urls";
 import { uploadByteLimits } from "@/lib/media/upload-limits";
+
+/**
+ * The card this page's own address unfurls with. On a public trip anybody may open it, and a link to one walk should
+ * show that walk — its title, its day and its cover — not the trip it sits in, which is what the trip's layout would
+ * otherwise lend it. Anywhere else the address is the family's own and carries no card (the activity's share link
+ * has its own).
+ */
+export async function generateMetadata({ params }: PageProps<"/trips/[slug]/activities/[id]">): Promise<Metadata> {
+  const { slug, id } = await params;
+  const [viewer, trip] = await Promise.all([getViewer(), getTripBySlug(slug)]);
+  if (!trip || !canViewTrip(viewer, trip)) return {};
+  const activity = await db.activity.findFirst({ where: { id, tripId: trip.id }, select: { id: true, title: true, startTime: true, coverPhotoId: true } });
+  if (!activity) return {};
+  if (trip.visibility !== "PUBLIC") return { title: activity.title };
+  const day = formatDateTime(activity.startTime, trip.timezone, "EEEE, MMMM d, yyyy");
+  const card = previewCard({
+    title: activity.title,
+    description: `${trip.title} · ${day}`,
+    pageUrl: new URL(`/trips/${slug}/activities/${id}`, env().APP_URL).toString(),
+    cover: await activityCover(activity),
+    appUrl: env().APP_URL,
+  });
+  return { title: activity.title, openGraph: card.openGraph, twitter: card.twitter };
+}
 
 export default async function ActivityPage({ params, searchParams }: PageProps<"/trips/[slug]/activities/[id]">) {
   const { slug, id } = await params;

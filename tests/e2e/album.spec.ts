@@ -609,6 +609,32 @@ test("a photograph can be moved to the trash from an activity's own page", async
   }
 });
 
+test("a public trip's activity unfurls as that activity, with its own cover", async ({ browser }) => {
+  const act = (await withDb((c) => c.query(`SELECT a.id, a."tripId", a."coverPhotoId" FROM "Activity" a WHERE a.title = 'Ocean Path loop' LIMIT 1`))).rows[0];
+  const pic = (await withDb((c) => c.query(`SELECT p.id FROM "Photo" p JOIN "Trip" t ON t.id = p."tripId" WHERE t.slug = 'acadia' AND p.status = 'READY' AND p."trashedAt" IS NULL AND p."activityId" IS NULL AND p.kind = 'PHOTO' ORDER BY p.id LIMIT 1`))).rows[0];
+  const was = (await withDb((c) => c.query(`SELECT visibility FROM "Trip" WHERE id = $1`, [act.tripId]))).rows[0].visibility;
+  await withDb((c) => c.query(`UPDATE "Photo" SET "activityId" = $2 WHERE id = $1`, [pic.id, act.id]));
+  await withDb((c) => c.query(`UPDATE "Activity" SET "coverPhotoId" = $2 WHERE id = $1`, [act.id, pic.id]));
+  await withDb((c) => c.query(`UPDATE "Trip" SET visibility = 'PUBLIC' WHERE id = $1`, [act.tripId]));
+  const crawler = await browser.newContext({ userAgent: "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)" });
+  try {
+    // Pasting the walk's own address must show the walk, not the fortnight it sat in.
+    const html = await (await crawler.request.get(`/trips/acadia/activities/${act.id}`)).text();
+    expect(html).toContain('<meta property="og:title" content="Ocean Path loop"/>');
+    const og = [...html.matchAll(/<meta property="og:image" content="([^"]*)"/g)].map((m) => m[1].replace(/&amp;/g, "&"));
+    expect(og.length).toBe(1);
+    expect(og[0]).toContain(`/api/photos/${pic.id}/preview`);
+    const img = await crawler.request.get(og[0]);
+    expect(img.ok()).toBe(true);
+    expect(img.headers()["content-type"]).toBe("image/jpeg");
+  } finally {
+    await crawler.close();
+    await withDb((c) => c.query(`UPDATE "Trip" SET visibility = $2 WHERE id = $1`, [act.tripId, was]));
+    await withDb((c) => c.query(`UPDATE "Activity" SET "coverPhotoId" = $2 WHERE id = $1`, [act.id, act.coverPhotoId]));
+    await withDb((c) => c.query(`UPDATE "Photo" SET "activityId" = NULL WHERE id = $1`, [pic.id]));
+  }
+});
+
 test("the guide is a page anyone can read, with the same words available as a PDF", async ({ page }) => {
   // A guide nobody can reach is no guide. It is a page, linked from the menu, and open to anyone who gets as far
   // as the site — somebody who cannot sign in is exactly who needs to read how signing in works.
