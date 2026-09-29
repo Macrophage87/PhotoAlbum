@@ -295,6 +295,8 @@ test("a visitor sends the family a note about a photo, and an admin reads it on 
   await visitor.goto("/trips/acadia/photos");
   // Every page a visitor sees ends with a way to write to the family.
   await expect(visitor.getByTestId("footer-note")).toHaveText("Send the family a note");
+  // Also at the top of the page, where a visitor scrolling a long gallery can find it.
+  await expect(visitor.getByTestId("nav-note").filter({ visible: true })).toHaveAttribute("href", "/note");
   await visitor.locator(`button:has(img[src*='/api/photos/${photoId}/'])`).first().click();
   await visitor.getByRole("dialog", { name: "Photo viewer" }).getByRole("link", { name: "Send a note about this photo" }).click();
   await expect(visitor).toHaveURL(new RegExp(`/note\\?photo=${photoId}$`));

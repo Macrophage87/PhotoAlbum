@@ -30,6 +30,9 @@ const occasional: NavLink[] = [
  * shows the everyday ones, the family's guide and Sign out, and folds the rest — and who is signed in — behind
  * "More". Below a laptop's width the whole lot goes into the menu button instead, as it always has on a phone.
  * Help stays in the bar at every width: it is the page for whoever is least sure what anything else does.
+ *
+ * A visitor also gets "Send a note" in the bar at every width, outside the phone's menu: the link at the foot of the
+ * page sits below every photo of a trip, which is too far down to find.
  */
 export async function Nav({ viewer }: { viewer: Viewer }) {
   const signedIn = viewer.kind === "user";
@@ -45,6 +48,11 @@ export async function Nav({ viewer }: { viewer: Viewer }) {
   const inMore: NavLink[] = signedIn ? [{ href: "/search", label: "Search" }, ...occasional, ...adminLink, ...privacy] : [];
   // The phone's menu has room for everything, search included.
   const all: NavLink[] = [...inBar, ...(signedIn ? occasional : []), { href: "/search", label: "Search" }, ...adminLink, ...privacy, help];
+  const note = !signedIn && (
+    <Link href="/note" prefetch={false} className="px-2.5 py-1.5 rounded-theme border border-border hover:bg-surface-alt whitespace-nowrap" data-testid="nav-note">
+      Send a note
+    </Link>
+  );
 
   return (
     <header className="border-b border-border bg-surface/80 backdrop-blur sticky top-0 z-40">
@@ -59,10 +67,14 @@ export async function Nav({ viewer }: { viewer: Viewer }) {
               {l.label}
             </Link>
           ))}
+          {note}
           {signedIn && <MoreMenu links={inMore} account={{ label: viewer.user.name ?? viewer.user.email, title: `${viewer.user.email} · your account` }} />}
           <UserMenu viewer={viewer} />
         </nav>
-        <MobileNav links={all} signedIn={signedIn} name={signedIn ? (viewer.user.name ?? viewer.user.email) : null} />
+        <div className="flex items-center gap-2 lg:hidden text-sm">
+          {note}
+          <MobileNav links={all} signedIn={signedIn} name={signedIn ? (viewer.user.name ?? viewer.user.email) : null} />
+        </div>
       </div>
       {signedIn && <RejudgeNotice />}
     </header>
