@@ -204,7 +204,7 @@ The basics (`APP_URL`, `ADMIN_EMAIL`, `SMTP_*`, `POSTGRES_*`, `APP_PORT`, `MAX_U
 | `ANTHROPIC_API_KEY` | empty | Required for descriptions. |
 | `ANTHROPIC_BASE_URL` | empty | Proxy or mock endpoint for the helper; leave empty. |
 | `YOUTUBE_OEMBED_URL`, `YOUTUBE_THUMBNAIL_URL`, `YOUTUBE_DATA_API_URL` | empty | Test doubles for the YouTube endpoints; leave empty. |
-| `ANNOTATION_MODEL` | `claude-opus-5` | Model for descriptions (`claude-sonnet-5` and `claude-haiku-4-5` cost less). |
+| `ANNOTATION_MODEL` | `claude-sonnet-5-5` | Model for descriptions. `claude-opus-5` costs more; `claude-haiku-4-5` costs less. `claude-sonnet-5` is also accepted. |
 | `ANNOTATION_QUIET_MINUTES` | `30` | Minutes without edits before an unreviewed item is sent. |
 | `ANNOTATION_RAW_RETENTION_DAYS` | `30` | How long raw responses are kept. |
 | `ML_URL`, `ML_TOKEN` | empty | Sidecar address and shared secret; both or neither. |

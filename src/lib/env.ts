@@ -47,7 +47,7 @@ const schema = z.object({
   ANTHROPIC_API_KEY: z.string().optional().transform((v) => (v ? v : undefined)),
   ANTHROPIC_BASE_URL: optionalUrl,
   ANNOTATION_ENABLED: boolish.transform((v) => v ?? false),
-  ANNOTATION_MODEL: z.enum(["claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5"]).default("claude-opus-5"),
+  ANNOTATION_MODEL: z.enum(["claude-sonnet-5-5", "claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5"]).default("claude-sonnet-5-5"),
   ANNOTATION_QUIET_MINUTES: z.coerce.number().int().positive().default(30),
   ANNOTATION_RAW_RETENTION_DAYS: z.coerce.number().int().positive().default(30),
   // Local ML sidecar (faces, image and text embeddings). Optional; when set, ML_TOKEN is required so the app fails closed.

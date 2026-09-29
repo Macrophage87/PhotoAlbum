@@ -2,7 +2,7 @@ import { PLACE_RULES } from "./place";
 
 /**
  * Fixed instructions for the helper. Kept in one cached system block (comfortably above the 512-token minimum on
- * Opus 5 and the 1,024 on Sonnet 5; it will not cache on Haiku 4.5, whose minimum is 4,096) and never varied per item,
+ * Sonnet 5.5 and Opus 5 and the 1,024 on Sonnet 5; it will not cache on Haiku 4.5, whose minimum is 4,096) and never varied per item,
  * so the per-item content that follows is the only uncached part of each request.
  */
 export const SYSTEM_INSTRUCTIONS = `You describe photos and short video clips for a private family photo album so that the family can find them again by searching. You write for the family, in plain, warm, specific language, never for a stock-photo catalog.

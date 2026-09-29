@@ -2,9 +2,13 @@
  * Per-model prices for the backfill estimate. Checked against Anthropic's published rates on the date below;
  * the admin page shows that date next to the figure so a stale table is visible rather than silently wrong.
  */
-export const pricesAsOf = "2026-06-24";
+export const pricesAsOf = "2026-09-25";
+
+/** The model used when ANNOTATION_MODEL is unset; also prices rows that name a model missing from the table. */
+export const DEFAULT_MODEL = "claude-sonnet-5-5";
 
 export const PRICES: Record<string, { inputPerMTok: number; outputPerMTok: number; cacheReadFactor: number; cacheMinTokens: number }> = {
+  "claude-sonnet-5-5": { inputPerMTok: 2, outputPerMTok: 10, cacheReadFactor: 0.1, cacheMinTokens: 512 },
   "claude-opus-5": { inputPerMTok: 5, outputPerMTok: 25, cacheReadFactor: 0.1, cacheMinTokens: 512 },
   "claude-sonnet-5": { inputPerMTok: 2, outputPerMTok: 10, cacheReadFactor: 0.1, cacheMinTokens: 1024 },
   "claude-haiku-4-5": { inputPerMTok: 1, outputPerMTok: 5, cacheReadFactor: 0.1, cacheMinTokens: 4096 },
@@ -21,7 +25,7 @@ export type Estimate = { items: number; inputTokens: number; outputTokens: numbe
 
 /** Estimate a run. Instructions bill at the cache-read rate when the block can cache on this model, full price otherwise. */
 export function estimateCost(model: string, counts: { photos: number; videos: number }, opts: { batch: boolean; shape?: typeof TOKENS_PER_PHOTO }): Estimate {
-  const price = PRICES[model] ?? PRICES["claude-opus-5"];
+  const price = PRICES[model] ?? PRICES[DEFAULT_MODEL];
   const shape = opts.shape ?? TOKENS_PER_PHOTO;
   const items = counts.photos + counts.videos;
   const imageTokens = counts.photos * shape.image + counts.videos * shape.image * VIDEO_FRAME_MULTIPLIER;
@@ -47,7 +51,7 @@ export const CACHE_WRITE_FACTOR = 1.25;
 export function actualSpend(fallbackModel: string, rows: { model?: string | null; input: number; cacheRead: number; cacheWrite?: number; output: number; batched: boolean }[]): Spend {
   let usd = 0, inputTokens = 0, cacheReadTokens = 0, cacheWriteTokens = 0, outputTokens = 0;
   for (const r of rows) {
-    const price = PRICES[r.model ?? ""] ?? PRICES[fallbackModel] ?? PRICES["claude-opus-5"];
+    const price = PRICES[r.model ?? ""] ?? PRICES[fallbackModel] ?? PRICES[DEFAULT_MODEL];
     const factor = r.batched ? BATCH_DISCOUNT : 1;
     usd += factor * ((r.input * price.inputPerMTok + r.cacheRead * price.inputPerMTok * price.cacheReadFactor + (r.cacheWrite ?? 0) * price.inputPerMTok * CACHE_WRITE_FACTOR + r.output * price.outputPerMTok) / 1_000_000);
     inputTokens += r.input;

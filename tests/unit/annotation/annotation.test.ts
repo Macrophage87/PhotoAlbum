@@ -29,11 +29,14 @@ describe("annotation schema and pricing", () => {
     expect(opus.usd).toBeCloseTo(10000 * ((2500 / 1e6) * 5 + (1000 / 1e6) * 0.5 + (400 / 1e6) * 25), 0);
     const haiku = estimateCost("claude-haiku-4-5", { photos: 10000, videos: 0 }, { batch: false });
     expect(haiku.usd).toBeCloseTo(10000 * ((3500 / 1e6) * 1 + (400 / 1e6) * 5), 0);
+    const sonnet = estimateCost("claude-sonnet-5-5", { photos: 10000, videos: 0 }, { batch: false });
+    expect(sonnet.usd).toBeCloseTo(10000 * ((2500 / 1e6) * 2 + (1000 / 1e6) * 0.2 + (400 / 1e6) * 10), 0);
     expect(estimateCost("claude-opus-5", { photos: 100, videos: 0 }, { batch: true }).usd).toBeCloseTo(estimateCost("claude-opus-5", { photos: 100, videos: 0 }, { batch: false }).usd / 2, 2);
     expect(estimateCost("claude-opus-5", { photos: 0, videos: 1 }, { batch: false }).inputTokens).toBeGreaterThan(estimateCost("claude-opus-5", { photos: 1, videos: 0 }, { batch: false }).inputTokens);
   });
   it("uses adaptive thinking at low effort except on Haiku", () => {
     expect(thinkingParams("claude-opus-5")).toEqual({ thinking: { type: "adaptive" }, output_config: { effort: "low" } });
+    expect(thinkingParams("claude-sonnet-5-5")).toEqual({ thinking: { type: "adaptive" }, output_config: { effort: "low" } });
     expect(thinkingParams("claude-haiku-4-5")).toEqual({});
   });
   it("keeps the effort level next to the output format in a built request", () => {

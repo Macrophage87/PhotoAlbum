@@ -12,7 +12,7 @@ export function anthropic(): Anthropic {
   return instance;
 }
 
-/** Thinking and effort settings differ by model: Opus 5 and Sonnet 5 take adaptive thinking with an effort level; Haiku 4.5 takes neither. */
+/** Thinking and effort settings differ by model: Sonnet 5.5, Opus 5 and Sonnet 5 take adaptive thinking with an effort level; Haiku 4.5 takes neither. */
 export function thinkingParams(model: string): { thinking?: { type: "adaptive" }; output_config?: { effort: "low" } } {
   if (model === "claude-haiku-4-5") return {};
   return { thinking: { type: "adaptive" }, output_config: { effort: "low" } };
