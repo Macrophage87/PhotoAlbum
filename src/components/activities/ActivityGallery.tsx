@@ -4,6 +4,8 @@ import { useState, useTransition } from "react";
 import { PhotoGrid, type GridPhoto } from "@/components/photos/PhotoGrid";
 import { Button } from "@/components/ui";
 import { bulkTakeOffActivity } from "@/app/photos/activity-actions";
+import { bulkTrash } from "@/app/photos/bulk-actions";
+import { BulkTrashControl } from "@/components/photos/TrashButton";
 
 /**
  * An activity's photographs, with a way to take one off it.
@@ -12,6 +14,9 @@ import { bulkTakeOffActivity } from "@/app/photos/activity-actions";
  * the time, and two people on the same afternoon do two different things. Taking one off leaves it on the trip,
  * under its own day — it did not stop being part of the fortnight, it just did not happen on this walk. Dragging
  * it out of the activity card was already possible on the timeline, which is no use on a phone.
+ *
+ * A photograph that should not be in the album at all goes to the trash from the same selection, as it does from the
+ * trip's gallery.
  */
 export function ActivityGallery({ photos, emptyMessage }: { photos: GridPhoto[]; emptyMessage: string }) {
   const [selecting, setSelecting] = useState(false);
@@ -36,6 +41,16 @@ export function ActivityGallery({ photos, emptyMessage }: { photos: GridPhoto[];
             <Button size="sm" variant="secondary" disabled={!ids.length || pending} onClick={take} data-testid="take-off-activity">
               {pending ? "Working…" : ids.length ? `Take ${ids.length} off this activity` : "Take off this activity"}
             </Button>
+            <BulkTrashControl
+              count={ids.length}
+              disabled={!ids.length || pending}
+              onTrash={async (reason, note) => {
+                const n = await bulkTrash(ids, reason, note);
+                setSelected(new Set());
+                setSelecting(false);
+                setNotice(`${n} moved to the trash. An admin can put ${n === 1 ? "it" : "them"} back from the trash on the Admin page.`);
+              }}
+            />
             <Button size="sm" variant="ghost" onClick={() => { setSelecting(false); setSelected(new Set()); }}>Cancel</Button>
           </>
         ) : (

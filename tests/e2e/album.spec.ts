@@ -584,6 +584,31 @@ test("a photograph can be taken off an activity and stays on the trip", async ({
   }
 });
 
+test("a photograph can be moved to the trash from an activity's own page", async ({ context, page }) => {
+  await signIn(context, ADMIN);
+  const act = await withDb((c) => c.query(`SELECT id FROM "Activity" WHERE title = 'Ocean Path loop' LIMIT 1`));
+  const activityId = act.rows[0].id as string;
+  const mine = await withDb((c) => c.query(`SELECT p.id FROM "Photo" p JOIN "Trip" t ON t.id = p."tripId" WHERE t.slug = 'acadia' AND p.status = 'READY' AND p."trashedAt" IS NULL AND p."activityId" IS NULL ORDER BY p.id LIMIT 1`));
+  const onIt = mine.rows[0].id as string;
+  await withDb((c) => c.query(`UPDATE "Photo" SET "activityId" = $2 WHERE id = $1`, [onIt, activityId]));
+  try {
+    // A blurry shot seen while tidying an outing goes straight to the trash, without a trip to the trip's gallery.
+    await page.goto(`/trips/acadia/activities/${activityId}`);
+    await page.getByTestId("activity-select").click();
+    await page.locator(`li.tile-lazy:has(img[src*='/api/photos/${onIt}/']) button[aria-pressed]`).first().click();
+    await page.getByRole("button", { name: "Move to trash" }).click();
+    await page.getByLabel("Why is it going to the trash?").selectOption("BLURRY");
+    await page.getByRole("button", { name: "Move to trash" }).click();
+    await expect(page.getByRole("status")).toContainText("1 moved to the trash");
+    await expect(page.locator(`li.tile-lazy:has(img[src*='/api/photos/${onIt}/'])`)).toHaveCount(0);
+    const after = await withDb((c) => c.query(`SELECT "trashedAt", "trashReason" FROM "Photo" WHERE id = $1`, [onIt]));
+    expect(after.rows[0].trashedAt).not.toBeNull();
+    expect(after.rows[0].trashReason).toBe("BLURRY");
+  } finally {
+    await withDb((c) => c.query(`UPDATE "Photo" SET "activityId" = NULL, "trashedAt" = NULL, "trashedById" = NULL, "trashReason" = NULL, "trashNote" = NULL WHERE id = $1`, [onIt]));
+  }
+});
+
 test("the guide is a page anyone can read, with the same words available as a PDF", async ({ page }) => {
   // A guide nobody can reach is no guide. It is a page, linked from the menu, and open to anyone who gets as far
   // as the site — somebody who cannot sign in is exactly who needs to read how signing in works.
