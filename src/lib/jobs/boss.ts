@@ -38,7 +38,7 @@ export const HEAVY_QUEUES: readonly QueueName[] = [QUEUES.transcodeVideo, QUEUES
  * (see rejudgeSweep and finishRemoval), and stops at the next photograph once pg-boss does give up on it.
  */
 export const LONG_JOB_EXPIRE_SECONDS = 6 * 3600;
-export const LONG_QUEUES: readonly QueueName[] = [QUEUES.rejudgeText, QUEUES.finishRemovals];
+export const LONG_QUEUES: readonly QueueName[] = [QUEUES.rejudgeText, QUEUES.finishRemovals, QUEUES.offloadOriginals];
 const QUEUE_OPTIONS = { retryLimit: 2, retryDelay: 30, retryBackoff: true, expireInSeconds: JOB_EXPIRE_SECONDS };
 
 export function queueOptions(name: QueueName): typeof QUEUE_OPTIONS & { heartbeatSeconds?: number } {

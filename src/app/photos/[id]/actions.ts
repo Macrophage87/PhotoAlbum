@@ -17,7 +17,7 @@ import { QUEUES } from "@/lib/jobs/queues";
 import { activityFor, onActivity } from "@/lib/activities/reassign";
 import { applyPhotoInstant } from "@/lib/photos/apply-date";
 import { offsetMinutesInZone, photoOffsetMin, photoWallTimeToInstant } from "@/lib/time/local-day";
-import { storage } from "@/lib/storage";
+import { localFileOf, storage } from "@/lib/storage";
 import { forgetPublicScanCopy } from "@/lib/scans/public-copy";
 import { readExif, resolveTakenAt } from "@/lib/images/exif";
 import { parseLatLng, placeNameOf } from "@/lib/geo/parse";
@@ -206,7 +206,7 @@ export async function resetPhotoDateToCamera(id: string): Promise<DateResult> {
   if (!(await editorOrNull(id))) return { ok: false, message: NOT_YOURS };
   const photo = await db.photo.findUnique({ where: { id }, include: { trip: { select: { timezone: true } } } });
   if (!photo) return { ok: false, message: "Photo not found" };
-  const local = storage().localPath?.(photo.originalPath);
+  const local = photo.kind === "PHOTO" ? await localFileOf(storage(), photo.originalPath).catch(() => undefined) : undefined;
   if (!local || photo.kind !== "PHOTO") return { ok: false, message: "No camera date is available for this item" };
   const exif = await readExif(local).catch(() => null);
   const resolved = exif ? resolveTakenAt(exif, photo.trip?.timezone ?? null) : null;

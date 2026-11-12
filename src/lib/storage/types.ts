@@ -16,6 +16,11 @@ export interface StorageProvider {
   deletePrefix(prefix: string): Promise<void>;
   /** Fast path for libraries that read files directly (sharp, parsers). Undefined for remote stores. */
   localPath?(key: string): string;
+  /**
+   * A path on this machine that holds the object, fetched there first when it is kept elsewhere (an original moved to
+   * S3 by the tiered driver). Use `localFileOf` from "@/lib/storage" rather than calling this directly.
+   */
+  localFile?(key: string): Promise<string>;
 }
 
 export class StorageLimitError extends Error {

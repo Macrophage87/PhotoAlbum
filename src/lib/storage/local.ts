@@ -5,7 +5,7 @@ import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { StorageLimitError, type StorageProvider } from "./types";
 
-function assertSafeKey(key: string) {
+export function assertSafeKey(key: string) {
   if (key.includes("..") || path.isAbsolute(key) || key.includes("\0")) throw new Error(`Unsafe storage key: ${key}`);
 }
 
@@ -50,7 +50,7 @@ export class LocalStorage implements StorageProvider {
     await writeFile(file, buf);
   }
 
-  async getStream(key: string, range?: { start: number; end: number }) {
+  async getStream(key: string, range?: { start: number; end: number }): Promise<{ stream: Readable; size: number }> {
     const file = this.localPath(key);
     const s = await stat(file);
     return { stream: createReadStream(file, range), size: s.size };
