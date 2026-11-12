@@ -53,6 +53,11 @@ jobs:
         env:
           DATABASE_URL: postgresql://photoalbum:photoalbum@localhost:5432/photoalbum_test
       - run: pnpm test
+      # The sidecar's own image runs Python 3.12 (ml/Dockerfile). The runner's system Python moved to 3.14, for which
+      # the pinned Pillow has no wheel, so the tests use the image's version rather than whatever the runner has.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - name: ML sidecar tests (stub mode, no weights)
         run: |
           pip install -r ml/requirements.txt
