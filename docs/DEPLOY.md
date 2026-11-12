@@ -323,6 +323,8 @@ chmod +x ~/backup-album.sh
 
 Copy the `backups` folder off the server regularly (rclone to any cloud storage, or `rsync` to another machine). A backup on the same disk as the data does not protect against disk failure.
 
+On AWS, [SAFETY-COPY.md](SAFETY-COPY.md) does that every night: the photos and a database dump go to S3 Glacier Deep Archive in another region, locked against deletion, for about $1 per terabyte a month.
+
 To restore on a new server, put the database back **before the album starts for the first time**. The first start migrates an empty database and gives it an install id of its own, which the dump's `AppSetting` row then collides with and loses. So create the volumes without starting the app, load the dump, then the photos, then start everything:
 
 ```bash

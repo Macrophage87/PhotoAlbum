@@ -98,7 +98,7 @@ Every page is served with a nonce-based Content-Security-Policy: scripts only fr
 
 ### Behind a reverse proxy
 
-For a full walkthrough of a fresh server (Docker, deploy key, HTTPS with Caddy, backups, updates) see [docs/DEPLOY.md](docs/DEPLOY.md). When the photographs outgrow the disk, [docs/MOVE-MEDIA.md](docs/MOVE-MEDIA.md) moves them to another drive without downtime worth speaking of, and covers having the staging site and the live site work from one set of data.
+For a full walkthrough of a fresh server (Docker, deploy key, HTTPS with Caddy, backups, updates) see [docs/DEPLOY.md](docs/DEPLOY.md). When the photographs outgrow the disk, [docs/MOVE-MEDIA.md](docs/MOVE-MEDIA.md) moves them to another drive without downtime worth speaking of, and covers having the staging site and the live site work from one set of data. [docs/SAFETY-COPY.md](docs/SAFETY-COPY.md) keeps a nightly, locked copy of everything in S3 Glacier Deep Archive.
 
 Set `APP_URL` to the public URL (used in emails and redirects) and raise the proxy's body size limit (e.g. `client_max_body_size 2g;` in nginx, `max_size 2GB` in Caddy) so large photos, 1 GB clips (`MAX_VIDEO_UPLOAD_BYTES`) and Google exports get through. `MAX_UPLOAD_BYTES`, `MAX_VIDEO_UPLOAD_BYTES` and `MAX_IMPORT_BYTES` cap sizes on the app side. The proxy must also pass the client's address in `X-Forwarded-For` (Caddy does by itself; nginx needs `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for`): the app trusts only the last entry, the one the proxy adds, for its sign-in rate limits.
 
