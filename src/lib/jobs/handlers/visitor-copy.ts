@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { db } from "@/lib/db";
-import { storage } from "@/lib/storage";
+import { localFileOf, storage } from "@/lib/storage";
 import { editsOf } from "@/lib/images/edits";
 import { heicSource, isHeic } from "@/lib/images/heic";
 import { findVisitorCopy, forgetVisitorFiles, planVisitorCopy, renderVisitorCopy, visitorStem } from "@/lib/images/visitor-copy";
@@ -21,9 +21,9 @@ export async function makeVisitorCopy(job: VisitorCopyJob, signal?: AbortSignal)
   // photo is still copied (it may be waiting on its re-render), but one that is not processed yet has nothing to show.
   if (!photo || photo.kind !== "PHOTO" || !photo.renditions || photo.imageVersion !== job.imageVersion) return;
   const store = storage();
-  const local = store.localPath?.(photo.originalPath);
-  if (!local) return;
   if (await findVisitorCopy(photo)) return;
+  const local = await localFileOf(store, photo.originalPath);
+  if (!local) return;
   // What was made of the picture before it last changed is never looked for again, and a making that died part-way
   // left what it was writing.
   await forgetVisitorFiles(photo.storageKey, photo.imageVersion);

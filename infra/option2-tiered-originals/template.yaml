@@ -1,0 +1,132 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Family Album, storage Option 2: a private S3 bucket for photo and video originals. New originals stay in
+  S3 Standard; a lifecycle rule moves each to Glacier Instant Retrieval once it has been in the bucket for
+  GlacierAfterDays. Versioned, so a deleted original can be recovered for NoncurrentDays. Also a managed
+  policy that lets the album's EC2 server read, write and delete there (but never purge old versions).
+  Deploy with: aws cloudformation deploy --template-file template.yaml --stack-name album-originals
+  --capabilities CAPABILITY_NAMED_IAM --parameter-overrides InstanceRoleName=<the server's role>
+  (see docs/ORIGINALS-ON-S3.md). Deploying creates resources but changes nothing on the server.
+
+Parameters:
+  BucketName:
+    Type: String
+    Default: ""
+    Description: Leave blank for a generated name (recommended; bucket names are global).
+  InstanceRoleName:
+    Type: String
+    Default: ""
+    Description: >-
+      Name (not ARN) of the IAM role on the album's EC2 instance profile. The access policy is attached to it.
+      Leave blank to attach the policy yourself.
+  GlacierAfterDays:
+    Type: Number
+    Default: 90
+    MinValue: 1
+    Description: Days an original stays in S3 Standard before moving to Glacier Instant Retrieval. Keep ORIGINALS_GLACIER_AFTER_DAYS in .env the same.
+  NoncurrentDays:
+    Type: Number
+    Default: 30
+    MinValue: 1
+    Description: Days a deleted or replaced original can still be recovered before S3 removes it for good.
+
+Conditions:
+  HasBucketName: !Not [!Equals [!Ref BucketName, ""]]
+  HasRole: !Not [!Equals [!Ref InstanceRoleName, ""]]
+
+Resources:
+  OriginalsBucket:
+    Type: AWS::S3::Bucket
+    # The album's originals: never deleted with the stack.
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !If [HasBucketName, !Ref BucketName, !Ref AWS::NoValue]
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+            BucketKeyEnabled: true
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      LifecycleConfiguration:
+        Rules:
+          # The heart of Option 2. Objects under 128 KB stay in Standard: Glacier IR bills every object as at
+          # least 128 KB, so moving a tiny one would cost more, not less.
+          - Id: originals-to-glacier-instant-retrieval
+            Status: Enabled
+            ObjectSizeGreaterThan: 131072
+            Transitions:
+              - StorageClass: GLACIER_IR
+                TransitionInDays: !Ref GlacierAfterDays
+          # The safety net for deletes: an original deleted or written over is kept as an old version this long.
+          - Id: expire-old-versions
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NoncurrentDays: !Ref NoncurrentDays
+            ExpiredObjectDeleteMarker: true
+          # Uploads cut off half-way (a restart mid-upload) are otherwise billed for ever, invisibly.
+          - Id: abort-incomplete-uploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+
+  OriginalsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref OriginalsBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource:
+              - !GetAtt OriginalsBucket.Arn
+              - !Sub "${OriginalsBucket.Arn}/*"
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+
+  OriginalsAccessPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: Lets the Family Album server keep originals in its S3 bucket (Option 2).
+      Roles: !If [HasRole, [!Ref InstanceRoleName], !Ref AWS::NoValue]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: ListTheBucket
+            Effect: Allow
+            Action: s3:ListBucket
+            Resource: !GetAtt OriginalsBucket.Arn
+          # No s3:DeleteObjectVersion and no lifecycle or versioning changes: a server that is broken into, or a
+          # bug, can hide an original behind a delete marker but cannot destroy the old version.
+          - Sid: ReadWriteOriginals
+            Effect: Allow
+            Action:
+              - s3:GetObject
+              - s3:PutObject
+              - s3:DeleteObject
+              - s3:AbortMultipartUpload
+            Resource: !Sub "${OriginalsBucket.Arn}/*"
+
+Outputs:
+  BucketName:
+    Description: Put this in .env as ORIGINALS_S3_BUCKET.
+    Value: !Ref OriginalsBucket
+  Region:
+    Description: Put this in .env as AWS_REGION.
+    Value: !Ref AWS::Region
+  AccessPolicyArn:
+    Description: Attach to the server's instance role if InstanceRoleName was left blank.
+    Value: !Ref OriginalsAccessPolicy

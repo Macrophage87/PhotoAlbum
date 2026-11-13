@@ -1,6 +1,6 @@
 import { stat } from "node:fs/promises";
 import { db } from "@/lib/db";
-import { storage } from "@/lib/storage";
+import { localFileOf, storage } from "@/lib/storage";
 import { publicScanCopy } from "@/lib/scans/public-copy";
 import { cameraLabel, readExif, resolveDigitizedTakenAt, resolveTakenAt, type TakenAtResolution } from "@/lib/images/exif";
 import { resolveFilenameTakenAt } from "@/lib/images/filename-date";
@@ -45,7 +45,7 @@ export async function processPhoto(job: ProcessPhotoJob, signal?: AbortSignal): 
 
   try {
     const store = storage();
-    const localPath = store.localPath?.(photo.originalPath);
+    const localPath = await localFileOf(store, photo.originalPath);
     if (!localPath) throw new Error("process-photo requires a storage driver with local paths");
 
     // A 3D scan has no pixels to read or render: it is dated by the file itself, filed on a trip by that date, and

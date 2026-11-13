@@ -29,6 +29,7 @@ export const QUEUES = {
   sweepStrandedUploads: "sweep-stranded-uploads",
   reconcilePhotos: "reconcile-photos",
   sweepOrphanFiles: "sweep-orphan-files",
+  offloadOriginals: "offload-originals",
   revokeGoogle: "revoke-google",
   finishRemovals: "finish-removals",
   visitorCopy: "visitor-copy",

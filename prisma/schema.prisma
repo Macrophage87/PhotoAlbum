@@ -539,6 +539,7 @@ model Photo {
   similarB          MediaSimilarity[] @relation("SimB")
   visits            Visit[]
   visitorNotes      VisitorNote[]
+  originalCopy      OriginalCopy?
 
   @@index([takenAt])
   @@index([uploaderId])
@@ -1112,4 +1113,18 @@ model MapVersion {
   id      Int    @id @default(1)
   version BigInt @default(0)
   access  BigInt @default(0)
+}
+
+/// An item's original as kept in S3 (STORAGE_DRIVER=tiered, "Option 2"). Written by the offload job once the copy is
+/// seen there whole; only then may the disk's copy go. `key` is the original's storage key at that time, so an item
+/// whose original changed since (a new upload in its place) is offloaded again. Gone with its item.
+model OriginalCopy {
+  photoId      String   @id
+  photo        Photo    @relation(fields: [photoId], references: [id], onDelete: Cascade)
+  key          String
+  bytes        BigInt
+  /// What it was written as: STANDARD, or GLACIER_IR for an original already past the lifecycle's age when it went up.
+  /// S3's lifecycle rule moves STANDARD ones later without telling the album, so this is not kept up to date.
+  storageClass String
+  storedAt     DateTime @default(now())
 }

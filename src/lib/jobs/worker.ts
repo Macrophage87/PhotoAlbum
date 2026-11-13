@@ -150,6 +150,9 @@ export async function startWorker(): Promise<void> {
   };
   await boss.work(QUEUES.finishRemovals, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60, heartbeatRefreshSeconds: HEAVY_HEARTBEAT_REFRESH_SECONDS }, async () => finishRemovals());
   await boss.work(QUEUES.sweepOrphanFiles, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60 }, async () => sweepOrphanFiles());
+  // Option 2 storage (STORAGE_DRIVER=tiered): originals to S3, and the disk's copies freed. Does nothing otherwise.
+  const { offloadOriginals } = await import("@/lib/storage/offload");
+  await boss.work(QUEUES.offloadOriginals, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60, heartbeatRefreshSeconds: HEAVY_HEARTBEAT_REFRESH_SECONDS }, async () => void (await offloadOriginals()));
   // Schedules (idempotent): weekly video re-check, the annotation quiet-period sweep, batch polling, raw-response purge,
   // and the stale-photo reconciliation.
   await boss.schedule(QUEUES.checkExternalVideos, "0 4 * * 1", {}, { retryLimit: 1 });
@@ -171,6 +174,7 @@ export async function startWorker(): Promise<void> {
   // Files left behind by work that died part-way: uploaded track files no import will read again are deleted; photo
   // folders with no row are only counted, for an admin to move to the quarantine.
   await boss.schedule(QUEUES.sweepOrphanFiles, "25 * * * *", {}, { retryLimit: 0 });
+  await boss.schedule(QUEUES.offloadOriginals, "35 * * * *", {}, { retryLimit: 0 });
   console.log("[worker] pg-boss handlers registered");
   // Before anything sweeps the storage root: which album it belongs to (see src/lib/storage/identity.ts).
   await (await import("@/lib/storage/identity")).ensureInstallIdentity().catch((err) => console.error("[worker] could not check the storage's install marker", err));

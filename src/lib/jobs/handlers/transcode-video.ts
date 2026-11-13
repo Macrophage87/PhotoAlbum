@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { db } from "@/lib/db";
 import { env } from "@/lib/env";
-import { storage } from "@/lib/storage";
+import { localFileOf, storage } from "@/lib/storage";
 import { makeRenditions } from "@/lib/images/renditions";
 import { ffmpeg, posterArgs, probe, transcodeArgs } from "@/lib/video/ffmpeg";
 import { pickTripByDay, whoWasThere } from "@/lib/photos/assign";
@@ -49,7 +49,7 @@ export async function transcodeVideo(job: TranscodeVideoJob, signal?: AbortSigna
   // Everything after the row turns PROCESSING is inside the try, so no failure can leave it spinning.
   try {
     claimedAt = (await db.photo.update({ where: { id: photo.id }, data: { status: "PROCESSING", error: null }, select: { updatedAt: true } })).updatedAt;
-    const input = store.localPath?.(photo.originalPath);
+    const input = await localFileOf(store, photo.originalPath);
     if (!input) throw new Error("transcode-video requires a storage driver with local paths");
     const dir = (work = await mkdtemp(path.join(tmpdir(), "clip-")));
     await withHeavyLock(async () => {
