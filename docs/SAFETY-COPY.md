@@ -31,6 +31,16 @@ album and good for undoing a mistake quickly. Keep both.
   copies what is there but marks nothing deleted, and fails, so an unmounted drive is noticed instead of mirrored.
 - **Encrypted** at rest (SSE-S3), reachable only over HTTPS, never public.
 
+## With storage Option 2
+
+When the album keeps older originals in S3 ([ORIGINALS-ON-S3.md](ORIGINALS-ON-S3.md), `STORAGE_DRIVER=tiered`), they are
+no longer on the server's disk, so the job copies the originals bucket too. Nothing to configure: it reads
+`STORAGE_DRIVER`, `ORIGINALS_S3_BUCKET`, `ORIGINALS_S3_PREFIX` and `AWS_REGION` from the instance's `.env`, and copies
+S3 to S3 into `<prefix>/originals/` in Deep Archive, under the same guard against a sudden drop. The read permission
+comes from Option 2's own policy on the same instance role. A restore puts those originals back in the media folder,
+where the album finds them under either storage driver. Each original copied this way costs about $0.03 per GB once
+(moving it between regions, plus Glacier Instant Retrieval's read fee), on top of the costs below.
+
 What is **not** in it: `.env`, and with it `FORGET_KEY`. Keep those where DEPLOY.md says, apart from the album.
 
 ## What it costs

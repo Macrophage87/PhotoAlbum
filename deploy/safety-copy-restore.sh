@@ -54,7 +54,11 @@ newest_dump() {
 
 # Every key to bring back, one per line: the media, and one dump.
 keys() {
-  aws_in -- s3api list-objects-v2 --bucket "$B" --prefix "$P/media/" --query 'Contents[].[Key]' --output text | { grep -v '^None$' || true; }
+  local part
+  # originals/ exists only when the album used storage Option 2 (docs/ORIGINALS-ON-S3.md).
+  for part in media originals; do
+    aws_in -- s3api list-objects-v2 --bucket "$B" --prefix "$P/$part/" --query 'Contents[].[Key]' --output text | { grep -v '^None$' || true; }
+  done
   newest_dump
 }
 
@@ -94,6 +98,10 @@ case "${1:-}" in
     DUMP_KEY=$(newest_dump)
     # --force-glacier-transfer: read the restored copies; anything not yet restored fails loudly rather than being skipped.
     aws_in -v "$(cd "$TARGET" && pwd):/restore" -- s3 sync "s3://$B/$P/media/" /restore/media/ \
+      --force-glacier-transfer --no-progress --only-show-errors
+    # Option 2's originals go back into the same media folder: their keys are the album's own paths under it, so the
+    # album finds them on the disk whichever storage driver it runs with.
+    aws_in -v "$(cd "$TARGET" && pwd):/restore" -- s3 sync "s3://$B/$P/originals/" /restore/media/ \
       --force-glacier-transfer --no-progress --only-show-errors
     aws_in -v "$(cd "$TARGET" && pwd):/restore" -- s3 cp "s3://$B/$DUMP_KEY" "/restore/$(basename "$DUMP_KEY")" \
       --force-glacier-transfer --no-progress --only-show-errors

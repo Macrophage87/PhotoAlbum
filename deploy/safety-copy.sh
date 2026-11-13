@@ -18,12 +18,18 @@
 #                         unmounted drive is noticed rather than mirrored (default 10)
 #   SAFETY_COPY_PING_URL  optional; fetched after a run that went through, for a dead-man's-switch monitor
 #
+# With storage Option 2 (STORAGE_DRIVER=tiered, docs/ORIGINALS-ON-S3.md), older originals are no longer on the disk
+# but in the originals bucket. The job then copies that bucket too, reading ORIGINALS_S3_BUCKET, ORIGINALS_S3_PREFIX
+# and AWS_REGION from the instance's .env; set SAFETY_COPY_ORIGINALS=off to skip it (not recommended).
+#
 # What it does, in order:
 #   1. dump the database (checked for pg_dump's closing line, as deploy/update.sh does) and upload it to
 #      db/<prefix>/db-<date>.sql.gz, where the bucket retires old dumps on its own,
 #   2. mirror the media root to <prefix>/media/ with `aws s3 sync`, straight into DEEP_ARCHIVE; only new and changed
 #      files are sent. Files the album deleted get a delete marker, and the bucket keeps the old version (and its
 #      lock) for as long as the stack says,
+#   2b. with Option 2, copy the originals bucket to <prefix>/originals/ the same way, S3 to S3 (nothing passes
+#      through the server), under the same guard against a sudden drop,
 #   3. write <prefix>/last-success.json (in S3 Standard, so it reads at once), which says when and how much.
 #
 # The server's role can add files and delete markers but cannot remove a stored version or lift its lock, so a
@@ -101,29 +107,69 @@ DB_BYTES=$(stat -c %s "$DUMP")
 rm -f "$DUMP"
 echo "== database: $DB_KEY ($DB_BYTES bytes) =="
 
+# Mirror into the copy with --delete, unless what is there now is far smaller than last night (by more than the
+# limit and more than 100 files): then copy without marking anything deleted, and fail the run at the end.
+SHRANK=0
+delete_unless_shrunk() { # $1: name, $2: count now; sets DELETE
+  local last
+  DELETE=()
+  last=$(cat "$STATE_DIR/last-count-$1" 2>/dev/null || echo 0)
+  if [ "$last" -gt 0 ] && [ $((last - $2)) -gt 100 ] && [ $(($2 * 100)) -lt $((last * (100 - SHRINK_LIMIT))) ]; then
+    echo "!! $1 has $2 files, last night $last: more than $SHRINK_LIMIT% fewer. Copying what is there, marking" >&2
+    echo "!! nothing deleted. If that many really went, run once with SAFETY_COPY_SHRINK_LIMIT=100." >&2
+    SHRANK=1
+  else
+    DELETE=(--delete)
+  fi
+}
+# Older copies of this script kept the media count under another name.
+if [ -f "$STATE_DIR/last-file-count" ] && [ ! -f "$STATE_DIR/last-count-media" ]; then
+  mv "$STATE_DIR/last-file-count" "$STATE_DIR/last-count-media"
+fi
+
 # 2. the media
 FILES=$(find "$MEDIA_SOURCE" -type f | wc -l)
 BYTES=$(du -sb "$MEDIA_SOURCE" | cut -f1)
-LAST=$(cat "$STATE_DIR/last-file-count" 2>/dev/null || echo 0)
-DELETE=(--delete)
-SHRANK=0
-# A few deletions are ordinary; only a big drop at once (more than the limit, and more than 100 files) stops it.
-if [ "$LAST" -gt 0 ] && [ $((LAST - FILES)) -gt 100 ] && [ $((FILES * 100)) -lt $((LAST * (100 - SHRINK_LIMIT))) ]; then
-  echo "!! the media has $FILES files, last night $LAST: more than $SHRINK_LIMIT% fewer. Copying what is there, marking" >&2
-  echo "!! nothing deleted. If that many really went, run once with SAFETY_COPY_SHRINK_LIMIT=100." >&2
-  DELETE=()
-  SHRANK=1
-fi
+delete_unless_shrunk media "$FILES"
 aws_in -v "$MEDIA_SOURCE:/media:ro" -- s3 sync /media "$DEST/media/" "${DELETE[@]}" \
   --storage-class DEEP_ARCHIVE --no-progress --only-show-errors
 echo "== media: $FILES files, $BYTES bytes =="
 
+# 2b. Option 2's originals bucket, when the instance uses it
+env_value() { # the value of $1 in the instance's .env, without quotes
+  sed -n "s/^$1=//p" .env 2>/dev/null | tail -n 1 | sed -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'$/\1/"
+}
+ORIG_FILES=0
+ORIG_BYTES=0
+if [ "$(env_value STORAGE_DRIVER)" = tiered ] && [ "${SAFETY_COPY_ORIGINALS:-on}" != off ]; then
+  ORIG_BUCKET=$(env_value ORIGINALS_S3_BUCKET)
+  ORIG_PREFIX=$(env_value ORIGINALS_S3_PREFIX)
+  ORIG_REGION=$(env_value AWS_REGION)
+  if [ -z "$ORIG_BUCKET" ] || [ -z "$ORIG_REGION" ]; then
+    echo "!! STORAGE_DRIVER=tiered but ORIGINALS_S3_BUCKET or AWS_REGION is empty in $APP_DIR/.env; originals not copied" >&2
+    exit 1
+  fi
+  SRC="s3://$ORIG_BUCKET/$ORIG_PREFIX"
+  # `s3 ls` exits 1 when nothing is there yet (a fresh bucket); any other failure shows in the sync below.
+  SUMMARY=$(aws_in -- s3 ls "$SRC" --recursive --summarize --region "$ORIG_REGION" | tail -n 2) || true
+  ORIG_FILES=$(echo "$SUMMARY" | sed -n 's/.*Total Objects: *//p')
+  ORIG_BYTES=$(echo "$SUMMARY" | sed -n 's/.*Total Size: *//p')
+  ORIG_FILES=${ORIG_FILES:-0}
+  ORIG_BYTES=${ORIG_BYTES:-0}
+  delete_unless_shrunk originals "$ORIG_FILES"
+  # S3 copies server side, from the server's region into the copy's. Glacier Instant Retrieval reads at once.
+  aws_in -- s3 sync "$SRC" "$DEST/originals/" --source-region "$ORIG_REGION" "${DELETE[@]}" \
+    --storage-class DEEP_ARCHIVE --no-progress --only-show-errors
+  echo "== originals in $SRC: $ORIG_FILES files, $ORIG_BYTES bytes =="
+fi
+
 if [ "$SHRANK" = 1 ]; then exit 1; fi
-echo "$FILES" > "$STATE_DIR/last-file-count"
+echo "$FILES" > "$STATE_DIR/last-count-media"
+if [ "$ORIG_FILES" -gt 0 ]; then echo "$ORIG_FILES" > "$STATE_DIR/last-count-originals"; fi
 
 # 3. the receipt
-printf '{"finishedAt":"%s","mediaFiles":%s,"mediaBytes":%s,"database":"%s","databaseBytes":%s}\n' \
-  "$(date -Is)" "$FILES" "$BYTES" "$DB_KEY" "$DB_BYTES" > "$STATE_DIR/last-success.json"
+printf '{"finishedAt":"%s","mediaFiles":%s,"mediaBytes":%s,"originalsFiles":%s,"originalsBytes":%s,"database":"%s","databaseBytes":%s}\n' \
+  "$(date -Is)" "$FILES" "$BYTES" "$ORIG_FILES" "$ORIG_BYTES" "$DB_KEY" "$DB_BYTES" > "$STATE_DIR/last-success.json"
 # Kept in S3 Standard (a few bytes) so it can be read without waiting on Deep Archive.
 aws_in -v "$STATE_DIR:/state:ro" -- s3 cp /state/last-success.json "$DEST/last-success.json" \
   --storage-class STANDARD --no-progress --only-show-errors
