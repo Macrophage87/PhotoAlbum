@@ -337,6 +337,8 @@ docker compose up -d
 
 The photo archive brings its `.album-install-id` with it and the dump brings the same id, but the database now lives in another Postgres, so the Admin page will say under **Storage** that the storage is bound to another database. Make sure the old album is stopped for good, and check this one looks right. The marker also carries the old album's last heartbeat, so **Re-bind the storage to this database** becomes available there 48 hours after the old album last ran (the page says when); until then the album works normally but cleans nothing up. If the album was started before the dump went in, stop it, empty the database (`docker compose exec -T db sh -c 'exec psql -U "$POSTGRES_USER" -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;" "$POSTGRES_DB"'`), load the dump, start it again, and re-bind.
 
+With `STORAGE_DRIVER=tiered` (originals in S3, storage Option 2) this backup no longer holds the older originals; see [ORIGINALS-ON-S3.md](ORIGINALS-ON-S3.md#backups).
+
 If the photographs have been moved onto their own drive, the volume in that script is no longer what the album reads: see [MOVE-MEDIA.md](MOVE-MEDIA.md), which says what to change here.
 
 **Restoring an older dump over the same photos** (rolling back a mistake): the album is still the same album, so its clean-ups keep running. Uploaded GPX and FIT files kept for tracks added after the dump (`imports/`) have no track in the restored database, and the hourly clean-up deletes them after six hours. Copy `imports/` somewhere safe before restoring if you might want those tracks again. Photo folders from after the dump are only counted, never deleted.

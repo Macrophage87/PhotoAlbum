@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Readable } from "node:stream";
 import path from "node:path";
-import { readFile, readdir, stat } from "node:fs/promises";
+import { readdir, stat } from "node:fs/promises";
 import { storage } from "@/lib/storage";
 import { scanShareable, type ScanFormat } from "@/lib/media/mime";
 import { PLY_HEADER_MAX, PlyWithheld, plyFixedLength, plyHeader, plyTextBody, sanitizeScan } from "./sanitize";
@@ -140,8 +140,8 @@ async function write(scan: ScanFile, tmp: string): Promise<string | null> {
     }
     // Binary records with lists in them: their length is found by reading them, below.
   }
-  const local = store.localPath?.(scan.originalPath);
-  const original = local ? await readFile(local) : await readAll((await store.getStream(scan.originalPath)).stream);
+  // Read whole either way; with the tiered driver a scan moved to S3 is streamed from there rather than fetched back.
+  const original = await readAll((await store.getStream(scan.originalPath)).stream);
   const cleaned = await sanitizeScan(scan.scanFormat as ScanFormat, original);
   if (!cleaned) return `not a ${scan.scanFormat} this can clean with confidence`;
   await store.putBuffer(tmp, cleaned);

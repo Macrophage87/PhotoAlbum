@@ -28,8 +28,17 @@ const schema = z.object({
   SMTP_PASS: z.string().optional().transform((v) => (v ? v : undefined)),
   SMTP_SECURE: boolish.transform((v) => v ?? false),
   SMTP_FROM: z.string().default("Family Album <album@localhost>"),
-  STORAGE_DRIVER: z.enum(["local"]).default("local"),
+  // "tiered" is Option 2: originals move to S3 once processed, and S3 moves them to Glacier Instant Retrieval later.
+  STORAGE_DRIVER: z.enum(["local", "tiered"]).default("local"),
   PHOTO_STORAGE_ROOT: z.string().default("/data/photos"),
+  ORIGINALS_S3_BUCKET: z.string().optional().transform((v) => (v ? v : undefined)),
+  // Required with "tiered", and different for every install sharing the bucket (live/, staging/): a staging copy of
+  // live's database deleting a photo must never delete live's original.
+  ORIGINALS_S3_PREFIX: z.string().default("").transform((v) => (v && !v.endsWith("/") ? `${v}/` : v)),
+  // How long after an item was last processed its original moves to S3, and how long a copy fetched back for work is kept.
+  ORIGINALS_OFFLOAD_AFTER_HOURS: z.coerce.number().positive().default(24),
+  // Must match the bucket's lifecycle rule: an original older than this when it first goes up goes straight to Glacier IR.
+  ORIGINALS_GLACIER_AFTER_DAYS: z.coerce.number().int().positive().default(90),
   MAX_UPLOAD_BYTES: z.coerce.number().int().positive().default(100 * 1024 * 1024),
   MAX_IMPORT_BYTES: z.coerce.number().int().positive().default(2 * 1024 * 1024 * 1024),
   // Short clips only: longer videos go to YouTube. Phone video runs 65 to 400 MB per minute, hence the separate byte cap.
@@ -80,6 +89,8 @@ const schema = z.object({
   // Send the page Content-Security-Policy as report-only (browser console warnings instead of blocking) while trying a new tile or style host.
   CSP_REPORT_ONLY: boolish.transform((v) => v ?? false),
 })
+  .refine((e) => e.STORAGE_DRIVER !== "tiered" || Boolean(e.ORIGINALS_S3_BUCKET), { message: "ORIGINALS_S3_BUCKET is required when STORAGE_DRIVER=tiered", path: ["ORIGINALS_S3_BUCKET"] })
+  .refine((e) => e.STORAGE_DRIVER !== "tiered" || /^[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*\/$/.test(e.ORIGINALS_S3_PREFIX), { message: "ORIGINALS_S3_PREFIX is required when STORAGE_DRIVER=tiered (e.g. live/ or staging/)", path: ["ORIGINALS_S3_PREFIX"] })
   .refine((e) => !e.ML_URL || Boolean(e.ML_TOKEN), { message: "ML_TOKEN is required when ML_URL is set", path: ["ML_TOKEN"] })
   .refine((e) => !e.GOOGLE_OAUTH_CLIENT_ID || Boolean(e.GOOGLE_OAUTH_CLIENT_SECRET), { message: "GOOGLE_OAUTH_CLIENT_SECRET is required with GOOGLE_OAUTH_CLIENT_ID", path: ["GOOGLE_OAUTH_CLIENT_SECRET"] })
   .refine((e) => !e.GOOGLE_OAUTH_CLIENT_ID || (Boolean(e.TOKEN_ENCRYPTION_KEY) && Buffer.from(e.TOKEN_ENCRYPTION_KEY ?? "", "base64").length === 32), { message: "TOKEN_ENCRYPTION_KEY (32 bytes, base64) is required when Google OAuth is configured", path: ["TOKEN_ENCRYPTION_KEY"] });
