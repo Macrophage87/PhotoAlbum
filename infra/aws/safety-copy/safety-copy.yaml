@@ -1,0 +1,211 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Family Album safety copy (Option 1): a locked, versioned S3 bucket that keeps a nightly copy of the album's
+  media and database dumps in Glacier Deep Archive. Deploy it in a DIFFERENT region from the album's server.
+  See docs/SAFETY-COPY.md.
+
+Parameters:
+  BucketName:
+    Type: String
+    Default: ""
+    Description: >-
+      Optional bucket name. Leave empty to let CloudFormation make a unique one (it is shown under Outputs).
+  LockMode:
+    Type: String
+    Default: GOVERNANCE
+    AllowedValues: [GOVERNANCE, COMPLIANCE]
+    Description: >-
+      GOVERNANCE: nobody can delete or overwrite a locked copy unless an admin explicitly bypasses the lock.
+      COMPLIANCE: nobody can, not even the account's root user, until the lock runs out. Start with GOVERNANCE;
+      the mode can be tightened later but a COMPLIANCE lock cannot be loosened.
+  LockDays:
+    Type: Number
+    Default: 90
+    MinValue: 1
+    MaxValue: 3650
+    Description: Every version written is locked against deletion for this many days.
+  KeepDeletedDays:
+    Type: Number
+    Default: 180
+    MinValue: 1
+    MaxValue: 3650
+    Description: >-
+      How long a file stays in the safety copy after the album deleted or replaced it. Keep it at or above
+      LockDays (a locked version cannot expire early) and at or above 180 (Deep Archive bills 180 days anyway).
+  DatabaseDumpDays:
+    Type: Number
+    Default: 90
+    MinValue: 1
+    MaxValue: 3650
+    Description: >-
+      Nightly database dumps older than this are marked deleted, then kept KeepDeletedDays more before they go.
+  WriterRoleName:
+    Type: String
+    Default: ""
+    Description: >-
+      Name of the IAM role the album's EC2 instance already runs as (its instance profile). The upload policy is
+      attached to it. Leave empty if the instance has no role yet: the stack then makes one with an instance
+      profile, to attach to the instance.
+
+Conditions:
+  HasBucketName: !Not [!Equals [!Ref BucketName, ""]]
+  HasWriterRole: !Not [!Equals [!Ref WriterRoleName, ""]]
+  MakeWriterRole: !Equals [!Ref WriterRoleName, ""]
+
+Resources:
+  SafetyCopyBucket:
+    Type: AWS::S3::Bucket
+    # The point of the bucket is that it outlives mistakes, including deleting this stack.
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !If [HasBucketName, !Ref BucketName, !Ref AWS::NoValue]
+      VersioningConfiguration:
+        Status: Enabled
+      ObjectLockEnabled: true
+      ObjectLockConfiguration:
+        ObjectLockEnabled: Enabled
+        Rule:
+          DefaultRetention:
+            Mode: !Ref LockMode
+            Days: !Ref LockDays
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+            BucketKeyEnabled: true
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      LifecycleConfiguration:
+        Rules:
+          # The nightly job uploads straight into DEEP_ARCHIVE. This catches anything that arrived without the
+          # storage class (S3 skips objects under 128 KB, which cost next to nothing either way).
+          - Id: everything-to-deep-archive
+            Status: Enabled
+            Transitions:
+              - StorageClass: DEEP_ARCHIVE
+                TransitionInDays: 0
+            NoncurrentVersionTransitions:
+              - StorageClass: DEEP_ARCHIVE
+                TransitionInDays: 0
+          # Files the album deleted or replaced: a delete marker on top, the old version underneath. Keep the old
+          # version KeepDeletedDays, then let it go, and tidy up delete markers with nothing left under them.
+          - Id: forget-deleted-files
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NoncurrentDays: !Ref KeepDeletedDays
+            ExpiredObjectDeleteMarker: true
+          # Only the nightly database dumps, under db/<instance>/. Expiring one only lays a delete marker; the
+          # rule above keeps the dump itself KeepDeletedDays longer.
+          - Id: retire-old-database-dumps
+            Status: Enabled
+            Prefix: db/
+            ExpirationInDays: !Ref DatabaseDumpDays
+          - Id: abort-stalled-uploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+
+  SafetyCopyBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref SafetyCopyBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyPlainHttp
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource:
+              - !GetAtt SafetyCopyBucket.Arn
+              - !Sub "${SafetyCopyBucket.Arn}/*"
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+
+  # What the album's server may do: add files and delete markers, read the listing, nothing else. It cannot delete
+  # or shorten the lock on a stored version, restore files out of Deep Archive, or change the bucket's settings, so
+  # someone who broke into the server could not erase the copy.
+  WriterPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: Family Album server writes its nightly safety copy.
+      Roles: !If
+        - HasWriterRole
+        - [!Ref WriterRoleName]
+        - [!Ref WriterRole]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: List
+            Effect: Allow
+            Action:
+              - s3:ListBucket
+              - s3:ListBucketMultipartUploads
+            Resource: !GetAtt SafetyCopyBucket.Arn
+          - Sid: Write
+            Effect: Allow
+            Action:
+              - s3:PutObject
+              - s3:GetObject
+              - s3:DeleteObject
+              - s3:AbortMultipartUpload
+              - s3:ListMultipartUploadParts
+            Resource: !Sub "${SafetyCopyBucket.Arn}/*"
+          - Sid: NeverErase
+            Effect: Deny
+            Action:
+              - s3:DeleteObjectVersion
+              - s3:BypassGovernanceRetention
+              - s3:PutObjectRetention
+              - s3:PutObjectLegalHold
+              - s3:RestoreObject
+              - s3:PutBucketObjectLockConfiguration
+              - s3:PutLifecycleConfiguration
+              - s3:PutBucketVersioning
+              - s3:PutBucketPolicy
+              - s3:DeleteBucketPolicy
+              - s3:DeleteBucket
+            Resource:
+              - !GetAtt SafetyCopyBucket.Arn
+              - !Sub "${SafetyCopyBucket.Arn}/*"
+
+  WriterRole:
+    Type: AWS::IAM::Role
+    Condition: MakeWriterRole
+    Properties:
+      Description: The Family Album's EC2 instance. Writes the nightly safety copy.
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+
+  WriterInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Condition: MakeWriterRole
+    Properties:
+      Roles: [!Ref WriterRole]
+
+Outputs:
+  BucketName:
+    Description: Put this in the server's /etc/photoalbum-safety-copy.env as SAFETY_COPY_BUCKET.
+    Value: !Ref SafetyCopyBucket
+  BucketRegion:
+    Description: Put this in the server's /etc/photoalbum-safety-copy.env as SAFETY_COPY_REGION.
+    Value: !Ref AWS::Region
+  InstanceProfile:
+    Condition: MakeWriterRole
+    Description: Attach this to the album's EC2 instance (EC2 console, Actions, Security, Modify IAM role).
+    Value: !Ref WriterInstanceProfile
+  WriterPolicyArn:
+    Value: !Ref WriterPolicy
