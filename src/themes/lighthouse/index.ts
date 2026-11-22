@@ -18,7 +18,7 @@ export const lighthouseTheme: Theme = {
     border: "#d5dde6",
     ring: "#8fb3d9",
   },
-  fonts: { display: "var(--font-playfair), Georgia, serif", body: "var(--font-source-sans), system-ui, sans-serif" },
+  fonts: { display: "var(--font-atkinson), system-ui, sans-serif", body: "var(--font-atkinson), system-ui, sans-serif" },
   radius: "0.375rem",
   headerArt: LighthouseArt,
   map: { trackColor: "#c1272d", photoMarkerColor: "#14213d", clusterColor: "#0b3d91", canvasFilter: "saturate(0.85) contrast(1.02)" },

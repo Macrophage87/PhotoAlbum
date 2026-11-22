@@ -1,17 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import {
-  Inter,
-  Playfair_Display,
-  Source_Sans_3,
-  Cormorant_Garamond,
-  Lato,
-  Fraunces,
-  Nunito,
-  Bitter,
-  Work_Sans,
-  Montserrat,
-  Open_Sans,
-} from "next/font/google";
+import { Atkinson_Hyperlegible } from "next/font/google";
 import { headers } from "next/headers";
 import "./globals.css";
 import { RegisterServiceWorker } from "@/components/pwa/RegisterServiceWorker";
@@ -20,22 +8,12 @@ import { UploadQueueProvider } from "@/components/photos/UploadQueue";
 import { SiteFooter } from "@/components/layout/SiteFooter";
 import { env } from "@/lib/env";
 
-// Every theme's font pair is loaded once here and referenced by CSS variable.
-const inter = Inter({ variable: "--font-inter", subsets: ["latin"] });
-const playfair = Playfair_Display({ variable: "--font-playfair", subsets: ["latin"] });
-const sourceSans = Source_Sans_3({ variable: "--font-source-sans", subsets: ["latin"] });
-const cormorant = Cormorant_Garamond({ variable: "--font-cormorant", subsets: ["latin"], weight: ["400", "500", "600", "700"] });
-const lato = Lato({ variable: "--font-lato", subsets: ["latin"], weight: ["400", "700"] });
-const fraunces = Fraunces({ variable: "--font-fraunces", subsets: ["latin"] });
-const nunito = Nunito({ variable: "--font-nunito", subsets: ["latin"] });
-const bitter = Bitter({ variable: "--font-bitter", subsets: ["latin"] });
-const workSans = Work_Sans({ variable: "--font-work-sans", subsets: ["latin"] });
-const montserrat = Montserrat({ variable: "--font-montserrat", subsets: ["latin"] });
-const openSans = Open_Sans({ variable: "--font-open-sans", subsets: ["latin"] });
+// One typeface for the whole album, in every theme: Atkinson Hyperlegible, drawn by the Braille Institute so that
+// letters easily mistaken for each other are told apart. It is here for the older readers in the family. It comes in
+// two weights, so the browser draws medium as regular and semibold as bold.
+const atkinson = Atkinson_Hyperlegible({ variable: "--font-atkinson", subsets: ["latin"], weight: ["400", "700"], style: ["normal", "italic"] });
 
-const fontVars = [inter, playfair, sourceSans, cormorant, lato, fraunces, nunito, bitter, workSans, montserrat, openSans]
-  .map((f) => f.variable)
-  .join(" ");
+const fontVars = atkinson.variable;
 
 export const metadata: Metadata = {
   title: { default: "Family Album", template: "%s · Family Album" },

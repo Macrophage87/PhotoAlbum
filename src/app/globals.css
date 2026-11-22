@@ -13,8 +13,8 @@
   --th-accent-fg: #ffffff;
   --th-border: #e2e8f0;
   --th-ring: #93c5fd;
-  --th-font-display: var(--font-inter), system-ui, sans-serif;
-  --th-font-body: var(--font-inter), system-ui, sans-serif;
+  --th-font-display: var(--font-atkinson), system-ui, sans-serif;
+  --th-font-body: var(--font-atkinson), system-ui, sans-serif;
   --th-radius: 0.75rem;
 }
 

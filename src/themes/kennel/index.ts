@@ -19,7 +19,7 @@ export const kennelTheme: Theme = {
     border: "#e3d5c0",
     ring: "#d2a36c",
   },
-  fonts: { display: "var(--font-fraunces), Georgia, serif", body: "var(--font-nunito), system-ui, sans-serif" },
+  fonts: { display: "var(--font-atkinson), system-ui, sans-serif", body: "var(--font-atkinson), system-ui, sans-serif" },
   radius: "1.25rem",
   headerArt: KennelArt,
   map: { trackColor: "#8a5a2b", photoMarkerColor: "#b7c92f", clusterColor: "#6b4a2b", canvasFilter: "sepia(0.12) saturate(1.05)" },

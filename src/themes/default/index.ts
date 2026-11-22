@@ -18,7 +18,7 @@ export const defaultTheme: Theme = {
     border: "#e2e8f0",
     ring: "#93c5fd",
   },
-  fonts: { display: "var(--font-inter), system-ui, sans-serif", body: "var(--font-inter), system-ui, sans-serif" },
+  fonts: { display: "var(--font-atkinson), system-ui, sans-serif", body: "var(--font-atkinson), system-ui, sans-serif" },
   radius: "0.75rem",
   headerArt: DefaultArt,
   map: { trackColor: "#2563eb", photoMarkerColor: "#2563eb", clusterColor: "#1d4ed8" },

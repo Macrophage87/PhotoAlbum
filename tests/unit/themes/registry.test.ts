@@ -29,6 +29,6 @@ describe("theme registry", () => {
   it("produces CSS variables", () => {
     const vars = themeToCssVars(getTheme("lighthouse")) as Record<string, string>;
     expect(vars["--th-primary"]).toBe("#14213d");
-    expect(vars["--th-font-display"]).toContain("playfair");
+    expect(vars["--th-font-display"]).toContain("atkinson");
   });
 });

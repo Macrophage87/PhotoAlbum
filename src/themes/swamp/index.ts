@@ -18,7 +18,7 @@ export const swampTheme: Theme = {
     border: "#d2dac8",
     ring: "#8fbf9a",
   },
-  fonts: { display: "var(--font-fraunces), Georgia, serif", body: "var(--font-nunito), system-ui, sans-serif" },
+  fonts: { display: "var(--font-atkinson), system-ui, sans-serif", body: "var(--font-atkinson), system-ui, sans-serif" },
   radius: "1rem",
   headerArt: SwampArt,
   map: { trackColor: "#1f4d2e", photoMarkerColor: "#e07a2f", clusterColor: "#173a23", canvasFilter: "hue-rotate(-8deg) saturate(0.9)" },
