@@ -69,6 +69,18 @@ export async function animalSweep(): Promise<number> {
   return rows.length;
 }
 
+/**
+ * One photo's open detections matched again, when something matching reads has changed: its AI description, whose
+ * words can name a pet's look or say the birds are chickens. Nothing is queued for a photo with no open animals.
+ */
+export async function enqueueAnimalMatch(photoId: string): Promise<boolean> {
+  if (!petGates().active) return false;
+  const open = await db.animalDetection.findFirst({ where: { photoId, status: { in: ["DETECTED", "PROPOSED"] } }, select: { id: true } });
+  if (!open) return false;
+  await enqueue(QUEUES.matchAnimals, { photoId }, { singletonKey: `match-animals:${photoId}`, singletonSeconds: 30 });
+  return true;
+}
+
 /** Every photo with an open detection: run after a pet gains its first confirmed crop. */
 export async function enqueueAnimalMatchAllOpen(): Promise<number> {
   const rows = await db.animalDetection.findMany({ where: { status: "DETECTED" }, select: { photoId: true }, distinct: ["photoId"] });

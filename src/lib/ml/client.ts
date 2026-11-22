@@ -55,7 +55,7 @@ export async function detectFaces(bytes: Buffer, mediaType = "image/webp", signa
   return r.faces;
 }
 
-export type AnimalSpecies = "DOG" | "CAT" | "CHICKEN" | "HORSE" | "OTHER";
+export type AnimalSpecies = "DOG" | "CAT" | "CHICKEN" | "BIRD" | "HORSE" | "OTHER";
 export type AnimalResult = { box: [number, number, number, number]; species: AnimalSpecies; confidence: number; embedding: number[] };
 
 /** Animals with a species and a 512-d crop embedding. A 503 means the detector weights are missing on the sidecar. */

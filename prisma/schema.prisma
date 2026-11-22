@@ -166,6 +166,9 @@ enum Species {
   DOG
   CAT
   CHICKEN
+  /// Any bird the detector sees (it cannot tell a hen from a gull). A chicken pet is proposed for one only with
+  /// evidence: the photo's words mention chickens, or the crop looks like the flock's confirmed ones.
+  BIRD
   HORSE
   OTHER
 }
