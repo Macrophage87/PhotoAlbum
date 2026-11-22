@@ -96,6 +96,24 @@ object Helpers {
         return null
     }
 
+    /**
+     * Which file on this phone something is, without reading it: its name, size and when it was last changed.
+     * Android's own ids are no good for this (they change on a new phone), and a hash means reading the whole file.
+     */
+    fun fileKey(name: String, bytes: Long?, modifiedSeconds: Long?): String = "$name|${bytes ?: "?"}|${modifiedSeconds ?: "?"}"
+
+    /** A digest as the album writes one: lower-case hex. */
+    fun hex(digest: ByteArray): String = digest.joinToString("") { String.format(Locale.US, "%02x", it.toInt() and 0xff) }
+
+    /** "3 waiting, 12 in the album, 1 failed": the queue in a line, or null when it is empty. */
+    fun queueSummary(waiting: Int, inAlbum: Int, failed: Int): String? {
+        val parts = ArrayList<String>()
+        if (waiting > 0) parts.add("$waiting waiting to send")
+        if (inAlbum > 0) parts.add("$inAlbum in the album")
+        if (failed > 0) parts.add("$failed not sent")
+        return if (parts.isEmpty()) null else parts.joinToString(", ")
+    }
+
     fun formatBytes(bytes: Long): String = when {
         bytes >= 1L shl 30 -> String.format(Locale.US, "%.1f GB", bytes / (1L shl 30).toDouble())
         bytes >= 1L shl 20 -> String.format(Locale.US, "%.1f MB", bytes / (1L shl 20).toDouble())

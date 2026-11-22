@@ -19,6 +19,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
@@ -26,6 +28,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items as listItems
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -44,6 +48,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -59,17 +64,25 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.util.UUID
 
-/** Where the app is. Milestone 1 has three places and no need of a navigation library. */
+/** Where the app is. A handful of places, and no need of a navigation library. */
 private sealed interface Screen {
     data object Setup : Screen
     data object Home : Screen
+    data object Pick : Screen
+    data object Queue : Screen
     data class Item(val uri: Uri, val origin: Origin) : Screen
 }
 
@@ -120,7 +133,11 @@ private fun App(store: TokenStore, handedBack: String?, onHandled: () -> Unit) {
         return
     }
     val api = remember(current) { AlbumApi(current.baseUrl, current.token) }
+    val context = LocalContext.current
     val signOut = {
+        // What was waiting was for this member's album; the next sign-in may be someone else's.
+        UploadWorker.cancel(context)
+        UploadQueue.get(context).clear()
         store.clear()
         signIn = null
         member = null
@@ -132,12 +149,22 @@ private fun App(store: TokenStore, handedBack: String?, onHandled: () -> Unit) {
             BackHandler { screen = Screen.Home }
             ItemScreen(api, current.baseUrl, member, at, onBack = { screen = Screen.Home })
         }
+        Screen.Pick -> {
+            BackHandler { screen = Screen.Home }
+            PickScreen(onBack = { screen = Screen.Home }, onQueued = { screen = Screen.Queue })
+        }
+        Screen.Queue -> {
+            BackHandler { screen = Screen.Home }
+            QueueScreen(current.baseUrl, onBack = { screen = Screen.Home }, onPickMore = { screen = Screen.Pick })
+        }
         else -> HomeScreen(
             api = api,
             baseUrl = current.baseUrl,
             member = member,
             onMember = { member = it },
             onPick = { uri, origin -> screen = Screen.Item(uri, origin) },
+            onUpload = { screen = Screen.Pick },
+            onQueue = { screen = Screen.Queue },
             onSignOut = signOut,
         )
     }
@@ -252,9 +279,16 @@ private fun HomeScreen(
     member: Member?,
     onMember: (Member) -> Unit,
     onPick: (Uri, Origin) -> Unit,
+    onUpload: () -> Unit,
+    onQueue: () -> Unit,
     onSignOut: () -> Unit,
 ) {
     val context = LocalContext.current
+    val queue by UploadQueue.get(context).state.collectAsState()
+    // Anything left waiting from last time (the phone was restarted, say) is taken up again.
+    LaunchedEffect(Unit) {
+        if (queue.items.any { it.state == ItemState.WAITING }) UploadWorker.kick(context)
+    }
     // Bumped whenever a permission answer comes back, so everything below is read again.
     var asked by remember { mutableIntStateOf(0) }
     var problem by remember { mutableStateOf<String?>(null) }
@@ -299,6 +333,10 @@ private fun HomeScreen(
                     else "Signed in to ${baseUrl.removePrefix("https://")}.",
                 )
                 problem?.let { Text(it, color = Rust) }
+                Button(modifier = Modifier.fillMaxWidth(), onClick = onUpload) { Text("Upload photos and videos") }
+                summaryOf(queue)?.let { summary ->
+                    OutlinedButton(modifier = Modifier.fillMaxWidth(), onClick = onQueue) { Text(summary) }
+                }
                 Card(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text("What Android allows this app", fontWeight = FontWeight.Bold)
@@ -319,7 +357,8 @@ private fun HomeScreen(
                         }
                     }
                 }
-                Text("Pick something to send. Each way of picking is tested separately, because Android treats them differently.")
+                Text("Testing one file", fontWeight = FontWeight.Bold)
+                Text("Pick one thing to see what Android hands over and what the album makes of it. Each way of picking is tested separately, because Android treats them differently.")
                 OutlinedButton(
                     modifier = Modifier.fillMaxWidth(),
                     onClick = { systemPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)) },
@@ -349,6 +388,199 @@ private fun HomeScreen(
         }
         item(span = { GridItemSpan(maxLineSpan) }) {
             TextButton(onClick = onSignOut, modifier = Modifier.padding(vertical = 12.dp)) { Text("Sign out of this phone") }
+        }
+    }
+}
+
+/** The queue in a line, for the button that opens it; null when there is nothing to say. */
+private fun summaryOf(queue: QueueFile): String? = Helpers.queueSummary(
+    waiting = queue.items.count { it.state == ItemState.WAITING || it.state == ItemState.SENDING },
+    inAlbum = queue.items.count { it.state == ItemState.SENT || it.state == ItemState.ALREADY },
+    failed = queue.items.count { it.state == ItemState.FAILED },
+)
+
+private val dayFormat: DateTimeFormatter = DateTimeFormatter.ofPattern("EEEE d MMMM yyyy")
+
+private fun dayOf(ms: Long): LocalDate = Instant.ofEpochMilli(ms).atZone(ZoneId.systemDefault()).toLocalDate()
+
+/** The library by day, to choose what goes to the album. Sent from this phone already: ticked, and not chosen again. */
+@Composable
+private fun PickScreen(onBack: () -> Unit, onQueued: () -> Unit) {
+    val context = LocalContext.current
+    val queue by UploadQueue.get(context).state.collectAsState()
+    var asked by remember { mutableIntStateOf(0) }
+    val permissions = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { asked++ }
+    val access = remember(asked) { Media.libraryAccess(context) }
+    val location = remember(asked) { Media.mediaLocationGranted(context) }
+    val library by produceState<List<GridItem>?>(initialValue = null, asked) {
+        value = withContext(Dispatchers.IO) { Media.library(context) }
+    }
+    var chosen by remember { mutableStateOf(emptySet<String>()) }
+
+    // Asked the first time the library is wanted, not at install: this is the moment the reason is plain.
+    LaunchedEffect(Unit) {
+        if (access == LibraryAccess.NONE || !location) permissions.launch(Media.wantedPermissions())
+    }
+
+    val all = library
+    val days = remember(all) { (all ?: emptyList()).groupBy { dayOf(it.takenMs) }.toList() }
+    val busy = remember(queue) { queue.items.filter { it.state == ItemState.WAITING || it.state == ItemState.SENDING }.map { it.key }.toSet() }
+
+    Column(Modifier.fillMaxSize()) {
+        Column(Modifier.padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            TextButton(onClick = onBack) { Text("‹ Back") }
+            Heading("Choose what to send")
+            when {
+                access == LibraryAccess.NONE -> {
+                    Text("The app needs to see this phone's photos to show them here.")
+                    Button(onClick = { permissions.launch(Media.wantedPermissions()) }) { Text("Allow access") }
+                }
+                !location -> {
+                    Text("Android is not letting the app read the location inside photos. Sending them without their place would defeat the point, so nothing is sent until that is allowed.", color = Rust)
+                    Button(onClick = { permissions.launch(Media.wantedPermissions()) }) { Text("Allow location in photos") }
+                }
+                access == LibraryAccess.SELECTED -> {
+                    Text("Android is only showing the app the photos you selected, so this list is short.")
+                    OutlinedButton(onClick = { permissions.launch(Media.wantedPermissions()) }) { Text("Choose which photos") }
+                }
+            }
+        }
+        if (all == null) {
+            Box(Modifier.weight(1f).fillMaxWidth().padding(20.dp)) { CircularProgressIndicator() }
+        } else {
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(4),
+                modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(3.dp),
+                verticalArrangement = Arrangement.spacedBy(3.dp),
+            ) {
+                if (all.isEmpty() && access != LibraryAccess.NONE) {
+                    item(span = { GridItemSpan(maxLineSpan) }) { Text("No photos or videos found on this phone.") }
+                }
+                for ((day, ofDay) in days) {
+                    // Only what can still be chosen: not what the album has, and not what is already waiting to go.
+                    val open = ofDay.filter { it.key !in queue.sent && it.key !in busy }.map { it.uri.toString() }
+                    val allChosen = open.isNotEmpty() && open.all { it in chosen }
+                    item(key = "day-$day", span = { GridItemSpan(maxLineSpan) }, contentType = "day") {
+                        Row(Modifier.fillMaxWidth().padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text(day.format(dayFormat), fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                            if (open.isNotEmpty()) {
+                                TextButton(onClick = { chosen = if (allChosen) chosen - open.toSet() else chosen + open }) {
+                                    Text(if (allChosen) "Clear day" else "Select day")
+                                }
+                            }
+                        }
+                    }
+                    items(ofDay, key = { it.uri.toString() }, contentType = { "item" }) { entry ->
+                        val id = entry.uri.toString()
+                        val sent = entry.key in queue.sent
+                        val waiting = entry.key in busy
+                        val picked = id in chosen
+                        Box(
+                            Modifier.aspectRatio(1f).background(Color(0xFFE6E9EE)).clickable(enabled = !sent && !waiting && location) {
+                                chosen = if (picked) chosen - id else chosen + id
+                            },
+                        ) {
+                            Thumbnail(entry.uri, Modifier.fillMaxSize())
+                            if (picked) Box(Modifier.fillMaxSize().background(Color(0x661F3A5F)))
+                            if (sent || waiting) Box(Modifier.fillMaxSize().background(Color(0x99FFFFFF)))
+                            val mark = when {
+                                sent -> "✓ In the album"
+                                waiting -> "Waiting"
+                                picked -> "✓ Chosen"
+                                entry.video -> "Video"
+                                else -> null
+                            }
+                            if (mark != null) {
+                                Text(
+                                    mark,
+                                    color = Color.White,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    modifier = Modifier.align(Alignment.BottomStart).background(if (sent) Good else Color(0xCC000000)).padding(horizontal = 4.dp, vertical = 2.dp),
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Button(
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
+            enabled = chosen.isNotEmpty() && location,
+            onClick = {
+                val picked = (all ?: emptyList()).filter { it.uri.toString() in chosen }
+                UploadQueue.get(context).add(
+                    picked.map {
+                        QueueItem(
+                            id = UUID.randomUUID().toString(),
+                            uri = it.uri.toString(),
+                            video = it.video,
+                            name = it.name,
+                            key = it.key,
+                            bytes = it.bytes,
+                            lastModifiedMs = it.modifiedSeconds?.times(1000),
+                        )
+                    },
+                )
+                UploadWorker.kick(context)
+                chosen = emptySet()
+                onQueued()
+            },
+        ) { Text(if (chosen.isEmpty()) "Choose photos to send" else "Send ${chosen.size} to the album") }
+    }
+}
+
+/** Everything chosen, and how far each has got. Sending carries on with the app closed. */
+@Composable
+private fun QueueScreen(baseUrl: String, onBack: () -> Unit, onPickMore: () -> Unit) {
+    val context = LocalContext.current
+    val queue by UploadQueue.get(context).state.collectAsState()
+    val lines = queue.items
+    val failed = lines.count { it.state == ItemState.FAILED }
+    val finished = lines.count { it.state == ItemState.SENT || it.state == ItemState.ALREADY }
+
+    LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        item {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = onBack) { Text("‹ Back") }
+                Heading("Uploads")
+                Text(summaryOf(queue) ?: "Nothing has been chosen yet.")
+                if (lines.any { it.state == ItemState.WAITING || it.state == ItemState.SENDING }) {
+                    Text("These keep sending with the app closed, whenever the phone has a connection. The album then takes a moment to read each one.")
+                }
+                Button(onClick = onPickMore) { Text("Choose more") }
+                if (failed > 0) {
+                    OutlinedButton(onClick = { UploadQueue.get(context).retryFailed(); UploadWorker.kick(context) }) { Text("Try the $failed again") }
+                }
+                if (finished > 0) {
+                    TextButton(onClick = { UploadQueue.get(context).clearFinished() }) { Text("Clear the $finished that are done") }
+                }
+            }
+        }
+        // What needs attention first, then what is moving, then what is over with.
+        val order = listOf(ItemState.FAILED, ItemState.SENDING, ItemState.WAITING, ItemState.SENT, ItemState.ALREADY)
+        listItems(lines.sortedBy { order.indexOf(it.state) }, key = { it.id }) { item ->
+            Card(Modifier.fillMaxWidth()) {
+                Row(Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(56.dp).background(Color(0xFFE6E9EE))) { Thumbnail(Uri.parse(item.uri), Modifier.fillMaxSize()) }
+                    Column(Modifier.padding(start = 10.dp).weight(1f)) {
+                        Text(item.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        val (label, color) = when (item.state) {
+                            ItemState.WAITING -> "Waiting" to Color.Unspecified
+                            ItemState.SENDING -> "Sending…" to Navy
+                            ItemState.SENT -> "Sent" to Good
+                            ItemState.ALREADY -> "Already in the album" to Good
+                            ItemState.FAILED -> "Not sent" to Rust
+                        }
+                        Text(label, color = color, fontWeight = FontWeight.Bold)
+                        item.message?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+                    }
+                    val photoId = item.photoId
+                    if (photoId != null) {
+                        TextButton(onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("$baseUrl/photos/$photoId"))) }) { Text("Open") }
+                    }
+                }
+            }
         }
     }
 }

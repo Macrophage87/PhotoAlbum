@@ -25,6 +25,13 @@ class AlbumJsonTest {
     }
 
     @Test
+    fun `the album says whether it already holds a file`() {
+        assertNull(AlbumJson.have("""{"have":null}"""))
+        assertEquals(Have("p7", false), AlbumJson.have("""{"have":{"id":"p7","status":"READY","mine":false}}"""))
+        assertEquals(Have("p8", true), AlbumJson.have("""{"have":{"id":"p8","status":"PENDING","mine":true}}"""))
+    }
+
+    @Test
     fun `a status answer carries where the album put it`() {
         val body = """{"photos":[
             {"id":"p0","status":"PENDING","error":null,"lat":null,"lng":null,"gpsSource":null,"takenAt":null},

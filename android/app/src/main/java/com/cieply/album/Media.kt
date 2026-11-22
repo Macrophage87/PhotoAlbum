@@ -22,6 +22,19 @@ enum class Origin(val label: String) {
 
 data class LibraryItem(val uri: Uri, val video: Boolean)
 
+/** One photo or video in the library, with what is needed to show it by day and to queue it. */
+data class GridItem(
+    val uri: Uri,
+    val video: Boolean,
+    val name: String,
+    val bytes: Long?,
+    val modifiedSeconds: Long?,
+    /** When it was taken, as near as the phone knows (it falls back to when it was added). */
+    val takenMs: Long,
+) {
+    val key: String get() = Helpers.fileKey(name, bytes, modifiedSeconds)
+}
+
 /** What the phone says about one picked file, read before anything is sent. */
 data class Inspection(
     val name: String,
@@ -92,6 +105,50 @@ object Media {
             // No access to the library: an empty grid, and the screen says why.
         }
         return items
+    }
+
+    /** The library, newest first, for picking from. */
+    fun library(context: Context, limit: Int = 3000): List<GridItem> {
+        val items = ArrayList<GridItem>()
+        val collection = MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL)
+        val columns = arrayOf(
+            MediaStore.Files.FileColumns._ID,
+            MediaStore.Files.FileColumns.MEDIA_TYPE,
+            MediaStore.MediaColumns.DISPLAY_NAME,
+            MediaStore.MediaColumns.SIZE,
+            MediaStore.MediaColumns.DATE_MODIFIED,
+            MediaStore.MediaColumns.DATE_TAKEN,
+            MediaStore.MediaColumns.DATE_ADDED,
+        )
+        val image = MediaStore.Files.FileColumns.MEDIA_TYPE_IMAGE
+        val video = MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO
+        val where = "${MediaStore.Files.FileColumns.MEDIA_TYPE} IN ($image, $video)"
+        try {
+            context.contentResolver.query(collection, columns, where, null, null)?.use { cursor ->
+                while (cursor.moveToNext()) {
+                    val id = cursor.getLong(0)
+                    val isVideo = cursor.getInt(1) == video
+                    val base = if (isVideo) MediaStore.Video.Media.EXTERNAL_CONTENT_URI else MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+                    val added = if (cursor.isNull(6)) 0L else cursor.getLong(6) * 1000
+                    val taken = if (cursor.isNull(5) || cursor.getLong(5) <= 0) added else cursor.getLong(5)
+                    items.add(
+                        GridItem(
+                            uri = ContentUris.withAppendedId(base, id),
+                            video = isVideo,
+                            name = if (cursor.isNull(2)) "file-$id" else cursor.getString(2),
+                            bytes = if (cursor.isNull(3)) null else cursor.getLong(3).takeIf { it > 0 },
+                            modifiedSeconds = if (cursor.isNull(4)) null else cursor.getLong(4),
+                            takenMs = taken,
+                        ),
+                    )
+                }
+            }
+        } catch (e: SecurityException) {
+            // No access to the library: an empty grid, and the screen says why.
+        }
+        // Sorted here, not by the provider: "taken" is missing for some files and the fallback is worked out above.
+        items.sortByDescending { it.takenMs }
+        return if (items.size > limit) items.subList(0, limit) else items
     }
 
     /**

@@ -1,19 +1,28 @@
 # Family Album for Android
 
-The album's phone app. This is milestone 1 of the plan: a small build that proves the one thing the whole app
-depends on, which is that a photo sent from a phone arrives with its location intact.
+The album's phone app. Its job is to get photos and videos from a phone into the album as the original files,
+with their location intact.
 
 ## What this build does
 
 1. Signs in through the album's own website (see "Signing in").
-2. Lets you pick a photo or video three ways: from the app's own library view, with Android's photo picker, and
-   with Android's file chooser.
-3. Shows what Android handed over: whether it gave the original file, and whether a location is inside it.
-4. Sends the file to the album unchanged and reports where the album placed it and how it knew.
+2. **Upload photos and videos** shows the phone's library by day. Tap to choose, or select a whole day, then send.
+   What the album already has from this phone is ticked.
+3. What was chosen goes into a queue kept on the phone (`UploadQueue`) and is sent in the background by
+   `UploadWorker`, with the app open or closed, whenever there is a connection. Before sending a file the app
+   asks the album whether it already holds it (by SHA-256), so nothing crosses the network twice.
+4. The queue screen shows each file as waiting, sending, sent, already in the album, or not sent with the reason
+   (too big, too long, a kind the album does not take). Limits come from the album, not from the app.
 
-Android treats each way of picking differently. The photo picker blanks the location out; the library view keeps
-it only with the "location in photos" permission. The result card says "Passed" when the album read the place from
-the file itself.
+Files are read with `MediaStore.setRequireOriginal`, which needs the "location in photos" permission; without it
+the app refuses to send rather than send photos with their place blanked out.
+
+### Testing one file
+
+The first milestone's test screen is still on the home screen. It picks one file three ways (the app's library
+view, Android's photo picker, Android's file chooser), shows what Android handed over, sends it, and reports where
+the album placed it. Measured on a Galaxy S26 Ultra: the library view and the file chooser hand over the original
+with its location; the photo picker does not, which is why the app does not use it.
 
 ## Signing in
 
