@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useLocalTime } from "@/components/time/useLocalTime";
+import { useLocalToday } from "@/components/time/useLocalToday";
 import { Button, Input, Label } from "@/components/ui";
 import { ContainerPicker, type Container } from "@/components/containers/ContainerPicker";
 import { cancelBackfill, previewBackfill, setAnnotationOptIn, startBackfill, type BackfillPreview } from "@/app/annotation/actions";
@@ -57,7 +58,10 @@ export function AnnotationAdmin({ gates, model, batches, spend, rawRetentionDays
   const [trip, setTrip] = useState<Container | null>(null);
   const [collection, setCollection] = useState<Container | null>(null);
   const [from, setFrom] = useState("2000-01-01");
-  const [to, setTo] = useState(new Date().toISOString().slice(0, 10));
+  // "To" starts at today on the admin's own clock (blank until hydrated), until they pick a date of their own.
+  const today = useLocalToday();
+  const [typedTo, setTo] = useState<string | null>(null);
+  const to = typedTo ?? today;
   const [preview, setPreview] = useState<BackfillPreview | null>(null);
   const [typed, setTyped] = useState("");
   const [message, setMessage] = useState<string | null>(null);
