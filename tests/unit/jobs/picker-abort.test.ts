@@ -29,7 +29,7 @@ describe("a timed-out Picker download", () => {
     for (const n of [1, 2]) {
       const row = await db.photo.create({ data: { uploaderId: userId, kind: "PHOTO", sourceKind: "GOOGLE_PICKER", sourceId: `gp-${n}`, status: "PENDING", originalName: `p${n}.jpg`, mimeType: "image/jpeg", storageKey: "pending", originalPath: "pending", sizeBytes: 0 }, select: { id: true } });
       ids.push(row.id);
-      items[row.id] = { id: `gp-${n}`, type: "PHOTO", baseUrl: `https://lh3.test/${n}`, mimeType: "", filename: "", createTime: null, width: null, height: null };
+      items[row.id] = { id: `gp-${n}`, type: "PHOTO", baseUrl: `https://lh3.googleusercontent.com/${n}`, mimeType: "", filename: "", createTime: null, width: null, height: null };
     }
     const ac = new AbortController();
     google.download.mockImplementation(async () => {
@@ -46,7 +46,7 @@ describe("a timed-out Picker download", () => {
   it("leaves an item whose download it cut off waiting for the retry, not failed", async () => {
     const userId = (await db.user.create({ data: { email: "pa@example.com", role: "MEMBER" } })).id;
     const row = await db.photo.create({ data: { uploaderId: userId, kind: "PHOTO", sourceKind: "GOOGLE_PICKER", sourceId: "gp-1", status: "PENDING", originalName: "p1.jpg", mimeType: "image/jpeg", storageKey: "pending", originalPath: "pending", sizeBytes: 0 }, select: { id: true } });
-    const items = { [row.id]: { id: "gp-1", type: "PHOTO", baseUrl: "https://lh3.test/1", mimeType: "", filename: "", createTime: null, width: null, height: null } };
+    const items = { [row.id]: { id: "gp-1", type: "PHOTO", baseUrl: "https://lh3.googleusercontent.com/1", mimeType: "", filename: "", createTime: null, width: null, height: null } };
     const cutOff = async (final: boolean) => {
       const ac = new AbortController();
       google.download.mockImplementation(async () => {
@@ -69,7 +69,7 @@ describe("a timed-out Picker download", () => {
     for (const n of [1, 2]) {
       const row = await db.photo.create({ data: { uploaderId: userId, kind: "PHOTO", sourceKind: "GOOGLE_PICKER", sourceId: `gp-${n}`, status: "PENDING", originalName: `p${n}.jpg`, mimeType: "image/jpeg", storageKey: "pending", originalPath: "pending", sizeBytes: 0 }, select: { id: true } });
       ids.push(row.id);
-      items[row.id] = { id: `gp-${n}`, type: "PHOTO", baseUrl: `https://lh3.test/${n}`, mimeType: "", filename: "", createTime: null, width: null, height: null };
+      items[row.id] = { id: `gp-${n}`, type: "PHOTO", baseUrl: `https://lh3.googleusercontent.com/${n}`, mimeType: "", filename: "", createTime: null, width: null, height: null };
     }
     const ac = new AbortController();
     google.download.mockImplementation(async () => {

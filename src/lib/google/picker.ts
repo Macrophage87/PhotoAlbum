@@ -68,10 +68,36 @@ export function downloadUrl(item: PickedItem): string {
   return `${item.baseUrl}${item.type === "VIDEO" ? "=dv" : "=d"}`;
 }
 
+/** A picked item's address pointed somewhere the member's Google token must not go. */
+export class UntrustedDownloadUrl extends Error {}
+
+/**
+ * Where the member's access token may be sent with a download: Google's media host over https
+ * (`*.googleusercontent.com`, where every Picker `baseUrl` lives), or the Picker API's own origin, which gets the
+ * token anyway (and is the stand-in's address in tests). Anything else — another host, plain http, a different port,
+ * credentials in the address — is refused before the token is attached.
+ */
+export function isTrustedDownloadUrl(raw: unknown): boolean {
+  if (typeof raw !== "string") return false;
+  let u: URL;
+  try {
+    u = new URL(raw);
+  } catch {
+    return false;
+  }
+  if (u.username || u.password) return false;
+  if (u.protocol === "https:" && u.port === "" && u.hostname.endsWith(".googleusercontent.com")) return true;
+  return u.origin === new URL(env().GOOGLE_PHOTOS_API_URL).origin;
+}
+
 /** `signal` is the job's own, so a job that pg-boss gives up on stops downloading as well. */
 export async function openDownload(accessToken: string, item: PickedItem, signal?: AbortSignal): Promise<Response> {
+  // The item comes from a queued job's payload; whatever wrote it, the token goes only to Google.
+  const url = item && typeof item.baseUrl === "string" ? downloadUrl(item) : null;
+  if (!url || !isTrustedDownloadUrl(url)) throw new UntrustedDownloadUrl("Picked item has an address outside Google Photos");
   const timeout = AbortSignal.timeout(10 * 60_000);
-  const res = await fetch(downloadUrl(item), { headers: { authorization: `Bearer ${accessToken}` }, signal: signal ? AbortSignal.any([timeout, signal]) : timeout });
+  // A redirect elsewhere is followed without the token: fetch drops authorization on a cross-origin hop.
+  const res = await fetch(url, { headers: { authorization: `Bearer ${accessToken}` }, signal: signal ? AbortSignal.any([timeout, signal]) : timeout });
   if (res.status === 401 || res.status === 403) throw new GoogleAuthError(`Google Photos refused the download (${res.status})`, res.status === 401);
   if (!res.ok || !res.body) throw new Error(`Download failed (${res.status})`);
   return res;
