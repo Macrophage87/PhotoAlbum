@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseProbe, posterArgs, transcodeArgs, videoFilter } from "@/lib/video/ffmpeg";
+import { parseIso6709, parseProbe, posterArgs, transcodeArgs, videoFilter } from "@/lib/video/ffmpeg";
 import { parseRange } from "@/app/api/photos/[id]/[size]/route";
 
 describe("parseProbe", () => {
@@ -12,7 +12,16 @@ describe("parseProbe", () => {
     expect(p.createdAt?.toISOString()).toBe("2025-08-12T14:03:00.000Z");
   });
   it("copes with missing fields", () => {
-    expect(parseProbe({})).toEqual({ durationS: null, width: null, height: null, rotation: 0, hdr: false, createdAt: null, videoCodec: null });
+    expect(parseProbe({})).toEqual({ durationS: null, width: null, height: null, rotation: 0, hdr: false, createdAt: null, videoCodec: null, place: null });
+  });
+  it("reads where a phone says the clip was filmed", () => {
+    expect(parseProbe({ format: { tags: { location: "+38.9110-077.0341/" } } }).place).toEqual({ lat: 38.911, lng: -77.0341, altitude: null });
+    expect(parseProbe({ format: { tags: { "com.apple.quicktime.location.ISO6709": "-33.8568+151.2153+012.500/" } } }).place).toEqual({ lat: -33.8568, lng: 151.2153, altitude: 12.5 });
+    expect(parseProbe({ streams: [{ codec_type: "video", tags: { "location-eng": "+51.5007-000.1246/" } }] }).place).toEqual({ lat: 51.5007, lng: -0.1246, altitude: null });
+  });
+  it("takes no place from one it cannot be sure of", () => {
+    for (const bad of ["", "somewhere", "+0.0000+000.0000/", "+3854.66-07702.05/", "+95.0+010.0/", "+10.0+190.0/", "38.9-77.0"]) expect(parseIso6709(bad)).toBeNull();
+    expect(parseIso6709(null)).toBeNull();
   });
 });
 

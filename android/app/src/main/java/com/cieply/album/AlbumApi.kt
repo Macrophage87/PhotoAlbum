@@ -31,6 +31,12 @@ data class PhotoStatus(
 /** A file the album already holds, found by its hash. */
 data class Have(val photoId: String, val mine: Boolean)
 
+/** A trip the member can send to, as `/api/v1/trips` lists it. Dates are calendar days ("2025-08-10"). */
+data class Trip(val id: String, val title: String, val startDate: String, val endDate: String)
+
+/** A YouTube link the album has taken. */
+data class AddedVideo(val photoId: String, val title: String)
+
 /** The album's answers, read. Kept apart from the network so they are tested on the build machine. */
 object AlbumJson {
     fun member(body: String): Member {
@@ -81,6 +87,23 @@ object AlbumJson {
         return Have(have.getString("id"), have.optBoolean("mine", false))
     }
 
+    fun trips(body: String): List<Trip> {
+        val array = JSONObject(body).getJSONArray("trips")
+        return (0 until array.length()).map {
+            val t = array.getJSONObject(it)
+            Trip(t.getString("id"), t.getString("title"), t.optString("startDate"), t.optString("endDate"))
+        }
+    }
+
+    fun addedVideo(body: String): AddedVideo {
+        val root = JSONObject(body)
+        return AddedVideo(root.getString("photoId"), root.optString("title"))
+    }
+
+    /** What is sent to add a YouTube link: the link, the day the video is from, and the trip if one was chosen. */
+    fun videoRequest(url: String, day: String, tripId: String?): String =
+        JSONObject().put("url", url.trim()).put("date", day).put("tripId", tripId ?: JSONObject.NULL).toString()
+
     /** The album's own words for what went wrong, when it sent any. */
     fun error(body: String?): String? = try {
         JSONObject(body ?: "").optString("error").takeIf { it.isNotBlank() }
@@ -119,7 +142,7 @@ class AlbumApi(private val baseUrl: String, private val token: String) {
     }
 
     /** Sends the file exactly as it is: the body is the file's own bytes, and what describes it rides in headers. */
-    fun upload(open: () -> InputStream, fileName: String, mime: String, bytes: Long?, lastModifiedMs: Long?, attempt: Int = 1): UploadResult {
+    fun upload(open: () -> InputStream, fileName: String, mime: String, bytes: Long?, lastModifiedMs: Long?, attempt: Int = 1, tripId: String? = null): UploadResult {
         val body = object : RequestBody() {
             override fun contentType() = mime.toMediaTypeOrNull()
             override fun contentLength() = bytes ?: -1L
@@ -132,11 +155,29 @@ class AlbumApi(private val baseUrl: String, private val token: String) {
             .header("x-file-name", Helpers.encodeFileName(fileName))
             .header("x-upload-attempt", attempt.coerceAtLeast(1).toString())
         if (lastModifiedMs != null) builder.header("x-last-modified", lastModifiedMs.toString())
+        // Left out, the album files it by the date it was taken.
+        if (tripId != null) builder.header("x-trip-id", tripId)
         return AlbumJson.upload(send(builder.build()))
     }
 
     /** Asks whether the album already holds the file with this SHA-256, so it need not be sent to find out. */
     fun have(sha256: String): Have? = AlbumJson.have(send(request("/api/photos/status?sha256=$sha256").get().build()))
+
+    /** The trips to choose from, newest first. */
+    fun trips(): List<Trip> = try {
+        AlbumJson.trips(send(request("/api/v1/trips").get().build()))
+    } catch (e: org.json.JSONException) {
+        throw AlbumException("The album's list of trips could not be read.")
+    }
+
+    /** Adds a YouTube link to the album: what stands in for a video too big or too long to keep there. */
+    fun addVideo(url: String, day: String, tripId: String?): AddedVideo = try {
+        AlbumJson.addedVideo(
+            send(request("/api/v1/videos").post(AlbumJson.videoRequest(url, day, tripId).toRequestBody("application/json".toMediaTypeOrNull())).build()),
+        )
+    } catch (e: org.json.JSONException) {
+        throw AlbumException("The album answered, but not in a way the app could read.")
+    }
 
     fun status(id: String): PhotoStatus? = AlbumJson.status(send(request("/api/photos/status?ids=$id").get().build()), id)
 

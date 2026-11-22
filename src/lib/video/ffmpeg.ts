@@ -14,7 +14,38 @@ export type Probe = {
   /** `creation_time` from the container, when present. */
   createdAt: Date | null;
   videoCodec: string | null;
+  /** Where the clip was filmed, when the phone wrote it into the container. */
+  place: { lat: number; lng: number; altitude: number | null } | null;
 };
+
+/**
+ * A place as phones write it into a video (ISO 6709, in degrees): `+38.9110-077.0341/`, or with a height after it,
+ * `+38.9110-077.0341+010.000/`. Anything else reads as no place: the degrees-and-minutes forms are not what any phone
+ * writes, and a wrong place is worse than none. Nor is 0, 0, which is what a phone with no fix has been known to write.
+ */
+export function parseIso6709(value: string | null | undefined): Probe["place"] {
+  const m = /^([+-])(\d{1,2}(?:\.\d+)?)([+-])(\d{1,3}(?:\.\d+)?)(?:([+-]\d+(?:\.\d+)?))?(?:CRS[\w-]+)?\/?$/.exec((value ?? "").trim());
+  if (!m) return null;
+  const lat = Number(m[2]) * (m[1] === "-" ? -1 : 1);
+  const lng = Number(m[4]) * (m[3] === "-" ? -1 : 1);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) return null;
+  if (lat === 0 && lng === 0) return null;
+  const altitude = m[5] === undefined ? null : Number(m[5]);
+  return { lat, lng, altitude: altitude !== null && Number.isFinite(altitude) ? altitude : null };
+}
+
+/** The tags a phone may put the place under: Android's `location`, Apple's QuickTime key, and their per-language forms. */
+function placeOf(tags: Record<string, string> | undefined): Probe["place"] {
+  if (!tags) return null;
+  for (const [key, value] of Object.entries(tags)) {
+    const k = key.toLowerCase();
+    if (k === "location" || k.startsWith("location-") || k === "com.apple.quicktime.location.iso6709") {
+      const place = parseIso6709(value);
+      if (place) return place;
+    }
+  }
+  return null;
+}
 
 type FfprobeJson = {
   format?: { duration?: string; tags?: Record<string, string> };
@@ -39,6 +70,7 @@ export function parseProbe(json: FfprobeJson): Probe {
     hdr: primaries === "bt2020" || ["smpte2084", "arib-std-b67"].includes(transfer),
     createdAt: createdAt && !Number.isNaN(createdAt.getTime()) ? createdAt : null,
     videoCodec: video?.codec_name ?? null,
+    place: placeOf(json.format?.tags) ?? placeOf(video?.tags),
   };
 }
 

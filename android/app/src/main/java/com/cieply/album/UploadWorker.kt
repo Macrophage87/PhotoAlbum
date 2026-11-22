@@ -31,9 +31,27 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
         val signIn = TokenStore(applicationContext).read() ?: return@withContext Result.failure()
         val api = AlbumApi(signIn.baseUrl, signIn.token)
         var limits: Limits? = null
+        var worked = false
+
+        /** Stopped with files still to go: they wait, and the notification says they will go on their own. */
+        fun later(): Result {
+            queue.releaseSending()
+            Notifier.waiting(applicationContext, count(queue, ItemState.WAITING), Settings.wifiOnly(applicationContext))
+            return Result.retry()
+        }
 
         while (!isStopped) {
-            val item = queue.claimNext() ?: return@withContext Result.success()
+            val item = queue.claimNext()
+            if (item == null) {
+                val inAlbum = count(queue, ItemState.SENT) + count(queue, ItemState.ALREADY)
+                val failed = count(queue, ItemState.FAILED)
+                val tooBig = count(queue, ItemState.TOO_BIG)
+                // Only when this run had something to say: a run that found nothing waiting leaves the shade alone.
+                if (worked) Notifier.finished(applicationContext, inAlbum, failed, tooBig) else Notifier.clear(applicationContext)
+                return@withContext Result.success()
+            }
+            worked = true
+            Notifier.sending(applicationContext, count(queue, ItemState.WAITING) + 1)
             try {
                 if (limits == null) limits = api.me().limits
                 val outcome = send(api, item, limits!!)
@@ -43,21 +61,20 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
                     // The sign-in is no longer good. Everything waits for the member to sign in again.
                     e.status == 401 -> {
                         queue.releaseSending()
+                        Notifier.clear(applicationContext)
                         return@withContext Result.failure()
                     }
                     // The album looked at this file and said no; its reason is the member's to read.
                     e.status in 400..499 -> queue.finish(item.id, ItemState.FAILED, e.message)
-                    else -> {
-                        queue.releaseSending()
-                        return@withContext Result.retry()
-                    }
+                    else -> return@withContext later()
                 }
+            } catch (e: TooBig) {
+                queue.finish(item.id, ItemState.TOO_BIG, e.message)
             } catch (e: Refused) {
                 queue.finish(item.id, ItemState.FAILED, e.message)
             } catch (e: IOException) {
                 // No signal, or it dropped part way. Nothing is wrong with the file: it waits.
-                queue.releaseSending()
-                return@withContext Result.retry()
+                return@withContext later()
             } catch (e: SecurityException) {
                 queue.finish(item.id, ItemState.FAILED, "Android no longer lets the app read this file. Allow access to photos and send it again.")
             } catch (e: Exception) {
@@ -65,9 +82,13 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
             }
         }
         // Stopped by Android (time is up, or the connection went). What is left waits for the next run.
-        queue.releaseSending()
-        Result.retry()
+        later()
     }
+
+    private fun count(queue: UploadQueue, state: ItemState): Int = queue.state.value.items.count { it.state == state }
+
+    /** A video the album takes the kind of, only too big or too long: the member is shown the way round by YouTube. */
+    private class TooBig(message: String) : Exception(message)
 
     /** Something about the file itself means it is not sent; the message is for the member. */
     private class Refused(message: String) : Exception(message)
@@ -105,7 +126,9 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
                 // A length the phone cannot read is left for the album to judge.
             }
         }
-        Helpers.refusal(mime, item.bytes, durationMs, limits)?.let { throw Refused(it) }
+        Helpers.refusal(mime, item.bytes, durationMs, limits)?.let {
+            if (Helpers.needsYouTube(mime, item.bytes, durationMs, limits)) throw TooBig(it) else throw Refused(it)
+        }
 
         // Ask before sending: a photo the album has need not cross the mobile network again to be recognised.
         val digest = MessageDigest.getInstance("SHA-256")
@@ -120,7 +143,12 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
         }
         val have = api.have(Helpers.hex(digest.digest()))
         if (have != null) {
-            return Outcome(ItemState.ALREADY, if (have.mine) null else "Added by someone else in the family.", have.photoId)
+            // Nothing is sent, so nothing is moved either: where it sits in the album is left as it is.
+            val note = listOfNotNull(
+                if (have.mine) null else "Added by someone else in the family.",
+                if (item.tripId != null) "It was left where it already is in the album." else null,
+            ).joinToString(" ").ifEmpty { null }
+            return Outcome(ItemState.ALREADY, note, have.photoId)
         }
 
         val result = api.upload(
@@ -130,6 +158,7 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
             bytes = item.bytes,
             lastModifiedMs = item.lastModifiedMs,
             attempt = item.attempts,
+            tripId = item.tripId,
         )
         return Outcome(if (result.duplicate) ItemState.ALREADY else ItemState.SENT, null, result.photoId)
     }
@@ -141,16 +170,26 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
          * Says there is something to send. Appended rather than kept: a run that is just finishing may already have
          * looked for more and found none, and what was added after that look must not be left behind.
          */
-        fun kick(context: Context) {
+        fun kick(context: Context) = enqueue(context, ExistingWorkPolicy.APPEND_OR_REPLACE)
+
+        /**
+         * Starts over under the rule as it is now, after the member changes "Wi-Fi only": work already waiting keeps
+         * the rule it was given. A file cut off part way is sent again from its start, which the album recognises.
+         */
+        fun restart(context: Context) = enqueue(context, ExistingWorkPolicy.REPLACE)
+
+        private fun enqueue(context: Context, policy: ExistingWorkPolicy) {
+            val network = if (Settings.wifiOnly(context)) NetworkType.UNMETERED else NetworkType.CONNECTED
             val request = OneTimeWorkRequestBuilder<UploadWorker>()
-                .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+                .setConstraints(Constraints.Builder().setRequiredNetworkType(network).build())
                 .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
                 .build()
-            WorkManager.getInstance(context).enqueueUniqueWork(NAME, ExistingWorkPolicy.APPEND_OR_REPLACE, request)
+            WorkManager.getInstance(context).enqueueUniqueWork(NAME, policy, request)
         }
 
         fun cancel(context: Context) {
             WorkManager.getInstance(context).cancelUniqueWork(NAME)
+            Notifier.clear(context)
         }
     }
 }

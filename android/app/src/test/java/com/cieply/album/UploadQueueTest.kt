@@ -91,4 +91,37 @@ class UploadQueueTest {
         assertEquals(1, queue.add(listOf(item(1).copy(id = "second"))))
         assertEquals(listOf("second"), queue.state.value.items.map { it.id })
     }
+
+    @Test
+    fun `the trip chosen and the day taken are kept with each file`() {
+        val chosen = item(1).copy(tripId = "t1", tripTitle = "Acadia", takenMs = 1754990000000)
+        val file = QueueFile(listOf(chosen, item(2)), emptySet())
+        val read = QueueJson.read(QueueJson.write(file))
+        assertEquals(file, read)
+        assertNull(read.items[1].tripId)
+    }
+
+    @Test
+    fun `a video too big waits for its YouTube link, and counts as in the album once linked`() {
+        val queue = UploadQueue.on(File(folder.root, "queue.json"))
+        queue.add(listOf(item(1), item(2)))
+        val big = queue.claimNext()!!
+        queue.finish(big.id, ItemState.TOO_BIG, "This video is 240 seconds long.")
+        // Not sent, so not ticked in the library yet, and not swept away with what is done.
+        assertTrue(item(1).key !in queue.state.value.sent)
+        queue.clearFinished()
+        assertEquals(ItemState.TOO_BIG, queue.state.value.items.first { it.id == big.id }.state)
+
+        queue.finish(big.id, ItemState.LINKED, "Falls", "p7")
+        val linked = queue.state.value
+        assertTrue(item(1).key in linked.sent)
+        assertEquals("p7", linked.items.first { it.id == big.id }.photoId)
+
+        // One the member leaves out simply goes.
+        val other = queue.claimNext()!!
+        queue.finish(other.id, ItemState.TOO_BIG, "Too long")
+        queue.remove(other.id)
+        assertEquals(listOf(big.id), queue.state.value.items.map { it.id })
+        assertTrue(item(2).key !in queue.state.value.sent)
+    }
 }

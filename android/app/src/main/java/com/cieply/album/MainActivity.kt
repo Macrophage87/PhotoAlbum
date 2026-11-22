@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -37,6 +38,7 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
@@ -44,6 +46,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -83,6 +86,9 @@ private sealed interface Screen {
     data object Home : Screen
     data object Pick : Screen
     data object Queue : Screen
+
+    /** The way round for one video too big for the album: put it on YouTube, paste its link. */
+    data class YouTube(val itemId: String) : Screen
     data class Item(val uri: Uri, val origin: Origin) : Screen
 }
 
@@ -134,6 +140,13 @@ private fun App(store: TokenStore, handedBack: String?, onHandled: () -> Unit) {
     }
     val api = remember(current) { AlbumApi(current.baseUrl, current.token) }
     val context = LocalContext.current
+    // Asked for the first time something is sent, by whichever screen sends it. The answer changes nothing but
+    // whether the progress is shown, so nothing waits on it.
+    val notifications = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    val askToNotify = {
+        val permission = Notifier.permission
+        if (permission != null && !Notifier.allowed(context)) notifications.launch(permission)
+    }
     val signOut = {
         // What was waiting was for this member's album; the next sign-in may be someone else's.
         UploadWorker.cancel(context)
@@ -151,11 +164,15 @@ private fun App(store: TokenStore, handedBack: String?, onHandled: () -> Unit) {
         }
         Screen.Pick -> {
             BackHandler { screen = Screen.Home }
-            PickScreen(onBack = { screen = Screen.Home }, onQueued = { screen = Screen.Queue })
+            PickScreen(api, onBack = { screen = Screen.Home }, onQueued = { screen = Screen.Queue; askToNotify() })
         }
         Screen.Queue -> {
             BackHandler { screen = Screen.Home }
-            QueueScreen(current.baseUrl, onBack = { screen = Screen.Home }, onPickMore = { screen = Screen.Pick })
+            QueueScreen(current.baseUrl, onBack = { screen = Screen.Home }, onPickMore = { screen = Screen.Pick }, onYouTube = { screen = Screen.YouTube(it) })
+        }
+        is Screen.YouTube -> {
+            BackHandler { screen = Screen.Queue }
+            YouTubeScreen(api, at.itemId, onBack = { screen = Screen.Queue })
         }
         else -> HomeScreen(
             api = api,
@@ -337,6 +354,7 @@ private fun HomeScreen(
                 summaryOf(queue)?.let { summary ->
                     OutlinedButton(modifier = Modifier.fillMaxWidth(), onClick = onQueue) { Text(summary) }
                 }
+                WifiOnlySwitch()
                 Card(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text("What Android allows this app", fontWeight = FontWeight.Bold)
@@ -397,7 +415,66 @@ private fun summaryOf(queue: QueueFile): String? = Helpers.queueSummary(
     waiting = queue.items.count { it.state == ItemState.WAITING || it.state == ItemState.SENDING },
     inAlbum = queue.items.count { it.state == ItemState.SENT || it.state == ItemState.ALREADY },
     failed = queue.items.count { it.state == ItemState.FAILED },
+    tooBig = queue.items.count { it.state == ItemState.TOO_BIG },
 )
+
+/** "Wi-Fi only", where it can be seen and changed. What is waiting is started again under the new rule. */
+@Composable
+private fun WifiOnlySwitch() {
+    val context = LocalContext.current
+    var on by remember { mutableStateOf(Settings.wifiOnly(context)) }
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text("Send on Wi-Fi only", fontWeight = FontWeight.Bold)
+            Text(
+                if (on) "Photos and videos wait until this phone is on Wi-Fi." else "Photos and videos are sent on mobile data too.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+        Switch(
+            checked = on,
+            onCheckedChange = {
+                on = it
+                Settings.setWifiOnly(context, it)
+                val waiting = UploadQueue.get(context).state.value.items.any { item -> item.state == ItemState.WAITING || item.state == ItemState.SENDING }
+                if (waiting) UploadWorker.restart(context)
+            },
+        )
+    }
+}
+
+/** The trips to choose from. The first line is the album's own way: each file goes to the trip its date falls on. */
+@Composable
+private fun TripDialog(trips: List<Trip>?, problem: String?, chosen: Trip?, onChoose: (Trip?) -> Unit, onClose: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onClose,
+        confirmButton = { TextButton(onClick = onClose) { Text("Close") } },
+        title = { Text("Which trip?") },
+        text = {
+            LazyColumn(Modifier.heightIn(max = 420.dp)) {
+                item {
+                    TripLine("Let the album decide", "Each one goes to the trip its date falls on.", chosen == null) { onChoose(null) }
+                }
+                when {
+                    problem != null -> item { Text(problem, color = Rust, modifier = Modifier.padding(vertical = 8.dp)) }
+                    trips == null -> item { Text("Fetching the album's trips…", modifier = Modifier.padding(vertical = 8.dp)) }
+                    trips.isEmpty() -> item { Text("The album has no trips yet.", modifier = Modifier.padding(vertical = 8.dp)) }
+                    else -> listItems(trips, key = { it.id }) { trip ->
+                        TripLine(trip.title, Helpers.tripDays(trip.startDate, trip.endDate), chosen?.id == trip.id) { onChoose(trip) }
+                    }
+                }
+            }
+        },
+    )
+}
+
+@Composable
+private fun TripLine(title: String, detail: String, chosen: Boolean, onClick: () -> Unit) {
+    Column(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 10.dp)) {
+        Text(if (chosen) "✓ $title" else title, fontWeight = FontWeight.Bold, color = if (chosen) Navy else Color.Unspecified)
+        if (detail.isNotEmpty()) Text(detail, style = MaterialTheme.typography.bodySmall)
+    }
+}
 
 private val dayFormat: DateTimeFormatter = DateTimeFormatter.ofPattern("EEEE d MMMM yyyy")
 
@@ -405,8 +482,25 @@ private fun dayOf(ms: Long): LocalDate = Instant.ofEpochMilli(ms).atZone(ZoneId.
 
 /** The library by day, to choose what goes to the album. Sent from this phone already: ticked, and not chosen again. */
 @Composable
-private fun PickScreen(onBack: () -> Unit, onQueued: () -> Unit) {
+private fun PickScreen(api: AlbumApi, onBack: () -> Unit, onQueued: () -> Unit) {
     val context = LocalContext.current
+    var trip by remember { mutableStateOf<Trip?>(null) }
+    var choosingTrip by remember { mutableStateOf(false) }
+    var tripProblem by remember { mutableStateOf<String?>(null) }
+    val trips by produceState<List<Trip>?>(initialValue = null, api) {
+        value = try {
+            withContext(Dispatchers.IO) { api.trips() }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // Without the list the album still files each one by its date, so sending is not held up.
+            tripProblem = "The album's trips could not be fetched just now. What you send will be filed by its date."
+            emptyList()
+        }
+    }
+    if (choosingTrip) {
+        TripDialog(trips, tripProblem, trip, onChoose = { trip = it; choosingTrip = false }, onClose = { choosingTrip = false })
+    }
     val queue by UploadQueue.get(context).state.collectAsState()
     var asked by remember { mutableIntStateOf(0) }
     val permissions = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { asked++ }
@@ -504,6 +598,9 @@ private fun PickScreen(onBack: () -> Unit, onQueued: () -> Unit) {
                 }
             }
         }
+        OutlinedButton(modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 8.dp), onClick = { choosingTrip = true }) {
+            Text(trip?.let { "Trip: ${it.title}" } ?: "Trip: the album decides by date", maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
         Button(
             modifier = Modifier.fillMaxWidth().padding(12.dp),
             enabled = chosen.isNotEmpty() && location,
@@ -519,6 +616,9 @@ private fun PickScreen(onBack: () -> Unit, onQueued: () -> Unit) {
                             key = it.key,
                             bytes = it.bytes,
                             lastModifiedMs = it.modifiedSeconds?.times(1000),
+                            tripId = trip?.id,
+                            tripTitle = trip?.title,
+                            takenMs = it.takenMs,
                         )
                     },
                 )
@@ -532,12 +632,12 @@ private fun PickScreen(onBack: () -> Unit, onQueued: () -> Unit) {
 
 /** Everything chosen, and how far each has got. Sending carries on with the app closed. */
 @Composable
-private fun QueueScreen(baseUrl: String, onBack: () -> Unit, onPickMore: () -> Unit) {
+private fun QueueScreen(baseUrl: String, onBack: () -> Unit, onPickMore: () -> Unit, onYouTube: (String) -> Unit) {
     val context = LocalContext.current
     val queue by UploadQueue.get(context).state.collectAsState()
     val lines = queue.items
     val failed = lines.count { it.state == ItemState.FAILED }
-    val finished = lines.count { it.state == ItemState.SENT || it.state == ItemState.ALREADY }
+    val finished = lines.count { it.state == ItemState.SENT || it.state == ItemState.ALREADY || it.state == ItemState.LINKED }
 
     LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item {
@@ -548,6 +648,7 @@ private fun QueueScreen(baseUrl: String, onBack: () -> Unit, onPickMore: () -> U
                 if (lines.any { it.state == ItemState.WAITING || it.state == ItemState.SENDING }) {
                     Text("These keep sending with the app closed, whenever the phone has a connection. The album then takes a moment to read each one.")
                 }
+                WifiOnlySwitch()
                 Button(onClick = onPickMore) { Text("Choose more") }
                 if (failed > 0) {
                     OutlinedButton(onClick = { UploadQueue.get(context).retryFailed(); UploadWorker.kick(context) }) { Text("Try the $failed again") }
@@ -558,7 +659,7 @@ private fun QueueScreen(baseUrl: String, onBack: () -> Unit, onPickMore: () -> U
             }
         }
         // What needs attention first, then what is moving, then what is over with.
-        val order = listOf(ItemState.FAILED, ItemState.SENDING, ItemState.WAITING, ItemState.SENT, ItemState.ALREADY)
+        val order = listOf(ItemState.TOO_BIG, ItemState.FAILED, ItemState.SENDING, ItemState.WAITING, ItemState.SENT, ItemState.ALREADY, ItemState.LINKED)
         listItems(lines.sortedBy { order.indexOf(it.state) }, key = { it.id }) { item ->
             Card(Modifier.fillMaxWidth()) {
                 Row(Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -571,16 +672,117 @@ private fun QueueScreen(baseUrl: String, onBack: () -> Unit, onPickMore: () -> U
                             ItemState.SENT -> "Sent" to Good
                             ItemState.ALREADY -> "Already in the album" to Good
                             ItemState.FAILED -> "Not sent" to Rust
+                            ItemState.TOO_BIG -> "Too big for the album" to Rust
+                            ItemState.LINKED -> "Linked from YouTube" to Good
                         }
                         Text(label, color = color, fontWeight = FontWeight.Bold)
+                        item.tripTitle?.let { Text("Trip: $it", style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis) }
                         item.message?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
                     }
                     val photoId = item.photoId
-                    if (photoId != null) {
+                    if (item.state == ItemState.TOO_BIG) {
+                        TextButton(onClick = { onYouTube(item.id) }) { Text("Use YouTube") }
+                    } else if (photoId != null) {
                         TextButton(onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("$baseUrl/photos/$photoId"))) }) { Text("Open") }
                     }
                 }
             }
+        }
+    }
+}
+
+/**
+ * For a video the album will not keep: the steps to put it on YouTube, and a box for the link that comes back. The
+ * link is added to the album on the video's own day, and on the trip that was chosen for it.
+ */
+@Composable
+private fun YouTubeScreen(api: AlbumApi, itemId: String, onBack: () -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val queue by UploadQueue.get(context).state.collectAsState()
+    val item = queue.items.firstOrNull { it.id == itemId }
+    var link by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    var problem by remember { mutableStateOf<String?>(null) }
+
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        TextButton(onClick = onBack) { Text("‹ Back") }
+        if (item == null || item.state != ItemState.TOO_BIG) {
+            // Dealt with (or cleared) while this screen was open.
+            Text("There is nothing more to do for this video.")
+            return@Column
+        }
+        Heading("Too big for the album")
+        Text(item.name, fontWeight = FontWeight.Bold)
+        item.message?.let { Text(it) }
+        Text("The album keeps short clips itself. A longer video lives on YouTube, and the album shows it from there:")
+        Text("1. Tap the button below and choose YouTube.")
+        Text("2. Set who can see it to Unlisted. Then only people with the link, which is to say the album, can watch it.")
+        Text("3. Upload it. When YouTube has finished, open the video there, tap Share, then Copy link.")
+        Text("4. Come back here, paste the link, and add it.")
+        OutlinedButton(
+            modifier = Modifier.fillMaxWidth(),
+            onClick = {
+                val send = Intent(Intent.ACTION_SEND)
+                    .setType("video/*")
+                    .putExtra(Intent.EXTRA_STREAM, Uri.parse(item.uri))
+                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                try {
+                    context.startActivity(Intent.createChooser(send, "Put this video on YouTube"))
+                } catch (e: Exception) {
+                    problem = "This phone could not hand the video to YouTube. Open the YouTube app and upload it from there."
+                }
+            },
+        ) { Text("Put this video on YouTube") }
+        OutlinedTextField(
+            value = link,
+            onValueChange = { link = it },
+            label = { Text("YouTube link") },
+            placeholder = { Text("https://youtu.be/…") },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+            modifier = Modifier.fillMaxWidth(),
+        )
+        TextButton(
+            onClick = {
+                val clip = context.getSystemService(android.content.ClipboardManager::class.java)?.primaryClip
+                val pasted = if (clip != null && clip.itemCount > 0) clip.getItemAt(0).coerceToText(context)?.toString() else null
+                if (pasted.isNullOrBlank()) problem = "Nothing has been copied yet. In YouTube, tap Share, then Copy link." else link = pasted.trim()
+            },
+        ) { Text("Paste the copied link") }
+        Text(
+            item.tripTitle?.let { "It will go on the trip $it." } ?: "The album will file it by the day it was filmed.",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        problem?.let { Text(it, color = Rust) }
+        if (busy) {
+            Progress("Adding it to the album…")
+        } else {
+            Button(
+                modifier = Modifier.fillMaxWidth(),
+                enabled = link.isNotBlank(),
+                onClick = {
+                    busy = true
+                    problem = null
+                    val day = Helpers.dayString(item.takenMs ?: item.lastModifiedMs ?: System.currentTimeMillis(), ZoneId.systemDefault())
+                    scope.launch {
+                        try {
+                            val added = withContext(Dispatchers.IO) { api.addVideo(link, day, item.tripId) }
+                            UploadQueue.get(context).finish(item.id, ItemState.LINKED, added.title.ifBlank { null }, added.photoId)
+                            onBack()
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            problem = if (e is AlbumException) e.message else "Could not reach the album: ${e.message ?: e.javaClass.simpleName}"
+                            busy = false
+                        }
+                    }
+                },
+            ) { Text("Add the link to the album") }
+            TextButton(onClick = { UploadQueue.get(context).remove(item.id); onBack() }) { Text("Leave this video out") }
         }
     }
 }

@@ -14,6 +14,7 @@ import { bearerToken, createDeviceToken, DEVICE_TOKEN_IDLE_MS, DEVICE_TOKEN_TOUC
 import { hashToken } from "@/lib/auth/tokens";
 import { GET as me } from "@/app/api/v1/me/route";
 import { GET as status } from "@/app/api/photos/status/route";
+import { GET as trips } from "@/app/api/v1/trips/route";
 
 const call = (token?: string) => new Request("http://localhost/api/v1/me", { headers: token ? { authorization: `Bearer ${token}` } : {} });
 
@@ -117,5 +118,24 @@ describe("a phone's token", () => {
     const kept = await db.photo.create({ data: { ...photo, uploaderId: other.id } });
     expect(await (await ask(hash)).json()).toEqual({ have: { id: kept.id, status: "READY", mine: false } });
     expect(binned.id).not.toBe(kept.id);
+  });
+
+  it("lists the trips the app can send to, newest first, without one being deleted", async () => {
+    const { token } = await createDeviceToken(db, userId);
+    const url = "http://localhost/api/v1/trips";
+    expect((await trips(new Request(url))).status).toBe(401);
+    const trip = (slug: string, start: string, end: string, deletingAt: Date | null = null) =>
+      db.trip.create({ data: { slug, title: slug.toUpperCase(), startDate: new Date(start), endDate: new Date(end), createdById: userId, deletingAt } });
+    const old = await trip("acadia", "2024-08-10", "2024-08-16");
+    const recent = await trip("shore", "2025-07-01", "2025-07-04");
+    await trip("going", "2025-09-01", "2025-09-02", new Date());
+    const res = await trips(new Request(url, { headers: { authorization: `Bearer ${token}` } }));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      trips: [
+        { id: recent.id, slug: "shore", title: "SHORE", startDate: "2025-07-01", endDate: "2025-07-04" },
+        { id: old.id, slug: "acadia", title: "ACADIA", startDate: "2024-08-10", endDate: "2024-08-16" },
+      ],
+    });
   });
 });
