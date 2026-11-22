@@ -27,8 +27,9 @@ MODEL_DIR = os.environ.get("ML_MODEL_DIR", "/models")
 IDLE_UNLOAD_SECONDS = int(os.environ.get("ML_IDLE_UNLOAD_SECONDS", "300"))
 
 
-# COCO category ids from the torchvision detection models, mapped onto the album's species list.
-COCO_SPECIES = {16: "CHICKEN", 17: "CAT", 18: "DOG", 19: "HORSE", 20: "OTHER", 21: "OTHER", 22: "OTHER", 23: "OTHER", 24: "OTHER", 25: "OTHER"}
+# COCO category ids from the torchvision detection models, mapped onto the album's species list. COCO has one class
+# for every bird, so it is BIRD, never CHICKEN: the album decides whether a bird is the family's chickens (#23).
+COCO_SPECIES = {16: "BIRD", 17: "CAT", 18: "DOG", 19: "HORSE", 20: "OTHER", 21: "OTHER", 22: "OTHER", 23: "OTHER", 24: "OTHER", 25: "OTHER"}
 ANIMAL_MIN_SCORE = float(os.environ.get("ML_ANIMAL_MIN_SCORE", "0.6"))
 DETECTOR_FILE = "fasterrcnn_mobilenet_v3_large_320_fpn.pth"
 

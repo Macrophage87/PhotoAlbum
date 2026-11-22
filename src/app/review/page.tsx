@@ -21,8 +21,10 @@ import { GooglePickerButton } from "@/components/google/GooglePickerButton";
 import { googleStatus } from "@/lib/google/account";
 import { googleConfigured } from "@/lib/google/oauth";
 import { NOT_TRASHED } from "@/lib/photos/trash";
-import { editableMediaWhere, isAdmin } from "@/lib/auth/ownership";
+import { isAdmin } from "@/lib/auth/ownership";
 import { readableTitle } from "@/lib/photos/readable-text";
+import { REVIEW_PAGE, unreviewedPage, unreviewedWhere } from "@/lib/review/queue";
+import { UnassignedGallery } from "@/components/photos/UnassignedGallery";
 
 export const metadata = { title: "Review uploads" };
 
@@ -41,10 +43,12 @@ export default async function ReviewPage({ searchParams }: PageProps<"/review">)
   const gates = await annotationGates();
   // Notes and review are the uploader's (and an admin's), so the queue a member works through is their own uploads.
   const admin = isAdmin(me);
-  const mine = editableMediaWhere(me);
-  const [photos, unreviewedCount] = await Promise.all([
-    db.photo.findMany({ where: batch ? { id: { in: ids }, ...NOT_TRASHED } : { reviewedAt: null, ...NOT_TRASHED, ...mine }, orderBy: { createdAt: "desc" }, select: { ...photoCardSelect, uploaderId: true, context: true, reviewedAt: true, annotation: true, annotationOptOut: true, annotatedAt: true, estimatedDate: true, estimatedDateConfidence: true, estimatedDateNote: true, takenAtSource: true, trip: { select: { annotationOptOut: true, timezone: true } }, collections: { select: { collection: { select: { slug: true, title: true, annotationOptOut: true } } } } } }),
-    db.photo.count({ where: { reviewedAt: null, ...NOT_TRASHED, ...mine } }),
+  const select = { ...photoCardSelect, uploaderId: true, context: true, reviewedAt: true, annotation: true, annotationOptOut: true, annotatedAt: true, estimatedDate: true, estimatedDateConfidence: true, estimatedDateNote: true, takenAtSource: true, trip: { select: { annotationOptOut: true, timezone: true } }, collections: { select: { collection: { select: { slug: true, title: true, annotationOptOut: true } } } } } as const;
+  // The queue comes a page at a time (#12): the newest page with everything about it, and the rest of the grid as
+  // the member scrolls. A batch named in the address is at most 500, and shown whole.
+  const [{ photos, nextCursor }, unreviewedCount] = await Promise.all([
+    batch ? db.photo.findMany({ where: { id: { in: ids }, ...NOT_TRASHED }, orderBy: { createdAt: "desc" }, select }).then((photos) => ({ photos, nextCursor: null })) : unreviewedPage(me, select, { take: REVIEW_PAGE }),
+    db.photo.count({ where: unreviewedWhere(me) }),
   ]);
   // A batch named in the address can hold somebody else's items: they are shown, but the panel acts on these alone.
   const ownIds = photos.filter((p) => admin || p.uploaderId === me.id).map((p) => p.id);
@@ -67,6 +71,7 @@ export default async function ReviewPage({ searchParams }: PageProps<"/review">)
                   <Link href="/review" className="text-primary hover:underline">{unreviewedCount} {admin ? "unreviewed in all" : "of yours unreviewed in all"}.</Link>
                 </>
               )}
+              {!batch && nextCursor && ` The newest ${photos.length} are below; mark them reviewed and the next ones come up.`}
             </p>
           </div>
         </div>
@@ -91,7 +96,12 @@ export default async function ReviewPage({ searchParams }: PageProps<"/review">)
             )}
             {editable && <YouTubeAddForm />}
             {google && <GooglePickerButton status={google} configured next="/review" />}
-            <PhotoGrid photos={photos.map((p) => toGridPhoto(p, p.reviewedAt ? null : "unreviewed", me))} />
+            {batch ? (
+              <PhotoGrid photos={photos.map((p) => toGridPhoto(p, p.reviewedAt ? null : "unreviewed", me))} />
+            ) : (
+              // Keyed on what is shown, so once a page has been marked reviewed the grid starts again from the new first page.
+              <UnassignedGallery key={`${unreviewedCount}:${photos[0]?.id ?? ""}`} photos={photos.map((p) => toGridPhoto(p, "unreviewed", me))} emptyMessage="Nothing to review." more={{ url: "/api/review/unreviewed", nextCursor, total: unreviewedCount }} />
+            )}
             {(proposals.length > 0 || unnamedFaces > 0) && (
               <section className="space-y-2">
                 <h2 className="font-display text-lg font-semibold">Who might be in these</h2>

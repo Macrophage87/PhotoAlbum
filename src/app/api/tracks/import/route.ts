@@ -43,7 +43,10 @@ export async function POST(request: Request) {
   const importKey = `imports/${randomUUID()}.${ext}`;
   try {
     // With the request's signal, so a client that goes away mid-file ends this instead of leaving it waiting.
-    const { bytes } = await storage().putStream(importKey, Readable.fromWeb(request.body as never, { signal: request.signal }), { maxBytes: env().MAX_IMPORT_BYTES });
+    const body = Readable.fromWeb(request.body as never, { signal: request.signal });
+    // An abort before storage starts reading would otherwise error the stream with no listener and crash the process.
+    body.on("error", () => {});
+    const { bytes } = await storage().putStream(importKey, body, { maxBytes: env().MAX_IMPORT_BYTES });
     if (!bytes) {
       await storage().delete(importKey).catch(() => {});
       return Response.json({ error: EMPTY_IMPORT }, { status: 422 });

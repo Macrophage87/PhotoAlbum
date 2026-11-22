@@ -166,6 +166,9 @@ enum Species {
   DOG
   CAT
   CHICKEN
+  /// Any bird the detector sees (it cannot tell a hen from a gull). A chicken pet is proposed for one only with
+  /// evidence: the photo's words mention chickens, or the crop looks like the flock's confirmed ones.
+  BIRD
   HORSE
   OTHER
 }
@@ -927,6 +930,10 @@ model TakeoutImport {
   collectionsCreated Int                 @default(0)
   report             Json?
   startedById        String
+  /// Whose Google export this is: its photos are uploaded as theirs and its albums become their collections. Chosen
+  /// when the import is started, the admin themselves by default; null on runs from before the choice, which were
+  /// the starter's.
+  ownerId            String?
   startedAt          DateTime            @default(now())
   heartbeatAt        DateTime?
   endedAt            DateTime?

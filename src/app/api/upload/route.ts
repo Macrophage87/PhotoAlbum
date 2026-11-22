@@ -113,6 +113,9 @@ export async function POST(request: Request) {
     // The request's own signal goes with the body, so a client that goes away mid-file ends the pipeline (and this
     // handler) instead of leaving it waiting for bytes that will never come.
     const body = Readable.fromWeb(request.body as never, { signal: request.signal });
+    // A signal that fires before storage starts reading (it is still making the folder) errors the stream with no
+    // listener yet, which would crash the process. The pipeline still sees the error through the stream's own state.
+    body.on("error", () => {});
     const { bytes } = await storage().putStream(originalPath, body, { maxBytes: maxUploadBytes(mime, uploadByteLimits()), onChunk: (chunk) => digest.update(chunk) });
     // Before it takes a hash: every empty file is the same file, and would be answered as one the album already has.
     if (bytes === 0) throw new Refused(EMPTY_FILE_MESSAGE);

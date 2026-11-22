@@ -1,4 +1,5 @@
 import { env } from "@/lib/env";
+import { inboxDir } from "@/lib/takeout/inbox";
 import { getViewer, requireUser } from "@/lib/auth/viewer";
 import { AppShell, Container } from "@/components/layout/AppShell";
 import { Card } from "@/components/ui";
@@ -71,7 +72,7 @@ export default async function PrivacyPage() {
       what: "Nothing. An admin copies the Takeout zip files onto this server and the import reads them here; dates, places, captions and Google album names come across, nothing goes back.",
       when: "Never leaves the server. The archive is an unencrypted copy of the export; delete it from the inbox once its photos are in.",
       off: "Leave IMPORT_INBOX_DIR empty.",
-      enabled: false,
+      enabled: Boolean(inboxDir()),
     },
     {
       name: "Address lookup (OpenStreetMap Nominatim)",

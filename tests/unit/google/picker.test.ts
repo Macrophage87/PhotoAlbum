@@ -11,7 +11,7 @@ vi.hoisted(() => {
 });
 
 import { authorizationUrl, exchangeCode, GoogleAuthError, refreshAccessToken } from "@/lib/google/oauth";
-import { createPickerSession, downloadUrl, getPickerSession, listPickedItems, parseDuration, PickerSessionGone, sessionDeadline } from "@/lib/google/picker";
+import { createPickerSession, downloadUrl, getPickerSession, isTrustedDownloadUrl, listPickedItems, openDownload, parseDuration, PickerSessionGone, sessionDeadline, UntrustedDownloadUrl, type PickedItem } from "@/lib/google/picker";
 
 const calls: { url: string; init?: RequestInit }[] = [];
 let responses: (() => Response)[] = [];
@@ -86,5 +86,37 @@ describe("picker sessions", () => {
   it("turns a 401 into a reconnect error", async () => {
     responses = [json(401, {})];
     await expect(createPickerSession("stale")).rejects.toMatchObject({ needsReconnect: true });
+  });
+});
+
+describe("where a download may take the member's token", () => {
+  const picked = (baseUrl: unknown, type: PickedItem["type"] = "PHOTO") => ({ id: "x", type, baseUrl, mimeType: "image/jpeg", filename: "x.jpg", createTime: null, width: null, height: null }) as PickedItem;
+  it("trusts Google's media host over https and the Picker API's own origin, nothing else", () => {
+    expect(isTrustedDownloadUrl("https://lh3.googleusercontent.com/abc=d")).toBe(true);
+    expect(isTrustedDownloadUrl("https://video-downloads.googleusercontent.com/abc=dv")).toBe(true);
+    expect(isTrustedDownloadUrl("https://picker.test/download/abc=d")).toBe(true);
+    for (const bad of [
+      "http://lh3.googleusercontent.com/abc=d",
+      "https://googleusercontent.com.evil.example/abc=d",
+      "https://evilgoogleusercontent.com/abc=d",
+      "https://lh3.googleusercontent.com:8443/abc=d",
+      "https://user:pw@lh3.googleusercontent.com/abc=d",
+      "http://picker.test/abc=d",
+      "https://attacker.example/steal",
+      "not a url",
+      "",
+      42,
+      null,
+    ]) expect(isTrustedDownloadUrl(bad), String(bad)).toBe(false);
+  });
+  it("sends the token to a Google address, and refuses any other before fetching", async () => {
+    responses = [() => new Response("bytes", { status: 200 })];
+    await openDownload("tok", picked("https://lh3.googleusercontent.com/a", "VIDEO"));
+    expect(calls[0].url).toBe("https://lh3.googleusercontent.com/a=dv");
+    expect((calls[0].init?.headers as Record<string, string>).authorization).toBe("Bearer tok");
+    await expect(openDownload("tok", picked("https://attacker.example/a"))).rejects.toBeInstanceOf(UntrustedDownloadUrl);
+    await expect(openDownload("tok", picked(undefined))).rejects.toBeInstanceOf(UntrustedDownloadUrl);
+    await expect(openDownload("tok", null as unknown as PickedItem)).rejects.toBeInstanceOf(UntrustedDownloadUrl);
+    expect(calls).toHaveLength(1);
   });
 });

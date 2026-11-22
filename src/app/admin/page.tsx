@@ -25,6 +25,7 @@ import { isMinor } from "@/lib/people/consent";
 import { TakeoutAdmin } from "@/components/admin/TakeoutAdmin";
 import { inboxDir, listArchives } from "@/lib/takeout/inbox";
 import { closeDeadImports } from "@/lib/takeout/import";
+import { unreviewedFromRun } from "@/lib/takeout/review";
 import { visitorStats } from "@/lib/visits/stats";
 import { VisitorStats } from "@/components/admin/VisitorStats";
 import { OrphanFoldersAdmin } from "@/components/admin/OrphanFoldersAdmin";
@@ -83,6 +84,9 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
   };
   await closeDeadImports();
   const [archives, takeoutImports] = await Promise.all([listArchives(), db.takeoutImport.findMany({ orderBy: { startedAt: "desc" }, take: 10 })]);
+  // How many of each finished run's photos still wait in the Unreviewed queue, so they can be marked in one step.
+  const takeoutUnreviewed = await Promise.all(takeoutImports.map((i) => (i.status === "RUNNING" || i.imported === 0 ? 0 : db.photo.count({ where: unreviewedFromRun(i) }))));
+  const memberName = (id: string | null) => { const m = id ? members.find((u) => u.id === id) : null; return m ? m.name || m.email : null; };
   // The same file in the album more than once, with one tile each to recognise them by.
   const dupeGroups = await duplicateGroups(60);
   const dupeLeaders = await db.photo.findMany({ where: { id: { in: dupeGroups.map((g) => g.ids[0]) } }, select: { id: true, originalName: true, status: true, updatedAt: true, imageVersion: true, renditions: true } });
@@ -235,7 +239,14 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
 
         <section>
           <h2 className="font-display text-xl font-semibold mb-1">Import from Google Photos (Takeout)</h2>
-          <TakeoutAdmin configured={Boolean(inboxDir())} dir={inboxDir()} archives={archives.map((a) => ({ ...a, modifiedAt: a.modifiedAt.toISOString() }))} imports={takeoutImports.map((i) => ({ id: i.id, archiveName: i.archiveName, status: i.status, imported: i.imported, skipped: i.skipped, failed: i.failed, repaired: i.repaired, collectionsCreated: i.collectionsCreated, startedAt: i.startedAt.toISOString(), endedAt: i.endedAt?.toISOString() ?? null, report: (i.report as never) ?? null }))} />
+          <TakeoutAdmin
+            configured={Boolean(inboxDir())}
+            dir={inboxDir()}
+            archives={archives.map((a) => ({ ...a, modifiedAt: a.modifiedAt.toISOString() }))}
+            imports={takeoutImports.map((i, n) => ({ id: i.id, archiveName: i.archiveName, status: i.status, imported: i.imported, skipped: i.skipped, failed: i.failed, repaired: i.repaired, collectionsCreated: i.collectionsCreated, startedAt: i.startedAt.toISOString(), endedAt: i.endedAt?.toISOString() ?? null, report: (i.report as never) ?? null, ownerName: i.ownerId && i.ownerId !== i.startedById ? memberName(i.ownerId) : null, unreviewed: takeoutUnreviewed[n] }))}
+            members={members.filter((m) => !m.removingAt).map((m) => ({ id: m.id, label: m.name || m.email }))}
+            meId={me.id}
+          />
         </section>
 
         <section id="notes" className="scroll-mt-4">

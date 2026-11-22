@@ -1,4 +1,4 @@
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import { expect, test, type Dialog, type Locator, type Page } from "@playwright/test";
 import path from "node:path";
 import fs from "node:fs";
 import { randomUUID } from "node:crypto";
@@ -1275,14 +1275,17 @@ test("a trip and a collection each draw their own photographs by what they look 
 });
 
 test("a Google Takeout archive in the inbox imports with dates, places, notes and a private album, then can be deleted", async ({ context, page }) => {
+  // Two imports, each waited on for up to a minute, plus a minute and a half for the pipeline: well past the
+  // config's 60 s, so the test is given room for the waits it actually makes.
+  test.setTimeout(6 * 60_000);
   const inbox = process.env.E2E_INBOX_DIR ?? "/tmp/photoalbum-e2e-inbox";
   const { copyFileSync, existsSync } = await import("node:fs");
   copyFileSync(fixture("takeout.zip"), path.join(inbox, "takeout-e2e.zip"));
   await signIn(context, ADMIN);
   await page.goto("/admin");
-  const row = page.getByTestId("takeout-admin").getByText("takeout-e2e.zip").locator("..").locator("..");
-  await page.waitForLoadState("networkidle");
-  await row.getByRole("button", { name: "Import" }).click();
+  const row = () => page.getByTestId("takeout-archive-row").filter({ hasText: "takeout-e2e.zip" });
+  const runs = async () => (await withDb((c) => c.query('SELECT count(*)::int AS n FROM "TakeoutImport" WHERE "archiveName" = $1', ["takeout-e2e.zip"]))).rows[0].n as number;
+  await clickUntil(page, () => row().getByRole("button", { name: "Import" }), async () => (await runs()) >= 1);
   await expect.poll(async () => (await withDb((c) => c.query('SELECT status FROM "TakeoutImport" WHERE "archiveName" = $1', ["takeout-e2e.zip"]))).rows[0]?.status, { timeout: 60_000 }).toBe("ENDED");
   const run = await withDb((c) => c.query('SELECT imported, skipped, "collectionsCreated" FROM "TakeoutImport" WHERE "archiveName" = $1', ["takeout-e2e.zip"]));
   expect(run.rows[0]).toMatchObject({ imported: 4, skipped: 1, collectionsCreated: 1 });
@@ -1302,21 +1305,25 @@ test("a Google Takeout archive in the inbox imports with dates, places, notes an
 
   // A phone upload loses its position to Android on the way out; a second run of the same export gives it back.
   await withDb((c) => c.query(`UPDATE "Photo" SET lat = NULL, lng = NULL, "gpsSource" = NULL WHERE "originalName" = 'photo-with-gps.jpg'`));
-  await page.waitForLoadState("networkidle");
-  await page.getByTestId("takeout-admin").getByText("takeout-e2e.zip").locator("..").locator("..").getByRole("button", { name: "Import" }).click();
+  await clickUntil(page, () => row().getByRole("button", { name: "Import" }), async () => (await runs()) >= 2);
   await expect.poll(async () => (await withDb((c) => c.query('SELECT count(*)::int AS n FROM "TakeoutImport" WHERE status = $1', ["ENDED"]))).rows[0].n, { timeout: 60_000 }).toBe(2);
   const repaired = await withDb((c) => c.query(`SELECT lat, lng, "gpsSource" FROM "Photo" WHERE "originalName" = 'photo-with-gps.jpg' AND "sourceKind" = 'TAKEOUT'`));
   expect(repaired.rows[0]).toEqual({ lat: 44.3186, lng: -68.1917, gpsSource: "SIDECAR" });
   await page.reload();
   await expect(page.getByTestId("takeout-import").first()).toContainText("1 repaired");
   await expect(page.getByTestId("takeout-import").first()).toContainText("0 imported");
-  page.once("dialog", (d) => d.accept());
-  await page.waitForLoadState("networkidle");
-  await page.getByTestId("takeout-admin").getByText("takeout-e2e.zip").locator("..").locator("..").getByRole("button", { name: "Delete" }).click();
-  await expect.poll(() => existsSync(path.join(inbox, "takeout-e2e.zip")), { timeout: 15_000 }).toBe(false);
+  // Every click (clickUntil may need more than one) asks "Delete … from the inbox?"; say yes to each.
+  const accept = (d: Dialog) => void d.accept();
+  page.on("dialog", accept);
+  await clickUntil(page, () => row().getByRole("button", { name: "Delete" }), async () => !existsSync(path.join(inbox, "takeout-e2e.zip")));
+  page.off("dialog", accept);
+  await page.reload();
+  await expect(row()).toHaveCount(0);
 });
 
 test("a member connects Google Photos, picks items on Google's page, gets them on the review screen, and can disconnect", async ({ context, page }) => {
+  // Two minutes for the copies to land, then a second pick and a disconnect: more than the config's 60 s.
+  test.setTimeout(5 * 60_000);
   await signIn(context, ADMIN);
   await page.goto("/upload");
   await page.getByRole("link", { name: "Connect Google Photos" }).click();
@@ -1328,7 +1335,8 @@ test("a member connects Google Photos, picks items on Google's page, gets them o
   const [popup] = await Promise.all([context.waitForEvent("page"), picker.getByRole("link", { name: "Open Google Photos" }).click()]);
   await expect(popup.getByText("Mock Google Photos picker")).toBeVisible();
   await popup.close();
-  await expect(picker.getByRole("status")).toContainText("Copying 3 items", { timeout: 30_000 });
+  // The "Copying 3 items" line can be skipped entirely when the copies are quick (the picker moves on to the review
+  // page in the same tick it would show it), so wait for where it ends up instead.
   await page.waitForURL(/\/review\?ids=.*google=1/, { timeout: 120_000 });
   await expect(page.getByRole("heading", { name: "Review what you picked" })).toBeVisible();
   await expect(page.getByText("Add places here, or file these to a trip")).toBeVisible();
@@ -1350,17 +1358,19 @@ test("a member connects Google Photos, picks items on Google's page, gets them o
   const stored = await withDb((c) => c.query('SELECT "encryptedRefreshToken" FROM "GoogleAccount"'));
   expect(stored.rows[0].encryptedRefreshToken).toMatch(/^v1\./);
   expect(stored.rows[0].encryptedRefreshToken).not.toContain("mock-refresh");
+  const accounts = async () => (await withDb((c) => c.query('SELECT count(*)::int AS n FROM "GoogleAccount"'))).rows[0].n as number;
+  await clickUntil(page, () => picker.getByRole("button", { name: "Disconnect Google" }), async () => (await accounts()) === 0);
   await page.reload();
-  await page.waitForLoadState("networkidle");
-  await picker.getByRole("button", { name: "Disconnect Google" }).click();
   await expect(picker.getByRole("link", { name: "Connect Google Photos" })).toBeVisible();
-  expect((await withDb((c) => c.query('SELECT count(*)::int AS n FROM "GoogleAccount"'))).rows[0].n).toBe(0);
 });
 
 test("a pet tagged on a spotted animal is proposed on the next look-alike and confirmed from the review screen", async ({ context, page }) => {
+  // Several 30 s waits on the sidecar and the review screen add up past the config's 60 s.
+  test.slow();
   await signIn(context, ADMIN);
+  const pets = (await withDb((c) => c.query(`SELECT count(*)::int AS n, (count(*) FILTER (WHERE status = 'CONFIRMED'))::int AS confirmed FROM "AnimalDetection"`))).rows[0];
   await page.goto("/admin");
-  await expect(page.getByTestId("pet-gates")).toContainText("on,");
+  await expect(page.getByTestId("pet-gates")).toHaveText(`Pet spotting (animals, not faces; no opt-in needed): on, ${pets.n} sighting${pets.n === 1 ? "" : "s"} kept, ${pets.confirmed} confirmed.`);
   await page.goto("/people");
   const petForm = page.locator("form").filter({ has: page.getByRole("button", { name: "Add pet" }) });
   await petForm.locator("#pet-name").fill("Rex");
@@ -3699,4 +3709,119 @@ test("a selection added to a collection shows its chip at once, and Enter waits 
   } finally {
     await withDb((c) => c.query(`DELETE FROM "Collection" WHERE id = $1`, [collectionId]));
   }
+});
+
+test.describe("Google Photos picker: one press, phones, lost tabs, paging, expiry and revocation (#10, #24, #26, #27)", () => {
+  const MOCK = "http://127.0.0.1:3201/google-picker/_test";
+  const mock = (config: Record<string, unknown>) => fetch(`${MOCK}/config`, { method: "POST", body: JSON.stringify(config) });
+  const pickerRows = (prefix: string) => withDb((c) => c.query(`SELECT "sourceId", status, kind FROM "Photo" WHERE "sourceKind" = 'GOOGLE_PICKER' AND "sourceId" LIKE $1 ORDER BY "sourceId"`, [`${prefix}-%`])).then((r) => r.rows);
+
+  /** Signed in with Google connected (an earlier test disconnects it), on the upload page, ready to pick. */
+  async function readyToPick(context: import("@playwright/test").BrowserContext, page: Page) {
+    await signIn(context, ADMIN);
+    await page.goto("/upload");
+    const picker = page.getByTestId("google-picker");
+    const connect = picker.getByRole("link", { name: /Connect (Google Photos|again)/ });
+    if (await connect.isVisible()) {
+      await connect.click();
+      await page.waitForURL("**/upload?google=connected");
+    }
+    await expect(picker.getByRole("button", { name: "Pick from Google Photos" })).toBeVisible();
+    await page.waitForLoadState("networkidle");
+    return picker;
+  }
+
+  test.beforeEach(async () => {
+    await fetch(`${MOCK}/reset`);
+  });
+  test.afterAll(async () => {
+    await fetch(`${MOCK}/reset`);
+  });
+
+  test("on a computer one press opens Google's page in a new tab, and every page of what was picked arrives, each with the right download", async ({ context, page }) => {
+    await mock({ itemPrefix: "gp-one", pageSize: 2 });
+    const picker = await readyToPick(context, page);
+    // No second link to press: the tab opens from the first press itself.
+    const [tab] = await Promise.all([context.waitForEvent("page"), picker.getByRole("button", { name: "Pick from Google Photos" }).click()]);
+    await expect(tab.getByText("Mock Google Photos picker")).toBeVisible();
+    // Only now does the page talk about the other tab, and it still offers a way back to it.
+    await expect(picker.getByText("Google Photos is open in another tab")).toBeVisible();
+    await expect(picker.getByRole("link", { name: "Open Google Photos again" })).toBeVisible();
+    await tab.close();
+    await page.waitForURL(/\/review\?ids=.*google=1/, { timeout: 120_000 });
+    // Three items over two pages: the second page was asked for and its item came in too.
+    expect(await pickerRows("gp-one")).toEqual([
+      { sourceId: "gp-one-1", status: "READY", kind: "PHOTO" },
+      { sourceId: "gp-one-2", status: "READY", kind: "PHOTO" },
+      { sourceId: "gp-one-3", status: "READY", kind: "VIDEO" },
+    ]);
+    const log = (await (await fetch(`${MOCK}/log`)).json()) as { pages: { pageToken: string | null }[]; downloads: { name: string; mode: string }[] };
+    expect(log.pages.map((p) => p.pageToken)).toEqual([null, "page-2"]);
+    // Photos fetched with =d and the clip with =dv; the stand-in refuses the other way round.
+    expect(log.downloads.sort((a, b) => a.name.localeCompare(b.name))).toEqual([
+      { name: "clip.mp4", mode: "dv" },
+      { name: "photo-no-exif.jpg", mode: "d" },
+      { name: "photo-with-gps.jpg", mode: "d" },
+    ]);
+  });
+
+  test("a tab lost while copying still ends on the review screen", async ({ context, page }) => {
+    await mock({ itemPrefix: "gp-lost" });
+    const picker = await readyToPick(context, page);
+    const [tab] = await Promise.all([context.waitForEvent("page"), picker.getByRole("button", { name: "Pick from Google Photos" }).click()]);
+    await expect(tab.getByText("Mock Google Photos picker")).toBeVisible();
+    await tab.close();
+    await expect(picker.getByRole("status")).toContainText("Copying 3 items", { timeout: 30_000 });
+    // The phone throws the tab away mid-copy; coming back to it loads the page afresh.
+    await page.reload();
+    await page.waitForURL(/\/review\?ids=.*google=1/, { timeout: 120_000 });
+    await expect(page.getByRole("heading", { name: "Review what you picked" })).toBeVisible();
+    expect((await pickerRows("gp-lost")).map((r) => r.status)).toEqual(["READY", "READY", "READY"]);
+  });
+
+  test("a session that runs out before anything is picked says so instead of watching for ever", async ({ context, page }) => {
+    await mock({ itemPrefix: "gp-late", autoPick: false, sessionSeconds: 4 });
+    const picker = await readyToPick(context, page);
+    const [tab] = await Promise.all([context.waitForEvent("page"), picker.getByRole("button", { name: "Pick from Google Photos" }).click()]);
+    await expect(tab.getByText("Choose some photos")).toBeVisible();
+    await expect(picker.getByRole("alert")).toContainText("That picking session has ended; start again.", { timeout: 30_000 });
+    await tab.close();
+    await expect(picker.getByRole("button", { name: "Try again" })).toBeVisible();
+    expect(await pickerRows("gp-late")).toEqual([]);
+  });
+
+  test("Google forgetting the grant while picking asks the member to connect again, and connecting again works", async ({ context, page }) => {
+    await mock({ itemPrefix: "gp-gone", autoPick: false });
+    const picker = await readyToPick(context, page);
+    const [tab] = await Promise.all([context.waitForEvent("page"), picker.getByRole("button", { name: "Pick from Google Photos" }).click()]);
+    await expect(picker.getByText("Google Photos is open in another tab")).toBeVisible();
+    await mock({ revoked: true });
+    await expect(picker.getByRole("alert")).toContainText("Google Photos needs to be connected again.", { timeout: 30_000 });
+    await tab.close();
+    expect((await withDb((c) => c.query('SELECT "needsReconnect" FROM "GoogleAccount"'))).rows).toEqual([{ needsReconnect: true }]);
+    await mock({ revoked: false });
+    await picker.getByRole("link", { name: "Connect again" }).click();
+    await page.waitForURL("**/upload?google=connected");
+    await expect(page.getByTestId("google-picker").getByRole("button", { name: "Pick from Google Photos" })).toBeVisible();
+    expect((await withDb((c) => c.query('SELECT "needsReconnect" FROM "GoogleAccount"'))).rows).toEqual([{ needsReconnect: false }]);
+  });
+
+  test.describe("on a phone", () => {
+    test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+
+    test("one press goes to Google's page in the same tab, and coming back carries on to the review screen", async ({ context, page }) => {
+      await mock({ itemPrefix: "gp-phone" });
+      const picker = await readyToPick(context, page);
+      let opened = 0;
+      context.on("page", () => { opened++; });
+      await picker.getByRole("button", { name: "Pick from Google Photos" }).click();
+      await page.waitForURL(/\/google-picker\/pick\//);
+      await expect(page.getByText("Mock Google Photos picker")).toBeVisible();
+      expect(opened).toBe(0);
+      // Back to the album, as the member would with the back button.
+      await page.goBack();
+      await page.waitForURL(/\/review\?ids=.*google=1/, { timeout: 120_000 });
+      expect((await pickerRows("gp-phone")).map((r) => r.status)).toEqual(["READY", "READY", "READY"]);
+    });
+  });
 });

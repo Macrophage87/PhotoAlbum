@@ -38,7 +38,7 @@ describe("the Picker download job", () => {
     for (const n of [1, 2, 3]) {
       const row = await db.photo.create({ data: { uploaderId: userId, kind: n === 3 ? "VIDEO" : "PHOTO", sourceKind: "GOOGLE_PICKER", sourceId: `gp-${n}`, status: "PENDING", originalName: n === 3 ? "c.mp4" : `p${n}.jpg`, mimeType: n === 3 ? "video/mp4" : "image/jpeg", storageKey: "pending", originalPath: "pending", sizeBytes: 0 }, select: { id: true } });
       ids.push(row.id);
-      items[row.id] = { id: `gp-${n}`, type: n === 3 ? "VIDEO" : "PHOTO", baseUrl: `https://lh3.test/${n}`, mimeType: "", filename: "", createTime: null, width: null, height: null };
+      items[row.id] = { id: `gp-${n}`, type: n === 3 ? "VIDEO" : "PHOTO", baseUrl: `https://lh3.googleusercontent.com/${n}`, mimeType: "", filename: "", createTime: null, width: null, height: null };
     }
   });
   const job = () => ({ userId, sessionId: "s1", photoIds: ids, items });
@@ -105,7 +105,7 @@ describe("the Picker download job", () => {
       if (!item.baseUrl.includes("fresh")) throw new GoogleAuthError("refused (403)", false);
       return body(10);
     });
-    google.list.mockResolvedValue([1, 2, 3].map((n) => ({ id: `gp-${n}`, type: n === 3 ? "VIDEO" : "PHOTO", baseUrl: `https://lh3.test/fresh-${n}`, mimeType: "", filename: "", createTime: null, width: null, height: null })));
+    google.list.mockResolvedValue([1, 2, 3].map((n) => ({ id: `gp-${n}`, type: n === 3 ? "VIDEO" : "PHOTO", baseUrl: `https://lh3.googleusercontent.com/fresh-${n}`, mimeType: "", filename: "", createTime: null, width: null, height: null })));
     await googlePickerImport(job());
     expect((await statuses()).map((r) => r.status)).toEqual(["PENDING", "PENDING", "PENDING"]);
     expect(google.list).toHaveBeenCalledTimes(1);
@@ -211,5 +211,15 @@ describe("the Picker download job", () => {
     await googlePickerImport({ userId, sessionId: "s1", photoIds: ids, items: rest });
     expect(google.download).toHaveBeenCalledTimes(1);
     expect((await statuses())[0].status).toBe("PENDING");
+  });
+  it("fails an item whose address is not Google's without downloading it, and fetches the rest", async () => {
+    google.download.mockImplementation(async () => body(10));
+    const tampered = { ...items, [ids[0]]: { ...(items[ids[0]] as object), baseUrl: "https://attacker.example/steal" }, [ids[1]]: "not an item" };
+    await googlePickerImport({ userId, sessionId: "s1", photoIds: ids, items: tampered });
+    const rows = await statuses();
+    expect(rows.map((r) => r.status)).toEqual(["FAILED", "FAILED", "PENDING"]);
+    expect(rows[0].error).toBe("Google Photos did not hand this item over properly. Pick it again in Google Photos to fetch it.");
+    expect(google.download).toHaveBeenCalledTimes(1);
+    expect(google.download.mock.calls[0][1]).toMatchObject({ id: "gp-3" });
   });
 });

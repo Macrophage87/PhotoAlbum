@@ -9,6 +9,18 @@ const poster = readFileSync(path.join(here, "../fixtures/photo-no-gps.jpg"));
 const annotation = readFileSync(path.join(here, "../fixtures/annotation-response.json"), "utf8");
 const batches = new Map();
 const pickerSessions = new Map();
+/**
+ * How the Picker stand-in behaves; a test changes it through POST /google-picker/_test/config and puts it back with
+ * /google-picker/_test/reset. `pageSize` caps each mediaItems page, so three picked items come back over two pages;
+ * `itemPrefix` gives the picked items fresh Google ids, so a test can import "new" items after another test did;
+ * `sessionSeconds` is how long a new session lives (past it, Google answers 404); `autoPick` false makes the picking
+ * page a page that only opens, so nothing is ever picked; `revoked` makes Google forget the grant: the access token
+ * gets 401 and a refresh gets invalid_grant.
+ */
+const PICKER_DEFAULTS = { pageSize: 2, itemPrefix: "gp-item", sessionSeconds: 1800, autoPick: true, revoked: false };
+let picker = { ...PICKER_DEFAULTS };
+/** What the stand-in was asked, for tests to check: each mediaItems page and each download with its suffix. */
+const pickerLog = { pages: [], downloads: [] };
 const fixtureBytes = (name) => readFileSync(path.join(here, "../fixtures", name));
 
 /** A Messages API reply shaped like the real one, with the recorded structured record as its text block. */
@@ -127,37 +139,48 @@ export function startMocks(port = 3201) {
         if (form.get("code") !== "mock-code") return json(400, { error: "invalid_grant", error_description: "bad code" });
         return json(200, { access_token: "mock-access", refresh_token: "mock-refresh", expires_in: 3600, scope: "https://www.googleapis.com/auth/photospicker.mediaitems.readonly", token_type: "Bearer" });
       }
-      if (form.get("refresh_token") === "mock-refresh") return json(200, { access_token: "mock-access", expires_in: 3600, token_type: "Bearer" });
+      if (form.get("refresh_token") === "mock-refresh" && !picker.revoked) return json(200, { access_token: "mock-access", expires_in: 3600, token_type: "Bearer" });
       return json(400, { error: "invalid_grant", error_description: "Token has been expired or revoked." });
     }
     if (url.pathname === "/google-oauth/revoke") return json(200, {});
     if (url.pathname.startsWith("/google-picker/")) {
       const rest = url.pathname.slice("/google-picker/".length);
+      // --- Test controls (not part of Google's API) ---
+      if (rest === "_test/config" && req.method === "POST") { picker = { ...picker, ...JSON.parse((await readBody(req)) || "{}") }; return json(200, picker); }
+      if (rest === "_test/reset") { picker = { ...PICKER_DEFAULTS }; pickerLog.pages.length = 0; pickerLog.downloads.length = 0; return json(200, picker); }
+      if (rest === "_test/log") return json(200, pickerLog);
+      const authorized = req.headers.authorization === "Bearer mock-access" && !picker.revoked;
       // The picking page a person would see: visiting it counts as picking two fixture photos and one clip and pressing Done.
       if (rest.startsWith("pick/")) {
         const s = pickerSessions.get(rest.slice(5));
-        if (s) s.mediaItemsSet = true;
+        if (s && picker.autoPick && Date.now() < Date.parse(s.expireTime)) s.mediaItemsSet = true;
         res.writeHead(200, { "content-type": "text/html" });
-        res.end("<html><body><h1>Mock Google Photos picker</h1><p>Done. You can close this tab.</p></body></html>");
+        res.end(picker.autoPick ? "<html><body><h1>Mock Google Photos picker</h1><p>Done. You can close this tab.</p></body></html>" : "<html><body><h1>Mock Google Photos picker</h1><p>Choose some photos.</p></body></html>");
         return;
       }
+      // Google's download: `=d` gives a photo's original bytes and `=dv` a video's; asking for the wrong one (or for
+      // neither) is refused here, so the album choosing the wrong suffix shows up as a failed item.
       if (rest.startsWith("download/")) {
         const [name, mode] = rest.slice(9).split("=");
-        if (req.headers.authorization !== "Bearer mock-access") return json(401, { error: "unauthenticated" });
-        res.writeHead(200, { "content-type": mode === "dv" ? "video/mp4" : "image/jpeg" });
+        if (!authorized) return json(401, { error: "unauthenticated" });
+        const isVideo = /\.(mp4|mov|webm)$/i.test(name);
+        pickerLog.downloads.push({ name, mode: mode ?? "" });
+        if (mode !== (isVideo ? "dv" : "d")) return json(400, { error: `${name} asked for with "=${mode ?? ""}"; a ${isVideo ? "video needs =dv" : "photo needs =d"}` });
+        res.writeHead(200, { "content-type": isVideo ? "video/mp4" : "image/jpeg" });
         res.end(fixtureBytes(name));
         return;
       }
-      if (req.headers.authorization !== "Bearer mock-access") return json(401, { error: { code: 401, status: "UNAUTHENTICATED" } });
+      if (!authorized) return json(401, { error: { code: 401, status: "UNAUTHENTICATED" } });
       if (rest === "sessions" && req.method === "POST") {
         const id = `sess-${pickerSessions.size + 1}-${Date.now()}`;
-        const s = { id, pickerUri: `http://127.0.0.1:${port}/google-picker/pick/${id}`, mediaItemsSet: false, pollingConfig: { pollInterval: "1s", timeoutIn: "1800s" }, expireTime: new Date(Date.now() + 1800_000).toISOString() };
+        const s = { id, pickerUri: `http://127.0.0.1:${port}/google-picker/pick/${id}`, mediaItemsSet: false, pollingConfig: { pollInterval: "1s", timeoutIn: `${picker.sessionSeconds}s` }, expireTime: new Date(Date.now() + picker.sessionSeconds * 1000).toISOString() };
         pickerSessions.set(id, s);
         return json(200, s);
       }
       if (rest.startsWith("sessions/")) {
         const s = pickerSessions.get(rest.slice(9));
-        if (!s) return json(404, { error: { code: 404 } });
+        // An expired session is gone, as Google has it.
+        if (!s || Date.now() >= Date.parse(s.expireTime)) return json(404, { error: { code: 404 } });
         if (req.method === "DELETE") { pickerSessions.delete(s.id); return json(200, {}); }
         return json(200, s);
       }
@@ -165,11 +188,20 @@ export function startMocks(port = 3201) {
         const s = pickerSessions.get(url.searchParams.get("sessionId") ?? "");
         if (!s?.mediaItemsSet) return json(400, { error: { code: 400, message: "not set" } });
         const base = `http://127.0.0.1:${port}/google-picker/download/`;
-        return json(200, { mediaItems: [
-          { id: "gp-item-1", createTime: "2025-08-12T13:30:00Z", type: "PHOTO", mediaFile: { baseUrl: `${base}photo-with-gps.jpg`, mimeType: "image/jpeg", filename: "photo-with-gps.jpg", mediaFileMetadata: { width: 1200, height: 800 } } },
-          { id: "gp-item-2", createTime: "2019-07-03T12:00:00Z", type: "PHOTO", mediaFile: { baseUrl: `${base}photo-no-exif.jpg`, mimeType: "image/jpeg", filename: "IMG_2001.jpg", mediaFileMetadata: { width: 800, height: 600 } } },
-          { id: "gp-item-3", createTime: "2019-07-04T12:00:00Z", type: "VIDEO", mediaFile: { baseUrl: `${base}clip.mp4`, mimeType: "video/mp4", filename: "clip.mp4", mediaFileMetadata: { width: 320, height: 240 } } },
-        ] });
+        const p = picker.itemPrefix;
+        const all = [
+          { id: `${p}-1`, createTime: "2025-08-12T13:30:00Z", type: "PHOTO", mediaFile: { baseUrl: `${base}photo-with-gps.jpg`, mimeType: "image/jpeg", filename: "photo-with-gps.jpg", mediaFileMetadata: { width: 1200, height: 800 } } },
+          { id: `${p}-2`, createTime: "2019-07-03T12:00:00Z", type: "PHOTO", mediaFile: { baseUrl: `${base}photo-no-exif.jpg`, mimeType: "image/jpeg", filename: "IMG_2001.jpg", mediaFileMetadata: { width: 800, height: 600 } } },
+          { id: `${p}-3`, createTime: "2019-07-04T12:00:00Z", type: "VIDEO", mediaFile: { baseUrl: `${base}clip.mp4`, mimeType: "video/mp4", filename: "clip.mp4", mediaFileMetadata: { width: 320, height: 240 } } },
+        ];
+        // Paged as Google pages it: an opaque token for the next page, none on the last.
+        const size = Math.max(1, Math.min(Number(url.searchParams.get("pageSize")) || 100, picker.pageSize));
+        const token = url.searchParams.get("pageToken");
+        const from = token ? Number(/^page-(\d+)$/.exec(token)?.[1] ?? NaN) : 0;
+        if (!Number.isInteger(from) || from < 0 || from >= all.length) return json(400, { error: { code: 400, message: "bad page token" } });
+        pickerLog.pages.push({ sessionId: s.id, pageToken: token });
+        const next = from + size < all.length ? `page-${from + size}` : undefined;
+        return json(200, { mediaItems: all.slice(from, from + size), ...(next ? { nextPageToken: next } : {}) });
       }
       return json(404, { error: { code: 404 } });
     }

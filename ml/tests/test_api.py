@@ -63,10 +63,127 @@ def test_animals_shape_and_determinism():
     b = client.post("/animals", files={"file": ("a.png", png(), "image/png")}, headers=HEADERS).json()
     assert a["dim"] == 512 and 1 <= len(a["animals"]) <= 2
     animal = a["animals"][0]
-    assert animal["species"] in {"DOG", "CAT", "CHICKEN", "HORSE", "OTHER"}
+    assert animal["species"] in {"DOG", "CAT", "BIRD", "HORSE", "OTHER"}
     assert len(animal["box"]) == 4 and all(0 <= v <= 1 for v in animal["box"])
     assert len(animal["embedding"]) == 512 and 0 < animal["confidence"] <= 1
     assert a == b
+
+
+def test_coco_bird_is_any_bird_not_a_chicken():
+    # COCO's one bird class covers gulls and pigeons too; the album decides when a bird is the family's chickens.
+    from ml.models import COCO_SPECIES
+
+    assert COCO_SPECIES[16] == "BIRD"
+    assert "CHICKEN" not in COCO_SPECIES.values()
+
+
+def test_animals_answers_503_until_the_detector_weights_are_there(monkeypatch, tmp_path):
+    import ml.models as m
+
+    monkeypatch.setattr(m, "STUB", False)
+    monkeypatch.setattr(m, "MODEL_DIR", str(tmp_path))
+    r = client.post("/animals", files={"file": ("a.png", png(), "image/png")}, headers=HEADERS)
+    assert r.status_code == 503
+    assert "detector weights missing" in r.json()["detail"]
+    # The token is still checked first: a stranger learns nothing about the weights.
+    assert client.post("/animals", files={"file": ("a.png", png(), "image/png")}).status_code == 401
+    (tmp_path / "detector").mkdir()
+    (tmp_path / "detector" / m.DETECTOR_FILE).write_bytes(b"")
+    assert m.Models.detector_present()
+
+
+class _NoGrad:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class _Tensor:
+    """Just enough of a torch tensor for Models.animals to turn the picture into the detector's input."""
+
+    def __init__(self, arr):
+        self.arr = arr
+
+    def permute(self, *dims):
+        return _Tensor(self.arr.transpose(dims))
+
+    def float(self):
+        return _Tensor(self.arr.astype("float32"))
+
+    def __truediv__(self, n):
+        return _Tensor(self.arr / n)
+
+
+class _Listy:
+    def __init__(self, values):
+        self.values = values
+
+    def tolist(self):
+        return list(self.values)
+
+
+def test_real_animals_path_maps_coco_labels_filters_scores_and_crops(monkeypatch):
+    """The real (non-stub) detector path, with torch and the weights stood in for: CI has neither. What is under test
+    is what the album does with the detector's answer: COCO labels to species, the minimum score, fractional boxes,
+    a padded crop clamped to the frame for the embedding, and the cap of eight."""
+    import sys
+    import types
+
+    import ml.models as m
+
+    fake_torch = types.SimpleNamespace(from_numpy=_Tensor, no_grad=_NoGrad)
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    monkeypatch.setattr(m, "STUB", False)
+    monkeypatch.setattr(m, "ANIMAL_MIN_SCORE", 0.6)
+
+    seen_inputs = []
+    boxes = [
+        (10.0, 20.0, 30.0, 40.0),  # dog (COCO 18), inside the frame
+        (0.0, 0.0, 50.0, 48.0),  # cat (COCO 17), padding would run off every edge
+        (5.0, 5.0, 15.0, 15.0),  # person (COCO 1): not an animal the album knows
+        (5.0, 5.0, 15.0, 15.0),  # horse (COCO 19) below the minimum score
+        (1.0, 2.0, 3.0, 4.0),  # bird (COCO 16) -> BIRD
+        (1.0, 2.0, 3.0, 4.0),  # bear (COCO 23) -> OTHER
+    ]
+    labels = [18, 17, 1, 19, 16, 23]
+    scores = [0.95, 0.7, 0.99, 0.59, 0.6, 0.8]
+
+    def detector(inputs):
+        seen_inputs.extend(inputs)
+        return [{"boxes": _Listy(boxes), "labels": _Listy(labels), "scores": _Listy(scores)}]
+
+    crops = []
+
+    def clip_embed(image):
+        crops.append(image.size)
+        return [1.0] + [0.0] * (m.IMAGE_DIM - 1)
+
+    models = m.Models()
+    models._detector = detector
+    monkeypatch.setattr(models, "_clip_embed", clip_embed)
+
+    found = models.animals(png())  # 64 x 48
+
+    # The detector is given the picture as channels-first floats in 0..1.
+    assert seen_inputs[0].arr.shape == (3, 48, 64)
+    assert 0 <= seen_inputs[0].arr.min() and seen_inputs[0].arr.max() <= 1
+    assert [a.species for a in found] == ["DOG", "CAT", "BIRD", "OTHER"]
+    assert [a.confidence for a in found] == [0.95, 0.7, 0.6, 0.8]
+    dog, cat = found[0], found[1]
+    assert dog.box == pytest.approx((10 / 64, 20 / 48, 20 / 64, 20 / 48))
+    assert cat.box == pytest.approx((0, 0, 50 / 64, 1))
+    # 10 % padding of the longer side around the dog (20 px -> 2 px each way); the cat's is clamped to the frame.
+    assert crops[0] == (24, 24)
+    assert crops[1] == (55, 48)
+    assert len(dog.embedding) == m.IMAGE_DIM
+
+    # Never more than eight animals, however many the detector reports.
+    boxes[:] = [(1.0, 1.0, 9.0, 9.0)] * 12
+    labels[:] = [18] * 12
+    scores[:] = [0.9] * 12
+    assert len(models.animals(png())) == 8
 
 
 def test_empty_and_oversized_images_are_refused():

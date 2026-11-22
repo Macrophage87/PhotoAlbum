@@ -5,7 +5,7 @@ import { env } from "@/lib/env";
 import { storage, StorageLimitError } from "@/lib/storage";
 import { accessTokenFor, forgetAccessToken } from "@/lib/google/account";
 import { GoogleAuthError } from "@/lib/google/oauth";
-import { deletePickerSession, listPickedItems, openDownload, type PickedItem } from "@/lib/google/picker";
+import { deletePickerSession, downloadUrl, isTrustedDownloadUrl, listPickedItems, openDownload, type PickedItem } from "@/lib/google/picker";
 import { EXT_BY_MIME } from "@/lib/media/mime";
 import { PICK_AGAIN, takeableDownload } from "@/lib/google/download-claim";
 import { enqueue } from "../boss";
@@ -82,6 +82,14 @@ export async function googlePickerImport(job: GooglePickerImportJob, signal?: Ab
       return;
     }
     if (!items.has(row.id)) continue;
+    // The job's payload is only data: an item whose address is not Google's is failed here, without the token ever
+    // being sent anywhere (openDownload refuses it as well).
+    const item = items.get(row.id);
+    if (!item || typeof item !== "object" || typeof item.baseUrl !== "string" || !isTrustedDownloadUrl(downloadUrl(item))) {
+      await db.photo.updateMany({ where: { id: row.id, ...takeableDownload() }, data: { status: "FAILED", error: `Google Photos did not hand this item over properly. ${PICK_AGAIN}` } });
+      console.error(`[google] refused to download ${row.originalName}: its address is not a Google Photos one`);
+      continue;
+    }
     const isVideo = row.kind === "VIDEO";
     const storageKey = `photos/${row.id}`;
     // A name of this download's own, in the photo's folder, and written onto the row in the same guarded write that

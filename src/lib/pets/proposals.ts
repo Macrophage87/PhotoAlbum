@@ -1,19 +1,36 @@
+import type { Species } from "@/generated/prisma/client";
 import { db } from "@/lib/db";
 import { vectorLiteral } from "@/lib/ml/client";
-import { centroidOf, matchAnimal, type PetCandidate } from "./matching";
+import { centroidOf, detectedAs, matchAnimal, type PetCandidate } from "./matching";
 
-/** Each pet with the centroid of its confirmed crops (null until a member has tagged it on a detected animal). */
+/**
+ * Each pet with the centroid of its confirmed crops (null until a member has tagged it on a detected animal), the crops
+ * members said were not it, and its "Looks like" words.
+ */
 export async function petCandidates(): Promise<PetCandidate[]> {
-  const pets = await db.person.findMany({ where: { kind: "PET" }, select: { id: true, species: true, isFlock: true, livedFrom: true, livedTo: true } });
+  const pets = await db.person.findMany({ where: { kind: "PET" }, select: { id: true, species: true, isFlock: true, livedFrom: true, livedTo: true, descriptors: true } });
   const rows = await db.$queryRaw<{ personId: string; embedding: string }[]>`SELECT "personId", embedding::text AS embedding FROM "AnimalDetection" WHERE status = 'CONFIRMED' AND "personId" IS NOT NULL AND embedding IS NOT NULL`;
-  const byPet = new Map<string, number[][]>();
-  for (const r of rows) byPet.set(r.personId, [...(byPet.get(r.personId) ?? []), JSON.parse(r.embedding) as number[]]);
-  return pets.map((p) => ({ ...p, centroid: centroidOf(byPet.get(p.id) ?? []) }));
+  const noRows = await db.$queryRaw<{ personId: string; embedding: string }[]>`SELECT "proposedPersonId" AS "personId", embedding::text AS embedding FROM "AnimalDetection" WHERE status = 'REJECTED' AND "proposedPersonId" IS NOT NULL AND embedding IS NOT NULL`;
+  const group = (list: { personId: string; embedding: string }[]) => {
+    const by = new Map<string, number[][]>();
+    for (const r of list) by.set(r.personId, [...(by.get(r.personId) ?? []), JSON.parse(r.embedding) as number[]]);
+    return by;
+  };
+  const byPet = group(rows);
+  const rejectedByPet = group(noRows);
+  return pets.map((p) => ({ ...p, centroid: centroidOf(byPet.get(p.id) ?? []), rejected: rejectedByPet.get(p.id) ?? [] }));
+}
+
+/** The words a photo carries, lowercased: the AI helper's caption, description, tags and objects, and members' text. */
+export function photoWords(photo: { annotation: unknown; caption: string | null; context: string | null; title: string | null }): string {
+  const a = (photo.annotation && typeof photo.annotation === "object" ? photo.annotation : {}) as Record<string, unknown>;
+  const parts: unknown[] = [a.title, a.caption, a.description, a.activity, ...(Array.isArray(a.tags) ? a.tags : []), ...(Array.isArray(a.objects) ? a.objects : []), photo.caption, photo.context, photo.title];
+  return parts.filter((x): x is string => typeof x === "string" && !!x.trim()).join(" \n ").toLowerCase();
 }
 
 /** Turn a photo's open animal detections into "Probably Biscuit?" proposals where a pet matches. */
 export async function proposeAnimalsForPhoto(photoId: string): Promise<number> {
-  const photo = await db.photo.findUnique({ where: { id: photoId }, select: { takenAt: true, takenAtSource: true, estimatedDate: true } });
+  const photo = await db.photo.findUnique({ where: { id: photoId }, select: { takenAt: true, takenAtSource: true, estimatedDate: true, annotation: true, caption: true, context: true, title: true } });
   if (!photo) return 0;
   const when = photo.takenAt && photo.takenAtSource !== "FILE_MTIME" && photo.takenAtSource !== "UPLOAD_TIME" ? photo.takenAt : photo.estimatedDate;
   const open = await db.$queryRaw<{ id: string; species: string; embedding: string | null }[]>`SELECT id, species::text AS species, embedding::text AS embedding FROM "AnimalDetection" WHERE "photoId" = ${photoId} AND status IN ('DETECTED', 'PROPOSED')`;
@@ -21,9 +38,10 @@ export async function proposeAnimalsForPhoto(photoId: string): Promise<number> {
   const rejected = await db.animalDetection.findMany({ where: { photoId, status: "REJECTED", proposedPersonId: { not: null } }, select: { proposedPersonId: true } });
   const rejectedPetIds = rejected.map((r) => r.proposedPersonId!);
   const pets = await petCandidates();
+  const text = photoWords(photo);
   let n = 0;
   for (const a of open) {
-    const hit = matchAnimal({ species: a.species, embedding: a.embedding ? (JSON.parse(a.embedding) as number[]) : null, takenAt: when, rejectedPetIds }, pets);
+    const hit = matchAnimal({ species: a.species, embedding: a.embedding ? (JSON.parse(a.embedding) as number[]) : null, takenAt: when, rejectedPetIds, text }, pets);
     if (hit) {
       const r = await db.animalDetection.updateMany({ where: { id: a.id, status: { in: ["DETECTED", "PROPOSED"] } }, data: { status: "PROPOSED", proposedPersonId: hit.petId } });
       n += r.count;
@@ -53,7 +71,7 @@ export async function rejectAnimal(animalId: string): Promise<void> {
 export async function claimAnimalsForPet(photoId: string, personId: string): Promise<number> {
   const pet = await db.person.findUnique({ where: { id: personId }, select: { species: true } });
   if (!pet?.species) return 0;
-  const r = await db.animalDetection.updateMany({ where: { photoId, species: pet.species, status: { in: ["DETECTED", "PROPOSED"] } }, data: { personId, proposedPersonId: null, status: "CONFIRMED" } });
+  const r = await db.animalDetection.updateMany({ where: { photoId, species: { in: detectedAs(pet.species) as Species[] }, status: { in: ["DETECTED", "PROPOSED"] } }, data: { personId, proposedPersonId: null, status: "CONFIRMED" } });
   return r.count;
 }
 

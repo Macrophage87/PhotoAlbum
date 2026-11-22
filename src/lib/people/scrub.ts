@@ -939,8 +939,10 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
         start -= kin[0].length;
       }
       const last = spans[spans.length - 1];
-      // Two of their names side by side are one mention: "byron ada".
-      if (last && (start <= last[1] || /^[ \t]+$/u.test(text.slice(last[1], start)))) last[1] = Math.max(last[1], b);
+      // Two of their names side by side are one mention: "byron ada". Not two hashtags or handles, each its own
+      // ("#TeamMay #MayDay"), as a later answer reads them (tombstone.ts).
+      const tagLike = (x: number) => /^[#＃@＠]/u.test(text.slice(x));
+      if (last && (start < last[1] || (/^[ \t]*$/u.test(text.slice(last[1], start)) && !(tagLike(start) && tagLike(last[0]))))) last[1] = Math.max(last[1], b);
       else spans.push([start, b]);
     }
     return replaceSpans(text, spans);
@@ -954,7 +956,7 @@ export function nameMatcher(names: string[], others: string[] = []): NameMatcher
   let awayForms: string[] | null = null;
   const scrubText = (text: string, where: Where, keywords = false): string => {
     if (ownPhoto(where)) return scrubOwn(text, where, keywords);
-    if (/[#＃]/u.test(text)) {
+    if (/[#＃@＠]|\p{Lu}[\p{Lu}\p{M}\p{Cf}]{7}/u.test(text)) {
       const forms = where.tagged ? (aboutForms ??= strictForms(list)) : (awayForms ??= [...strictForms(list).filter((f) => /\s/u.test(f)), ...whole.map((w) => strictNormalize(w))]);
       const tags = hashtagSpans(text, forms, { minSubstring: 5, noMonths: true });
       if (tags.length) text = replaceSpans(text, tags);
