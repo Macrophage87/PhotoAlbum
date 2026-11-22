@@ -42,7 +42,6 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -66,10 +65,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-private val Navy = Color(0xFF1F3A5F)
-private val Rust = Color(0xFFD2552B)
-private val Good = Color(0xFF1E6B3A)
-
 /** Where the app is. Milestone 1 has three places and no need of a navigation library. */
 private sealed interface Screen {
     data object Setup : Screen
@@ -83,7 +78,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         val store = TokenStore(applicationContext)
         setContent {
-            MaterialTheme(colorScheme = lightColorScheme(primary = Navy, secondary = Rust)) {
+            AlbumTheme {
                 Surface(Modifier.fillMaxSize().safeDrawingPadding()) { App(store) }
             }
         }
@@ -134,7 +129,7 @@ private fun App(store: TokenStore) {
 
 @Composable
 private fun Heading(text: String) {
-    Text(text, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold, color = Navy)
+    Text(text, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, color = Navy)
 }
 
 @Composable
@@ -255,7 +250,7 @@ private fun HomeScreen(
                 problem?.let { Text(it, color = Rust) }
                 Card(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text("What Android allows this app", fontWeight = FontWeight.SemiBold)
+                        Text("What Android allows this app", fontWeight = FontWeight.Bold)
                         Text(
                             when (access) {
                                 LibraryAccess.ALL -> "Photos and videos: all of them."
@@ -282,7 +277,7 @@ private fun HomeScreen(
                     modifier = Modifier.fillMaxWidth(),
                     onClick = { fileChooser.launch(arrayOf("image/*", "video/*")) },
                 ) { Text("Pick with Android's file chooser") }
-                Text("Or tap one from this phone's library:", fontWeight = FontWeight.SemiBold)
+                Text("Or tap one from this phone's library:", fontWeight = FontWeight.Bold)
                 if (library.isEmpty()) {
                     Text(if (access == LibraryAccess.NONE) "Allow access above to see the library here." else "Nothing to show yet.")
                 }
@@ -364,7 +359,7 @@ private fun ItemScreen(api: AlbumApi, baseUrl: String, member: Member?, at: Scre
         }
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("On this phone", fontWeight = FontWeight.SemiBold)
+                Text("On this phone", fontWeight = FontWeight.Bold)
                 Fact("Picked with", at.origin.label)
                 Fact(
                     "Kind and size",
@@ -469,7 +464,7 @@ private fun ResultCard(baseUrl: String, found: Inspection, done: Sending.Done) {
     val status = done.status
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("In the album", fontWeight = FontWeight.SemiBold)
+            Text("In the album", fontWeight = FontWeight.Bold)
             if (done.result.duplicate) Text("The album already had this exact file, so this is the copy it kept.")
             if (status.status == "FAILED") {
                 Fact("Processing", "Failed. ${status.error ?: ""}".trim(), Rust)
@@ -493,7 +488,7 @@ private fun ResultCard(baseUrl: String, found: Inspection, done: Sending.Done) {
                 found.place != null -> "Failed: the phone saw a location in the file, but the album did not get one from it." to Rust
                 else -> "Nothing to prove here: this file had no location on the phone either." to Color.Unspecified
             }
-            Text(verdict.first, color = verdict.second, fontWeight = FontWeight.SemiBold)
+            Text(verdict.first, color = verdict.second, fontWeight = FontWeight.Bold)
             OutlinedButton(
                 onClick = {
                     context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("$baseUrl/photos/${status.id}")))

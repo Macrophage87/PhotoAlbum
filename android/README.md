@@ -38,3 +38,9 @@ Opening this folder in Android Studio does both.
 
 `debug.keystore` is committed on purpose so every debug build installs over the last. It signs nothing released;
 the Play upload key is never kept in this repository.
+
+## Type
+
+The app is set in Atkinson Hyperlegible (Braille Institute), chosen for the older readers in the family. The font
+files are bundled under `app/src/main/res/font/`; their licence (SIL Open Font License 1.1) is in
+`app/src/main/ATKINSON-HYPERLEGIBLE-OFL.txt`.
