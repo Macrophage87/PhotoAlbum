@@ -43,7 +43,7 @@ export function TakeoutAdmin({ configured, dir, archives, imports }: { configure
       ) : (
         <Card className="divide-y divide-border">
           {archives.map((a) => (
-            <div key={a.name} className="flex flex-wrap items-center justify-between gap-3 p-3 text-sm">
+            <div key={a.name} data-testid="takeout-archive-row" className="flex flex-wrap items-center justify-between gap-3 p-3 text-sm">
               <div className="min-w-0">
                 <div className="font-medium truncate">{a.name}</div>
                 <div className="text-muted">{size(a.bytes)} · copied {stamp(a.modifiedAt, "date")}</div>
