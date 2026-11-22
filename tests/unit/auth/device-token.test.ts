@@ -102,4 +102,20 @@ describe("a phone's token", () => {
     expect((await status(new Request(url))).status).toBe(401);
     expect((await status(new Request(url, { headers: { authorization: `Bearer ${token}` } }))).status).toBe(200);
   });
+
+  it("tells the app whether the album already holds a file, by its hash", async () => {
+    const { token } = await createDeviceToken(db, userId);
+    const ask = async (sha256: string) => status(new Request(`http://localhost/api/photos/status?sha256=${sha256}`, { headers: { authorization: `Bearer ${token}` } }));
+    const hash = "a".repeat(64);
+    expect(await (await ask(hash)).json()).toEqual({ have: null });
+    expect((await ask("not-a-hash")).status).toBe(400);
+
+    const other = await db.user.create({ data: { email: "sam@example.com" } });
+    const photo = { status: "READY" as const, originalName: "a.jpg", mimeType: "image/jpeg", storageKey: "k", originalPath: "k/original.jpg", sizeBytes: 1, contentHash: hash };
+    const binned = await db.photo.create({ data: { ...photo, uploaderId: userId, trashedAt: new Date() } });
+    expect(await (await ask(hash)).json()).toEqual({ have: null });
+    const kept = await db.photo.create({ data: { ...photo, uploaderId: other.id } });
+    expect(await (await ask(hash)).json()).toEqual({ have: { id: kept.id, status: "READY", mine: false } });
+    expect(binned.id).not.toBe(kept.id);
+  });
 });

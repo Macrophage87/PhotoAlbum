@@ -2,10 +2,29 @@ import { db } from "@/lib/db";
 import { getApiViewer } from "@/lib/auth/viewer";
 import { photoUrl } from "@/lib/photos/urls";
 
-/** Poll endpoint for the uploader: ?ids=a,b,c */
+const SHA256 = /^[0-9a-f]{64}$/;
+
+/**
+ * Poll endpoint for the uploader: ?ids=a,b,c
+ *
+ * With ?sha256=<hex> it answers one question instead: does the album already hold this exact file? The phone app
+ * asks before sending, so a photo the album has is not sent over the mobile network again just to be recognised
+ * once it has all arrived. `have` is null when it does not.
+ */
 export async function GET(request: Request) {
   const viewer = await getApiViewer(request);
   if (viewer.kind !== "user") return Response.json({ error: "Unauthorized" }, { status: 401 });
+  const sha256 = new URL(request.url).searchParams.get("sha256");
+  if (sha256 !== null) {
+    if (!SHA256.test(sha256)) return Response.json({ error: "Bad hash" }, { status: 400 });
+    // The same rule as an upload's own check: the oldest live copy is the one the album kept.
+    const have = await db.photo.findFirst({
+      where: { contentHash: sha256, trashedAt: null },
+      orderBy: { createdAt: "asc" },
+      select: { id: true, status: true, uploaderId: true },
+    });
+    return Response.json({ have: have ? { id: have.id, status: have.status, mine: have.uploaderId === viewer.user.id } : null });
+  }
   const ids = (new URL(request.url).searchParams.get("ids") ?? "").split(",").filter(Boolean).slice(0, 200);
   const photos = await db.photo.findMany({
     where: { id: { in: ids } },

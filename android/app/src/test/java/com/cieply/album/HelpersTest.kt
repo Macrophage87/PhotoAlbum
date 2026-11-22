@@ -86,4 +86,23 @@ class HelpersTest {
         assertNull(Helpers.codeFrom("familyalbum://elsewhere?code=$code"))
         assertNull(Helpers.codeFrom(null))
     }
+
+    @Test
+    fun `a file is told apart by its name, size and when it changed`() {
+        assertEquals("IMG_1.jpg|2048|1700000000", Helpers.fileKey("IMG_1.jpg", 2048, 1700000000))
+        assertEquals("IMG_1.jpg|?|?", Helpers.fileKey("IMG_1.jpg", null, null))
+    }
+
+    @Test
+    fun `a digest is written the way the album writes one`() {
+        val digest = java.security.MessageDigest.getInstance("SHA-256").digest("abc".toByteArray())
+        assertEquals("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", Helpers.hex(digest))
+    }
+
+    @Test
+    fun `the queue is summed up in a line`() {
+        assertEquals(null, Helpers.queueSummary(0, 0, 0))
+        assertEquals("3 waiting to send", Helpers.queueSummary(3, 0, 0))
+        assertEquals("3 waiting to send, 12 in the album, 1 not sent", Helpers.queueSummary(3, 12, 1))
+    }
 }
