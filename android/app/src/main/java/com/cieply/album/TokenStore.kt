@@ -45,6 +45,23 @@ class TokenStore(context: Context) {
             .apply()
     }
 
+    /** A sign-in that has been asked for and not yet answered: which album, and the secret that proves it was us. */
+    data class Pending(val baseUrl: String, val verifier: String)
+
+    fun pending(): Pending? {
+        val baseUrl = prefs.getString(KEY_PENDING_URL, null) ?: return null
+        val verifier = prefs.getString(KEY_PENDING_VERIFIER, null) ?: return null
+        return Pending(baseUrl, verifier)
+    }
+
+    fun savePending(pending: Pending) {
+        prefs.edit().putString(KEY_PENDING_URL, pending.baseUrl).putString(KEY_PENDING_VERIFIER, pending.verifier).apply()
+    }
+
+    fun clearPending() {
+        prefs.edit().remove(KEY_PENDING_URL).remove(KEY_PENDING_VERIFIER).apply()
+    }
+
     fun clear() {
         prefs.edit().remove(KEY_URL).remove(KEY_TOKEN).apply()
     }
@@ -68,5 +85,7 @@ class TokenStore(context: Context) {
         const val TRANSFORMATION = "AES/GCM/NoPadding"
         const val KEY_URL = "baseUrl"
         const val KEY_TOKEN = "token"
+        const val KEY_PENDING_URL = "pendingBaseUrl"
+        const val KEY_PENDING_VERIFIER = "pendingVerifier"
     }
 }

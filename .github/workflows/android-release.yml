@@ -1,0 +1,82 @@
+name: Android release
+
+# Merge to `main` with a change under android/ → a signed bundle goes to the internal testing track on Google Play.
+# The family's phones then update from Play by themselves. Setup is in android/README.md → "Automatic delivery".
+#
+# Needs four repository secrets. Until they exist the job prints a note and exits green, like the deploy workflows:
+#   PLAY_SERVICE_ACCOUNT_JSON          the service account allowed to release to testing tracks
+#   ANDROID_UPLOAD_KEYSTORE_BASE64     the upload keystore, base64
+#   ANDROID_UPLOAD_KEYSTORE_PASSWORD   its password (store and key share one)
+#   ALBUM_URL                          the album's address, built into the app
+on:
+  push:
+    branches: [main]
+    paths: ["android/**", ".github/workflows/android-release.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-release
+  cancel-in-progress: false # uploads queue, never overlap: each needs a higher version number than the last
+
+jobs:
+  release:
+    name: Bundle and upload to internal testing
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ARMED: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON != '' && secrets.ANDROID_UPLOAD_KEYSTORE_BASE64 != '' && secrets.ANDROID_UPLOAD_KEYSTORE_PASSWORD != '' && secrets.ALBUM_URL != '' }}
+    steps:
+      - name: Not armed yet
+        if: env.ARMED != 'true'
+        run: echo "The Play secrets are not all set — skipping the release (see android/README.md)."
+      - uses: actions/checkout@v4
+        if: env.ARMED == 'true'
+      - uses: actions/setup-java@v4
+        if: env.ARMED == 'true'
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@v4
+        if: env.ARMED == 'true'
+      - name: Put the upload key in place
+        if: env.ARMED == 'true'
+        working-directory: android
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_UPLOAD_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_UPLOAD_KEYSTORE_PASSWORD }}
+        run: |
+          umask 077
+          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/upload.jks"
+          {
+            echo "storeFile=$RUNNER_TEMP/upload.jks"
+            echo "storePassword=$KEYSTORE_PASSWORD"
+            echo "keyAlias=upload"
+            echo "keyPassword=$KEYSTORE_PASSWORD"
+          } > keystore.properties
+      - name: Test and bundle
+        if: env.ARMED == 'true'
+        working-directory: android
+        env:
+          ALBUM_URL: ${{ secrets.ALBUM_URL }}
+        # Play refuses a version number it has seen. The run number only goes up; the 100 keeps it clear of the
+        # few uploaded by hand before this workflow existed.
+        run: |
+          CODE=$((100 + GITHUB_RUN_NUMBER))
+          ./gradlew --no-daemon testDebugUnitTest bundleRelease -PversionCode="$CODE" -PversionName="0.1.$GITHUB_RUN_NUMBER"
+      - name: Upload to Google Play (internal testing)
+        if: env.ARMED == 'true'
+        # Pinned to the commit v1.1.5 pointed at, since this step is handed the Play credentials: a moved tag cannot
+        # change what runs with them. Bump by looking up the new tag's commit.
+        uses: r0adkll/upload-google-play@e738b9dd8f2476ea806d921b64aacd24f34515a5 # v1.1.5
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: com.cieply.album
+          releaseFiles: android/app/build/outputs/bundle/release/app-release.aab
+          track: internal
+          status: completed
+      - name: Remove the upload key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/upload.jks" android/keystore.properties

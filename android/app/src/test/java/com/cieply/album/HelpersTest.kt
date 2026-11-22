@@ -62,4 +62,28 @@ class HelpersTest {
         assertEquals("1.5 MB", Helpers.formatBytes(3L shl 19))
         assertEquals("1.0 GB", Helpers.formatBytes(1L shl 30))
     }
+
+    @Test
+    fun `asking to sign in sends the hash of a secret, never the secret`() {
+        // The example from RFC 7636, which the album's server follows too.
+        assertEquals("E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM", Helpers.challengeOf("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"))
+        val verifier = Helpers.newVerifier()
+        assertEquals(43, verifier.length)
+        assertEquals(43, Helpers.challengeOf(verifier).length)
+        assertEquals(false, verifier == Helpers.newVerifier())
+        assertEquals(
+            "https://album.example.com/account/phone?challenge=abc&app=familyalbum-debug&name=Pixel%209%20Pro",
+            Helpers.connectUrl("https://album.example.com", "abc", "Pixel 9 Pro", "familyalbum-debug"),
+        )
+    }
+
+    @Test
+    fun `the code is read from the link the website hands back`() {
+        val code = "A".repeat(43)
+        assertEquals(code, Helpers.codeFrom("familyalbum://connect?code=$code"))
+        assertEquals(code, Helpers.codeFrom("familyalbum-debug://connect?x=1&code=$code&y=2"))
+        assertNull(Helpers.codeFrom("familyalbum://connect?code=short"))
+        assertNull(Helpers.codeFrom("familyalbum://elsewhere?code=$code"))
+        assertNull(Helpers.codeFrom(null))
+    }
 }

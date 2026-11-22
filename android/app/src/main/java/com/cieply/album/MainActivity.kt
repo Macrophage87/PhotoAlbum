@@ -73,20 +73,31 @@ private sealed interface Screen {
 }
 
 class MainActivity : ComponentActivity() {
+    /** The link the album's website handed back, until the sign-in screen has dealt with it. */
+    private val handedBack = mutableStateOf<String?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         val store = TokenStore(applicationContext)
+        if (savedInstanceState == null) handedBack.value = intent?.dataString
         setContent {
             AlbumTheme {
-                Surface(Modifier.fillMaxSize().safeDrawingPadding()) { App(store) }
+                Surface(Modifier.fillMaxSize().safeDrawingPadding()) {
+                    App(store, handedBack.value, onHandled = { handedBack.value = null })
+                }
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        intent.dataString?.let { handedBack.value = it }
     }
 }
 
 @Composable
-private fun App(store: TokenStore) {
+private fun App(store: TokenStore, handedBack: String?, onHandled: () -> Unit) {
     var signIn by remember { mutableStateOf(store.read()) }
     var member by remember { mutableStateOf<Member?>(null) }
     var screen by remember { mutableStateOf<Screen>(if (signIn == null) Screen.Setup else Screen.Home) }
@@ -94,8 +105,12 @@ private fun App(store: TokenStore) {
     val current = signIn
     if (current == null || screen == Screen.Setup) {
         SetupScreen(
+            store = store,
+            handedBack = handedBack,
+            onHandled = onHandled,
             onSignedIn = { saved, who ->
                 store.save(saved)
+                store.clearPending()
                 signIn = saved
                 member = who
                 screen = Screen.Home
@@ -133,64 +148,95 @@ private fun Heading(text: String) {
 }
 
 @Composable
-private fun SetupScreen(onSignedIn: (TokenStore.SignIn, Member) -> Unit) {
+private fun SetupScreen(
+    store: TokenStore,
+    handedBack: String?,
+    onHandled: () -> Unit,
+    onSignedIn: (TokenStore.SignIn, Member) -> Unit,
+) {
+    val context = LocalContext.current
+    // The album's address is built into the app when it was built with one; otherwise it is asked for once.
+    val builtIn = remember { Helpers.normalizeBaseUrl(BuildConfig.ALBUM_URL) }
     var address by remember { mutableStateOf("") }
-    var token by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
+    var waiting by remember { mutableStateOf(store.pending() != null) }
     var problem by remember { mutableStateOf<String?>(null) }
-    val scope = rememberCoroutineScope()
+
+    // The website has handed the member back with a one-time code: trade it, with our secret, for this phone's token.
+    LaunchedEffect(handedBack) {
+        val link = handedBack ?: return@LaunchedEffect
+        onHandled()
+        val code = Helpers.codeFrom(link)
+        val pending = store.pending()
+        if (code == null || pending == null) {
+            problem = "That sign-in could not be finished. Tap Sign in to start again."
+            waiting = false
+            return@LaunchedEffect
+        }
+        busy = true
+        problem = null
+        try {
+            val (token, who) = withContext(Dispatchers.IO) {
+                val token = AlbumApi.exchange(pending.baseUrl, code, pending.verifier)
+                token to AlbumApi(pending.baseUrl, token).me()
+            }
+            onSignedIn(TokenStore.SignIn(pending.baseUrl, token), who)
+        } catch (e: AlbumException) {
+            problem = e.message
+        } catch (e: Exception) {
+            problem = "Could not reach the album: ${e.message ?: e.javaClass.simpleName}"
+        } finally {
+            busy = false
+            waiting = false
+            store.clearPending()
+        }
+    }
 
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         Heading("Family Album")
-        Text("This early build signs in with a token made on the album's server. Paste it once; it stays on this phone.")
-        OutlinedTextField(
-            value = address,
-            onValueChange = { address = it },
-            label = { Text("Album address") },
-            placeholder = { Text("album.example.com") },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-            modifier = Modifier.fillMaxWidth(),
-        )
-        OutlinedTextField(
-            value = token,
-            onValueChange = { token = it },
-            label = { Text("Sign-in token") },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-            modifier = Modifier.fillMaxWidth(),
-        )
+        Text("Sign in the same way you do on the album's website. Your browser will open, and then bring you back here.")
+        if (builtIn == null) {
+            OutlinedTextField(
+                value = address,
+                onValueChange = { address = it },
+                label = { Text("Album address") },
+                placeholder = { Text("album.example.com") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
         problem?.let { Text(it, color = Rust) }
-        Button(
-            enabled = !busy,
-            onClick = {
-                val baseUrl = Helpers.normalizeBaseUrl(address)
-                val pasted = token.trim()
-                if (baseUrl == null) {
-                    problem = "That does not look like the album's address. It should be like album.example.com (https only)."
-                } else if (pasted.isEmpty()) {
-                    problem = "Paste the sign-in token."
-                } else {
-                    busy = true
-                    problem = null
-                    scope.launch {
+        if (busy) {
+            Progress("Finishing sign-in…")
+        } else {
+            Button(
+                modifier = Modifier.fillMaxWidth(),
+                onClick = {
+                    val baseUrl = builtIn ?: Helpers.normalizeBaseUrl(address)
+                    if (baseUrl == null) {
+                        problem = "That does not look like the album's address. It should be like album.example.com (https only)."
+                    } else {
+                        problem = null
+                        val verifier = Helpers.newVerifier()
+                        store.savePending(TokenStore.Pending(baseUrl, verifier))
+                        val url = Helpers.connectUrl(baseUrl, Helpers.challengeOf(verifier), android.os.Build.MODEL ?: "Phone", BuildConfig.APP_SCHEME)
                         try {
-                            val who = withContext(Dispatchers.IO) { AlbumApi(baseUrl, pasted).me() }
-                            onSignedIn(TokenStore.SignIn(baseUrl, pasted), who)
-                        } catch (e: AlbumException) {
-                            problem = e.message
+                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                            waiting = true
                         } catch (e: Exception) {
-                            problem = "Could not reach the album: ${e.message ?: e.javaClass.simpleName}"
-                        } finally {
-                            busy = false
+                            problem = "This phone has no browser to open the album's sign-in page."
                         }
                     }
-                }
-            },
-        ) { Text(if (busy) "Checking…" else "Sign in") }
+                },
+            ) { Text(if (waiting) "Sign in again" else "Sign in") }
+            if (waiting) {
+                Text("Waiting for you to finish in the browser. When the page says so, tap \"Back to the Family Album app\".")
+            }
+        }
     }
 }
 

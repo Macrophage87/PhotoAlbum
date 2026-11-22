@@ -1,9 +1,11 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { requireUserOrThrow } from "@/lib/auth/viewer";
+import { appScheme, createPhoneLink, isChallenge } from "@/lib/auth/phone-link";
 import { rejudgeFromAction } from "@/lib/annotation/rejudge-notice";
 
 const nameSchema = z.string().trim().max(80).transform((v) => v || null);
@@ -29,4 +31,25 @@ export async function setMemberName(userId: string, fd: FormData): Promise<void>
   await db.user.update({ where: { id: userId }, data: { name } });
   if (name !== before?.name) await rejudgeFromAction({ members: [userId] });
   revalidatePath("/", "layout");
+}
+
+/**
+ * A signed-in member says the album's app may be connected as them. The answer is a one-time code in the address
+ * of the page they land on, which hands it back to the app (see src/lib/auth/phone-link.ts).
+ */
+export async function connectPhone(fd: FormData): Promise<void> {
+  const user = await requireUserOrThrow();
+  const challenge = fd.get("challenge");
+  if (!isChallenge(challenge)) throw new Error("Open this page from the app");
+  const app = appScheme(fd.get("app"));
+  const code = await createPhoneLink(db, user.id, challenge, typeof fd.get("name") === "string" ? (fd.get("name") as string) : null);
+  redirect(`/account/phone?app=${app}&code=${code}`);
+}
+
+/** Sign one phone out. Only ever the member's own: the id names nothing unless it is theirs. */
+export async function disconnectPhone(fd: FormData): Promise<void> {
+  const user = await requireUserOrThrow();
+  const id = fd.get("id");
+  if (typeof id === "string") await db.deviceToken.deleteMany({ where: { id, userId: user.id } });
+  revalidatePath("/account");
 }
