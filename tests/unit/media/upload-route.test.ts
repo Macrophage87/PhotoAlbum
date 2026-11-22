@@ -79,6 +79,20 @@ describe("the upload route", () => {
     expect(leftovers()).toEqual([]);
   });
 
+  it("ends cleanly when the client is already gone before the file is read", async () => {
+    // The abort lands while the handler is still on its database work, so the body stream is made from a signal that
+    // has already fired and errors before storage has started reading it. That error must not go unhandled.
+    const ac = new AbortController();
+    const body = new ReadableStream<Uint8Array>({ start(c) { c.enqueue(bytes(100)); } });
+    const pending = upload(body, "a.jpg", {}, ac.signal);
+    ac.abort();
+    const r = await settles(pending);
+    expect(r).not.toBe("hung");
+    expect((r as Response).status).toBe(499);
+    expect(await db.photo.count()).toBe(0);
+    expect(leftovers()).toEqual([]);
+  });
+
   it("removes the stored original when a step after storing fails", async () => {
     claim.fail = true;
     const r = await upload(bytes(10), "a.jpg");
