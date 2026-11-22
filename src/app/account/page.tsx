@@ -1,7 +1,8 @@
 import { getViewer, requireUser } from "@/lib/auth/viewer";
 import { AppShell, Container } from "@/components/layout/AppShell";
-import { Button, Card, Input, Label } from "@/components/ui";
-import { updateMyName } from "./actions";
+import { Button, Card, ConfirmSubmitButton, Input, Label } from "@/components/ui";
+import { db } from "@/lib/db";
+import { disconnectPhone, updateMyName } from "./actions";
 
 export const metadata = { title: "Your account" };
 
@@ -9,6 +10,8 @@ export default async function AccountPage({ searchParams }: PageProps<"/account"
   const me = await requireUser("/account");
   const viewer = await getViewer();
   const sp = await searchParams;
+  const phones = await db.deviceToken.findMany({ where: { userId: me.id }, orderBy: { createdAt: "desc" }, select: { id: true, name: true, createdAt: true, lastUsedAt: true } });
+  const day = new Intl.DateTimeFormat("en", { dateStyle: "medium" });
   return (
     <AppShell viewer={viewer}>
       <Container className="py-10 max-w-xl space-y-6">
@@ -26,6 +29,30 @@ export default async function AccountPage({ searchParams }: PageProps<"/account"
             </div>
             <Button type="submit" size="sm">Save</Button>
           </form>
+        </Card>
+        <Card className="p-5 space-y-3">
+          <div>
+            <h2 className="font-display text-xl font-semibold">Phones with the album&rsquo;s app</h2>
+            <p className="text-sm text-muted mt-1">Each phone you sign in on the app is listed here. Sign one out if it is lost or no longer yours; the others carry on.</p>
+          </div>
+          {phones.length === 0 ? (
+            <p className="text-sm text-muted">None yet. Open the Family Album app on your phone and choose Sign in.</p>
+          ) : (
+            <ul className="divide-y divide-border">
+              {phones.map((phone) => (
+                <li key={phone.id} className="py-3 flex items-center justify-between gap-3">
+                  <div>
+                    <div className="font-medium">{phone.name}</div>
+                    <div className="text-xs text-muted">Connected {day.format(phone.createdAt)} · last used {day.format(phone.lastUsedAt)}</div>
+                  </div>
+                  <form action={disconnectPhone}>
+                    <input type="hidden" name="id" value={phone.id} />
+                    <ConfirmSubmitButton variant="secondary" size="sm" confirmMessage={`Sign ${phone.name} out of the album?`}>Sign out</ConfirmSubmitButton>
+                  </form>
+                </li>
+              ))}
+            </ul>
+          )}
         </Card>
       </Container>
     </AppShell>

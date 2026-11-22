@@ -2,6 +2,9 @@ package com.cieply.album
 
 import java.net.URI
 import java.net.URLEncoder
+import java.security.MessageDigest
+import java.security.SecureRandom
+import java.util.Base64
 import java.util.Locale
 
 /** What the album will take, as its own `/api/v1/me` reports it. */
@@ -40,6 +43,26 @@ object Helpers {
         val port = if (uri.port == -1 || uri.port == 443) "" else ":${uri.port}"
         return "https://${host.lowercase(Locale.US)}$port"
     }
+
+    private val urlSafe = Base64.getUrlEncoder().withoutPadding()
+
+    /** A secret this app makes when it asks to sign in, and never sends until the very last step. */
+    fun newVerifier(): String = urlSafe.encodeToString(ByteArray(32).also { SecureRandom().nextBytes(it) })
+
+    /**
+     * What is sent in place of the secret when asking: its SHA-256. The album gives a sign-in only to whoever can
+     * show the secret this was made from, so a code caught on its way back to the app is of no use to anyone else.
+     */
+    fun challengeOf(verifier: String): String =
+        urlSafe.encodeToString(MessageDigest.getInstance("SHA-256").digest(verifier.toByteArray(Charsets.US_ASCII)))
+
+    /** The page on the album's website where a member signs in and says this phone may be connected. */
+    fun connectUrl(baseUrl: String, challenge: String, phoneName: String, scheme: String): String =
+        "$baseUrl/account/phone?challenge=$challenge&app=${encodeFileName(scheme)}&name=${encodeFileName(phoneName)}"
+
+    /** The one-time code in the link the website hands back, when it has the shape of one. */
+    fun codeFrom(link: String?): String? =
+        Regex("^[a-z-]+://connect\\?(?:.*&)?code=([A-Za-z0-9_-]{43})(?:&.*)?$").find(link ?: "")?.groupValues?.get(1)
 
     /** A file name for the `x-file-name` header, percent-encoded the way a browser's encodeURIComponent would. */
     fun encodeFileName(name: String): String = URLEncoder.encode(name, "UTF-8").replace("+", "%20")

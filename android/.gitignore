@@ -6,3 +6,7 @@ local.properties
 captures/
 *.jks
 release.keystore
+keystore.properties
+*.keystore
+!debug.keystore
+*.aab
