@@ -51,6 +51,39 @@ export function strictNormalize(text: string): string {
   return normalizeText(text).text;
 }
 
+/**
+ * The text with each invisible character between two letters a space, of the same length so offsets stay: a
+ * zero-width space as the only thing between "Tom" and "Jordan" still parts two words. Read beside the text as it
+ * is, where the same character inside a word ("Madi\u00adson") is taken out.
+ */
+export function invisibleSpaced(text: string): string {
+  return text.replace(/(?<=\p{L}\p{M}*)\p{Cf}+(?=\p{L})/gu, (m) => " ".repeat(m.length));
+}
+
+/** The longest name kept in the album, in letters: no run inside a hashtag longer than this is one name. */
+export const MAX_NAME_LETTERS = 30;
+
+/** Each doubled letter written once: "maddison" and "madison" alike, as a hashtag may spell a name. */
+export function singleLetters(s: string): string {
+  return s.replace(/(\p{L})\1+/gu, "$1");
+}
+
+/**
+ * Words read the way a hashtag is (see `hashtagSpans`): a hashtag, hyphens inside it too ("#madi-son"); a handle
+ * ("@MayChen", "@may.chen"); and a run of eight capitals or more with no space ("HAPPYBIRTHDAYMAY"). `body` is the
+ * part after the mark, or the whole run.
+ */
+export function tagLikeRuns(text: string): { start: number; end: number; body: string }[] {
+  const rx = /[#＃]([\p{L}\p{M}\p{N}_\p{Cf}]+(?:[-‐‑][\p{L}\p{M}\p{N}_\p{Cf}]+)*)|[@＠]([\p{L}\p{M}\p{N}_\p{Cf}]+(?:[.\-‐‑][\p{L}\p{M}\p{N}_\p{Cf}]+)*)|(?<![\p{L}\p{M}\p{N}_\p{Cf}#＃@＠])(\p{Lu}[\p{Lu}\p{M}\p{Cf}]*)(?![\p{L}\p{M}])/gu;
+  const out: { start: number; end: number; body: string }[] = [];
+  for (const m of text.matchAll(rx)) {
+    const body = m[1] ?? m[2] ?? m[3];
+    if (m[3] !== undefined && (body.match(/\p{Lu}/gu) ?? []).length < 8) continue;
+    out.push({ start: m.index!, end: m.index! + m[0].length, body });
+  }
+  return out;
+}
+
 /** The normalized text, and for each of its characters the index in the original it came from. */
 function normalizeText(text: string): { text: string; from: number[] } {
   let out = "";
@@ -80,7 +113,7 @@ const ORDINAL_DATE_WORDS = new Set([...DATE_WORDS, "on", "by", "before", "after"
 /** Words right before a month and a year that make them a date: "In May 2019", "Since June 2021" (not "by", "from"). */
 const YEAR_DATE_WORDS = new Set([...DATE_WORDS, "on", "before", "after", "through"]);
 /** A person after a month and a year: "June 2019 champion!", "May 2020 graduate". */
-const PERSON_AFTER = /^[ \t]+(?:champion|champ|graduate|grad|winner|runner-up|girl|boy|baby|babe|star|queen|king|princess|prince|mvp|hero|kid|toddler|newborn|player|captain|student|athlete|swimmer|dancer|scholar|leader|helper|superstar|cutie|sweetie)s?(?![\p{L}])/u;
+const PERSON_AFTER = /^[ \t]+(?:champion|champ|graduate|grad|winner|runner-up|girl|boy|baby|babe|star|queen|king|princess|prince|mvp|hero|kid|toddler|newborn|player|captain|student|athlete|swimmer|dancer|scholar|leader|helper|superstar|cutie|sweetie|twin|sister|brother|son|daughter|kiddo)s?(?![\p{L}])/u;
 const TIME_WORDS = "dawn|dusk|sunrise|sunset|night|noon|midnight|twilight|daybreak|morning|evening|afternoon";
 /** Two-letter names that are also small words: only written with a capital ("An", not "an"). */
 const SMALL_WORDS = new Set(["an", "in", "on", "at", "to", "so", "no", "or", "as", "is", "it", "me", "we", "us", "he", "be", "do", "go", "my", "by", "of", "up", "am", "if", "al", "el", "la", "le", "de", "da", "di", "du"]);
@@ -143,12 +176,13 @@ export function strictFirstNames(names: string[]): Set<string> {
 
 /**
  * A month used as a date, in normalized text, only in these shapes (the language review's fourth to seventh rounds):
- * - with a year, opening the text, a sentence or a line, or right after a date word ("May 2019", "In May 2019 we",
+ * - with a year, opening the text, a sentence or a line (not after a semicolon: "Ben; May 2019"), or right after a
+ *   date word ("May 2019", "In May 2019 we",
  *   "Since June 2021.", and with a comma "Late June, 2019"), or "from" in a range ("from May 2019 to June 2020");
  *   after anything else it is them ("Grandpa with May 2019.", "Ben + May 2019", "ben, may 2019", "Photo by May
  *   2021.", "Flowers from June 2021"); and not before something a person does ("May 2020 swims",
- *   "smiling", "learned"), an age or a birth ("June 2019 months", "May 2016 born") or a person ("June 2019
- *   champion!");
+ *   "smiling", "learned"), an age or a birth ("June 2019 months", "May 2016 born") or a person, the next word or the one
+ *   after ("June 2019 champion!", "May 2019 birthday girl");
  * - with a day and a year: "May 5, 2019"; or an ordinal day with a year ("May 5th, 2019"), or at the end after a date
  *   word or opening the text ("On May 5th.", "May 5th."), never in a list of names or places ("Ben 1st, May 3rd!");
  *   "the 5th of May.";
@@ -165,14 +199,17 @@ export function monthAsDate(before: string, after: string, originalAfter?: strin
     const w = /^[ \t]+(\p{L}+)/u.exec(rest)?.[1];
     // Only opening the text, a sentence or a line, or right after a date word ("In May 2019", "Since June 2021."):
     // after anything else it is her ("Grandpa with May 2019.", "Ben + May 2019", "ben, may 2019").
-    const opens = /(?:^|[\n.!?;:])[\s"'“‘(\[*_#>•-]*$/u.test(before);
+    // Not after a semicolon, which joins a list as "and" does ("Ben; May 2019").
+    const opens = /(?:^|[\n.!?:])[\s"'“‘(\[*_#>•-]*$/u.test(before);
     // Not after "by" or "from" ("Photo by May 2021.", "Flowers from June 2021"), but for a range ("from May 2019 to
     // June 2020").
     const range = prevWord === "from" && /^[ \t]*(?:-|to|until|till|through|thru)(?![\p{L}])/u.test(rest);
     if (!opens && !YEAR_DATE_WORDS.has(prevWord) && !range) return false;
     // Nor before an age, a birth, a person or something going on: "May 2016 born", "May 1999 age 5", "June 2019
     // champion!", "May 2020 smiling", "May 2020 loses her first tooth!", "May 2019 learned to ride".
-    if (/^[ \t]+(?:months?|years?|weeks?|days?|old|born|age|aged)(?![\p{L}])/u.test(rest) || PERSON_AFTER.test(rest)) return false;
+    // A person one word further on as well: "May 2019 birthday girl", "June 2020 big sister".
+    const second = /^[ \t]+\p{L}[\p{L}'-]*(?=[ \t])/u.exec(rest);
+    if (/^[ \t]+(?:months?|years?|weeks?|days?|old|born|age|aged)(?![\p{L}])/u.test(rest) || PERSON_AFTER.test(rest) || (second && PERSON_AFTER.test(rest.slice(second[0].length)))) return false;
     return !(w && (isPersonVerb(w) || (/(?:ing|ed|s)$/u.test(w) && !NOT_DOING.has(w))));
   }
   const end = /^[ \t]*[.!?]*[ \t]*(?:$|\n)/u;
@@ -217,8 +254,10 @@ export type StrictFinder = {
 };
 
 /**
- * The whole hashtags that hold one of these forms: a word of it written in camel case ("#MayTheBirthdayGirl",
- * "#TeamMay"), or any form of three letters or more anywhere inside it ("#happybirthdaymay", "#amazinggrace").
+ * The whole hashtags that hold one of these forms, and handles and runs of capitals read as they are (see
+ * `tagLikeRuns`: "@MayChen", "HAPPYBIRTHDAYMAY"): a word of it written in camel case ("#MayTheBirthdayGirl",
+ * "#TeamMay"), or any form of three letters or more anywhere inside it ("#happybirthdaymay", "#amazinggrace"), a
+ * doubled letter written once or twice ("#maddison") and a hyphen inside it no break ("#madi-son").
  * `forms` normalized, as strictForms gives them; a two-letter one only as a capitalized word. Off their own
  * photographs, as prose is read there: `noMonths` leaves a month alone ("#MayDay", "#dismay"), and `minSubstring` 5
  * leaves a short name run into another word ("#planning" is no Ann).
@@ -226,17 +265,25 @@ export type StrictFinder = {
 export function hashtagSpans(text: string, forms: string[], opts: { minSubstring?: number; noMonths?: boolean } = {}): [number, number][] {
   const out: [number, number][] = [];
   const min = opts.minSubstring ?? 3;
-  const joined = forms.filter((f) => !CJK.test(f) && !(opts.noMonths && MONTHS.has(f))).map((f) => ({ f, run: f.replace(/[\s-]+/gu, "") }));
-  for (const h of text.matchAll(/[#＃]([\p{L}\p{M}\p{N}_\p{Cf}]+)/gu)) {
-    const body = strictNormalize(h[1]).replace(/[_\d]+/gu, "");
-    const words = splitCamel(h[1].replace(/\p{Cf}/gu, "")).split(/[^\p{L}\p{M}]+/u).filter(Boolean);
+  const joined = forms
+    .filter((f) => !CJK.test(f) && !(opts.noMonths && MONTHS.has(f)))
+    .map((f) => {
+      const run = f.replace(/[\s-]+/gu, "");
+      return { f, run, single: singleLetters(run) };
+    });
+  for (const h of tagLikeRuns(text)) {
+    const body = strictNormalize(h.body).replace(/[_\d.\s-]+/gu, "");
+    // Another spelling of it, a letter doubled or not ("#maddison" for a Madison, "#madison" for a Maddison).
+    const single = singleLetters(body);
+    const words = splitCamel(h.body.replace(/\p{Cf}/gu, "")).split(/[^\p{L}\p{M}]+/u).filter(Boolean);
     const spaced = ` ${words.map(strictNormalize).join(" ")} `;
-    const hit = joined.some(({ f, run }) => {
+    const hit = joined.some(({ f, run, single: s }) => {
       if (run.length >= min && body.includes(run)) return true;
+      if (s.length >= min && single.includes(s)) return true;
       if (!spaced.includes(` ${f.replace(/-/gu, " ")} `)) return false;
       return !SMALL_WORDS.has(f) || words.some((w) => strictNormalize(w) === f && /^\p{Lu}/u.test(w));
     });
-    if (hit) out.push([h.index!, h.index! + h[0].length]);
+    if (hit) out.push([h.start, h.end]);
   }
   return out;
 }
@@ -271,11 +318,22 @@ export function strictFinder(names: string[], others: string[] = [], skip: Set<s
   // Whole words, letters only at the edges (digits or a hyphen run against a name do not hide it).
   const rx = words.length ? new RegExp(`(?<![\\p{L}])(?:${words.map((w) => escape(w).replace(/[ -]/g, "[\\s\\-]+")).join("|")})(?:'?s)?(?![\\p{L}])`, "gu") : null;
   // Written as one person's name: each word with a capital, and exactly one space or tab between them, as written.
+  // An invisible character between two letters is no space ("Tom\u200bJordan" is not Tom Jordan written out).
   const capitalized = (original: string) => {
-    const words = original.replace(/\p{Cf}/gu, "").split(/[ \t]/u);
+    const words = original.replace(/(?<=\p{L}\p{M}*)\p{Cf}+(?=\p{L})/gu, "\u0000").replace(/\p{Cf}/gu, "").split(/[ \t]/u);
     return words.every((w) => /^\p{Lu}[\p{L}\p{M}'’.-]*$/u.test(w));
   };
+  // Read twice where an invisible character stands between two letters: taken out ("Madi\u00adson"), and as a space
+  // ("Tom\u200bJordan" is Tom and Jordan). Either finding it counts.
   const spans = (text: string, opts: StrictOptions = {}): [number, number][] => {
+    const found = spansOf(text, text, opts);
+    const spaced = invisibleSpaced(text);
+    if (spaced === text) return found;
+    const more = spansOf(spaced, text, opts).filter(([a, b]) => !found.some(([x, y]) => x === a && y === b));
+    return [...found, ...more].sort((x, y) => x[0] - y[0] || x[1] - y[1]);
+  };
+  // `original`: the text as written, the same length, for judging how somebody else's full name is written.
+  const spansOf = (text: string, original: string, opts: StrictOptions): [number, number][] => {
     if (!text.trim()) return [];
     const out: [number, number][] = [];
     const { text: t, from } = normalizeText(text);
@@ -296,7 +354,7 @@ export function strictFinder(names: string[], others: string[] = [], skip: Set<s
     if (!rx) return out.sort((a, b) => a[0] - b[0]);
     const lake = lakeSpans(text);
     // Judged on the original: a dash turned into a space ("Tom—Jordan") is no space between one person's names.
-    const theirs: [number, number][] = fullRx && !opts.list ? [...t.matchAll(fullRx)].filter((m) => capitalized(text.slice(from[m.index!], from[m.index! + m[0].length]))).map((m) => [m.index!, m.index! + m[0].length]) : [];
+    const theirs: [number, number][] = fullRx && !opts.list ? [...t.matchAll(fullRx)].filter((m) => capitalized(original.slice(from[m.index!], from[m.index! + m[0].length]))).map((m) => [m.index!, m.index! + m[0].length]) : [];
     for (const m of t.matchAll(rx)) {
       if (theirs.some(([a, b]) => m.index! >= a && m.index! + m[0].length <= b)) continue;
       if (tags.some(([a, b]) => from[m.index!] >= a && from[m.index!] < b)) continue;

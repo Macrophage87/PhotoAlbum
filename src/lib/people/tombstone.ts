@@ -6,7 +6,7 @@ import { dbNow } from "./names-changed";
 import { Prisma } from "@/generated/prisma/client";
 import type { StoredAnnotation } from "@/lib/annotation/schema";
 import { FUNCTION_WORDS, inTitleCase, isEverydayWord, isKinWord, isMonth, isTitlePrefix, kinshipKey, isPlaceOrDateWord, normalizeName, notThePerson, replaceSpans, type Neighbourhood } from "./scrub";
-import { lakeSpans, monthAsDate, strictNormalize } from "./strict-names";
+import { invisibleSpaced, lakeSpans, MAX_NAME_LETTERS, monthAsDate, singleLetters, strictNormalize, tagLikeRuns } from "./strict-names";
 import { splitCamel } from "@/lib/annotation/names";
 
 /**
@@ -35,6 +35,8 @@ const CJK = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hang
 const CJK_RUN = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}ー]+/gu;
 const MAX_WORDS = 4;
 const MAX_CJK = 12;
+/** A hashtag longer than this, in letters, is not searched letter by letter, but goes whole where a name is in play. */
+const MAX_TAG_LETTERS = 500;
 
 type VersionKey = { version: number; key: Buffer };
 export type ForgetKeyState = {
@@ -525,7 +527,17 @@ export async function loadTombstone(): Promise<Tombstone> {
     return currentForms.has(n) || lookup(n) !== undefined;
   };
   type Mode = "prose" | "summary" | "tag";
+  // Read twice where an invisible character stands between two letters: taken out ("Madi\u00adson" is Madison), and
+  // as a space ("Tom\u200bJordan" is Tom and Jordan), as the forget reads it (strict-names.ts). Either counts.
   const spansIn = (text: string, scope: Scope | undefined, mode: Mode): [number, number][] => {
+    const found = spansOf(text, text, scope, mode);
+    const spaced = invisibleSpaced(text);
+    if (spaced === text) return found;
+    const more = spansOf(spaced, text, scope, mode).filter(([a, b]) => !found.some(([x, y]) => x === a && y === b));
+    return [...found, ...more].sort((x, y) => x[0] - y[0] || x[1] - y[1]);
+  };
+  // `original`: the text as written, the same length, for judging how somebody else's full name is written.
+  const spansOf = (text: string, original: string, scope: Scope | undefined, mode: Mode): [number, number][] => {
     const spans: [number, number][] = [];
     // Letters apart from digits ("madison2016" is Madison and a year), invisible characters inside a word kept in it.
     const tokens = [...text.matchAll(/[\p{L}\p{M}][\p{L}\p{M}\p{Cf}'’.]*|\p{N}+/gu)].map((m) => {
@@ -542,6 +554,24 @@ export async function loadTombstone(): Promise<Tombstone> {
     // A tag that is a one-word name, or its possessive: "ximena", "ximena's".
     const wholeTag = mode === "tag" && tokens.length === 1 && /^[\s]*[\p{L}\p{M}\p{N}'’.-]+[\s]*$/u.test(text);
     const titlePrefix = (t: { raw: string }) => /^(?:great|step|half|grand)$/iu.test(t.raw);
+    /**
+     * Whether words i to i+n are inside the full name of somebody the album knows now, written in one field with
+     * capitals and a single space or tab between the words ("Grace Kelly"), as the forget reads it (strict-names.ts):
+     * their name, not the forgotten person's. Kinship words are nobody's name words; a full name that is also a
+     * forgotten one is no excuse.
+     */
+    const insideSomebodyElse = (i: number, n: number): boolean => {
+      for (let len = Math.min(MAX_WORDS, tokens.length); len > n; len--) {
+        for (let j = Math.max(0, i + n - len); j <= i && j + len <= tokens.length; j++) {
+          const w = tokens.slice(j, j + len);
+          if (w.some((t) => !/^\p{Lu}/u.test(t.raw) || isKinWord(t.raw))) continue;
+          if (w.some((t, k) => k > 0 && !/^[ \t]$/u.test(original.slice(w[k - 1].end, t.start)))) continue;
+          const full = normalizeName(w.map((t) => t.raw.replace(/\p{Cf}/gu, "")).join(" "));
+          if (currentForms.has(full) && !lookupAll(full).length) return true;
+        }
+      }
+      return false;
+    };
     // A hashtag holding a forgotten name goes whole: a camel-case word or run of words of it that is a name kept here
     // ("#MayTheBirthdayGirl", "#AdaByron"), or on their own photograph any name of theirs inside it
     // ("#happybirthdaymay", "#amazinggrace").
@@ -553,8 +583,9 @@ export async function loadTombstone(): Promise<Tombstone> {
       return n > 1 && !f.scoped && !f.derived;
     };
     const tagSpans: [number, number][] = [];
-    for (const h of text.matchAll(/[#＃]([\p{L}\p{M}\p{N}_\p{Cf}]+)/gu)) {
-      const words = splitCamel(h[1].replace(/\p{Cf}/gu, "")).split(/[^\p{L}\p{M}]+/u).filter(Boolean);
+    // Handles and runs of capitals as hashtags (see tagLikeRuns): "@MayChen", "HAPPYBIRTHDAYMAY", "#madi-son".
+    for (const h of tagLikeRuns(text)) {
+      const words = splitCamel(h.body.replace(/\p{Cf}/gu, "")).split(/[^\p{L}\p{M}]+/u).filter(Boolean);
       let hit = false;
       // Off their own photographs as prose is read there: never a month ("#MayDay" of a photograph May was untagged
       // from), and a name run into other letters only when it is five letters or more ("#planning" is no Ann).
@@ -562,22 +593,27 @@ export async function loadTombstone(): Promise<Tombstone> {
       for (let a = 0; a < words.length && !hit; a++) {
         for (let n = Math.min(MAX_WORDS, words.length - a); n >= 1 && !hit; n--) {
           const norm = normalizeName(words.slice(a, a + n).join(" "));
-          hit = lookupAll(norm).some((f) => allowed(f, n, norm, false));
+          // Or with a doubled letter written once ("#TeamMaddison" for a Madison).
+          hit = [...new Set([norm, singleLetters(norm)])].some((x) => lookupAll(x).some((f) => allowed(f, n, x, false)));
         }
       }
-      const letters = normalizeName(h[1].replace(/[\p{N}_\p{Cf}]+/gu, "")).replace(/\s+/gu, "");
+      const letters = normalizeName(h.body.replace(/[\p{N}_\p{Cf}.]+/gu, "")).replace(/[\s-]+/gu, "");
       // Only where a name is kept with this photograph at all: the lookups are many. Three letters on their own
-      // photographs, five elsewhere.
+      // photographs, five elsewhere; every letter of it, the doubled ones written once too ("#maddison"). One too
+      // long to search goes whole there.
       if (scope && !scope.whole && scope.rows.size) {
         const shortest = scope.own.size ? 3 : 5;
-        for (let a = 0; a + shortest <= letters.length && a < 60 && !hit; a++) {
-          for (let b = Math.min(letters.length, a + 30); b >= a + shortest && !hit; b--) {
-            const norm = letters.slice(a, b);
-            hit = lookupAll(norm).some((f) => scope.rows.has(f.key) && allowed(f, 1, norm, true));
+        if (letters.length > MAX_TAG_LETTERS) hit = true;
+        for (const s of [...new Set([letters, singleLetters(letters)])]) {
+          for (let a = 0; a + shortest <= s.length && !hit; a++) {
+            for (let b = Math.min(s.length, a + MAX_NAME_LETTERS); b >= a + shortest && !hit; b--) {
+              const norm = s.slice(a, b);
+              hit = lookupAll(norm).some((f) => scope.rows.has(f.key) && allowed(f, 1, norm, true));
+            }
           }
         }
       }
-      if (hit) tagSpans.push([h.index!, h.index! + h[0].length]);
+      if (hit) tagSpans.push([h.start, h.end]);
     }
     spans.push(...tagSpans);
     for (let i = 0; i < tokens.length; i++) {
@@ -603,6 +639,8 @@ export async function loadTombstone(): Promise<Tombstone> {
             if (found.people && [...found.people].some((id) => scope!.tagged.has(id))) return null;
             // "Lake Geneva at dawn.", as the forget reads it there (strict-names.ts).
             if (lakes().some(([a, b]) => run[0].start >= a && run[n - 1].end <= b)) return null;
+            // "Grace Kelly" when the album knows a Grace Kelly: hers, not this Grace's (never in keywords or tags).
+            if (mode === "prose" && insideSomebodyElse(i, n)) return null;
             if (n === 1 && !plural && isMonth(run[0].raw) && monthAsDate(strictNormalize(text.slice(0, run[0].start)), strictNormalize(text.slice(run[0].end)), text.slice(run[0].end))) return null;
             let k = i;
             // "Great", "Grand", "Step" or "Half" only as part of a kinship word taken already: "The Great Ada show."
