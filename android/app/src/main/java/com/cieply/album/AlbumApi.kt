@@ -1,0 +1,137 @@
+package com.cieply.album
+
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody
+import okio.BufferedSink
+import okio.source
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.IOException
+import java.io.InputStream
+import java.util.concurrent.TimeUnit
+
+/** The album said no, or could not be understood. The message is written to be shown as it is. */
+class AlbumException(message: String, val status: Int = 0) : IOException(message)
+
+data class UploadResult(val photoId: String, val duplicate: Boolean)
+
+/** One item as `/api/photos/status` reports it. */
+data class PhotoStatus(
+    val id: String,
+    val status: String,
+    val error: String?,
+    val place: LatLng?,
+    val gpsSource: String?,
+    val takenAt: String?,
+)
+
+/** The album's answers, read. Kept apart from the network so they are tested on the build machine. */
+object AlbumJson {
+    fun member(body: String): Member {
+        val root = JSONObject(body)
+        val user = root.getJSONObject("user")
+        val limits = root.getJSONObject("limits")
+        return Member(
+            email = user.getString("email"),
+            name = user.optString("name").takeIf { it.isNotBlank() && !user.isNull("name") },
+            limits = Limits(
+                photoBytes = limits.getLong("photoBytes"),
+                videoBytes = limits.getLong("videoBytes"),
+                clipSeconds = limits.getInt("clipSeconds"),
+                imageTypes = strings(limits.getJSONArray("imageTypes")),
+                videoTypes = strings(limits.getJSONArray("videoTypes")),
+            ),
+        )
+    }
+
+    fun upload(body: String): UploadResult {
+        val root = JSONObject(body)
+        return UploadResult(root.getString("photoId"), root.optBoolean("duplicate", false))
+    }
+
+    fun status(body: String, id: String): PhotoStatus? {
+        val photos = JSONObject(body).getJSONArray("photos")
+        for (i in 0 until photos.length()) {
+            val p = photos.getJSONObject(i)
+            if (p.getString("id") != id) continue
+            val place = if (p.isNull("lat") || p.isNull("lng")) null else LatLng(p.getDouble("lat"), p.getDouble("lng"))
+            return PhotoStatus(
+                id = id,
+                status = p.getString("status"),
+                error = if (p.isNull("error")) null else p.getString("error"),
+                place = place,
+                gpsSource = if (p.isNull("gpsSource")) null else p.getString("gpsSource"),
+                takenAt = if (p.isNull("takenAt")) null else p.getString("takenAt"),
+            )
+        }
+        return null
+    }
+
+    /** The album's own words for what went wrong, when it sent any. */
+    fun error(body: String?): String? = try {
+        JSONObject(body ?: "").optString("error").takeIf { it.isNotBlank() }
+    } catch (e: Exception) {
+        null
+    }
+
+    private fun strings(array: JSONArray): Set<String> = (0 until array.length()).map { array.getString(it) }.toSet()
+}
+
+/** Talks to one album as one member. Every call blocks, so call from a background dispatcher. */
+class AlbumApi(private val baseUrl: String, private val token: String) {
+    private fun request(path: String): Request.Builder =
+        Request.Builder().url("$baseUrl$path").header("Authorization", "Bearer $token").header("Accept", "application/json")
+
+    private fun send(request: Request): String {
+        client.newCall(request).execute().use { response ->
+            val body = response.body?.string()
+            if (response.isSuccessful && body != null) return body
+            val said = AlbumJson.error(body)
+            throw AlbumException(
+                when {
+                    response.code == 401 -> "The album did not accept this sign-in. The token may be mistyped, revoked, or unused for too long."
+                    said != null -> said
+                    else -> "The album answered with an error (${response.code})."
+                },
+                response.code,
+            )
+        }
+    }
+
+    fun me(): Member = try {
+        AlbumJson.member(send(request("/api/v1/me").get().build()))
+    } catch (e: org.json.JSONException) {
+        throw AlbumException("That address answered, but not like the album does. Check the address.")
+    }
+
+    /** Sends the file exactly as it is: the body is the file's own bytes, and what describes it rides in headers. */
+    fun upload(open: () -> InputStream, fileName: String, mime: String, bytes: Long?, lastModifiedMs: Long?): UploadResult {
+        val body = object : RequestBody() {
+            override fun contentType() = mime.toMediaTypeOrNull()
+            override fun contentLength() = bytes ?: -1L
+            override fun isOneShot() = false
+            override fun writeTo(sink: BufferedSink) {
+                open().use { input -> sink.writeAll(input.source()) }
+            }
+        }
+        val builder = request("/api/upload").post(body)
+            .header("x-file-name", Helpers.encodeFileName(fileName))
+            .header("x-upload-attempt", "1")
+        if (lastModifiedMs != null) builder.header("x-last-modified", lastModifiedMs.toString())
+        return AlbumJson.upload(send(builder.build()))
+    }
+
+    fun status(id: String): PhotoStatus? = AlbumJson.status(send(request("/api/photos/status?ids=$id").get().build()), id)
+
+    companion object {
+        // One client for the app. No read timeout shorter than a slow phone upload of a clip would need.
+        private val client: OkHttpClient = OkHttpClient.Builder()
+            .connectTimeout(20, TimeUnit.SECONDS)
+            .writeTimeout(120, TimeUnit.SECONDS)
+            .readTimeout(120, TimeUnit.SECONDS)
+            .followRedirects(false)
+            .build()
+    }
+}

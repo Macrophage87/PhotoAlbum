@@ -1,0 +1,4 @@
+<resources>
+    <style name="Theme.FamilyAlbum" parent="android:Theme.Material.Light.NoActionBar">
+    </style>
+</resources>
