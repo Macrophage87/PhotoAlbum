@@ -44,3 +44,33 @@ the Play upload key is never kept in this repository.
 The app is set in Atkinson Hyperlegible (Braille Institute), chosen for the older readers in the family. The font
 files are bundled under `app/src/main/res/font/`; their licence (SIL Open Font License 1.1) is in
 `app/src/main/ATKINSON-HYPERLEGIBLE-OFL.txt`.
+
+## A bundle for Google Play
+
+Play takes an `.aab` signed with an upload key. Google keeps the real signing key (Play App Signing), so a lost
+upload key can be replaced through Play Console; it is still a secret and is never committed.
+
+1. Once, make an upload key somewhere outside the repository:
+
+   ```
+   keytool -genkeypair -v -keystore ~/keys/family-album-upload.jks -alias upload \
+     -keyalg RSA -keysize 2048 -validity 10000
+   ```
+
+2. Once, write `android/keystore.properties` (git-ignored):
+
+   ```
+   storeFile=/home/you/keys/family-album-upload.jks
+   storePassword=...
+   keyAlias=upload
+   keyPassword=...
+   ```
+
+3. For each upload, build with the next version number:
+
+   ```
+   ./gradlew bundleRelease -PversionCode=2 -PversionName=0.1.1
+   ```
+
+   The bundle is `app/build/outputs/bundle/release/app-release.aab`. Its id is `com.cieply.album`, which is
+   permanent once Play has seen it.

@@ -1,4 +1,11 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import java.util.Properties
+
+// The upload key for Google Play is never in the repository. Whoever builds a release keeps it on their own machine
+// and points at it from android/keystore.properties (git-ignored): storeFile, storePassword, keyAlias, keyPassword.
+// Without that file the debug build and the tests work as before, and a release bundle is built unsigned.
+val keystoreFile = rootProject.file("keystore.properties")
+val keystore = Properties().apply { if (keystoreFile.exists()) keystoreFile.inputStream().use { load(it) } }
 
 plugins {
     id("com.android.application")
@@ -15,8 +22,10 @@ android {
         // Android 10: the first version with MediaStore.setRequireOriginal, which is what keeps a photo's location.
         minSdk = 29
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        // Play refuses an upload whose number it has seen, so each upload is built with the next one:
+        // ./gradlew bundleRelease -PversionCode=2
+        versionCode = (findProperty("versionCode") as String?)?.toInt() ?: 1
+        versionName = (findProperty("versionName") as String?) ?: "0.1.0"
     }
 
     signingConfigs {
@@ -28,6 +37,14 @@ android {
             keyAlias = "androiddebugkey"
             keyPassword = "android"
         }
+        if (keystoreFile.exists()) {
+            create("release") {
+                storeFile = file(keystore.getProperty("storeFile"))
+                storePassword = keystore.getProperty("storePassword")
+                keyAlias = keystore.getProperty("keyAlias")
+                keyPassword = keystore.getProperty("keyPassword")
+            }
+        }
     }
 
     buildTypes {
@@ -37,6 +54,7 @@ android {
         }
         release {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.findByName("release")
         }
     }
 
