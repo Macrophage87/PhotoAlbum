@@ -6,23 +6,25 @@ import { useRouter } from "next/navigation";
 import { Button, buttonClasses } from "@/components/ui";
 import { disconnectGoogle, pickerProgress, pollPickerSession, startPickerSession } from "@/app/google/actions";
 import { statusRetryMs } from "@/lib/media/upload-retry";
+import { clearSavedPicker, opensInSameTab, readSavedPicker, savePicker, type PickerOpenMode } from "@/lib/google/picker-resume";
 
 type Status = { connected: boolean; needsReconnect: boolean };
 type Phase =
   | { kind: "idle" }
   | { kind: "starting" }
-  | { kind: "picking"; sessionId: string; pickerUri: string; pollIntervalMs: number; deadline: number }
+  | { kind: "picking"; sessionId: string; pickerUri: string; pollIntervalMs: number; deadline: number; mode: PickerOpenMode }
   | { kind: "downloading"; photoIds: string[]; done: number; failed: number; skipped: number; unsupported: number }
   | { kind: "error"; message: string; reconnect: boolean };
 
-const STORAGE_KEY = "google-picker-session";
 /** Missed answers in a row before the page says it is reconnecting; one on its own is ordinary on a phone. */
 const TROUBLE_AFTER = 2;
 
 /**
- * Import from Google Photos through Google's own picker: the member chooses on photos.google.com (a new tab), this
- * tab notices when they are done and queues the downloads. The session id is kept in sessionStorage so a phone that
- * discarded the tab resumes where it left off. Google strips location from what it hands over; the notice says so.
+ * Import from Google Photos through Google's own picker. One press opens Google's page: in a new tab on a computer
+ * (opened in the click itself, so the browser does not block it; a plain link is left in case it does), in this same
+ * tab on a phone. This page notices when the member is done and queues the downloads. Where it is in that — picking,
+ * then copying — is kept in sessionStorage, so coming back from Google in the same tab, or to a tab the phone threw
+ * away, resumes and still ends on the review screen. Google strips location from what it hands over; the notice says so.
  */
 export function GooglePickerButton({ status, configured, tripId, next }: { status: Status; configured: boolean; tripId?: string | null; next: string }) {
   const router = useRouter();
@@ -36,6 +38,10 @@ export function GooglePickerButton({ status, configured, tripId, next }: { statu
   // little later each time, as the uploader's status check does. Stopping at the first would leave the page saying
   // "watching" while it no longer was.
   const trackDownloads = useCallback((photoIds: string[], extra: { skipped: number; unsupported: number }) => {
+    // Remembered until the review screen has them, so a tab lost while copying still gets there.
+    savePicker({ stage: "downloading", photoIds, ...extra });
+    setPhase({ kind: "downloading", photoIds, done: 0, failed: 0, ...extra });
+    setReconnecting(false);
     let misses = 0;
     const tick = async () => {
       const p = await pickerProgress(photoIds).catch(() => null);
@@ -49,8 +55,8 @@ export function GooglePickerButton({ status, configured, tripId, next }: { statu
       setReconnecting(false);
       setPhase({ kind: "downloading", photoIds, done: p.done, failed: p.failed, ...extra });
       if (p.done + p.failed >= p.total) {
-        try { sessionStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
         router.push(`/review?ids=${photoIds.join(",")}&google=1`);
+        clearSavedPicker();
         return;
       }
       timer.current = setTimeout(tick, 2000);
@@ -58,14 +64,14 @@ export function GooglePickerButton({ status, configured, tripId, next }: { statu
     void tick();
   }, [router]);
 
-  const watchSession = useCallback((sessionId: string, pickerUri: string, pollIntervalMs: number, deadline: number) => {
-    setPhase({ kind: "picking", sessionId, pickerUri, pollIntervalMs, deadline });
+  const watchSession = useCallback((sessionId: string, pickerUri: string, pollIntervalMs: number, deadline: number, mode: PickerOpenMode, firstAfterMs?: number) => {
+    setPhase({ kind: "picking", sessionId, pickerUri, pollIntervalMs, deadline, mode });
     setReconnecting(false);
     let misses = 0;
     const tick = async () => {
       // Google's session has a lifetime; past it the poll would only ever see "gone", so stop and say so.
       if (Date.now() > deadline) {
-        try { sessionStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
+        clearSavedPicker();
         setPhase({ kind: "error", message: "That picking session has ended; start again.", reconnect: false });
         return;
       }
@@ -79,29 +85,54 @@ export function GooglePickerButton({ status, configured, tripId, next }: { statu
       misses = 0;
       setReconnecting(false);
       if (r.state === "picking") { timer.current = setTimeout(tick, pollIntervalMs); return; }
-      try { sessionStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
-      if (r.state === "error") { setPhase({ kind: "error", message: r.message, reconnect: r.reconnect }); return; }
-      if (r.photoIds.length === 0) { setPhase({ kind: "error", message: r.skipped > 0 ? "Everything you picked is already in the album." : "Nothing importable was picked.", reconnect: false }); return; }
+      if (r.state === "error") { clearSavedPicker(); setPhase({ kind: "error", message: r.message, reconnect: r.reconnect }); return; }
+      if (r.photoIds.length === 0) { clearSavedPicker(); setPhase({ kind: "error", message: r.skipped > 0 ? "Everything you picked is already in the album." : "Nothing importable was picked.", reconnect: false }); return; }
       trackDownloads(r.photoIds, { skipped: r.skipped, unsupported: r.unsupported });
     };
-    timer.current = setTimeout(tick, pollIntervalMs);
+    timer.current = setTimeout(tick, firstAfterMs ?? pollIntervalMs);
   }, [tripId, trackDownloads]);
 
-  // Resume a session this tab started before it was discarded.
+  // Pick up where this tab was before it went to Google's page or was discarded: still picking, or still copying.
   useEffect(() => {
-    let saved: { sessionId: string; pickerUri: string; pollIntervalMs: number; deadline?: number } | null = null;
-    try { saved = JSON.parse(sessionStorage.getItem(STORAGE_KEY) ?? "null"); } catch { saved = null; }
+    const saved = readSavedPicker();
     // Resuming is scheduled rather than done inline so the first render stays a plain render.
-    const resume = saved?.sessionId && status.connected ? setTimeout(() => watchSession(saved.sessionId, saved.pickerUri, saved.pollIntervalMs || 5000, saved.deadline ?? Date.now() + 30 * 60_000), 0) : null;
+    const resume = saved && status.connected
+      ? setTimeout(() => (saved.stage === "downloading" ? trackDownloads(saved.photoIds, { skipped: saved.skipped, unsupported: saved.unsupported }) : watchSession(saved.sessionId, saved.pickerUri, saved.pollIntervalMs, saved.deadline, saved.mode, 0)), 0)
+      : null;
     return () => { if (resume) clearTimeout(resume); stop(); };
-  }, [status.connected, watchSession]);
+  }, [status.connected, watchSession, trackDownloads]);
 
   const start = async () => {
+    const sameTab = opensInSameTab();
+    // Opened now, inside the click, while the browser still counts it as the member's own doing; it is pointed at
+    // Google's page once the session exists. Null when a popup blocker said no: the link below is then the way in.
+    let tab: Window | null = null;
+    if (!sameTab) {
+      try { tab = window.open("", "_blank"); } catch { tab = null; }
+      if (tab) {
+        try { tab.opener = null; tab.document.title = "Opening Google Photos…"; tab.document.body.textContent = "Opening Google Photos…"; } catch { /* ignore */ }
+      }
+    }
     setPhase({ kind: "starting" });
-    const r = await startPickerSession();
-    if (!r.ok) { setPhase({ kind: "error", message: r.message, reconnect: r.reconnect }); return; }
-    try { sessionStorage.setItem(STORAGE_KEY, JSON.stringify({ sessionId: r.sessionId, pickerUri: r.pickerUri, pollIntervalMs: r.pollIntervalMs, deadline: r.deadline })); } catch { /* ignore */ }
-    watchSession(r.sessionId, r.pickerUri, r.pollIntervalMs, r.deadline);
+    const r = await startPickerSession().catch(() => ({ ok: false as const, reconnect: false, message: "The album is not answering. Try again in a moment." }));
+    if (!r.ok) {
+      tab?.close();
+      setPhase({ kind: "error", message: r.message, reconnect: r.reconnect });
+      return;
+    }
+    const mode: PickerOpenMode = sameTab ? "same" : tab && !tab.closed ? "tab" : "blocked";
+    savePicker({ stage: "picking", sessionId: r.sessionId, pickerUri: r.pickerUri, pollIntervalMs: r.pollIntervalMs, deadline: r.deadline, mode });
+    if (sameTab) {
+      // Off to Google in this tab. Coming back either restores this page as it was, still watching, or loads it
+      // afresh and resumes from what was just saved.
+      watchSession(r.sessionId, r.pickerUri, r.pollIntervalMs, r.deadline, mode);
+      window.location.assign(r.pickerUri);
+      return;
+    }
+    if (tab && mode === "tab") {
+      try { tab.location.href = r.pickerUri; } catch { /* the link below still works */ }
+    }
+    watchSession(r.sessionId, r.pickerUri, r.pollIntervalMs, r.deadline, mode);
   };
 
   if (!configured) return null;
@@ -124,9 +155,14 @@ export function GooglePickerButton({ status, configured, tripId, next }: { statu
         </div>
       ) : phase.kind === "picking" ? (
         <div className="space-y-2">
-          <p className="text-muted">Choose in the Google Photos tab, press Done there, and come back here. This page is watching for you.{reconnecting ? " Reconnecting…" : ""}</p>
-          <a href={phase.pickerUri} target="_blank" rel="noopener" className={buttonClasses("primary", "sm")}>Open Google Photos</a>{" "}
-          <button type="button" className="text-muted hover:underline" onClick={() => { stop(); try { sessionStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ } setPhase({ kind: "idle" }); }}>Cancel</button>
+          <p className="text-muted">
+            {phase.mode === "tab" ? "Google Photos is open in another tab. Choose your photos there, press Done, then come back to this page." : phase.mode === "same" ? "Choose your photos in Google Photos and press Done. When you come back here, this page carries on by itself." : "Press Open Google Photos to choose your photos. Press Done there, then come back to this page."}
+            {reconnecting ? " Reconnecting…" : ""}
+          </p>
+          {phase.mode === "same"
+            ? <a href={phase.pickerUri} className={buttonClasses("primary", "sm")}>Open Google Photos</a>
+            : <a href={phase.pickerUri} target="_blank" rel="noopener" className={buttonClasses(phase.mode === "tab" ? "secondary" : "primary", "sm")}>{phase.mode === "tab" ? "Open Google Photos again" : "Open Google Photos"}</a>}{" "}
+          <button type="button" className="text-muted hover:underline" onClick={() => { stop(); clearSavedPicker(); setPhase({ kind: "idle" }); }}>Cancel</button>
         </div>
       ) : phase.kind === "downloading" ? (
         <p role="status" className="text-muted">Copying {phase.photoIds.length} item{phase.photoIds.length === 1 ? "" : "s"} from Google Photos… {phase.done} ready{phase.failed > 0 ? `, ${phase.failed} failed` : ""}{phase.skipped > 0 ? ` · ${phase.skipped} already in the album` : ""}{phase.unsupported > 0 ? ` · ${phase.unsupported} unsupported` : ""}{reconnecting ? " · reconnecting…" : ""}</p>
