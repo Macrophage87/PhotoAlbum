@@ -1,4 +1,4 @@
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import { expect, test, type Dialog, type Locator, type Page } from "@playwright/test";
 import path from "node:path";
 import fs from "node:fs";
 import { randomUUID } from "node:crypto";
@@ -1275,14 +1275,17 @@ test("a trip and a collection each draw their own photographs by what they look 
 });
 
 test("a Google Takeout archive in the inbox imports with dates, places, notes and a private album, then can be deleted", async ({ context, page }) => {
+  // Two imports, each waited on for up to a minute, plus a minute and a half for the pipeline: well past the
+  // config's 60 s, so the test is given room for the waits it actually makes.
+  test.setTimeout(6 * 60_000);
   const inbox = process.env.E2E_INBOX_DIR ?? "/tmp/photoalbum-e2e-inbox";
   const { copyFileSync, existsSync } = await import("node:fs");
   copyFileSync(fixture("takeout.zip"), path.join(inbox, "takeout-e2e.zip"));
   await signIn(context, ADMIN);
   await page.goto("/admin");
-  const row = page.getByTestId("takeout-admin").getByText("takeout-e2e.zip").locator("..").locator("..");
-  await page.waitForLoadState("networkidle");
-  await row.getByRole("button", { name: "Import" }).click();
+  const row = () => page.getByTestId("takeout-archive-row").filter({ hasText: "takeout-e2e.zip" });
+  const runs = async () => (await withDb((c) => c.query('SELECT count(*)::int AS n FROM "TakeoutImport" WHERE "archiveName" = $1', ["takeout-e2e.zip"]))).rows[0].n as number;
+  await clickUntil(page, () => row().getByRole("button", { name: "Import" }), async () => (await runs()) >= 1);
   await expect.poll(async () => (await withDb((c) => c.query('SELECT status FROM "TakeoutImport" WHERE "archiveName" = $1', ["takeout-e2e.zip"]))).rows[0]?.status, { timeout: 60_000 }).toBe("ENDED");
   const run = await withDb((c) => c.query('SELECT imported, skipped, "collectionsCreated" FROM "TakeoutImport" WHERE "archiveName" = $1', ["takeout-e2e.zip"]));
   expect(run.rows[0]).toMatchObject({ imported: 4, skipped: 1, collectionsCreated: 1 });
@@ -1302,21 +1305,25 @@ test("a Google Takeout archive in the inbox imports with dates, places, notes an
 
   // A phone upload loses its position to Android on the way out; a second run of the same export gives it back.
   await withDb((c) => c.query(`UPDATE "Photo" SET lat = NULL, lng = NULL, "gpsSource" = NULL WHERE "originalName" = 'photo-with-gps.jpg'`));
-  await page.waitForLoadState("networkidle");
-  await page.getByTestId("takeout-admin").getByText("takeout-e2e.zip").locator("..").locator("..").getByRole("button", { name: "Import" }).click();
+  await clickUntil(page, () => row().getByRole("button", { name: "Import" }), async () => (await runs()) >= 2);
   await expect.poll(async () => (await withDb((c) => c.query('SELECT count(*)::int AS n FROM "TakeoutImport" WHERE status = $1', ["ENDED"]))).rows[0].n, { timeout: 60_000 }).toBe(2);
   const repaired = await withDb((c) => c.query(`SELECT lat, lng, "gpsSource" FROM "Photo" WHERE "originalName" = 'photo-with-gps.jpg' AND "sourceKind" = 'TAKEOUT'`));
   expect(repaired.rows[0]).toEqual({ lat: 44.3186, lng: -68.1917, gpsSource: "SIDECAR" });
   await page.reload();
   await expect(page.getByTestId("takeout-import").first()).toContainText("1 repaired");
   await expect(page.getByTestId("takeout-import").first()).toContainText("0 imported");
-  page.once("dialog", (d) => d.accept());
-  await page.waitForLoadState("networkidle");
-  await page.getByTestId("takeout-admin").getByText("takeout-e2e.zip").locator("..").locator("..").getByRole("button", { name: "Delete" }).click();
-  await expect.poll(() => existsSync(path.join(inbox, "takeout-e2e.zip")), { timeout: 15_000 }).toBe(false);
+  // Every click (clickUntil may need more than one) asks "Delete … from the inbox?"; say yes to each.
+  const accept = (d: Dialog) => void d.accept();
+  page.on("dialog", accept);
+  await clickUntil(page, () => row().getByRole("button", { name: "Delete" }), async () => !existsSync(path.join(inbox, "takeout-e2e.zip")));
+  page.off("dialog", accept);
+  await page.reload();
+  await expect(row()).toHaveCount(0);
 });
 
 test("a member connects Google Photos, picks items on Google's page, gets them on the review screen, and can disconnect", async ({ context, page }) => {
+  // Two minutes for the copies to land, then a second pick and a disconnect: more than the config's 60 s.
+  test.setTimeout(5 * 60_000);
   await signIn(context, ADMIN);
   await page.goto("/upload");
   await page.getByRole("link", { name: "Connect Google Photos" }).click();
@@ -1328,7 +1335,8 @@ test("a member connects Google Photos, picks items on Google's page, gets them o
   const [popup] = await Promise.all([context.waitForEvent("page"), picker.getByRole("link", { name: "Open Google Photos" }).click()]);
   await expect(popup.getByText("Mock Google Photos picker")).toBeVisible();
   await popup.close();
-  await expect(picker.getByRole("status")).toContainText("Copying 3 items", { timeout: 30_000 });
+  // The "Copying 3 items" line can be skipped entirely when the copies are quick (the picker moves on to the review
+  // page in the same tick it would show it), so wait for where it ends up instead.
   await page.waitForURL(/\/review\?ids=.*google=1/, { timeout: 120_000 });
   await expect(page.getByRole("heading", { name: "Review what you picked" })).toBeVisible();
   await expect(page.getByText("Add places here, or file these to a trip")).toBeVisible();
@@ -1350,17 +1358,19 @@ test("a member connects Google Photos, picks items on Google's page, gets them o
   const stored = await withDb((c) => c.query('SELECT "encryptedRefreshToken" FROM "GoogleAccount"'));
   expect(stored.rows[0].encryptedRefreshToken).toMatch(/^v1\./);
   expect(stored.rows[0].encryptedRefreshToken).not.toContain("mock-refresh");
+  const accounts = async () => (await withDb((c) => c.query('SELECT count(*)::int AS n FROM "GoogleAccount"'))).rows[0].n as number;
+  await clickUntil(page, () => picker.getByRole("button", { name: "Disconnect Google" }), async () => (await accounts()) === 0);
   await page.reload();
-  await page.waitForLoadState("networkidle");
-  await picker.getByRole("button", { name: "Disconnect Google" }).click();
   await expect(picker.getByRole("link", { name: "Connect Google Photos" })).toBeVisible();
-  expect((await withDb((c) => c.query('SELECT count(*)::int AS n FROM "GoogleAccount"'))).rows[0].n).toBe(0);
 });
 
 test("a pet tagged on a spotted animal is proposed on the next look-alike and confirmed from the review screen", async ({ context, page }) => {
+  // Several 30 s waits on the sidecar and the review screen add up past the config's 60 s.
+  test.slow();
   await signIn(context, ADMIN);
+  const pets = (await withDb((c) => c.query(`SELECT count(*)::int AS n, (count(*) FILTER (WHERE status = 'CONFIRMED'))::int AS confirmed FROM "AnimalDetection"`))).rows[0];
   await page.goto("/admin");
-  await expect(page.getByTestId("pet-gates")).toContainText("on,");
+  await expect(page.getByTestId("pet-gates")).toHaveText(`Pet spotting (animals, not faces; no opt-in needed): on, ${pets.n} sighting${pets.n === 1 ? "" : "s"} kept, ${pets.confirmed} confirmed.`);
   await page.goto("/people");
   const petForm = page.locator("form").filter({ has: page.getByRole("button", { name: "Add pet" }) });
   await petForm.locator("#pet-name").fill("Rex");
