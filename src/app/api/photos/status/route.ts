@@ -1,10 +1,10 @@
 import { db } from "@/lib/db";
-import { getViewer } from "@/lib/auth/viewer";
+import { getApiViewer } from "@/lib/auth/viewer";
 import { photoUrl } from "@/lib/photos/urls";
 
 /** Poll endpoint for the uploader: ?ids=a,b,c */
 export async function GET(request: Request) {
-  const viewer = await getViewer();
+  const viewer = await getApiViewer(request);
   if (viewer.kind !== "user") return Response.json({ error: "Unauthorized" }, { status: 401 });
   const ids = (new URL(request.url).searchParams.get("ids") ?? "").split(",").filter(Boolean).slice(0, 200);
   const photos = await db.photo.findMany({

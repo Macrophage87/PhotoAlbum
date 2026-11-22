@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("@/lib/auth/viewer", () => ({ getViewer: async () => ({ kind: "user", user: { id: "u", email: "u@example.com", name: null, role: "MEMBER" }, shareTokens: new Map() }) }));
+vi.mock("@/lib/auth/viewer", () => ({ getApiViewer: async () => ({ kind: "user", user: { id: "u", email: "u@example.com", name: null, role: "MEMBER" }, shareTokens: new Map() }) }));
 
 import { decodeHeaderName } from "@/lib/media/header-name";
 import { POST } from "@/app/api/upload/route";

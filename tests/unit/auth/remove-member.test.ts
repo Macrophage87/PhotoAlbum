@@ -143,6 +143,7 @@ describe("removing a member", () => {
   it("finishes a removal interrupted half-way from its mark, and tells Google only once they are gone", async () => {
     const m = await member();
     await db.session.create({ data: { id: "their-session", userId: m.id, expiresAt: new Date(Date.now() + 86_400_000) } });
+    await db.deviceToken.create({ data: { id: "their-phone", userId: m.id, name: "Phone" } });
     await db.googleAccount.create({ data: { userId: m.id, encryptedRefreshToken: "sealed" } });
     await photos(m.id, 450, { dateSetById: m.id, takenAtSource: "MANUAL" });
     const spy = dieAtBatch(3);
@@ -154,6 +155,7 @@ describe("removing a member", () => {
     expect(half).toMatchObject({ role: "MEMBER", removingById: admin });
     expect(half.removingAt).toBeInstanceOf(Date);
     expect(await db.session.count({ where: { userId: m.id } })).toBe(0);
+    expect(await db.deviceToken.count({ where: { userId: m.id } })).toBe(0);
     const handed = await db.photo.count({ where: { uploaderId: admin, dateSetById: admin } });
     expect(handed).toBeGreaterThan(0);
     expect(await db.photo.count({ where: { uploaderId: m.id, dateSetById: m.id } })).toBe(450 - handed);

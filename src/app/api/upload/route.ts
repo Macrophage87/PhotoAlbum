@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { Readable } from "node:stream";
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { getViewer } from "@/lib/auth/viewer";
+import { getApiViewer } from "@/lib/auth/viewer";
 import { storage, StorageLimitError } from "@/lib/storage";
 import { enqueue } from "@/lib/jobs/boss";
 import { QUEUES } from "@/lib/jobs/queues";
@@ -43,7 +43,7 @@ async function headOf(key: string, n: number): Promise<Buffer> {
 
 /** Streams one file to storage and queues processing. Body is the raw file; metadata rides in headers. */
 export async function POST(request: Request) {
-  const viewer = await getViewer();
+  const viewer = await getApiViewer(request);
   if (viewer.kind !== "user") return Response.json({ error: "Unauthorized" }, { status: 401 });
   // A zero-byte file may arrive with no body at all.
   if (!request.body) return Response.json({ error: EMPTY_FILE_MESSAGE }, { status: 422 });

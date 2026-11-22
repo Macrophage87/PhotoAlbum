@@ -202,6 +202,7 @@ model User {
   takingOver   User[]   @relation("RemovingBy")
 
   sessions Session[]
+  deviceTokens DeviceToken[]
   googleAccount GoogleAccount?
   invites  Invite[]  @relation("InvitedBy")
   trips    Trip[]
@@ -254,6 +255,21 @@ model Session {
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   expiresAt DateTime
   createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+/// A phone signed in to the album's app. The app sends the token itself as `Authorization: Bearer`; only its hash is
+/// kept, as with a session. It has no fixed lifetime (nobody is signed out mid-trip) but one left unused for
+/// DEVICE_TOKEN_IDLE_MS is no longer honoured. Only the app's own routes take one (see src/lib/auth/device-token.ts).
+model DeviceToken {
+  id         String   @id
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// What the member sees in a list of their phones: the model's name, as the app or whoever made the token gave it.
+  name       String
+  createdAt  DateTime @default(now())
+  lastUsedAt DateTime @default(now())
 
   @@index([userId])
 }

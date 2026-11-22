@@ -2,7 +2,9 @@ import { cache } from "react";
 import { redirect } from "next/navigation";
 import { cookies } from "next/headers";
 import type { Role } from "@/generated/prisma/enums";
+import { db } from "@/lib/db";
 import { readSessionUser } from "./session";
+import { bearerToken, readDeviceUser } from "./device-token";
 
 export type ViewerUser = { id: string; email: string; name: string | null; role: Role };
 
@@ -27,6 +29,20 @@ export const getViewer = cache(async (): Promise<Viewer> => {
   if (user) return { kind: "user", user: { id: user.id, email: user.email, name: user.name, role: user.role }, shareTokens };
   return { kind: "anonymous", user: null, shareTokens };
 });
+
+/**
+ * Who is calling one of the routes the album's app uses: the browser's session as everywhere else, or failing that a
+ * phone's token in the Authorization header (src/lib/auth/device-token.ts). Only those routes call this, so a phone's
+ * token opens the upload, its status and /api/v1 and nothing else. A phone carries no share cookies.
+ */
+export async function getApiViewer(request: Request): Promise<Viewer> {
+  const viewer = await getViewer();
+  if (viewer.kind === "user") return viewer;
+  const token = bearerToken(request.headers);
+  const user = token ? await readDeviceUser(db, token) : null;
+  if (!user) return viewer;
+  return { kind: "user", user: { id: user.id, email: user.email, name: user.name, role: user.role }, shareTokens: new Map() };
+}
 
 /** Redirects to sign-in when not a member. Use in pages that always need a member. */
 export async function requireUser(nextPath?: string): Promise<ViewerUser> {
