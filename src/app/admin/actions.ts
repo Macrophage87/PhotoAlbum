@@ -13,6 +13,7 @@ import { enqueue } from "@/lib/jobs/boss";
 import { QUEUES } from "@/lib/jobs/queues";
 import { ArchiveDeleteError, deleteArchive, safeArchivePath } from "@/lib/takeout/inbox";
 import { closeDeadImports } from "@/lib/takeout/import";
+import { markRunReviewed } from "@/lib/takeout/review";
 import { stat } from "node:fs/promises";
 import { removeMemberAs } from "@/lib/auth/remove-member";
 import { deleteTripById } from "@/lib/trips/delete";
@@ -113,18 +114,32 @@ export async function clearTakeoutReport(importId: string): Promise<void> {
   revalidatePath("/people/forgotten");
 }
 
-/** Queue one Takeout archive from the inbox. One import runs at a time so the worker's memory stays bounded. */
-export async function startTakeoutImport(archiveName: string): Promise<void> {
+/**
+ * Queue one Takeout archive from the inbox. One import runs at a time so the worker's memory stays bounded. `ownerId`
+ * is the member whose export it is (the admin by default): the photos are uploaded as theirs (#29).
+ */
+export async function startTakeoutImport(archiveName: string, ownerId?: string): Promise<void> {
   const admin = await requireAdminOrThrow();
+  const owner = ownerId && ownerId !== admin.id ? await db.user.findUnique({ where: { id: z.string().min(1).max(64).parse(ownerId) }, select: { id: true, removingAt: true } }) : { id: admin.id, removingAt: null };
+  if (!owner || owner.removingAt) throw new Error("That member is no longer in the album; choose someone else.");
   const file = safeArchivePath(archiveName);
   const s = await stat(file).catch(() => null);
   if (!s?.isFile()) throw new Error("That archive is no longer in the inbox.");
   await closeDeadImports();
   const running = await db.takeoutImport.count({ where: { status: "RUNNING" } });
   if (running > 0) throw new Error("An import is still running; wait for it to finish.");
-  const run = await db.takeoutImport.create({ data: { archiveName, startedById: admin.id } });
+  const run = await db.takeoutImport.create({ data: { archiveName, startedById: admin.id, ownerId: owner.id } });
   await enqueue(QUEUES.takeoutImport, { importId: run.id }, { expireInSeconds: 12 * 3600, retryLimit: 0 });
   revalidatePath("/admin");
+}
+
+/** Mark everything one finished Takeout run brought in as reviewed (#12). Answers how many. */
+export async function markTakeoutImportReviewed(importId: string): Promise<number> {
+  await requireAdminOrThrow();
+  const n = await markRunReviewed(z.string().min(1).max(64).parse(importId));
+  revalidatePath("/admin");
+  revalidatePath("/review");
+  return n;
 }
 
 /**

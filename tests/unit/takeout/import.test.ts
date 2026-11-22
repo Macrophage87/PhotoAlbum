@@ -252,14 +252,29 @@ describe("importing a Takeout archive", () => {
   it.each([
     ["seven minutes off, which no time zone explains", { takenAt: new Date("2025-08-12T13:37:00.000Z") }],
     ["on another day altogether", { takenAt: new Date("2025-08-14T13:30:00.000Z") }],
-    ["another member's", { mine: false }],
+    ["another member's, with no size to compare", { mine: false, width: null, height: null }],
+    ["another member's, of a different size", { mine: false, width: 640, height: 480 }],
     ["a different size", { width: 640, height: 480 }],
-  ])("does not take a Picker photo of the same name that is %s", async (_why, over: { takenAt?: Date; mine?: boolean; width?: number; height?: number }) => {
+  ])("does not take a Picker photo of the same name that is %s", async (_why, over: { takenAt?: Date; mine?: boolean; width?: number | null; height?: number | null }) => {
     const other = await db.user.create({ data: { email: "cousin@example.com", role: "MEMBER" } });
-    await db.photo.create({ data: { uploaderId: over.mine === false ? other.id : userId, sourceKind: "GOOGLE_PICKER", sourceId: "picker-id", status: "READY", originalName: "photo-with-gps.jpg", mimeType: "image/jpeg", storageKey: "photos/p", originalPath: "photos/p/original.jpg", sizeBytes: 5, takenAt: over.takenAt ?? new Date("2025-08-12T17:30:00.000Z"), takenAtSource: "EXIF_TZLOOKUP", width: over.width ?? 800, height: over.height ?? 1200 } });
+    await db.photo.create({ data: { uploaderId: over.mine === false ? other.id : userId, sourceKind: "GOOGLE_PICKER", sourceId: "picker-id", status: "READY", originalName: "photo-with-gps.jpg", mimeType: "image/jpeg", storageKey: "photos/p", originalPath: "photos/p/original.jpg", sizeBytes: 5, takenAt: over.takenAt ?? new Date("2025-08-12T17:30:00.000Z"), takenAtSource: "EXIF_TZLOOKUP", width: over.width === undefined ? 800 : over.width, height: over.height === undefined ? 1200 : over.height } });
     const r = await run();
     expect(r.imported).toBe(4);
     expect(await db.photo.count({ where: { originalName: "photo-with-gps.jpg" } })).toBe(2);
+  });
+  it("finds the same photo another member brought in through the Picker, by name, time and size, and repairs it rather than importing it again (#106)", async () => {
+    const cousin = await db.user.create({ data: { email: "cousin@example.com", role: "MEMBER" } });
+    const picked = await db.photo.create({ data: { uploaderId: cousin.id, sourceKind: "GOOGLE_PICKER", sourceId: "picker-id", status: "READY", originalName: "photo-with-gps.jpg", mimeType: "image/jpeg", storageKey: "photos/p", originalPath: "photos/p/original.jpg", sizeBytes: 5, contentHash: "0".repeat(64), takenAt: new Date("2025-08-12T17:30:00.000Z"), takenAtSource: "EXIF_TZLOOKUP", width: 1200, height: 800 } });
+    // Their own private collection of the same name as the Google album: the import never pours anything into it.
+    const theirs = await db.collection.create({ data: { slug: "lake-house", title: "Lake House", themeKey: "default", visibility: "PRIVATE", createdById: cousin.id } });
+    const r = await run();
+    expect({ imported: r.imported, repaired: r.repaired }).toEqual({ imported: 3, repaired: 1 });
+    expect(await db.photo.count({ where: { originalName: "photo-with-gps.jpg" } })).toBe(1);
+    // Still the cousin's, with its place given back.
+    expect(await db.photo.findUniqueOrThrow({ where: { id: picked.id } })).toMatchObject({ uploaderId: cousin.id, lat: 44.3186, gpsSource: "SIDECAR" });
+    expect(await db.collectionItem.count({ where: { collectionId: theirs.id } })).toBe(0);
+    const mine = await db.collection.findFirstOrThrow({ where: { title: "Lake House", createdById: userId }, include: { items: true } });
+    expect(mine.items.map((i) => i.photoId)).toContain(picked.id);
   });
   it("does not file an album into another member's private collection of the same name", async () => {
     const other = await db.user.create({ data: { email: "mom@example.com", role: "MEMBER" } });
