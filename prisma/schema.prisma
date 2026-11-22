@@ -911,6 +911,10 @@ model TakeoutImport {
   collectionsCreated Int                 @default(0)
   report             Json?
   startedById        String
+  /// Whose Google export this is: its photos are uploaded as theirs and its albums become their collections. Chosen
+  /// when the import is started, the admin themselves by default; null on runs from before the choice, which were
+  /// the starter's.
+  ownerId            String?
   startedAt          DateTime            @default(now())
   heartbeatAt        DateTime?
   endedAt            DateTime?
