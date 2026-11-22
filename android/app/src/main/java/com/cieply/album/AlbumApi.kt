@@ -4,6 +4,7 @@ import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody
+import okhttp3.RequestBody.Companion.toRequestBody
 import okio.BufferedSink
 import okio.source
 import org.json.JSONArray
@@ -126,6 +127,28 @@ class AlbumApi(private val baseUrl: String, private val token: String) {
     fun status(id: String): PhotoStatus? = AlbumJson.status(send(request("/api/photos/status?ids=$id").get().build()), id)
 
     companion object {
+        /**
+         * The last step of signing in: the code the website handed back, with the secret only this app holds, for
+         * this phone's token. Nobody is signed in yet, so it carries no Authorization header.
+         */
+        fun exchange(baseUrl: String, code: String, verifier: String): String {
+            val json = JSONObject().put("code", code).put("verifier", verifier).toString()
+            val request = Request.Builder().url("$baseUrl/api/v1/phone-link")
+                .post(json.toRequestBody("application/json".toMediaTypeOrNull()))
+                .header("Accept", "application/json").build()
+            client.newCall(request).execute().use { response ->
+                val body = response.body?.string()
+                if (!response.isSuccessful || body == null) {
+                    throw AlbumException(AlbumJson.error(body) ?: "The album answered with an error (${response.code}).", response.code)
+                }
+                return try {
+                    JSONObject(body).getString("token")
+                } catch (e: org.json.JSONException) {
+                    throw AlbumException("That address answered, but not like the album does.")
+                }
+            }
+        }
+
         // One client for the app. No read timeout shorter than a slow phone upload of a clip would need.
         private val client: OkHttpClient = OkHttpClient.Builder()
             .connectTimeout(20, TimeUnit.SECONDS)

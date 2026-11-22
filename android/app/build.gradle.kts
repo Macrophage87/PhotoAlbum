@@ -7,6 +7,11 @@ import java.util.Properties
 val keystoreFile = rootProject.file("keystore.properties")
 val keystore = Properties().apply { if (keystoreFile.exists()) keystoreFile.inputStream().use { load(it) } }
 
+// Where the album lives. It is built into the app so nobody has to type it, and kept out of the repository: pass
+// -PalbumUrl=https://…, or set ALBUM_URL, or put albumUrl=… in keystore.properties. Left out, the app asks for it.
+val albumUrl: String = listOf(findProperty("albumUrl") as String?, System.getenv("ALBUM_URL"), keystore.getProperty("albumUrl"))
+    .firstOrNull { !it.isNullOrBlank() }?.trim() ?: ""
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -26,6 +31,10 @@ android {
         // ./gradlew bundleRelease -PversionCode=2
         versionCode = (findProperty("versionCode") as String?)?.toInt() ?: 1
         versionName = (findProperty("versionName") as String?) ?: "0.1.0"
+        buildConfigField("String", "ALBUM_URL", "\"${albumUrl.replace("\\", "").replace("\"", "")}\"")
+        // The link the album's website uses to hand a sign-in back to this app (see the manifest).
+        manifestPlaceholders["appScheme"] = "familyalbum"
+        buildConfigField("String", "APP_SCHEME", "\"familyalbum\"")
     }
 
     signingConfigs {
@@ -50,6 +59,9 @@ android {
     buildTypes {
         debug {
             applicationIdSuffix = ".debug"
+            // Its own link, so a debug build installed beside the real one gets its own sign-ins back.
+            manifestPlaceholders["appScheme"] = "familyalbum-debug"
+            buildConfigField("String", "APP_SCHEME", "\"familyalbum-debug\"")
             versionNameSuffix = "-debug"
         }
         release {
@@ -64,6 +76,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 

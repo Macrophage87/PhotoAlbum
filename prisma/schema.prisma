@@ -203,6 +203,7 @@ model User {
 
   sessions Session[]
   deviceTokens DeviceToken[]
+  phoneLinks   PhoneLink[]
   googleAccount GoogleAccount?
   invites  Invite[]  @relation("InvitedBy")
   trips    Trip[]
@@ -270,6 +271,21 @@ model DeviceToken {
   name       String
   createdAt  DateTime @default(now())
   lastUsedAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+/// A member has said, on the website and signed in, that a phone may be connected as them. It is the hash of a
+/// code handed back to the app, good once and for PHONE_LINK_TTL_MS. The code alone is not enough: the app must
+/// also show the secret whose hash (`challenge`) it sent when it asked, so another app that catches the code on its
+/// way back cannot use it. Exchanged, it becomes a DeviceToken and the row is gone.
+model PhoneLink {
+  id        String   @id
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  challenge String
+  name      String
+  createdAt DateTime @default(now())
 
   @@index([userId])
 }

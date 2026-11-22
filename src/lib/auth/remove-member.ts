@@ -92,6 +92,7 @@ async function beginRemoval(actorId: string, memberId: string): Promise<boolean>
     await tx.session.deleteMany({ where: { userId: memberId } });
     // Their phones too: the app's token is a sign-in like any other, and would otherwise go on uploading.
     await tx.deviceToken.deleteMany({ where: { userId: memberId } });
+    await tx.phoneLink.deleteMany({ where: { userId: memberId } });
     await tx.magicLinkToken.deleteMany({ where: { email: member.email } });
     // Nobody joins on their word any more: their pending invitations went with the account before, and would now
     // outlive the mark by as long as the hand-over takes (see verifyMagicLink for one sent at this very moment).

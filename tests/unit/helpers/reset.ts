@@ -27,6 +27,7 @@ export async function resetTestDb(): Promise<void> {
   await db.trip.deleteMany();
   await db.session.deleteMany();
   await db.deviceToken.deleteMany();
+  await db.phoneLink.deleteMany();
   await db.magicLinkToken.deleteMany();
   await db.invite.deleteMany();
   await db.user.deleteMany();
