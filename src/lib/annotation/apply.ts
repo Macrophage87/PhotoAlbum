@@ -1,6 +1,7 @@
 import { db } from "@/lib/db";
 import { annotationSchema, clampAnnotation, toStored, type Annotation, type StoredAnnotation } from "./schema";
 import { enqueueEmbedding } from "@/lib/jobs/handlers/embed-photo";
+import { enqueueAnimalMatch } from "@/lib/jobs/handlers/detect-animals";
 import { enqueue } from "@/lib/jobs/boss";
 import { QUEUES } from "@/lib/jobs/queues";
 import { applyPlaceEstimate, needsPlaceEstimate } from "./place";
@@ -251,6 +252,8 @@ export async function applyAnnotation(photoId: string, model: string, parsed: An
   await noteRelaxedRelease(photoId);
   // The description changed, so the semantic index for this item is stale.
   await enqueueEmbedding(photoId, true);
+  // Its words can tell which pet it is ("golden retriever", "the hens"), so its animals are matched again.
+  await enqueueAnimalMatch(photoId);
 }
 
 /**

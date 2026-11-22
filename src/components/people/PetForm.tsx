@@ -1,7 +1,7 @@
 import { Button, Input, Label, Select } from "@/components/ui";
 import { createPet, updatePet } from "@/app/people/actions";
 
-const SPECIES = [["DOG", "Dog"], ["CAT", "Cat"], ["CHICKEN", "Chicken"], ["HORSE", "Horse"], ["OTHER", "Other"]] as const;
+const SPECIES = [["DOG", "Dog"], ["CAT", "Cat"], ["CHICKEN", "Chicken"], ["BIRD", "Other bird"], ["HORSE", "Horse"], ["OTHER", "Other"]] as const;
 
 type Pet = { id: string; name: string; species: string | null; livedFrom: Date | null; livedTo: Date | null; isFlock: boolean; descriptors?: string | null };
 const day = (d: Date | null) => (d ? d.toISOString().slice(0, 10) : "");
@@ -33,12 +33,18 @@ export function PetForm({ pet }: { pet?: Pet }) {
       </div>
       <div className="sm:col-span-2">
         <Label htmlFor="pet-descriptors">Looks like (optional)</Label>
-        <Input id="pet-descriptors" name="descriptors" defaultValue={pet?.descriptors ?? ""} placeholder="golden retriever, floppy ears" className="h-9" />
+        <Input id="pet-descriptors" name="descriptors" defaultValue={pet?.descriptors ?? ""} placeholder="golden retriever, floppy ears" aria-describedby="pet-descriptors-help" className="h-9" />
+        <p id="pet-descriptors-help" className="mt-1 text-xs text-muted">
+          A few words about colour or breed. When a photo’s description uses one of them, we can suggest this pet there, and it wins over a look-alike that doesn’t match.
+        </p>
       </div>
       <label className="flex items-center gap-2 sm:col-span-2">
         <input type="checkbox" name="isFlock" defaultChecked={pet?.isFlock ?? false} />
         A flock or group record (“the chickens”), not one animal
       </label>
+      <p className="-mt-1 text-xs text-muted sm:col-span-2">
+        For chickens: the album can’t tell a hen from a gull, so we only suggest them when the photo mentions chickens or looks like ones you’ve already tagged.
+      </p>
       <div className="sm:col-span-2">
         <Button type="submit" size="sm">{pet ? "Save" : "Add pet"}</Button>
       </div>

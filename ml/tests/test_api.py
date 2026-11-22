@@ -63,10 +63,18 @@ def test_animals_shape_and_determinism():
     b = client.post("/animals", files={"file": ("a.png", png(), "image/png")}, headers=HEADERS).json()
     assert a["dim"] == 512 and 1 <= len(a["animals"]) <= 2
     animal = a["animals"][0]
-    assert animal["species"] in {"DOG", "CAT", "CHICKEN", "HORSE", "OTHER"}
+    assert animal["species"] in {"DOG", "CAT", "BIRD", "HORSE", "OTHER"}
     assert len(animal["box"]) == 4 and all(0 <= v <= 1 for v in animal["box"])
     assert len(animal["embedding"]) == 512 and 0 < animal["confidence"] <= 1
     assert a == b
+
+
+def test_coco_bird_is_any_bird_not_a_chicken():
+    # COCO's one bird class covers gulls and pigeons too; the album decides when a bird is the family's chickens.
+    from ml.models import COCO_SPECIES
+
+    assert COCO_SPECIES[16] == "BIRD"
+    assert "CHICKEN" not in COCO_SPECIES.values()
 
 
 def test_empty_and_oversized_images_are_refused():

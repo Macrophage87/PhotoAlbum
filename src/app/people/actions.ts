@@ -614,7 +614,7 @@ async function forgetIfNoLongerOn(photoId: string, personId: string): Promise<vo
 
 const petSchema = z.object({
   name: z.string().trim().min(1).max(80),
-  species: z.enum(["DOG", "CAT", "CHICKEN", "HORSE", "OTHER"]),
+  species: z.enum(["DOG", "CAT", "CHICKEN", "BIRD", "HORSE", "OTHER"]),
   livedFrom: day,
   livedTo: day,
   isFlock: z.boolean(),
