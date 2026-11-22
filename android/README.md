@@ -11,8 +11,16 @@ with their location intact.
 3. What was chosen goes into a queue kept on the phone (`UploadQueue`) and is sent in the background by
    `UploadWorker`, with the app open or closed, whenever there is a connection. Before sending a file the app
    asks the album whether it already holds it (by SHA-256), so nothing crosses the network twice.
-4. The queue screen shows each file as waiting, sending, sent, already in the album, or not sent with the reason
-   (too big, too long, a kind the album does not take). Limits come from the album, not from the app.
+4. The queue screen shows each file as waiting, sending, sent, already in the album, or not sent with the reason.
+   Limits come from the album, not from the app.
+5. Before sending, a trip can be chosen from the album's own list (`GET /api/v1/trips`). Left alone, the album
+   files each one by the date it was taken, as it does for the website.
+6. A video too big or too long for the album is not a dead end: its line offers "Use YouTube", which walks through
+   putting it on YouTube as Unlisted and takes the link back (`POST /api/v1/videos`), on the video's own day and
+   the trip that was chosen.
+7. A quiet notification shows how many are left and how it ended. It is posted by the ordinary background job, not
+   a foreground service, so sending is the same with notifications refused.
+8. "Send on Wi-Fi only" (home and queue screens) makes the job wait for an unmetered connection.
 
 Files are read with `MediaStore.setRequireOriginal`, which needs the "location in photos" permission; without it
 the app refuses to send rather than send photos with their place blanked out.

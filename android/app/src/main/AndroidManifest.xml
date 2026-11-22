@@ -12,6 +12,11 @@
     <!-- The point of the app: without this, Android blanks the location out of every photo it hands over. -->
     <uses-permission android:name="android.permission.ACCESS_MEDIA_LOCATION" />
 
+    <!-- The one notification: how sending is going. Sending works the same without it. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- To wait for Wi-Fi when the member asks for that. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
     <application
         android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"

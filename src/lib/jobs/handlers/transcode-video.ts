@@ -10,7 +10,7 @@ import { ffmpeg, posterArgs, probe, transcodeArgs } from "@/lib/video/ffmpeg";
 import { pickTripByDay, whoWasThere } from "@/lib/photos/assign";
 import { pickTripByCoverage } from "@/lib/photos/trip-by-coverage";
 import { activityFor } from "@/lib/activities/reassign";
-import { dateByHand, dateMovedSince, lockedPhoto, offsetForKeptDate, tripChangedSinceQueued } from "@/lib/photos/member-owned";
+import { dateByHand, dateMovedSince, lockedPhoto, offsetForKeptDate, placeByHand, tripChangedSinceQueued } from "@/lib/photos/member-owned";
 import { localDayFromOffset, offsetMinutesInZone } from "@/lib/time/local-day";
 import { withHeavyLock } from "../heavy-lock";
 import { workerStopping } from "../shutdown";
@@ -131,12 +131,16 @@ export async function transcodeVideo(job: TranscodeVideoJob, signal?: AbortSigna
         const filing = await activityFor(now, tripId, keepDate ? now.takenAt : instant, tx);
         // A kept date with no zone recorded still gets its trip's; the date itself stays as the member set it.
         const keptZone = keepDate ? await offsetForKeptDate(tx, now, tripId) : null;
+        // Where the phone says it was filmed. A place a member pinned, or took away, is theirs and stays; and a clip
+        // that carries none keeps whatever it has (a sidecar's, a track's), since this file has nothing better.
+        const place = placeByHand(now) ? null : info.place;
         await tx.photo.update({
           where: { id: photo.id },
           data: {
             status: "READY",
             contentHash,
             kind: "VIDEO",
+            ...(place ? { lat: place.lat, lng: place.lng, altitude: place.altitude, gpsSource: "EXIF" as const } : {}),
             width: out.width,
             height: out.height,
             durationS: out.durationS ?? info.durationS,

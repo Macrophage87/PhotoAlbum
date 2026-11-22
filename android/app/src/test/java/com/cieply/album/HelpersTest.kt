@@ -105,4 +105,42 @@ class HelpersTest {
         assertEquals("3 waiting to send", Helpers.queueSummary(3, 0, 0))
         assertEquals("3 waiting to send, 12 in the album, 1 not sent", Helpers.queueSummary(3, 12, 1))
     }
+
+    @Test
+    fun `a video too big or too long is one for YouTube, and nothing else is`() {
+        assertEquals(true, Helpers.needsYouTube("video/mp4", 200L shl 20, 91_000, limits))
+        assertEquals(true, Helpers.needsYouTube("video/mp4", 2L shl 30, null, limits))
+        assertEquals(false, Helpers.needsYouTube("video/mp4", 200L shl 20, 60_000, limits))
+        assertEquals(false, Helpers.needsYouTube("image/jpeg", 101L shl 20, null, limits))
+        assertEquals(false, Helpers.needsYouTube("video/x-unknown", 2L shl 30, null, limits))
+        assertEquals(false, Helpers.needsYouTube(null, 2L shl 30, null, limits))
+    }
+
+    @Test
+    fun `a moment is the day it fell on where the phone is`() {
+        // 03:30 UTC on the 13th is still the evening of the 12th in Washington.
+        val ms = java.time.Instant.parse("2025-08-13T03:30:00Z").toEpochMilli()
+        assertEquals("2025-08-12", Helpers.dayString(ms, java.time.ZoneId.of("America/New_York")))
+        assertEquals("2025-08-13", Helpers.dayString(ms, java.time.ZoneId.of("UTC")))
+    }
+
+    @Test
+    fun `a trip's days are written in a line`() {
+        assertEquals("10 to 16 August 2025", Helpers.tripDays("2025-08-10", "2025-08-16"))
+        assertEquals("30 July to 2 August 2025", Helpers.tripDays("2025-07-30", "2025-08-02"))
+        assertEquals("28 December 2025 to 3 January 2026", Helpers.tripDays("2025-12-28", "2026-01-03"))
+        assertEquals("4 July 2025", Helpers.tripDays("2025-07-04", "2025-07-04"))
+        assertEquals("", Helpers.tripDays("", "nonsense"))
+    }
+
+    @Test
+    fun `the notification says what is left and how it ended`() {
+        assertEquals("1 left to send", Helpers.progressLine(1))
+        assertEquals("7 left to send", Helpers.progressLine(7))
+        assertEquals("12 in the album", Helpers.finishedLine(12, 0, 0))
+        assertEquals("12 in the album, 1 not sent, 1 video is too big and needs YouTube", Helpers.finishedLine(12, 1, 1))
+        assertEquals("2 videos are too big and need YouTube", Helpers.finishedLine(0, 0, 2))
+        assertEquals("Nothing left to send", Helpers.finishedLine(0, 0, 0))
+        assertEquals("1 waiting to send, 2 for YouTube", Helpers.queueSummary(1, 0, 0, 2))
+    }
 }

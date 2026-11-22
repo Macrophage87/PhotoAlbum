@@ -97,6 +97,45 @@ object Helpers {
     }
 
     /**
+     * Whether a file the album refuses is one for YouTube: a video the album does take the kind of, only too big or
+     * too long. The album keeps short clips; a longer video is put on YouTube and its link added to the album.
+     */
+    fun needsYouTube(mime: String?, bytes: Long?, durationMs: Long?, limits: Limits): Boolean {
+        val type = mime?.lowercase(Locale.US) ?: return false
+        if (type !in limits.videoTypes) return false
+        return (bytes != null && bytes > limits.videoBytes) || (durationMs != null && durationMs > limits.clipSeconds * 1000L)
+    }
+
+    /** A moment as the calendar day it fell on where the phone is ("2025-08-12"): how the album is told a video's day. */
+    fun dayString(ms: Long, zone: java.time.ZoneId): String = java.time.Instant.ofEpochMilli(ms).atZone(zone).toLocalDate().toString()
+
+    /** "10 to 16 August 2025", "30 July to 2 August 2025": a trip's days in a line, from the album's own dates. */
+    fun tripDays(start: String, end: String): String = try {
+        val a = java.time.LocalDate.parse(start)
+        val b = java.time.LocalDate.parse(end)
+        val full = java.time.format.DateTimeFormatter.ofPattern("d MMMM yyyy", Locale.US)
+        when {
+            a == b -> a.format(full)
+            a.year == b.year && a.month == b.month -> "${a.dayOfMonth} to ${b.format(full)}"
+            a.year == b.year -> "${a.format(java.time.format.DateTimeFormatter.ofPattern("d MMMM", Locale.US))} to ${b.format(full)}"
+            else -> "${a.format(full)} to ${b.format(full)}"
+        }
+    } catch (e: Exception) {
+        ""
+    }
+
+    /** What the notification says while files are going, and when they have all gone. */
+    fun progressLine(left: Int): String = if (left == 1) "1 left to send" else "$left left to send"
+
+    fun finishedLine(inAlbum: Int, failed: Int, tooBig: Int): String {
+        val parts = ArrayList<String>()
+        if (inAlbum > 0) parts.add("$inAlbum in the album")
+        if (failed > 0) parts.add("$failed not sent")
+        if (tooBig > 0) parts.add(if (tooBig == 1) "1 video is too big and needs YouTube" else "$tooBig videos are too big and need YouTube")
+        return if (parts.isEmpty()) "Nothing left to send" else parts.joinToString(", ")
+    }
+
+    /**
      * Which file on this phone something is, without reading it: its name, size and when it was last changed.
      * Android's own ids are no good for this (they change on a new phone), and a hash means reading the whole file.
      */
@@ -106,11 +145,12 @@ object Helpers {
     fun hex(digest: ByteArray): String = digest.joinToString("") { String.format(Locale.US, "%02x", it.toInt() and 0xff) }
 
     /** "3 waiting, 12 in the album, 1 failed": the queue in a line, or null when it is empty. */
-    fun queueSummary(waiting: Int, inAlbum: Int, failed: Int): String? {
+    fun queueSummary(waiting: Int, inAlbum: Int, failed: Int, tooBig: Int = 0): String? {
         val parts = ArrayList<String>()
         if (waiting > 0) parts.add("$waiting waiting to send")
         if (inAlbum > 0) parts.add("$inAlbum in the album")
         if (failed > 0) parts.add("$failed not sent")
+        if (tooBig > 0) parts.add("$tooBig for YouTube")
         return if (parts.isEmpty()) null else parts.joinToString(", ")
     }
 

@@ -8,7 +8,15 @@ import org.json.JSONObject
 import java.io.File
 
 /** How far one queued file has got. */
-enum class ItemState { WAITING, SENDING, SENT, ALREADY, FAILED }
+enum class ItemState {
+    WAITING, SENDING, SENT, ALREADY, FAILED,
+
+    /** A video too big or too long for the album to keep: it goes on YouTube, and its link is added instead. */
+    TOO_BIG,
+
+    /** Its YouTube link is in the album. */
+    LINKED,
+}
 
 /** One file the member chose to send. */
 data class QueueItem(
@@ -27,6 +35,11 @@ data class QueueItem(
     /** The album's id for it once the album has it. */
     val photoId: String? = null,
     val attempts: Int = 0,
+    /** The trip the member chose for it; null leaves the album to file it by its date. */
+    val tripId: String? = null,
+    val tripTitle: String? = null,
+    /** When it was taken, as the phone has it: the day a YouTube link for it is filed under. */
+    val takenMs: Long? = null,
 )
 
 /** What is kept on disk: the queue, and which of this phone's files the album is known to have. */
@@ -49,7 +62,10 @@ object QueueJson {
                     .put("state", item.state.name)
                     .put("message", item.message ?: JSONObject.NULL)
                     .put("photoId", item.photoId ?: JSONObject.NULL)
-                    .put("attempts", item.attempts),
+                    .put("attempts", item.attempts)
+                    .put("tripId", item.tripId ?: JSONObject.NULL)
+                    .put("tripTitle", item.tripTitle ?: JSONObject.NULL)
+                    .put("takenMs", item.takenMs ?: JSONObject.NULL),
             )
         }
         return JSONObject().put("items", items).put("sent", JSONArray(file.sent.sorted())).toString()
@@ -81,6 +97,9 @@ object QueueJson {
                     message = if (o.isNull("message")) null else o.getString("message"),
                     photoId = if (o.isNull("photoId")) null else o.getString("photoId"),
                     attempts = o.optInt("attempts", 0),
+                    tripId = if (o.isNull("tripId")) null else o.getString("tripId"),
+                    tripTitle = if (o.isNull("tripTitle")) null else o.getString("tripTitle"),
+                    takenMs = if (o.isNull("takenMs")) null else o.getLong("takenMs"),
                 ),
             )
         }
@@ -141,7 +160,7 @@ class UploadQueue private constructor(private val file: File) {
     fun finish(id: String, state: ItemState, message: String? = null, photoId: String? = null) = synchronized(lock) {
         val item = current.items.firstOrNull { it.id == id } ?: return@synchronized
         val done = item.copy(state = state, message = message, photoId = photoId ?: item.photoId)
-        val inAlbum = state == ItemState.SENT || state == ItemState.ALREADY
+        val inAlbum = state == ItemState.SENT || state == ItemState.ALREADY || state == ItemState.LINKED
         save(QueueFile(current.items.map { if (it.id == id) done else it }, if (inAlbum) current.sent + item.key else current.sent))
     }
 
@@ -161,9 +180,14 @@ class UploadQueue private constructor(private val file: File) {
         failed
     }
 
-    /** Drops the lines that are over with (sent, already there). What the album has stays remembered. */
+    /** Drops the lines that are over with (sent, already there, linked). What the album has stays remembered. */
     fun clearFinished() = synchronized(lock) {
-        save(current.copy(items = current.items.filter { it.state != ItemState.SENT && it.state != ItemState.ALREADY }))
+        save(current.copy(items = current.items.filter { it.state != ItemState.SENT && it.state != ItemState.ALREADY && it.state != ItemState.LINKED }))
+    }
+
+    /** Drops one line: a video the member has decided not to put on YouTube after all. */
+    fun remove(id: String) = synchronized(lock) {
+        if (current.items.any { it.id == id }) save(current.copy(items = current.items.filter { it.id != id }))
     }
 
     /** Forgets everything: for signing out, since the next member's album may be another one. */

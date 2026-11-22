@@ -52,4 +52,24 @@ class AlbumJsonTest {
         assertNull(AlbumJson.error("<html>502</html>"))
         assertNull(AlbumJson.error(null))
     }
+
+    @Test
+    fun `the album's trips are read in the order it gives them`() {
+        val body = """{"trips":[{"id":"t2","slug":"shore","title":"The shore","startDate":"2025-07-01","endDate":"2025-07-04"},{"id":"t1","slug":"acadia","title":"Acadia","startDate":"2024-08-10","endDate":"2024-08-16"}]}"""
+        assertEquals(
+            listOf(Trip("t2", "The shore", "2025-07-01", "2025-07-04"), Trip("t1", "Acadia", "2024-08-10", "2024-08-16")),
+            AlbumJson.trips(body),
+        )
+        assertEquals(emptyList<Trip>(), AlbumJson.trips("""{"trips":[]}"""))
+    }
+
+    @Test
+    fun `a YouTube link is sent with its day and its trip, and the answer read`() {
+        val sent = org.json.JSONObject(AlbumJson.videoRequest("  https://youtu.be/dQw4w9WgXcQ ", "2025-08-12", "t1"))
+        assertEquals("https://youtu.be/dQw4w9WgXcQ", sent.getString("url"))
+        assertEquals("2025-08-12", sent.getString("date"))
+        assertEquals("t1", sent.getString("tripId"))
+        assertEquals(true, org.json.JSONObject(AlbumJson.videoRequest("x", "2025-08-12", null)).isNull("tripId"))
+        assertEquals(AddedVideo("p1", "Falls"), AlbumJson.addedVideo("""{"photoId":"p1","title":"Falls"}"""))
+    }
 }
