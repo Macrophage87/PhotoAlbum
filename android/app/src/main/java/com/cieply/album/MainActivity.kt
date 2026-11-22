@@ -60,6 +60,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -163,14 +164,16 @@ private fun SetupScreen(
     var problem by remember { mutableStateOf<String?>(null) }
 
     // The website has handed the member back with a one-time code: trade it, with our secret, for this phone's token.
+    // The link is only marked as dealt with (onHandled) once the work is over: clearing it changes this effect's key,
+    // and Compose cancels an effect whose key changes, which would cut the exchange off part way.
     LaunchedEffect(handedBack) {
         val link = handedBack ?: return@LaunchedEffect
-        onHandled()
         val code = Helpers.codeFrom(link)
         val pending = store.pending()
         if (code == null || pending == null) {
             problem = "That sign-in could not be finished. Tap Sign in to start again."
             waiting = false
+            onHandled()
             return@LaunchedEffect
         }
         busy = true
@@ -180,15 +183,17 @@ private fun SetupScreen(
                 val token = AlbumApi.exchange(pending.baseUrl, code, pending.verifier)
                 token to AlbumApi(pending.baseUrl, token).me()
             }
+            store.clearPending()
+            onHandled()
             onSignedIn(TokenStore.SignIn(pending.baseUrl, token), who)
-        } catch (e: AlbumException) {
-            problem = e.message
+        } catch (e: CancellationException) {
+            throw e // the screen went away (say, the phone was turned); not a failure to report
         } catch (e: Exception) {
-            problem = "Could not reach the album: ${e.message ?: e.javaClass.simpleName}"
-        } finally {
+            problem = if (e is AlbumException) e.message else "Could not reach the album: ${e.message ?: e.javaClass.simpleName}"
             busy = false
             waiting = false
             store.clearPending()
+            onHandled()
         }
     }
 
