@@ -18,7 +18,7 @@ export const highlandsTheme: Theme = {
     border: "#dcd4e3",
     ring: "#b79cd0",
   },
-  fonts: { display: "var(--font-cormorant), Georgia, serif", body: "var(--font-lato), system-ui, sans-serif" },
+  fonts: { display: "var(--font-atkinson), system-ui, sans-serif", body: "var(--font-atkinson), system-ui, sans-serif" },
   radius: "0.5rem",
   headerArt: HighlandsArt,
   map: { trackColor: "#5e3a7a", photoMarkerColor: "#5e3a7a", clusterColor: "#3f2657", canvasFilter: "sepia(0.15) saturate(0.85)" },

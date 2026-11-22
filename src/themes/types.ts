@@ -19,7 +19,7 @@ export type Theme = {
   name: string;
   description: string;
   palette: ThemePalette;
-  /** CSS font-family values (usually `var(--font-xxx), fallback`). */
+  /** CSS font-family values. Every theme uses the album's one typeface, `var(--font-atkinson)`, loaded in the root layout. */
   fonts: { display: string; body: string };
   radius: string;
   /** Full-width decorative header illustration. */

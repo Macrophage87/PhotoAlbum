@@ -18,7 +18,7 @@ export const alpineTheme: Theme = {
     border: "#d3dfe8",
     ring: "#8fc0e0",
   },
-  fonts: { display: "var(--font-montserrat), system-ui, sans-serif", body: "var(--font-open-sans), system-ui, sans-serif" },
+  fonts: { display: "var(--font-atkinson), system-ui, sans-serif", body: "var(--font-atkinson), system-ui, sans-serif" },
   radius: "0.5rem",
   headerArt: AlpineArt,
   map: { trackColor: "#1f5f8b", photoMarkerColor: "#1f5f8b", clusterColor: "#154466", canvasFilter: "saturate(0.9) brightness(1.02)" },

@@ -18,7 +18,7 @@ export const desertTheme: Theme = {
     border: "#e5d8c8",
     ring: "#e3a37f",
   },
-  fonts: { display: "var(--font-bitter), Georgia, serif", body: "var(--font-work-sans), system-ui, sans-serif" },
+  fonts: { display: "var(--font-atkinson), system-ui, sans-serif", body: "var(--font-atkinson), system-ui, sans-serif" },
   radius: "0.5rem",
   headerArt: DesertArt,
   map: { trackColor: "#b5542a", photoMarkerColor: "#b5542a", clusterColor: "#8a3d1c", canvasFilter: "sepia(0.25) saturate(0.9)" },
