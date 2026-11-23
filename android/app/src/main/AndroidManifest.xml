@@ -25,6 +25,11 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.FamilyAlbum"
         android:usesCleartextTraffic="false">
+        <!-- How Google's casting library learns what this app casts to (see CastOptionsProvider). -->
+        <meta-data
+            android:name="com.google.android.gms.cast.framework.OPTIONS_PROVIDER_CLASS_NAME"
+            android:value="com.cieply.album.CastOptionsProvider" />
+
         <activity
             android:name=".MainActivity"
             android:exported="true"

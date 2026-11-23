@@ -89,6 +89,12 @@ private sealed interface Screen {
 
     /** The way round for one video too big for the album: put it on YouTube, paste its link. */
     data class YouTube(val itemId: String) : Screen
+
+    /** Choosing a trip or a collection to show on a television. */
+    data object Shows : Screen
+
+    /** The remote control for one slideshow on a television. */
+    data class Remote(val show: Show) : Screen
     data class Item(val uri: Uri, val origin: Origin) : Screen
 }
 
@@ -170,6 +176,14 @@ private fun App(store: TokenStore, handedBack: String?, onHandled: () -> Unit) {
             BackHandler { screen = Screen.Home }
             QueueScreen(current.baseUrl, onBack = { screen = Screen.Home }, onPickMore = { screen = Screen.Pick }, onYouTube = { screen = Screen.YouTube(it) })
         }
+        Screen.Shows -> {
+            BackHandler { screen = Screen.Home }
+            ShowsScreen(api, onBack = { screen = Screen.Home }, onChoose = { screen = Screen.Remote(it) })
+        }
+        is Screen.Remote -> {
+            BackHandler { screen = Screen.Shows }
+            RemoteScreen(api, current.baseUrl, at.show, onBack = { screen = Screen.Shows })
+        }
         is Screen.YouTube -> {
             BackHandler { screen = Screen.Queue }
             YouTubeScreen(api, at.itemId, onBack = { screen = Screen.Queue })
@@ -182,6 +196,7 @@ private fun App(store: TokenStore, handedBack: String?, onHandled: () -> Unit) {
             onPick = { uri, origin -> screen = Screen.Item(uri, origin) },
             onUpload = { screen = Screen.Pick },
             onQueue = { screen = Screen.Queue },
+            onSlideshow = { screen = Screen.Shows },
             onSignOut = signOut,
         )
     }
@@ -298,6 +313,7 @@ private fun HomeScreen(
     onPick: (Uri, Origin) -> Unit,
     onUpload: () -> Unit,
     onQueue: () -> Unit,
+    onSlideshow: () -> Unit,
     onSignOut: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -355,6 +371,7 @@ private fun HomeScreen(
                     OutlinedButton(modifier = Modifier.fillMaxWidth(), onClick = onQueue) { Text(summary) }
                 }
                 WifiOnlySwitch()
+                OutlinedButton(modifier = Modifier.fillMaxWidth(), onClick = onSlideshow) { Text("Show a slideshow on a TV") }
                 Card(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text("What Android allows this app", fontWeight = FontWeight.Bold)
@@ -785,6 +802,168 @@ private fun YouTubeScreen(api: AlbumApi, itemId: String, onBack: () -> Unit) {
             TextButton(onClick = { UploadQueue.get(context).remove(item.id); onBack() }) { Text("Leave this video out") }
         }
     }
+}
+
+/** The album's trips and collections, to pick one to show on a television. */
+@Composable
+private fun ShowsScreen(api: AlbumApi, onBack: () -> Unit, onChoose: (Show) -> Unit) {
+    var problem by remember { mutableStateOf<String?>(null) }
+    val shows by produceState<List<Show>?>(initialValue = null, api) {
+        value = try {
+            withContext(Dispatchers.IO) { api.shows("trip") + api.shows("collection") }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            problem = if (e is AlbumException) e.message else "Could not reach the album: ${e.message ?: e.javaClass.simpleName}"
+            emptyList()
+        }
+    }
+    val list = shows
+    LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        item {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = onBack) { Text("‹ Back") }
+                Heading("Slideshow on a TV")
+                Text("Choose what to show. The TV shows the pictures; this phone is the remote control.")
+                problem?.let { Text(it, color = Rust) }
+                if (list == null) Progress("Fetching the album's trips and collections…")
+                if (list != null && list.isEmpty() && problem == null) Text("The album has no trips or collections yet.")
+            }
+        }
+        if (list != null) {
+            for (kind in listOf("trip", "collection")) {
+                val ofKind = list.filter { it.kind == kind }
+                if (ofKind.isEmpty()) continue
+                item(key = "heading-$kind") {
+                    Text(if (kind == "trip") "Trips" else "Collections", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp))
+                }
+                listItems(ofKind, key = { "${it.kind}-${it.slug}" }) { show ->
+                    Card(Modifier.fillMaxWidth().clickable { onChoose(show) }) {
+                        Column(Modifier.padding(12.dp)) {
+                            Text(show.title, fontWeight = FontWeight.Bold)
+                            val count = if (show.items == 1) "1 item" else "${show.items} items"
+                            Text(if (show.detail.isEmpty()) count else "${show.detail} · $count", style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * The remote control. The television fetches each picture itself, from an address the album signed for it; the
+ * phone finds the television, says which picture, and shows what is on the screen.
+ */
+@Composable
+private fun RemoteScreen(api: AlbumApi, baseUrl: String, show: Show, onBack: () -> Unit) {
+    val context = LocalContext.current
+    val caster = remember { Caster(context) }
+    val screens by caster.screens.collectAsState()
+    val connected by caster.connected.collectAsState()
+    val castProblem by caster.problem.collectAsState()
+    var problem by remember { mutableStateOf<String?>(null) }
+    var index by remember { mutableIntStateOf(0) }
+    var playing by remember { mutableStateOf(false) }
+
+    // Looking for televisions only while this screen is open; leaving it ends the show on the television too.
+    androidx.compose.runtime.DisposableEffect(caster) {
+        caster.start()
+        onDispose {
+            caster.disconnect()
+            caster.stop()
+        }
+    }
+
+    val slideShow by produceState<SlideShow?>(initialValue = null, show) {
+        value = try {
+            withContext(Dispatchers.IO) { api.slideShow(show.kind, show.slug) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            problem = if (e is AlbumException) e.message else "Could not reach the album: ${e.message ?: e.javaClass.simpleName}"
+            null
+        }
+    }
+    val slides = slideShow?.slides ?: emptyList()
+    val slide = slides.getOrNull(index)
+
+    // Whenever the picture changes, or a television has just connected, the television is told which to show.
+    LaunchedEffect(connected, slide?.id) {
+        if (connected != null && slide != null) caster.show(baseUrl + slide.cast, slide.title ?: slide.caption, slide.place)
+    }
+    // Playing by itself: on to the next every ten seconds, round to the start after the last, as the website does.
+    LaunchedEffect(playing, index, connected, slides.size) {
+        if (playing && connected != null && slides.size > 1) {
+            delay(10_000)
+            index = (index + 1) % slides.size
+        }
+    }
+
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        TextButton(onClick = onBack) { Text("‹ Back") }
+        Heading(show.title)
+        problem?.let { Text(it, color = Rust) }
+        when {
+            !caster.available -> Text("This phone cannot cast: it needs Google Play services, which it does not have or which are out of date.", color = Rust)
+            slideShow == null && problem == null -> Progress("Fetching the slideshow…")
+            slideShow != null && slides.isEmpty() -> Text("There are no photos here to show yet. A slideshow shows photos only, not videos.")
+            slide == null -> {}
+            connected == null -> {
+                Text("Choose a TV", fontWeight = FontWeight.Bold)
+                castProblem?.let { Text(it, color = Rust) }
+                if (screens.isEmpty()) {
+                    Progress("Looking for TVs…")
+                    Text("The TV needs Chromecast or Google TV, to be switched on, and to be on the same Wi-Fi as this phone.")
+                }
+                for (tv in screens) {
+                    Button(modifier = Modifier.fillMaxWidth(), onClick = { caster.connect(tv.id) }) { Text(tv.name) }
+                }
+            }
+            else -> {
+                Text("Showing on $connected", color = Good, fontWeight = FontWeight.Bold)
+                Box(Modifier.fillMaxWidth().height(220.dp).background(Color(0xFFE6E9EE))) {
+                    AlbumPicture(api, slide.thumb, Modifier.fillMaxSize())
+                }
+                Text("${index + 1} of ${slides.size}", fontWeight = FontWeight.Bold)
+                (slide.title ?: slide.caption)?.let { Text(it) }
+                listOfNotNull(slide.day, slide.place).joinToString(" · ").takeIf { it.isNotEmpty() }?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall)
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    OutlinedButton(modifier = Modifier.weight(1f).height(72.dp), onClick = { index = (index - 1 + slides.size) % slides.size }) { Text("‹ Previous") }
+                    Button(modifier = Modifier.weight(1f).height(72.dp), onClick = { index = (index + 1) % slides.size }) { Text("Next ›") }
+                }
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Play by itself", fontWeight = FontWeight.Bold)
+                        Text("Moves on every 10 seconds while this screen is open.", style = MaterialTheme.typography.bodySmall)
+                    }
+                    Switch(checked = playing, onCheckedChange = { playing = it })
+                }
+                OutlinedButton(modifier = Modifier.fillMaxWidth(), onClick = { playing = false; caster.disconnect() }) { Text("Stop showing on the TV") }
+            }
+        }
+    }
+}
+
+/** One of the album's own pictures, fetched as this member. */
+@Composable
+private fun AlbumPicture(api: AlbumApi, path: String, modifier: Modifier = Modifier) {
+    val bitmap by produceState<Bitmap?>(initialValue = null, path) {
+        value = withContext(Dispatchers.IO) {
+            try {
+                val bytes = api.bytes(path)
+                android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            } catch (e: Exception) {
+                null
+            }
+        }
+    }
+    bitmap?.let { Image(it.asImageBitmap(), contentDescription = null, contentScale = ContentScale.Fit, modifier = modifier) }
 }
 
 private fun loadThumbnail(context: Context, uri: Uri): Bitmap? = try {

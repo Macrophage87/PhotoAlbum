@@ -11,6 +11,7 @@ import { viewerFor } from "@/lib/auth/access";
 import { largestRendition } from "@/lib/photos/urls";
 import { visitorFullSize } from "@/lib/images/visitor-copy";
 import { publicScanCopy } from "@/lib/scans/public-copy";
+import { castLinkGood } from "@/lib/cast/link";
 
 const MIME: Record<string, string> = { webp: "image/webp", jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", heic: "image/heic", heif: "image/heif", tif: "image/tiff", avif: "image/avif", gif: "image/gif", mp4: "video/mp4" };
 
@@ -61,7 +62,11 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   // A browser's session, or the phone app's token: the app shows the album's pictures as the website does.
   const viewer = await getApiViewer(request);
   const media = toMediaAccess(photo);
-  if (!mediaBytesAllowed(viewer, media, { token: url.searchParams.get("share"), kind: url.searchParams.get("kind") })) {
+  // A television shown a slideshow from the app: it cannot sign in, so the address itself was signed for this one
+  // picture, for a few hours, and only at the size a link's preview gets (a JPEG without the file's metadata).
+  const cast = url.searchParams.get("cast");
+  const byCast = size === "preview" && cast !== null && !media.trashedAt && (await castLinkGood(photo.id, cast));
+  if (!byCast && !mediaBytesAllowed(viewer, media, { token: url.searchParams.get("share"), kind: url.searchParams.get("kind") })) {
     return new Response("Forbidden", { status: viewer.kind === "user" ? 403 : 401 });
   }
 

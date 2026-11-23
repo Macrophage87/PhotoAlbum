@@ -37,6 +37,20 @@ data class Trip(val id: String, val title: String, val startDate: String, val en
 /** A YouTube link the album has taken. */
 data class AddedVideo(val photoId: String, val title: String)
 
+/** A trip or a collection that can be shown as a slideshow. `kind` is "trip" or "collection", as the album's address says it. */
+data class Show(val kind: String, val slug: String, val title: String, val detail: String, val items: Int)
+
+/** One page of the album's list of trips or collections, and where the next page starts (null at the end). */
+data class ShowPage(val shows: List<Show>, val next: Int?)
+
+/**
+ * One picture of a slideshow. `thumb` is for the phone, fetched with its sign-in; `cast` is the address a television
+ * fetches by itself, signed by the album and good for a few hours.
+ */
+data class Slide(val id: String, val title: String?, val caption: String?, val day: String?, val place: String?, val thumb: String, val cast: String)
+
+data class SlideShow(val title: String, val slides: List<Slide>)
+
 /** The album's answers, read. Kept apart from the network so they are tested on the build machine. */
 object AlbumJson {
     fun member(body: String): Member {
@@ -93,6 +107,32 @@ object AlbumJson {
             val t = array.getJSONObject(it)
             Trip(t.getString("id"), t.getString("title"), t.optString("startDate"), t.optString("endDate"))
         }
+    }
+
+    private fun text(o: JSONObject, key: String): String? = if (o.isNull(key)) null else o.optString(key).takeIf { it.isNotBlank() }
+
+    /** A page of `/api/v1/album/trips` or `/api/v1/album/collections`; `kind` says which. */
+    fun shows(body: String, kind: String): ShowPage {
+        val root = JSONObject(body)
+        val array = root.getJSONArray(if (kind == "trip") "trips" else "collections")
+        val shows = (0 until array.length()).map {
+            val o = array.getJSONObject(it)
+            val detail = if (kind == "trip") Helpers.tripDays(o.optString("startDate"), o.optString("endDate")) else ""
+            Show(kind, o.getString("slug"), o.getString("title"), detail, o.optInt("items", 0))
+        }
+        return ShowPage(shows, if (root.isNull("next")) null else root.optInt("next"))
+    }
+
+    fun slideShow(body: String): SlideShow {
+        val root = JSONObject(body)
+        val array = root.getJSONArray("slides")
+        return SlideShow(
+            root.optString("title"),
+            (0 until array.length()).map {
+                val o = array.getJSONObject(it)
+                Slide(o.getString("id"), text(o, "title"), text(o, "caption"), text(o, "day"), text(o, "place"), o.getString("thumb"), o.getString("cast"))
+            },
+        )
     }
 
     fun addedVideo(body: String): AddedVideo {
@@ -177,6 +217,37 @@ class AlbumApi(private val baseUrl: String, private val token: String) {
         )
     } catch (e: org.json.JSONException) {
         throw AlbumException("The album answered, but not in a way the app could read.")
+    }
+
+    /** Every trip or every collection in the album, a page at a time until there are no more. */
+    fun shows(kind: String): List<Show> = try {
+        val all = ArrayList<Show>()
+        var from: Int? = 0
+        // A stop well past any family's album, so an answer that never ends cannot keep the phone asking for ever.
+        while (from != null && all.size < 5000) {
+            val page = AlbumJson.shows(send(request("/api/v1/album/${if (kind == "trip") "trips" else "collections"}?from=$from").get().build()), kind)
+            all.addAll(page.shows)
+            from = if (page.shows.isEmpty()) null else page.next
+        }
+        all
+    } catch (e: org.json.JSONException) {
+        throw AlbumException("The album's list could not be read.")
+    }
+
+    /** A trip's or a collection's slideshow, with the addresses a television can fetch. */
+    fun slideShow(kind: String, slug: String): SlideShow = try {
+        AlbumJson.slideShow(send(request("/api/v1/album/slideshow?$kind=${Helpers.encodeFileName(slug)}").get().build()))
+    } catch (e: org.json.JSONException) {
+        throw AlbumException("The album's slideshow could not be read.")
+    }
+
+    /** A picture's bytes from one of the album's own paths, as this member. */
+    fun bytes(path: String): ByteArray {
+        client.newCall(request(path).get().build()).execute().use { response ->
+            val body = response.body?.bytes()
+            if (!response.isSuccessful || body == null) throw AlbumException("The album would not give that picture (${response.code}).", response.code)
+            return body
+        }
     }
 
     fun status(id: String): PhotoStatus? = AlbumJson.status(send(request("/api/photos/status?ids=$id").get().build()), id)

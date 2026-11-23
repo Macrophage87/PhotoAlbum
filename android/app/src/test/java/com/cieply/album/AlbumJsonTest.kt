@@ -72,4 +72,23 @@ class AlbumJsonTest {
         assertEquals(true, org.json.JSONObject(AlbumJson.videoRequest("x", "2025-08-12", null)).isNull("tripId"))
         assertEquals(AddedVideo("p1", "Falls"), AlbumJson.addedVideo("""{"photoId":"p1","title":"Falls"}"""))
     }
+
+    @Test
+    fun `the album's trips and collections are read as things to show, a page at a time`() {
+        val trips = AlbumJson.shows("""{"trips":[{"id":"t1","slug":"coast","title":"Coast","startDate":"2025-08-10","endDate":"2025-08-16","items":42}],"total":101,"next":100}""", "trip")
+        assertEquals(ShowPage(listOf(Show("trip", "coast", "Coast", "10 to 16 August 2025", 42)), 100), trips)
+        val collections = AlbumJson.shows("""{"collections":[{"id":"c1","slug":"best","title":"Best","items":1}],"total":1,"next":null}""", "collection")
+        assertEquals(ShowPage(listOf(Show("collection", "best", "Best", "", 1)), null), collections)
+    }
+
+    @Test
+    fun `a slideshow is read with the address for the phone and the one for the television`() {
+        val body = """{"title":"Coast","expiresAt":"2026-11-23T22:00:00.000Z","slides":[
+            {"id":"p1","title":null,"caption":"Low tide","day":"Monday, August 11, 2025","place":null,"thumb":"/api/photos/p1/thumb?v=2","cast":"/api/photos/p1/preview?v=2&cast=1.x"},
+            {"id":"p2","title":"Harbour","caption":"","day":null,"place":"Bar Harbor","thumb":"/api/photos/p2/thumb?v=1","cast":"/api/photos/p2/preview?v=1&cast=1.y"}]}"""
+        val show = AlbumJson.slideShow(body)
+        assertEquals("Coast", show.title)
+        assertEquals(Slide("p1", null, "Low tide", "Monday, August 11, 2025", null, "/api/photos/p1/thumb?v=2", "/api/photos/p1/preview?v=2&cast=1.x"), show.slides[0])
+        assertEquals(Slide("p2", "Harbour", null, null, "Bar Harbor", "/api/photos/p2/thumb?v=1", "/api/photos/p2/preview?v=1&cast=1.y"), show.slides[1])
+    }
 }

@@ -21,6 +21,12 @@ with their location intact.
 7. A quiet notification shows how many are left and how it ended. It is posted by the ordinary background job, not
    a foreground service, so sending is the same with notifications refused.
 8. "Send on Wi-Fi only" (home and queue screens) makes the job wait for an unmetered connection.
+9. **Show a slideshow on a TV** lists the album's trips and collections, finds Chromecast and Google TV screens on
+   the Wi-Fi, and casts the chosen slideshow. The phone is the remote: Previous, Next, and "Play by itself". The
+   television fetches each picture itself from an address the album signs for that one picture for a few hours
+   (`GET /api/v1/album/slideshow`, `src/lib/cast/link.ts`), using the receiver every Chromecast already has, so
+   there is no receiver app to register. The list of screens is drawn by the app (`Caster`), not by Google's
+   dialog, which would need an AppCompat theme.
 
 Files are read with `MediaStore.setRequireOriginal`, which needs the "location in photos" permission; without it
 the app refuses to send rather than send photos with their place blanked out.
