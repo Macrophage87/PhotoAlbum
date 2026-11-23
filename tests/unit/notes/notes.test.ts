@@ -46,7 +46,9 @@ async function form(fields: Record<string, string>, now: Date, age = 10_000): Pr
 
 async function send(fields: Record<string, string> = {}, opts: { now?: Date; ip?: string | null; viewer?: Viewer; age?: number } = {}) {
   const now = opts.now ?? T0;
-  return submitNote(await form(fields, now, opts.age), { viewer: opts.viewer ?? anonymous, headers: from(opts.ip === undefined ? "198.51.100.7" : opts.ip), appUrl: APP, now });
+  // A different sender leaves a different address, unless the test says otherwise.
+  const ip = opts.ip === undefined ? "198.51.100.7" : opts.ip;
+  return submitNote(await form({ email: `ruth.${(ip ?? "none").replace(/[^0-9a-f]/gi, "-")}@example.com`, ...fields }, now, opts.age), { viewer: opts.viewer ?? anonymous, headers: from(ip), appUrl: APP, now });
 }
 
 const minutes = (n: number) => new Date(T0.getTime() + n * 60_000);
@@ -61,32 +63,36 @@ beforeEach(async () => {
 });
 
 describe("what a note may say", () => {
-  it("wants a name and a message, each within its length, and an email only if one is given", () => {
-    expect(validateNote({ name: "Ruth", email: "", message: "Hello!" })).toEqual({ ok: true, note: { name: "Ruth", email: null, message: "Hello!" } });
-    expect(validateNote({ name: " ", email: "", message: "Hello" })).toMatchObject({ ok: false, errors: { name: expect.any(String) } });
-    expect(validateNote({ name: "R".repeat(81), email: "", message: "Hello" })).toMatchObject({ ok: false, errors: { name: expect.stringMatching(/80/) } });
-    expect(validateNote({ name: "R".repeat(80), email: "", message: "Hello" }).ok).toBe(true);
+  it("wants a name, an email address and a message, each within its length", () => {
+    expect(validateNote({ name: "Ruth", email: "r@example.com", message: "Hello!" })).toEqual({ ok: true, note: { name: "Ruth", email: "r@example.com", message: "Hello!" } });
+    expect(validateNote({ name: "Ruth", email: "", message: "Hello!" })).toMatchObject({ ok: false, errors: { email: "Please add your email address." } });
+    expect(validateNote({ name: "Ruth", email: "   ", message: "Hello!" })).toMatchObject({ ok: false, errors: { email: expect.any(String) } });
+    // A signed-in member's address comes from their account, so the form need not carry one.
+    expect(validateNote({ name: "Ruth", email: "", message: "Hello!" }, { emailRequired: false })).toEqual({ ok: true, note: { name: "Ruth", email: null, message: "Hello!" } });
+    expect(validateNote({ name: " ", email: "r@example.com", message: "Hello" })).toMatchObject({ ok: false, errors: { name: expect.any(String) } });
+    expect(validateNote({ name: "R".repeat(81), email: "r@example.com", message: "Hello" })).toMatchObject({ ok: false, errors: { name: expect.stringMatching(/80/) } });
+    expect(validateNote({ name: "R".repeat(80), email: "r@example.com", message: "Hello" }).ok).toBe(true);
     expect(validateNote({ name: "Ruth", email: "not an address", message: "Hello" })).toMatchObject({ ok: false, errors: { email: expect.any(String) } });
     expect(validateNote({ name: "Ruth", email: " ruth@example.com ", message: "Hello" })).toMatchObject({ ok: true, note: { email: "ruth@example.com" } });
-    expect(validateNote({ name: "Ruth", email: "", message: "" })).toMatchObject({ ok: false, errors: { message: expect.any(String) } });
-    expect(validateNote({ name: "Ruth", email: "", message: "x".repeat(2001) })).toMatchObject({ ok: false, errors: { message: expect.stringMatching(/2,000/) } });
-    expect(validateNote({ name: "Ruth", email: "", message: "x".repeat(2000) }).ok).toBe(true);
+    expect(validateNote({ name: "Ruth", email: "r@example.com", message: "" })).toMatchObject({ ok: false, errors: { message: expect.any(String) } });
+    expect(validateNote({ name: "Ruth", email: "r@example.com", message: "x".repeat(2001) })).toMatchObject({ ok: false, errors: { message: expect.stringMatching(/2,000/) } });
+    expect(validateNote({ name: "Ruth", email: "r@example.com", message: "x".repeat(2000) }).ok).toBe(true);
     expect(validateNote({ name: undefined, email: null, message: 42 }).ok).toBe(false);
   });
 
   it("makes a name one line, so it cannot carry a header into the email's subject", () => {
-    const r = validateNote({ name: "Ruth\r\nBcc: everyone@example.com", email: "", message: "Hi" });
-    expect(r).toEqual({ ok: true, note: { name: "Ruth Bcc: everyone@example.com", email: null, message: "Hi" } });
+    const r = validateNote({ name: "Ruth\r\nBcc: everyone@example.com", email: "r@example.com", message: "Hi" });
+    expect(r).toEqual({ ok: true, note: { name: "Ruth Bcc: everyone@example.com", email: "r@example.com", message: "Hi" } });
   });
 
   it("takes two links, not three, and never nothing but links", () => {
     expect(linkCount("see https://a.example/x and www.b.example")).toBe(2);
-    expect(validateNote({ name: "R", email: "", message: "Look: https://a.example and https://b.example" }).ok).toBe(true);
-    expect(validateNote({ name: "R", email: "", message: "https://a.example https://b.example https://c.example great photos" })).toMatchObject({ ok: false, errors: { message: expect.stringMatching(/no more than 2 links/) } });
+    expect(validateNote({ name: "R", email: "r@example.com", message: "Look: https://a.example and https://b.example" }).ok).toBe(true);
+    expect(validateNote({ name: "R", email: "r@example.com", message: "https://a.example https://b.example https://c.example great photos" })).toMatchObject({ ok: false, errors: { message: expect.stringMatching(/no more than 2 links/) } });
     expect(onlyLinks("https://spam.example")).toBe(true);
     expect(onlyLinks("  www.spam.example , https://x.example! ")).toBe(true);
     expect(onlyLinks("Lovely! https://x.example")).toBe(false);
-    expect(validateNote({ name: "R", email: "", message: "https://spam.example" })).toMatchObject({ ok: false, errors: { message: expect.stringMatching(/not just a link/) } });
+    expect(validateNote({ name: "R", email: "r@example.com", message: "https://spam.example" })).toMatchObject({ ok: false, errors: { message: expect.stringMatching(/not just a link/) } });
   });
 });
 
@@ -210,8 +216,42 @@ describe("limits", () => {
   });
 
   it("lets senders no proxy named share a looser bucket", async () => {
-    for (let i = 0; i < 10; i++) expect(await send({}, { now: minutes(i / 10), ip: null })).toEqual({ status: "sent" });
-    expect(await send({}, { now: minutes(1), ip: null })).toMatchObject({ status: "error" });
+    for (let i = 0; i < 10; i++) expect(await send({ email: `guest${i}@example.com` }, { now: minutes(i / 10), ip: null })).toEqual({ status: "sent" });
+    expect(await send({ email: "guest10@example.com" }, { now: minutes(1), ip: null })).toMatchObject({ status: "error" });
+  });
+
+  it("counts one email address as one sender, wherever it writes from and however it is capitalised", async () => {
+    for (const [m, ip] of [[0, "198.51.100.1"], [1, "198.51.100.2"], [2, "198.51.100.3"]] as const) expect(await send({ email: "spam@example.com" }, { now: minutes(m), ip })).toEqual({ status: "sent" });
+    expect(await send({ email: "SPAM@Example.com" }, { now: minutes(3), ip: "198.51.100.4" })).toMatchObject({ status: "error", message: expect.stringMatching(/wait ten minutes/) });
+    // Over the day, ten.
+    for (let i = 0; i < 7; i++) expect(await send({ email: "spam@example.com" }, { now: minutes(11 + i * 11), ip: `203.0.113.${i + 1}` })).toEqual({ status: "sent" });
+    expect(await send({ email: "spam@example.com" }, { now: minutes(200), ip: "203.0.113.99" })).toMatchObject({ status: "error", message: expect.stringMatching(/tomorrow/) });
+    expect(await db.visitorNote.count()).toBe(10);
+  });
+
+  it("does not limit a signed-in member at all, and takes their address from their account", async () => {
+    const user = await db.user.create({ data: { email: "cousin@example.com", name: "Cousin Al", role: "MEMBER" } });
+    const member: Viewer = { kind: "user", user: { id: user.id, email: user.email, name: user.name, role: "MEMBER" }, shareTokens: new Map() };
+    // Far past every visitor's limit, from one address, in one minute; with no email typed, or somebody else's.
+    for (let i = 0; i < 15; i++) expect(await send({ email: i % 2 ? "" : "someone.else@example.com" }, { now: minutes(i / 15), viewer: member })).toEqual({ status: "sent" });
+    expect(await db.visitorNote.count({ where: { email: "cousin@example.com" } })).toBe(15);
+    expect(jobs.queued).toHaveLength(15);
+    expect(jobs.queued[0]).toMatchObject({ data: { member: true } });
+  });
+
+  it("emails the admins about a member's note even past the day's cap", async () => {
+    const user = await db.user.create({ data: { email: "cousin@example.com", role: "MEMBER" } });
+    const member: Viewer = { kind: "user", user: { id: user.id, email: user.email, name: null, role: "MEMBER" }, shareTokens: new Map() };
+    await db.visitorNote.createMany({ data: Array.from({ length: MAILED_PER_DAY }, (_, i) => ({ name: "N", message: "m", clientHash: `other${i}`, createdAt: new Date(T0.getTime() - 60_000) })) });
+    expect(await send({}, { viewer: member })).toEqual({ status: "sent" });
+    expect(jobs.queued).toHaveLength(1);
+    const note = await db.visitorNote.findFirstOrThrow({ where: { email: "cousin@example.com" } });
+    expect(note.unmailed).toBe(false);
+    await db.user.create({ data: { email: "mom@example.com", role: "ADMIN" } });
+    expect(await mailVisitorNote(note.id, { member: true })).toEqual({ sent: 1, failed: 0 });
+    // The same note sent as a visitor's would have been held back by the cap.
+    const other = await db.visitorNote.create({ data: { name: "V", email: "v@example.com", message: "m", clientHash: "v", createdAt: T0 } });
+    expect(await mailVisitorNote(other.id)).toEqual({ sent: 0, failed: 0 });
   });
 
   it("past the day's cap keeps notes but emails nobody about them", async () => {

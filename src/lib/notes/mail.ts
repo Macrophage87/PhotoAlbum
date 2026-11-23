@@ -33,21 +33,24 @@ export function noteEmail(to: string, note: NoteForMail, appUrl: string): Mail {
  * Tell every admin about one note. One admin's mail failing does not stop the others'; only when nobody could be
  * reached does the job fail, and so get retried, which then sends nobody a second copy.
  */
-export async function mailVisitorNote(noteId: string): Promise<{ sent: number; failed: number }> {
+export async function mailVisitorNote(noteId: string, opts: { member?: boolean } = {}): Promise<{ sent: number; failed: number }> {
   const note = await db.visitorNote.findUnique({ where: { id: noteId } });
   if (!note || note.unmailed) return { sent: 0, failed: 0 };
-  // The day's cap once more, in case notes got past it on the way in: counted over the notes to be mailed that came
-  // in before this one, so however the jobs run, the same ones are mailed.
-  const ahead = await db.visitorNote.count({
-    where: {
-      unmailed: false,
-      createdAt: { gt: new Date(note.createdAt.getTime() - 24 * 60 * 60 * 1000) },
-      OR: [{ createdAt: { lt: note.createdAt } }, { createdAt: note.createdAt, id: { lt: note.id } }],
-    },
-  });
-  if (ahead >= MAILED_PER_DAY) {
-    await db.visitorNote.update({ where: { id: note.id }, data: { unmailed: true } });
-    return { sent: 0, failed: 0 };
+  // A signed-in member's note always goes out: the cap is there for a flood from visitors.
+  if (!opts.member) {
+    // The day's cap once more, in case notes got past it on the way in: counted over the notes to be mailed that came
+    // in before this one, so however the jobs run, the same ones are mailed.
+    const ahead = await db.visitorNote.count({
+      where: {
+        unmailed: false,
+        createdAt: { gt: new Date(note.createdAt.getTime() - 24 * 60 * 60 * 1000) },
+        OR: [{ createdAt: { lt: note.createdAt } }, { createdAt: note.createdAt, id: { lt: note.id } }],
+      },
+    });
+    if (ahead >= MAILED_PER_DAY) {
+      await db.visitorNote.update({ where: { id: note.id }, data: { unmailed: true } });
+      return { sent: 0, failed: 0 };
+    }
   }
   const admins = await db.user.findMany({ where: { role: "ADMIN", removingAt: null }, select: { email: true } });
   let sent = 0;

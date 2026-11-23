@@ -11,7 +11,7 @@ import { sendNote } from "./actions";
  * with its answer. What was typed comes back with an answer that is not a thank-you, so nothing has to be written
  * again.
  */
-export function NoteForm({ token, photo, page, back }: { token: string; photo: string; page: string; back: string }) {
+export function NoteForm({ token, photo, page, back, member }: { token: string; photo: string; page: string; back: string; member: { name: string; email: string } | null }) {
   const [state, action, pending] = useActionState<NoteState, FormData>(sendNote, { status: "idle", token });
 
   if (state.status === "sent") {
@@ -24,7 +24,7 @@ export function NoteForm({ token, photo, page, back }: { token: string; photo: s
     );
   }
 
-  const values = state.status === "error" ? state.values : { name: "", email: "", message: "", photo, page };
+  const values = state.status === "error" ? state.values : { name: member?.name ?? "", email: "", message: "", photo, page };
   const errors = state.status === "error" ? state.errors : {};
   return (
     <form action={action} className="space-y-4" data-testid="note-form">
@@ -42,11 +42,16 @@ export function NoteForm({ token, photo, page, back }: { token: string; photo: s
         <Input id="note-name" name="name" required maxLength={NAME_MAX} autoComplete="name" defaultValue={values.name} aria-invalid={Boolean(errors.name)} />
         <FieldError>{errors.name}</FieldError>
       </div>
-      <div>
-        <Label htmlFor="note-email">Your email <span className="font-normal text-muted">(optional, so we can reply)</span></Label>
-        <Input id="note-email" name="email" type="email" autoComplete="email" defaultValue={values.email} aria-invalid={Boolean(errors.email)} />
-        <FieldError>{errors.email}</FieldError>
-      </div>
+      {member ? (
+        // A member's note goes out with their account's address; nothing to type.
+        <p className="text-sm text-muted" data-testid="note-member-email">We&rsquo;ll reply to {member.email}.</p>
+      ) : (
+        <div>
+          <Label htmlFor="note-email">Your email <span className="font-normal text-muted">(so we can reply; never shown to anyone else)</span></Label>
+          <Input id="note-email" name="email" type="email" required autoComplete="email" defaultValue={values.email} aria-invalid={Boolean(errors.email)} />
+          <FieldError>{errors.email}</FieldError>
+        </div>
+      )}
       <div>
         <Label htmlFor="note-message">Your message</Label>
         <Textarea id="note-message" name="message" required rows={6} maxLength={MESSAGE_MAX} defaultValue={values.message} aria-invalid={Boolean(errors.message)} />

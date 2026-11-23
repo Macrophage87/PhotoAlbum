@@ -42,7 +42,7 @@ export default async function NotePage({ searchParams }: PageProps<"/note">) {
             <span>About this photo</span>
           </div>
         )}
-        <NoteForm token={token} photo={photoParam} page={page} back={back} />
+        <NoteForm token={token} photo={photoParam} page={page} back={back} member={viewer.kind === "user" ? { name: viewer.user.name ?? "", email: viewer.user.email } : null} />
       </Container>
     </AppShell>
   );
