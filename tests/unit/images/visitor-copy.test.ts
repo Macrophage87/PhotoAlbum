@@ -13,7 +13,7 @@ import { resetTestDb } from "../helpers/reset";
 
 const who = vi.hoisted(() => ({ viewer: null as unknown as Viewer }));
 const queued = vi.hoisted(() => [] as { queue: string; data: unknown; opts: unknown }[]);
-vi.mock("@/lib/auth/viewer", () => ({ getViewer: async () => who.viewer }));
+vi.mock("@/lib/auth/viewer", () => ({ getViewer: async () => who.viewer, getApiViewer: async () => who.viewer }));
 vi.mock("@/lib/jobs/boss", () => ({ enqueue: async (queue: string, data: unknown, opts: unknown) => void queued.push({ queue, data, opts }) }));
 
 import { GET as bytes } from "@/app/api/photos/[id]/[size]/route";
@@ -197,7 +197,7 @@ describe("the full-size picture for a visitor", () => {
     expect(res.headers.get("Content-Type")).toBe("image/webp");
     expect(res.headers.get("Content-Disposition")).toBeNull();
     expect(res.headers.get("Cache-Control")).toMatch(/^private, max-age/);
-    expect(res.headers.get("Vary")).toBe("Cookie");
+    expect(res.headers.get("Vary")).toBe("Cookie, Authorization");
     expect(queued).toEqual([]);
     const meta = await sharp(body).metadata();
     // The member's file is 3000 × 2000 on its side: the same pixels, the right way up, none left out.

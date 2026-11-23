@@ -48,6 +48,10 @@ A self-hosted photo album for family trips. Photos are grouped into **trips** an
 - **Search.** Captions, notes, AI descriptions and tags, confirmed people's names (members only), titles, trip and collection names, and for members uploader names, through Postgres full-text search with filters by trip, collection, uploader, person (members only), year and type. Anonymous visitors search only public content and only the column that carries no names.
 - **Photo links.** Mark photos as the same scene, before/after, parts of a panorama, or related.
 - **Family sign-in** by emailed magic link; an admin invites members. No passwords.
+- **Slideshow.** Every trip and collection has a Slideshow tab: one picture at a time filling the screen, moving on by itself (slow, medium or fast, remembered on the device), with the title or caption, the day and the place in large type underneath. Big labelled buttons for Previous, Pause, Next and Full screen, and the arrow keys, space, F and Escape do the same. It keeps the screen awake while it plays, so it can be left running on a television.
+- **On this day.** The front page opens with photographs taken on this day of the year in earlier years ("3 years ago · 2023 · Acadia, Maine"), read on the clock where each was taken and on the viewer's own calendar, a few from each year with the family's favourites first. Visitors see only what is public; nothing is shown on a day with no memories.
+- **Easier reading.** A button at the foot of every page (and on Your account) makes all the text bigger and the grey words darker, in every trip's theme. A member's choice is kept on their account, so it follows them to every device they sign in on.
+- **Browsing from the phone app.** `/api/v1/album/trips`, `/api/v1/album/trips/[slug]`, `/api/v1/album/collections`, `/api/v1/album/collections/[slug]` and `/api/v1/album/on-this-day` give the app the album's trips, collections and items a page at a time, and the picture routes accept the phone's token, ready for the app's browsing screens.
 - **Installable.** Add it to a phone's home screen and it opens full-screen like an app, with its own icon.
 
 ## Quick start (Docker)

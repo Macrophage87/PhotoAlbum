@@ -6,7 +6,7 @@ import { db } from "@/lib/db";
 import { readSessionUser } from "./session";
 import { bearerToken, readDeviceUser } from "./device-token";
 
-export type ViewerUser = { id: string; email: string; name: string | null; role: Role };
+export type ViewerUser = { id: string; email: string; name: string | null; role: Role; /** Larger text and stronger contrast on every page (see src/lib/reading/large-text.ts). */ largeText?: boolean };
 
 export type Viewer =
   | { kind: "user"; user: ViewerUser; shareTokens: Map<string, string> }
@@ -26,14 +26,15 @@ async function readShareCookies(): Promise<Map<string, string>> {
 /** Who is looking: a signed-in member, or an anonymous visitor (possibly holding share cookies). Cached per request. */
 export const getViewer = cache(async (): Promise<Viewer> => {
   const [user, shareTokens] = await Promise.all([readSessionUser(), readShareCookies()]);
-  if (user) return { kind: "user", user: { id: user.id, email: user.email, name: user.name, role: user.role }, shareTokens };
+  if (user) return { kind: "user", user: { id: user.id, email: user.email, name: user.name, role: user.role, largeText: user.largeText }, shareTokens };
   return { kind: "anonymous", user: null, shareTokens };
 });
 
 /**
  * Who is calling one of the routes the album's app uses: the browser's session as everywhere else, or failing that a
  * phone's token in the Authorization header (src/lib/auth/device-token.ts). Only those routes call this, so a phone's
- * token opens the upload, its status and /api/v1 and nothing else. A phone carries no share cookies.
+ * token opens the upload, its status, /api/v1 and the pictures themselves (/api/photos/[id]/[size], for the app's
+ * browsing screens) and nothing else. A phone carries no share cookies.
  */
 export async function getApiViewer(request: Request): Promise<Viewer> {
   const viewer = await getViewer();

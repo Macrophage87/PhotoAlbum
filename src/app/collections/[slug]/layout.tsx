@@ -52,6 +52,8 @@ export default async function CollectionLayout({ params, children }: LayoutProps
   const tabs = [
     { href: base, label: "Timeline", exact: true },
     { href: `${base}/map`, label: "Map" },
+    // Full screen, one picture at a time: for watching together, or for whoever would rather not click.
+    { href: `${base}/slideshow`, label: "Slideshow" },
     // A member's own, and the family's shortlist: nothing for somebody holding a share link.
     ...(viewer.kind === "user" ? [{ href: `${base}/favorites`, label: "Favorites" }] : []),
     // What the album thinks looks alike is for the family, not for whoever holds a share link.

@@ -57,3 +57,23 @@ h1, h2, h3, .font-display {
 main#main:focus {
   outline: none;
 }
+
+/*
+ * Larger text and stronger contrast, chosen at the foot of any page (src/lib/reading/large-text.ts). Everything is
+ * sized in rem, so raising the root size enlarges the whole page in proportion — text, buttons and the gaps between
+ * them — rather than squeezing big letters into small boxes. The smallest print is raised further, and grey text is
+ * pulled most of the way to the page's own text colour, in every trip's theme. Unlayered, so it wins over utilities.
+ */
+html.large-text {
+  font-size: 118.75%;
+}
+html.large-text .text-xs {
+  font-size: 0.875rem;
+  line-height: 1.35;
+}
+html.large-text .text-muted {
+  color: color-mix(in oklab, var(--th-text-muted) 35%, var(--th-text));
+}
+html.large-text body {
+  line-height: 1.6;
+}
