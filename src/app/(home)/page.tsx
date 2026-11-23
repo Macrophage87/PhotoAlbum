@@ -11,6 +11,7 @@ import { AppShell, Container } from "@/components/layout/AppShell";
 import { TripCard } from "@/components/trips/TripCard";
 import { ButtonLink } from "@/components/ui";
 import { withReadableDescription } from "@/lib/photos/readable-text";
+import { OnThisDay } from "@/components/home/OnThisDay";
 
 /** How many cards a page of the front page holds. Enough to browse, few enough that a long history still loads. */
 const PAGE = 24;
@@ -47,6 +48,8 @@ export default async function HomePage({ searchParams }: PageProps<"/">) {
             Only admins can open that page. Ask an admin of the album if you need something there.
           </p>
         )}
+        {/* Only on the front page itself: a search or a later page is somebody looking for something else. */}
+        {!q && page === 1 && <OnThisDay />}
         <div className="flex items-end justify-between gap-4 mb-6">
           <div>
             <h1 className="font-display text-3xl font-semibold">Trips</h1>

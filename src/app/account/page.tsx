@@ -3,6 +3,7 @@ import { AppShell, Container } from "@/components/layout/AppShell";
 import { Button, Card, ConfirmSubmitButton, Input, Label } from "@/components/ui";
 import { db } from "@/lib/db";
 import { disconnectPhone, updateMyName } from "./actions";
+import { LargeTextToggle } from "@/components/layout/LargeTextToggle";
 
 export const metadata = { title: "Your account" };
 
@@ -29,6 +30,13 @@ export default async function AccountPage({ searchParams }: PageProps<"/account"
             </div>
             <Button type="submit" size="sm">Save</Button>
           </form>
+        </Card>
+        <Card className="p-5 space-y-3">
+          <div>
+            <h2 className="font-display text-xl font-semibold">Easier reading</h2>
+            <p className="text-sm text-muted mt-1">Bigger text and darker grey words on every page, on every computer and phone you sign in on. The same switch is at the foot of every page.</p>
+          </div>
+          <LargeTextToggle on={Boolean(viewer.user?.largeText)} />
         </Card>
         <Card className="p-5 space-y-3">
           <div>

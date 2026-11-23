@@ -58,6 +58,8 @@ export default async function TripLayout({ params, children }: LayoutProps<"/tri
   const tabs = [
     { href: base, label: "Timeline", exact: true },
     { href: `${base}/map`, label: "Map" },
+    // Full screen, one picture at a time: for watching together, or for whoever would rather not click.
+    { href: `${base}/slideshow`, label: "Slideshow" },
     { href: `${base}/activities`, label: "Activities" },
     // A member's own, and the family's shortlist: nothing for somebody holding a share link.
     ...(viewer.kind === "user" ? [{ href: `${base}/favorites`, label: "Favorites" }] : []),

@@ -11,7 +11,7 @@ import { readExif } from "@/lib/images/exif";
 import { resetTestDb } from "../helpers/reset";
 
 const who = vi.hoisted(() => ({ viewer: null as unknown as Viewer }));
-vi.mock("@/lib/auth/viewer", () => ({ getViewer: async () => who.viewer }));
+vi.mock("@/lib/auth/viewer", () => ({ getViewer: async () => who.viewer, getApiViewer: async () => who.viewer }));
 vi.mock("@/lib/jobs/boss", () => ({ enqueue: async () => null }));
 
 import { GET as bytes } from "@/app/api/photos/[id]/[size]/route";
@@ -76,7 +76,7 @@ describe("the file as uploaded, for somebody outside the family", () => {
     expect(res.headers.get("Content-Disposition")).toContain("plain");
     // The same address answers others differently, so no shared cache may keep it.
     expect(res.headers.get("Cache-Control")).toMatch(/^private/);
-    expect(res.headers.get("Vary")).toBe("Cookie");
+    expect(res.headers.get("Vary")).toBe("Cookie, Authorization");
     expect((await fetchBytes(editedId, "source")).body.equals(await readFile(storage().localPath!(edited.source!.key)))).toBe(true);
     expect((await fetchBytes(clipId, "original")).body.toString()).toContain("location and all");
   });

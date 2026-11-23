@@ -203,6 +203,9 @@ model User {
   removingById String?
   removingBy   User?    @relation("RemovingBy", fields: [removingById], references: [id], onDelete: Restrict)
   takingOver   User[]   @relation("RemovingBy")
+  /// Larger text and stronger contrast on every page, chosen from the foot of any page. Kept on the account so it
+  /// follows the member to every device they sign in on; a visitor's choice is kept in a cookie instead.
+  largeText    Boolean  @default(false)
 
   sessions Session[]
   deviceTokens DeviceToken[]

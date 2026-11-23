@@ -1,6 +1,6 @@
 import { Readable } from "node:stream";
 import { db } from "@/lib/db";
-import { getViewer } from "@/lib/auth/viewer";
+import { getApiViewer } from "@/lib/auth/viewer";
 import { storage } from "@/lib/storage";
 import type { Renditions } from "@/lib/images/renditions";
 import type { VideoRenditions } from "@/lib/jobs/handlers/transcode-video";
@@ -58,7 +58,8 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   if (!photo) return new Response("Not found", { status: 404 });
 
   const url = new URL(request.url);
-  const viewer = await getViewer();
+  // A browser's session, or the phone app's token: the app shows the album's pictures as the website does.
+  const viewer = await getApiViewer(request);
   const media = toMediaAccess(photo);
   if (!mediaBytesAllowed(viewer, media, { token: url.searchParams.get("share"), kind: url.searchParams.get("kind") })) {
     return new Response("Forbidden", { status: viewer.kind === "user" ? 403 : 401 });
@@ -78,7 +79,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
       const answer = await visitorFullSize(photo);
       if (!answer) return new Response("Not ready", { status: 404 });
       // What stands in until the copy is made is kept by nobody, so the next look asks for the copy again.
-      const noStore = { "Cache-Control": "private, no-store", Vary: "Cookie" };
+      const noStore = { "Cache-Control": "private, no-store", Vary: "Cookie, Authorization" };
       const res = await serve(request, answer.key, mimeOf(answer.key), answer.standIn ? noStore : byViewer(url));
       // A newer copy took its place between finding it and reading it.
       if (res.status !== 404 || !answer.otherwise) return res;
@@ -166,7 +167,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
  * else): never a shared cache, and a browser keeps it only for the cookie it was fetched with.
  */
 function byViewer(url: URL): Record<string, string> {
-  return { "Cache-Control": url.searchParams.has("v") ? "private, max-age=86400" : "private, max-age=0, must-revalidate", Vary: "Cookie" };
+  return { "Cache-Control": url.searchParams.has("v") ? "private, max-age=86400" : "private, max-age=0, must-revalidate", Vary: "Cookie, Authorization" };
 }
 
 /** Stream one stored file, whole or by the single range asked for. */
