@@ -15,13 +15,18 @@ export type { NoteState } from "./validate";
 const MINUTE = 60 * 1000;
 const DAY = 24 * 60 * MINUTE;
 
-/** Notes one sender may send: a few in a sitting, and not many more in a day. */
+/**
+ * Notes one visitor may send: a few in a sitting, and not many more in a day. Signed-in members are not limited at
+ * all: these are for visitors who are not signed in.
+ */
 export const PER_CLIENT = { tenMinutes: 3, day: 10 };
 /**
  * Senders no proxy named share one bucket (an install without a proxy is a small one where it is only ever the
  * family and a few friends): looser, as sign-in's is, so one of them cannot use it up for everybody.
  */
 export const UNKNOWN_CLIENTS = { tenMinutes: 10, day: 30 };
+/** Notes giving one email address, whoever sends them from wherever: as one sender's. */
+export const PER_EMAIL = { tenMinutes: 3, day: 10 };
 /** The wider network a sender is in (an IPv6 /48, where one site can hold 65,536 /64s), as sign-in limits it too. */
 export const PER_NETWORK = { tenMinutes: 10, day: 30 };
 /** Emails to the admins in any 24 hours. Past it notes are still kept, and the notes page says none went out. */
@@ -97,6 +102,9 @@ export type SubmitContext = { viewer: Viewer; headers: Headers; appUrl: string; 
  * Everything the note form's action does, in order: the honeypot (a silent "thank you", and nothing kept), the
  * timing token, the fields, the sender's limits, then the note is kept and the admins' email is queued. The email
  * is the worker's job: however it fares, the sender has already been thanked.
+ *
+ * A signed-in member is trusted: their note carries their account's email address (whatever the form said), and no
+ * limit applies to them, neither the sender's nor the day's cap on emails to the admins.
  */
 export async function submitNote(fd: FormData, ctx: SubmitContext): Promise<NoteState> {
   const now = ctx.now ?? new Date();
@@ -110,8 +118,10 @@ export async function submitNote(fd: FormData, ctx: SubmitContext): Promise<Note
   }
   const again = (message: string | null, errors: NoteErrors = {}): NoteState => ({ status: "error", message, errors, token: token as string, values });
 
-  const checked = validateNote(values);
+  const member = ctx.viewer.kind === "user" ? ctx.viewer.user : null;
+  const checked = validateNote(values, { emailRequired: !member });
   if (!checked.ok) return again(null, checked.errors);
+  const fields = member ? { ...checked.note, email: member.email } : checked.note;
 
   const sender = await senderHash(ctx.headers, now);
   const photoId = (await visiblePhoto(ctx.viewer, values.photo))?.id ?? null;
@@ -121,18 +131,28 @@ export async function submitNote(fd: FormData, ctx: SubmitContext): Promise<Note
   // against the same empty count. A flood waits its turn for the lock rather than failing to start.
   const outcome = await db.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('visitor-note'))`;
-    const [lately, today, networkLately, networkToday, mailedToday] = await Promise.all([
+    if (member) {
+      const note = await tx.visitorNote.create({
+        data: { ...fields, photoId, pageUrl: notePagePath(values.page, ctx.appUrl), clientHash: sender.hash, networkHash: sender.network, unmailed: false, createdAt: now },
+        select: { id: true },
+      });
+      return { kept: true, id: note.id, unmailed: false } as const;
+    }
+    const byEmail = { email: { equals: fields.email!, mode: "insensitive" as const } };
+    const [lately, today, networkLately, networkToday, mailedToday, emailLately, emailToday] = await Promise.all([
       tx.visitorNote.count({ where: { clientHash: sender.hash, createdAt: since(10 * MINUTE) } }),
       tx.visitorNote.count({ where: { clientHash: sender.hash, createdAt: since(DAY) } }),
       sender.network ? tx.visitorNote.count({ where: { networkHash: sender.network, createdAt: since(10 * MINUTE) } }) : 0,
       sender.network ? tx.visitorNote.count({ where: { networkHash: sender.network, createdAt: since(DAY) } }) : 0,
       tx.visitorNote.count({ where: { unmailed: false, createdAt: since(DAY) } }),
+      tx.visitorNote.count({ where: { ...byEmail, createdAt: since(10 * MINUTE) } }),
+      tx.visitorNote.count({ where: { ...byEmail, createdAt: since(DAY) } }),
     ]);
-    if (lately >= limits.tenMinutes || networkLately >= PER_NETWORK.tenMinutes) return { kept: false, refused: TOO_MANY_NOW } as const;
-    if (today >= limits.day || networkToday >= PER_NETWORK.day) return { kept: false, refused: TOO_MANY_TODAY } as const;
+    if (lately >= limits.tenMinutes || networkLately >= PER_NETWORK.tenMinutes || emailLately >= PER_EMAIL.tenMinutes) return { kept: false, refused: TOO_MANY_NOW } as const;
+    if (today >= limits.day || networkToday >= PER_NETWORK.day || emailToday >= PER_EMAIL.day) return { kept: false, refused: TOO_MANY_TODAY } as const;
     const unmailed = mailedToday >= MAILED_PER_DAY;
     const note = await tx.visitorNote.create({
-      data: { ...checked.note, photoId, pageUrl: notePagePath(values.page, ctx.appUrl), clientHash: sender.hash, networkHash: sender.network, unmailed, createdAt: now },
+      data: { ...fields, photoId, pageUrl: notePagePath(values.page, ctx.appUrl), clientHash: sender.hash, networkHash: sender.network, unmailed, createdAt: now },
       select: { id: true },
     });
     return { kept: true, id: note.id, unmailed } as const;
@@ -140,7 +160,7 @@ export async function submitNote(fd: FormData, ctx: SubmitContext): Promise<Note
   if (!outcome.kept) return again(outcome.refused);
   // Only once the note is surely kept: the worker must find it.
   if (!outcome.unmailed) {
-    await enqueue(QUEUES.mailVisitorNote, { noteId: outcome.id }).catch((err) => {
+    await enqueue(QUEUES.mailVisitorNote, member ? { noteId: outcome.id, member: true } : { noteId: outcome.id }).catch((err) => {
       console.error("[notes] could not queue the email about a note; it is on the notes page", err instanceof Error ? err.message : err);
     });
   }

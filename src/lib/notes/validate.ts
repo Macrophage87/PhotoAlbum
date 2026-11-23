@@ -44,15 +44,24 @@ export type NoteState =
 
 const email = z.string().email().max(254);
 
-/** The three fields as the form sent them, checked and cleaned; each problem is said beside its own field. */
-export function validateNote(raw: { name: unknown; email: unknown; message: unknown }): { ok: true; note: NoteFields } | { ok: false; errors: NoteErrors } {
+/**
+ * The three fields as the form sent them, checked and cleaned; each problem is said beside its own field. A visitor
+ * must leave an email address (a spammer's script rarely leaves a real one, and the family can always answer); a
+ * signed-in member's comes from their account, so for them it is optional here.
+ */
+export function validateNote(
+  raw: { name: unknown; email: unknown; message: unknown },
+  opts: { emailRequired?: boolean } = {},
+): { ok: true; note: NoteFields } | { ok: false; errors: NoteErrors } {
+  const emailRequired = opts.emailRequired ?? true;
   const name = oneLine(typeof raw.name === "string" ? raw.name : "");
   const address = typeof raw.email === "string" ? raw.email.trim() : "";
   const message = cleanMessage(typeof raw.message === "string" ? raw.message : "");
   const errors: NoteErrors = {};
   if (!name) errors.name = "Please tell us your name.";
   else if (name.length > NAME_MAX) errors.name = `Please keep your name to ${NAME_MAX} characters.`;
-  if (address && !email.safeParse(address).success) errors.email = "That email address doesn't look quite right. You can leave it blank.";
+  if (!address && emailRequired) errors.email = "Please add your email address.";
+  else if (address && !email.safeParse(address).success) errors.email = emailRequired ? "That email address doesn't look quite right." : "That email address doesn't look quite right. You can leave it blank.";
   if (!message) errors.message = "Please write a message.";
   else if (message.length > MESSAGE_MAX) errors.message = "Please keep your message under 2,000 characters.";
   else if (onlyLinks(message)) errors.message = "Please add a few words, not just a link.";

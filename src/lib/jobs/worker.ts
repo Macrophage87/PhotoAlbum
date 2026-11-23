@@ -127,7 +127,10 @@ export async function startWorker(): Promise<void> {
     await purgeVisits();
     await purgeVisitorNotes();
   });
-  await boss.work(QUEUES.mailVisitorNote, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 5 }, async ([job]) => mailVisitorNote((job.data as { noteId: string }).noteId));
+  await boss.work(QUEUES.mailVisitorNote, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 5 }, async ([job]) => {
+    const data = job.data as { noteId: string; member?: boolean };
+    return mailVisitorNote(data.noteId, { member: data.member === true });
+  });
   await boss.work(QUEUES.purgeMagicLinks, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60 }, async () => void (await purgeExpiredMagicLinks({ db })));
   await boss.work(QUEUES.sweepStrandedUploads, { batchSize: 1, localConcurrency: 1, pollingIntervalSeconds: 60 }, async () => void (await sweepStrandedUploads()));
   const { revokeQueuedConnection } = await import("@/lib/google/account");
