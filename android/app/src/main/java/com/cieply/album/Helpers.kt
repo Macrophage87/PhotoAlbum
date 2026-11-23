@@ -22,7 +22,11 @@ data class LatLng(val lat: Double, val lng: Double) {
     override fun toString(): String = String.format(Locale.US, "%.5f, %.5f", lat, lng)
 }
 
+/** One day of a slideshow: its key ("2025-08-12", or `Helpers.UNDATED`), what to call it, and its photos. */
+data class SlideDay(val key: String, val label: String, val slides: List<Slide>)
+
 /** Everything here is plain Kotlin with no Android in it, so it is tested on the build machine. */
+
 object Helpers {
     /**
      * The album's address as someone would type it ("album.example.com", with or without https:// or a trailing
@@ -123,6 +127,72 @@ object Helpers {
     } catch (e: Exception) {
         ""
     }
+
+    /** What the album is asked for a slideshow: which trip or collection, and whatever it is narrowed by. */
+    fun showQuery(kind: String, slug: String, filter: ShowFilter): String {
+        // "all" is the whole album, which has no name to give.
+        val parts = mutableListOf(if (kind == ALL) "all=1" else "$kind=${encodeFileName(slug)}")
+        if (filter.words.isNotBlank()) parts += "q=${encodeFileName(filter.words.trim())}"
+        filter.uploaderId?.let { parts += "uploader=${encodeFileName(it)}" }
+        for (id in filter.personIds.sorted()) parts += "person=${encodeFileName(id)}"
+        filter.activityId?.let { parts += "activity=${encodeFileName(it)}" }
+        filter.year?.let { parts += "year=$it" }
+        return parts.joinToString("&")
+    }
+
+    /**
+     * A slideshow laid out by day, as the album's timeline is: the days in order, the photos nobody can date last.
+     * Each day keeps its photos in the order they came. A collection somebody arranged is one run, in their order.
+     */
+    fun slideDays(slides: List<Slide>, arranged: Boolean = false): List<SlideDay> {
+        if (slides.isEmpty()) return emptyList()
+        if (arranged) return listOf(SlideDay(ARRANGED, "", slides))
+        val byDay = LinkedHashMap<String, MutableList<Slide>>()
+        for (s in slides) byDay.getOrPut(s.dayKey ?: UNDATED) { mutableListOf() }.add(s)
+        val keys = byDay.keys.filter { it != UNDATED }.sorted() + listOfNotNull(UNDATED.takeIf { it in byDay })
+        // The year is said only when the days are not all in one.
+        val years = keys.filter { it != UNDATED }.map { it.take(4) }.toSet().size
+        return keys.map { SlideDay(it, dayLabel(it, years > 1), byDay.getValue(it)) }
+    }
+
+    /** "Tue, Aug 12", with the year when asked; "No date" for the ones nobody can date. */
+    fun dayLabel(key: String, withYear: Boolean): String = try {
+        if (key == UNDATED) "No date"
+        else java.time.LocalDate.parse(key).format(java.time.format.DateTimeFormatter.ofPattern(if (withYear) "EEE, MMM d, yyyy" else "EEE, MMM d", Locale.US))
+    } catch (e: Exception) {
+        key
+    }
+
+    /** The days somebody picked, or all of them when none is picked. */
+    fun pickedDays(days: List<SlideDay>, picked: Set<String>): List<SlideDay> {
+        val kept = days.filter { it.key in picked }
+        return if (kept.isEmpty()) days else kept
+    }
+
+    /**
+     * The photo to show after moving on (`by` 1) or back (`by` -1) from the one on the television, round to the
+     * other end at either end. When that one is not in the list, as after narrowing, moving on starts the list and
+     * moving back ends it.
+     */
+    fun step(slides: List<Slide>, currentId: String?, by: Int): Slide? {
+        if (slides.isEmpty()) return null
+        val at = slides.indexOfFirst { it.id == currentId }
+        if (at < 0) return if (by >= 0) slides.first() else slides.last()
+        return slides[Math.floorMod(at + by, slides.size)]
+    }
+
+    /** "340 photos", or "12 of 340 photos" when something is asked or days are picked. */
+    fun shownLine(shown: Int, total: Int): String = when {
+        shown == total -> if (total == 1) "1 photo" else "$total photos"
+        shown == 0 -> "Nothing matches"
+        else -> "$shown of $total photos"
+    }
+
+    const val UNDATED = "undated"
+    const val ARRANGED = "arranged"
+
+    /** The kind of show that is a search of the whole album, not one trip or collection. */
+    const val ALL = "all"
 
     /** What the notification says while files are going, and when they have all gone. */
     fun progressLine(left: Int): String = if (left == 1) "1 left to send" else "$left left to send"

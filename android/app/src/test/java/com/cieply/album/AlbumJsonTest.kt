@@ -91,4 +91,27 @@ class AlbumJsonTest {
         assertEquals(Slide("p1", null, "Low tide", "Monday, August 11, 2025", null, "/api/photos/p1/thumb?v=2", "/api/photos/p1/preview?v=2&cast=1.x"), show.slides[0])
         assertEquals(Slide("p2", "Harbour", null, null, "Bar Harbor", "/api/photos/p2/thumb?v=1", "/api/photos/p2/preview?v=1&cast=1.y"), show.slides[1])
     }
+
+    @Test
+    fun `a slideshow says each day and what it can be narrowed by`() {
+        val body = """{"title":"Coast","total":9,"arranged":true,"choices":{
+            "members":[{"id":"u1","label":"Pat"}],
+            "people":[{"id":"a","name":"Ada","kind":"HUMAN"},{"id":"b","name":"Biscuit","kind":"PET"}],
+            "activities":[{"id":"w","label":"Harbour walk"}]},
+            "slides":[{"id":"p1","title":null,"caption":null,"day":"Monday, August 11, 2025","dayKey":"2025-08-11","place":null,"thumb":"/t","cast":"/c"},
+                      {"id":"p2","title":null,"caption":null,"day":null,"dayKey":null,"place":null,"thumb":"/t","cast":"/c"}]}"""
+        val show = AlbumJson.slideShow(body)
+        assertEquals(9, show.total)
+        assertEquals(true, show.arranged)
+        assertEquals(listOf("2025-08-11", null), show.slides.map { it.dayKey })
+        assertEquals(SlideChoices(listOf(Choice("u1", "Pat")), listOf(Choice("a", "Ada")), listOf(Choice("b", "Biscuit")), listOf(Choice("w", "Harbour walk"))), show.choices)
+    }
+
+    @Test
+    fun `an older album's slideshow still reads, with nothing to narrow by`() {
+        val show = AlbumJson.slideShow("""{"title":"Coast","slides":[{"id":"p1","thumb":"/t","cast":"/c"}]}""")
+        assertEquals(1, show.total)
+        assertEquals(false, show.arranged)
+        assertEquals(SlideChoices(), show.choices)
+    }
 }
