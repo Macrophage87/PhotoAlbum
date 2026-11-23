@@ -35,6 +35,18 @@ export type NoteErrors = Partial<Record<keyof NoteFields, string>>;
 /** The field a person never sees and a form-filling script fills in. */
 export const HONEYPOT_FIELD = "website";
 
+/**
+ * Addresses that can never receive mail: the domains set aside for examples and tests (RFC 2606 and RFC 6761),
+ * such as test@example.com. A person who wants an answer never leaves one, but test robots and form-filling bots
+ * do (Google Play's automatic test of the phone app sent "test@example.com" through the live form). A note giving
+ * one is treated like the honeypot: thanked, and nothing kept or mailed.
+ */
+export function isPlaceholderEmail(address: string | null): boolean {
+  const domain = address?.split("@").pop()?.trim().toLowerCase().replace(/\.$/, "");
+  if (!domain) return false;
+  return /(^|\.)example\.(com|net|org)$/.test(domain) || /(^|\.)(example|test|invalid|localhost)$/.test(domain);
+}
+
 /** What the form sent, handed back with any answer but a thank-you so nothing has to be typed again. */
 export type NoteValues = { name: string; email: string; message: string; photo: string; page: string };
 export type NoteState =

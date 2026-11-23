@@ -305,7 +305,7 @@ test("a visitor sends the family a note about a photo, and an admin reads it on 
   await expect(visitor.locator('meta[name="robots"]')).toHaveAttribute("content", /noindex/);
   await visitor.waitForLoadState("networkidle");
   await visitor.getByLabel("Your name").fill("Aunt Ruth");
-  await visitor.getByLabel(/Your email/).fill("ruth@example.com");
+  await visitor.getByLabel(/Your email/).fill("ruth@inbox.family");
   await visitor.getByLabel("Your message").fill("Mom's pictures of Acadia are wonderful!");
   // A form sent within three seconds of being drawn is taken for a script's, so wait as a person would have.
   await visitor.waitForTimeout(3_500);
@@ -314,7 +314,7 @@ test("a visitor sends the family a note about a photo, and an admin reads it on 
   // Nothing a visitor is shown says who the admins are.
   expect(await visitor.content()).not.toContain(ADMIN);
   const stored = await withDb((c) => c.query('SELECT name, email, "photoId", "pageUrl", "readAt" FROM "VisitorNote"'));
-  expect(stored.rows).toEqual([{ name: "Aunt Ruth", email: "ruth@example.com", photoId, pageUrl: "/trips/acadia/photos", readAt: null }]);
+  expect(stored.rows).toEqual([{ name: "Aunt Ruth", email: "ruth@inbox.family", photoId, pageUrl: "/trips/acadia/photos", readAt: null }]);
   await anon.close();
 
   await signIn(context, ADMIN);
@@ -326,7 +326,7 @@ test("a visitor sends the family a note about a photo, and an admin reads it on 
   await expect(note).toHaveCount(1);
   await expect(note).toContainText("Aunt Ruth");
   await expect(note).toContainText("Mom's pictures of Acadia are wonderful!");
-  await expect(note.getByRole("link", { name: "ruth@example.com" })).toHaveAttribute("href", "mailto:ruth@example.com");
+  await expect(note.getByRole("link", { name: "ruth@inbox.family" })).toHaveAttribute("href", "mailto:ruth@inbox.family");
   await expect(note.locator(`a[href="/photos/${photoId}"] img`)).toBeVisible();
   await expect(note.getByText("New", { exact: true })).toBeVisible();
   await page.waitForLoadState("networkidle");

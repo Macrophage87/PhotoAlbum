@@ -8,7 +8,7 @@ import { dayKey, saltFor } from "@/lib/visits/record";
 import { enqueue } from "@/lib/jobs/boss";
 import { QUEUES } from "@/lib/jobs/queues";
 import { checkFormToken, issueFormToken } from "./token";
-import { HONEYPOT_FIELD, validateNote, type NoteErrors, type NoteState, type NoteValues } from "./validate";
+import { HONEYPOT_FIELD, isPlaceholderEmail, validateNote, type NoteErrors, type NoteState, type NoteValues } from "./validate";
 
 export type { NoteState } from "./validate";
 
@@ -100,7 +100,8 @@ export type SubmitContext = { viewer: Viewer; headers: Headers; appUrl: string; 
 
 /**
  * Everything the note form's action does, in order: the honeypot (a silent "thank you", and nothing kept), the
- * timing token, the fields, the sender's limits, then the note is kept and the admins' email is queued. The email
+ * timing token, the fields, the bot trap (a placeholder address such as test@example.com, thanked the same silent
+ * way), the sender's limits, then the note is kept and the admins' email is queued. The email
  * is the worker's job: however it fares, the sender has already been thanked.
  *
  * A signed-in member is trusted: their note carries their account's email address (whatever the form said), and no
@@ -121,6 +122,8 @@ export async function submitNote(fd: FormData, ctx: SubmitContext): Promise<Note
   const member = ctx.viewer.kind === "user" ? ctx.viewer.user : null;
   const checked = validateNote(values, { emailRequired: !member });
   if (!checked.ok) return again(null, checked.errors);
+  // The bot trap: a visitor's address that can never receive mail (test@example.com and the like) is a robot's.
+  if (!member && isPlaceholderEmail(checked.note.email)) return { status: "sent" };
   const fields = member ? { ...checked.note, email: member.email } : checked.note;
 
   const sender = await senderHash(ctx.headers, now);
