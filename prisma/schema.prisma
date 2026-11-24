@@ -191,6 +191,23 @@ enum PhotoRelation {
   RELATED
 }
 
+/// A piece of music a member put in the album to play under a slideshow on a television (see src/lib/music).
+/// Only ever played to the family: there is no public page for it.
+model Song {
+  id         String   @id @default(cuid())
+  title      String
+  /// Where the file is kept (see src/lib/storage).
+  path       String
+  mimeType   String
+  sizeBytes  Int
+  /// Who added it. Left empty, not deleted with them, when a member's account goes.
+  uploaderId String?
+  uploader   User?    @relation("SongUploader", fields: [uploaderId], references: [id], onDelete: SetNull)
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
+}
+
 model User {
   id        String   @id @default(cuid())
   email     String   @unique
@@ -203,6 +220,7 @@ model User {
   removingById String?
   removingBy   User?    @relation("RemovingBy", fields: [removingById], references: [id], onDelete: Restrict)
   takingOver   User[]   @relation("RemovingBy")
+  songs        Song[]   @relation("SongUploader")
   /// Larger text and stronger contrast on every page, chosen from the foot of any page. Kept on the account so it
   /// follows the member to every device they sign in on; a visitor's choice is kept in a cookie instead.
   largeText    Boolean  @default(false)
