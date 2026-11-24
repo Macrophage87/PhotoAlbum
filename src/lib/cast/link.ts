@@ -44,6 +44,11 @@ export async function castUrl(photo: { id: string; imageVersion: number }, now =
   return `/api/photos/${photo.id}/preview?v=${photo.imageVersion}&cast=${signCastLink(await castKey(), photo.id, now + CAST_LINK_MS)}`;
 }
 
+/** A clip's own address for a television: the copy the album made for playing, signed as its still is. */
+export async function castVideoUrl(photo: { id: string; imageVersion: number }, now = Date.now()): Promise<string> {
+  return `/api/photos/${photo.id}/video?v=${photo.imageVersion}&cast=${signCastLink(await castKey(), photo.id, now + CAST_LINK_MS)}`;
+}
+
 export async function castLinkGood(photoId: string, token: unknown, now = Date.now()): Promise<boolean> {
   return readCastLink(await castKey(), photoId, token, now);
 }
