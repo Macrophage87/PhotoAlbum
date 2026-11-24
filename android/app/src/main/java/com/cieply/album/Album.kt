@@ -3,7 +3,9 @@ package com.cieply.album
 import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -26,6 +28,7 @@ import androidx.compose.foundation.lazy.items as listItems
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -50,6 +53,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -104,12 +108,12 @@ private fun DayButton(label: String, day: LocalDate, modifier: Modifier = Modifi
         DatePickerDialog(
             onDismissRequest = { open = false },
             confirmButton = {
-                TextButton(onClick = {
+                Button(onClick = {
                     state.selectedDateMillis?.let { onChange(Instant.ofEpochMilli(it).atZone(ZoneOffset.UTC).toLocalDate()) }
                     open = false
                 }) { Text("OK") }
             },
-            dismissButton = { TextButton(onClick = { open = false }) { Text("Cancel") } },
+            dismissButton = { OutlinedButton(onClick = { open = false }) { Text("Cancel") } },
         ) { DatePicker(state = state) }
     }
 }
@@ -123,8 +127,8 @@ private fun TimeButton(hour: Int, minute: Int, modifier: Modifier = Modifier, on
         val state = rememberTimePickerState(initialHour = hour, initialMinute = minute, is24Hour = false)
         AlertDialog(
             onDismissRequest = { open = false },
-            confirmButton = { TextButton(onClick = { onChange(state.hour, state.minute); open = false }) { Text("OK") } },
-            dismissButton = { TextButton(onClick = { open = false }) { Text("Cancel") } },
+            confirmButton = { Button(onClick = { onChange(state.hour, state.minute); open = false }) { Text("OK") } },
+            dismissButton = { OutlinedButton(onClick = { open = false }) { Text("Cancel") } },
             text = { TimePicker(state = state) },
         )
     }
@@ -162,7 +166,7 @@ internal fun NewTripDialog(api: AlbumApi, span: Pair<Long, Long>?, onMade: (Trip
             }
         },
         confirmButton = {
-            TextButton(
+            Button(
                 enabled = !busy && title.isNotBlank(),
                 onClick = {
                     scope.launch {
@@ -174,7 +178,7 @@ internal fun NewTripDialog(api: AlbumApi, span: Pair<Long, Long>?, onMade: (Trip
                 },
             ) { Text(if (busy) "Making…" else "Make the trip") }
         },
-        dismissButton = { TextButton(onClick = onClose) { Text("Cancel") } },
+        dismissButton = { OutlinedButton(onClick = onClose) { Text("Cancel") } },
     )
 }
 
@@ -223,7 +227,7 @@ internal fun NewOutingDialog(api: AlbumApi, trip: Trip, kinds: List<OutingKind>,
             }
         },
         confirmButton = {
-            TextButton(
+            Button(
                 enabled = !busy && title.isNotBlank(),
                 onClick = {
                     scope.launch {
@@ -237,7 +241,7 @@ internal fun NewOutingDialog(api: AlbumApi, trip: Trip, kinds: List<OutingKind>,
                 },
             ) { Text(if (busy) "Making…" else "Make the activity") }
         },
-        dismissButton = { TextButton(onClick = onClose) { Text("Cancel") } },
+        dismissButton = { OutlinedButton(onClick = onClose) { Text("Cancel") } },
     )
 }
 
@@ -258,7 +262,7 @@ internal fun NewCollectionDialog(api: AlbumApi, onMade: (CollectionName) -> Unit
             }
         },
         confirmButton = {
-            TextButton(
+            Button(
                 enabled = !busy && title.isNotBlank(),
                 onClick = {
                     scope.launch {
@@ -270,15 +274,20 @@ internal fun NewCollectionDialog(api: AlbumApi, onMade: (CollectionName) -> Unit
                 },
             ) { Text(if (busy) "Making…" else "Make the collection") }
         },
-        dismissButton = { TextButton(onClick = onClose) { Text("Cancel") } },
+        dismissButton = { OutlinedButton(onClick = onClose) { Text("Cancel") } },
     )
 }
 
+/** A choice in a list, drawn as a button: outlined, and filled when it is the one chosen. */
 @Composable
-private fun Line(title: String, detail: String = "", chosen: Boolean = false, onClick: () -> Unit) {
-    Column(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 10.dp)) {
-        Text(if (chosen) "✓ $title" else title, fontWeight = FontWeight.Bold, color = if (chosen) Navy else Color.Unspecified)
-        if (detail.isNotEmpty()) Text(detail, style = MaterialTheme.typography.bodySmall)
+internal fun Line(title: String, detail: String = "", chosen: Boolean = false, onClick: () -> Unit) {
+    val shape = RoundedCornerShape(12.dp)
+    Column(
+        Modifier.fillMaxWidth().padding(vertical = 4.dp).clip(shape).background(if (chosen) Navy else Color.Transparent).border(1.dp, Navy, shape)
+            .clickable(onClick = onClick).padding(horizontal = 14.dp, vertical = 10.dp),
+    ) {
+        Text(if (chosen) "✓ $title" else title, fontWeight = FontWeight.Bold, color = if (chosen) Color.White else Navy)
+        if (detail.isNotEmpty()) Text(detail, style = MaterialTheme.typography.bodySmall, color = if (chosen) Color.White else Color.Unspecified)
     }
 }
 
@@ -323,7 +332,7 @@ internal fun FilingDialog(api: AlbumApi, filing: Filing, byDate: Boolean, span: 
     AlertDialog(
         onDismissRequest = onClose,
         confirmButton = {
-            if (at == Choosing.WHERE) TextButton(onClick = onClose) { Text("Done") } else TextButton(onClick = { at = Choosing.WHERE }) { Text("Back") }
+            if (at == Choosing.WHERE) Button(onClick = onClose) { Text("Done") } else OutlinedButton(onClick = { at = Choosing.WHERE }) { Text("Back") }
         },
         title = {
             Text(
@@ -424,7 +433,7 @@ internal fun BrowseScreen(api: AlbumApi, onBack: () -> Unit, onOpen: (Show) -> U
     LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                TextButton(onClick = onBack) { Text("‹ Back") }
+                OutlinedButton(onClick = onBack) { Text("‹ Back") }
                 Heading("The album")
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(modifier = Modifier.weight(1f), onClick = { making = "trip" }) { Text("＋ New trip") }
@@ -455,8 +464,8 @@ private fun Viewer(api: AlbumApi, baseUrl: String, items: List<AlbumItem>, first
     BackHandler(onBack = onClose)
     Column(Modifier.fillMaxSize().background(Color.Black)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = onClose) { Text("‹ Back", color = Color.White) }
-            Text("${pager.currentPage + 1} of ${items.size}", color = Color.White, modifier = Modifier.weight(1f))
+            OutlinedButton(onClick = onClose, border = BorderStroke(1.dp, Color.White), modifier = Modifier.padding(8.dp)) { Text("‹ Back", color = Color.White) }
+            Text("${pager.currentPage + 1} of ${items.size}", color = Color.White, modifier = Modifier.weight(1f).padding(start = 4.dp))
         }
         HorizontalPager(state = pager, modifier = Modifier.weight(1f).fillMaxWidth()) { page ->
             val item = items[page]
@@ -472,7 +481,7 @@ private fun Viewer(api: AlbumApi, baseUrl: String, items: List<AlbumItem>, first
                 val where = listOfNotNull(item.day?.let { Helpers.dayLabel(it, true) }, item.place).joinToString(" · ")
                 if (where.isNotEmpty()) Text(where, color = Color(0xFFCFD6E0), style = MaterialTheme.typography.bodySmall)
                 if (item.page.isNotEmpty()) {
-                    TextButton(onClick = {
+                    OutlinedButton(border = BorderStroke(1.dp, Color.White), onClick = {
                         try {
                             context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(baseUrl + item.page)))
                         } catch (e: Exception) {
@@ -541,7 +550,7 @@ internal fun PlaceScreen(api: AlbumApi, baseUrl: String, show: Show, onBack: () 
         ) {
             item(span = { GridItemSpan(maxLineSpan) }) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TextButton(onClick = onBack) { Text("‹ Back") }
+                    OutlinedButton(onClick = onBack) { Text("‹ Back") }
                     Heading(show.title)
                     if (show.detail.isNotEmpty()) Text(show.detail)
                     show.description?.let { Text(it) }
@@ -567,7 +576,7 @@ internal fun PlaceScreen(api: AlbumApi, baseUrl: String, show: Show, onBack: () 
                     Row(Modifier.fillMaxWidth().padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                         Text(if (day.isEmpty()) "No date" else Helpers.dayLabel(day, true), fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
                         if (selecting && mine.isNotEmpty()) {
-                            TextButton(onClick = { chosen = if (allChosen) chosen - mine.toSet() else chosen + mine }) { Text(if (allChosen) "Clear day" else "Select day") }
+                            OutlinedButton(onClick = { chosen = if (allChosen) chosen - mine.toSet() else chosen + mine }) { Text(if (allChosen) "Clear day" else "Select day") }
                         }
                     }
                 }

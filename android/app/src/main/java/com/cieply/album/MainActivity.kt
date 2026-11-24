@@ -455,7 +455,7 @@ private fun MoreScreen(onBack: () -> Unit, onPick: (Uri, Origin) -> Unit, onSign
     ) {
         item(span = { GridItemSpan(maxLineSpan) }) {
             Column(Modifier.padding(vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                TextButton(onClick = onBack) { Text("‹ Back") }
+                OutlinedButton(onClick = onBack) { Text("‹ Back") }
                 Heading("Settings")
                 WifiOnlySwitch()
                 Card(Modifier.fillMaxWidth()) {
@@ -545,12 +545,7 @@ private fun WifiOnlySwitch() {
 }
 
 @Composable
-private fun TripLine(title: String, detail: String, chosen: Boolean, onClick: () -> Unit) {
-    Column(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 10.dp)) {
-        Text(if (chosen) "✓ $title" else title, fontWeight = FontWeight.Bold, color = if (chosen) Navy else Color.Unspecified)
-        if (detail.isNotEmpty()) Text(detail, style = MaterialTheme.typography.bodySmall)
-    }
-}
+private fun TripLine(title: String, detail: String, chosen: Boolean, onClick: () -> Unit) = Line(title, detail, chosen, onClick)
 
 private val dayFormat: DateTimeFormatter = DateTimeFormatter.ofPattern("EEEE d MMMM yyyy")
 
@@ -588,7 +583,7 @@ private fun PickScreen(api: AlbumApi, onBack: () -> Unit, onQueued: () -> Unit) 
 
     Column(Modifier.fillMaxSize()) {
         Column(Modifier.padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            TextButton(onClick = onBack) { Text("‹ Back") }
+            OutlinedButton(onClick = onBack) { Text("‹ Back") }
             Heading("Choose what to send")
             when {
                 access == LibraryAccess.NONE -> {
@@ -625,7 +620,7 @@ private fun PickScreen(api: AlbumApi, onBack: () -> Unit, onQueued: () -> Unit) 
                         Row(Modifier.fillMaxWidth().padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                             Text(day.format(dayFormat), fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
                             if (open.isNotEmpty()) {
-                                TextButton(onClick = { chosen = if (allChosen) chosen - open.toSet() else chosen + open }) {
+                                OutlinedButton(onClick = { chosen = if (allChosen) chosen - open.toSet() else chosen + open }) {
                                     Text(if (allChosen) "Clear day" else "Select day")
                                 }
                             }
@@ -712,7 +707,7 @@ private fun QueueScreen(baseUrl: String, onBack: () -> Unit, onPickMore: () -> U
     LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                TextButton(onClick = onBack) { Text("‹ Back") }
+                OutlinedButton(onClick = onBack) { Text("‹ Back") }
                 Heading("Uploads")
                 Text(summaryOf(queue) ?: "Nothing has been chosen yet.")
                 if (lines.any { it.state == ItemState.WAITING || it.state == ItemState.SENDING }) {
@@ -724,7 +719,7 @@ private fun QueueScreen(baseUrl: String, onBack: () -> Unit, onPickMore: () -> U
                     OutlinedButton(onClick = { UploadQueue.get(context).retryFailed(); UploadWorker.kick(context) }) { Text("Try the $failed again") }
                 }
                 if (finished > 0) {
-                    TextButton(onClick = { UploadQueue.get(context).clearFinished() }) { Text("Clear the $finished that are done") }
+                    OutlinedButton(onClick = { UploadQueue.get(context).clearFinished() }) { Text("Clear the $finished that are done") }
                 }
             }
         }
@@ -751,9 +746,9 @@ private fun QueueScreen(baseUrl: String, onBack: () -> Unit, onPickMore: () -> U
                     }
                     val photoId = item.photoId
                     if (item.state == ItemState.TOO_BIG) {
-                        TextButton(onClick = { onYouTube(item.id) }) { Text("Use YouTube") }
+                        OutlinedButton(onClick = { onYouTube(item.id) }) { Text("Use YouTube") }
                     } else if (photoId != null) {
-                        TextButton(onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("$baseUrl/photos/$photoId"))) }) { Text("Open") }
+                        OutlinedButton(onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("$baseUrl/photos/$photoId"))) }) { Text("Open") }
                     }
                 }
             }
@@ -779,7 +774,7 @@ private fun YouTubeScreen(api: AlbumApi, itemId: String, onBack: () -> Unit) {
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        TextButton(onClick = onBack) { Text("‹ Back") }
+        OutlinedButton(onClick = onBack) { Text("‹ Back") }
         if (item == null || item.state != ItemState.TOO_BIG) {
             // Dealt with (or cleared) while this screen was open.
             Text("There is nothing more to do for this video.")
@@ -816,7 +811,7 @@ private fun YouTubeScreen(api: AlbumApi, itemId: String, onBack: () -> Unit) {
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
             modifier = Modifier.fillMaxWidth(),
         )
-        TextButton(
+        OutlinedButton(
             onClick = {
                 val clip = context.getSystemService(android.content.ClipboardManager::class.java)?.primaryClip
                 val pasted = if (clip != null && clip.itemCount > 0) clip.getItemAt(0).coerceToText(context)?.toString() else null
@@ -852,7 +847,7 @@ private fun YouTubeScreen(api: AlbumApi, itemId: String, onBack: () -> Unit) {
                     }
                 },
             ) { Text("Add the link to the album") }
-            TextButton(onClick = { UploadQueue.get(context).remove(item.id); onBack() }) { Text("Leave this video out") }
+            OutlinedButton(onClick = { UploadQueue.get(context).remove(item.id); onBack() }) { Text("Leave this video out") }
         }
     }
 }
@@ -875,7 +870,7 @@ private fun ShowsScreen(api: AlbumApi, onBack: () -> Unit, onChoose: (Show) -> U
     LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                TextButton(onClick = onBack) { Text("‹ Back") }
+                OutlinedButton(onClick = onBack) { Text("‹ Back") }
                 Heading("Slideshow on a TV")
                 Text("Choose what to show. The TV shows the pictures; this phone is the remote control.")
                 problem?.let { Text(it, color = Rust) }
@@ -1035,7 +1030,7 @@ private fun RemoteScreen(api: AlbumApi, baseUrl: String, show: Show, onBack: () 
 
     Column(Modifier.fillMaxSize().padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = onBack) { Text("‹ Back") }
+            OutlinedButton(onClick = onBack) { Text("‹ Back") }
             Text(show.title, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
         }
         problem?.let { Text(it, color = Rust) }
@@ -1053,14 +1048,14 @@ private fun RemoteScreen(api: AlbumApi, baseUrl: String, show: Show, onBack: () 
         } else {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("Showing on $connected", color = Good, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-                TextButton(onClick = { ShowPlayer.stopShow() }) { Text("Stop") }
+                OutlinedButton(onClick = { ShowPlayer.stopShow() }) { Text("Stop") }
             }
             if (Caster.OWN_PAGE) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text(Helpers.musicLine(songs, tvMusic?.index, tvMusic?.playing), style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                     if (songs.isNotEmpty()) {
-                        if (tvMusic?.playing == false) TextButton(onClick = { ShowPlayer.resumeMusic() }) { Text("▶") } else TextButton(onClick = { ShowPlayer.pauseMusic() }) { Text("❚❚") }
-                        if (songs.size > 1) TextButton(onClick = { ShowPlayer.nextSong() }) { Text("Next song") }
+                        if (tvMusic?.playing == false) OutlinedButton(onClick = { ShowPlayer.resumeMusic() }) { Text("▶") } else OutlinedButton(onClick = { ShowPlayer.pauseMusic() }) { Text("❚❚") }
+                        if (songs.size > 1) OutlinedButton(onClick = { ShowPlayer.nextSong() }) { Text("Next song") }
                     }
                     OutlinedButton(onClick = { choosingMusic = true }) { Text("Music") }
                 }
@@ -1105,7 +1100,7 @@ private fun RemoteScreen(api: AlbumApi, baseUrl: String, show: Show, onBack: () 
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.weight(1f),
                 )
-                TextButton(onClick = { ShowPlayer.setSeconds(Helpers.nextPace(seconds)) }) { Text("Change speed") }
+                OutlinedButton(onClick = { ShowPlayer.setSeconds(Helpers.nextPace(seconds)) }) { Text("Change speed") }
             }
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(
@@ -1140,7 +1135,7 @@ private fun RemoteScreen(api: AlbumApi, baseUrl: String, show: Show, onBack: () 
                     modifier = Modifier.weight(1f),
                 )
                 if (filter.active || picked.isNotEmpty()) {
-                    TextButton(onClick = { filter = ShowFilter(); picked = emptySet() }) { Text("Clear") }
+                    OutlinedButton(onClick = { filter = ShowFilter(); picked = emptySet() }) { Text("Clear") }
                 }
             }
             if (days.size > 1) {
@@ -1245,7 +1240,7 @@ private fun NarrowScreen(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        TextButton(onClick = onClose) { Text("‹ Back") }
+        OutlinedButton(onClick = onClose) { Text("‹ Back") }
         Heading("Search and narrow")
         OutlinedTextField(
             value = draft.words,
@@ -1335,7 +1330,7 @@ private fun MusicScreen(api: AlbumApi, playing: List<Song>, onClose: () -> Unit,
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        TextButton(onClick = onClose) { Text("‹ Back") }
+        OutlinedButton(onClick = onClose) { Text("‹ Back") }
         Heading("Music for the slideshow")
         Text("The TV plays these under the photos, one after another, and starts again at the end. Add songs on the album's website, under Music.", style = MaterialTheme.typography.bodySmall)
         problem?.let { Text(it, color = Rust) }
@@ -1357,8 +1352,8 @@ private fun MusicScreen(api: AlbumApi, playing: List<Song>, onClose: () -> Unit,
                     Switch(checked = mix, onCheckedChange = { mix = it })
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TextButton(onClick = { chosen = all.map { it.id }.toSet() }) { Text("Tick all") }
-                    TextButton(onClick = { chosen = emptySet() }) { Text("Tick none") }
+                    OutlinedButton(onClick = { chosen = all.map { it.id }.toSet() }) { Text("Tick all") }
+                    OutlinedButton(onClick = { chosen = emptySet() }) { Text("Tick none") }
                 }
                 for (song in all) {
                     val on = song.id in chosen
@@ -1438,7 +1433,7 @@ private fun ItemScreen(api: AlbumApi, baseUrl: String, member: Member?, at: Scre
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        TextButton(onClick = onBack) { Text("‹ Back") }
+        OutlinedButton(onClick = onBack) { Text("‹ Back") }
         val found = inspection
         if (found == null) {
             CircularProgressIndicator()
