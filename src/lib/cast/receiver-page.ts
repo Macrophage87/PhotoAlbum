@@ -89,6 +89,17 @@ const SCRIPT = String.raw`
     else if (m.type === "volume") { var v = Number(m.level); if (v >= 0 && v <= 1) audio.volume = v; }
   });
 
+  // A phone that walks out of the house cannot say stop. With nobody connected for ten minutes the page closes,
+  // so the music does not go round all night; a phone whose Wi-Fi only blinked is back long before that.
+  var leaving = null;
+  function watchSenders() {
+    var none = context.getSenders().length === 0;
+    if (none && !leaving) leaving = setTimeout(function () { context.stop(); }, 10 * 60 * 1000);
+    if (!none && leaving) { clearTimeout(leaving); leaving = null; }
+  }
+  context.addEventListener(cast.framework.system.EventType.SENDER_DISCONNECTED, watchSenders);
+  context.addEventListener(cast.framework.system.EventType.SENDER_CONNECTED, watchSenders);
+
   var options = new cast.framework.CastReceiverOptions();
   // A slideshow is watched for an evening without the television being asked anything; it must not give up after five minutes.
   options.disableIdleTimeout = true;
