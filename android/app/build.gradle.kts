@@ -32,6 +32,10 @@ android {
         versionCode = (findProperty("versionCode") as String?)?.toInt() ?: 1
         versionName = (findProperty("versionName") as String?) ?: "0.1.0"
         buildConfigField("String", "ALBUM_URL", "\"${albumUrl.replace("\\", "").replace("\"", "")}\"")
+        // The album's own page for a television (the website's /cast/receiver), as Google's Cast console names it once
+        // it is registered there. It is not a secret. While it is blank the app casts to Google's built-in player,
+        // which shows the photos but cannot play music under them.
+        buildConfigField("String", "CAST_APP_ID", "\"\"")
         // The link the album's website uses to hand a sign-in back to this app (see the manifest).
         manifestPlaceholders["appScheme"] = "familyalbum"
         buildConfigField("String", "APP_SCHEME", "\"familyalbum\"")

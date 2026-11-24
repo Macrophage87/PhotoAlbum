@@ -37,6 +37,12 @@ with their location intact.
 11. The slideshow keeps going with the app in the background or the screen off (`ShowPlayer`, `ShowService`): a
     notification with Back, Play or Pause, Next and Stop stays up while a TV is connected. It is a foreground
     service of the media-playback kind and holds a wake lock only while playing by itself.
+12. Music under the slideshow. Google's built-in cast player shows a picture or plays a song, never both, so the
+    album has a page of its own for the television (the website's `/cast/receiver`), which does both. The app
+    uses it when the build names its Cast application ID (`CAST_APP_ID` in `app/build.gradle.kts`, from Google's
+    Cast SDK Developer Console, where the page's address is registered); until then it casts as before and shows
+    no music controls. With it, the remote has a Music button to choose from the songs added on the website's
+    Music page, and says which song is on. The phone and the page talk on `urn:x-cast:com.cieply.album`.
 
 Files are read with `MediaStore.setRequireOriginal`, which needs the "location in photos" permission; without it
 the app refuses to send rather than send photos with their place blanked out.

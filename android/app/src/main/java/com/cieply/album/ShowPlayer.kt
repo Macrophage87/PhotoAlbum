@@ -26,6 +26,7 @@ object ShowPlayer {
     private val pace = MutableStateFlow(10)
     private val mixed = MutableStateFlow(false)
     private val listed = MutableStateFlow<List<Slide>>(emptyList())
+    private val tunes = MutableStateFlow<List<Song>>(emptyList())
 
     /** What is on the television, or will be once one is chosen. */
     val current: StateFlow<Slide?> get() = now
@@ -41,6 +42,9 @@ object ShowPlayer {
 
     /** The photos Next and Back move through, in the order they are listed. */
     val shown: StateFlow<List<Slide>> get() = listed
+
+    /** The songs the television has been asked to play under the photos, in the order it plays them. */
+    val songs: StateFlow<List<Song>> get() = tunes
 
     var title: String = ""
         private set
@@ -67,6 +71,8 @@ object ShowPlayer {
             with.connected.collect { tv ->
                 if (tv != null) {
                     cast()
+                    // A television that comes back mid-show (the Wi-Fi dropped) starts its page afresh, so it is told its music again.
+                    if (tunes.value.isNotEmpty()) with.playMusic(tunes.value.map { it.cast })
                     settle()
                     app?.let { ShowService.start(it) }
                 } else {
@@ -89,6 +95,7 @@ object ShowPlayer {
         now.value = null
         listed.value = emptyList()
         mixed.value = false
+        tunes.value = emptyList()
     }
 
     /**
@@ -137,6 +144,18 @@ object ShowPlayer {
         mixed.value = on
     }
 
+    /** Has the television play these songs under the photos, in this order and round again. None stops the music. */
+    fun setMusic(list: List<Song>) {
+        tunes.value = list
+        caster?.playMusic(list.map { it.cast })
+    }
+
+    fun pauseMusic() = caster?.pauseMusic()
+
+    fun resumeMusic() = caster?.resumeMusic()
+
+    fun nextSong() = caster?.nextSong()
+
     /** Ends the show on the television, from the remote or from the notification. */
     fun stopShow() {
         going.value = false
@@ -146,7 +165,7 @@ object ShowPlayer {
 
     private fun cast() {
         val slide = now.value ?: return
-        if (caster?.connected?.value != null) caster?.show(baseUrl + slide.cast, slide.title ?: slide.caption, slide.place)
+        if (caster?.connected?.value != null) caster?.show(baseUrl, slide.cast, slide.title ?: slide.caption, slide.place)
     }
 
     /** Starts or stops the clock that moves on, and keeps the phone's processor awake only while it is needed. */

@@ -201,6 +201,20 @@ object Helpers {
         return "$where · $how" + if (shuffle) " · shuffled" else ""
     }
 
+    /**
+     * What the remote says about the music: the song the television says is on, from the songs it was given. Before
+     * the television has said anything, the first song is taken to be starting.
+     */
+    fun musicLine(songs: List<Song>, index: Int?, playing: Boolean?): String {
+        if (songs.isEmpty()) return "No music playing."
+        val title = songs.getOrNull(index ?: 0)?.title
+        return when {
+            title == null -> "Music: ${songs.size} songs chosen."
+            playing == false -> "Music paused: $title"
+            else -> "Music: $title"
+        }
+    }
+
     /** How long each photo stays up when the slideshow plays by itself, and the next choice round the list. */
     val PACES = listOf(5, 10, 20, 30)
 
