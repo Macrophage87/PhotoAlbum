@@ -20,8 +20,9 @@
  *   { type: "musicPause" } / { type: "musicPlay" } / { type: "musicNext" }
  *   { type: "volume", level }                   0 to 1, for the music only
  * It tells every phone connected:
- *   { type: "state", id, title, day, place, thumb, url, show, playing, driver, seconds }   whenever any of it changes,
- *       so several phones can hold the remote at once and each shows what is really on the screen
+ *   { type: "state", id, title, day, place, thumb, url, show, playing, driver, seconds, phones }   whenever any of it
+ *       changes, so several phones can hold the remote at once and each shows what is really on the screen; `phones`
+ *       is how many are connected, so one that leaves knows whether to end the show or leave it to the others
  *   { type: "clipEnded", id }                   a clip has played to its end
  *   { type: "music", index, playing, count }    whenever the music changes
  */
@@ -68,7 +69,7 @@ const SCRIPT = String.raw`
     say({ type: "music", index: songs.length ? at : -1, playing: songs.length > 0 && !audio.paused, count: songs.length });
   }
   function tellState() {
-    say({ type: "state", id: state.id, title: state.title, day: state.day, place: state.place, thumb: state.thumb, url: state.url, show: state.show, playing: state.playing, driver: state.driver, seconds: state.seconds });
+    say({ type: "state", id: state.id, title: state.title, day: state.day, place: state.place, thumb: state.thumb, url: state.url, show: state.show, playing: state.playing, driver: state.driver, seconds: state.seconds, phones: context.getSenders().length });
   }
 
   function names(list) {
