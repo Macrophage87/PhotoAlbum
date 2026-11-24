@@ -43,6 +43,14 @@ with their location intact.
     Cast SDK Developer Console, where the page's address is registered); until then it casts as before and shows
     no music controls. With it, the remote has a Music button to choose from the songs added on the website's
     Music page, and says which song is on. The phone and the page talk on `urn:x-cast:com.cieply.album`.
+13. The rest of what the album's own page allows. Each slide is sent with its day, place and the people in it (the
+    caption), where it was taken (a small map), the day to announce when the day changes (a title card), and the
+    next slide's address so the television fetches it ahead. The family's clips are among the photos (a Videos
+    switch on the remote): the television plays each through and says when it has ended, and the slideshow then
+    moves on. Several phones can hold one television's remote: the page tells them all what is on it and which
+    phone is moving it on, so each shows the same and only one phone's clock runs (`ShowPlayer.heard`). A phone
+    that connects to a television already showing something follows it rather than replacing it, and leaving the
+    remote ends the show only when no other phone is connected.
 
 Files are read with `MediaStore.setRequireOriginal`, which needs the "location in photos" permission; without it
 the app refuses to send rather than send photos with their place blanked out.

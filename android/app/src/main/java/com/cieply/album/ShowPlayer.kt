@@ -27,6 +27,7 @@ object ShowPlayer {
     private val mixed = MutableStateFlow(false)
     private val listed = MutableStateFlow<List<Slide>>(emptyList())
     private val tunes = MutableStateFlow<List<Song>>(emptyList())
+    private val other = MutableStateFlow(false)
 
     /** What is on the television, or will be once one is chosen. */
     val current: StateFlow<Slide?> get() = now
@@ -43,6 +44,9 @@ object ShowPlayer {
     /** The photos Next and Back move through, in the order they are listed. */
     val shown: StateFlow<List<Slide>> get() = listed
 
+    /** Whether another phone is moving this television's slideshow on by itself. */
+    val elsewhere: StateFlow<Boolean> get() = other
+
     /** The songs the television has been asked to play under the photos, in the order it plays them. */
     val songs: StateFlow<List<Song>> get() = tunes
 
@@ -57,6 +61,19 @@ object ShowPlayer {
     private var seed: Long = 0
     private var awake: PowerManager.WakeLock? = null
 
+    /** This phone, to the television and the other phones: so each knows whether it is the one moving the slideshow on. */
+    private val me: String = java.util.UUID.randomUUID().toString()
+
+    /** Whether the television has said what is on it since this phone connected; until it has, nothing is put up. */
+    private var greeted = true
+    private var greeting: Job? = null
+
+    /** When this phone last said it was playing or pausing: what the television says just after may be older news. */
+    private var claimedAt = 0L
+
+    /** The day of the last slide this phone put up, so a new day is announced once. */
+    private var showingDay: String? = null
+
     /** The name of the television, or null when none is connected. */
     val connected: String? get() = caster?.connected?.value
 
@@ -67,20 +84,72 @@ object ShowPlayer {
         caster = with
         baseUrl = albumUrl
         title = showTitle
+        with.onClipEnded = { id -> if (going.value && id != null && id == now.value?.id) step(1) }
         watching = scope.launch {
-            with.connected.collect { tv ->
-                if (tv != null) {
-                    cast()
-                    // A television that comes back mid-show (the Wi-Fi dropped) starts its page afresh, so it is told its music again.
-                    if (tunes.value.isNotEmpty()) with.playMusic(tunes.value.map { it.cast })
-                    settle()
-                    app?.let { ShowService.start(it) }
-                } else {
-                    going.value = false
-                    settle()
-                    app?.let { ShowService.stop(it) }
+            launch {
+                with.connected.collect { tv ->
+                    if (tv != null) {
+                        if (Caster.OWN_PAGE) {
+                            // Another phone may have a slideshow up: the television is asked first (see `Caster.began`),
+                            // and this phone's photo goes up only if nothing is on, or if no answer comes.
+                            greeted = false
+                            greeting?.cancel()
+                            greeting = launch {
+                                delay(2500)
+                                if (!greeted) {
+                                    greeted = true
+                                    begin()
+                                }
+                            }
+                        } else {
+                            begin()
+                        }
+                        // A television that comes back mid-show (the Wi-Fi dropped) starts its page afresh, so it is told its music again.
+                        if (tunes.value.isNotEmpty()) with.playMusic(tunes.value.map { it.cast })
+                        settle()
+                        app?.let { ShowService.start(it) }
+                    } else {
+                        going.value = false
+                        other.value = false
+                        settle()
+                        app?.let { ShowService.stop(it) }
+                    }
                 }
             }
+            launch { with.tv.collect { said -> if (said != null) heard(said) } }
+        }
+    }
+
+    /** Puts this phone's slideshow on a television that has nothing on it. */
+    private fun begin() {
+        if (going.value) caster?.playing(true, pace.value, me)
+        cast()
+    }
+
+    /**
+     * The television says what is on it. Another phone may have changed the photo, or started or stopped it moving
+     * on: this phone shows the same, and never has two phones moving it on at once.
+     */
+    private fun heard(said: TvState) {
+        if (!greeted) {
+            greeted = true
+            greeting?.cancel()
+            if (said.id == null) {
+                begin()
+                return
+            }
+        }
+        if (said.id != null && said.id != now.value?.id) {
+            now.value = listed.value.firstOrNull { it.id == said.id }
+                ?: Slide(said.id, said.title.ifBlank { null }, null, said.day.ifBlank { null }, said.place.ifBlank { null }, said.thumb, said.url)
+            settle()
+        }
+        val mine = said.playing && said.driver == me
+        other.value = said.playing && !mine
+        // Somebody else paused it or took it over. Just after this phone's own Play, the news may be older than that.
+        if (going.value && !mine && android.os.SystemClock.elapsedRealtime() - claimedAt > 1500) {
+            going.value = false
+            settle()
         }
     }
 
@@ -88,6 +157,11 @@ object ShowPlayer {
     fun end() {
         watching?.cancel()
         watching = null
+        greeting = null
+        greeted = true
+        other.value = false
+        showingDay = null
+        caster?.onClipEnded = null
         going.value = false
         settle()
         app?.let { ShowService.stop(it) }
@@ -123,18 +197,21 @@ object ShowPlayer {
 
     /** On (`by` 1) or back (`by` -1) through the photos, in the mixed-up order when shuffle is on. */
     fun step(by: Int) {
-        val all = listed.value
-        val order = if (mixed.value) Helpers.shuffled(all, seed) else all
-        Helpers.step(order, now.value?.id, by)?.let { show(it) }
+        Helpers.step(order(), now.value?.id, by)?.let { show(it) }
     }
 
+    /** Starts or stops the slideshow moving on by itself. Stopping stops it whichever phone was moving it. */
     fun setPlaying(on: Boolean) {
         going.value = on
+        if (!on) other.value = false
+        claimedAt = android.os.SystemClock.elapsedRealtime()
+        caster?.playing(on, pace.value, me)
         settle()
     }
 
     fun setSeconds(value: Int) {
         pace.value = value
+        if (going.value) caster?.playing(true, value, me)
         settle()
     }
 
@@ -163,9 +240,17 @@ object ShowPlayer {
         caster?.disconnect()
     }
 
+    private fun order(): List<Slide> = if (mixed.value) Helpers.shuffled(listed.value, seed) else listed.value
+
     private fun cast() {
         val slide = now.value ?: return
-        if (caster?.connected?.value != null) caster?.show(baseUrl, slide.cast, slide.title ?: slide.caption, slide.place)
+        val tv = caster ?: return
+        // Not before the television has said whether another phone's slideshow is already on it.
+        if (tv.connected.value == null || !greeted) return
+        val next = Helpers.step(order(), slide.id, 1)?.takeIf { it.id != slide.id }
+        val card = Helpers.dayCard(slide, showingDay)
+        showingDay = slide.dayKey ?: showingDay
+        tv.show(baseUrl, slide, card, title, next?.cast, pace.value)
     }
 
     /** Starts or stops the clock that moves on, and keeps the phone's processor awake only while it is needed. */
@@ -177,11 +262,10 @@ object ShowPlayer {
         if (!run) return
         timer = scope.launch {
             while (isActive) {
-                delay(pace.value * 1000L)
+                // A clip is waited out: the television says when it ends (see `attach`), and this is the fallback.
+                delay(Helpers.waitMs(now.value, pace.value))
                 if (listed.value.size > 1) {
-                    val all = listed.value
-                    val order = if (mixed.value) Helpers.shuffled(all, seed) else all
-                    Helpers.step(order, now.value?.id, 1)?.let {
+                    Helpers.step(order(), now.value?.id, 1)?.let {
                         now.value = it
                         cast()
                     }

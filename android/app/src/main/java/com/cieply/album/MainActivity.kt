@@ -882,6 +882,10 @@ private fun RemoteScreen(api: AlbumApi, baseUrl: String, show: Show, onBack: () 
     val playing by ShowPlayer.playing.collectAsState()
     val seconds by ShowPlayer.seconds.collectAsState()
     val shuffle by ShowPlayer.shuffle.collectAsState()
+    // Another phone holding the same television's remote may be the one moving the slideshow on.
+    val elsewhere by ShowPlayer.elsewhere.collectAsState()
+    // The family's videos among the photos, where the television can play them (the album's own page).
+    var clips by remember { mutableStateOf(Caster.OWN_PAGE) }
     // Asking every trip and collection at once, not only the one that was opened. The whole album always is.
     var everywhere by remember { mutableStateOf(show.kind == Helpers.ALL) }
     var filter by remember { mutableStateOf(ShowFilter()) }
@@ -901,17 +905,17 @@ private fun RemoteScreen(api: AlbumApi, baseUrl: String, show: Show, onBack: () 
         ShowPlayer.attach(context, caster, baseUrl, show.title)
         onDispose {
             ShowPlayer.end()
-            caster.disconnect()
+            caster.leave()
             caster.stop()
         }
     }
 
     val kind = if (everywhere) Helpers.ALL else show.kind
-    LaunchedEffect(show, kind, filter) {
+    LaunchedEffect(show, kind, filter, clips) {
         loading = true
         problem = null
         try {
-            val got = withContext(Dispatchers.IO) { api.slideShow(kind, show.slug, filter) }
+            val got = withContext(Dispatchers.IO) { api.slideShow(kind, show.slug, filter, clips) }
             loaded = got
             // The same photo with its fresh address, or the first one when nothing is up yet.
             ShowPlayer.adopt(got.slides)
@@ -1016,7 +1020,8 @@ private fun RemoteScreen(api: AlbumApi, baseUrl: String, show: Show, onBack: () 
         if (slide != null) {
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.size(96.dp).background(Color(0xFFE6E9EE))) {
-                    AlbumPicture(api, slide.thumb, Modifier.fillMaxSize())
+                    // A photo another phone put up, from a slideshow this one has not opened, may come without its small picture.
+                    if (slide.thumb.isNotEmpty()) AlbumPicture(api, slide.thumb, Modifier.fillMaxSize())
                 }
                 Column(Modifier.weight(1f)) {
                     Text(
@@ -1027,7 +1032,7 @@ private fun RemoteScreen(api: AlbumApi, baseUrl: String, show: Show, onBack: () 
                         },
                         fontWeight = FontWeight.Bold,
                     )
-                    (slide.title ?: slide.caption)?.let { Text(it, maxLines = 2, overflow = TextOverflow.Ellipsis) }
+                    (slide.title ?: slide.caption)?.let { Text((if (slide.video != null) "▶ Video: " else "") + it, maxLines = 2, overflow = TextOverflow.Ellipsis) }
                     listOfNotNull(slide.day, slide.place).joinToString(" · ").takeIf { it.isNotEmpty() }?.let {
                         Text(it, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     }
@@ -1039,12 +1044,13 @@ private fun RemoteScreen(api: AlbumApi, baseUrl: String, show: Show, onBack: () 
         if (shown.isNotEmpty()) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(modifier = Modifier.weight(1f).height(56.dp), onClick = { ShowPlayer.step(-1) }) { Text("‹ Back") }
-                Button(modifier = Modifier.weight(1.3f).height(56.dp), onClick = { ShowPlayer.setPlaying(!playing) }) { Text(if (playing) "❚❚ Pause" else "▶ Play") }
+                Button(modifier = Modifier.weight(1.3f).height(56.dp), onClick = { ShowPlayer.setPlaying(!(playing || elsewhere)) }) { Text(if (playing || elsewhere) "❚❚ Pause" else "▶ Play") }
                 OutlinedButton(modifier = Modifier.weight(1f).height(56.dp), onClick = { ShowPlayer.step(1) }) { Text("Next ›") }
             }
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    if (playing && connected == null) "Will play once a TV is chosen: a new photo every $seconds seconds."
+                    if (elsewhere && !playing) "Another phone is playing this slideshow. Pause stops it; Back and Next still work."
+                    else if (playing && connected == null) "Will play once a TV is chosen: a new photo every $seconds seconds."
                     else if (playing) "Playing by itself: a new photo every $seconds seconds. It keeps going with the app closed." else "Play moves on by itself every $seconds seconds.",
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.weight(1f),
@@ -1058,6 +1064,16 @@ private fun RemoteScreen(api: AlbumApi, baseUrl: String, show: Show, onBack: () 
                     modifier = Modifier.weight(1f),
                 )
                 Switch(checked = shuffle, onCheckedChange = { ShowPlayer.setShuffle(it) })
+            }
+            if (Caster.OWN_PAGE) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        if (clips) "Videos are included: each plays through, then the slideshow moves on." else "Videos: play the family's clips among the photos.",
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Switch(checked = clips, onCheckedChange = { clips = it })
+                }
             }
         }
 

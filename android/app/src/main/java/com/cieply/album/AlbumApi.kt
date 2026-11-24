@@ -60,6 +60,13 @@ data class Slide(
     val cast: String,
     /** The day as "2025-08-12", or null when nobody knows it. */
     val dayKey: String? = null,
+    /** The people and pets a member has said are in it. */
+    val people: List<String> = emptyList(),
+    val lat: Double? = null,
+    val lng: Double? = null,
+    /** For a clip: the address a television plays it from (`cast` is then its still), and its length where known. */
+    val video: String? = null,
+    val seconds: Double? = null,
 )
 
 /** Something a slideshow can be narrowed by: a member, a person or pet, or an outing. */
@@ -173,7 +180,15 @@ object AlbumJson {
             root.optString("title"),
             (0 until array.length()).map {
                 val o = array.getJSONObject(it)
-                Slide(o.getString("id"), text(o, "title"), text(o, "caption"), text(o, "day"), text(o, "place"), o.getString("thumb"), o.getString("cast"), text(o, "dayKey"))
+                val people = o.optJSONArray("people")
+                Slide(
+                    o.getString("id"), text(o, "title"), text(o, "caption"), text(o, "day"), text(o, "place"), o.getString("thumb"), o.getString("cast"), text(o, "dayKey"),
+                    people = if (people == null) emptyList() else (0 until people.length()).map { i -> people.optString(i) }.filter { name -> name.isNotBlank() },
+                    lat = if (o.isNull("lat")) null else o.optDouble("lat").takeIf { v -> !v.isNaN() },
+                    lng = if (o.isNull("lng")) null else o.optDouble("lng").takeIf { v -> !v.isNaN() },
+                    video = text(o, "video"),
+                    seconds = if (o.isNull("seconds")) null else o.optDouble("seconds").takeIf { v -> !v.isNaN() },
+                )
             },
             root.optInt("total", array.length()),
             slideChoices(root.optJSONObject("choices")),
@@ -302,9 +317,9 @@ class AlbumApi(private val baseUrl: String, private val token: String) {
         throw AlbumException("The album's list could not be read.")
     }
 
-    /** A trip's or a collection's slideshow, with the addresses a television can fetch. */
-    fun slideShow(kind: String, slug: String, filter: ShowFilter = ShowFilter()): SlideShow = try {
-        AlbumJson.slideShow(send(request("/api/v1/album/slideshow?${Helpers.showQuery(kind, slug, filter)}").get().build()))
+    /** A trip's or a collection's slideshow, with the addresses a television can fetch. `clips` asks for the family's videos among the photos. */
+    fun slideShow(kind: String, slug: String, filter: ShowFilter = ShowFilter(), clips: Boolean = false): SlideShow = try {
+        AlbumJson.slideShow(send(request("/api/v1/album/slideshow?${Helpers.showQuery(kind, slug, filter, clips)}").get().build()))
     } catch (e: org.json.JSONException) {
         throw AlbumException("The album's slideshow could not be read.")
     }

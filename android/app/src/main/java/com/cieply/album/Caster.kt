@@ -23,6 +23,24 @@ data class CastScreen(val id: String, val name: String)
 data class TvMusic(val index: Int, val playing: Boolean, val count: Int)
 
 /**
+ * What the album's page on the television says is going on, which every connected phone hears: the slide that is up
+ * (`id` null when none is yet), whether a phone is moving the slideshow on by itself, and which (`driver`).
+ */
+data class TvState(
+    val id: String?,
+    val title: String,
+    val day: String,
+    val place: String,
+    val thumb: String,
+    val url: String,
+    val show: String,
+    val playing: Boolean,
+    val driver: String?,
+    /** How many phones are connected to the television, this one included. */
+    val phones: Int = 1,
+)
+
+/**
  * Finds the televisions on the Wi-Fi, connects to one, and puts a picture on it. The television fetches the picture
  * itself from the address it is given; the phone only says which. Everything here is called on the main thread, as
  * Google's casting library requires.
@@ -47,6 +65,7 @@ class Caster(context: Context) {
     private val on = MutableStateFlow<String?>(null)
     private val wrong = MutableStateFlow<String?>(null)
     private val tune = MutableStateFlow<TvMusic?>(null)
+    private val said = MutableStateFlow<TvState?>(null)
 
     /** The screens that can be cast to now. */
     val screens: StateFlow<List<CastScreen>> get() = found
@@ -59,6 +78,12 @@ class Caster(context: Context) {
 
     /** What the television last said about its music, or null when it has said nothing (or cannot play any). */
     val music: StateFlow<TvMusic?> get() = tune
+
+    /** What the television last said is on it, or null when it has said nothing. */
+    val tv: StateFlow<TvState?> get() = said
+
+    /** Called when the television says a clip has played to its end, with the slide's id. */
+    var onClipEnded: ((String?) -> Unit)? = null
 
     private var session: CastSession? = null
 
@@ -83,13 +108,30 @@ class Caster(context: Context) {
                 // Then the remote is not told what is playing; the television still does as it is asked.
             }
         }
+        // Another phone may have a slideshow up already: ask before putting anything on the screen.
+        say(JSONObject().put("type", "hello"))
         on.value = s.castDevice?.friendlyName ?: "the TV"
     }
 
     private fun heard(message: String) {
         try {
             val o = JSONObject(message)
-            if (o.optString("type") == "music") tune.value = TvMusic(o.optInt("index", -1), o.optBoolean("playing", false), o.optInt("count", 0))
+            when (o.optString("type")) {
+                "music" -> tune.value = TvMusic(o.optInt("index", -1), o.optBoolean("playing", false), o.optInt("count", 0))
+                "state" -> said.value = TvState(
+                    id = if (o.isNull("id")) null else o.optString("id").ifBlank { null },
+                    title = o.optString("title"),
+                    day = o.optString("day"),
+                    place = o.optString("place"),
+                    thumb = o.optString("thumb"),
+                    url = o.optString("url"),
+                    show = o.optString("show"),
+                    playing = o.optBoolean("playing", false),
+                    driver = if (o.isNull("driver")) null else o.optString("driver").ifBlank { null },
+                    phones = o.optInt("phones", 1),
+                )
+                "clipEnded" -> onClipEnded?.invoke(if (o.isNull("id")) null else o.optString("id"))
+            }
         } catch (e: Exception) {
             // Not something the album's page says; nothing to do with it.
         }
@@ -109,6 +151,7 @@ class Caster(context: Context) {
         session = null
         on.value = null
         tune.value = null
+        said.value = null
         if (message != null) wrong.value = message
     }
 
@@ -149,32 +192,62 @@ class Caster(context: Context) {
         router?.selectRoute(route)
     }
 
-    /** Ends the cast: the television goes back to what it shows when idle. */
+    /** Ends the cast: the television goes back to what it shows when idle, whoever else is connected. */
     fun disconnect() {
         castContext?.sessionManager?.endCurrentSession(true)
         over(null)
     }
 
     /**
-     * Puts one picture on the screen. `path` is the picture's signed address on the album at `base`; the television
-     * fetches it itself. The album's own page is given the path alone, since it only fetches from the album it came from.
+     * This phone puts the remote down. The television stops too, unless another phone is still connected to it, in
+     * which case the slideshow is theirs to carry on with.
      */
-    fun show(base: String, path: String, title: String?, place: String?) {
+    fun leave() {
+        val others = (said.value?.phones ?: 1) > 1
+        castContext?.sessionManager?.endCurrentSession(!others)
+        over(null)
+    }
+
+    /**
+     * Puts one slide on the screen. Its picture (and clip) are signed addresses on the album at `base`, which the
+     * television fetches itself; the album's own page is given the paths alone, since it only fetches from the album
+     * it came from. `card` is the day to announce first, `next` the picture likely to follow (fetched ahead), and
+     * `seconds` how long this one will stay.
+     */
+    fun show(base: String, slide: Slide, card: String?, showTitle: String, next: String?, seconds: Int) {
         if (OWN_PAGE) {
-            say(JSONObject().put("type", "photo").put("url", path).put("title", title ?: "").put("place", place ?: ""))
+            val message = JSONObject()
+                .put("type", "photo")
+                .put("url", slide.cast)
+                .put("id", slide.id)
+                .put("title", slide.title ?: slide.caption ?: "")
+                .put("day", slide.day ?: "")
+                .put("place", slide.place ?: "")
+                .put("people", JSONArray(slide.people))
+                .put("show", showTitle)
+                .put("thumb", slide.thumb)
+                .put("seconds", seconds)
+            if (slide.lat != null && slide.lng != null) message.put("lat", slide.lat).put("lng", slide.lng)
+            if (card != null) message.put("card", card)
+            if (next != null) message.put("next", next)
+            if (slide.video != null) message.put("video", slide.video)
+            say(message)
             return
         }
         val client = session?.remoteMediaClient ?: return
         val metadata = MediaMetadata(MediaMetadata.MEDIA_TYPE_PHOTO)
-        if (title != null) metadata.putString(MediaMetadata.KEY_TITLE, title)
-        if (place != null) metadata.putString(MediaMetadata.KEY_LOCATION_NAME, place)
-        val info = MediaInfo.Builder(base + path)
+        (slide.title ?: slide.caption)?.let { metadata.putString(MediaMetadata.KEY_TITLE, it) }
+        slide.place?.let { metadata.putString(MediaMetadata.KEY_LOCATION_NAME, it) }
+        val info = MediaInfo.Builder(base + slide.cast)
             .setStreamType(MediaInfo.STREAM_TYPE_NONE)
             .setContentType("image/jpeg")
             .setMetadata(metadata)
             .build()
         client.load(MediaLoadRequestData.Builder().setMediaInfo(info).build())
     }
+
+    /** Tells the television, and through it the other phones, that this phone is (or has stopped) moving the slideshow on. */
+    fun playing(on: Boolean, seconds: Int, from: String) = say(JSONObject().put("type", "playing").put("on", on).put("seconds", seconds).put("from", from))
 
     /** Has the television play these songs (their signed addresses), one after another and round again. None stops the music. */
     fun playMusic(paths: List<String>) = say(JSONObject().put("type", "music").put("songs", JSONArray(paths)))

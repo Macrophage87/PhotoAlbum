@@ -46,7 +46,7 @@ class ShowService : Service() {
         when (intent?.action) {
             BACK -> ShowPlayer.step(-1)
             NEXT -> ShowPlayer.step(1)
-            TOGGLE -> ShowPlayer.setPlaying(!ShowPlayer.playing.value)
+            TOGGLE -> ShowPlayer.setPlaying(!(ShowPlayer.playing.value || ShowPlayer.elsewhere.value))
             STOP -> ShowPlayer.stopShow()
         }
         // Started again by Android with nothing to show, or the television has gone: there is nothing to keep going.
@@ -78,7 +78,7 @@ class ShowService : Service() {
     private fun build(): Notification {
         val slide = ShowPlayer.current.value
         val all = ShowPlayer.shown.value
-        val playing = ShowPlayer.playing.value
+        val playing = ShowPlayer.playing.value || ShowPlayer.elsewhere.value
         val open = PendingIntent.getActivity(
             this,
             0,
