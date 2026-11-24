@@ -143,4 +143,67 @@ class HelpersTest {
         assertEquals("Nothing left to send", Helpers.finishedLine(0, 0, 0))
         assertEquals("1 waiting to send, 2 for YouTube", Helpers.queueSummary(1, 0, 0, 2))
     }
+
+    private fun slide(id: String, dayKey: String?) = Slide(id, null, null, null, null, "/t/$id", "/c/$id", dayKey)
+
+    @Test
+    fun `a slideshow is asked for with whatever it is narrowed by`() {
+        assertEquals("trip=maine%202025", Helpers.showQuery("trip", "maine 2025", ShowFilter()))
+        assertEquals(
+            "collection=best&q=light%20house&uploader=u1&person=a&person=b&activity=act&year=2019",
+            Helpers.showQuery("collection", "best", ShowFilter(" light house ", "u1", setOf("b", "a"), "act", 2019)),
+        )
+        assertEquals("all=1&person=a", Helpers.showQuery(Helpers.ALL, "", ShowFilter(personIds = setOf("a"))))
+    }
+
+    @Test
+    fun `slides are laid out by day in order with the undated last`() {
+        val days = Helpers.slideDays(listOf(slide("b", "2025-08-12"), slide("x", null), slide("a", "2025-08-11"), slide("c", "2025-08-12")))
+        assertEquals(listOf("2025-08-11", "2025-08-12", Helpers.UNDATED), days.map { it.key })
+        assertEquals(listOf("Mon, Aug 11", "Tue, Aug 12", "No date"), days.map { it.label })
+        assertEquals(listOf("b", "c"), days[1].slides.map { it.id })
+    }
+
+    @Test
+    fun `days say their year only when there is more than one`() {
+        val days = Helpers.slideDays(listOf(slide("a", "2024-12-31"), slide("b", "2025-01-01")))
+        assertEquals(listOf("Tue, Dec 31, 2024", "Wed, Jan 1, 2025"), days.map { it.label })
+    }
+
+    @Test
+    fun `an arranged collection is one run in its own order`() {
+        val days = Helpers.slideDays(listOf(slide("b", "2025-08-12"), slide("a", "2025-08-11")), arranged = true)
+        assertEquals(1, days.size)
+        assertEquals("", days[0].label)
+        assertEquals(listOf("b", "a"), days[0].slides.map { it.id })
+        assertEquals(emptyList<SlideDay>(), Helpers.slideDays(emptyList(), arranged = true))
+    }
+
+    @Test
+    fun `picking days keeps only those and picking none keeps all`() {
+        val days = Helpers.slideDays(listOf(slide("a", "2025-08-11"), slide("b", "2025-08-12"), slide("c", "2025-08-13")))
+        assertEquals(days, Helpers.pickedDays(days, emptySet()))
+        assertEquals(listOf("2025-08-11", "2025-08-13"), Helpers.pickedDays(days, setOf("2025-08-13", "2025-08-11")).map { it.key })
+        assertEquals(days, Helpers.pickedDays(days, setOf("2001-01-01")))
+    }
+
+    @Test
+    fun `next and previous go round and start the list when the photo on the television is not in it`() {
+        val slides = listOf(slide("a", null), slide("b", null), slide("c", null))
+        assertEquals("b", Helpers.step(slides, "a", 1)?.id)
+        assertEquals("a", Helpers.step(slides, "c", 1)?.id)
+        assertEquals("c", Helpers.step(slides, "a", -1)?.id)
+        assertEquals("a", Helpers.step(slides, "gone", 1)?.id)
+        assertEquals("c", Helpers.step(slides, "gone", -1)?.id)
+        assertEquals("a", Helpers.step(slides, null, 1)?.id)
+        assertEquals(null, Helpers.step(emptyList(), "a", 1))
+    }
+
+    @Test
+    fun `the count says how much of the show is left`() {
+        assertEquals("340 photos", Helpers.shownLine(340, 340))
+        assertEquals("1 photo", Helpers.shownLine(1, 1))
+        assertEquals("12 of 340 photos", Helpers.shownLine(12, 340))
+        assertEquals("Nothing matches", Helpers.shownLine(0, 340))
+    }
 }

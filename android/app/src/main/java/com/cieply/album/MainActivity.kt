@@ -15,6 +15,8 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -35,6 +37,7 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -826,6 +829,10 @@ private fun ShowsScreen(api: AlbumApi, onBack: () -> Unit, onChoose: (Show) -> U
                 Heading("Slideshow on a TV")
                 Text("Choose what to show. The TV shows the pictures; this phone is the remote control.")
                 problem?.let { Text(it, color = Rust) }
+                Button(modifier = Modifier.fillMaxWidth(), onClick = { onChoose(Show(Helpers.ALL, "", "Search the whole album", "", 0)) }) {
+                    Text("Search the whole album")
+                }
+                Text("Find a person, a theme or a year across every trip, and show what matches.", style = MaterialTheme.typography.bodySmall)
                 if (list == null) Progress("Fetching the album's trips and collections…")
                 if (list != null && list.isEmpty() && problem == null) Text("The album has no trips or collections yet.")
             }
@@ -851,9 +858,17 @@ private fun ShowsScreen(api: AlbumApi, onBack: () -> Unit, onChoose: (Show) -> U
     }
 }
 
+/** One line of the remote's grid: a day's heading, or one photo. */
+private sealed interface GridLine {
+    data class Day(val day: SlideDay) : GridLine
+    data class Photo(val slide: Slide) : GridLine
+}
+
 /**
- * The remote control. The television fetches each picture itself, from an address the album signed for it; the
- * phone finds the television, says which picture, and shows what is on the screen.
+ * The remote control for a slideshow on a television, and the slideshow itself laid out by day as the album's
+ * timeline is. The photo on the television is outlined; tapping any other puts that one up. Days can be picked and
+ * the show narrowed as on the website, and Next and Previous then move through what is left. The television
+ * fetches each picture itself, from an address the album signed for it; the phone only says which.
  */
 @Composable
 private fun RemoteScreen(api: AlbumApi, baseUrl: String, show: Show, onBack: () -> Unit) {
@@ -863,8 +878,15 @@ private fun RemoteScreen(api: AlbumApi, baseUrl: String, show: Show, onBack: () 
     val connected by caster.connected.collectAsState()
     val castProblem by caster.problem.collectAsState()
     var problem by remember { mutableStateOf<String?>(null) }
-    var index by remember { mutableIntStateOf(0) }
     var playing by remember { mutableStateOf(false) }
+    var filter by remember { mutableStateOf(ShowFilter()) }
+    var picked by remember { mutableStateOf(setOf<String>()) }
+    // The whole album is only ever shown narrowed, so it opens on the questions.
+    var narrowing by remember { mutableStateOf(show.kind == Helpers.ALL) }
+    var loaded by remember { mutableStateOf<SlideShow?>(null) }
+    var loading by remember { mutableStateOf(true) }
+    // What is on the television, or will be once one is chosen. Narrowing the list does not change it.
+    var current by remember { mutableStateOf<Slide?>(null) }
 
     // Looking for televisions only while this screen is open; leaving it ends the show on the television too.
     androidx.compose.runtime.DisposableEffect(caster) {
@@ -875,95 +897,308 @@ private fun RemoteScreen(api: AlbumApi, baseUrl: String, show: Show, onBack: () 
         }
     }
 
-    val slideShow by produceState<SlideShow?>(initialValue = null, show) {
-        value = try {
-            withContext(Dispatchers.IO) { api.slideShow(show.kind, show.slug) }
+    LaunchedEffect(show, filter) {
+        loading = true
+        problem = null
+        try {
+            val got = withContext(Dispatchers.IO) { api.slideShow(show.kind, show.slug, filter) }
+            loaded = got
+            // The same photo with its fresh address, or the first one when nothing is up yet.
+            current = got.slides.firstOrNull { it.id == current?.id } ?: current ?: got.slides.firstOrNull()
+            val there = got.slides.map { it.dayKey ?: Helpers.UNDATED }.toSet()
+            picked = picked.filter { it in there }.toSet()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             problem = if (e is AlbumException) e.message else "Could not reach the album: ${e.message ?: e.javaClass.simpleName}"
-            null
+        }
+        loading = false
+    }
+
+    val all = loaded?.slides ?: emptyList()
+    val arranged = loaded?.arranged == true
+    val days = remember(all, arranged) { Helpers.slideDays(all, arranged) }
+    val shownDays = remember(days, picked) { Helpers.pickedDays(days, picked) }
+    val shown = remember(shownDays) { shownDays.flatMap { it.slides } }
+    val lines: List<GridLine> = remember(shownDays) {
+        buildList<GridLine> {
+            for (day in shownDays) {
+                if (day.label.isNotEmpty()) add(GridLine.Day(day))
+                for (photo in day.slides) add(GridLine.Photo(photo))
+            }
         }
     }
-    val slides = slideShow?.slides ?: emptyList()
-    val slide = slides.getOrNull(index)
+    val slide = current
+    val place = shown.indexOfFirst { it.id == slide?.id }
+    val grid = rememberLazyGridState()
 
     // Whenever the picture changes, or a television has just connected, the television is told which to show.
     LaunchedEffect(connected, slide?.id) {
         if (connected != null && slide != null) caster.show(baseUrl + slide.cast, slide.title ?: slide.caption, slide.place)
     }
     // Playing by itself: on to the next every ten seconds, round to the start after the last, as the website does.
-    LaunchedEffect(playing, index, connected, slides.size) {
-        if (playing && connected != null && slides.size > 1) {
+    LaunchedEffect(playing, slide?.id, connected, shown) {
+        if (playing && connected != null && shown.size > 1) {
             delay(10_000)
-            index = (index + 1) % slides.size
+            current = Helpers.step(shown, current?.id, 1)
         }
     }
+    // The grid follows the television: when the photo on it is off the screen, the grid is brought to it.
+    LaunchedEffect(slide?.id, lines) {
+        val at = lines.indexOfFirst { it is GridLine.Photo && it.slide.id == slide?.id }
+        if (at >= 0 && grid.layoutInfo.visibleItemsInfo.none { it.index == at }) grid.animateScrollToItem(maxOf(0, at - 3))
+    }
 
-    Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        TextButton(onClick = onBack) { Text("‹ Back") }
-        Heading(show.title)
+    if (narrowing) {
+        BackHandler { narrowing = false }
+        NarrowScreen(
+            filter = filter,
+            choices = loaded?.choices ?: SlideChoices(),
+            onClose = { narrowing = false },
+            onApply = {
+                filter = it
+                narrowing = false
+            },
+        )
+        return
+    }
+
+    Column(Modifier.fillMaxSize().padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            TextButton(onClick = onBack) { Text("‹ Back") }
+            Text(show.title, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+        }
         problem?.let { Text(it, color = Rust) }
-        when {
-            !caster.available -> Text("This phone cannot cast: it needs Google Play services, which it does not have or which are out of date.", color = Rust)
-            slideShow == null && problem == null -> Progress("Fetching the slideshow…")
-            slideShow != null && slides.isEmpty() -> Text("There are no photos here to show yet. A slideshow shows photos only, not videos.")
-            slide == null -> {}
-            connected == null -> {
-                Text("Choose a TV", fontWeight = FontWeight.Bold)
-                castProblem?.let { Text(it, color = Rust) }
-                if (screens.isEmpty()) {
-                    Progress("Looking for TVs…")
-                    Text("The TV needs Chromecast or Google TV, to be switched on, and to be on the same Wi-Fi as this phone.")
-                }
-                for (tv in screens) {
-                    Button(modifier = Modifier.fillMaxWidth(), onClick = { caster.connect(tv.id) }) { Text(tv.name) }
-                }
+        if (!caster.available) {
+            Text("This phone cannot cast: it needs Google Play services, which it does not have or which are out of date.", color = Rust)
+        } else if (connected == null) {
+            Text("Choose a TV", fontWeight = FontWeight.Bold)
+            castProblem?.let { Text(it, color = Rust) }
+            if (screens.isEmpty()) {
+                Text("Looking for TVs… The TV needs Chromecast or Google TV, to be switched on, and to be on the same Wi-Fi as this phone.", style = MaterialTheme.typography.bodySmall)
             }
-            else -> {
-                Text("Showing on $connected", color = Good, fontWeight = FontWeight.Bold)
-                Box(Modifier.fillMaxWidth().height(220.dp).background(Color(0xFFE6E9EE))) {
+            for (tv in screens) {
+                Button(modifier = Modifier.fillMaxWidth(), onClick = { caster.connect(tv.id) }) { Text(tv.name) }
+            }
+        } else {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Showing on $connected", color = Good, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                TextButton(onClick = { playing = false; caster.disconnect() }) { Text("Stop") }
+            }
+        }
+
+        if (slide != null) {
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(96.dp).background(Color(0xFFE6E9EE))) {
                     AlbumPicture(api, slide.thumb, Modifier.fillMaxSize())
                 }
-                Text("${index + 1} of ${slides.size}", fontWeight = FontWeight.Bold)
-                (slide.title ?: slide.caption)?.let { Text(it) }
-                listOfNotNull(slide.day, slide.place).joinToString(" · ").takeIf { it.isNotEmpty() }?.let {
-                    Text(it, style = MaterialTheme.typography.bodySmall)
-                }
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    OutlinedButton(modifier = Modifier.weight(1f).height(72.dp), onClick = { index = (index - 1 + slides.size) % slides.size }) { Text("‹ Previous") }
-                    Button(modifier = Modifier.weight(1f).height(72.dp), onClick = { index = (index + 1) % slides.size }) { Text("Next ›") }
-                }
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text("Play by itself", fontWeight = FontWeight.Bold)
-                        Text("Moves on every 10 seconds while this screen is open.", style = MaterialTheme.typography.bodySmall)
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        when {
+                            place >= 0 -> "${place + 1} of ${shown.size}"
+                            connected != null -> "On the TV, but not in the list below"
+                            else -> "First up, but not in the list below"
+                        },
+                        fontWeight = FontWeight.Bold,
+                    )
+                    (slide.title ?: slide.caption)?.let { Text(it, maxLines = 2, overflow = TextOverflow.Ellipsis) }
+                    listOfNotNull(slide.day, slide.place).joinToString(" · ").takeIf { it.isNotEmpty() }?.let {
+                        Text(it, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     }
-                    Switch(checked = playing, onCheckedChange = { playing = it })
                 }
-                OutlinedButton(modifier = Modifier.fillMaxWidth(), onClick = { playing = false; caster.disconnect() }) { Text("Stop showing on the TV") }
+            }
+        }
+        if (connected != null && shown.isNotEmpty()) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedButton(modifier = Modifier.weight(1f).height(56.dp), onClick = { current = Helpers.step(shown, current?.id, -1) }) { Text("‹ Previous") }
+                Button(modifier = Modifier.weight(1f).height(56.dp), onClick = { current = Helpers.step(shown, current?.id, 1) }) { Text("Next ›") }
+            }
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("Play by itself, every 10 seconds", modifier = Modifier.weight(1f))
+                Switch(checked = playing, onCheckedChange = { playing = it })
+            }
+        }
+
+        if (loaded != null) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { narrowing = true }) { Text(if (filter.active) "Search and narrow ✓" else "Search and narrow") }
+                Text(
+                    when {
+                        loading -> "Fetching…"
+                        show.kind == Helpers.ALL -> Helpers.shownLine(shown.size, shown.size) + if (all.size >= 2000) ", the first 2,000 that match" else ""
+                        else -> Helpers.shownLine(shown.size, loaded?.total ?: shown.size)
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.weight(1f),
+                )
+                if (filter.active || picked.isNotEmpty()) {
+                    TextButton(onClick = { filter = ShowFilter(); picked = emptySet() }) { Text("Clear") }
+                }
+            }
+            if (days.size > 1) {
+                // Tap a day to see only that day; tap more to add them. Next and Previous then stay inside them.
+                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    DayChip("All days", picked.isEmpty()) { picked = emptySet() }
+                    for (day in days) {
+                        DayChip("${day.label} (${day.slides.size})", day.key in picked) {
+                            picked = if (day.key in picked) picked - day.key else picked + day.key
+                        }
+                    }
+                }
+            }
+        }
+
+        when {
+            loaded == null && problem == null -> Box(Modifier.weight(1f).fillMaxWidth().padding(20.dp)) { Progress("Fetching the slideshow…") }
+            loaded == null -> Spacer(Modifier.weight(1f))
+            all.isEmpty() -> Text(
+                if (show.kind == Helpers.ALL && !filter.active) "Tap Search and narrow to choose words, a person or a year, and the photos that match become the slideshow."
+                else if (filter.active) "No photos here match that. Try fewer words, or tap Clear."
+                else "There are no photos here to show yet. A slideshow shows photos only, not videos.",
+                modifier = Modifier.weight(1f),
+            )
+            else -> LazyVerticalGrid(
+                columns = GridCells.Fixed(4),
+                state = grid,
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(3.dp),
+                verticalArrangement = Arrangement.spacedBy(3.dp),
+            ) {
+                items(
+                    lines,
+                    key = { if (it is GridLine.Photo) it.slide.id else "day:" + (it as GridLine.Day).day.key },
+                    span = { if (it is GridLine.Day) GridItemSpan(maxLineSpan) else GridItemSpan(1) },
+                ) { line ->
+                    when (line) {
+                        is GridLine.Day -> Text(
+                            "${line.day.label} · ${Helpers.shownLine(line.day.slides.size, line.day.slides.size)}",
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(top = 10.dp, bottom = 2.dp),
+                        )
+                        is GridLine.Photo -> {
+                            val onTv = line.slide.id == slide?.id
+                            Box(
+                                Modifier
+                                    .aspectRatio(1f)
+                                    .background(Color(0xFFE6E9EE))
+                                    .then(if (onTv) Modifier.border(4.dp, Rust) else Modifier)
+                                    .clickable { current = line.slide },
+                            ) {
+                                AlbumPicture(api, line.slide.thumb, Modifier.fillMaxSize(), ContentScale.Crop)
+                                if (onTv) {
+                                    Text(
+                                        if (connected != null) "On TV" else "First",
+                                        color = Color.White,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        modifier = Modifier.align(Alignment.BottomStart).background(Rust).padding(horizontal = 4.dp, vertical = 1.dp),
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
 }
 
+/** A day in the row of days: filled when it is picked. */
+@Composable
+private fun DayChip(label: String, chosen: Boolean, onClick: () -> Unit) {
+    Text(
+        label,
+        color = if (chosen) Color.White else Navy,
+        fontWeight = if (chosen) FontWeight.Bold else FontWeight.Normal,
+        modifier = Modifier
+            .background(if (chosen) Navy else Color(0xFFE6E9EE))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+    )
+}
+
+/**
+ * The questions the album's timeline can be asked, for a slideshow: words, who uploaded it, who is in it, and which
+ * part of the trip. Nothing changes until "Show these photos" is tapped.
+ */
+@Composable
+private fun NarrowScreen(filter: ShowFilter, choices: SlideChoices, onClose: () -> Unit, onApply: (ShowFilter) -> Unit) {
+    var draft by remember { mutableStateOf(filter) }
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        TextButton(onClick = onClose) { Text("‹ Back") }
+        Heading("Search and narrow")
+        OutlinedTextField(
+            value = draft.words,
+            onValueChange = { draft = draft.copy(words = it.take(200)) },
+            label = { Text("Words to look for") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Button(modifier = Modifier.fillMaxWidth(), onClick = { onApply(draft.copy(words = draft.words.trim())) }) { Text("Show these photos") }
+        if (draft.active) {
+            OutlinedButton(modifier = Modifier.fillMaxWidth(), onClick = { draft = ShowFilter() }) { Text("Clear everything") }
+        }
+        OutlinedTextField(
+            value = draft.year?.toString() ?: "",
+            onValueChange = { typed -> draft = draft.copy(year = typed.filter { it.isDigit() }.take(4).toIntOrNull()) },
+            label = { Text("Year, such as 2019 (optional)") },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            modifier = Modifier.fillMaxWidth(),
+        )
+
+        if (choices.people.isNotEmpty() || choices.pets.isNotEmpty()) {
+            Text("Who is in it", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp))
+            Text("Choose several for the photos they are all in.", style = MaterialTheme.typography.bodySmall)
+            for (person in choices.people + choices.pets) {
+                val on = person.id in draft.personIds
+                // The album answers for up to ten names at once.
+                TripLine(person.label, "", on) {
+                    draft = draft.copy(personIds = if (on) draft.personIds - person.id else if (draft.personIds.size < 10) draft.personIds + person.id else draft.personIds)
+                }
+            }
+        }
+        if (choices.activities.isNotEmpty()) {
+            Text("Part of the trip", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp))
+            TripLine("Any activity", "", draft.activityId == null) { draft = draft.copy(activityId = null) }
+            for (activity in choices.activities) {
+                TripLine(activity.label, "", draft.activityId == activity.id) { draft = draft.copy(activityId = activity.id) }
+            }
+        }
+        if (choices.members.size > 1) {
+            Text("Uploaded by", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp))
+            TripLine("Anyone", "", draft.uploaderId == null) { draft = draft.copy(uploaderId = null) }
+            for (member in choices.members) {
+                TripLine(member.label, "", draft.uploaderId == member.id) { draft = draft.copy(uploaderId = member.id) }
+            }
+        }
+        Spacer(Modifier.height(24.dp))
+    }
+}
+
+/** The album's small pictures already fetched, so scrolling back up a grid does not fetch them again. */
+private val pictures = object : android.util.LruCache<String, Bitmap>(24 * 1024 * 1024) {
+    override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount
+}
+
 /** One of the album's own pictures, fetched as this member. */
 @Composable
-private fun AlbumPicture(api: AlbumApi, path: String, modifier: Modifier = Modifier) {
-    val bitmap by produceState<Bitmap?>(initialValue = null, path) {
-        value = withContext(Dispatchers.IO) {
+private fun AlbumPicture(api: AlbumApi, path: String, modifier: Modifier = Modifier, scale: ContentScale = ContentScale.Fit) {
+    val bitmap by produceState<Bitmap?>(initialValue = pictures.get(path), path) {
+        value = pictures.get(path) ?: withContext(Dispatchers.IO) {
             try {
                 val bytes = api.bytes(path)
-                android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.also { pictures.put(path, it) }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 null
             }
         }
     }
-    bitmap?.let { Image(it.asImageBitmap(), contentDescription = null, contentScale = ContentScale.Fit, modifier = modifier) }
+    bitmap?.let { Image(it.asImageBitmap(), contentDescription = null, contentScale = scale, modifier = modifier) }
 }
 
 private fun loadThumbnail(context: Context, uri: Uri): Bitmap? = try {

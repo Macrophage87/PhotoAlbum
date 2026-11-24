@@ -75,6 +75,71 @@ describe("the slideshow for a television", () => {
     expect(body.slides.map((s: { id: string }) => s.id)).toEqual([secondId]);
   });
 
+  it("says each slide's day, and what there is to narrow by", async () => {
+    const ada = await db.person.create({ data: { name: "Ada", createdById: userId } });
+    await db.face.create({ data: { photoId: firstId, personId: ada.id, status: "CONFIRMED", box: {}, confidence: 1 } });
+    const walk = await db.activity.create({ data: { tripId, title: "Harbour walk", startTime: new Date("2025-08-12T14:00:00Z"), endTime: new Date("2025-08-12T16:00:00Z") } });
+    await db.photo.update({ where: { id: secondId }, data: { activityId: walk.id } });
+    const body = await (await slideshow(req("/api/v1/album/slideshow?trip=coast", token))).json();
+    expect(body.slides.map((s: { dayKey: string }) => s.dayKey)).toEqual(["2025-08-11", "2025-08-12"]);
+    expect(body.total).toBe(2);
+    expect(body.choices).toEqual({
+      members: [{ id: userId, label: "Pat" }],
+      people: [{ id: ada.id, name: "Ada", kind: "HUMAN" }],
+      activities: [{ id: walk.id, label: "Harbour walk" }],
+    });
+  });
+
+  it("narrows a trip the way its timeline does, and still counts the whole of it", async () => {
+    const sam = (await db.user.create({ data: { email: "sam@example.com", name: "Sam" } })).id;
+    await db.photo.update({ where: { id: secondId }, data: { uploaderId: sam } });
+    const ada = await db.person.create({ data: { name: "Ada", createdById: userId } });
+    await db.face.create({ data: { photoId: firstId, personId: ada.id, status: "CONFIRMED", box: {}, confidence: 1 } });
+    const walk = await db.activity.create({ data: { tripId, title: "Harbour walk", startTime: new Date("2025-08-12T14:00:00Z"), endTime: new Date("2025-08-12T16:00:00Z") } });
+    await db.photo.update({ where: { id: secondId }, data: { activityId: walk.id } });
+    const ids = async (query: string) => {
+      const body = await (await slideshow(req(`/api/v1/album/slideshow?trip=coast&${query}`, token))).json();
+      expect(body.total).toBe(2);
+      return body.slides.map((s: { id: string }) => s.id);
+    };
+    expect(await ids(`uploader=${sam}`)).toEqual([secondId]);
+    expect(await ids(`person=${ada.id}`)).toEqual([firstId]);
+    expect(await ids(`activity=${walk.id}`)).toEqual([secondId]);
+    expect(await ids(`person=${ada.id}&activity=${walk.id}`)).toEqual([]);
+    expect(await ids("year=2025")).toEqual([firstId, secondId]);
+    expect(await ids("year=2024")).toEqual([]);
+    // What kind of thing it is goes unasked: a slideshow is photographs, whatever the address says.
+    expect(await ids("kind=VIDEO")).toEqual([firstId, secondId]);
+  });
+
+  it("narrows a collection too", async () => {
+    const c = await db.collection.create({ data: { slug: "best", title: "Best", createdById: userId } });
+    for (const photoId of [firstId, secondId]) await db.collectionItem.create({ data: { collectionId: c.id, photoId, addedById: userId } });
+    const ada = await db.person.create({ data: { name: "Ada", createdById: userId } });
+    await db.face.create({ data: { photoId: secondId, personId: ada.id, status: "CONFIRMED", box: {}, confidence: 1 } });
+    const body = await (await slideshow(req(`/api/v1/album/slideshow?collection=best&person=${ada.id}`, token))).json();
+    expect(body.slides.map((s: { id: string }) => s.id)).toEqual([secondId]);
+    expect(body.total).toBe(2);
+    expect(body.choices.people).toEqual([{ id: ada.id, name: "Ada", kind: "HUMAN" }]);
+    expect(body.choices.activities).toEqual([]);
+  });
+
+  it("makes a slideshow out of the whole album once something is asked of it", async () => {
+    const loose = (await db.photo.create({ data: { uploaderId: userId, originalName: "loose", mimeType: "image/jpeg", storageKey: "loose", originalPath: "loose/o.jpg", sizeBytes: 1, status: "READY", width: 100, height: 80, takenAt: new Date("2024-03-01T12:00:00Z") } })).id;
+    const ada = await db.person.create({ data: { name: "Ada", createdById: userId } });
+    for (const photoId of [loose, secondId]) await db.face.create({ data: { photoId, personId: ada.id, status: "CONFIRMED", box: {}, confidence: 1 } });
+    const nothingAsked = await (await slideshow(req("/api/v1/album/slideshow?all=1", token))).json();
+    expect(nothingAsked.slides).toEqual([]);
+    expect(nothingAsked.total).toBe(3);
+    expect(nothingAsked.choices.people).toEqual([{ id: ada.id, name: "Ada", kind: "HUMAN" }]);
+    const body = await (await slideshow(req(`/api/v1/album/slideshow?all=1&person=${ada.id}`, token))).json();
+    expect(body.slides.map((s: { id: string }) => s.id)).toEqual([loose, secondId]);
+    expect(body.slides[0].cast).toContain(`/api/photos/${loose}/preview`);
+    const inYear = await (await slideshow(req(`/api/v1/album/slideshow?all=1&person=${ada.id}&year=2025`, token))).json();
+    expect(inYear.slides.map((s: { id: string }) => s.id)).toEqual([secondId]);
+    expect((await slideshow(req("/api/v1/album/slideshow?all=1&trip=coast", token))).status).toBe(400);
+  });
+
   it("lets the signed address past the door with no sign-in, for that picture at that size only", async () => {
     const body = await (await slideshow(req("/api/v1/album/slideshow?trip=coast", token))).json();
     const cast = new URL(body.slides[0].cast, "http://album.test").searchParams.get("cast")!;

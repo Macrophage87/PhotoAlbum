@@ -47,9 +47,49 @@ data class ShowPage(val shows: List<Show>, val next: Int?)
  * One picture of a slideshow. `thumb` is for the phone, fetched with its sign-in; `cast` is the address a television
  * fetches by itself, signed by the album and good for a few hours.
  */
-data class Slide(val id: String, val title: String?, val caption: String?, val day: String?, val place: String?, val thumb: String, val cast: String)
+data class Slide(
+    val id: String,
+    val title: String?,
+    val caption: String?,
+    val day: String?,
+    val place: String?,
+    val thumb: String,
+    val cast: String,
+    /** The day as "2025-08-12", or null when nobody knows it. */
+    val dayKey: String? = null,
+)
 
-data class SlideShow(val title: String, val slides: List<Slide>)
+/** Something a slideshow can be narrowed by: a member, a person or pet, or an outing. */
+data class Choice(val id: String, val label: String)
+
+/** What this slideshow can be narrowed by, as the album's own timeline offers it. */
+data class SlideChoices(
+    val members: List<Choice> = emptyList(),
+    val people: List<Choice> = emptyList(),
+    val pets: List<Choice> = emptyList(),
+    val activities: List<Choice> = emptyList(),
+)
+
+/** What somebody has asked a slideshow for. Several people means the photos they are all in. */
+data class ShowFilter(
+    val words: String = "",
+    val uploaderId: String? = null,
+    val personIds: Set<String> = emptySet(),
+    val activityId: String? = null,
+    val year: Int? = null,
+) {
+    val active: Boolean get() = words.isNotBlank() || uploaderId != null || personIds.isNotEmpty() || activityId != null || year != null
+}
+
+data class SlideShow(
+    val title: String,
+    val slides: List<Slide>,
+    /** How many photos it has with nothing asked. */
+    val total: Int = slides.size,
+    val choices: SlideChoices = SlideChoices(),
+    /** Somebody put this collection in order, so it is shown in that order and not by day. */
+    val arranged: Boolean = false,
+)
 
 /** The album's answers, read. Kept apart from the network so they are tested on the build machine. */
 object AlbumJson {
@@ -130,8 +170,25 @@ object AlbumJson {
             root.optString("title"),
             (0 until array.length()).map {
                 val o = array.getJSONObject(it)
-                Slide(o.getString("id"), text(o, "title"), text(o, "caption"), text(o, "day"), text(o, "place"), o.getString("thumb"), o.getString("cast"))
+                Slide(o.getString("id"), text(o, "title"), text(o, "caption"), text(o, "day"), text(o, "place"), o.getString("thumb"), o.getString("cast"), text(o, "dayKey"))
             },
+            root.optInt("total", array.length()),
+            slideChoices(root.optJSONObject("choices")),
+            root.optBoolean("arranged", false),
+        )
+    }
+
+    private fun slideChoices(o: JSONObject?): SlideChoices {
+        if (o == null) return SlideChoices()
+        fun list(key: String, label: String, keep: (JSONObject) -> Boolean = { true }): List<Choice> {
+            val array = o.optJSONArray(key) ?: return emptyList()
+            return (0 until array.length()).map { array.getJSONObject(it) }.filter(keep).map { Choice(it.getString("id"), it.optString(label)) }
+        }
+        return SlideChoices(
+            members = list("members", "label"),
+            people = list("people", "name") { it.optString("kind") != "PET" },
+            pets = list("people", "name") { it.optString("kind") == "PET" },
+            activities = list("activities", "label"),
         )
     }
 
@@ -235,8 +292,8 @@ class AlbumApi(private val baseUrl: String, private val token: String) {
     }
 
     /** A trip's or a collection's slideshow, with the addresses a television can fetch. */
-    fun slideShow(kind: String, slug: String): SlideShow = try {
-        AlbumJson.slideShow(send(request("/api/v1/album/slideshow?$kind=${Helpers.encodeFileName(slug)}").get().build()))
+    fun slideShow(kind: String, slug: String, filter: ShowFilter = ShowFilter()): SlideShow = try {
+        AlbumJson.slideShow(send(request("/api/v1/album/slideshow?${Helpers.showQuery(kind, slug, filter)}").get().build()))
     } catch (e: org.json.JSONException) {
         throw AlbumException("The album's slideshow could not be read.")
     }

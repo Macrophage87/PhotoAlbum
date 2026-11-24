@@ -27,6 +27,11 @@ with their location intact.
    (`GET /api/v1/album/slideshow`, `src/lib/cast/link.ts`), using the receiver every Chromecast already has, so
    there is no receiver app to register. The list of screens is drawn by the app (`Caster`), not by Google's
    dialog, which would need an AppCompat theme.
+10. The remote lays the slideshow out by day, as the album's timeline does, with the photo on the TV outlined.
+    Tapping a photo puts it on the TV. Days can be picked from the row of days, and **Search and narrow** asks the
+    same questions as the website (words, who is in it, part of the trip, who uploaded it, year); Next, Previous
+    and "Play by itself" then stay inside what is left. **Search the whole album** makes a slideshow from every
+    photo that matches, across all trips (`?all=1`, up to 2,000).
 
 Files are read with `MediaStore.setRequireOriginal`, which needs the "location in photos" permission; without it
 the app refuses to send rather than send photos with their place blanked out.
