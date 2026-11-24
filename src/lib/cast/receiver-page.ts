@@ -62,6 +62,14 @@ const SCRIPT = String.raw`
   var musicHeld = false;
 
   function good(url) { return typeof url === "string" && OK.test(url); }
+
+  // How many real pixels across this television draws the page with. One that draws well past 1080p asks the album
+  // for its 4K copy of each photograph; any other is given the medium copy, which is all it could show.
+  var across = Math.round(Math.max(window.innerWidth || 0, (window.screen && window.screen.width) || 0) * (window.devicePixelRatio || 1));
+  var down = Math.round(Math.max(window.innerHeight || 0, (window.screen && window.screen.height) || 0) * (window.devicePixelRatio || 1));
+  var sharp = across > 2000 ? "&w=3840" : "";
+  function picture(url) { return /\/preview\?/.test(url) ? url + sharp : url; }
+  $("screen").textContent = across && down ? across + " × " + down : "";
   function text(x, most) { return typeof x === "string" ? x.slice(0, most || 200) : ""; }
   function say(message) { try { context.sendCustomMessage(NS, undefined, message); } catch (e) {} }
 
@@ -142,7 +150,7 @@ const SCRIPT = String.raw`
         if (mine !== turn) return;
         stopClip();
         next.style.animation = "none";
-        next.src = m.url;
+        next.src = picture(m.url);
         // Reading a size makes the browser take "none" before the new drift is set, so the drift starts over.
         void next.offsetWidth;
         next.style.animation = (pans++ % 2 ? "drift-a " : "drift-b ") + Math.max(8, state.seconds + 3) + "s ease-out forwards";
@@ -165,11 +173,11 @@ const SCRIPT = String.raw`
           var p = clip.play();
           if (p && p.catch) p.catch(function () {});
         }
-        if (good(m.next)) { var ahead = new Image(); ahead.src = m.next; }
+        if (good(m.next)) { var ahead = new Image(); ahead.src = picture(m.next); }
       }, Math.max(0, wait - (Date.now() - began)));
     };
     pre.onerror = function () { if (mine === turn) card.style.opacity = 0; };
-    pre.src = m.url;
+    pre.src = picture(m.url);
   }
 
   clip.addEventListener("ended", function () {
@@ -287,11 +295,12 @@ img.slide,#clip{position:absolute;inset:0;width:100%;height:100%;object-fit:cont
 #card{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;background:rgba(8,12,20,.92);opacity:0;transition:opacity .8s ease}
 #card-day{font-size:5vw;font-weight:bold;padding:0 6vw}
 #card-show{font-size:2.4vw;color:#cfd6e0;margin-top:1.2vw}
-#idle{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:4vw;color:#cfd6e0}
+#idle{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;font-size:4vw;color:#cfd6e0}
+#screen{font-size:1.3vw;color:#7d8794;margin-top:1vw}
 </style>
 </head>
 <body>
-<div id="idle">Family Album</div>
+<div id="idle"><div>Family Album</div><div id="screen"></div></div>
 <img id="a" class="slide" alt="">
 <img id="b" class="slide" alt="">
 <video id="clip" playsinline></video>

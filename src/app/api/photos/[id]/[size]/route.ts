@@ -10,6 +10,7 @@ import { MEDIA_CSP } from "@/lib/security/csp";
 import { viewerFor } from "@/lib/auth/access";
 import { largestRendition } from "@/lib/photos/urls";
 import { visitorFullSize } from "@/lib/images/visitor-copy";
+import { tvPicture, TV_SIDE } from "@/lib/images/tv-copy";
 import { publicScanCopy } from "@/lib/scans/public-copy";
 import { castLinkGood } from "@/lib/cast/link";
 
@@ -106,13 +107,21 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     const medium = (photo.renditions as Renditions | null)?.medium;
     const poster = video?.poster;
     if (!medium && !poster) return new Response("Not ready", { status: 404 });
+    // A 4K television asks for more than the medium copy (`w`). It gets a copy made for it once the worker has made
+    // one, and the medium meanwhile, which is then kept by nobody so that the next ask finds the better one.
+    const forTv = byCast && photo.kind === "PHOTO" && url.searchParams.get("w") === String(TV_SIDE);
+    const tv = forTv ? await tvPicture(photo).catch(() => null) : null;
+    if (tv) {
+      const res = await serve(request, tv, "image/jpeg", { "Cache-Control": "private, max-age=86400" });
+      if (res.status !== 404) return res;
+    }
     const jpeg = await jpegPreview((medium ?? poster!).key).catch(() => null);
     if (!jpeg) return new Response("Not found", { status: 404 });
     return new Response(new Uint8Array(jpeg), {
       headers: {
         "Content-Type": "image/jpeg",
         "Content-Length": String(jpeg.byteLength),
-        "Cache-Control": mediaCacheControl(media, url.searchParams.has("v")),
+        "Cache-Control": forTv ? "private, no-store" : mediaCacheControl(media, url.searchParams.has("v")),
       },
     });
   }

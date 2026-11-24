@@ -122,7 +122,7 @@ export async function renderVisitorCopy(input: string | Buffer, edits: PhotoEdit
 export type VisitorCopyItem = { storageKey: string; imageVersion: number; edits: unknown };
 
 /** A short, stable name for a set of edits, or for none. */
-function editsTag(edits: unknown): string {
+export function editsTag(edits: unknown): string {
   return createHash("sha256").update(JSON.stringify(editsOf(edits))).digest("hex").slice(0, 8);
 }
 
@@ -133,9 +133,10 @@ export function visitorStem(item: VisitorCopyItem): string {
 
 /**
  * Everything a making of a copy leaves in an item's folder: the copy, a note that it failed or that the picture is
- * too big to copy safely, and a file still being written.
+ * too big to copy safely, and a file still being written. A television's copy (see `./tv-copy`) is kept the same
+ * way under its own name, so the same clearing-out covers it.
  */
-export const VISITOR_FILE = /^visitor-(\d+)-[0-9a-f]{8}\.(webp|jpg|failed|withheld|[0-9a-f-]{36}\.tmp)$/;
+export const VISITOR_FILE = /^(?:visitor|tv)-(\d+)-[0-9a-f]{8}\.(webp|jpg|failed|withheld|[0-9a-f-]{36}\.tmp)$/;
 
 /**
  * Delete the item's visitor files from before `version`, and with `keep`, every other one of that version too. A
@@ -151,7 +152,9 @@ export async function forgetVisitorFiles(storageKey: string, version: number, ke
     const m = VISITOR_FILE.exec(name);
     if (!m) continue;
     const of = Number(m[1]);
-    if (of < version || (keep && of === version && name !== path.basename(keep))) await store.delete(`${storageKey}/${name}`).then(() => gone++, () => undefined);
+    // `keep` clears the rest of its own kind only: a visitor's copy and a television's sit side by side.
+    const sameKind = keep ? name.split("-")[0] === path.basename(keep).split("-")[0] : false;
+    if (of < version || (keep && sameKind && of === version && name !== path.basename(keep))) await store.delete(`${storageKey}/${name}`).then(() => gone++, () => undefined);
   }
   return gone;
 }
