@@ -17,6 +17,12 @@
     <!-- To wait for Wi-Fi when the member asks for that. -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
+    <!-- A slideshow on a television keeps going with the app in the background (see ShowService), and moves on by
+         itself with the phone's screen off, which needs the processor kept awake while it plays. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
     <application
         android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
@@ -48,6 +54,11 @@
                 <data android:scheme="${appScheme}" android:host="connect" />
             </intent-filter>
         </activity>
+
+        <service
+            android:name=".ShowService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
     </application>
 
 </manifest>

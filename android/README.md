@@ -33,7 +33,10 @@ with their location intact.
     and "Play by itself" then stay inside what is left. **Search the whole album** makes a slideshow from every
     photo that matches, across all trips (`?all=1`, up to 2,000), and the same switch is inside any slideshow's
     "Search and narrow". **Play** between Back and Next moves on by itself; "Change speed" picks 5, 10, 20 or 30
-    seconds.
+    seconds. A **Shuffle** switch mixes the order.
+11. The slideshow keeps going with the app in the background or the screen off (`ShowPlayer`, `ShowService`): a
+    notification with Back, Play or Pause, Next and Stop stays up while a TV is connected. It is a foreground
+    service of the media-playback kind and holds a wake lock only while playing by itself.
 
 Files are read with `MediaStore.setRequireOriginal`, which needs the "location in photos" permission; without it
 the app refuses to send rather than send photos with their place blanked out.
