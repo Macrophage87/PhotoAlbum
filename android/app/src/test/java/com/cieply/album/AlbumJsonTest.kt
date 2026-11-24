@@ -76,9 +76,9 @@ class AlbumJsonTest {
     @Test
     fun `the album's trips and collections are read as things to show, a page at a time`() {
         val trips = AlbumJson.shows("""{"trips":[{"id":"t1","slug":"coast","title":"Coast","startDate":"2025-08-10","endDate":"2025-08-16","items":42}],"total":101,"next":100}""", "trip")
-        assertEquals(ShowPage(listOf(Show("trip", "coast", "Coast", "10 to 16 August 2025", 42)), 100), trips)
+        assertEquals(ShowPage(listOf(Show("trip", "coast", "Coast", "10 to 16 August 2025", 42, id = "t1", startDate = "2025-08-10", endDate = "2025-08-16")), 100), trips)
         val collections = AlbumJson.shows("""{"collections":[{"id":"c1","slug":"best","title":"Best","items":1}],"total":1,"next":null}""", "collection")
-        assertEquals(ShowPage(listOf(Show("collection", "best", "Best", "", 1)), null), collections)
+        assertEquals(ShowPage(listOf(Show("collection", "best", "Best", "", 1, id = "c1")), null), collections)
     }
 
     @Test
@@ -129,5 +129,65 @@ class AlbumJsonTest {
         assertEquals("/api/photos/v1/video?v=1&cast=1.x", show.slides[1].video)
         assertEquals(12.5, show.slides[1].seconds!!, 0.0001)
         assertNull(show.slides[1].lat)
+    }
+
+    @Test
+    fun `a trip, an activity and a collection just made are read from the album's answers`() {
+        assertEquals(Trip("t1", "Acadia", "2025-08-10", "2025-08-16"), AlbumJson.trip("""{"trip":{"id":"t1","slug":"acadia","title":"Acadia","startDate":"2025-08-10","endDate":"2025-08-16"}}"""))
+        assertEquals(Outing("a1", "Walk", "Hike", "2025-08-12T10:00", "2025-08-12T12:00"), AlbumJson.outing("""{"activity":{"id":"a1","title":"Walk","type":"HIKE","label":"Hike","start":"2025-08-12T10:00","end":"2025-08-12T12:00"}}"""))
+        assertEquals(CollectionName("c1", "Best"), AlbumJson.collection("""{"collection":{"id":"c1","slug":"best","title":"Best"}}"""))
+        assertEquals(listOf(CollectionName("c1", "Best"), CollectionName("c2", "Birthdays")), AlbumJson.collections("""{"collections":[{"id":"c1","slug":"best","title":"Best"},{"id":"c2","slug":"b","title":"Birthdays"}]}"""))
+    }
+
+    @Test
+    fun `a trip's activities say what kinds there are and whether this member may add one`() {
+        val found = AlbumJson.outings("""{"activities":[{"id":"a1","title":"Walk","type":"HIKE","label":"Hike","start":"2025-08-12T10:00","end":"2025-08-12T12:00"}],"types":[{"type":"HIKE","label":"Hike"},{"type":"OTHER","label":"Activity"}],"canAdd":true}""")
+        assertEquals(listOf(Outing("a1", "Walk", "Hike", "2025-08-12T10:00", "2025-08-12T12:00")), found.outings)
+        assertEquals(listOf(OutingKind("HIKE", "Hike"), OutingKind("OTHER", "Activity")), found.kinds)
+        assertEquals(true, found.canAdd)
+        assertEquals(TripOutings(emptyList(), emptyList(), false), AlbumJson.outings("""{"activities":[]}"""))
+    }
+
+    @Test
+    fun `what is asked of the album to make things and to file photos is written as it reads them`() {
+        val trip = org.json.JSONObject(AlbumJson.tripRequest(" Acadia ", "2025-08-10", "2025-08-16", "America/New_York"))
+        assertEquals(listOf("Acadia", "2025-08-10", "2025-08-16", "America/New_York"), listOf("title", "startDate", "endDate", "timezone").map { trip.getString(it) })
+        val outing = org.json.JSONObject(AlbumJson.outingRequest("Walk", "HIKE", "2025-08-12T10:00", "2025-08-12T12:00"))
+        assertEquals(listOf("Walk", "HIKE", "2025-08-12T10:00", "2025-08-12T12:00"), listOf("title", "type", "start", "end").map { outing.getString(it) })
+        assertEquals("Best", org.json.JSONObject(AlbumJson.collectionRequest("Best ")).getString("title"))
+        // An activity says its trip, so the trip is not sent beside it.
+        val both = org.json.JSONObject(AlbumJson.fileRequest(listOf("p1", "p2"), "t1", "a1", "c1"))
+        assertEquals(2, both.getJSONArray("photoIds").length())
+        assertEquals("p2", both.getJSONArray("photoIds").getString(1))
+        assertEquals(true, both.isNull("tripId"))
+        assertEquals("a1", both.getString("activityId"))
+        assertEquals("c1", both.getString("collectionId"))
+        val onlyTrip = org.json.JSONObject(AlbumJson.fileRequest(listOf("p1"), "t1", null, null))
+        assertEquals("t1", onlyTrip.getString("tripId"))
+        assertEquals(true, onlyTrip.isNull("activityId") && onlyTrip.isNull("collectionId"))
+        assertEquals(Filed(3, 1), AlbumJson.filed("""{"filed":3,"notYours":1}"""))
+    }
+
+    @Test
+    fun `a page of a trip's items says which are this member's, and how to ask for the next`() {
+        val page = AlbumJson.items(
+            """{"items":[{"id":"p1","kind":"PHOTO","day":"2025-08-11","thumb":"/t1","medium":"/m1","caption":"Low tide","place":"Coast","page":"/photos/p1","mine":true},
+               {"id":"p2","kind":"VIDEO","day":null,"thumb":"/t2","medium":"/m2","title":"Clip","page":"/photos/p2"}],"next":"abc"}""",
+        )
+        assertEquals(AlbumItem("p1", "/t1", "2025-08-11", false, true, "/m1", null, "Low tide", "Coast", "/photos/p1"), page.items[0])
+        assertEquals(AlbumItem("p2", "/t2", null, true, false, "/m2", "Clip", null, null, "/photos/p2"), page.items[1])
+        assertEquals("abc", page.next)
+        assertEquals("100", AlbumJson.items("""{"items":[],"next":100}""").next)
+        assertNull(AlbumJson.items("""{"items":[],"next":null}""").next)
+    }
+
+    @Test
+    fun `the album's trips carry their covers and days for browsing`() {
+        val page = AlbumJson.shows("""{"trips":[{"id":"t1","slug":"coast","title":"Coast","description":"A week","startDate":"2025-08-10","endDate":"2025-08-16","items":3,"cover":{"thumb":"/c","medium":"/m"}},{"slug":"bare","title":"Bare"}],"next":null}""", "trip")
+        assertEquals("t1", page.shows[0].id)
+        assertEquals("/c", page.shows[0].cover)
+        assertEquals("A week", page.shows[0].description)
+        assertEquals("2025-08-10", page.shows[0].startDate)
+        assertNull(page.shows[1].cover)
     }
 }

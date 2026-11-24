@@ -273,4 +273,37 @@ class HelpersTest {
         assertEquals("trip=coast", Helpers.showQuery("trip", "coast", ShowFilter()))
         assertEquals("trip=coast&clips=1", Helpers.showQuery("trip", "coast", ShowFilter(), true))
     }
+
+    @Test
+    fun `where photos are going is said in a line`() {
+        val trip = Trip("t1", "Acadia", "2025-08-10", "2025-08-16")
+        val walk = Outing("a1", "Walk", "Hike", "", "")
+        val best = CollectionName("c1", "Best")
+        assertEquals("Trip: the album decides by date", Helpers.filingLine(Filing(), byDate = true))
+        assertEquals("Choose a trip, activity or collection", Helpers.filingLine(Filing(), byDate = false))
+        assertEquals("Trip: Acadia", Helpers.filingLine(Filing(trip), byDate = true))
+        assertEquals("Trip: Acadia · Activity: Walk · Collection: Best", Helpers.filingLine(Filing(trip, walk, best), byDate = false))
+        assertEquals("By date · Collection: Best", Helpers.filingLine(Filing(collection = best), byDate = true))
+        assertEquals("Collection: Best", Helpers.filingLine(Filing(collection = best), byDate = false))
+        assertEquals("Walk and Best", Helpers.filingNames(Filing(trip, walk, best)))
+        assertEquals("Acadia", Helpers.filingNames(Filing(trip)))
+    }
+
+    @Test
+    fun `what a filing did is said, with whose the rest are`() {
+        assertEquals("3 are now in Acadia.", Helpers.filedLine(Filed(3, 0), "Acadia"))
+        assertEquals("1 is now in Acadia. 2 were added by someone else, so only they or an admin can move them.", Helpers.filedLine(Filed(1, 2), "Acadia"))
+        assertEquals("Nothing was moved. 1 was added by someone else, so only they or an admin can move it.", Helpers.filedLine(Filed(0, 1), "Acadia"))
+    }
+
+    @Test
+    fun `an activity's times are written as the album's form takes them`() {
+        assertEquals("2025-08-12T09:05", Helpers.wallTime(java.time.LocalDate.of(2025, 8, 12), 9, 5))
+        assertEquals("9:05 AM", Helpers.clock(9, 5))
+        assertEquals("12:00 PM", Helpers.clock(12, 0))
+        assertEquals("12:30 AM", Helpers.clock(0, 30))
+        assertEquals("11:59 PM", Helpers.clock(23, 59))
+        assertEquals(Pair(10L, 30L), Helpers.span(listOf(20L, 10L, 30L)))
+        assertNull(Helpers.span(emptyList()))
+    }
 }

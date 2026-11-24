@@ -1,4 +1,5 @@
 import { getApiViewer } from "@/lib/auth/viewer";
+import { canEditMedia } from "@/lib/auth/ownership";
 import { coverFor, tripCardSelect } from "@/lib/trips/queries";
 import { tripPhotoPage } from "@/lib/photos/page";
 import { db } from "@/lib/db";
@@ -20,7 +21,8 @@ export async function GET(request: Request, { params }: RouteContext<"/api/v1/al
   const page = await tripPhotoPage(trip.id, { cursor, take: APP_PAGE, order: "taken", readyOnly: true });
   return Response.json({
     trip: toAppTrip(trip, await coverFor(trip)),
-    items: page.photos.map(toAppItem),
+    // `mine`: whether this member may move it (their own, or anything for an admin), so the app can say so first.
+    items: page.photos.map((p) => ({ ...toAppItem(p), mine: canEditMedia(viewer.user, p) })),
     total: page.total,
     next: page.nextCursor,
   });

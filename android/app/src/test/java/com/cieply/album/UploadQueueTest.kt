@@ -102,6 +102,17 @@ class UploadQueueTest {
     }
 
     @Test
+    fun `the activity and collection chosen are kept, and a queue written before there were any still reads`() {
+        val chosen = item(1).copy(tripId = "t1", tripTitle = "Acadia", outingId = "a1", outingTitle = "Walk", collectionId = "c1", collectionTitle = "Best")
+        val read = QueueJson.read(QueueJson.write(QueueFile(listOf(chosen), emptySet())))
+        assertEquals(chosen, read.items[0])
+        val old = QueueJson.read("""{"items":[{"id":"x","uri":"content://x","name":"a.jpg","key":"k","state":"WAITING","tripId":"t1","tripTitle":"Acadia"}],"sent":[]}""")
+        assertEquals("t1", old.items[0].tripId)
+        assertNull(old.items[0].outingId)
+        assertNull(old.items[0].collectionId)
+    }
+
+    @Test
     fun `a video too big waits for its YouTube link, and counts as in the album once linked`() {
         val queue = UploadQueue.on(File(folder.root, "queue.json"))
         queue.add(listOf(item(1), item(2)))

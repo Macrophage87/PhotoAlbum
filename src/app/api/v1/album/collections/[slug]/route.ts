@@ -1,4 +1,5 @@
 import { getApiViewer } from "@/lib/auth/viewer";
+import { canEditMedia } from "@/lib/auth/ownership";
 import { collectionCardSelect, collectionCoverFor, defaultCollectionOrder, listCollectionItems } from "@/lib/collections/queries";
 import { db } from "@/lib/db";
 import { APP_PAGE, pageOffset, toAppCollection, toAppItem } from "@/lib/app-api/album";
@@ -20,7 +21,8 @@ export async function GET(request: Request, { params }: RouteContext<"/api/v1/al
   const page = items.slice(from, from + APP_PAGE);
   return Response.json({
     collection: toAppCollection(collection, await collectionCoverFor(collection)),
-    items: page.map(toAppItem),
+    // `mine`: whether this member may move it (their own, or anything for an admin), so the app can say so first.
+    items: page.map((p) => ({ ...toAppItem(p), mine: canEditMedia(viewer.user, p) })),
     total: items.length,
     next: from + page.length < items.length ? from + page.length : null,
   });
