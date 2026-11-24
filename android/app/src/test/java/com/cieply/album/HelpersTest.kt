@@ -206,4 +206,11 @@ class HelpersTest {
         assertEquals("12 of 340 photos", Helpers.shownLine(12, 340))
         assertEquals("Nothing matches", Helpers.shownLine(0, 340))
     }
+
+    @Test
+    fun `the speed goes round its choices and starts over from anything else`() {
+        assertEquals(20, Helpers.nextPace(10))
+        assertEquals(5, Helpers.nextPace(30))
+        assertEquals(5, Helpers.nextPace(7))
+    }
 }

@@ -188,6 +188,11 @@ object Helpers {
         else -> "$shown of $total photos"
     }
 
+    /** How long each photo stays up when the slideshow plays by itself, and the next choice round the list. */
+    val PACES = listOf(5, 10, 20, 30)
+
+    fun nextPace(seconds: Int): Int = PACES[(PACES.indexOf(seconds) + 1) % PACES.size]
+
     const val UNDATED = "undated"
     const val ARRANGED = "arranged"
 
