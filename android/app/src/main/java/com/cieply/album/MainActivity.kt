@@ -879,6 +879,9 @@ private fun RemoteScreen(api: AlbumApi, baseUrl: String, show: Show, onBack: () 
     val castProblem by caster.problem.collectAsState()
     var problem by remember { mutableStateOf<String?>(null) }
     var playing by remember { mutableStateOf(false) }
+    var seconds by remember { mutableIntStateOf(10) }
+    // Asking every trip and collection at once, not only the one that was opened. The whole album always is.
+    var everywhere by remember { mutableStateOf(show.kind == Helpers.ALL) }
     var filter by remember { mutableStateOf(ShowFilter()) }
     var picked by remember { mutableStateOf(setOf<String>()) }
     // The whole album is only ever shown narrowed, so it opens on the questions.
@@ -897,11 +900,12 @@ private fun RemoteScreen(api: AlbumApi, baseUrl: String, show: Show, onBack: () 
         }
     }
 
-    LaunchedEffect(show, filter) {
+    val kind = if (everywhere) Helpers.ALL else show.kind
+    LaunchedEffect(show, kind, filter) {
         loading = true
         problem = null
         try {
-            val got = withContext(Dispatchers.IO) { api.slideShow(show.kind, show.slug, filter) }
+            val got = withContext(Dispatchers.IO) { api.slideShow(kind, show.slug, filter) }
             loaded = got
             // The same photo with its fresh address, or the first one when nothing is up yet.
             current = got.slides.firstOrNull { it.id == current?.id } ?: current ?: got.slides.firstOrNull()
@@ -936,10 +940,10 @@ private fun RemoteScreen(api: AlbumApi, baseUrl: String, show: Show, onBack: () 
     LaunchedEffect(connected, slide?.id) {
         if (connected != null && slide != null) caster.show(baseUrl + slide.cast, slide.title ?: slide.caption, slide.place)
     }
-    // Playing by itself: on to the next every ten seconds, round to the start after the last, as the website does.
-    LaunchedEffect(playing, slide?.id, connected, shown) {
-        if (playing && connected != null && shown.size > 1) {
-            delay(10_000)
+    // Playing by itself: on to the next every few seconds, round to the start after the last, as the website does.
+    LaunchedEffect(playing, seconds, slide?.id, shown) {
+        if (playing && shown.size > 1) {
+            delay(seconds * 1000L)
             current = Helpers.step(shown, current?.id, 1)
         }
     }
@@ -954,9 +958,14 @@ private fun RemoteScreen(api: AlbumApi, baseUrl: String, show: Show, onBack: () 
         NarrowScreen(
             filter = filter,
             choices = loaded?.choices ?: SlideChoices(),
+            everywhere = everywhere,
+            canStayHere = show.kind != Helpers.ALL,
+            hereTitle = show.title,
             onClose = { narrowing = false },
-            onApply = {
-                filter = it
+            onApply = { asked, all ->
+                everywhere = all
+                // An outing belongs to one trip, so it is not asked of the whole album.
+                filter = if (all) asked.copy(activityId = null) else asked
                 narrowing = false
             },
         )
@@ -1008,14 +1017,21 @@ private fun RemoteScreen(api: AlbumApi, baseUrl: String, show: Show, onBack: () 
                 }
             }
         }
-        if (connected != null && shown.isNotEmpty()) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                OutlinedButton(modifier = Modifier.weight(1f).height(56.dp), onClick = { current = Helpers.step(shown, current?.id, -1) }) { Text("‹ Previous") }
-                Button(modifier = Modifier.weight(1f).height(56.dp), onClick = { current = Helpers.step(shown, current?.id, 1) }) { Text("Next ›") }
+        // Always there once there is something to show, so the remote never loses its buttons; with no television
+        // chosen yet they move the outline, and the television picks up from there.
+        if (shown.isNotEmpty()) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(modifier = Modifier.weight(1f).height(56.dp), onClick = { current = Helpers.step(shown, current?.id, -1) }) { Text("‹ Back") }
+                Button(modifier = Modifier.weight(1.3f).height(56.dp), onClick = { playing = !playing }) { Text(if (playing) "❚❚ Pause" else "▶ Play") }
+                OutlinedButton(modifier = Modifier.weight(1f).height(56.dp), onClick = { current = Helpers.step(shown, current?.id, 1) }) { Text("Next ›") }
             }
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text("Play by itself, every 10 seconds", modifier = Modifier.weight(1f))
-                Switch(checked = playing, onCheckedChange = { playing = it })
+                Text(
+                    if (playing) "Playing by itself: a new photo every $seconds seconds." else "Play moves on by itself every $seconds seconds.",
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = { seconds = Helpers.nextPace(seconds) }) { Text("Change speed") }
             }
         }
 
@@ -1025,7 +1041,7 @@ private fun RemoteScreen(api: AlbumApi, baseUrl: String, show: Show, onBack: () 
                 Text(
                     when {
                         loading -> "Fetching…"
-                        show.kind == Helpers.ALL -> Helpers.shownLine(shown.size, shown.size) + if (all.size >= 2000) ", the first 2,000 that match" else ""
+                        everywhere -> Helpers.shownLine(shown.size, shown.size) + if (all.size >= 2000) ", the first 2,000 that match" else ""
                         else -> Helpers.shownLine(shown.size, loaded?.total ?: shown.size)
                     },
                     style = MaterialTheme.typography.bodySmall,
@@ -1052,7 +1068,7 @@ private fun RemoteScreen(api: AlbumApi, baseUrl: String, show: Show, onBack: () 
             loaded == null && problem == null -> Box(Modifier.weight(1f).fillMaxWidth().padding(20.dp)) { Progress("Fetching the slideshow…") }
             loaded == null -> Spacer(Modifier.weight(1f))
             all.isEmpty() -> Text(
-                if (show.kind == Helpers.ALL && !filter.active) "Tap Search and narrow to choose words, a person or a year, and the photos that match become the slideshow."
+                if (everywhere && !filter.active) "Tap Search and narrow to choose words, a person or a year, and the photos that match become the slideshow."
                 else if (filter.active) "No photos here match that. Try fewer words, or tap Clear."
                 else "There are no photos here to show yet. A slideshow shows photos only, not videos.",
                 modifier = Modifier.weight(1f),
@@ -1121,8 +1137,18 @@ private fun DayChip(label: String, chosen: Boolean, onClick: () -> Unit) {
  * part of the trip. Nothing changes until "Show these photos" is tapped.
  */
 @Composable
-private fun NarrowScreen(filter: ShowFilter, choices: SlideChoices, onClose: () -> Unit, onApply: (ShowFilter) -> Unit) {
+private fun NarrowScreen(
+    filter: ShowFilter,
+    choices: SlideChoices,
+    everywhere: Boolean,
+    /** False for the whole-album search, which has no one trip or collection to stay in. */
+    canStayHere: Boolean,
+    hereTitle: String,
+    onClose: () -> Unit,
+    onApply: (ShowFilter, Boolean) -> Unit,
+) {
     var draft by remember { mutableStateOf(filter) }
+    var all by remember { mutableStateOf(everywhere) }
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -1136,7 +1162,20 @@ private fun NarrowScreen(filter: ShowFilter, choices: SlideChoices, onClose: () 
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
-        Button(modifier = Modifier.fillMaxWidth(), onClick = { onApply(draft.copy(words = draft.words.trim())) }) { Text("Show these photos") }
+        if (canStayHere) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Search every trip and collection", fontWeight = FontWeight.Bold)
+                    Text(
+                        if (all) "Looking through the whole album. It needs words, a person or a year to go on."
+                        else "Off: looking only in $hereTitle.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                Switch(checked = all, onCheckedChange = { all = it })
+            }
+        }
+        Button(modifier = Modifier.fillMaxWidth(), onClick = { onApply(draft.copy(words = draft.words.trim()), all) }) { Text("Show these photos") }
         if (draft.active) {
             OutlinedButton(modifier = Modifier.fillMaxWidth(), onClick = { draft = ShowFilter() }) { Text("Clear everything") }
         }
@@ -1160,7 +1199,7 @@ private fun NarrowScreen(filter: ShowFilter, choices: SlideChoices, onClose: () 
                 }
             }
         }
-        if (choices.activities.isNotEmpty()) {
+        if (choices.activities.isNotEmpty() && !all) {
             Text("Part of the trip", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp))
             TripLine("Any activity", "", draft.activityId == null) { draft = draft.copy(activityId = null) }
             for (activity in choices.activities) {
