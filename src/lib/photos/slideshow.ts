@@ -30,6 +30,13 @@ export type Slide = {
 /** What a slideshow shows: finished photographs only. A clip, a scan or a YouTube video has no still to sit on. */
 const SHOWABLE = { ...NOT_TRASHED, status: "READY" as const, kind: "PHOTO" as const, width: { not: null } };
 
+/**
+ * The same with the family's own clips among the photographs, for a television that can play them (the phone app
+ * asks for this). A YouTube video has no file of the album's to play, so it stays out.
+ */
+const SHOWABLE_WITH_CLIPS = { ...NOT_TRASHED, status: "READY" as const, AND: [{ OR: [{ kind: "PHOTO" as const, width: { not: null } }, { kind: "VIDEO" as const, sourceKind: { not: "YOUTUBE" as const } }] }] };
+const showable = (clips: boolean) => (clips ? SHOWABLE_WITH_CLIPS : SHOWABLE);
+
 type SlideSource = Pick<PhotoCard, "id" | "imageVersion" | "width" | "height" | "title" | "membersTitle" | "caption" | "takenAt" | "tzOffsetMin" | "placeName"> & { trip: { timezone: string } | null };
 
 export function toSlide(p: SlideSource, member: boolean): Slide {
@@ -53,13 +60,13 @@ export function toSlide(p: SlideSource, member: boolean): Slide {
  * the same questions the trip's timeline answers, with the same answers (see `tripTimeline`). What kind of thing it
  * is goes unasked, because a slideshow is photographs whatever is asked.
  */
-export async function tripSlides(tripId: string, member: boolean, filter: GalleryFilter = NO_FILTER): Promise<Slide[]> {
+export async function tripSlides(tripId: string, member: boolean, filter: GalleryFilter = NO_FILTER, clips = false): Promise<Slide[]> {
   const restrict = filterIsActive(filter) ? await timelineIds(filter, tripId) : null;
   if (restrict && restrict.length === 0) return [];
   const photos = await db.photo.findMany({
     where: {
       tripId,
-      ...SHOWABLE,
+      ...showable(clips),
       ...(filter.uploaderId ? { uploaderId: filter.uploaderId } : {}),
       ...(filter.activityId ? { activityId: filter.activityId } : {}),
       ...(restrict ? { id: { in: restrict } } : {}),
@@ -75,7 +82,7 @@ export async function tripSlides(tripId: string, member: boolean, filter: Galler
  * favourites first: a slideshow is often watched together, and it should tell the story the same way for everyone.
  * Narrowed the way the collection's own timeline is (see `collectionTimeline`).
  */
-export async function collectionSlides(collection: { id: string; arrangedAt: Date | null }, member: boolean, filter: GalleryFilter = NO_FILTER): Promise<Slide[]> {
+export async function collectionSlides(collection: { id: string; arrangedAt: Date | null }, member: boolean, filter: GalleryFilter = NO_FILTER, clips = false): Promise<Slide[]> {
   const lists: string[][] = [];
   if (filter.q) lists.push(await idsMatching(filter.q, { member: filter.member, scope: { collectionId: collection.id } }));
   // A collection gathers photographs from any number of trips, so the year is asked of the whole album.
@@ -85,7 +92,7 @@ export async function collectionSlides(collection: { id: string; arrangedAt: Dat
   if (keep && keep.size === 0) return [];
   const items = await listCollectionItems(collection.id, { order: collection.arrangedAt ? "arranged" : "oldest" });
   return items
-    .filter((p) => p.status === "READY" && p.kind === "PHOTO" && p.width !== null)
+    .filter((p) => p.status === "READY" && ((p.kind === "PHOTO" && p.width !== null) || (clips && p.kind === "VIDEO" && !p.externalId)))
     .filter((p) => (!keep || keep.has(p.id)) && (!filter.uploaderId || p.uploaderId === filter.uploaderId))
     .map((p) => toSlide(p, member));
 }
@@ -99,15 +106,19 @@ export const ALBUM_SLIDES = 2000;
  * which is why nothing here asks what may be seen. With nothing asked there is no slideshow: the whole album in
  * one run is nobody's evening.
  */
-export async function albumSlides(filter: GalleryFilter): Promise<Slide[]> {
+export async function albumSlides(filter: GalleryFilter, clips = false): Promise<Slide[]> {
   if (!filterIsActive(filter)) return [];
   const restrict = await timelineIds(filter, null);
   if (restrict && restrict.length === 0) return [];
   const photos = await db.photo.findMany({
     where: {
-      ...SHOWABLE,
-      // A trip on its way out of the album takes its photographs with it.
-      OR: [{ tripId: null }, { trip: { deletingAt: null } }],
+      ...NOT_TRASHED,
+      status: "READY",
+      AND: [
+        clips ? SHOWABLE_WITH_CLIPS.AND[0] : { kind: "PHOTO", width: { not: null } },
+        // A trip on its way out of the album takes its photographs with it.
+        { OR: [{ tripId: null }, { trip: { deletingAt: null } }] },
+      ],
       ...(filter.uploaderId ? { uploaderId: filter.uploaderId } : {}),
       ...(restrict ? { id: { in: restrict } } : {}),
     },
@@ -146,4 +157,36 @@ export async function slideChoices(scope: { tripId: string } | { collectionId: s
     people,
     activities: activities.map((a) => ({ id: a.id, label: a.title })),
   };
+}
+
+/** What a television's slideshow says and does beyond the picture: who is in it, where it was, and whether it moves. */
+export type SlideExtras = {
+  /** The people and pets a member has said are in it, by name. */
+  people: string[];
+  lat: number | null;
+  lng: number | null;
+  /** A clip the album can play: its length in seconds where known. Null for a photograph. */
+  clip: { seconds: number | null; imageVersion: number } | null;
+};
+
+/**
+ * Those extras for a list of slides, by id. Members only: names and places are the family's. A clip the album has
+ * no playable copy of is reported with `unplayable`, so whoever asked can leave it out.
+ */
+export async function slideExtras(ids: string[]): Promise<{ extras: Map<string, SlideExtras>; unplayable: Set<string> }> {
+  const extras = new Map<string, SlideExtras>();
+  const unplayable = new Set<string>();
+  if (!ids.length) return { extras, unplayable };
+  const named = { where: { status: "CONFIRMED" as const, person: { optedOutAt: null } }, select: { person: { select: { name: true } } } };
+  const rows = await db.photo.findMany({
+    where: { id: { in: ids } },
+    select: { id: true, kind: true, lat: true, lng: true, durationS: true, imageVersion: true, videoRenditions: true, faces: named, animals: named },
+  });
+  for (const r of rows) {
+    const people = [...new Set([...r.faces, ...r.animals].map((x) => x.person?.name.trim()).filter((n): n is string => Boolean(n)))].sort((a, b) => a.localeCompare(b));
+    const playable = Boolean((r.videoRenditions as { mp4?: { key?: string } } | null)?.mp4?.key);
+    if (r.kind === "VIDEO" && !playable) unplayable.add(r.id);
+    extras.set(r.id, { people, lat: r.lat, lng: r.lng, clip: r.kind === "VIDEO" ? { seconds: r.durationS, imageVersion: r.imageVersion } : null });
+  }
+  return { extras, unplayable };
 }

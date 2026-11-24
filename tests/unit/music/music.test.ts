@@ -7,13 +7,14 @@ vi.mock("@/lib/jobs/boss", () => ({ enqueue: async () => null }));
 
 import { createDeviceToken } from "@/lib/auth/device-token";
 import { CAST_LINK_MS } from "@/lib/cast/link";
-import { CAST_ADDRESS, CAST_NAMESPACE, receiverPage } from "@/lib/cast/receiver-page";
+import { CAST_ADDRESS, CAST_NAMESPACE, CAST_THUMB, receiverPage, receiverScript } from "@/lib/cast/receiver-page";
 import { songCastUrl, songLinkGood, songTitle, songType } from "@/lib/music/songs";
 import { POST as add } from "@/app/api/music/route";
 import { DELETE as remove, GET as bytes } from "@/app/api/music/[id]/route";
 import { GET as list } from "@/app/api/v1/album/music/route";
 import { GET as slideshow } from "@/app/api/v1/album/slideshow/route";
 import { GET as receiver } from "@/app/cast/receiver/route";
+import { GET as media } from "@/app/api/photos/[id]/[size]/route";
 
 const req = (path: string, token?: string, init: RequestInit = {}) =>
   new Request(`http://album.test${path}`, { ...init, headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), ...(init.headers as Record<string, string> | undefined) } });
@@ -119,6 +120,10 @@ describe("the page a television opens", () => {
     expect(page).toContain("cast_receiver_framework.js");
     expect(page).not.toContain("__NS__");
     expect(page).not.toContain("__OK__");
+    expect(page).not.toContain("__THUMB__");
+    expect(page).not.toContain("__TILES__");
+    // Sound JavaScript: a slip in the script would otherwise only show as a blank television.
+    expect(() => new Function("cast", "document", receiverScript())).not.toThrow();
   });
 
   it("will fetch a slide or a song from this album and nothing else", async () => {
@@ -130,5 +135,42 @@ describe("the page a television opens", () => {
     const body = await (await slideshow(req("/api/v1/album/slideshow?trip=coast", token))).json();
     expect(CAST_ADDRESS.test(body.slides[0].cast)).toBe(true);
     for (const bad of ["https://elsewhere.example/api/photos/a/preview?cast=1.a", "//elsewhere.example/api/music/a?cast=1.a", "/api/photos/a/original?cast=1.a", "/api/music/a", "/api/music/../admin?x=1", "javascript:alert(1)", "/api/music/a?cast=1.a#<script>"]) expect(CAST_ADDRESS.test(bad)).toBe(false);
+  });
+
+  it("is given clips, names and places for a slide only when a member's app asks", async () => {
+    await resetTestDb();
+    const userId = (await db.user.create({ data: { email: "pat@example.com", name: "Pat" } })).id;
+    const token = (await createDeviceToken(db, userId, "Pixel")).token;
+    const trip = await db.trip.create({ data: { slug: "coast", title: "Coast", startDate: new Date("2025-08-10"), endDate: new Date("2025-08-16"), createdById: userId } });
+    const mk = async (name: string, extra: Record<string, unknown> = {}) =>
+      (await db.photo.create({ data: { tripId: trip.id, uploaderId: userId, originalName: name, mimeType: "image/jpeg", storageKey: name, originalPath: `${name}/o.jpg`, sizeBytes: 1, status: "READY", width: 100, height: 80, ...extra } })).id;
+    const photo = await mk("photo", { takenAt: new Date("2025-08-11T15:00:00Z"), lat: 38.9, lng: -77.03 });
+    const clip = await mk("clip", { kind: "VIDEO", takenAt: new Date("2025-08-11T16:00:00Z"), durationS: 12.5, videoRenditions: { mp4: { key: "clip/v.mp4", w: 100, h: 80, bytes: 1 }, poster: { key: "clip/p.jpg" } } });
+    // On YouTube, and one the album has not finished making a copy of: neither can be played by the television.
+    await mk("tube", { kind: "VIDEO", sourceKind: "YOUTUBE", externalId: "abc", takenAt: new Date("2025-08-11T17:00:00Z") });
+    await mk("raw", { kind: "VIDEO", takenAt: new Date("2025-08-11T18:00:00Z") });
+    const ada = await db.person.create({ data: { name: "Ada", createdById: userId } });
+    const gone = await db.person.create({ data: { name: "Gone", createdById: userId, optedOutAt: new Date() } });
+    await db.face.create({ data: { photoId: photo, personId: ada.id, status: "CONFIRMED", box: {}, confidence: 1 } });
+    await db.face.create({ data: { photoId: photo, personId: gone.id, status: "CONFIRMED", box: {}, confidence: 1 } });
+
+    const plain = await (await slideshow(req("/api/v1/album/slideshow?trip=coast", token))).json();
+    expect(plain.slides.map((s: { id: string }) => s.id)).toEqual([photo]);
+    expect(plain.slides[0]).toMatchObject({ people: ["Ada"], lat: 38.9, lng: -77.03, video: null, seconds: null });
+    expect(CAST_THUMB.test(plain.slides[0].thumb)).toBe(true);
+
+    const withClips = await (await slideshow(req("/api/v1/album/slideshow?trip=coast&clips=1", token))).json();
+    expect(withClips.slides.map((s: { id: string }) => s.id)).toEqual([photo, clip]);
+    const video = withClips.slides[1].video as string;
+    expect(withClips.slides[1]).toMatchObject({ seconds: 12.5, people: [] });
+    expect(CAST_ADDRESS.test(video)).toBe(true);
+
+    // The clip's signed address gets past the door with no sign-in (there is no file here, so it is "not found", not "unauthorized")...
+    const at = (id: string, size: string) => ({ params: Promise.resolve({ id, size }) });
+    expect((await media(req(video), at(clip, "video"))).status).toBe(404);
+    expect((await media(req(`/api/photos/${clip}/video`), at(clip, "video"))).status).toBe(401);
+    // ...and opens neither the file as uploaded nor another item.
+    expect((await media(req(video.replace("/video?", "/original?")), at(clip, "original"))).status).toBe(401);
+    expect((await media(req(video.replace(clip, photo)), at(photo, "video"))).status).toBe(401);
   });
 });

@@ -65,7 +65,8 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   // A television shown a slideshow from the app: it cannot sign in, so the address itself was signed for this one
   // picture, for a few hours, and only at the size a link's preview gets (a JPEG without the file's metadata).
   const cast = url.searchParams.get("cast");
-  const byCast = size === "preview" && cast !== null && !media.trashedAt && (await castLinkGood(photo.id, cast));
+  // A clip is played from the copy the album made for playing, which is what a visitor is given too.
+  const byCast = (size === "preview" || size === "video") && cast !== null && !media.trashedAt && (await castLinkGood(photo.id, cast));
   if (!byCast && !mediaBytesAllowed(viewer, media, { token: url.searchParams.get("share"), kind: url.searchParams.get("kind") })) {
     return new Response("Forbidden", { status: viewer.kind === "user" ? 403 : 401 });
   }
