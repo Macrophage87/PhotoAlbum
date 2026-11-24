@@ -42,7 +42,7 @@ export type QueueName = (typeof QUEUES)[keyof typeof QUEUES];
 export type ProcessPhotoJob = { photoId: string; tripId?: string | null; mode?: "full" | "renditions" };
 export type TranscodeVideoJob = { photoId: string; tripId?: string | null };
 /** The picture as it was at `imageVersion`: a job for an older one finds nothing to do. */
-export type VisitorCopyJob = { photoId: string; imageVersion: number };
+export type VisitorCopyJob = { photoId: string; imageVersion: number; /** The copy for a 4K television instead (see lib/images/tv-copy). */ tv?: boolean };
 /** Tell the admins about one note a visitor sent (src/lib/notes/mail.ts). */
 export type MailVisitorNoteJob = { noteId: string };
 export type CheckExternalVideosJob = Record<string, never>;

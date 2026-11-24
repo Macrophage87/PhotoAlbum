@@ -4,6 +4,8 @@ import { localFileOf, storage } from "@/lib/storage";
 import { editsOf } from "@/lib/images/edits";
 import { heicSource, isHeic } from "@/lib/images/heic";
 import { findVisitorCopy, forgetVisitorFiles, planVisitorCopy, renderVisitorCopy, visitorStem } from "@/lib/images/visitor-copy";
+import { planTvCopy, renderTvCopy, tvStem } from "@/lib/images/tv-copy";
+import type { Renditions } from "@/lib/images/renditions";
 import { forgetFilesIfGone } from "@/lib/storage/sweep";
 import { withHeavyLock } from "../heavy-lock";
 import type { VisitorCopyJob } from "../queues";
@@ -16,6 +18,7 @@ import type { VisitorCopyJob } from "../queues";
  * anything else of the same picture's.
  */
 export async function makeVisitorCopy(job: VisitorCopyJob, signal?: AbortSignal): Promise<void> {
+  if (job.tv) return makeTvCopy(job, signal);
   const photo = await db.photo.findUnique({ where: { id: job.photoId }, select: { id: true, kind: true, storageKey: true, originalPath: true, originalName: true, mimeType: true, edits: true, imageVersion: true, renditions: true } });
   // Gone, or changed since it was asked for: whoever asks about the picture as it is now queues that one. An edited
   // photo is still copied (it may be waiting on its re-render), but one that is not processed yet has nothing to show.
@@ -57,6 +60,51 @@ export async function makeVisitorCopy(job: VisitorCopyJob, signal?: AbortSignal)
     if (await forgetFilesIfGone(photo.id)) return;
     // Noted, so visitors asking meanwhile are given the largest rendition rather than queueing it again and again;
     // pg-boss still retries it a couple of times.
+    await store.putBuffer(`${stem}.failed`, Buffer.from(String(err).slice(0, 500))).catch(() => undefined);
+    throw err;
+  }
+  if (kept === null || (await forgetFilesIfGone(photo.id))) return;
+  await forgetVisitorFiles(photo.storageKey, photo.imageVersion, kept);
+}
+
+/**
+ * Make a photograph's copy for a 4K television (see `lib/images/tv-copy`), the same careful way: one at a time under
+ * the heavy lock, written under a name of its own and moved into place whole, with a note left when it cannot or
+ * need not be made. An edited photo's is made from its edited full size, which has the edits on it already; any
+ * other from the file as uploaded, fetched back first where originals are kept in S3.
+ */
+export async function makeTvCopy(job: VisitorCopyJob, signal?: AbortSignal): Promise<void> {
+  const photo = await db.photo.findUnique({ where: { id: job.photoId }, select: { id: true, kind: true, storageKey: true, originalPath: true, originalName: true, mimeType: true, edits: true, imageVersion: true, renditions: true } });
+  if (!photo || photo.kind !== "PHOTO" || !photo.renditions || photo.imageVersion !== job.imageVersion) return;
+  const store = storage();
+  const stem = tvStem(photo);
+  if ((await store.exists(`${stem}.jpg`)) || (await store.exists(`${stem}.withheld`))) return;
+  const edits = editsOf(photo.edits);
+  const full = (photo.renditions as Renditions | null)?.full?.key;
+  // Edited, and its edited full size not written yet: the re-render is on its way, and it is asked for again then.
+  if (edits && !full) return;
+  const local = await localFileOf(store, full ?? photo.originalPath);
+  if (!local) return;
+
+  const tmp = `${stem}.${randomUUID()}.tmp`;
+  let kept: string | null;
+  try {
+    kept = await withHeavyLock(async () => {
+      if ((await db.photo.findUnique({ where: { id: photo.id }, select: { imageVersion: true } }))?.imageVersion !== photo.imageVersion) return null;
+      const input = !full && isHeic(photo.mimeType, photo.originalName) ? await heicSource(store, photo.storageKey, local) : local;
+      if (!(await planTvCopy(input))) {
+        await store.putBuffer(`${stem}.withheld`, Buffer.from("the medium copy serves"));
+        return `${stem}.withheld`;
+      }
+      signal?.throwIfAborted();
+      await renderTvCopy(input, store.localPath!(tmp));
+      signal?.throwIfAborted();
+      await store.move(tmp, `${stem}.jpg`);
+      return `${stem}.jpg`;
+    }, signal);
+  } catch (err) {
+    await store.delete(tmp).catch(() => undefined);
+    if (await forgetFilesIfGone(photo.id)) return;
     await store.putBuffer(`${stem}.failed`, Buffer.from(String(err).slice(0, 500))).catch(() => undefined);
     throw err;
   }
