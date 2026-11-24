@@ -1,6 +1,7 @@
 package com.cieply.album
 
 import android.content.Context
+import com.google.android.gms.cast.Cast
 import androidx.mediarouter.media.MediaRouteSelector
 import androidx.mediarouter.media.MediaRouter
 import com.google.android.gms.cast.CastMediaControlIntent
@@ -12,9 +13,14 @@ import com.google.android.gms.cast.framework.CastSession
 import com.google.android.gms.cast.framework.SessionManagerListener
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import org.json.JSONArray
+import org.json.JSONObject
 
 /** A television (or anything else that takes a cast) the phone can see on its Wi-Fi. */
 data class CastScreen(val id: String, val name: String)
+
+/** What the television says about its music: which of the songs it was given is on (-1 for none), and whether it is sounding. */
+data class TvMusic(val index: Int, val playing: Boolean, val count: Int)
 
 /**
  * Finds the televisions on the Wi-Fi, connects to one, and puts a picture on it. The television fetches the picture
@@ -32,7 +38,7 @@ class Caster(context: Context) {
     }
     private val router: MediaRouter? = if (castContext == null) null else MediaRouter.getInstance(app)
     private val selector = MediaRouteSelector.Builder()
-        .addControlCategory(CastMediaControlIntent.categoryForCast(CastMediaControlIntent.DEFAULT_MEDIA_RECEIVER_APPLICATION_ID))
+        .addControlCategory(CastMediaControlIntent.categoryForCast(APP_ID))
         .build()
 
     val available: Boolean get() = castContext != null
@@ -40,6 +46,7 @@ class Caster(context: Context) {
     private val found = MutableStateFlow<List<CastScreen>>(emptyList())
     private val on = MutableStateFlow<String?>(null)
     private val wrong = MutableStateFlow<String?>(null)
+    private val tune = MutableStateFlow<TvMusic?>(null)
 
     /** The screens that can be cast to now. */
     val screens: StateFlow<List<CastScreen>> get() = found
@@ -49,6 +56,9 @@ class Caster(context: Context) {
 
     /** Why connecting did not work, in words for the member. */
     val problem: StateFlow<String?> get() = wrong
+
+    /** What the television last said about its music, or null when it has said nothing (or cannot play any). */
+    val music: StateFlow<TvMusic?> get() = tune
 
     private var session: CastSession? = null
 
@@ -66,12 +76,39 @@ class Caster(context: Context) {
     private fun began(s: CastSession) {
         session = s
         wrong.value = null
+        if (OWN_PAGE) {
+            try {
+                s.setMessageReceivedCallbacks(NAMESPACE, Cast.MessageReceivedCallback { _, _, message -> heard(message) })
+            } catch (e: Exception) {
+                // Then the remote is not told what is playing; the television still does as it is asked.
+            }
+        }
         on.value = s.castDevice?.friendlyName ?: "the TV"
+    }
+
+    private fun heard(message: String) {
+        try {
+            val o = JSONObject(message)
+            if (o.optString("type") == "music") tune.value = TvMusic(o.optInt("index", -1), o.optBoolean("playing", false), o.optInt("count", 0))
+        } catch (e: Exception) {
+            // Not something the album's page says; nothing to do with it.
+        }
+    }
+
+    /** Says something to the album's page on the television. Nothing happens when there is no such page or no television. */
+    private fun say(message: JSONObject) {
+        if (!OWN_PAGE) return
+        try {
+            session?.sendMessage(NAMESPACE, message.toString())
+        } catch (e: Exception) {
+            // The television has gone; the session's own listener says so.
+        }
     }
 
     private fun over(message: String?) {
         session = null
         on.value = null
+        tune.value = null
         if (message != null) wrong.value = message
     }
 
@@ -118,17 +155,43 @@ class Caster(context: Context) {
         over(null)
     }
 
-    /** Puts one picture on the screen. `url` is the whole address the television will fetch. */
-    fun show(url: String, title: String?, place: String?) {
+    /**
+     * Puts one picture on the screen. `path` is the picture's signed address on the album at `base`; the television
+     * fetches it itself. The album's own page is given the path alone, since it only fetches from the album it came from.
+     */
+    fun show(base: String, path: String, title: String?, place: String?) {
+        if (OWN_PAGE) {
+            say(JSONObject().put("type", "photo").put("url", path).put("title", title ?: "").put("place", place ?: ""))
+            return
+        }
         val client = session?.remoteMediaClient ?: return
         val metadata = MediaMetadata(MediaMetadata.MEDIA_TYPE_PHOTO)
         if (title != null) metadata.putString(MediaMetadata.KEY_TITLE, title)
         if (place != null) metadata.putString(MediaMetadata.KEY_LOCATION_NAME, place)
-        val info = MediaInfo.Builder(url)
+        val info = MediaInfo.Builder(base + path)
             .setStreamType(MediaInfo.STREAM_TYPE_NONE)
             .setContentType("image/jpeg")
             .setMetadata(metadata)
             .build()
         client.load(MediaLoadRequestData.Builder().setMediaInfo(info).build())
+    }
+
+    /** Has the television play these songs (their signed addresses), one after another and round again. None stops the music. */
+    fun playMusic(paths: List<String>) = say(JSONObject().put("type", "music").put("songs", JSONArray(paths)))
+
+    fun pauseMusic() = say(JSONObject().put("type", "musicPause"))
+
+    fun resumeMusic() = say(JSONObject().put("type", "musicPlay"))
+
+    fun nextSong() = say(JSONObject().put("type", "musicNext"))
+
+    companion object {
+        /** Whether this build casts to the album's own page, which can play music, or to Google's built-in player, which cannot. */
+        val OWN_PAGE: Boolean = BuildConfig.CAST_APP_ID.isNotBlank()
+
+        val APP_ID: String = BuildConfig.CAST_APP_ID.ifBlank { CastMediaControlIntent.DEFAULT_MEDIA_RECEIVER_APPLICATION_ID }
+
+        /** The channel the phone and the album's page talk on; the same name is in the website's `lib/cast/receiver-page`. */
+        const val NAMESPACE = "urn:x-cast:com.cieply.album"
     }
 }

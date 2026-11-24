@@ -232,4 +232,20 @@ class HelpersTest {
         assertEquals("40 photos · paused", Helpers.showLine(-1, 40, false, 10, false))
         assertEquals("Slideshow · paused", Helpers.showLine(-1, 0, false, 10, false))
     }
+
+    @Test
+    fun `the remote names the song the television says is on`() {
+        val songs = listOf(Song("a", "Summer Wind", "/api/music/a?cast=1.x"), Song("b", "Moon River", "/api/music/b?cast=1.x"))
+        assertEquals("No music playing.", Helpers.musicLine(emptyList(), null, null))
+        assertEquals("Music: Summer Wind", Helpers.musicLine(songs, null, null))
+        assertEquals("Music: Moon River", Helpers.musicLine(songs, 1, true))
+        assertEquals("Music paused: Moon River", Helpers.musicLine(songs, 1, false))
+        assertEquals("Music: 2 songs chosen.", Helpers.musicLine(songs, -1, false))
+    }
+
+    @Test
+    fun `the album's songs are read from what it sends`() {
+        val songs = AlbumJson.songs("""{"songs":[{"id":"a","title":"Summer Wind","cast":"/api/music/a?cast=1.x"},{"id":"b","title":"","cast":"/api/music/b?cast=1.x"}]}""")
+        assertEquals(listOf(Song("a", "Summer Wind", "/api/music/a?cast=1.x"), Song("b", "Untitled", "/api/music/b?cast=1.x")), songs)
+    }
 }

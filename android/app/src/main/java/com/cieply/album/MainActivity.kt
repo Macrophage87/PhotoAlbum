@@ -890,6 +890,10 @@ private fun RemoteScreen(api: AlbumApi, baseUrl: String, show: Show, onBack: () 
     var narrowing by remember { mutableStateOf(show.kind == Helpers.ALL) }
     var loaded by remember { mutableStateOf<SlideShow?>(null) }
     var loading by remember { mutableStateOf(true) }
+    // Music under the photos, where this build casts to the album's own page (see `Caster.OWN_PAGE`).
+    var choosingMusic by remember { mutableStateOf(false) }
+    val songs by ShowPlayer.songs.collectAsState()
+    val tvMusic by caster.music.collectAsState()
 
     // Looking for televisions only while this screen is open; leaving it ends the show on the television too.
     androidx.compose.runtime.DisposableEffect(caster) {
@@ -966,6 +970,15 @@ private fun RemoteScreen(api: AlbumApi, baseUrl: String, show: Show, onBack: () 
         return
     }
 
+    if (choosingMusic) {
+        BackHandler { choosingMusic = false }
+        MusicScreen(api, playing = songs, onClose = { choosingMusic = false }, onPlay = { chosen ->
+            ShowPlayer.setMusic(chosen)
+            choosingMusic = false
+        })
+        return
+    }
+
     Column(Modifier.fillMaxSize().padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = onBack) { Text("‹ Back") }
@@ -987,6 +1000,16 @@ private fun RemoteScreen(api: AlbumApi, baseUrl: String, show: Show, onBack: () 
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("Showing on $connected", color = Good, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
                 TextButton(onClick = { ShowPlayer.stopShow() }) { Text("Stop") }
+            }
+            if (Caster.OWN_PAGE) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(Helpers.musicLine(songs, tvMusic?.index, tvMusic?.playing), style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                    if (songs.isNotEmpty()) {
+                        if (tvMusic?.playing == false) TextButton(onClick = { ShowPlayer.resumeMusic() }) { Text("▶") } else TextButton(onClick = { ShowPlayer.pauseMusic() }) { Text("❚❚") }
+                        if (songs.size > 1) TextButton(onClick = { ShowPlayer.nextSong() }) { Text("Next song") }
+                    }
+                    OutlinedButton(onClick = { choosingMusic = true }) { Text("Music") }
+                }
             }
         }
 
@@ -1214,6 +1237,67 @@ private fun NarrowScreen(
             TripLine("Anyone", "", draft.uploaderId == null) { draft = draft.copy(uploaderId = null) }
             for (member in choices.members) {
                 TripLine(member.label, "", draft.uploaderId == member.id) { draft = draft.copy(uploaderId = member.id) }
+            }
+        }
+        Spacer(Modifier.height(24.dp))
+    }
+}
+
+/**
+ * Choosing the music the television plays under the photos, from the songs the family has added on the website.
+ * `playing` is what it has been asked to play already.
+ */
+@Composable
+private fun MusicScreen(api: AlbumApi, playing: List<Song>, onClose: () -> Unit, onPlay: (List<Song>) -> Unit) {
+    var songs by remember { mutableStateOf<List<Song>?>(null) }
+    var problem by remember { mutableStateOf<String?>(null) }
+    var chosen by remember { mutableStateOf(playing.map { it.id }.toSet()) }
+    var mix by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        try {
+            val got = withContext(Dispatchers.IO) { api.songs() }
+            songs = got
+            // With nothing playing yet, everything starts ticked: most often the whole list is what is wanted.
+            if (playing.isEmpty()) chosen = got.map { it.id }.toSet()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            problem = if (e is AlbumException) e.message else "Could not reach the album: ${e.message ?: e.javaClass.simpleName}"
+        }
+    }
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        TextButton(onClick = onClose) { Text("‹ Back") }
+        Heading("Music for the slideshow")
+        Text("The TV plays these under the photos, one after another, and starts again at the end. Add songs on the album's website, under Music.", style = MaterialTheme.typography.bodySmall)
+        problem?.let { Text(it, color = Rust) }
+        val all = songs
+        when {
+            all == null && problem == null -> Progress("Fetching the songs…")
+            all == null -> {}
+            all.isEmpty() -> Text("There are no songs in the album yet. Open the album's website on a computer, choose Music, and add some.")
+            else -> {
+                val picked = all.filter { it.id in chosen }
+                Button(modifier = Modifier.fillMaxWidth(), enabled = picked.isNotEmpty(), onClick = { onPlay(if (mix) picked.shuffled() else picked) }) {
+                    Text(if (picked.size == 1) "Play this song on the TV" else "Play these ${picked.size} songs on the TV")
+                }
+                if (playing.isNotEmpty()) {
+                    OutlinedButton(modifier = Modifier.fillMaxWidth(), onClick = { onPlay(emptyList()) }) { Text("Stop the music") }
+                }
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text("Mix up the order", modifier = Modifier.weight(1f))
+                    Switch(checked = mix, onCheckedChange = { mix = it })
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(onClick = { chosen = all.map { it.id }.toSet() }) { Text("Tick all") }
+                    TextButton(onClick = { chosen = emptySet() }) { Text("Tick none") }
+                }
+                for (song in all) {
+                    val on = song.id in chosen
+                    TripLine(song.title, "", on) { chosen = if (on) chosen - song.id else chosen + song.id }
+                }
             }
         }
         Spacer(Modifier.height(24.dp))

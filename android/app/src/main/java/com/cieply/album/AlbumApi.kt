@@ -43,6 +43,9 @@ data class Show(val kind: String, val slug: String, val title: String, val detai
 /** One page of the album's list of trips or collections, and where the next page starts (null at the end). */
 data class ShowPage(val shows: List<Show>, val next: Int?)
 
+/** A song a member added to the album, with the address a television plays it from for the next few hours. */
+data class Song(val id: String, val title: String, val cast: String)
+
 /**
  * One picture of a slideshow. `thumb` is for the phone, fetched with its sign-in; `cast` is the address a television
  * fetches by itself, signed by the album and good for a few hours.
@@ -178,6 +181,14 @@ object AlbumJson {
         )
     }
 
+    fun songs(body: String): List<Song> {
+        val array = JSONObject(body).getJSONArray("songs")
+        return (0 until array.length()).map {
+            val o = array.getJSONObject(it)
+            Song(o.getString("id"), o.optString("title").ifBlank { "Untitled" }, o.getString("cast"))
+        }
+    }
+
     private fun slideChoices(o: JSONObject?): SlideChoices {
         if (o == null) return SlideChoices()
         fun list(key: String, label: String, keep: (JSONObject) -> Boolean = { true }): List<Choice> {
@@ -296,6 +307,13 @@ class AlbumApi(private val baseUrl: String, private val token: String) {
         AlbumJson.slideShow(send(request("/api/v1/album/slideshow?${Helpers.showQuery(kind, slug, filter)}").get().build()))
     } catch (e: org.json.JSONException) {
         throw AlbumException("The album's slideshow could not be read.")
+    }
+
+    /** The album's songs, newest first. */
+    fun songs(): List<Song> = try {
+        AlbumJson.songs(send(request("/api/v1/album/music").get().build()))
+    } catch (e: org.json.JSONException) {
+        throw AlbumException("The album's music could not be read.")
     }
 
     /** A picture's bytes from one of the album's own paths, as this member. */
