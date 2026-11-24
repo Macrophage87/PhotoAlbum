@@ -1,8 +1,9 @@
 name: CI
 
 on:
+  # Branches are tested through their pull request; testing the push as well ran everything twice.
   push:
-    branches: ["**"]
+    branches: [main, staging]
   pull_request:
   # Run by hand on staging or main to redeploy its tip once it passes again.
   workflow_dispatch:
@@ -11,8 +12,77 @@ on:
 permissions:
   contents: read
 
+# A newer push to the same pull request or branch makes the older run pointless.
+# On main and staging every commit runs to the end, since each one deploys.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}-${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/staging') && github.run_id || 'latest' }}
+  cancel-in-progress: true
+
+# The work is split into jobs that run side by side; together they run exactly what the single job used to.
+# The longest is e2e (one serial Playwright file, so it cannot be split); the unit tests run in three shards,
+# each against its own Postgres, while it goes.
 jobs:
-  test:
+  checks:
+    name: lint and typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-node-deps
+      - run: pnpm lint
+      - run: pnpm typecheck
+
+  unit:
+    name: unit tests (${{ matrix.shard }}/3)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: photoalbum
+          POSTGRES_PASSWORD: photoalbum
+          POSTGRES_DB: photoalbum
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U photoalbum"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgresql://photoalbum:photoalbum@localhost:5432/photoalbum
+      APP_URL: http://localhost:3200
+      ADMIN_EMAIL: admin@example.com
+      PHOTO_STORAGE_ROOT: /tmp/photoalbum-photos
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-node-deps
+        with:
+          ffmpeg: "true"
+      # Vitest's global setup migrates photoalbum_test, creating it if missing.
+      - run: pnpm exec vitest run --shard=${{ matrix.shard }}/3
+
+  ml:
+    name: ML sidecar tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The sidecar's own Python (ml/Dockerfile): the runner's default moved to 3.14, which the pinned Pillow
+      # has no wheel for, so pip tried to build it from source and failed.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: ml/requirements.txt
+      - name: ML sidecar tests (stub mode, no weights)
+        run: |
+          pip install -r ml/requirements.txt
+          cd ml && python -m pytest -q
+
+  e2e:
+    name: build and e2e
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -34,34 +104,17 @@ jobs:
       PHOTO_STORAGE_ROOT: /tmp/photoalbum-photos
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: ./.github/actions/setup-node-deps
         with:
-          node-version: 22
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - name: Install ffmpeg (clip transcoding in unit and e2e tests)
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
-      - name: Create test databases
-        run: |
-          psql "$DATABASE_URL" -c 'CREATE DATABASE photoalbum_test' -c 'CREATE DATABASE photoalbum_e2e'
-      - run: pnpm prisma generate
-      - run: pnpm lint
-      - run: pnpm typecheck
-      - name: Migrate test database
-        run: pnpm prisma migrate deploy
-        env:
-          DATABASE_URL: postgresql://photoalbum:photoalbum@localhost:5432/photoalbum_test
-      - run: pnpm test
-      # The sidecar's own Python (ml/Dockerfile): the runner's default moved to 3.14, which the pinned Pillow
-      # has no wheel for, so pip tried to build it from source and failed.
-      - uses: actions/setup-python@v5
+          ffmpeg: "true"
+      - name: Create the e2e database
+        run: psql "$DATABASE_URL" -c 'CREATE DATABASE photoalbum_e2e'
+      # Next's own build cache; a stale one only makes the build slower, never different.
+      - uses: actions/cache@v4
         with:
-          python-version: "3.12"
-      - name: ML sidecar tests (stub mode, no weights)
-        run: |
-          pip install -r ml/requirements.txt
-          cd ml && python -m pytest -q
+          path: .next/cache
+          key: nextjs-${{ hashFiles('pnpm-lock.yaml') }}-${{ hashFiles('src/**', 'next.config.ts') }}
+          restore-keys: nextjs-${{ hashFiles('pnpm-lock.yaml') }}-
       - run: pnpm build
       - name: Install Playwright browsers
         run: pnpm exec playwright install --with-deps chromium
@@ -72,6 +125,17 @@ jobs:
           name: playwright-traces
           path: test-results
           if-no-files-found: ignore
+
+  # The one check that stands for all of the above, under the name the single job had, so a required "test"
+  # check still means everything passed.
+  test:
+    needs: [checks, unit, ml, e2e]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every test job passed
+        run: |
+          test "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped') }}" = false
 
   docker:
     runs-on: ubuntu-latest

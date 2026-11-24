@@ -3,8 +3,9 @@ name: Android
 # The album's phone app. Built here because this is where the Android SDK is; the result is a debug build to
 # install by hand, not a release.
 on:
+  # Branches are built through their pull request; building the push as well did it twice.
   push:
-    branches: ["**"]
+    branches: [main]
     paths: ["android/**", ".github/workflows/android.yml"]
   pull_request:
     paths: ["android/**", ".github/workflows/android.yml"]
