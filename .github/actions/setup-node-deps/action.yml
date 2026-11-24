@@ -1,0 +1,22 @@
+name: Node and dependencies
+description: pnpm, Node 22 with the pnpm store cached, a frozen install and the Prisma client. Shared by the CI jobs.
+inputs:
+  ffmpeg:
+    description: Also install ffmpeg (clip transcoding in the unit and e2e tests)
+    default: "false"
+runs:
+  using: composite
+  steps:
+    - uses: pnpm/action-setup@v4
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 22
+        cache: pnpm
+    - run: pnpm install --frozen-lockfile
+      shell: bash
+    - run: pnpm prisma generate
+      shell: bash
+    - name: Install ffmpeg
+      if: inputs.ffmpeg == 'true'
+      shell: bash
+      run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
