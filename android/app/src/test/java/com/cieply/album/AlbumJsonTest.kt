@@ -114,4 +114,20 @@ class AlbumJsonTest {
         assertEquals(false, show.arranged)
         assertEquals(SlideChoices(), show.choices)
     }
+
+    @Test
+    fun `a slide says who is in it, where it was and whether it is a clip`() {
+        val show = AlbumJson.slideShow(
+            """{"title":"Coast","slides":[
+            {"id":"p1","title":null,"caption":null,"day":null,"dayKey":null,"place":null,"thumb":"/t","cast":"/c","people":["Ada","Biscuit"],"lat":38.9,"lng":-77.03,"video":null,"seconds":null},
+            {"id":"v1","title":"Waves","caption":null,"day":null,"dayKey":null,"place":null,"thumb":"/t2","cast":"/c2","people":[],"lat":null,"lng":null,"video":"/api/photos/v1/video?v=1&cast=1.x","seconds":12.5}]}""",
+        )
+        assertEquals(listOf("Ada", "Biscuit"), show.slides[0].people)
+        assertEquals(38.9, show.slides[0].lat!!, 0.0001)
+        assertEquals(-77.03, show.slides[0].lng!!, 0.0001)
+        assertNull(show.slides[0].video)
+        assertEquals("/api/photos/v1/video?v=1&cast=1.x", show.slides[1].video)
+        assertEquals(12.5, show.slides[1].seconds!!, 0.0001)
+        assertNull(show.slides[1].lat)
+    }
 }

@@ -129,7 +129,7 @@ object Helpers {
     }
 
     /** What the album is asked for a slideshow: which trip or collection, and whatever it is narrowed by. */
-    fun showQuery(kind: String, slug: String, filter: ShowFilter): String {
+    fun showQuery(kind: String, slug: String, filter: ShowFilter, clips: Boolean = false): String {
         // "all" is the whole album, which has no name to give.
         val parts = mutableListOf(if (kind == ALL) "all=1" else "$kind=${encodeFileName(slug)}")
         if (filter.words.isNotBlank()) parts += "q=${encodeFileName(filter.words.trim())}"
@@ -137,6 +137,7 @@ object Helpers {
         for (id in filter.personIds.sorted()) parts += "person=${encodeFileName(id)}"
         filter.activityId?.let { parts += "activity=${encodeFileName(it)}" }
         filter.year?.let { parts += "year=$it" }
+        if (clips) parts += "clips=1"
         return parts.joinToString("&")
     }
 
@@ -214,6 +215,20 @@ object Helpers {
             else -> "Music: $title"
         }
     }
+
+    /**
+     * How long the slideshow waits on this slide before moving on by itself, in milliseconds. A photo stays for the
+     * pace chosen. A clip is given its whole length and a little over: the television says when it has ended, and
+     * this is only for when that word never comes. A clip of unknown length gets a minute and a half.
+     */
+    fun waitMs(slide: Slide?, paceSeconds: Int): Long {
+        if (slide?.video == null) return paceSeconds * 1000L
+        val length = slide.seconds?.takeIf { it > 0 } ?: 90.0
+        return ((length.coerceAtMost(900.0) + 8) * 1000).toLong()
+    }
+
+    /** The day to announce on the television before this slide: its day, when that is not the day already showing. */
+    fun dayCard(slide: Slide, showingDay: String?): String? = slide.day?.takeIf { slide.dayKey != null && slide.dayKey != showingDay }
 
     /** How long each photo stays up when the slideshow plays by itself, and the next choice round the list. */
     val PACES = listOf(5, 10, 20, 30)

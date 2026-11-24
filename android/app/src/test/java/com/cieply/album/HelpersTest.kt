@@ -248,4 +248,29 @@ class HelpersTest {
         val songs = AlbumJson.songs("""{"songs":[{"id":"a","title":"Summer Wind","cast":"/api/music/a?cast=1.x"},{"id":"b","title":"","cast":"/api/music/b?cast=1.x"}]}""")
         assertEquals(listOf(Song("a", "Summer Wind", "/api/music/a?cast=1.x"), Song("b", "Untitled", "/api/music/b?cast=1.x")), songs)
     }
+
+    @Test
+    fun `a clip is waited out and a photo stays for the pace chosen`() {
+        val photo = slide("a", "2025-08-11")
+        assertEquals(10_000L, Helpers.waitMs(photo, 10))
+        assertEquals(10_000L, Helpers.waitMs(null, 10))
+        assertEquals(20_500L, Helpers.waitMs(photo.copy(video = "/v", seconds = 12.5), 10))
+        assertEquals(98_000L, Helpers.waitMs(photo.copy(video = "/v"), 10))
+        assertEquals(908_000L, Helpers.waitMs(photo.copy(video = "/v", seconds = 5000.0), 10))
+    }
+
+    @Test
+    fun `a new day is announced once`() {
+        val first = slide("a", "2025-08-11").copy(day = "Monday, August 11, 2025")
+        assertEquals("Monday, August 11, 2025", Helpers.dayCard(first, null))
+        assertEquals(null, Helpers.dayCard(first, "2025-08-11"))
+        assertEquals("Monday, August 11, 2025", Helpers.dayCard(first, "2025-08-10"))
+        assertEquals(null, Helpers.dayCard(slide("b", null), "2025-08-10"))
+    }
+
+    @Test
+    fun `clips are asked for only when the television can play them`() {
+        assertEquals("trip=coast", Helpers.showQuery("trip", "coast", ShowFilter()))
+        assertEquals("trip=coast&clips=1", Helpers.showQuery("trip", "coast", ShowFilter(), true))
+    }
 }
