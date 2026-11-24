@@ -21,6 +21,7 @@ const everyday: NavLink[] = [
 const occasional: NavLink[] = [
   { href: "/review", label: "Review" },
   { href: "/graph", label: "Graph" },
+  { href: "/music", label: "Music" },
 ];
 
 /**

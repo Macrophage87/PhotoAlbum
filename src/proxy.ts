@@ -5,7 +5,7 @@ import { looksLikeSessionToken, SESSION_COOKIE, SESSION_REFRESH_MS, sessionCooki
 import { envFlag } from "@/lib/env-flag";
 
 /** Paths that always need a member: anonymous requests are bounced to sign-in. Real authorization happens per page/action/route. */
-const PROTECTED = [/^\/upload$/, /^\/admin(\/|$)/, /^\/trips\/new$/, /^\/trips\/[^/]+\/(settings|import|place)$/, /^\/photos(\/|$)/, /^\/collections\/new$/, /^\/collections\/[^/]+\/settings$/, /^\/privacy$/, /^\/review$/, /^\/people(\/|$)/, /^\/graph$/, /^\/favorites$/];
+const PROTECTED = [/^\/upload$/, /^\/admin(\/|$)/, /^\/trips\/new$/, /^\/trips\/[^/]+\/(settings|import|place)$/, /^\/photos(\/|$)/, /^\/collections\/new$/, /^\/collections\/[^/]+\/settings$/, /^\/privacy$/, /^\/review$/, /^\/people(\/|$)/, /^\/graph$/, /^\/favorites$/, /^\/music$/];
 
 /**
  * The jobs on every page request: the optimistic sign-in redirect for member-only paths, a per-request nonce
@@ -49,6 +49,7 @@ export function proxy(request: NextRequest) {
 }
 
 export const config = {
-  // Every page, but not the API, static assets, the service worker or files with an extension.
-  matcher: [{ source: "/((?!api/|_next/static|_next/image|maplibre/|icons/|sw\\.js|.*\\..*).*)", missing: [{ type: "header", key: "next-router-prefetch" }] }],
+  // Every page, but not the API, static assets, the service worker or files with an extension. Nor the page a
+  // television opens for a cast slideshow: Google's casting script there must reach the television itself.
+  matcher: [{ source: "/((?!api/|_next/static|_next/image|maplibre/|icons/|cast/receiver$|sw\\.js|.*\\..*).*)", missing: [{ type: "header", key: "next-router-prefetch" }] }],
 };
