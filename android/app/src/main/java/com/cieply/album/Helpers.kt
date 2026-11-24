@@ -188,6 +188,19 @@ object Helpers {
         else -> "$shown of $total photos"
     }
 
+    /**
+     * The same photos in a mixed-up order. The same `seed` gives the same order every time, so Back retraces what
+     * Next did, until shuffle is turned on again with another seed.
+     */
+    fun shuffled(slides: List<Slide>, seed: Long): List<Slide> = slides.shuffled(java.util.Random(seed))
+
+    /** What the slideshow's notification says: where it is, and whether it is moving on by itself. */
+    fun showLine(at: Int, of: Int, playing: Boolean, seconds: Int, shuffle: Boolean): String {
+        val where = if (at >= 0 && of > 0) "Photo ${at + 1} of $of" else if (of > 0) "$of photos" else "Slideshow"
+        val how = if (playing) "playing, every $seconds seconds" else "paused"
+        return "$where · $how" + if (shuffle) " · shuffled" else ""
+    }
+
     /** How long each photo stays up when the slideshow plays by itself, and the next choice round the list. */
     val PACES = listOf(5, 10, 20, 30)
 

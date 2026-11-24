@@ -878,8 +878,10 @@ private fun RemoteScreen(api: AlbumApi, baseUrl: String, show: Show, onBack: () 
     val connected by caster.connected.collectAsState()
     val castProblem by caster.problem.collectAsState()
     var problem by remember { mutableStateOf<String?>(null) }
-    var playing by remember { mutableStateOf(false) }
-    var seconds by remember { mutableIntStateOf(10) }
+    // The slideshow itself is `ShowPlayer`'s, so it goes on with this screen in the background.
+    val playing by ShowPlayer.playing.collectAsState()
+    val seconds by ShowPlayer.seconds.collectAsState()
+    val shuffle by ShowPlayer.shuffle.collectAsState()
     // Asking every trip and collection at once, not only the one that was opened. The whole album always is.
     var everywhere by remember { mutableStateOf(show.kind == Helpers.ALL) }
     var filter by remember { mutableStateOf(ShowFilter()) }
@@ -888,13 +890,13 @@ private fun RemoteScreen(api: AlbumApi, baseUrl: String, show: Show, onBack: () 
     var narrowing by remember { mutableStateOf(show.kind == Helpers.ALL) }
     var loaded by remember { mutableStateOf<SlideShow?>(null) }
     var loading by remember { mutableStateOf(true) }
-    // What is on the television, or will be once one is chosen. Narrowing the list does not change it.
-    var current by remember { mutableStateOf<Slide?>(null) }
 
     // Looking for televisions only while this screen is open; leaving it ends the show on the television too.
     androidx.compose.runtime.DisposableEffect(caster) {
         caster.start()
+        ShowPlayer.attach(context, caster, baseUrl, show.title)
         onDispose {
+            ShowPlayer.end()
             caster.disconnect()
             caster.stop()
         }
@@ -908,7 +910,7 @@ private fun RemoteScreen(api: AlbumApi, baseUrl: String, show: Show, onBack: () 
             val got = withContext(Dispatchers.IO) { api.slideShow(kind, show.slug, filter) }
             loaded = got
             // The same photo with its fresh address, or the first one when nothing is up yet.
-            current = got.slides.firstOrNull { it.id == current?.id } ?: current ?: got.slides.firstOrNull()
+            ShowPlayer.adopt(got.slides)
             val there = got.slides.map { it.dayKey ?: Helpers.UNDATED }.toSet()
             picked = picked.filter { it in there }.toSet()
         } catch (e: CancellationException) {
@@ -932,21 +934,13 @@ private fun RemoteScreen(api: AlbumApi, baseUrl: String, show: Show, onBack: () 
             }
         }
     }
-    val slide = current
+    // What is on the television, or will be once one is chosen. Narrowing the list does not change it.
+    val slide = ShowPlayer.current.collectAsState().value
     val place = shown.indexOfFirst { it.id == slide?.id }
     val grid = rememberLazyGridState()
 
-    // Whenever the picture changes, or a television has just connected, the television is told which to show.
-    LaunchedEffect(connected, slide?.id) {
-        if (connected != null && slide != null) caster.show(baseUrl + slide.cast, slide.title ?: slide.caption, slide.place)
-    }
-    // Playing by itself: on to the next every few seconds, round to the start after the last, as the website does.
-    LaunchedEffect(playing, seconds, slide?.id, shown) {
-        if (playing && shown.size > 1) {
-            delay(seconds * 1000L)
-            current = Helpers.step(shown, current?.id, 1)
-        }
-    }
+    // Next, Back and playing by itself move through what is listed here; the player puts each photo on the television.
+    LaunchedEffect(shown) { ShowPlayer.list(shown) }
     // The grid follows the television: when the photo on it is off the screen, the grid is brought to it.
     LaunchedEffect(slide?.id, lines) {
         val at = lines.indexOfFirst { it is GridLine.Photo && it.slide.id == slide?.id }
@@ -992,7 +986,7 @@ private fun RemoteScreen(api: AlbumApi, baseUrl: String, show: Show, onBack: () 
         } else {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("Showing on $connected", color = Good, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-                TextButton(onClick = { playing = false; caster.disconnect() }) { Text("Stop") }
+                TextButton(onClick = { ShowPlayer.stopShow() }) { Text("Stop") }
             }
         }
 
@@ -1021,17 +1015,26 @@ private fun RemoteScreen(api: AlbumApi, baseUrl: String, show: Show, onBack: () 
         // chosen yet they move the outline, and the television picks up from there.
         if (shown.isNotEmpty()) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(modifier = Modifier.weight(1f).height(56.dp), onClick = { current = Helpers.step(shown, current?.id, -1) }) { Text("‹ Back") }
-                Button(modifier = Modifier.weight(1.3f).height(56.dp), onClick = { playing = !playing }) { Text(if (playing) "❚❚ Pause" else "▶ Play") }
-                OutlinedButton(modifier = Modifier.weight(1f).height(56.dp), onClick = { current = Helpers.step(shown, current?.id, 1) }) { Text("Next ›") }
+                OutlinedButton(modifier = Modifier.weight(1f).height(56.dp), onClick = { ShowPlayer.step(-1) }) { Text("‹ Back") }
+                Button(modifier = Modifier.weight(1.3f).height(56.dp), onClick = { ShowPlayer.setPlaying(!playing) }) { Text(if (playing) "❚❚ Pause" else "▶ Play") }
+                OutlinedButton(modifier = Modifier.weight(1f).height(56.dp), onClick = { ShowPlayer.step(1) }) { Text("Next ›") }
             }
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    if (playing) "Playing by itself: a new photo every $seconds seconds." else "Play moves on by itself every $seconds seconds.",
+                    if (playing && connected == null) "Will play once a TV is chosen: a new photo every $seconds seconds."
+                    else if (playing) "Playing by itself: a new photo every $seconds seconds. It keeps going with the app closed." else "Play moves on by itself every $seconds seconds.",
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.weight(1f),
                 )
-                TextButton(onClick = { seconds = Helpers.nextPace(seconds) }) { Text("Change speed") }
+                TextButton(onClick = { ShowPlayer.setSeconds(Helpers.nextPace(seconds)) }) { Text("Change speed") }
+            }
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    if (shuffle) "Shuffle is on: Next and Play pick photos in a mixed-up order." else "Shuffle: mix up the order.",
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.weight(1f),
+                )
+                Switch(checked = shuffle, onCheckedChange = { ShowPlayer.setShuffle(it) })
             }
         }
 
@@ -1098,7 +1101,7 @@ private fun RemoteScreen(api: AlbumApi, baseUrl: String, show: Show, onBack: () 
                                     .aspectRatio(1f)
                                     .background(Color(0xFFE6E9EE))
                                     .then(if (onTv) Modifier.border(4.dp, Rust) else Modifier)
-                                    .clickable { current = line.slide },
+                                    .clickable { ShowPlayer.show(line.slide) },
                             ) {
                                 AlbumPicture(api, line.slide.thumb, Modifier.fillMaxSize(), ContentScale.Crop)
                                 if (onTv) {

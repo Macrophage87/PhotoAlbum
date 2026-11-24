@@ -213,4 +213,23 @@ class HelpersTest {
         assertEquals(5, Helpers.nextPace(30))
         assertEquals(5, Helpers.nextPace(7))
     }
+
+    @Test
+    fun `shuffle keeps every photo once and gives the same order for the same seed`() {
+        val slides = (1..40).map { slide("p$it", null) }
+        val mixed = Helpers.shuffled(slides, 7L)
+        assertEquals(slides.map { it.id }.sorted(), mixed.map { it.id }.sorted())
+        assertEquals(mixed, Helpers.shuffled(slides, 7L))
+        assertEquals(false, mixed == slides)
+        assertEquals(false, mixed == Helpers.shuffled(slides, 8L))
+        assertEquals(emptyList<Slide>(), Helpers.shuffled(emptyList(), 7L))
+    }
+
+    @Test
+    fun `the slideshow notification says where it is and whether it is playing`() {
+        assertEquals("Photo 3 of 40 · playing, every 10 seconds", Helpers.showLine(2, 40, true, 10, false))
+        assertEquals("Photo 1 of 40 · paused · shuffled", Helpers.showLine(0, 40, false, 10, true))
+        assertEquals("40 photos · paused", Helpers.showLine(-1, 40, false, 10, false))
+        assertEquals("Slideshow · paused", Helpers.showLine(-1, 0, false, 10, false))
+    }
 }
