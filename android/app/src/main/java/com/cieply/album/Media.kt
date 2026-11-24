@@ -83,6 +83,16 @@ object Media {
 
     fun mediaLocationGranted(context: Context) = granted(context, Manifest.permission.ACCESS_MEDIA_LOCATION)
 
+    /**
+     * What a gallery app has thrown away is still a file on the phone for a month or so. Android's own trash is
+     * marked as such; Samsung's Gallery moves the file into a hidden ".Trash" folder instead. Neither belongs in a
+     * list of things to send to the album, and nor does anything else kept in a hidden folder.
+     */
+    private const val NOT_THROWN_AWAY =
+        "${MediaStore.MediaColumns.IS_TRASHED} = 0 AND ${MediaStore.MediaColumns.IS_PENDING} = 0" +
+            " AND (${MediaStore.MediaColumns.RELATIVE_PATH} IS NULL OR (${MediaStore.MediaColumns.RELATIVE_PATH} NOT LIKE '.%'" +
+            " AND ${MediaStore.MediaColumns.RELATIVE_PATH} NOT LIKE '%/.%'))"
+
     /** The newest photos and videos the app is allowed to see. */
     fun recent(context: Context, limit: Int = 90): List<LibraryItem> {
         val items = ArrayList<LibraryItem>()
@@ -90,7 +100,7 @@ object Media {
         val columns = arrayOf(MediaStore.Files.FileColumns._ID, MediaStore.Files.FileColumns.MEDIA_TYPE)
         val image = MediaStore.Files.FileColumns.MEDIA_TYPE_IMAGE
         val video = MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO
-        val where = "${MediaStore.Files.FileColumns.MEDIA_TYPE} IN ($image, $video)"
+        val where = "${MediaStore.Files.FileColumns.MEDIA_TYPE} IN ($image, $video) AND $NOT_THROWN_AWAY"
         val order = "${MediaStore.Files.FileColumns.DATE_ADDED} DESC"
         try {
             context.contentResolver.query(collection, columns, where, null, order)?.use { cursor ->
@@ -122,7 +132,7 @@ object Media {
         )
         val image = MediaStore.Files.FileColumns.MEDIA_TYPE_IMAGE
         val video = MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO
-        val where = "${MediaStore.Files.FileColumns.MEDIA_TYPE} IN ($image, $video)"
+        val where = "${MediaStore.Files.FileColumns.MEDIA_TYPE} IN ($image, $video) AND $NOT_THROWN_AWAY"
         try {
             context.contentResolver.query(collection, columns, where, null, null)?.use { cursor ->
                 while (cursor.moveToNext()) {
