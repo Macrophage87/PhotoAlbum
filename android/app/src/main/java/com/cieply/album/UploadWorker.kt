@@ -143,10 +143,17 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
         }
         val have = api.have(Helpers.hex(digest.digest()))
         if (have != null) {
-            // Nothing is sent, so nothing is moved either: where it sits in the album is left as it is.
+            // Nothing is sent. The member's own is still put where they chose, as sending it again would have done;
+            // somebody else's is left where it is.
+            val wanted = item.tripId != null || item.outingId != null || item.collectionId != null
+            val put = have.mine && wanted && try {
+                api.file(listOf(have.photoId), item.tripId, item.outingId, item.collectionId).filed > 0
+            } catch (e: AlbumException) {
+                false
+            }
             val note = listOfNotNull(
                 if (have.mine) null else "Added by someone else in the family.",
-                if (item.tripId != null) "It was left where it already is in the album." else null,
+                if (wanted && !put) "It was left where it already is in the album." else null,
             ).joinToString(" ").ifEmpty { null }
             return Outcome(ItemState.ALREADY, note, have.photoId)
         }
@@ -159,6 +166,8 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
             lastModifiedMs = item.lastModifiedMs,
             attempt = item.attempts,
             tripId = item.tripId,
+            outingId = item.outingId,
+            collectionId = item.collectionId,
         )
         return Outcome(if (result.duplicate) ItemState.ALREADY else ItemState.SENT, null, result.photoId)
     }

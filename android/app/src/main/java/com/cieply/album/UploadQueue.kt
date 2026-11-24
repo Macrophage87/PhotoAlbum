@@ -38,6 +38,11 @@ data class QueueItem(
     /** The trip the member chose for it; null leaves the album to file it by its date. */
     val tripId: String? = null,
     val tripTitle: String? = null,
+    /** The activity and the collection the member chose for it, when they chose any. */
+    val outingId: String? = null,
+    val outingTitle: String? = null,
+    val collectionId: String? = null,
+    val collectionTitle: String? = null,
     /** When it was taken, as the phone has it: the day a YouTube link for it is filed under. */
     val takenMs: Long? = null,
 )
@@ -65,6 +70,10 @@ object QueueJson {
                     .put("attempts", item.attempts)
                     .put("tripId", item.tripId ?: JSONObject.NULL)
                     .put("tripTitle", item.tripTitle ?: JSONObject.NULL)
+                    .put("outingId", item.outingId ?: JSONObject.NULL)
+                    .put("outingTitle", item.outingTitle ?: JSONObject.NULL)
+                    .put("collectionId", item.collectionId ?: JSONObject.NULL)
+                    .put("collectionTitle", item.collectionTitle ?: JSONObject.NULL)
                     .put("takenMs", item.takenMs ?: JSONObject.NULL),
             )
         }
@@ -99,6 +108,11 @@ object QueueJson {
                     attempts = o.optInt("attempts", 0),
                     tripId = if (o.isNull("tripId")) null else o.getString("tripId"),
                     tripTitle = if (o.isNull("tripTitle")) null else o.getString("tripTitle"),
+                    // Absent from a queue an older version of the app wrote, which reads as none chosen.
+                    outingId = if (o.isNull("outingId")) null else o.getString("outingId"),
+                    outingTitle = if (o.isNull("outingTitle")) null else o.getString("outingTitle"),
+                    collectionId = if (o.isNull("collectionId")) null else o.getString("collectionId"),
+                    collectionTitle = if (o.isNull("collectionTitle")) null else o.getString("collectionTitle"),
                     takenMs = if (o.isNull("takenMs")) null else o.getLong("takenMs"),
                 ),
             )

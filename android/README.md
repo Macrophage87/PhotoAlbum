@@ -51,6 +51,12 @@ with their location intact.
     phone is moving it on, so each shows the same and only one phone's clock runs (`ShowPlayer.heard`). A phone
     that connects to a television already showing something follows it rather than replacing it, and leaving the
     remote ends the show only when no other phone is connected.
+14. Browsing and arranging (`Album.kt`). "Browse the album" lists trips and collections with their covers; one opens
+    to its photos by day, and a photo opens to be swiped through. From there a member makes a trip, an activity or
+    a collection (`POST /api/v1/trips`, `/api/v1/trips/<id>/activities`, `/api/v1/collections`) and, with "Select
+    photos", puts their own photos on any of them (`POST /api/v1/file`). The upload screen asks the same question
+    of what is sent from the phone. The front page is the newest trips and four buttons; the permissions card and
+    the one-file test moved to Settings.
 
 Files are read with `MediaStore.setRequireOriginal`, which needs the "location in photos" permission; without it
 the app refuses to send rather than send photos with their place blanked out.

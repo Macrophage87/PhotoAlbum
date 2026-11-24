@@ -129,6 +129,48 @@ object Helpers {
     }
 
     /** What the album is asked for a slideshow: which trip or collection, and whatever it is narrowed by. */
+    /** Where photos are going, in a line for the button that changes it. `byDate` is for sending, where no trip means the album files each by its date. */
+    fun filingLine(filing: Filing, byDate: Boolean): String {
+        val parts = listOfNotNull(
+            filing.trip?.let { "Trip: ${it.title}" },
+            filing.outing?.let { "Activity: ${it.title}" },
+            filing.collection?.let { "Collection: ${it.title}" },
+        )
+        return when {
+            parts.isNotEmpty() && filing.trip == null && byDate -> "By date · ${parts.joinToString(" · ")}"
+            parts.isNotEmpty() -> parts.joinToString(" · ")
+            byDate -> "Trip: the album decides by date"
+            else -> "Choose a trip, activity or collection"
+        }
+    }
+
+    /** What a filing did, in a sentence or two. */
+    fun filedLine(filed: Filed, where: String): String {
+        val put = when (filed.filed) {
+            0 -> "Nothing was moved."
+            1 -> "1 is now in $where."
+            else -> "${filed.filed} are now in $where."
+        }
+        val left = when (filed.notYours) {
+            0 -> null
+            1 -> "1 was added by someone else, so only they or an admin can move it."
+            else -> "${filed.notYours} were added by someone else, so only they or an admin can move them."
+        }
+        return listOfNotNull(put, left).joinToString(" ")
+    }
+
+    /** The names of where a filing puts things, for [filedLine]. */
+    fun filingNames(filing: Filing): String = listOfNotNull(filing.outing?.title ?: filing.trip?.title, filing.collection?.title).joinToString(" and ")
+
+    /** A day and a time of day as the album's activity form takes them: "2025-08-12T15:04". */
+    fun wallTime(day: java.time.LocalDate, hour: Int, minute: Int): String = String.format(Locale.US, "%sT%02d:%02d", day, hour, minute)
+
+    /** A time of day for a button: "3:04 PM". */
+    fun clock(hour: Int, minute: Int): String = String.format(Locale.US, "%d:%02d %s", if (hour % 12 == 0) 12 else hour % 12, minute, if (hour < 12) "AM" else "PM")
+
+    /** The first and last moments among these, or null when there are none: what a new trip or activity is offered as its days and hours. */
+    fun span(takenMs: List<Long>): Pair<Long, Long>? = if (takenMs.isEmpty()) null else Pair(takenMs.min(), takenMs.max())
+
     fun showQuery(kind: String, slug: String, filter: ShowFilter, clips: Boolean = false): String {
         // "all" is the whole album, which has no name to give.
         val parts = mutableListOf(if (kind == ALL) "all=1" else "$kind=${encodeFileName(slug)}")

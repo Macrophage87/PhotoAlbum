@@ -34,11 +34,61 @@ data class Have(val photoId: String, val mine: Boolean)
 /** A trip the member can send to, as `/api/v1/trips` lists it. Dates are calendar days ("2025-08-10"). */
 data class Trip(val id: String, val title: String, val startDate: String, val endDate: String)
 
+/** One of a trip's activities. Its times are the clock's on the trip, to the minute ("2025-08-12T15:04"). */
+data class Outing(val id: String, val title: String, val label: String, val start: String, val end: String)
+
+/** A kind an activity can be: the album's word for it, and the name to show. */
+data class OutingKind(val type: String, val label: String)
+
+/** A trip's activities, the kinds a new one can be, and whether this member may add one. */
+data class TripOutings(val outings: List<Outing>, val kinds: List<OutingKind>, val canAdd: Boolean)
+
+/** A collection photos can be put in, by name. */
+data class CollectionName(val id: String, val title: String)
+
+/** Where photos are being put: a trip, one of its activities, a collection, or any of them. */
+data class Filing(val trip: Trip? = null, val outing: Outing? = null, val collection: CollectionName? = null) {
+    val chosen: Boolean get() = trip != null || outing != null || collection != null
+}
+
+/** Something already in the album, for choosing: `mine` says whether this member may move it. */
+data class AlbumItem(
+    val id: String,
+    val thumb: String,
+    val day: String?,
+    val video: Boolean,
+    val mine: Boolean,
+    /** For looking at it: a bigger copy, what is written on it, where it was taken, and its page on the website. */
+    val medium: String = thumb,
+    val title: String? = null,
+    val caption: String? = null,
+    val place: String? = null,
+    val page: String = "",
+)
+
+/** One page of a trip's or a collection's items, and what to ask the next page with (null at the end). */
+data class ItemPage(val items: List<AlbumItem>, val next: String?)
+
+/** How a filing went: how many are now where they were put, and how many are somebody else's and were left. */
+data class Filed(val filed: Int, val notYours: Int)
+
 /** A YouTube link the album has taken. */
 data class AddedVideo(val photoId: String, val title: String)
 
 /** A trip or a collection that can be shown as a slideshow. `kind` is "trip" or "collection", as the album's address says it. */
-data class Show(val kind: String, val slug: String, val title: String, val detail: String, val items: Int)
+data class Show(
+    val kind: String,
+    val slug: String,
+    val title: String,
+    val detail: String,
+    val items: Int,
+    /** For the browsing screens: the album's id for it, its cover's address, what is written about it, and a trip's days. */
+    val id: String = "",
+    val cover: String? = null,
+    val description: String? = null,
+    val startDate: String = "",
+    val endDate: String = "",
+)
 
 /** One page of the album's list of trips or collections, and where the next page starts (null at the end). */
 data class ShowPage(val shows: List<Show>, val next: Int?)
@@ -159,6 +209,74 @@ object AlbumJson {
         }
     }
 
+    private fun tripOf(t: JSONObject) = Trip(t.getString("id"), t.getString("title"), t.optString("startDate"), t.optString("endDate"))
+
+    /** The answer to making a trip. */
+    fun trip(body: String): Trip = tripOf(JSONObject(body).getJSONObject("trip"))
+
+    private fun outingOf(o: JSONObject) = Outing(o.getString("id"), o.getString("title"), o.optString("label"), o.optString("start"), o.optString("end"))
+
+    fun outings(body: String): TripOutings {
+        val root = JSONObject(body)
+        val array = root.getJSONArray("activities")
+        val kinds = root.optJSONArray("types") ?: org.json.JSONArray()
+        return TripOutings(
+            (0 until array.length()).map { outingOf(array.getJSONObject(it)) },
+            (0 until kinds.length()).map { kinds.getJSONObject(it).let { k -> OutingKind(k.getString("type"), k.optString("label", k.getString("type"))) } },
+            root.optBoolean("canAdd", false),
+        )
+    }
+
+    /** The answer to making an activity. */
+    fun outing(body: String): Outing = outingOf(JSONObject(body).getJSONObject("activity"))
+
+    private fun collectionOf(c: JSONObject) = CollectionName(c.getString("id"), c.getString("title"))
+
+    fun collections(body: String): List<CollectionName> {
+        val array = JSONObject(body).getJSONArray("collections")
+        return (0 until array.length()).map { collectionOf(array.getJSONObject(it)) }
+    }
+
+    /** The answer to making a collection. */
+    fun collection(body: String): CollectionName = collectionOf(JSONObject(body).getJSONObject("collection"))
+
+    /** A page of one trip's or one collection's items. A trip's next page is a word, a collection's a number: both are kept as written. */
+    fun items(body: String): ItemPage {
+        val root = JSONObject(body)
+        val array = root.getJSONArray("items")
+        return ItemPage(
+            (0 until array.length()).map {
+                val o = array.getJSONObject(it)
+                AlbumItem(
+                    o.getString("id"), o.getString("thumb"), text(o, "day"), o.optString("kind") != "PHOTO", o.optBoolean("mine", false),
+                    medium = text(o, "medium") ?: o.getString("thumb"),
+                    title = text(o, "title"),
+                    caption = text(o, "caption"),
+                    place = text(o, "place"),
+                    page = o.optString("page"),
+                )
+            },
+            if (root.isNull("next")) null else root.get("next").toString(),
+        )
+    }
+
+    fun filed(body: String): Filed = JSONObject(body).let { Filed(it.optInt("filed", 0), it.optInt("notYours", 0)) }
+
+    fun tripRequest(title: String, startDate: String, endDate: String, timezone: String): String =
+        JSONObject().put("title", title.trim()).put("startDate", startDate).put("endDate", endDate).put("timezone", timezone).toString()
+
+    fun outingRequest(title: String, type: String, start: String, end: String): String =
+        JSONObject().put("title", title.trim()).put("type", type).put("start", start).put("end", end).toString()
+
+    fun collectionRequest(title: String): String = JSONObject().put("title", title.trim()).toString()
+
+    /** An activity is on one trip, so naming it says the trip too; the trip is sent only without one. */
+    fun fileRequest(photoIds: List<String>, tripId: String?, outingId: String?, collectionId: String?): String =
+        JSONObject().put("photoIds", org.json.JSONArray(photoIds))
+            .put("tripId", if (outingId == null && tripId != null) tripId else JSONObject.NULL)
+            .put("activityId", outingId ?: JSONObject.NULL)
+            .put("collectionId", collectionId ?: JSONObject.NULL).toString()
+
     private fun text(o: JSONObject, key: String): String? = if (o.isNull(key)) null else o.optString(key).takeIf { it.isNotBlank() }
 
     /** A page of `/api/v1/album/trips` or `/api/v1/album/collections`; `kind` says which. */
@@ -168,7 +286,14 @@ object AlbumJson {
         val shows = (0 until array.length()).map {
             val o = array.getJSONObject(it)
             val detail = if (kind == "trip") Helpers.tripDays(o.optString("startDate"), o.optString("endDate")) else ""
-            Show(kind, o.getString("slug"), o.getString("title"), detail, o.optInt("items", 0))
+            Show(
+                kind, o.getString("slug"), o.getString("title"), detail, o.optInt("items", 0),
+                id = o.optString("id"),
+                cover = o.optJSONObject("cover")?.let { c -> text(c, "thumb") },
+                description = text(o, "description"),
+                startDate = o.optString("startDate"),
+                endDate = o.optString("endDate"),
+            )
         }
         return ShowPage(shows, if (root.isNull("next")) null else root.optInt("next"))
     }
@@ -265,7 +390,7 @@ class AlbumApi(private val baseUrl: String, private val token: String) {
     }
 
     /** Sends the file exactly as it is: the body is the file's own bytes, and what describes it rides in headers. */
-    fun upload(open: () -> InputStream, fileName: String, mime: String, bytes: Long?, lastModifiedMs: Long?, attempt: Int = 1, tripId: String? = null): UploadResult {
+    fun upload(open: () -> InputStream, fileName: String, mime: String, bytes: Long?, lastModifiedMs: Long?, attempt: Int = 1, tripId: String? = null, outingId: String? = null, collectionId: String? = null): UploadResult {
         val body = object : RequestBody() {
             override fun contentType() = mime.toMediaTypeOrNull()
             override fun contentLength() = bytes ?: -1L
@@ -280,6 +405,9 @@ class AlbumApi(private val baseUrl: String, private val token: String) {
         if (lastModifiedMs != null) builder.header("x-last-modified", lastModifiedMs.toString())
         // Left out, the album files it by the date it was taken.
         if (tripId != null) builder.header("x-trip-id", tripId)
+        // An activity the member chose, and a collection: the album puts it there as it arrives.
+        if (outingId != null) builder.header("x-activity-id", outingId)
+        if (collectionId != null) builder.header("x-collection-id", collectionId)
         return AlbumJson.upload(send(builder.build()))
     }
 
@@ -291,6 +419,57 @@ class AlbumApi(private val baseUrl: String, private val token: String) {
         AlbumJson.trips(send(request("/api/v1/trips").get().build()))
     } catch (e: org.json.JSONException) {
         throw AlbumException("The album's list of trips could not be read.")
+    }
+
+    private fun post(path: String, json: String): String = send(request(path).post(json.toRequestBody("application/json".toMediaTypeOrNull())).build())
+
+    /** Calls the album and reads its answer; an answer that will not read is said plainly. */
+    private fun <T> read(what: String, ask: () -> T): T = try {
+        ask()
+    } catch (e: org.json.JSONException) {
+        throw AlbumException("The album's $what could not be read.")
+    }
+
+    /** Makes a trip. Its days are calendar days ("2025-08-10"), in the time zone named. */
+    fun createTrip(title: String, startDate: String, endDate: String, timezone: String): Trip =
+        read("answer") { AlbumJson.trip(post("/api/v1/trips", AlbumJson.tripRequest(title, startDate, endDate, timezone))) }
+
+    /** A trip's activities, in the order they happened. */
+    fun outings(tripId: String): TripOutings = read("list of activities") { AlbumJson.outings(send(request("/api/v1/trips/$tripId/activities").get().build())) }
+
+    /** Makes an activity on a trip. Its times are the clock's on the trip ("2025-08-12T15:04"). */
+    fun createOuting(tripId: String, title: String, type: String, start: String, end: String): Outing =
+        read("answer") { AlbumJson.outing(post("/api/v1/trips/$tripId/activities", AlbumJson.outingRequest(title, type, start, end))) }
+
+    /** Every collection, by name. */
+    fun collections(): List<CollectionName> = read("list of collections") { AlbumJson.collections(send(request("/api/v1/collections").get().build())) }
+
+    fun createCollection(title: String): CollectionName = read("answer") { AlbumJson.collection(post("/api/v1/collections", AlbumJson.collectionRequest(title))) }
+
+    /** Puts photos already in the album where the member says, a couple of hundred at a time as the album takes them. */
+    fun file(photoIds: List<String>, tripId: String?, outingId: String?, collectionId: String?): Filed = read("answer") {
+        var filed = 0
+        var notYours = 0
+        for (some in photoIds.chunked(200)) {
+            val r = AlbumJson.filed(post("/api/v1/file", AlbumJson.fileRequest(some, tripId, outingId, collectionId)))
+            filed += r.filed
+            notYours += r.notYours
+        }
+        Filed(filed, notYours)
+    }
+
+    /** Everything finished in one trip or one collection, a page at a time until there is no more. */
+    fun items(kind: String, slug: String): List<AlbumItem> = read("photos") {
+        val all = ArrayList<AlbumItem>()
+        val trip = kind == "trip"
+        var next: String? = ""
+        while (next != null && all.size < 5000) {
+            val query = if (next.isEmpty()) "" else "?${if (trip) "cursor" else "from"}=${java.net.URLEncoder.encode(next, "UTF-8")}"
+            val page = AlbumJson.items(send(request("/api/v1/album/${if (trip) "trips" else "collections"}/$slug$query").get().build()))
+            all.addAll(page.items)
+            next = if (page.items.isEmpty()) null else page.next
+        }
+        all
     }
 
     /** Adds a YouTube link to the album: what stands in for a video too big or too long to keep there. */
@@ -316,6 +495,9 @@ class AlbumApi(private val baseUrl: String, private val token: String) {
     } catch (e: org.json.JSONException) {
         throw AlbumException("The album's list could not be read.")
     }
+
+    /** The newest few trips, for the front page: the first page of the album's list and no more. */
+    fun latestTrips(): List<Show> = read("list") { AlbumJson.shows(send(request("/api/v1/album/trips?from=0").get().build()), "trip").shows.take(8) }
 
     /** A trip's or a collection's slideshow, with the addresses a television can fetch. `clips` asks for the family's videos among the photos. */
     fun slideShow(kind: String, slug: String, filter: ShowFilter = ShowFilter(), clips: Boolean = false): SlideShow = try {

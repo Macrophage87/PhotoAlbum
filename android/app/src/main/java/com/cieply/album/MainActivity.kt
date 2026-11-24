@@ -31,6 +31,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items as listItems
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -44,6 +45,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -93,11 +95,20 @@ private sealed interface Screen {
     /** The way round for one video too big for the album: put it on YouTube, paste its link. */
     data class YouTube(val itemId: String) : Screen
 
+    /** The album's trips and collections, to look through. */
+    data object Browse : Screen
+
+    /** One trip or one collection, and its photos. `fromHome` is where Back goes. */
+    data class Place(val show: Show, val fromHome: Boolean = false) : Screen
+
+    /** What Android allows the app, sending on Wi-Fi, trying one file, and signing out. */
+    data object More : Screen
+
     /** Choosing a trip or a collection to show on a television. */
     data object Shows : Screen
 
     /** The remote control for one slideshow on a television. */
-    data class Remote(val show: Show) : Screen
+    data class Remote(val show: Show, val from: Screen = Shows) : Screen
     data class Item(val uri: Uri, val origin: Origin) : Screen
 }
 
@@ -168,8 +179,8 @@ private fun App(store: TokenStore, handedBack: String?, onHandled: () -> Unit) {
 
     when (val at = screen) {
         is Screen.Item -> {
-            BackHandler { screen = Screen.Home }
-            ItemScreen(api, current.baseUrl, member, at, onBack = { screen = Screen.Home })
+            BackHandler { screen = Screen.More }
+            ItemScreen(api, current.baseUrl, member, at, onBack = { screen = Screen.More })
         }
         Screen.Pick -> {
             BackHandler { screen = Screen.Home }
@@ -184,8 +195,21 @@ private fun App(store: TokenStore, handedBack: String?, onHandled: () -> Unit) {
             ShowsScreen(api, onBack = { screen = Screen.Home }, onChoose = { screen = Screen.Remote(it) })
         }
         is Screen.Remote -> {
-            BackHandler { screen = Screen.Shows }
-            RemoteScreen(api, current.baseUrl, at.show, onBack = { screen = Screen.Shows })
+            BackHandler { screen = at.from }
+            RemoteScreen(api, current.baseUrl, at.show, onBack = { screen = at.from })
+        }
+        Screen.Browse -> {
+            BackHandler { screen = Screen.Home }
+            BrowseScreen(api, onBack = { screen = Screen.Home }, onOpen = { screen = Screen.Place(it) })
+        }
+        is Screen.Place -> {
+            // Its own back handling comes first: leaving a photo, then leaving selecting, then this.
+            val back = { screen = if (at.fromHome) Screen.Home else Screen.Browse }
+            PlaceScreen(api, current.baseUrl, at.show, onBack = back, onTv = { screen = Screen.Remote(it, at) })
+        }
+        Screen.More -> {
+            BackHandler { screen = Screen.Home }
+            MoreScreen(onBack = { screen = Screen.Home }, onPick = { uri, origin -> screen = Screen.Item(uri, origin) }, onSignOut = signOut)
         }
         is Screen.YouTube -> {
             BackHandler { screen = Screen.Queue }
@@ -196,17 +220,19 @@ private fun App(store: TokenStore, handedBack: String?, onHandled: () -> Unit) {
             baseUrl = current.baseUrl,
             member = member,
             onMember = { member = it },
-            onPick = { uri, origin -> screen = Screen.Item(uri, origin) },
             onUpload = { screen = Screen.Pick },
             onQueue = { screen = Screen.Queue },
             onSlideshow = { screen = Screen.Shows },
+            onBrowse = { screen = Screen.Browse },
+            onOpen = { screen = Screen.Place(it, fromHome = true) },
+            onMore = { screen = Screen.More },
             onSignOut = signOut,
         )
     }
 }
 
 @Composable
-private fun Heading(text: String) {
+internal fun Heading(text: String) {
     Text(text, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, color = Navy)
 }
 
@@ -307,16 +333,33 @@ private fun SetupScreen(
     }
 }
 
+/** A big button for the front page: what it does, and a line about it. */
+@Composable
+private fun HomeCard(title: String, detail: String, strong: Boolean = false, onClick: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+        colors = if (strong) CardDefaults.cardColors(containerColor = Navy, contentColor = Color.White) else CardDefaults.cardColors(),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Text(detail, style = MaterialTheme.typography.bodySmall)
+        }
+    }
+}
+
+/** The front page: the album's latest trips to open, and the few things the app does. */
 @Composable
 private fun HomeScreen(
     api: AlbumApi,
     baseUrl: String,
     member: Member?,
     onMember: (Member) -> Unit,
-    onPick: (Uri, Origin) -> Unit,
     onUpload: () -> Unit,
     onQueue: () -> Unit,
     onSlideshow: () -> Unit,
+    onBrowse: () -> Unit,
+    onOpen: (Show) -> Unit,
+    onMore: () -> Unit,
     onSignOut: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -325,8 +368,6 @@ private fun HomeScreen(
     LaunchedEffect(Unit) {
         if (queue.items.any { it.state == ItemState.WAITING }) UploadWorker.kick(context)
     }
-    // Bumped whenever a permission answer comes back, so everything below is read again.
-    var asked by remember { mutableIntStateOf(0) }
     var problem by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(api) {
@@ -340,7 +381,58 @@ private fun HomeScreen(
             }
         }
     }
+    // The newest trips, for a row to open one from. Without them the page still does everything else.
+    val latest by produceState<List<Show>>(initialValue = emptyList(), api) {
+        value = try {
+            withContext(Dispatchers.IO) { api.latestTrips() }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
 
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Heading("Family Album")
+        Text(
+            if (member != null) "Hello, ${member.name ?: member.email}." else "Signed in to ${baseUrl.removePrefix("https://")}.",
+        )
+        problem?.let { Text(it, color = Rust) }
+
+        if (latest.isNotEmpty()) {
+            Text("Latest trips", fontWeight = FontWeight.Bold)
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                for (show in latest) {
+                    Column(Modifier.width(150.dp).clickable { onOpen(show) }, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Box(Modifier.fillMaxWidth().aspectRatio(4f / 3f).background(Color(0xFFE6E9EE))) {
+                            show.cover?.let { AlbumPicture(api, it, Modifier.fillMaxSize(), ContentScale.Crop) }
+                        }
+                        Text(show.title, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        if (show.detail.isNotEmpty()) Text(show.detail, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+            }
+        }
+
+        HomeCard("Browse the album", "Trips, collections and their photos. Make a new trip, activity or collection, and put photos on them.", strong = true, onClick = onBrowse)
+        HomeCard("Upload photos and videos", "Choose from this phone, and say which trip, activity or collection they go to.", onClick = onUpload)
+        summaryOf(queue)?.let { summary ->
+            OutlinedButton(modifier = Modifier.fillMaxWidth(), onClick = onQueue) { Text(summary) }
+        }
+        HomeCard("Show a slideshow on a TV", "Pictures on the television, with this phone as the remote control.", onClick = onSlideshow)
+        HomeCard("Settings", "Wi-Fi only, what Android allows the app, and signing out.", onClick = onMore)
+    }
+}
+
+/** The settings and the testing tools: what Android allows, sending on Wi-Fi, trying one file, and signing out. */
+@Composable
+private fun MoreScreen(onBack: () -> Unit, onPick: (Uri, Origin) -> Unit, onSignOut: () -> Unit) {
+    val context = LocalContext.current
+    // Bumped whenever a permission answer comes back, so everything below is read again.
+    var asked by remember { mutableIntStateOf(0) }
     val permissions = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { asked++ }
     val systemPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri != null) onPick(uri, Origin.SYSTEM_PICKER)
@@ -363,18 +455,9 @@ private fun HomeScreen(
     ) {
         item(span = { GridItemSpan(maxLineSpan) }) {
             Column(Modifier.padding(vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Heading("Family Album")
-                Text(
-                    if (member != null) "Signed in to ${baseUrl.removePrefix("https://")} as ${member.name ?: member.email}."
-                    else "Signed in to ${baseUrl.removePrefix("https://")}.",
-                )
-                problem?.let { Text(it, color = Rust) }
-                Button(modifier = Modifier.fillMaxWidth(), onClick = onUpload) { Text("Upload photos and videos") }
-                summaryOf(queue)?.let { summary ->
-                    OutlinedButton(modifier = Modifier.fillMaxWidth(), onClick = onQueue) { Text(summary) }
-                }
+                TextButton(onClick = onBack) { Text("‹ Back") }
+                Heading("Settings")
                 WifiOnlySwitch()
-                OutlinedButton(modifier = Modifier.fillMaxWidth(), onClick = onSlideshow) { Text("Show a slideshow on a TV") }
                 Card(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text("What Android allows this app", fontWeight = FontWeight.Bold)
@@ -395,6 +478,7 @@ private fun HomeScreen(
                         }
                     }
                 }
+                OutlinedButton(onClick = onSignOut) { Text("Sign out of this phone") }
                 Text("Testing one file", fontWeight = FontWeight.Bold)
                 Text("Pick one thing to see what Android hands over and what the album makes of it. Each way of picking is tested separately, because Android treats them differently.")
                 OutlinedButton(
@@ -423,9 +507,6 @@ private fun HomeScreen(
                     )
                 }
             }
-        }
-        item(span = { GridItemSpan(maxLineSpan) }) {
-            TextButton(onClick = onSignOut, modifier = Modifier.padding(vertical = 12.dp)) { Text("Sign out of this phone") }
         }
     }
 }
@@ -463,31 +544,6 @@ private fun WifiOnlySwitch() {
     }
 }
 
-/** The trips to choose from. The first line is the album's own way: each file goes to the trip its date falls on. */
-@Composable
-private fun TripDialog(trips: List<Trip>?, problem: String?, chosen: Trip?, onChoose: (Trip?) -> Unit, onClose: () -> Unit) {
-    AlertDialog(
-        onDismissRequest = onClose,
-        confirmButton = { TextButton(onClick = onClose) { Text("Close") } },
-        title = { Text("Which trip?") },
-        text = {
-            LazyColumn(Modifier.heightIn(max = 420.dp)) {
-                item {
-                    TripLine("Let the album decide", "Each one goes to the trip its date falls on.", chosen == null) { onChoose(null) }
-                }
-                when {
-                    problem != null -> item { Text(problem, color = Rust, modifier = Modifier.padding(vertical = 8.dp)) }
-                    trips == null -> item { Text("Fetching the album's trips…", modifier = Modifier.padding(vertical = 8.dp)) }
-                    trips.isEmpty() -> item { Text("The album has no trips yet.", modifier = Modifier.padding(vertical = 8.dp)) }
-                    else -> listItems(trips, key = { it.id }) { trip ->
-                        TripLine(trip.title, Helpers.tripDays(trip.startDate, trip.endDate), chosen?.id == trip.id) { onChoose(trip) }
-                    }
-                }
-            }
-        },
-    )
-}
-
 @Composable
 private fun TripLine(title: String, detail: String, chosen: Boolean, onClick: () -> Unit) {
     Column(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 10.dp)) {
@@ -504,23 +560,8 @@ private fun dayOf(ms: Long): LocalDate = Instant.ofEpochMilli(ms).atZone(ZoneId.
 @Composable
 private fun PickScreen(api: AlbumApi, onBack: () -> Unit, onQueued: () -> Unit) {
     val context = LocalContext.current
-    var trip by remember { mutableStateOf<Trip?>(null) }
-    var choosingTrip by remember { mutableStateOf(false) }
-    var tripProblem by remember { mutableStateOf<String?>(null) }
-    val trips by produceState<List<Trip>?>(initialValue = null, api) {
-        value = try {
-            withContext(Dispatchers.IO) { api.trips() }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            // Without the list the album still files each one by its date, so sending is not held up.
-            tripProblem = "The album's trips could not be fetched just now. What you send will be filed by its date."
-            emptyList()
-        }
-    }
-    if (choosingTrip) {
-        TripDialog(trips, tripProblem, trip, onChoose = { trip = it; choosingTrip = false }, onClose = { choosingTrip = false })
-    }
+    var filing by remember { mutableStateOf(Filing()) }
+    var choosingWhere by remember { mutableStateOf(false) }
     val queue by UploadQueue.get(context).state.collectAsState()
     var asked by remember { mutableIntStateOf(0) }
     val permissions = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { asked++ }
@@ -530,6 +571,11 @@ private fun PickScreen(api: AlbumApi, onBack: () -> Unit, onQueued: () -> Unit) 
         value = withContext(Dispatchers.IO) { Media.library(context) }
     }
     var chosen by remember { mutableStateOf(emptySet<String>()) }
+    if (choosingWhere) {
+        // A new trip or activity made here starts from the days and hours of what is chosen.
+        val span = Helpers.span((library ?: emptyList()).filter { it.uri.toString() in chosen }.map { it.takenMs })
+        FilingDialog(api, filing, byDate = true, span = span, onChange = { filing = it }, onClose = { choosingWhere = false })
+    }
 
     // Asked the first time the library is wanted, not at install: this is the moment the reason is plain.
     LaunchedEffect(Unit) {
@@ -618,8 +664,8 @@ private fun PickScreen(api: AlbumApi, onBack: () -> Unit, onQueued: () -> Unit) 
                 }
             }
         }
-        OutlinedButton(modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 8.dp), onClick = { choosingTrip = true }) {
-            Text(trip?.let { "Trip: ${it.title}" } ?: "Trip: the album decides by date", maxLines = 1, overflow = TextOverflow.Ellipsis)
+        OutlinedButton(modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 8.dp), onClick = { choosingWhere = true }) {
+            Text(Helpers.filingLine(filing, byDate = true), maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         Button(
             modifier = Modifier.fillMaxWidth().padding(12.dp),
@@ -636,8 +682,12 @@ private fun PickScreen(api: AlbumApi, onBack: () -> Unit, onQueued: () -> Unit) 
                             key = it.key,
                             bytes = it.bytes,
                             lastModifiedMs = it.modifiedSeconds?.times(1000),
-                            tripId = trip?.id,
-                            tripTitle = trip?.title,
+                            tripId = filing.trip?.id,
+                            tripTitle = filing.trip?.title,
+                            outingId = filing.outing?.id,
+                            outingTitle = filing.outing?.title,
+                            collectionId = filing.collection?.id,
+                            collectionTitle = filing.collection?.title,
                             takenMs = it.takenMs,
                         )
                     },
@@ -696,7 +746,7 @@ private fun QueueScreen(baseUrl: String, onBack: () -> Unit, onPickMore: () -> U
                             ItemState.LINKED -> "Linked from YouTube" to Good
                         }
                         Text(label, color = color, fontWeight = FontWeight.Bold)
-                        item.tripTitle?.let { Text("Trip: $it", style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                        Helpers.filingLine(Filing(item.tripTitle?.let { t -> Trip("", t, "", "") }, item.outingTitle?.let { t -> Outing("", t, "", "", "") }, item.collectionTitle?.let { t -> CollectionName("", t) }), byDate = false).takeIf { item.tripTitle != null || item.outingTitle != null || item.collectionTitle != null }?.let { Text(it, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis) }
                         item.message?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
                     }
                     val photoId = item.photoId
@@ -1327,7 +1377,7 @@ private val pictures = object : android.util.LruCache<String, Bitmap>(24 * 1024 
 
 /** One of the album's own pictures, fetched as this member. */
 @Composable
-private fun AlbumPicture(api: AlbumApi, path: String, modifier: Modifier = Modifier, scale: ContentScale = ContentScale.Fit) {
+internal fun AlbumPicture(api: AlbumApi, path: String, modifier: Modifier = Modifier, scale: ContentScale = ContentScale.Fit) {
     val bitmap by produceState<Bitmap?>(initialValue = pictures.get(path), path) {
         value = pictures.get(path) ?: withContext(Dispatchers.IO) {
             try {
@@ -1492,7 +1542,7 @@ private fun ItemScreen(api: AlbumApi, baseUrl: String, member: Member?, at: Scre
 }
 
 @Composable
-private fun Progress(text: String) {
+internal fun Progress(text: String) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         CircularProgressIndicator()
         Text(text)
